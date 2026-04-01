@@ -4,23 +4,22 @@ train.py — Train schedule blurb generator + schedule management
 Commands (OGV Leadership only, leadership channel only):
   !train              — Launch the blurb wizard (manual, any name)
   !cancel             — Cancel any active wizard session
-  !schedule           — Input/replace the upcoming train schedule
-  !schedule list      — View the current schedule
+  !schedule           — Input the upcoming train schedule (with optional details per person)
+  !schedule list      — View the schedule as an embed
   !schedule clear     — Clear the entire schedule
-  !trainschedule      — Shortcut to view the current schedule
+  !trainschedule      — Shortcut to view the schedule embed
+  !trainprompt        — Retrieve today's stored prompt (or pick a date)
 
 Schedule reminder:
-  - 15 minutes after reset each day, if a blurb hasn't been generated
-    for today's scheduled person, a reminder is posted in the leadership
-    channel with a button to launch the wizard with the name pre-filled.
-  - Reminder always fires at 10:30pm ET regardless of day.
+  - 15 minutes after reset (10:30pm ET every day), if no prompt has been
+    retrieved for today's person, the bot pings leadership with a button
+    to pull up the stored details and confirm posting the prompt.
 """
 
 import asyncio
 import json
 import os
 import re
-import aiohttp
 import discord
 from discord.ext import commands, tasks
 from datetime import datetime, timedelta, date
@@ -31,28 +30,39 @@ ET = ZoneInfo("America/New_York")
 LEADERSHIP_CHANNEL_ID = 1488693874938482799
 REQUIRED_ROLE_NAME    = "OGV Leadership"
 
-ANTHROPIC_API_URL = "https://api.anthropic.com/v1/messages"
-ANTHROPIC_MODEL   = "claude-sonnet-4-20250514"
-
 WIZARD_TIMEOUT = 300  # seconds
 
 # Tracks active wizard sessions: { user_id: asyncio.Event }
-# Setting the event signals the wizard to cancel cleanly.
 active_wizards: dict[int, asyncio.Event] = {}
 
-# File to persist the schedule and generated blurb log across restarts
-SCHEDULE_FILE    = "train_schedule.json"
-BLURB_LOG_FILE   = "train_blurb_log.json"
+# Persistence files
+SCHEDULE_FILE = "train_schedule.json"
+BLURB_LOG_FILE = "train_blurb_log.json"
 
-# ── Persistence helpers ────────────────────────────────────────────────────────
+# ── Schedule data structure ────────────────────────────────────────────────────
+#
+# Schedule is stored as:
+# {
+#   "YYYY-MM-DD": {
+#     "name": "PlayerName",
+#     "theme": "Birthday",          # optional
+#     "tone": "More casual",        # optional
+#     "notes": "queen energy..."    # optional
+#   }
+# }
 
 def load_schedule() -> dict:
-    """
-    Returns a dict of { "YYYY-MM-DD": "Member Name" }
-    """
     if os.path.exists(SCHEDULE_FILE):
         with open(SCHEDULE_FILE, "r") as f:
-            return json.load(f)
+            data = json.load(f)
+            # Migrate old format { "YYYY-MM-DD": "Name" } to new format
+            migrated = {}
+            for k, v in data.items():
+                if isinstance(v, str):
+                    migrated[k] = {"name": v}
+                else:
+                    migrated[k] = v
+            return migrated
     return {}
 
 
@@ -62,10 +72,6 @@ def save_schedule(schedule: dict):
 
 
 def load_blurb_log() -> set:
-    """
-    Returns a set of date strings "YYYY-MM-DD" for which a blurb
-    has been generated and approved today.
-    """
     if os.path.exists(BLURB_LOG_FILE):
         with open(BLURB_LOG_FILE, "r") as f:
             return set(json.load(f))
@@ -84,83 +90,57 @@ def mark_blurb_generated(date_str: str):
 
 
 def blurb_generated_today() -> bool:
-    today = date.today().isoformat()
-    return today in load_blurb_log()
+    return date.today().isoformat() in load_blurb_log()
 
 
-# ── Schedule parsing ───────────────────────────────────────────────────────────
+# ── Schedule date parsing ──────────────────────────────────────────────────────
 
-def parse_schedule_input(text: str) -> dict[str, str]:
-    """
-    Parse a multi-line schedule input into { "YYYY-MM-DD": "Name" }.
+MONTH_MAP = {
+    "january": 1, "february": 2, "march": 3, "april": 4,
+    "may": 5, "june": 6, "july": 7, "august": 8,
+    "september": 9, "october": 10, "november": 11, "december": 12,
+    "jan": 1, "feb": 2, "mar": 3, "apr": 4, "jun": 6,
+    "jul": 7, "aug": 8, "sep": 9, "oct": 10, "nov": 11, "dec": 12,
+}
 
-    Accepts flexible formats:
-      April 1 - PlayerName
-      4/1 - PlayerName
-      4/1/2026 - PlayerName
-      April 1: PlayerName
-      April 1 PlayerName       (space separated)
-    """
+
+def parse_date_and_name(line: str) -> tuple[date, str] | tuple[None, None]:
+    """Parse a single 'Date - Name' line. Returns (date, name) or (None, None)."""
     current_year = datetime.now(tz=ET).year
-    schedule = {}
-    errors   = []
 
-    month_map = {
-        "january": 1, "february": 2, "march": 3, "april": 4,
-        "may": 5, "june": 6, "july": 7, "august": 8,
-        "september": 9, "october": 10, "november": 11, "december": 12,
-        "jan": 1, "feb": 2, "mar": 3, "apr": 4, "jun": 6,
-        "jul": 7, "aug": 8, "sep": 9, "oct": 10, "nov": 11, "dec": 12,
-    }
-
-    for line in text.strip().splitlines():
-        line = line.strip()
-        if not line:
-            continue
-
-        # Try numeric format: 4/1, 4/1/2026
-        numeric = re.match(r"^(\d{1,2})/(\d{1,2})(?:/(\d{4}))?\s*[-:]\s*(.+)$", line)
-        if numeric:
-            month = int(numeric.group(1))
-            day   = int(numeric.group(2))
-            year  = int(numeric.group(3)) if numeric.group(3) else current_year
-            name  = numeric.group(4).strip()
-            try:
-                d = date(year, month, day)
-                schedule[d.isoformat()] = name
-            except ValueError:
-                errors.append(f"Invalid date: {line}")
-            continue
-
-        # Try month-name format: April 1 - Name / April 1: Name / April 1 Name
-        named = re.match(
-            r"^([A-Za-z]+)\s+(\d{1,2})(?:\s*(?:st|nd|rd|th))?\s*[-:]\s*(.+)$",
-            line, re.IGNORECASE
-        )
-        if not named:
-            # Try without separator: "April 1 PlayerName"
-            named = re.match(
-                r"^([A-Za-z]+)\s+(\d{1,2})(?:\s*(?:st|nd|rd|th))?\s+(.+)$",
-                line, re.IGNORECASE
+    # Numeric: 4/1 - Name or 4/1/2026 - Name
+    numeric = re.match(r"^(\d{1,2})/(\d{1,2})(?:/(\d{4}))?\s*[-:]\s*(.+)$", line)
+    if numeric:
+        try:
+            d = date(
+                int(numeric.group(3)) if numeric.group(3) else current_year,
+                int(numeric.group(1)),
+                int(numeric.group(2)),
             )
-        if named:
-            month_str = named.group(1).lower()
-            day       = int(named.group(2))
-            name      = named.group(3).strip()
-            month     = month_map.get(month_str)
-            if month is None:
-                errors.append(f"Unknown month '{named.group(1)}': {line}")
-                continue
+            return d, numeric.group(4).strip()
+        except ValueError:
+            return None, None
+
+    # Month name: April 1 - Name or April 1: Name
+    named = re.match(
+        r"^([A-Za-z]+)\s+(\d{1,2})(?:\s*(?:st|nd|rd|th))?\s*[-:]\s*(.+)$",
+        line, re.IGNORECASE,
+    )
+    if not named:
+        named = re.match(
+            r"^([A-Za-z]+)\s+(\d{1,2})(?:\s*(?:st|nd|rd|th))?\s+(.+)$",
+            line, re.IGNORECASE,
+        )
+    if named:
+        month = MONTH_MAP.get(named.group(1).lower())
+        if month:
             try:
-                d = date(current_year, month, day)
-                schedule[d.isoformat()] = name
+                d = date(current_year, month, int(named.group(2)))
+                return d, named.group(3).strip()
             except ValueError:
-                errors.append(f"Invalid date: {line}")
-            continue
+                return None, None
 
-        errors.append(f"Could not parse: {line}")
-
-    return schedule, errors
+    return None, None
 
 
 # ── Theme and tone options ─────────────────────────────────────────────────────
@@ -184,53 +164,120 @@ TONES = [
     "Cinematic / Dramatic",
 ]
 
-# ── System prompt ──────────────────────────────────────────────────────────────
+# ── Prompt builder ─────────────────────────────────────────────────────────────
 
-SYSTEM_PROMPT = """You write short train announcements for OGV, a mobile game alliance. These are posted publicly to celebrate members — birthdays, new joins, milestones, war performances, contest wins, and more.
+def build_chatgpt_prompt(name: str, theme: str, tone: str, notes: str) -> str:
+    """Format a ready-to-paste ChatGPT thread prompt from stored entry data."""
+    lines = [
+        f"1. {name}",
+        f"3. {theme}" + (f" — {tone}" if tone and tone != "Default (match the theme)" else ""),
+    ]
+    if notes:
+        lines.append(f"4. {notes}")
+    return "\n".join(lines)
 
-## Your voice and style
 
-- Talk TO the alliance ABOUT the person — never narrate from the outside looking in
-- Open with a strong statement that sets the scene or names the person directly
-- Build momentum through the middle with specific details from the notes
-- Land on a punchy, memorable closing line — a callback, a twist, or something clever tied to their name or the achievement
-- Warm but confident. Never cheesy, never corporate, never stiff
-- Feel like a quick real post someone actually typed — not a template
-- Vary the structure every time. No two blurbs should open or flow the same way
-- Use emojis sparingly and only when they fit naturally
-- STRICT limit: under 500 characters including spaces
+# ── Embed builders ─────────────────────────────────────────────────────────────
 
-## What to avoid
-- Do NOT open with "there's something about..." or soft observational language
-- Do NOT over-explain or describe the vibe — state it and move on
-- Do NOT use filler transition lines like "Feels like a natural fit already"
-- Do NOT break ideas into separate short lines — flow them together
-- Do NOT sound like an AI wrote it
+def build_schedule_embed(schedule: dict, blurb_log: set) -> discord.Embed:
+    """Build a scannable embed showing the upcoming train schedule."""
+    today = date.today()
 
-## Style examples (study these carefully)
+    if not schedule:
+        embed = discord.Embed(
+            title="🚂 OGV Train Schedule",
+            description="*No schedule set. Use `!schedule` to add entries.*",
+            color=discord.Color.gold(),
+        )
+        return embed
 
-### Welcome to OGV
-Input: Name=Cho Cho Bunny, Theme=Welcome to OGV, Notes=fun energy, easygoing
-Output: Cho Cho Bunny bringing good vibes right on into OGV with them. Fun, friendly, and came ready to jump right into what our alliance has to offer. Welcome to OGV! 🐰
+    upcoming = {k: v for k, v in sorted(schedule.items()) if date.fromisoformat(k) >= today}
+    past     = {k: v for k, v in sorted(schedule.items()) if date.fromisoformat(k) < today}
 
-### Birthday
-Input: Name=LaReyna, Theme=Birthday, Notes=queen energy, style and strength, amazing presence
-Output: Happy Birthday LaReyna! Today we're celebrating a true queen! LaReyna brings style, strength, and amazing energy everywhere she goes. So today we raise the balloons, the cake, and all the birthday confetti in your honor. Wishing you a day full of love, laughter, and everything that makes you smile. May this year bring you big wins, unforgettable moments, and plenty of reasons to celebrate.
+    embed = discord.Embed(
+        title="🚂 OGV Train Schedule",
+        color=discord.Color.gold(),
+        timestamp=datetime.now(tz=ET),
+    )
 
-### Contest / Raffle — heartfelt moment
-Input: Name=Landers, Theme=Contest win given away, Notes=won the train raffle but immediately tried to give it to PinkCatBoi
-Output: Tonight's train raffle winner was Landers… but in true OGV fashion, he immediately tried to pass the spotlight to someone else. Instead of keeping the win, Landers wanted to give the train to PinkCatBoi. That right there is exactly what OGV has always been about — teammates lifting each other up and celebrating together. So whether it's Landers stepping up with the win or PinkCatBoi being the kind of teammate people want to share it with, this is the kind of energy that makes OGV special. Sometimes the best part of winning… is sharing it.
+    # ── Upcoming entries ───────────────────────────────────────────────────────
+    if upcoming:
+        for date_str, entry in upcoming.items():
+            d           = date.fromisoformat(date_str)
+            name        = entry.get("name", "Unknown")
+            is_today    = d == today
+            has_details = any(entry.get(k) for k in ("theme", "notes"))
+            prompted    = date_str in blurb_log
 
-### Achievement / Milestone
-Input: Name=Super Kale, Theme=Achievement, Notes=engineered Season Five, big-brain moves, clutch calls, strategy and coordination, superhero-level work
-Output: Season Five didn't just happen… it was strategically engineered — and we all know who was behind the master plan. From the big-brain moves to the clutch calls that kept the alliance flying high, Super Kale has been out here doing superhero-level work for OGV. Your planning, coordination, and next-level foresight kept this train on the rails and the whole squad moving forward strong. Season Five absolutely would not have been the same without you. Honestly? The only word that fits is… superKALEifragilistic.
+            # Status badge
+            if prompted:
+                status = "✅ Prompt Retrieved"
+            elif has_details:
+                status = "📋 Details Stored"
+            else:
+                status = "⏳ Pending"
 
-### Cinematic / Dramatic
-Input: Name=TRC, Theme=General celebration, Tone=Cinematic, Notes=protecting the alliance, watching over everyone
-Output: Out on the frontier, not every train makes it through the night… but this one's got protection. Mounted up and watching the tracks, TRC stands guard over the OGV Express — making sure the gold stays safe and the ride keeps rolling. Smoke in the air, iron on the rails, and anyone thinking about stopping this train better think twice. Around here the rule is simple: You ride with OGV… or you get left in the dust.
+            # Field name — highlight today
+            if is_today:
+                field_name = f"🔴 TODAY — {d.strftime('%A, %B %-d')}"
+            else:
+                days_away  = (d - today).days
+                day_label  = f"in {days_away} day{'s' if days_away != 1 else ''}"
+                field_name = f"📅 {d.strftime('%A, %B %-d')} ({day_label})"
 
-## Instructions
-Generate exactly ONE blurb. Output only the blurb text — no explanation, no commentary, no label, nothing else. Make it feel personal, specific, and real."""
+            # Field value — details summary if stored
+            lines = [f"**{name}**", f"Status: {status}"]
+            if entry.get("theme"):
+                lines.append(f"Theme: {entry['theme']}")
+            if entry.get("tone") and entry["tone"] != "Default (match the theme)":
+                lines.append(f"Tone: {entry['tone']}")
+            if entry.get("notes"):
+                # Truncate long notes for scannability
+                notes = entry["notes"]
+                if len(notes) > 60:
+                    notes = notes[:57] + "..."
+                lines.append(f"Notes: *{notes}*")
+
+            embed.add_field(name=field_name, value="\n".join(lines), inline=False)
+
+    # ── Recent past entries (compact) ─────────────────────────────────────────
+    if past:
+        past_lines = []
+        for date_str, entry in list(past.items())[-5:]:
+            d    = date.fromisoformat(date_str)
+            name = entry.get("name", "Unknown")
+            icon = "✅" if date_str in blurb_log else "—"
+            past_lines.append(f"{icon} ~~{d.strftime('%b %-d')}~~ — {name}")
+        embed.add_field(
+            name="📁 Recent Past",
+            value="\n".join(past_lines),
+            inline=False,
+        )
+
+    embed.set_footer(text="✅ Prompt retrieved  📋 Details stored  ⏳ Pending  |  Use !trainprompt to retrieve")
+    return embed
+
+
+def build_entry_embed(date_str: str, entry: dict, blurb_log: set) -> discord.Embed:
+    """Build a detail embed for a single schedule entry."""
+    d     = date.fromisoformat(date_str)
+    name  = entry.get("name", "Unknown")
+    done  = date_str in blurb_log
+
+    embed = discord.Embed(
+        title=f"🚂 {name} — {d.strftime('%A, %B %-d')}",
+        color=discord.Color.green() if done else discord.Color.blurple(),
+    )
+
+    embed.add_field(name="Theme",  value=entry.get("theme", "*Not set*"),  inline=True)
+    embed.add_field(name="Tone",   value=entry.get("tone",  "*Not set*"),  inline=True)
+    embed.add_field(name="\u200b", value="\u200b",                         inline=True)
+    embed.add_field(name="Notes",  value=entry.get("notes", "*Not set*"),  inline=False)
+
+    status = "✅ Prompt already retrieved" if done else "⏳ Prompt not yet retrieved"
+    embed.set_footer(text=status)
+
+    return embed
 
 
 # ── UI Views ───────────────────────────────────────────────────────────────────
@@ -269,115 +316,330 @@ class ToneSelectView(discord.ui.View):
         self.stop()
 
 
-class ConfirmView(discord.ui.View):
+class ConfirmPromptView(discord.ui.View):
     def __init__(self):
         super().__init__(timeout=WIZARD_TIMEOUT)
-        self.confirmed = None
+        self.action = None
 
-    @discord.ui.button(label="✅ Generate Blurb", style=discord.ButtonStyle.success)
-    async def confirm(self, interaction: discord.Interaction, button: discord.ui.Button):
-        self.confirmed = True
+    @discord.ui.button(label="📋 Get Prompt", style=discord.ButtonStyle.success)
+    async def get_prompt(self, interaction: discord.Interaction, button: discord.ui.Button):
+        self.action = "prompt"
         await interaction.response.defer()
         self.stop()
 
     @discord.ui.button(label="❌ Cancel", style=discord.ButtonStyle.danger)
     async def cancel(self, interaction: discord.Interaction, button: discord.ui.Button):
-        self.confirmed = False
+        self.action = "cancel"
         await interaction.response.defer()
         self.stop()
 
 
-class RegenerateView(discord.ui.View):
+class SkipOrFillView(discord.ui.View):
+    """Used during schedule input to ask whether to fill in details for a person."""
     def __init__(self):
         super().__init__(timeout=WIZARD_TIMEOUT)
         self.action = None
 
-    @discord.ui.button(label="🔄 Regenerate", style=discord.ButtonStyle.primary)
-    async def regenerate(self, interaction: discord.Interaction, button: discord.ui.Button):
-        self.action = "regenerate"
+    @discord.ui.button(label="✏️ Add Details", style=discord.ButtonStyle.primary)
+    async def fill(self, interaction: discord.Interaction, button: discord.ui.Button):
+        self.action = "fill"
         await interaction.response.defer()
         self.stop()
 
-    @discord.ui.button(label="✅ Looks Good", style=discord.ButtonStyle.success)
-    async def approve(self, interaction: discord.Interaction, button: discord.ui.Button):
-        self.action = "approve"
+    @discord.ui.button(label="⏭️ Skip for Now", style=discord.ButtonStyle.secondary)
+    async def skip(self, interaction: discord.Interaction, button: discord.ui.Button):
+        self.action = "skip"
+        await interaction.response.defer()
+        self.stop()
+
+    @discord.ui.button(label="🛑 Done Entering", style=discord.ButtonStyle.danger)
+    async def done(self, interaction: discord.Interaction, button: discord.ui.Button):
+        self.action = "done"
         await interaction.response.defer()
         self.stop()
 
 
 class ReminderView(discord.ui.View):
-    """Reminder button that launches the wizard with the name pre-filled."""
-
-    def __init__(self, cog, name: str):
+    def __init__(self, cog, date_str: str, name: str):
         super().__init__(timeout=3600)
-        self.cog  = cog
-        self.name = name
+        self.cog      = cog
+        self.date_str = date_str
+        self.name     = name
 
-    @discord.ui.button(label="🚂 Generate Blurb Now", style=discord.ButtonStyle.success)
-    async def launch_wizard(self, interaction: discord.Interaction, button: discord.ui.Button):
-        # Check role
+    @discord.ui.button(label="📋 View & Get Prompt", style=discord.ButtonStyle.success)
+    async def launch(self, interaction: discord.Interaction, button: discord.ui.Button):
         role_names = [r.name for r in interaction.user.roles]
         if REQUIRED_ROLE_NAME not in role_names:
             await interaction.response.send_message(
-                f"⛔ You need the **{REQUIRED_ROLE_NAME}** role to use this.",
-                ephemeral=True,
+                f"⛔ You need the **{REQUIRED_ROLE_NAME}** role.", ephemeral=True
             )
             return
 
-        # Disable the button so it can't be clicked twice
         button.disabled = True
         await interaction.response.edit_message(view=self)
 
-        # Launch wizard with name pre-filled
-        channel = interaction.channel
-        await run_train_wizard_prefilled(self.cog.bot, channel, interaction.user, self.name)
+        schedule   = load_schedule()
+        blurb_log  = load_blurb_log()
+        entry      = schedule.get(self.date_str, {"name": self.name})
+        channel    = interaction.channel
+
+        await retrieve_and_confirm(self.cog.bot, channel, interaction.user, self.date_str, entry, blurb_log)
         self.stop()
 
 
-# ── Claude API call ────────────────────────────────────────────────────────────
+# ── Retrieve and confirm flow ──────────────────────────────────────────────────
 
-async def generate_blurb(name: str, theme: str, tone: str, notes: str) -> str:
-    tone_str  = f"\nTone: {tone}" if tone != "Default (match the theme)" else ""
-    notes_str = f"\nNotes: {notes}" if notes else "\nNotes: (none provided — keep it general but warm)"
+async def retrieve_and_confirm(bot, channel, user, date_str: str, entry: dict, blurb_log: set):
+    """Show stored details for an entry and offer to post the prompt."""
+    detail_embed = build_entry_embed(date_str, entry, blurb_log)
+    confirm_view = ConfirmPromptView()
 
-    user_prompt = (
-        f"Generate a train announcement blurb with these details:\n"
-        f"Name: {name}\n"
-        f"Theme: {theme}"
-        f"{tone_str}"
-        f"{notes_str}\n\n"
-        f"Remember: under 500 characters, output only the blurb, no commentary."
+    name = entry.get("name", "Unknown")
+    has_details = any(entry.get(k) for k in ("theme", "notes"))
+
+    if not has_details:
+        await channel.send(
+            f"⚠️ No details stored for **{name}** yet. "
+            f"Use `!train` to build the prompt manually.",
+            embed=detail_embed,
+        )
+        return
+
+    await channel.send(
+        f"📋 Here are the stored details for **{name}**. Ready to get the ChatGPT prompt?",
+        embed=detail_embed,
+        view=confirm_view,
+    )
+    await confirm_view.wait()
+
+    if confirm_view.action != "prompt":
+        return
+
+    prompt = build_chatgpt_prompt(
+        name=name,
+        theme=entry.get("theme", ""),
+        tone=entry.get("tone", ""),
+        notes=entry.get("notes", ""),
+    )
+    await channel.send(
+        f"✅ **ChatGPT prompt for {name}** — copy and paste into the thread:\n```\n{prompt}\n```"
+    )
+    mark_blurb_generated(date_str)
+
+
+# ── Schedule collection wizard ─────────────────────────────────────────────────
+
+async def collect_schedule(bot, ctx: commands.Context, cancel_event: asyncio.Event):
+    """
+    Walk through schedule input:
+    1. Collect all date/name lines at once
+    2. For each parsed entry, offer to add theme/tone/notes or skip
+    """
+    channel = ctx.channel
+    user    = ctx.author
+
+    def check_msg(m):
+        return m.author == user and m.channel == channel
+
+    async def wait_for_msg(prompt_text: str) -> str | None:
+        msg = await channel.send(prompt_text)
+        try:
+            reply_task  = asyncio.ensure_future(bot.wait_for("message", check=check_msg, timeout=WIZARD_TIMEOUT))
+            cancel_task = asyncio.ensure_future(cancel_event.wait())
+            done, pending = await asyncio.wait([reply_task, cancel_task], return_when=asyncio.FIRST_COMPLETED)
+            for t in pending:
+                t.cancel()
+            if cancel_event.is_set():
+                try:
+                    await msg.delete()
+                except discord.HTTPException:
+                    pass
+                return None
+            reply = done.pop().result()
+            try:
+                await msg.delete()
+                await reply.delete()
+            except discord.HTTPException:
+                pass
+            return reply.content.strip()
+        except asyncio.TimeoutError:
+            await channel.send("⏰ Timed out. Use `!schedule` to try again.")
+            return None
+
+    async def wait_for_view(view: discord.ui.View, msg: discord.Message) -> bool:
+        """Wait for a view interaction or cancel. Returns False if cancelled."""
+        view_task   = asyncio.ensure_future(view.wait())
+        cancel_task = asyncio.ensure_future(cancel_event.wait())
+        done, pending = await asyncio.wait([view_task, cancel_task], return_when=asyncio.FIRST_COMPLETED)
+        for t in pending:
+            t.cancel()
+        if cancel_event.is_set():
+            for item in view.children:
+                item.disabled = True
+            try:
+                await msg.edit(view=view)
+            except discord.HTTPException:
+                pass
+            return False
+        return True
+
+    # Step 1: Collect date/name lines
+    prompt_msg = await channel.send(
+        f"📋 **Train Schedule Input** — {user.mention}\n\n"
+        f"Paste your schedule below, one entry per line:\n"
+        f"```\n"
+        f"April 2 - PlayerName\n"
+        f"April 5 - PlayerName\n"
+        f"4/8 - PlayerName\n"
+        f"```\n"
+        f"This will **merge** with the current schedule (existing entries are kept).\n"
+        f"*(Type `!cancel` at any time to stop)*"
     )
 
-    payload = {
-        "model": ANTHROPIC_MODEL,
-        "max_tokens": 1000,
-        "system": SYSTEM_PROMPT,
-        "messages": [{"role": "user", "content": user_prompt}],
-    }
+    raw = await wait_for_msg("")
+    try:
+        await prompt_msg.delete()
+    except discord.HTTPException:
+        pass
+    if raw is None:
+        return
 
-    headers = {
-        "Content-Type": "application/json",
-        "anthropic-version": "2023-06-01",
-    }
+    # Parse all lines
+    parsed  = []
+    errors  = []
+    for line in raw.strip().splitlines():
+        line = line.strip()
+        if not line:
+            continue
+        d, name = parse_date_and_name(line)
+        if d and name:
+            parsed.append((d, name))
+        else:
+            errors.append(line)
 
-    async with aiohttp.ClientSession() as session:
-        async with session.post(ANTHROPIC_API_URL, json=payload, headers=headers) as resp:
-            if resp.status != 200:
-                text = await resp.text()
-                raise Exception(f"Claude API error {resp.status}: {text}")
-            data = await resp.json()
-            return data["content"][0]["text"].strip()
+    if not parsed:
+        err_list = "\n".join(f"• {e}" for e in errors)
+        await channel.send(
+            f"⚠️ Could not parse any entries. Check your format and try again.\n\n"
+            f"**Could not parse:**\n{err_list}"
+        )
+        return
+
+    # Load existing schedule to merge into
+    schedule = load_schedule()
+
+    # Step 2: For each parsed entry, offer to add details
+    await channel.send(
+        f"✅ Parsed **{len(parsed)}** entr{'y' if len(parsed) == 1 else 'ies'}. "
+        f"Now you can add details for each person, or skip and do it later.\n"
+        f"*(Details are stored and used to auto-build the ChatGPT prompt when needed)*"
+    )
+
+    for i, (d, name) in enumerate(parsed):
+        date_str       = d.isoformat()
+        existing_entry = schedule.get(date_str, {})
+        existing_name  = existing_entry.get("name", name) if isinstance(existing_entry, dict) else name
+
+        skip_view = SkipOrFillView()
+        skip_msg  = await channel.send(
+            f"**Entry {i+1} of {len(parsed)}: {existing_name} — {d.strftime('%A, %B %-d')}**\n"
+            f"Would you like to add theme, tone, and notes now?",
+            view=skip_view,
+        )
+
+        ok = await wait_for_view(skip_view, skip_msg)
+        if not ok:
+            return
+
+        try:
+            await skip_msg.delete()
+        except discord.HTTPException:
+            pass
+
+        if skip_view.action == "done":
+            # Save what we have so far and stop
+            schedule[date_str] = {"name": existing_name}
+            break
+
+        if skip_view.action == "skip":
+            schedule[date_str] = {"name": existing_name}
+            continue
+
+        # Fill in details for this person
+        entry = {"name": existing_name}
+
+        # Theme
+        theme_msg  = await channel.send(f"🎯 **Theme** for {existing_name}:")
+        theme_view = ThemeSelectView()
+        await theme_msg.edit(view=theme_view)
+        ok = await wait_for_view(theme_view, theme_msg)
+        if not ok:
+            return
+        try:
+            await theme_msg.delete()
+        except discord.HTTPException:
+            pass
+
+        if theme_view.selected:
+            theme = theme_view.selected
+            if theme == "Custom":
+                custom = await wait_for_msg("Type your custom theme:")
+                if custom is None:
+                    return
+                theme = custom
+            entry["theme"] = theme
+
+        # Tone
+        tone_msg  = await channel.send(f"🎭 **Tone** for {existing_name}:")
+        tone_view = ToneSelectView()
+        await tone_msg.edit(view=tone_view)
+        ok = await wait_for_view(tone_view, tone_msg)
+        if not ok:
+            return
+        try:
+            await tone_msg.delete()
+        except discord.HTTPException:
+            pass
+
+        if tone_view.selected and tone_view.selected != "Default (match the theme)":
+            entry["tone"] = tone_view.selected
+
+        # Notes
+        notes_raw = await wait_for_msg(
+            f"📝 **Notes** for {existing_name} *(or type `skip`)*:\n"
+            f"Add anything personal — role, personality, achievements, story moments."
+        )
+        if notes_raw is None:
+            return
+        if notes_raw.lower() != "skip":
+            entry["notes"] = notes_raw
+
+        schedule[date_str] = entry
+
+        await channel.send(
+            f"✅ Saved details for **{existing_name}**.",
+            delete_after=5,
+        )
+
+    save_schedule(schedule)
+
+    # Show errors if any
+    error_text = ""
+    if errors:
+        error_text = f"\n\n⚠️ **Could not parse {len(errors)} line(s):**\n" + "\n".join(f"• {e}" for e in errors)
+
+    # Post updated schedule embed
+    blurb_log = load_blurb_log()
+    embed = build_schedule_embed(schedule, blurb_log)
+    await channel.send(
+        f"📋 **Schedule saved!**{error_text}",
+        embed=embed,
+    )
 
 
-# ── Wizard core (shared between !train and reminder button) ────────────────────
+# ── Train wizard (manual, for any name) ───────────────────────────────────────
 
 async def run_wizard_steps(bot, channel, user, prefilled_name: str = None):
-    """
-    Core wizard logic. If prefilled_name is provided, skip Step 1.
-    Returns True if a blurb was approved, False otherwise.
-    """
-    # Register this wizard session so !cancel can stop it
     cancel_event = asyncio.Event()
     active_wizards[user.id] = cancel_event
 
@@ -385,20 +647,13 @@ async def run_wizard_steps(bot, channel, user, prefilled_name: str = None):
         return m.author == user and m.channel == channel
 
     async def ask(prompt: str) -> str | None:
-        """Send a prompt and wait for a text reply. Returns None on timeout or cancel."""
         msg = await channel.send(prompt) if prompt else None
         try:
-            # Wait for either a message reply or cancellation
             reply_task  = asyncio.ensure_future(bot.wait_for("message", check=check_msg, timeout=WIZARD_TIMEOUT))
             cancel_task = asyncio.ensure_future(cancel_event.wait())
-
-            done, pending = await asyncio.wait(
-                [reply_task, cancel_task],
-                return_when=asyncio.FIRST_COMPLETED,
-            )
-            for task in pending:
-                task.cancel()
-
+            done, pending = await asyncio.wait([reply_task, cancel_task], return_when=asyncio.FIRST_COMPLETED)
+            for t in pending:
+                t.cancel()
             if cancel_event.is_set():
                 if msg:
                     try:
@@ -406,7 +661,6 @@ async def run_wizard_steps(bot, channel, user, prefilled_name: str = None):
                     except discord.HTTPException:
                         pass
                 return None
-
             reply = done.pop().result()
             try:
                 if msg:
@@ -415,175 +669,112 @@ async def run_wizard_steps(bot, channel, user, prefilled_name: str = None):
             except discord.HTTPException:
                 pass
             return reply.content.strip()
-
         except asyncio.TimeoutError:
             await channel.send("⏰ Wizard timed out. Use `!train` to start again.")
             return None
 
+    async def wait_for_view(view, msg):
+        view_task   = asyncio.ensure_future(view.wait())
+        cancel_task = asyncio.ensure_future(cancel_event.wait())
+        done, pending = await asyncio.wait([view_task, cancel_task], return_when=asyncio.FIRST_COMPLETED)
+        for t in pending:
+            t.cancel()
+        if cancel_event.is_set():
+            for item in view.children:
+                item.disabled = True
+            try:
+                await msg.edit(view=view)
+            except discord.HTTPException:
+                pass
+            return False
+        return True
+
     try:
-        # ── Step 1: Name ───────────────────────────────────────────────────────
+        # Step 1: Name
         if prefilled_name:
             name = prefilled_name
             await channel.send(
                 f"🚂 **Train Blurb Wizard** — started by {user.mention}\n\n"
-                f"👤 **Name pre-filled from schedule:** {name}\n"
-                f"*(Type `!cancel` at any time to stop the wizard)*"
+                f"👤 **Name pre-filled:** {name}\n"
+                f"*(Type `!cancel` at any time to stop)*"
             )
         else:
             await channel.send(
                 f"🚂 **Train Blurb Wizard** — started by {user.mention}\n\n"
                 f"**Step 1 of 4 — Member Name**\n"
-                f"Type the member's name exactly as it should appear in the announcement.\n"
-                f"*(Type `!cancel` at any time to stop the wizard)*"
+                f"Type the member's name exactly as it should appear:\n"
+                f"*(Type `!cancel` at any time to stop)*"
             )
             name = await ask("")
             if not name or cancel_event.is_set():
                 return False
 
-        # ── Step 2: Theme ──────────────────────────────────────────────────────
-        theme_msg  = await channel.send(f"**Step 2 of 4 — Theme**\nSelect the theme for this train:")
+        # Step 2: Theme
+        theme_msg  = await channel.send("**Step 2 of 4 — Theme**\nSelect the theme for this train:")
         theme_view = ThemeSelectView()
         await theme_msg.edit(view=theme_view)
-
-        # Wait for theme selection or cancellation
-        view_task   = asyncio.ensure_future(theme_view.wait())
-        cancel_task = asyncio.ensure_future(cancel_event.wait())
-        done, pending = await asyncio.wait([view_task, cancel_task], return_when=asyncio.FIRST_COMPLETED)
-        for task in pending:
-            task.cancel()
-
-        if cancel_event.is_set():
-            for item in theme_view.children:
-                item.disabled = True
-            await theme_msg.edit(view=theme_view)
+        if not await wait_for_view(theme_view, theme_msg):
             return False
-
         if theme_view.selected is None:
             await channel.send("⏰ Wizard timed out. Use `!train` to start again.")
             return False
-
         theme = theme_view.selected
         if theme == "Custom":
             theme = await ask("Type your custom theme:")
             if not theme or cancel_event.is_set():
                 return False
 
-        # ── Step 3: Tone ───────────────────────────────────────────────────────
-        tone_msg  = await channel.send(f"**Step 3 of 4 — Tone**\nSelect the tone (or leave as default to match the theme):")
+        # Step 3: Tone
+        tone_msg  = await channel.send("**Step 3 of 4 — Tone**\nSelect the tone:")
         tone_view = ToneSelectView()
         await tone_msg.edit(view=tone_view)
-
-        view_task   = asyncio.ensure_future(tone_view.wait())
-        cancel_task = asyncio.ensure_future(cancel_event.wait())
-        done, pending = await asyncio.wait([view_task, cancel_task], return_when=asyncio.FIRST_COMPLETED)
-        for task in pending:
-            task.cancel()
-
-        if cancel_event.is_set():
-            for item in tone_view.children:
-                item.disabled = True
-            await tone_msg.edit(view=tone_view)
+        if not await wait_for_view(tone_view, tone_msg):
             return False
-
         if tone_view.selected is None:
             await channel.send("⏰ Wizard timed out. Use `!train` to start again.")
             return False
-
         tone = tone_view.selected
 
-        # ── Step 4: Notes ──────────────────────────────────────────────────────
+        # Step 4: Notes
         await channel.send(
-            f"**Step 4 of 4 — Notes** *(highly recommended)*\n"
-            f"Add any details that make this personal — role, personality, achievements, "
-            f"story moments, anything specific about them.\n"
-            f"Type your notes below, or type `skip` to skip:"
+            "**Step 4 of 4 — Notes** *(highly recommended)*\n"
+            "Add anything personal — role, personality, achievements, story moments.\n"
+            "Type your notes, or type `skip`:"
         )
         notes_raw = await ask("")
         if notes_raw is None or cancel_event.is_set():
             return False
         notes = "" if notes_raw.lower() == "skip" else notes_raw
 
-        # ── Summary & confirm ──────────────────────────────────────────────────
+        # Summary
         tone_display  = tone if tone != "Default (match the theme)" else "Default"
         notes_display = notes if notes else "*(none)*"
 
-        confirm_view = ConfirmView()
+        confirm_view = ConfirmPromptView()
         await channel.send(
-            f"**Ready to generate — here's your input:**\n\n"
+            f"**Ready to build prompt — here's your input:**\n\n"
             f"👤 **Name:** {name}\n"
             f"🎯 **Theme:** {theme}\n"
             f"🎭 **Tone:** {tone_display}\n"
             f"📝 **Notes:** {notes_display}\n\n"
-            f"Generate the blurb?",
+            f"Post the ChatGPT prompt?",
             view=confirm_view,
         )
-
-        view_task   = asyncio.ensure_future(confirm_view.wait())
-        cancel_task = asyncio.ensure_future(cancel_event.wait())
-        done, pending = await asyncio.wait([view_task, cancel_task], return_when=asyncio.FIRST_COMPLETED)
-        for task in pending:
-            task.cancel()
-
-        if cancel_event.is_set():
-            for item in confirm_view.children:
-                item.disabled = True
+        if not await wait_for_view(confirm_view, discord.utils.MISSING):
             return False
-
-        if not confirm_view.confirmed:
+        if confirm_view.action != "prompt":
             await channel.send("❌ Cancelled. Use `!train` to start over.")
             return False
 
-        # ── Generate loop ──────────────────────────────────────────────────────
-        generating_msg = await channel.send("✍️ Generating blurb...")
-
-        while True:
-            if cancel_event.is_set():
-                await generating_msg.edit(content="❌ Wizard cancelled.")
-                return False
-
-            try:
-                blurb = await generate_blurb(name, theme, tone, notes)
-            except Exception as e:
-                await generating_msg.edit(content=f"⚠️ Error generating blurb: {e}")
-                return False
-
-            char_count = len(blurb)
-            warning = (
-                f" ⚠️ *({char_count} chars — slightly over 500, consider editing)*"
-                if char_count > 500 else f" ✅ *({char_count} chars)*"
-            )
-
-            regen_view = RegenerateView()
-            await generating_msg.edit(
-                content=f"🚂 **Generated blurb for {name}:**{warning}\n\n```\n{blurb}\n```",
-                view=regen_view,
-            )
-
-            view_task   = asyncio.ensure_future(regen_view.wait())
-            cancel_task = asyncio.ensure_future(cancel_event.wait())
-            done, pending = await asyncio.wait([view_task, cancel_task], return_when=asyncio.FIRST_COMPLETED)
-            for task in pending:
-                task.cancel()
-
-            if cancel_event.is_set():
-                for item in regen_view.children:
-                    item.disabled = True
-                await generating_msg.edit(view=regen_view)
-                await generating_msg.edit(content="❌ Wizard cancelled.")
-                return False
-
-            if regen_view.action == "approve" or regen_view.action is None:
-                for item in regen_view.children:
-                    item.disabled = True
-                await generating_msg.edit(view=regen_view)
-                await channel.send(f"✅ **Final blurb for {name}** — ready to use:\n\n{blurb}")
-                mark_blurb_generated(date.today().isoformat())
-                return True
-
-            await generating_msg.edit(content="✍️ Regenerating blurb...", view=None)
+        prompt = build_chatgpt_prompt(name, theme, tone, notes)
+        await channel.send(
+            f"✅ **ChatGPT prompt for {name}** — copy and paste into the thread:\n"
+            f"```\n{prompt}\n```"
+        )
+        mark_blurb_generated(date.today().isoformat())
+        return True
 
     finally:
-        # Always clean up the registry when the wizard ends for any reason
         active_wizards.pop(user.id, None)
 
 
@@ -599,7 +790,7 @@ async def run_train_wizard_prefilled(bot, channel, user, name: str):
 
 class TrainCog(commands.Cog):
     def __init__(self, bot):
-        self.bot              = bot
+        self.bot                 = bot
         self.reminder_sent_today = False
         self.last_reminder_date  = None
         self.check_reminder.start()
@@ -607,251 +798,168 @@ class TrainCog(commands.Cog):
     def cog_unload(self):
         self.check_reminder.cancel()
 
-    def _has_leadership_role(self, ctx) -> bool:
-        return REQUIRED_ROLE_NAME in [r.name for r in ctx.author.roles]
+    def _has_role(self, ctx_or_member) -> bool:
+        if hasattr(ctx_or_member, "author"):
+            roles = ctx_or_member.author.roles
+        else:
+            roles = ctx_or_member.roles
+        return REQUIRED_ROLE_NAME in [r.name for r in roles]
 
-    def _is_leadership_channel(self, ctx) -> bool:
+    def _in_channel(self, ctx) -> bool:
         return ctx.channel.id == LEADERSHIP_CHANNEL_ID
 
-    # ── !cancel command ────────────────────────────────────────────────────────
+    async def _guard(self, ctx) -> bool:
+        """Delete command message and return False if checks fail."""
+        try:
+            await ctx.message.delete()
+        except discord.HTTPException:
+            pass
+        if not self._in_channel(ctx):
+            return False
+        if not self._has_role(ctx):
+            await ctx.channel.send(
+                f"⛔ You need the **{REQUIRED_ROLE_NAME}** role to use this command.",
+                delete_after=10,
+            )
+            return False
+        return True
+
+    # ── !cancel ────────────────────────────────────────────────────────────────
 
     @commands.command(name="cancel")
     async def cancel(self, ctx: commands.Context):
-        """Cancel any active wizard session for this user."""
-        if not self._is_leadership_channel(ctx):
-            try:
-                await ctx.message.delete()
-            except discord.HTTPException:
-                pass
-            return
-
         try:
             await ctx.message.delete()
         except discord.HTTPException:
             pass
-
+        if not self._in_channel(ctx):
+            return
         if ctx.author.id in active_wizards:
             active_wizards[ctx.author.id].set()
-            await ctx.channel.send(
-                f"❌ **Wizard cancelled** by {ctx.author.mention}.",
-                delete_after=10,
-            )
+            await ctx.channel.send(f"❌ Wizard cancelled by {ctx.author.mention}.", delete_after=10)
         else:
-            await ctx.channel.send(
-                f"ℹ️ You don't have an active wizard running.",
-                delete_after=10,
-            )
+            await ctx.channel.send("ℹ️ You don't have an active wizard running.", delete_after=10)
 
-    # ── !trainschedule command (alias for !schedule list) ─────────────────────
-
-    @commands.command(name="trainschedule")
-    async def trainschedule(self, ctx: commands.Context):
-        """Shortcut to view the current train schedule."""
-        if not self._is_leadership_channel(ctx):
-            try:
-                await ctx.message.delete()
-            except discord.HTTPException:
-                pass
-            return
-
-        if not self._has_leadership_role(ctx):
-            await ctx.send(
-                f"⛔ You need the **{REQUIRED_ROLE_NAME}** role to use this command.",
-                delete_after=10,
-            )
-            return
-
-        try:
-            await ctx.message.delete()
-        except discord.HTTPException:
-            pass
-
-        await self._show_schedule(ctx.channel)
-
-    # ── !train command ─────────────────────────────────────────────────────────
+    # ── !train ─────────────────────────────────────────────────────────────────
 
     @commands.command(name="train")
     async def train(self, ctx: commands.Context):
-        if not self._is_leadership_channel(ctx):
-            try:
-                await ctx.message.delete()
-            except discord.HTTPException:
-                pass
+        if not await self._guard(ctx):
             return
-
-        if not self._has_leadership_role(ctx):
-            await ctx.send(
-                f"⛔ You need the **{REQUIRED_ROLE_NAME}** role to use this command.",
-                delete_after=10,
-            )
-            return
-
-        try:
-            await ctx.message.delete()
-        except discord.HTTPException:
-            pass
-
         await run_train_wizard(ctx)
 
-    # ── !schedule command ──────────────────────────────────────────────────────
+    # ── !schedule ──────────────────────────────────────────────────────────────
 
     @commands.command(name="schedule")
     async def schedule(self, ctx: commands.Context, subcommand: str = None):
-        if not self._is_leadership_channel(ctx):
-            try:
-                await ctx.message.delete()
-            except discord.HTTPException:
-                pass
+        if not await self._guard(ctx):
             return
 
-        if not self._has_leadership_role(ctx):
-            await ctx.send(
-                f"⛔ You need the **{REQUIRED_ROLE_NAME}** role to use this command.",
-                delete_after=10,
-            )
-            return
-
-        try:
-            await ctx.message.delete()
-        except discord.HTTPException:
-            pass
-
-        # !schedule list
         if subcommand and subcommand.lower() == "list":
-            await self._show_schedule(ctx.channel)
+            await self._post_schedule_embed(ctx.channel)
             return
 
-        # !schedule clear
         if subcommand and subcommand.lower() == "clear":
             save_schedule({})
             await ctx.channel.send("🗑️ Train schedule cleared.")
             return
 
-        # !schedule — input mode
-        await self._collect_schedule(ctx)
-
-    async def _show_schedule(self, channel):
-        schedule = load_schedule()
-        if not schedule:
-            await channel.send("📋 No train schedule set. Use `!schedule` to add one.")
-            return
-
-        today = date.today()
-        lines = ["📋 **Upcoming Train Schedule:**\n"]
-        for date_str, name in sorted(schedule.items()):
-            d = date.fromisoformat(date_str)
-            generated = "✅" if date_str in load_blurb_log() else "⏳"
-            past_marker = " *(past)*" if d < today else ""
-            lines.append(f"{generated} **{d.strftime('%A, %B %-d')}** — {name}{past_marker}")
-
-        await channel.send("\n".join(lines))
-
-    async def _collect_schedule(self, ctx: commands.Context):
-        channel = ctx.channel
-        user    = ctx.author
-
-        prompt_msg = await channel.send(
-            f"📋 **Train Schedule Input** — {user.mention}\n\n"
-            f"Paste your schedule below, one entry per line. Accepted formats:\n"
-            f"```\n"
-            f"April 2 - PlayerName\n"
-            f"April 5 - PlayerName\n"
-            f"4/8 - PlayerName\n"
-            f"4/11/2026 - PlayerName\n"
-            f"```\n"
-            f"This will **replace** the current schedule. Type your schedule now:"
-        )
-
-        def check(m):
-            return m.author == user and m.channel == channel
-
+        # Input mode — register cancel event
+        cancel_event = asyncio.Event()
+        active_wizards[ctx.author.id] = cancel_event
         try:
-            reply = await self.bot.wait_for("message", check=check, timeout=WIZARD_TIMEOUT)
-        except asyncio.TimeoutError:
-            await channel.send("⏰ Timed out. Use `!schedule` to try again.")
+            await collect_schedule(self.bot, ctx, cancel_event)
+        finally:
+            active_wizards.pop(ctx.author.id, None)
+
+    # ── !trainschedule ─────────────────────────────────────────────────────────
+
+    @commands.command(name="trainschedule")
+    async def trainschedule(self, ctx: commands.Context):
+        if not await self._guard(ctx):
+            return
+        await self._post_schedule_embed(ctx.channel)
+
+    async def _post_schedule_embed(self, channel):
+        schedule  = load_schedule()
+        blurb_log = load_blurb_log()
+        embed     = build_schedule_embed(schedule, blurb_log)
+        await channel.send(embed=embed)
+
+    # ── !trainprompt ───────────────────────────────────────────────────────────
+
+    @commands.command(name="trainprompt")
+    async def trainprompt(self, ctx: commands.Context, *, date_arg: str = None):
+        """
+        Retrieve the stored prompt for a scheduled person.
+        Defaults to today. Pass a date to retrieve a specific entry:
+          !trainprompt April 5
+          !trainprompt 4/5
+        """
+        if not await self._guard(ctx):
             return
 
-        try:
-            await prompt_msg.delete()
-            await reply.delete()
-        except discord.HTTPException:
-            pass
+        schedule  = load_schedule()
+        blurb_log = load_blurb_log()
 
-        schedule, errors = parse_schedule_input(reply.content)
+        if date_arg:
+            d, _ = parse_date_and_name(f"{date_arg} - placeholder")
+            if d is None:
+                await ctx.channel.send(
+                    f"⚠️ Could not parse date `{date_arg}`. Try formats like `April 5` or `4/5`."
+                )
+                return
+            date_str = d.isoformat()
+        else:
+            date_str = date.today().isoformat()
 
-        if not schedule and errors:
-            error_list = "\n".join(f"• {e}" for e in errors)
-            await channel.send(
-                f"⚠️ Could not parse any entries. Check your format and try again.\n\n"
-                f"**Errors:**\n{error_list}"
-            )
+        if date_str not in schedule:
+            d_label = date.fromisoformat(date_str).strftime("%A, %B %-d")
+            await ctx.channel.send(f"ℹ️ Nothing scheduled for **{d_label}**.")
             return
 
-        save_schedule(schedule)
-
-        # Build confirmation message
-        lines = ["✅ **Schedule saved:**\n"]
-        for date_str, name in sorted(schedule.items()):
-            d = date.fromisoformat(date_str)
-            lines.append(f"• **{d.strftime('%A, %B %-d')}** — {name}")
-
-        if errors:
-            lines.append(f"\n⚠️ **Could not parse {len(errors)} line(s):**")
-            for e in errors:
-                lines.append(f"• {e}")
-
-        await channel.send("\n".join(lines))
+        entry = schedule[date_str]
+        await retrieve_and_confirm(self.bot, ctx.channel, ctx.author, date_str, entry, blurb_log)
 
     # ── Reminder loop ──────────────────────────────────────────────────────────
 
     @tasks.loop(minutes=1)
     async def check_reminder(self):
-        """Check every minute if a blurb reminder needs to be sent."""
         now   = datetime.now(tz=ET)
         today = date.today()
 
-        # Reset the sent flag at midnight each day
         if self.last_reminder_date != today:
             self.last_reminder_date  = today
             self.reminder_sent_today = False
 
-        # Train reminder always fires at 10:30pm ET regardless of day
-        # (Saturday time shift only applies to alliance events, not trains)
-        reminder_hour, reminder_min = 22, 30
-
-        if now.hour != reminder_hour or now.minute != reminder_min:
+        # Train reminder always at 10:30pm ET
+        if now.hour != 22 or now.minute != 30:
             return
-
         if self.reminder_sent_today:
             return
 
-        # Check if today is on the schedule
-        schedule = load_schedule()
+        schedule  = load_schedule()
         today_str = today.isoformat()
         if today_str not in schedule:
-            return  # Nothing scheduled today
-
-        # Check if a blurb has already been generated
+            return
         if blurb_generated_today():
             return
 
-        # Fire the reminder
-        name    = schedule[today_str]
+        entry   = schedule[today_str]
+        name    = entry.get("name", "Unknown")
         channel = self.bot.get_channel(LEADERSHIP_CHANNEL_ID)
         if channel is None:
-            print(f"[TRAIN] Could not find leadership channel for reminder")
             return
 
-        view = ReminderView(cog=self, name=name)
+        view = ReminderView(cog=self, date_str=today_str, name=name)
         await channel.send(
-            f"⏰ **Train blurb reminder!**\n\n"
-            f"Today's train is for **{name}** and no blurb has been generated yet. "
-            f"Click below to launch the wizard with their name pre-filled.",
+            f"⏰ **Train prompt reminder!**\n\n"
+            f"Today's train is for **{name}** and the prompt hasn't been retrieved yet. "
+            f"Click below to view stored details and get the ChatGPT prompt.",
             view=view,
         )
-
         self.reminder_sent_today = True
-        print(f"[TRAIN] Blurb reminder sent for {name} on {today_str}")
+        print(f"[TRAIN] Reminder sent for {name} on {today_str}")
 
     @check_reminder.before_loop
     async def before_check_reminder(self):

@@ -524,7 +524,7 @@ async def collect_schedule(bot, ctx: commands.Context, cancel_event: asyncio.Eve
         return True
 
     # Step 1: Collect date/name lines
-    prompt_msg = await channel.send(
+    await channel.send(
         f"📋 **Train Schedule Input** — {user.mention}\n\n"
         f"Paste your schedule below, one entry per line:\n"
         f"```\n"
@@ -536,12 +536,33 @@ async def collect_schedule(bot, ctx: commands.Context, cancel_event: asyncio.Eve
         f"*(Type `!cancel` at any time to stop)*"
     )
 
-    raw = await wait_for_msg("")
+    # Wait directly for the user's reply
     try:
-        await prompt_msg.delete()
-    except discord.HTTPException:
-        pass
-    if raw is None:
+        reply_task  = asyncio.ensure_future(bot.wait_for("message", check=check_msg, timeout=WIZARD_TIMEOUT))
+        cancel_task = asyncio.ensure_future(cancel_event.wait())
+        done, pending = await asyncio.wait([reply_task, cancel_task], return_when=asyncio.FIRST_COMPLETED)
+        for t in pending:
+            t.cancel()
+
+        if cancel_event.is_set():
+            await channel.send("❌ Schedule input cancelled.")
+            return
+
+        reply = done.pop().result()
+        raw   = reply.content.strip()
+        print(f"[TRAIN] Schedule input received: {repr(raw)}")
+
+        try:
+            await reply.delete()
+        except discord.HTTPException:
+            pass
+
+    except asyncio.TimeoutError:
+        await channel.send("⏰ Timed out. Use `!schedule` to try again.")
+        return
+
+    if not raw:
+        await channel.send("⚠️ No input received. Use `!schedule` to try again.")
         return
 
     # Parse all lines
@@ -551,10 +572,13 @@ async def collect_schedule(bot, ctx: commands.Context, cancel_event: asyncio.Eve
         line = line.strip()
         if not line:
             continue
+        print(f"[TRAIN] Parsing line: {repr(line)}")
         d, name, hint = parse_date_and_name(line)
         if d and name:
+            print(f"[TRAIN] Parsed: {d} → {name} (hint: {hint})")
             parsed.append((d, name, hint))
         else:
+            print(f"[TRAIN] Could not parse: {repr(line)}")
             errors.append(line)
 
     if not parsed:

@@ -104,9 +104,47 @@ MONTH_MAP = {
 }
 
 
-def parse_date_and_name(line: str) -> tuple[date, str] | tuple[None, None]:
-    """Parse a single 'Date - Name' line. Returns (date, name) or (None, None)."""
+def parse_date_and_name(line: str) -> tuple[date, str, str | None] | tuple[None, None, None]:
+    """
+    Parse a single 'Date - Name' line.
+    Returns (date, clean_name, theme_hint) or (None, None, None).
+
+    Handles parenthetical notes in names:
+      4/02 - Emperor Gold (birthday)  →  name="Emperor Gold", theme_hint="Birthday"
+      4/03 - Badkimberdog (birtbday)  →  name="Badkimberdog", theme_hint="Birthday"
+      4/05 - Nomination or R4         →  name="Nomination or R4", theme_hint=None
+    """
     current_year = datetime.now(tz=ET).year
+
+    # Theme hint keywords found in parentheses
+    THEME_HINTS = {
+        "birthday": "Birthday",
+        "birtday": "Birthday",   # common typo
+        "birtbday": "Birthday",  # another common typo
+        "bday": "Birthday",
+        "welcome": "Welcome to OGV",
+        "milestone": "Milestone",
+        "war": "War / Performance",
+        "performance": "War / Performance",
+        "celebration": "General Celebration",
+        "raffle": "Contest / Raffle",
+        "nomination": "Contest / Raffle",
+    }
+
+    def extract_name_and_hint(raw_name: str) -> tuple[str, str | None]:
+        """Strip parenthetical notes from name and detect theme hints."""
+        paren_match = re.search(r"\(([^)]+)\)", raw_name)
+        hint = None
+        if paren_match:
+            paren_content = paren_match.group(1).lower().strip()
+            # Check each word in the parenthetical against hint keywords
+            for word in re.split(r"\W+", paren_content):
+                if word in THEME_HINTS:
+                    hint = THEME_HINTS[word]
+                    break
+            # Remove the parenthetical from the name
+            raw_name = raw_name[:paren_match.start()].strip()
+        return raw_name.strip(), hint
 
     # Numeric: 4/1 - Name or 4/1/2026 - Name
     numeric = re.match(r"^(\d{1,2})/(\d{1,2})(?:/(\d{4}))?\s*[-:]\s*(.+)$", line)
@@ -117,9 +155,10 @@ def parse_date_and_name(line: str) -> tuple[date, str] | tuple[None, None]:
                 int(numeric.group(1)),
                 int(numeric.group(2)),
             )
-            return d, numeric.group(4).strip()
+            name, hint = extract_name_and_hint(numeric.group(4).strip())
+            return d, name, hint
         except ValueError:
-            return None, None
+            return None, None, None
 
     # Month name: April 1 - Name or April 1: Name
     named = re.match(
@@ -136,11 +175,12 @@ def parse_date_and_name(line: str) -> tuple[date, str] | tuple[None, None]:
         if month:
             try:
                 d = date(current_year, month, int(named.group(2)))
-                return d, named.group(3).strip()
+                name, hint = extract_name_and_hint(named.group(3).strip())
+                return d, name, hint
             except ValueError:
-                return None, None
+                return None, None, None
 
-    return None, None
+    return None, None, None
 
 
 # ── Theme and tone options ─────────────────────────────────────────────────────
@@ -511,9 +551,9 @@ async def collect_schedule(bot, ctx: commands.Context, cancel_event: asyncio.Eve
         line = line.strip()
         if not line:
             continue
-        d, name = parse_date_and_name(line)
+        d, name, hint = parse_date_and_name(line)
         if d and name:
-            parsed.append((d, name))
+            parsed.append((d, name, hint))
         else:
             errors.append(line)
 
@@ -535,14 +575,15 @@ async def collect_schedule(bot, ctx: commands.Context, cancel_event: asyncio.Eve
         f"*(Details are stored and used to auto-build the ChatGPT prompt when needed)*"
     )
 
-    for i, (d, name) in enumerate(parsed):
+    for i, (d, name, theme_hint) in enumerate(parsed):
         date_str       = d.isoformat()
         existing_entry = schedule.get(date_str, {})
         existing_name  = existing_entry.get("name", name) if isinstance(existing_entry, dict) else name
 
+        hint_note = f" *(theme hint detected: **{theme_hint}**)*" if theme_hint else ""
         skip_view = SkipOrFillView()
         skip_msg  = await channel.send(
-            f"**Entry {i+1} of {len(parsed)}: {existing_name} — {d.strftime('%A, %B %-d')}**\n"
+            f"**Entry {i+1} of {len(parsed)}: {existing_name} — {d.strftime('%A, %B %-d')}**{hint_note}\n"
             f"Would you like to add theme, tone, and notes now?",
             view=skip_view,
         )
@@ -557,12 +598,20 @@ async def collect_schedule(bot, ctx: commands.Context, cancel_event: asyncio.Eve
             pass
 
         if skip_view.action == "done":
-            # Save what we have so far and stop
+            # Save what we have and stop iterating
             schedule[date_str] = {"name": existing_name}
+            if theme_hint:
+                schedule[date_str]["theme"] = theme_hint
+            save_schedule(schedule)
             break
 
         if skip_view.action == "skip":
-            schedule[date_str] = {"name": existing_name}
+            entry = {"name": existing_name}
+            if theme_hint:
+                entry["theme"] = theme_hint
+            schedule[date_str] = entry
+            # Save after every skip so nothing is lost if cancelled later
+            save_schedule(schedule)
             continue
 
         # Fill in details for this person
@@ -615,26 +664,38 @@ async def collect_schedule(bot, ctx: commands.Context, cancel_event: asyncio.Eve
             entry["notes"] = notes_raw
 
         schedule[date_str] = entry
+        # Save immediately after each filled entry
+        save_schedule(schedule)
 
         await channel.send(
             f"✅ Saved details for **{existing_name}**.",
             delete_after=5,
         )
 
+    # Final save (catches any remaining entries)
     save_schedule(schedule)
 
-    # Show errors if any
+    # Build error note if any lines couldn't be parsed
     error_text = ""
     if errors:
         error_text = f"\n\n⚠️ **Could not parse {len(errors)} line(s):**\n" + "\n".join(f"• {e}" for e in errors)
 
-    # Post updated schedule embed
+    # Post updated schedule embed — fall back to plain text if embed permission is missing
     blurb_log = load_blurb_log()
-    embed = build_schedule_embed(schedule, blurb_log)
-    await channel.send(
-        f"📋 **Schedule saved!**{error_text}",
-        embed=embed,
-    )
+    embed     = build_schedule_embed(schedule, blurb_log)
+    try:
+        await channel.send(f"📋 **Schedule saved!**{error_text}", embed=embed)
+    except discord.Forbidden:
+        # No embed permission — post a plain text summary instead
+        today    = date.today()
+        lines    = [f"📋 **Schedule saved!**{error_text}\n"]
+        upcoming = {k: v for k, v in sorted(schedule.items()) if date.fromisoformat(k) >= today}
+        for date_str, entry in upcoming.items():
+            d    = date.fromisoformat(date_str)
+            name = entry.get("name", "Unknown")
+            icon = "📋" if any(entry.get(k) for k in ("theme", "notes")) else "⏳"
+            lines.append(f"{icon} **{d.strftime('%a, %b %-d')}** — {name}")
+        await channel.send("\n".join(lines))
 
 
 # ── Train wizard (manual, for any name) ───────────────────────────────────────
@@ -864,7 +925,14 @@ class TrainCog(commands.Cog):
             await ctx.channel.send("🗑️ Train schedule cleared.")
             return
 
-        # Input mode — register cancel event
+        # Input mode — guard against double-triggering
+        if ctx.author.id in active_wizards:
+            await ctx.channel.send(
+                "⚠️ You already have an active session running. Type `!cancel` to stop it first.",
+                delete_after=10,
+            )
+            return
+
         cancel_event = asyncio.Event()
         active_wizards[ctx.author.id] = cancel_event
         try:
@@ -884,7 +952,21 @@ class TrainCog(commands.Cog):
         schedule  = load_schedule()
         blurb_log = load_blurb_log()
         embed     = build_schedule_embed(schedule, blurb_log)
-        await channel.send(embed=embed)
+        try:
+            await channel.send(embed=embed)
+        except discord.Forbidden:
+            today    = date.today()
+            lines    = ["📋 **OGV Train Schedule**\n*(Enable Embed Links permission for a better display)*\n"]
+            upcoming = {k: v for k, v in sorted(schedule.items()) if date.fromisoformat(k) >= today}
+            if not upcoming:
+                lines.append("*No upcoming entries.*")
+            for date_str, entry in upcoming.items():
+                d    = date.fromisoformat(date_str)
+                name = entry.get("name", "Unknown")
+                done = "✅" if date_str in blurb_log else ("📋" if any(entry.get(k) for k in ("theme", "notes")) else "⏳")
+                today_tag = " — **TODAY**" if d == today else ""
+                lines.append(f"{done} **{d.strftime('%a, %b %-d')}** — {name}{today_tag}")
+            await channel.send("\n".join(lines))
 
     # ── !trainprompt ───────────────────────────────────────────────────────────
 

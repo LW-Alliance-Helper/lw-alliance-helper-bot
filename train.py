@@ -3,16 +3,17 @@ train.py — Train schedule blurb generator + schedule management
 
 Commands (OGV Leadership only, leadership channel only):
   !train              — Launch the blurb wizard (manual, any name)
+  !cancel             — Cancel any active wizard session
   !schedule           — Input/replace the upcoming train schedule
   !schedule list      — View the current schedule
   !schedule clear     — Clear the entire schedule
+  !trainschedule      — Shortcut to view the current schedule
 
 Schedule reminder:
   - 15 minutes after reset each day, if a blurb hasn't been generated
     for today's scheduled person, a reminder is posted in the leadership
     channel with a button to launch the wizard with the name pre-filled.
-  - Normal reset: 10:15pm ET → reminder at 10:30pm ET
-  - Saturday reset: 5:00pm ET → reminder at 5:15pm ET
+  - Reminder always fires at 10:30pm ET regardless of day.
 """
 
 import asyncio
@@ -34,6 +35,10 @@ ANTHROPIC_API_URL = "https://api.anthropic.com/v1/messages"
 ANTHROPIC_MODEL   = "claude-sonnet-4-20250514"
 
 WIZARD_TIMEOUT = 300  # seconds
+
+# Tracks active wizard sessions: { user_id: asyncio.Event }
+# Setting the event signals the wizard to cancel cleanly.
+active_wizards: dict[int, asyncio.Event] = {}
 
 # File to persist the schedule and generated blurb log across restarts
 SCHEDULE_FILE    = "train_schedule.json"
@@ -372,13 +377,37 @@ async def run_wizard_steps(bot, channel, user, prefilled_name: str = None):
     Core wizard logic. If prefilled_name is provided, skip Step 1.
     Returns True if a blurb was approved, False otherwise.
     """
+    # Register this wizard session so !cancel can stop it
+    cancel_event = asyncio.Event()
+    active_wizards[user.id] = cancel_event
+
     def check_msg(m):
         return m.author == user and m.channel == channel
 
     async def ask(prompt: str) -> str | None:
+        """Send a prompt and wait for a text reply. Returns None on timeout or cancel."""
         msg = await channel.send(prompt) if prompt else None
         try:
-            reply = await bot.wait_for("message", check=check_msg, timeout=WIZARD_TIMEOUT)
+            # Wait for either a message reply or cancellation
+            reply_task  = asyncio.ensure_future(bot.wait_for("message", check=check_msg, timeout=WIZARD_TIMEOUT))
+            cancel_task = asyncio.ensure_future(cancel_event.wait())
+
+            done, pending = await asyncio.wait(
+                [reply_task, cancel_task],
+                return_when=asyncio.FIRST_COMPLETED,
+            )
+            for task in pending:
+                task.cancel()
+
+            if cancel_event.is_set():
+                if msg:
+                    try:
+                        await msg.delete()
+                    except discord.HTTPException:
+                        pass
+                return None
+
+            reply = done.pop().result()
             try:
                 if msg:
                     await msg.delete()
@@ -386,121 +415,176 @@ async def run_wizard_steps(bot, channel, user, prefilled_name: str = None):
             except discord.HTTPException:
                 pass
             return reply.content.strip()
+
         except asyncio.TimeoutError:
             await channel.send("⏰ Wizard timed out. Use `!train` to start again.")
             return None
 
-    # ── Step 1: Name ───────────────────────────────────────────────────────────
-    if prefilled_name:
-        name = prefilled_name
-        await channel.send(
-            f"🚂 **Train Blurb Wizard** — started by {user.mention}\n\n"
-            f"👤 **Name pre-filled from schedule:** {name}"
-        )
-    else:
-        await channel.send(
-            f"🚂 **Train Blurb Wizard** — started by {user.mention}\n\n"
-            f"**Step 1 of 4 — Member Name**\n"
-            f"Type the member's name exactly as it should appear in the announcement:"
-        )
-        name = await ask("")
-        if not name:
-            return False
+    try:
+        # ── Step 1: Name ───────────────────────────────────────────────────────
+        if prefilled_name:
+            name = prefilled_name
+            await channel.send(
+                f"🚂 **Train Blurb Wizard** — started by {user.mention}\n\n"
+                f"👤 **Name pre-filled from schedule:** {name}\n"
+                f"*(Type `!cancel` at any time to stop the wizard)*"
+            )
+        else:
+            await channel.send(
+                f"🚂 **Train Blurb Wizard** — started by {user.mention}\n\n"
+                f"**Step 1 of 4 — Member Name**\n"
+                f"Type the member's name exactly as it should appear in the announcement.\n"
+                f"*(Type `!cancel` at any time to stop the wizard)*"
+            )
+            name = await ask("")
+            if not name or cancel_event.is_set():
+                return False
 
-    # ── Step 2: Theme ──────────────────────────────────────────────────────────
-    theme_msg  = await channel.send(f"**Step 2 of 4 — Theme**\nSelect the theme for this train:")
-    theme_view = ThemeSelectView()
-    await theme_msg.edit(view=theme_view)
-    await theme_view.wait()
+        # ── Step 2: Theme ──────────────────────────────────────────────────────
+        theme_msg  = await channel.send(f"**Step 2 of 4 — Theme**\nSelect the theme for this train:")
+        theme_view = ThemeSelectView()
+        await theme_msg.edit(view=theme_view)
 
-    if theme_view.selected is None:
-        await channel.send("⏰ Wizard timed out. Use `!train` to start again.")
-        return False
+        # Wait for theme selection or cancellation
+        view_task   = asyncio.ensure_future(theme_view.wait())
+        cancel_task = asyncio.ensure_future(cancel_event.wait())
+        done, pending = await asyncio.wait([view_task, cancel_task], return_when=asyncio.FIRST_COMPLETED)
+        for task in pending:
+            task.cancel()
 
-    theme = theme_view.selected
-    if theme == "Custom":
-        theme = await ask("Type your custom theme:")
-        if not theme:
-            return False
-
-    # ── Step 3: Tone ───────────────────────────────────────────────────────────
-    tone_msg  = await channel.send(f"**Step 3 of 4 — Tone**\nSelect the tone (or leave as default to match the theme):")
-    tone_view = ToneSelectView()
-    await tone_msg.edit(view=tone_view)
-    await tone_view.wait()
-
-    if tone_view.selected is None:
-        await channel.send("⏰ Wizard timed out. Use `!train` to start again.")
-        return False
-
-    tone = tone_view.selected
-
-    # ── Step 4: Notes ──────────────────────────────────────────────────────────
-    await channel.send(
-        f"**Step 4 of 4 — Notes** *(highly recommended)*\n"
-        f"Add any details that make this personal — role, personality, achievements, "
-        f"story moments, anything specific about them.\n"
-        f"Type your notes below, or type `skip` to skip:"
-    )
-    notes_raw = await ask("")
-    if notes_raw is None:
-        return False
-    notes = "" if notes_raw.lower() == "skip" else notes_raw
-
-    # ── Summary & confirm ──────────────────────────────────────────────────────
-    tone_display  = tone if tone != "Default (match the theme)" else "Default"
-    notes_display = notes if notes else "*(none)*"
-
-    confirm_view = ConfirmView()
-    await channel.send(
-        f"**Ready to generate — here's your input:**\n\n"
-        f"👤 **Name:** {name}\n"
-        f"🎯 **Theme:** {theme}\n"
-        f"🎭 **Tone:** {tone_display}\n"
-        f"📝 **Notes:** {notes_display}\n\n"
-        f"Generate the blurb?",
-        view=confirm_view,
-    )
-    await confirm_view.wait()
-
-    if not confirm_view.confirmed:
-        await channel.send("❌ Cancelled. Use `!train` to start over.")
-        return False
-
-    # ── Generate loop ──────────────────────────────────────────────────────────
-    generating_msg = await channel.send("✍️ Generating blurb...")
-
-    while True:
-        try:
-            blurb = await generate_blurb(name, theme, tone, notes)
-        except Exception as e:
-            await generating_msg.edit(content=f"⚠️ Error generating blurb: {e}")
-            return False
-
-        char_count = len(blurb)
-        warning = (
-            f" ⚠️ *({char_count} chars — slightly over 500, consider editing)*"
-            if char_count > 500 else f" ✅ *({char_count} chars)*"
-        )
-
-        regen_view = RegenerateView()
-        await generating_msg.edit(
-            content=f"🚂 **Generated blurb for {name}:**{warning}\n\n```\n{blurb}\n```",
-            view=regen_view,
-        )
-        await regen_view.wait()
-
-        if regen_view.action == "approve" or regen_view.action is None:
-            for item in regen_view.children:
+        if cancel_event.is_set():
+            for item in theme_view.children:
                 item.disabled = True
-            await generating_msg.edit(view=regen_view)
-            await channel.send(f"✅ **Final blurb for {name}** — ready to use:\n\n{blurb}")
+            await theme_msg.edit(view=theme_view)
+            return False
 
-            # Mark today's blurb as generated
-            mark_blurb_generated(date.today().isoformat())
-            return True
+        if theme_view.selected is None:
+            await channel.send("⏰ Wizard timed out. Use `!train` to start again.")
+            return False
 
-        await generating_msg.edit(content="✍️ Regenerating blurb...", view=None)
+        theme = theme_view.selected
+        if theme == "Custom":
+            theme = await ask("Type your custom theme:")
+            if not theme or cancel_event.is_set():
+                return False
+
+        # ── Step 3: Tone ───────────────────────────────────────────────────────
+        tone_msg  = await channel.send(f"**Step 3 of 4 — Tone**\nSelect the tone (or leave as default to match the theme):")
+        tone_view = ToneSelectView()
+        await tone_msg.edit(view=tone_view)
+
+        view_task   = asyncio.ensure_future(tone_view.wait())
+        cancel_task = asyncio.ensure_future(cancel_event.wait())
+        done, pending = await asyncio.wait([view_task, cancel_task], return_when=asyncio.FIRST_COMPLETED)
+        for task in pending:
+            task.cancel()
+
+        if cancel_event.is_set():
+            for item in tone_view.children:
+                item.disabled = True
+            await tone_msg.edit(view=tone_view)
+            return False
+
+        if tone_view.selected is None:
+            await channel.send("⏰ Wizard timed out. Use `!train` to start again.")
+            return False
+
+        tone = tone_view.selected
+
+        # ── Step 4: Notes ──────────────────────────────────────────────────────
+        await channel.send(
+            f"**Step 4 of 4 — Notes** *(highly recommended)*\n"
+            f"Add any details that make this personal — role, personality, achievements, "
+            f"story moments, anything specific about them.\n"
+            f"Type your notes below, or type `skip` to skip:"
+        )
+        notes_raw = await ask("")
+        if notes_raw is None or cancel_event.is_set():
+            return False
+        notes = "" if notes_raw.lower() == "skip" else notes_raw
+
+        # ── Summary & confirm ──────────────────────────────────────────────────
+        tone_display  = tone if tone != "Default (match the theme)" else "Default"
+        notes_display = notes if notes else "*(none)*"
+
+        confirm_view = ConfirmView()
+        await channel.send(
+            f"**Ready to generate — here's your input:**\n\n"
+            f"👤 **Name:** {name}\n"
+            f"🎯 **Theme:** {theme}\n"
+            f"🎭 **Tone:** {tone_display}\n"
+            f"📝 **Notes:** {notes_display}\n\n"
+            f"Generate the blurb?",
+            view=confirm_view,
+        )
+
+        view_task   = asyncio.ensure_future(confirm_view.wait())
+        cancel_task = asyncio.ensure_future(cancel_event.wait())
+        done, pending = await asyncio.wait([view_task, cancel_task], return_when=asyncio.FIRST_COMPLETED)
+        for task in pending:
+            task.cancel()
+
+        if cancel_event.is_set():
+            for item in confirm_view.children:
+                item.disabled = True
+            return False
+
+        if not confirm_view.confirmed:
+            await channel.send("❌ Cancelled. Use `!train` to start over.")
+            return False
+
+        # ── Generate loop ──────────────────────────────────────────────────────
+        generating_msg = await channel.send("✍️ Generating blurb...")
+
+        while True:
+            if cancel_event.is_set():
+                await generating_msg.edit(content="❌ Wizard cancelled.")
+                return False
+
+            try:
+                blurb = await generate_blurb(name, theme, tone, notes)
+            except Exception as e:
+                await generating_msg.edit(content=f"⚠️ Error generating blurb: {e}")
+                return False
+
+            char_count = len(blurb)
+            warning = (
+                f" ⚠️ *({char_count} chars — slightly over 500, consider editing)*"
+                if char_count > 500 else f" ✅ *({char_count} chars)*"
+            )
+
+            regen_view = RegenerateView()
+            await generating_msg.edit(
+                content=f"🚂 **Generated blurb for {name}:**{warning}\n\n```\n{blurb}\n```",
+                view=regen_view,
+            )
+
+            view_task   = asyncio.ensure_future(regen_view.wait())
+            cancel_task = asyncio.ensure_future(cancel_event.wait())
+            done, pending = await asyncio.wait([view_task, cancel_task], return_when=asyncio.FIRST_COMPLETED)
+            for task in pending:
+                task.cancel()
+
+            if cancel_event.is_set():
+                for item in regen_view.children:
+                    item.disabled = True
+                await generating_msg.edit(view=regen_view)
+                await generating_msg.edit(content="❌ Wizard cancelled.")
+                return False
+
+            if regen_view.action == "approve" or regen_view.action is None:
+                for item in regen_view.children:
+                    item.disabled = True
+                await generating_msg.edit(view=regen_view)
+                await channel.send(f"✅ **Final blurb for {name}** — ready to use:\n\n{blurb}")
+                mark_blurb_generated(date.today().isoformat())
+                return True
+
+            await generating_msg.edit(content="✍️ Regenerating blurb...", view=None)
+
+    finally:
+        # Always clean up the registry when the wizard ends for any reason
+        active_wizards.pop(user.id, None)
 
 
 async def run_train_wizard(ctx: commands.Context):
@@ -528,6 +612,35 @@ class TrainCog(commands.Cog):
 
     def _is_leadership_channel(self, ctx) -> bool:
         return ctx.channel.id == LEADERSHIP_CHANNEL_ID
+
+    # ── !cancel command ────────────────────────────────────────────────────────
+
+    @commands.command(name="cancel")
+    async def cancel(self, ctx: commands.Context):
+        """Cancel any active wizard session for this user."""
+        if not self._is_leadership_channel(ctx):
+            try:
+                await ctx.message.delete()
+            except discord.HTTPException:
+                pass
+            return
+
+        try:
+            await ctx.message.delete()
+        except discord.HTTPException:
+            pass
+
+        if ctx.author.id in active_wizards:
+            active_wizards[ctx.author.id].set()
+            await ctx.channel.send(
+                f"❌ **Wizard cancelled** by {ctx.author.mention}.",
+                delete_after=10,
+            )
+        else:
+            await ctx.channel.send(
+                f"ℹ️ You don't have an active wizard running.",
+                delete_after=10,
+            )
 
     # ── !trainschedule command (alias for !schedule list) ─────────────────────
 

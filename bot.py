@@ -102,6 +102,8 @@ async def on_ready():
     print(f"[INFO] Watching channel ID: {WATCHED_CHANNEL_ID}")
     bot.loop.create_task(run_scheduler(bot))
     print(f"[INFO] Event scheduler started")
+    await bot.load_extension("train")
+    print(f"[INFO] Train wizard loaded")
 
 
 @bot.event

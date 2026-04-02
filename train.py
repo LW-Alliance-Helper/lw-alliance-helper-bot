@@ -11,9 +11,9 @@ Commands (OGV Leadership only, leadership channel only):
   !trainprompt        — Retrieve today's stored prompt (or pick a date)
 
 Schedule reminder:
-  - 15 minutes after reset (10:30pm ET every day), if no prompt has been
-    retrieved for today's person, the bot pings leadership with a button
-    to pull up the stored details and confirm posting the prompt.
+  - At 10pm ET (reset / 00:00 server) the bot reminds leadership that it's
+    the new train day and prompts them to pull the ChatGPT prompt whenever
+    the team is ready to run — no fixed run time assumed.
 """
 
 import asyncio
@@ -29,68 +29,143 @@ ET = ZoneInfo("America/New_York")
 
 LEADERSHIP_CHANNEL_ID = 1488693874938482799
 REQUIRED_ROLE_NAME    = "OGV Leadership"
+TRAIN_SHEET_NAME      = "Train Schedule"
 
 WIZARD_TIMEOUT = 300  # seconds
 
 # Tracks active wizard sessions: { user_id: asyncio.Event }
 active_wizards: dict[int, asyncio.Event] = {}
 
-# Persistence files
-SCHEDULE_FILE = "train_schedule.json"
-BLURB_LOG_FILE = "train_blurb_log.json"
-
-# ── Schedule data structure ────────────────────────────────────────────────────
+# ── Google Sheets persistence ──────────────────────────────────────────────────
 #
-# Schedule is stored as:
-# {
-#   "YYYY-MM-DD": {
-#     "name": "PlayerName",
-#     "theme": "Birthday",          # optional
-#     "tone": "More casual",        # optional
-#     "notes": "queen energy..."    # optional
-#   }
-# }
+# Sheet columns:
+#   A: Date (YYYY-MM-DD)
+#   B: Name
+#   C: Theme
+#   D: Tone
+#   E: Notes
+#   F: Prompt Retrieved (TRUE/FALSE)
+#
+# All reads/writes go through gspread using the same service account as sheets.py
+
+def _get_train_sheet():
+    """Return the Train Schedule worksheet."""
+    import gspread
+    from google.oauth2.service_account import Credentials
+
+    scopes = ["https://www.googleapis.com/auth/spreadsheets"]
+    credentials_json = os.getenv("GOOGLE_CREDENTIALS_JSON")
+    if credentials_json:
+        info  = json.loads(credentials_json)
+        creds = Credentials.from_service_account_info(info, scopes=scopes)
+    else:
+        key_file = os.getenv("GOOGLE_SERVICE_ACCOUNT_FILE", "service_account.json")
+        creds    = Credentials.from_service_account_file(key_file, scopes=scopes)
+
+    gc = gspread.authorize(creds)
+    sh = gc.open_by_key(os.getenv("SPREADSHEET_ID"))
+    return sh.worksheet(TRAIN_SHEET_NAME)
+
 
 def load_schedule() -> dict:
-    if os.path.exists(SCHEDULE_FILE):
-        with open(SCHEDULE_FILE, "r") as f:
-            data = json.load(f)
-            # Migrate old format { "YYYY-MM-DD": "Name" } to new format
-            migrated = {}
-            for k, v in data.items():
-                if isinstance(v, str):
-                    migrated[k] = {"name": v}
-                else:
-                    migrated[k] = v
-            return migrated
-    return {}
+    """
+    Load the full schedule from the Train Schedule sheet.
+    Returns { "YYYY-MM-DD": { name, theme, tone, notes, prompt_retrieved } }
+    """
+    try:
+        ws   = _get_train_sheet()
+        rows = ws.get_all_values()
+        schedule = {}
+        for row in rows[1:]:  # skip header row
+            if not row or not row[0].strip():
+                continue
+            date_str = row[0].strip()
+            schedule[date_str] = {
+                "name":             row[1].strip() if len(row) > 1 else "",
+                "theme":            row[2].strip() if len(row) > 2 else "",
+                "tone":             row[3].strip() if len(row) > 3 else "",
+                "notes":            row[4].strip() if len(row) > 4 else "",
+                "prompt_retrieved": row[5].strip().upper() == "TRUE" if len(row) > 5 else False,
+            }
+        return schedule
+    except Exception as e:
+        print(f"[TRAIN] Error loading schedule from sheet: {e}")
+        return {}
 
 
 def save_schedule(schedule: dict):
-    with open(SCHEDULE_FILE, "w") as f:
-        json.dump(schedule, f, indent=2)
+    """
+    Write the full schedule back to the Train Schedule sheet.
+    Clears everything below the header and rewrites all rows.
+    """
+    try:
+        ws = _get_train_sheet()
+        # Clear all data rows (keep header in row 1)
+        ws.batch_clear(["A2:F1000"])
 
+        if not schedule:
+            return
 
-def load_blurb_log() -> set:
-    if os.path.exists(BLURB_LOG_FILE):
-        with open(BLURB_LOG_FILE, "r") as f:
-            return set(json.load(f))
-    return set()
+        rows = []
+        for date_str, entry in sorted(schedule.items()):
+            rows.append([
+                date_str,
+                entry.get("name", ""),
+                entry.get("theme", ""),
+                entry.get("tone", ""),
+                entry.get("notes", ""),
+                "TRUE" if entry.get("prompt_retrieved", False) else "FALSE",
+            ])
 
-
-def save_blurb_log(log: set):
-    with open(BLURB_LOG_FILE, "w") as f:
-        json.dump(list(log), f, indent=2)
+        ws.update("A2", rows, value_input_option="USER_ENTERED")
+        print(f"[TRAIN] Schedule saved to sheet ({len(rows)} entries)")
+    except Exception as e:
+        print(f"[TRAIN] Error saving schedule to sheet: {e}")
 
 
 def mark_blurb_generated(date_str: str):
-    log = load_blurb_log()
-    log.add(date_str)
-    save_blurb_log(log)
+    """Mark a specific date's prompt_retrieved flag as TRUE in the sheet."""
+    try:
+        ws   = _get_train_sheet()
+        rows = ws.get_all_values()
+        for i, row in enumerate(rows[1:], start=2):
+            if row and row[0].strip() == date_str:
+                ws.update(f"F{i}", [["TRUE"]], value_input_option="USER_ENTERED")
+                print(f"[TRAIN] Marked prompt retrieved for {date_str}")
+                return
+        print(f"[TRAIN] Could not find row for {date_str} to mark as retrieved")
+    except Exception as e:
+        print(f"[TRAIN] Error marking blurb generated: {e}")
 
 
 def blurb_generated_today() -> bool:
-    return date.today().isoformat() in load_blurb_log()
+    """Check if today's prompt has been retrieved."""
+    try:
+        today    = date.today().isoformat()
+        ws       = _get_train_sheet()
+        rows     = ws.get_all_values()
+        for row in rows[1:]:
+            if row and row[0].strip() == today:
+                return len(row) > 5 and row[5].strip().upper() == "TRUE"
+        return False
+    except Exception as e:
+        print(f"[TRAIN] Error checking blurb log: {e}")
+        return False
+
+
+def load_blurb_log() -> set:
+    """Return the set of all dates where prompt has been retrieved."""
+    try:
+        ws   = _get_train_sheet()
+        rows = ws.get_all_values()
+        return {
+            row[0].strip()
+            for row in rows[1:]
+            if row and len(row) > 5 and row[5].strip().upper() == "TRUE"
+        }
+    except Exception as e:
+        print(f"[TRAIN] Error loading blurb log: {e}")
+        return set()
 
 
 # ── Schedule date parsing ──────────────────────────────────────────────────────
@@ -622,24 +697,22 @@ async def collect_schedule(bot, ctx: commands.Context, cancel_event: asyncio.Eve
             pass
 
         if skip_view.action == "done":
-            # Save what we have and stop iterating
-            schedule[date_str] = {"name": existing_name}
-            if theme_hint:
-                schedule[date_str]["theme"] = theme_hint
-            save_schedule(schedule)
+            existing_entry["name"] = existing_name
+            if theme_hint and not existing_entry.get("theme"):
+                existing_entry["theme"] = theme_hint
+            schedule[date_str] = existing_entry
             break
 
         if skip_view.action == "skip":
-            entry = {"name": existing_name}
-            if theme_hint:
-                entry["theme"] = theme_hint
-            schedule[date_str] = entry
-            # Save after every skip so nothing is lost if cancelled later
-            save_schedule(schedule)
+            existing_entry["name"] = existing_name
+            if theme_hint and not existing_entry.get("theme"):
+                existing_entry["theme"] = theme_hint
+            schedule[date_str] = existing_entry
             continue
 
-        # Fill in details for this person
-        entry = {"name": existing_name}
+        # Fill in details
+        entry = dict(existing_entry)
+        entry["name"] = existing_name
 
         # Theme
         theme_msg  = await channel.send(f"🎯 **Theme** for {existing_name}:")
@@ -647,6 +720,7 @@ async def collect_schedule(bot, ctx: commands.Context, cancel_event: asyncio.Eve
         await theme_msg.edit(view=theme_view)
         ok = await wait_for_view(theme_view, theme_msg)
         if not ok:
+            save_schedule(schedule)  # save whatever we have before exiting
             return
         try:
             await theme_msg.delete()
@@ -658,6 +732,7 @@ async def collect_schedule(bot, ctx: commands.Context, cancel_event: asyncio.Eve
             if theme == "Custom":
                 custom = await wait_for_msg("Type your custom theme:")
                 if custom is None:
+                    save_schedule(schedule)
                     return
                 theme = custom
             entry["theme"] = theme
@@ -668,6 +743,7 @@ async def collect_schedule(bot, ctx: commands.Context, cancel_event: asyncio.Eve
         await tone_msg.edit(view=tone_view)
         ok = await wait_for_view(tone_view, tone_msg)
         if not ok:
+            save_schedule(schedule)
             return
         try:
             await tone_msg.delete()
@@ -683,20 +759,20 @@ async def collect_schedule(bot, ctx: commands.Context, cancel_event: asyncio.Eve
             f"Add anything personal — role, personality, achievements, story moments."
         )
         if notes_raw is None:
+            save_schedule(schedule)
             return
         if notes_raw.lower() != "skip":
             entry["notes"] = notes_raw
 
         schedule[date_str] = entry
-        # Save immediately after each filled entry
-        save_schedule(schedule)
 
         await channel.send(
-            f"✅ Saved details for **{existing_name}**.",
+            f"✅ Details collected for **{existing_name}**.",
             delete_after=5,
         )
 
-    # Final save (catches any remaining entries)
+    # Single save to the sheet at the end — all entries written at once
+    await ctx.channel.send("💾 Saving schedule to Google Sheets...")
     save_schedule(schedule)
 
     # Build error note if any lines couldn't be parsed
@@ -1038,8 +1114,10 @@ class TrainCog(commands.Cog):
             self.last_reminder_date  = today
             self.reminder_sent_today = False
 
-        # Train reminder always at 10:30pm ET
-        if now.hour != 22 or now.minute != 30:
+        # Train reminder fires exactly at 10pm ET (00:00 server reset)
+        # This marks the start of the new train day — the train itself
+        # can be run any time after this
+        if now.hour != 22 or now.minute != 0:
             return
         if self.reminder_sent_today:
             return
@@ -1059,9 +1137,8 @@ class TrainCog(commands.Cog):
 
         view = ReminderView(cog=self, date_str=today_str, name=name)
         await channel.send(
-            f"⏰ **Train prompt reminder!**\n\n"
-            f"Today's train is for **{name}** and the prompt hasn't been retrieved yet. "
-            f"Click below to view stored details and get the ChatGPT prompt.",
+            f"🚂 **Reset! Today's train is for {name}.**\n\n"
+            f"Click below whenever you're ready to get the ChatGPT prompt — no rush, run it when the team is available.",
             view=view,
         )
         self.reminder_sent_today = True

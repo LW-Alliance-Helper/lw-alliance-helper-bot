@@ -2,10 +2,15 @@ import discord
 from discord.ext import commands
 import re
 import os
-from datetime import datetime
+from datetime import datetime, date, timedelta
 from dotenv import load_dotenv
 from sheets import find_and_update_or_create_row
-from scheduler import run_scheduler
+from scheduler import (
+    run_scheduler, post_editor, get_event_datetimes, default_event_list,
+    next_event_dates, is_friday, make_et_datetime, noon_dt_for,
+    EVENT_LIBRARY, parse_time_str, format_et
+)
+from zoneinfo import ZoneInfo
 
 load_dotenv()
 
@@ -94,6 +99,11 @@ def parse_survey_embeds(embeds):
     return data
 
 
+ET = ZoneInfo("America/New_York")
+LEADERSHIP_CHANNEL_ID = 1488693874938482799
+LEADERSHIP_ROLE_NAME  = "OGV Leadership"
+
+
 # ── Discord events ─────────────────────────────────────────────────────────────
 
 @bot.event
@@ -104,6 +114,110 @@ async def on_ready():
     print(f"[INFO] Event scheduler started")
     await bot.load_extension("train")
     print(f"[INFO] Train wizard loaded")
+
+
+@bot.command(name="events")
+async def events_command(ctx: commands.Context, *, date_arg: str = None):
+    """
+    Pull up the event editor for today or a specified date.
+
+    Usage:
+      !events           — today's events
+      !events April 5   — events for April 5
+      !events 4/5       — same
+
+    Only works in the leadership channel for OGV Leadership role members.
+    """
+    # Delete the command message
+    try:
+        await ctx.message.delete()
+    except discord.HTTPException:
+        pass
+
+    # Guard: leadership channel only
+    if ctx.channel.id != LEADERSHIP_CHANNEL_ID:
+        return
+
+    # Guard: OGV Leadership role only
+    role_names = [r.name for r in ctx.author.roles]
+    if LEADERSHIP_ROLE_NAME not in role_names:
+        await ctx.channel.send(
+            f"⛔ You need the **{LEADERSHIP_ROLE_NAME}** role to use this command.",
+            delete_after=10,
+        )
+        return
+
+    # Determine the target date
+    target_date = None
+
+    if date_arg:
+        # Try to parse the supplied date using scheduler's parse helpers
+        from scheduler import MONTH_MAP  # reuse the month map from train parsing
+        import re as _re
+
+        current_year = datetime.now(tz=ET).year
+
+        # Numeric: 4/5 or 4/5/2026
+        numeric = _re.match(r"^(\d{1,2})/(\d{1,2})(?:/(\d{4}))?$", date_arg.strip())
+        if numeric:
+            try:
+                target_date = date(
+                    int(numeric.group(3)) if numeric.group(3) else current_year,
+                    int(numeric.group(1)),
+                    int(numeric.group(2)),
+                )
+            except ValueError:
+                pass
+
+        # Month name: April 5 or Apr 5
+        if not target_date:
+            named = _re.match(r"^([A-Za-z]+)\s+(\d{1,2})$", date_arg.strip(), _re.IGNORECASE)
+            if named:
+                month_map = {
+                    "january": 1, "february": 2, "march": 3, "april": 4,
+                    "may": 5, "june": 6, "july": 7, "august": 8,
+                    "september": 9, "october": 10, "november": 11, "december": 12,
+                    "jan": 1, "feb": 2, "mar": 3, "apr": 4, "jun": 6,
+                    "jul": 7, "aug": 8, "sep": 9, "oct": 10, "nov": 11, "dec": 12,
+                }
+                month = month_map.get(named.group(1).lower())
+                if month:
+                    try:
+                        target_date = date(current_year, month, int(named.group(2)))
+                    except ValueError:
+                        pass
+
+        if not target_date:
+            await ctx.channel.send(
+                f"⚠️ Could not parse date `{date_arg}`. Try formats like `April 5` or `4/5`.",
+                delete_after=10,
+            )
+            return
+    else:
+        target_date = date.today()
+
+    # Find the nearest event date on or after the target date
+    upcoming = next_event_dates(from_date=target_date, count=1)
+    event_date = upcoming[0]
+
+    # Check if target date is actually an event date
+    # If the nearest event is more than 2 days away, warn but still allow
+    days_diff = (event_date - target_date).days
+    if days_diff > 0:
+        await ctx.channel.send(
+            f"ℹ️ **{target_date.strftime('%B %-d')}** is not an event day. "
+            f"Showing the next event date: **{event_date.strftime('%A, %B %-d')}**.",
+            delete_after=10,
+        )
+
+    # Build the default event list for that date
+    marauder_dt, siege_dt = get_event_datetimes(event_date)
+    event_list = default_event_list(marauder_dt, siege_dt)
+    event_key  = f"event-{event_date.isoformat()}-manual"
+    run_date   = marauder_dt.date()
+
+    await post_editor(bot, event_list, event_key, run_date)
+    print(f"[EVENTS] Manual event editor opened for {event_date} by {ctx.author}")
 
 
 @bot.event

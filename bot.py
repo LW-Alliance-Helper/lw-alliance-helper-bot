@@ -248,6 +248,7 @@ async def help_slash(interaction: discord.Interaction):
             "`/trainschedule` — Quick view of the schedule\n"
             "`/trainprompt [date]` — Retrieve a stored ChatGPT prompt\n"
             "`/setbirthdays [tab]` — Set the member tab used for birthday lookups\n"
+            "`/checkbirthdays` — Manually run the birthday check now\n"
             "`/cancel` — Cancel your active wizard session"
         ),
         inline=False,

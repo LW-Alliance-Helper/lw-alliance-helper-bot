@@ -1172,6 +1172,43 @@ class TrainCog(commands.Cog):
     def cog_unload(self):
         self.check_reminder.cancel()
 
+    # ── /checkbirthdays ────────────────────────────────────────────────────────
+
+    @app_commands.command(
+        name="checkbirthdays",
+        description="Manually run the birthday check and add upcoming birthdays to the schedule",
+    )
+    @app_commands.guilds(GUILD)
+    async def checkbirthdays(self, interaction: discord.Interaction):
+        if not await _guard(interaction):
+            return
+
+        await interaction.response.defer(ephemeral=True)
+
+        try:
+            current_schedule = load_schedule()
+            before_count     = len(current_schedule)
+            updated_schedule = check_and_add_birthdays(current_schedule)
+            after_count      = len(updated_schedule)
+            added            = after_count - before_count
+
+            if added > 0:
+                save_schedule(updated_schedule)
+                await interaction.followup.send(
+                    f"✅ Birthday check complete — added **{added}** birthday entr{'y' if added == 1 else 'ies'} to the schedule.",
+                    ephemeral=True,
+                )
+            else:
+                await interaction.followup.send(
+                    f"✅ Birthday check complete — no new entries to add within the next {BIRTHDAY_LOOKAHEAD} days.",
+                    ephemeral=True,
+                )
+        except Exception as e:
+            await interaction.followup.send(
+                f"⚠️ Birthday check failed: {e}",
+                ephemeral=True,
+            )
+
     # ── /setbirthdays ──────────────────────────────────────────────────────────
 
     @app_commands.command(

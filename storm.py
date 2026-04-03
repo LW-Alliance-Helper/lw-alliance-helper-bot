@@ -361,7 +361,7 @@ class StormApprovalView(discord.ui.View):
         await interaction.response.defer()
         await self._disable(interaction)
         save_ds_assignments(self.team, self.zones, self.subs)
-        channel = self.bot.get_channel(LEADERSHIP_CHANNEL_ID)
+        channel = interaction.channel
         if channel:
             await channel.send(
                 f"✅ **Desert Storm Team {self.team} mail — ready to copy:**\n"
@@ -373,7 +373,7 @@ class StormApprovalView(discord.ui.View):
     async def edit(self, interaction: discord.Interaction, button: discord.ui.Button):
         await interaction.response.defer()
         await self._disable(interaction)
-        channel = self.bot.get_channel(LEADERSHIP_CHANNEL_ID)
+        channel = interaction.channel
         if channel:
             template = build_ds_template(self.zones, self.subs)
             await channel.send(
@@ -473,7 +473,13 @@ async def run_ds_edit_step(bot, channel, user, team: str, current_zones: dict,
 # ── Guards ─────────────────────────────────────────────────────────────────────
 
 async def _guard(interaction: discord.Interaction) -> bool:
-    if interaction.channel_id != LEADERSHIP_CHANNEL_ID:
+    # Accept commands in the leadership channel or any thread inside it
+    in_channel = interaction.channel_id == LEADERSHIP_CHANNEL_ID
+    if not in_channel:
+        channel = interaction.channel
+        if isinstance(channel, discord.Thread) and channel.parent_id == LEADERSHIP_CHANNEL_ID:
+            in_channel = True
+    if not in_channel:
         await interaction.response.send_message(
             "⛔ This command can only be used in the leadership channel.", ephemeral=True
         )
@@ -502,9 +508,9 @@ class StormCog(commands.Cog):
             return
 
         await interaction.response.defer(ephemeral=True)
-        channel = self.bot.get_channel(LEADERSHIP_CHANNEL_ID)
+        channel = interaction.channel
         if channel is None:
-            await interaction.followup.send("⚠️ Could not find the leadership channel.", ephemeral=True)
+            await interaction.followup.send("⚠️ Could not find the channel.", ephemeral=True)
             return
 
         # Step 1: Pick team

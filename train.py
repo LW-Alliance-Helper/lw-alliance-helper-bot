@@ -1158,7 +1158,14 @@ def _is_leadership(interaction: discord.Interaction) -> bool:
     return REQUIRED_ROLE_NAME in [r.name for r in interaction.user.roles]
 
 def _in_channel(interaction: discord.Interaction) -> bool:
-    return interaction.channel_id == LEADERSHIP_CHANNEL_ID
+    """Accept commands in the leadership channel or any thread inside it."""
+    if interaction.channel_id == LEADERSHIP_CHANNEL_ID:
+        return True
+    # Check if we're in a thread whose parent is the leadership channel
+    channel = interaction.channel
+    if isinstance(channel, discord.Thread) and channel.parent_id == LEADERSHIP_CHANNEL_ID:
+        return True
+    return False
 
 async def _guard(interaction: discord.Interaction) -> bool:
     if not _in_channel(interaction):
@@ -1325,11 +1332,12 @@ class TrainCog(commands.Cog):
         active_wizards[interaction.user.id] = cancel_event
 
         # Build a fake ctx-like object so collect_schedule can send messages
+        # Use the channel the command was invoked in (works in threads too)
         class FakeCtx:
-            channel = interaction.channel
-            author  = interaction.user
+            pass
         fake_ctx = FakeCtx()
         fake_ctx.channel = interaction.channel
+        fake_ctx.author  = interaction.user
 
         try:
             await collect_schedule(self.bot, fake_ctx, cancel_event)
@@ -1345,7 +1353,10 @@ class TrainCog(commands.Cog):
             return
         await interaction.response.defer()
         await self._post_schedule_embed(interaction.channel)
-        await interaction.delete_original_response()
+        try:
+            await interaction.delete_original_response()
+        except discord.HTTPException:
+            pass
 
     async def _post_schedule_embed(self, channel):
         schedule  = load_schedule()

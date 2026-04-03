@@ -37,7 +37,13 @@ def is_leadership(interaction: discord.Interaction) -> bool:
     return LEADERSHIP_ROLE_NAME in [r.name for r in interaction.user.roles]
 
 def in_leadership_channel(interaction: discord.Interaction) -> bool:
-    return interaction.channel_id == LEADERSHIP_CHANNEL_ID
+    """Accept commands in the leadership channel or any thread inside it."""
+    if interaction.channel_id == LEADERSHIP_CHANNEL_ID:
+        return True
+    channel = interaction.channel
+    if isinstance(channel, discord.Thread) and channel.parent_id == LEADERSHIP_CHANNEL_ID:
+        return True
+    return False
 
 async def guard(interaction: discord.Interaction) -> bool:
     """Check role and channel. Respond with an error and return False if either fails."""

@@ -328,13 +328,13 @@ class TimeSelectView(discord.ui.View):
         super().__init__(timeout=WIZARD_TIMEOUT)
         self.selected = None
 
-    @discord.ui.button(label="4PM EST / 1800 Server", style=discord.ButtonStyle.primary)
+    @discord.ui.button(label="4:00pm ET (18:00 server)", style=discord.ButtonStyle.secondary)
     async def pick_4pm(self, interaction: discord.Interaction, button: discord.ui.Button):
         self.selected = "4pm"
         await interaction.response.defer()
         self.stop()
 
-    @discord.ui.button(label="9PM EST / 0100 Server", style=discord.ButtonStyle.secondary)
+    @discord.ui.button(label="9:00pm ET (01:00 server)", style=discord.ButtonStyle.secondary)
     async def pick_9pm(self, interaction: discord.Interaction, button: discord.ui.Button):
         self.selected = "9pm"
         await interaction.response.defer()
@@ -360,7 +360,7 @@ class StormApprovalView(discord.ui.View):
     async def approve(self, interaction: discord.Interaction, button: discord.ui.Button):
         await interaction.response.defer()
         await self._disable(interaction)
-        save_ds_assignments(self.team, self.zones, self.subs)
+        await asyncio.get_event_loop().run_in_executor(None, save_ds_assignments, self.team, self.zones, self.subs)
         channel = interaction.channel
         if channel:
             await channel.send(
@@ -534,8 +534,8 @@ class StormCog(commands.Cog):
 
         team = team_view.selected
 
-        # Step 2: Load and post the template for that team
-        zones, subs = load_ds_assignments(team)
+        # Step 2: Load and post the template for that team (run in executor to avoid blocking)
+        zones, subs = await asyncio.get_event_loop().run_in_executor(None, load_ds_assignments, team)
         template    = build_ds_template(zones, subs)
 
         await channel.send(

@@ -118,28 +118,27 @@ async def on_ready():
     print(f"[INFO] Logged in as {bot.user} (ID: {bot.user.id})")
     print(f"[INFO] Watching channel ID: {WATCHED_CHANNEL_ID}")
 
-    # Load the train cog
-    await bot.load_extension("train")
-    print(f"[INFO] Train cog loaded")
+    # Load cogs — skip if already loaded (happens on reconnect)
+    if "train" not in bot.extensions:
+        await bot.load_extension("train")
+        print(f"[INFO] Train cog loaded")
+    if "storm" not in bot.extensions:
+        await bot.load_extension("storm")
+        print(f"[INFO] Storm cog loaded")
 
-    # Load the storm cog
-    await bot.load_extension("storm")
-    print(f"[INFO] Storm cog loaded")
-
-    # Sync slash commands to the guild
+    # Sync slash commands to the guild (safe to run again on reconnect)
     bot.tree.copy_global_to(guild=GUILD)
     synced = await bot.tree.sync(guild=GUILD)
     print(f"[INFO] Synced {len(synced)} slash commands to guild {GUILD_ID}")
 
-    # Start the event scheduler
-    bot.loop.create_task(run_scheduler(bot))
-    print(f"[INFO] Event scheduler started")
-
-    # Run the growth snapshot immediately on startup (first deploy baseline)
-    # and start the monthly scheduler
-    bot.loop.create_task(_run_growth_on_startup())
-    growth_task.start()
-    print(f"[INFO] Growth tracker started")
+    # Only start background tasks once — they persist across reconnects
+    if not hasattr(bot, "_tasks_started"):
+        bot._tasks_started = True
+        bot.loop.create_task(run_scheduler(bot))
+        print(f"[INFO] Event scheduler started")
+        bot.loop.create_task(_run_growth_on_startup())
+        growth_task.start()
+        print(f"[INFO] Growth tracker started")
 
 
 async def _run_growth_on_startup():
@@ -147,7 +146,7 @@ async def _run_growth_on_startup():
     await bot.wait_until_ready()
     try:
         print(f"[GROWTH] Running initial snapshot on startup")
-        run_growth_snapshot()
+        await asyncio.get_event_loop().run_in_executor(None, run_growth_snapshot)
     except Exception as e:
         print(f"[GROWTH] Error during startup snapshot: {e}")
 
@@ -159,7 +158,7 @@ async def growth_task():
     if now.day == 1 and now.hour == 22 and now.minute < 60:
         try:
             print(f"[GROWTH] Monthly snapshot triggered for {now.strftime('%B %Y')}")
-            run_growth_snapshot()
+            await asyncio.get_event_loop().run_in_executor(None, run_growth_snapshot)
         except Exception as e:
             print(f"[GROWTH] Error during monthly snapshot: {e}")
 

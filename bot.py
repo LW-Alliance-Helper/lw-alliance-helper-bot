@@ -117,6 +117,10 @@ async def on_ready():
     await bot.load_extension("train")
     print(f"[INFO] Train cog loaded")
 
+    # Load the storm cog
+    await bot.load_extension("storm")
+    print(f"[INFO] Storm cog loaded")
+
     # Sync slash commands to the guild
     bot.tree.copy_global_to(guild=GUILD)
     synced = await bot.tree.sync(guild=GUILD)
@@ -306,6 +310,15 @@ async def help_slash(interaction: discord.Interaction):
             "`/setbirthdays [tab]` — Set the member tab used for birthday lookups\n"
             "`/checkbirthdays` — Manually run the birthday check now\n"
             "`/cancel` — Cancel your active wizard session"
+        ),
+        inline=False,
+    )
+
+    embed.add_field(
+        name="⚔️ Storm Mails",
+        value=(
+            "`/draftds` — Generate a Desert Storm mail draft from last week's assignments\n"
+            "Edit the pre-filled template, paste it back, preview the mail, then approve to save"
         ),
         inline=False,
     )

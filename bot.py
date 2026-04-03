@@ -1,6 +1,6 @@
 import discord
 from discord import app_commands
-from discord.ext import commands
+from discord.ext import commands, tasks
 import re
 import os
 from datetime import datetime, date, timedelta
@@ -10,6 +10,7 @@ from scheduler import (
     run_scheduler, post_editor, get_event_datetimes, default_event_list,
     next_event_dates, is_friday,
 )
+from growth import run_growth_snapshot
 from zoneinfo import ZoneInfo
 
 load_dotenv()
@@ -112,7 +113,7 @@ async def on_ready():
     print(f"[INFO] Logged in as {bot.user} (ID: {bot.user.id})")
     print(f"[INFO] Watching channel ID: {WATCHED_CHANNEL_ID}")
 
-    # Load the train cog (which registers its own slash commands)
+    # Load the train cog
     await bot.load_extension("train")
     print(f"[INFO] Train cog loaded")
 
@@ -124,6 +125,39 @@ async def on_ready():
     # Start the event scheduler
     bot.loop.create_task(run_scheduler(bot))
     print(f"[INFO] Event scheduler started")
+
+    # Run the growth snapshot immediately on startup (first deploy baseline)
+    # and start the monthly scheduler
+    bot.loop.create_task(_run_growth_on_startup())
+    growth_task.start()
+    print(f"[INFO] Growth tracker started")
+
+
+async def _run_growth_on_startup():
+    """Run the growth snapshot once on startup for the initial baseline."""
+    await bot.wait_until_ready()
+    try:
+        print(f"[GROWTH] Running initial snapshot on startup")
+        run_growth_snapshot()
+    except Exception as e:
+        print(f"[GROWTH] Error during startup snapshot: {e}")
+
+
+@tasks.loop(hours=1)
+async def growth_task():
+    """Check every hour — run the snapshot on the 1st of the month at 10pm ET."""
+    now = datetime.now(tz=ET)
+    if now.day == 1 and now.hour == 22 and now.minute < 60:
+        try:
+            print(f"[GROWTH] Monthly snapshot triggered for {now.strftime('%B %Y')}")
+            run_growth_snapshot()
+        except Exception as e:
+            print(f"[GROWTH] Error during monthly snapshot: {e}")
+
+
+@growth_task.before_loop
+async def before_growth_task():
+    await bot.wait_until_ready()
 
 
 @bot.event
@@ -147,6 +181,28 @@ async def on_message(message):
                     print(f"[ERROR] Failed to update Google Sheet: {e}")
 
     await bot.process_commands(message)
+
+
+@bot.tree.command(
+    name="rungrowth",
+    description="Manually run the monthly squad power growth snapshot",
+    guild=GUILD,
+)
+async def rungrowth_slash(interaction: discord.Interaction):
+    if not await guard(interaction):
+        return
+    await interaction.response.defer(ephemeral=True)
+    try:
+        run_growth_snapshot()
+        await interaction.followup.send(
+            "✅ Growth snapshot complete — check the Growth Tracking tab.",
+            ephemeral=True,
+        )
+    except Exception as e:
+        await interaction.followup.send(
+            f"⚠️ Growth snapshot failed: {e}",
+            ephemeral=True,
+        )
 
 
 # ── /events command ────────────────────────────────────────────────────────────
@@ -250,6 +306,15 @@ async def help_slash(interaction: discord.Interaction):
             "`/setbirthdays [tab]` — Set the member tab used for birthday lookups\n"
             "`/checkbirthdays` — Manually run the birthday check now\n"
             "`/cancel` — Cancel your active wizard session"
+        ),
+        inline=False,
+    )
+
+    embed.add_field(
+        name="📈 Growth Tracking",
+        value=(
+            "`/rungrowth` — Manually run the monthly squad power snapshot\n"
+            "Snapshots also run automatically on the 1st of each month at 10pm ET"
         ),
         inline=False,
     )

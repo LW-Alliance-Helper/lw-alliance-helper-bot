@@ -1,187 +1,102 @@
-# Squad Powers Survey Bot
+# OGV Alliance Bot
 
-A Discord bot that watches a channel for Subo survey response embeds, parses the data, and syncs it to a Google Sheet — updating existing rows or creating new ones based on Discord ID.
+A Discord bot built for the OGV alliance that automates member data tracking, event announcements, train schedule management, birthday reminders, and monthly squad power growth reporting.
 
----
-
-## File Structure
-
-```
-discord-bot/
-├── bot.py                  # Main bot — Discord event handling & embed parsing
-├── sheets.py               # Google Sheets read/write logic
-├── requirements.txt        # Python dependencies
-├── .env.example            # Environment variable template
-├── .env                    # Your actual secrets (never commit this)
-└── service_account.json    # Google service account key (never commit this)
-```
+All commands are restricted to the **OGV Leadership** role and the leadership channel. Use `/help` at any time to see the full command list in Discord.
 
 ---
 
-## Step 1 — Create a Discord Bot
+## What It Does
 
-1. Go to https://discord.com/developers/applications and click **New Application**
-2. Name it (e.g. "Squad Powers Bot") and click **Create**
-3. Go to the **Bot** tab on the left
-4. Click **Reset Token** and copy the token → this is your `DISCORD_TOKEN`
-5. Under **Privileged Gateway Intents**, enable:
-   - ✅ **Message Content Intent**
-6. Go to **OAuth2 → URL Generator**:
-   - Scopes: `bot`
-   - Bot Permissions: `Read Messages/View Channels`, `Read Message History`
-7. Copy the generated URL, open it in your browser, and invite the bot to your server
+### 🔵 Squad Power Tracking
+The bot watches the designated survey channel for responses from Subo the Survey Bot. When a survey comes in, it automatically reads the embed data and syncs the member's squad powers, gorilla level, and drone level to the Squad Powers sheet — updating their existing row or creating a new one if they haven't submitted before.
 
----
+### 📣 Event Announcements
+On event days (Plague Marauder and Zombie Siege run on a 3-day cycle), the bot posts a draft announcement to the leadership channel at noon for review. Leadership uses the event editor to adjust times, add or remove events like Glacieradon or Blimp, and add any extra notes. Once the event list looks right, the bot builds the announcement and routes it through an approval flow before anything posts publicly to Announcements. After approval, a 5-minute warning fires automatically to Announcements based on the first event's time.
 
-## Step 2 — Get Your Channel ID
+On Friday nights, a Buster Day shield reminder is posted to leadership for approval at 9:55pm ET.
 
-1. In Discord, go to **User Settings → Advanced** and enable **Developer Mode**
-2. Right-click the channel you want to watch → **Copy Channel ID**
-3. Paste it as `WATCHED_CHANNEL_ID` in your `.env`
+### 🚂 Train Schedule
+Leadership inputs the upcoming train schedule using `/schedule`, with the option to store theme, tone, and notes for each person at the time of entry. At 10pm ET (server reset) each day, if someone is scheduled the bot posts a reminder in the leadership channel with a button to pull up their stored details and get the ready-to-paste ChatGPT prompt.
+
+Birthdays are automatically added to the train schedule 14 days in advance by reading the active member sheet each night at reset. The birthday theme is pre-filled automatically. If a member already has a train entry within one day of their birthday, they are skipped.
+
+### 📈 Growth Tracking
+On the 1st of every month at 10pm ET, the bot takes a snapshot of every member's combined squad power (1st + 2nd + 3rd squad) and writes it to the Growth Tracking sheet alongside a percentage growth column comparing it to the previous month. Members not yet on the sheet are added automatically. Members who have been removed are left in place with blanks for the new month.
 
 ---
 
-## Step 3 — Set Up Google Sheets Access
+## Slash Commands
 
-### Create a Service Account
-1. Go to https://console.cloud.google.com
-2. Create a new project (or use an existing one)
-3. Go to **APIs & Services → Library** and enable:
-   - **Google Sheets API**
-4. Go to **APIs & Services → Credentials**
-5. Click **Create Credentials → Service Account**
-6. Give it a name, click **Create and Continue**, then **Done**
-7. Click on the service account you just created
-8. Go to the **Keys** tab → **Add Key → Create New Key → JSON**
-9. Download the JSON file and rename it `service_account.json`
-10. Place it in the same folder as `bot.py`
+### Event Announcements
+| Command | Description |
+|---|---|
+| `/events` | Open the event editor for today |
+| `/events [date]` | Open the event editor for a specific date, e.g. `/events April 5` or `/events 4/5` |
 
-### Share Your Sheet with the Service Account
-1. Open the downloaded JSON — find the `client_email` field (looks like `name@project.iam.gserviceaccount.com`)
-2. Open your Google Sheet
-3. Click **Share** and paste that email address — give it **Editor** access
+### Train Schedule
+| Command | Description |
+|---|---|
+| `/schedule` | Input the upcoming train schedule |
+| `/schedule list` | View the current schedule |
+| `/schedule clear` | Clear the entire schedule |
+| `/trainschedule` | Quick view of the current schedule |
+| `/trainprompt` | Retrieve today's stored ChatGPT prompt |
+| `/trainprompt [date]` | Retrieve a stored prompt for a specific date |
+| `/train` | Launch the manual train blurb wizard for any name |
+| `/cancel` | Cancel your active wizard session |
 
-### Get Your Spreadsheet ID
-From your sheet's URL:
-```
-https://docs.google.com/spreadsheets/d/SPREADSHEET_ID_IS_HERE/edit
-```
+### Birthday Management
+| Command | Description |
+|---|---|
+| `/checkbirthdays` | Manually run the birthday check and add upcoming birthdays to the schedule |
+| `/setbirthdays [tab name]` | Update the active member sheet tab used for birthday lookups — use this at the start of each new season |
 
----
+### Growth Tracking
+| Command | Description |
+|---|---|
+| `/rungrowth` | Manually run the monthly squad power snapshot |
 
-## Step 4 — Configure Environment Variables
-
-```bash
-cp .env.example .env
-```
-
-Edit `.env` and fill in all four values:
-
-```env
-DISCORD_TOKEN=your-discord-bot-token
-WATCHED_CHANNEL_ID=1234567890123456789
-SPREADSHEET_ID=your-spreadsheet-id
-SHEET_NAME=Sheet1
-GOOGLE_SERVICE_ACCOUNT_FILE=service_account.json
-```
+### General
+| Command | Description |
+|---|---|
+| `/help` | Show all available commands in Discord |
 
 ---
 
-## Step 5 — Install & Run
+## Automatic Schedule
 
-```bash
-# Create a virtual environment (recommended)
-python3 -m venv venv
-source venv/bin/activate        # Windows: venv\Scripts\activate
-
-# Install dependencies
-pip install -r requirements.txt
-
-# Run the bot
-python bot.py
-```
-
-You should see:
-```
-[INFO] Logged in as Squad Powers Bot#1234 (ID: ...)
-[INFO] Watching channel ID: ...
-```
+| Time | What Happens |
+|---|---|
+| **Noon ET on event days** | Event announcement draft posted to leadership for review |
+| **10pm ET nightly** | Birthday check runs — upcoming birthdays added to train schedule |
+| **10pm ET nightly** | Train day reminder posted if someone is scheduled and prompt hasn't been pulled |
+| **9:55pm ET Fridays** | Buster Day shield reminder posted to leadership for approval |
+| **5 min before first event** | Warning auto-posted to Announcements (fires after noon announcement is approved) |
+| **1st of every month at 10pm ET** | Squad power growth snapshot written to Growth Tracking sheet |
 
 ---
 
-## How It Works
+## Google Sheet Structure
 
-When Subo posts a survey response in the watched channel, the bot:
+The bot reads from and writes to the following tabs in the alliance Google Sheet:
 
-1. Detects the message (author is a bot, title contains "New Response")
-2. Parses **embed #1** description to extract:
-   - Discord ID (from the `<@123456789>` mention)
-   - Username (display name, with the mention stripped)
-3. Reads each **question embed** (#2–#10) to get squad powers, types, gorilla level, and drone level
-4. Looks up the Discord ID in **column B** of your sheet:
-   - **Found** → updates that row in place
-   - **Not found** → appends a new row
-5. Stamps **Date Modified** with today's date
-
-### Sheet Column Mapping
-
-| Column | Data |
-|--------|------|
-| A | Username |
-| B | Discord ID ← lookup key |
-| C | 1st Squad |
-| D | 1st Squad Type |
-| E | 2nd Squad |
-| F | 2nd Squad Type |
-| G | 3rd Squad |
-| H | 3rd Squad Type |
-| I | Gorilla Level |
-| J | Drone Level |
-| K | Date Modified |
+| Tab | Purpose |
+|---|---|
+| **Squad Powers** | Member squad data — updated automatically from Subo survey responses |
+| **Train Schedule** | Upcoming train entries with theme, tone, notes, and prompt status. Also stores the active member tab name in cell H1 |
+| **Growth Tracking** | Monthly combined squad power snapshots with % growth columns |
 
 ---
 
-## Keeping It Running (Optional)
+## Files
 
-### On a Linux server with systemd
-
-Create `/etc/systemd/system/squadbot.service`:
-
-```ini
-[Unit]
-Description=Squad Powers Discord Bot
-After=network.target
-
-[Service]
-User=youruser
-WorkingDirectory=/path/to/discord-bot
-ExecStart=/path/to/discord-bot/venv/bin/python bot.py
-Restart=always
-RestartSec=10
-
-[Install]
-WantedBy=multi-user.target
-```
-
-Then:
-```bash
-sudo systemctl enable squadbot
-sudo systemctl start squadbot
-sudo systemctl status squadbot
-```
-
-### On Railway / Render / Heroku
-- Set each `.env` value as an environment variable in the platform's dashboard
-- Upload `service_account.json` or paste its contents as a single-line env var
-- Set the start command to: `python bot.py`
-
----
-
-## Troubleshooting
-
-| Problem | Fix |
-|---------|-----|
-| Bot doesn't see messages | Check **Message Content Intent** is enabled in Developer Portal |
-| "Could not extract Discord ID" | Check Subo's embed description format hasn't changed |
-| Google Sheets 403 error | Make sure the service account email has Editor access to the sheet |
-| Wrong row updated | Confirm Discord IDs in column B are plain numbers (no spaces/formatting) |
+| File | Purpose |
+|---|---|
+| `bot.py` | Main bot — survey parsing, slash commands, growth scheduler |
+| `scheduler.py` | Event announcement scheduler and approval workflow |
+| `train.py` | Train schedule management, birthday auto-population, blurb wizard |
+| `growth.py` | Monthly squad power snapshot logic |
+| `sheets.py` | Google Sheets authentication and squad powers read/write |
+| `requirements.txt` | Python dependencies |
+| `Procfile` | Railway start command |

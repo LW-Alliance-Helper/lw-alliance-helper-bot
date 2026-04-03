@@ -21,6 +21,7 @@ import json
 import os
 import re
 import discord
+from discord import app_commands
 from discord.ext import commands, tasks
 from datetime import datetime, timedelta, date
 from zoneinfo import ZoneInfo
@@ -168,6 +169,193 @@ def load_blurb_log() -> set:
         return set()
 
 
+# ── Birthday sheet config ──────────────────────────────────────────────────────
+#
+# The active member tab name is stored in cell H1 of the Train Schedule tab.
+# G1 contains the label "Active Member Tab:" for human readability.
+# Default value if not set: "Season 5 - Off-Season"
+
+DEFAULT_MEMBER_TAB = "Season 5 - Off-Season"
+BIRTHDAY_LOOKAHEAD = 14  # days ahead to check for birthdays
+
+
+def get_member_tab_name() -> str:
+    """Read the active member tab name from H1 of the Train Schedule tab."""
+    try:
+        ws  = _get_train_sheet()
+        val = ws.acell("H1").value
+        return val.strip() if val and val.strip() else DEFAULT_MEMBER_TAB
+    except Exception as e:
+        print(f"[BIRTHDAY] Error reading member tab name: {e}")
+        return DEFAULT_MEMBER_TAB
+
+
+def set_member_tab_name(name: str):
+    """Write the active member tab name to H1 of the Train Schedule tab."""
+    try:
+        ws = _get_train_sheet()
+        ws.update("G1", [["Active Member Tab:"]], value_input_option="USER_ENTERED")
+        ws.update("H1", [[name]], value_input_option="USER_ENTERED")
+        print(f"[BIRTHDAY] Member tab name set to: {name}")
+    except Exception as e:
+        print(f"[BIRTHDAY] Error setting member tab name: {e}")
+
+
+def _get_member_sheet(tab_name: str):
+    """Return the active member worksheet."""
+    import gspread
+    from google.oauth2.service_account import Credentials
+
+    scopes = ["https://www.googleapis.com/auth/spreadsheets"]
+    credentials_json = os.getenv("GOOGLE_CREDENTIALS_JSON")
+    if credentials_json:
+        info  = json.loads(credentials_json)
+        creds = Credentials.from_service_account_info(info, scopes=scopes)
+    else:
+        key_file = os.getenv("GOOGLE_SERVICE_ACCOUNT_FILE", "service_account.json")
+        creds    = Credentials.from_service_account_file(key_file, scopes=scopes)
+
+    gc = gspread.authorize(creds)
+    sh = gc.open_by_key(os.getenv("SPREADSHEET_ID"))
+    return sh.worksheet(tab_name)
+
+
+def parse_birthday(raw: str) -> tuple[int, int] | None:
+    """
+    Parse a birthday string into (month, day), ignoring the year.
+    Handles formats like: 'December 7', 'December 7, 1990', '12/7', '12/7/1990'
+    Returns None if unparseable.
+    """
+    if not raw or not raw.strip():
+        return None
+
+    raw = raw.strip()
+
+    # Numeric: 12/7 or 12/7/1990
+    numeric = re.match(r"^(\d{1,2})/(\d{1,2})(?:/\d+)?$", raw)
+    if numeric:
+        try:
+            return int(numeric.group(1)), int(numeric.group(2))
+        except ValueError:
+            return None
+
+    # Month name: December 7 or December 7, 1990
+    named = re.match(
+        r"^([A-Za-z]+)\s+(\d{1,2})(?:st|nd|rd|th)?(?:\s*,?\s*\d+)?$",
+        raw, re.IGNORECASE,
+    )
+    if named:
+        month = MONTH_MAP.get(named.group(1).lower())
+        if month:
+            try:
+                return month, int(named.group(2))
+            except ValueError:
+                return None
+
+    return None
+
+
+def load_birthdays(tab_name: str) -> list[dict]:
+    """
+    Load all members with birthdays from the member sheet.
+    Returns a list of { "name": str, "month": int, "day": int }
+    Data starts at row 10 (index 9). Name = col E (index 4), Birthday = col H (index 7).
+    """
+    try:
+        ws   = _get_member_sheet(tab_name)
+        rows = ws.get_all_values()
+        members = []
+        for row in rows[9:]:  # data starts at row 10
+            if len(row) < 8:
+                continue
+            name     = row[4].strip()   # Column E
+            bday_raw = row[7].strip()   # Column H
+            if not name or not bday_raw:
+                continue
+            parsed = parse_birthday(bday_raw)
+            if parsed:
+                members.append({"name": name, "month": parsed[0], "day": parsed[1]})
+        print(f"[BIRTHDAY] Loaded {len(members)} members with birthdays from '{tab_name}'")
+        return members
+    except Exception as e:
+        print(f"[BIRTHDAY] Error loading birthdays from '{tab_name}': {e}")
+        return []
+
+
+def check_and_add_birthdays(schedule: dict) -> dict:
+    """
+    Look ahead BIRTHDAY_LOOKAHEAD days from today.
+    For each member whose birthday falls in that window:
+      - Check if that member's name already appears in the schedule
+        on their birthday ±1 day (person-specific conflict check)
+      - If no conflict, add them with theme=Birthday
+    Returns the updated schedule dict.
+    """
+    tab_name = get_member_tab_name()
+    members  = load_birthdays(tab_name)
+    if not members:
+        return schedule
+
+    today       = date.today()
+    check_year  = today.year
+    added_count = 0
+
+    for member in members:
+        month = member["month"]
+        day   = member["day"]
+        name  = member["name"]
+
+        # Find this year's birthday date — handle Dec/Jan year boundary
+        try:
+            bday = date(check_year, month, day)
+        except ValueError:
+            continue  # invalid date (e.g. Feb 29 in non-leap year)
+
+        # If birthday already passed this year, check next year
+        if bday < today:
+            try:
+                bday = date(check_year + 1, month, day)
+            except ValueError:
+                continue
+
+        # Only care about birthdays in the lookahead window
+        days_until = (bday - today).days
+        if days_until > BIRTHDAY_LOOKAHEAD:
+            continue
+
+        # Person-specific conflict check: is this member's name already
+        # in the schedule on bday-1, bday, or bday+1?
+        conflict = False
+        for delta in (-1, 0, 1):
+            check_date = (bday + timedelta(days=delta)).isoformat()
+            if check_date in schedule:
+                existing_name = schedule[check_date].get("name", "").strip().lower()
+                if existing_name == name.lower():
+                    conflict = True
+                    break
+
+        if conflict:
+            print(f"[BIRTHDAY] Skipping {name} — already in schedule near {bday.isoformat()}")
+            continue
+
+        # Add birthday entry
+        bday_str = bday.isoformat()
+        schedule[bday_str] = {
+            "name":             name,
+            "theme":            "Birthday",
+            "tone":             "",
+            "notes":            "Auto-added from birthday sheet",
+            "prompt_retrieved": False,
+        }
+        added_count += 1
+        print(f"[BIRTHDAY] Added {name} on {bday_str}")
+
+    if added_count:
+        print(f"[BIRTHDAY] Added {added_count} birthday entr{'y' if added_count == 1 else 'ies'} to schedule")
+
+    return schedule
+
+
 # ── Schedule date parsing ──────────────────────────────────────────────────────
 
 MONTH_MAP = {
@@ -301,7 +489,7 @@ def build_schedule_embed(schedule: dict, blurb_log: set) -> discord.Embed:
     if not schedule:
         embed = discord.Embed(
             title="🚂 OGV Train Schedule",
-            description="*No schedule set. Use `!schedule` to add entries.*",
+            description="*No schedule set. Use `/schedule` to add entries.*",
             color=discord.Color.gold(),
         )
         return embed
@@ -515,7 +703,7 @@ async def retrieve_and_confirm(bot, channel, user, date_str: str, entry: dict, b
     if not has_details:
         await channel.send(
             f"⚠️ No details stored for **{name}** yet. "
-            f"Use `!train` to build the prompt manually.",
+            f"Use `/train` to build the prompt manually.",
             embed=detail_embed,
         )
         return
@@ -578,7 +766,7 @@ async def collect_schedule(bot, ctx: commands.Context, cancel_event: asyncio.Eve
                 pass
             return reply.content.strip()
         except asyncio.TimeoutError:
-            await channel.send("⏰ Timed out. Use `!schedule` to try again.")
+            await channel.send("⏰ Timed out. Use `/schedule` to try again.")
             return None
 
     async def wait_for_view(view: discord.ui.View, msg: discord.Message) -> bool:
@@ -608,7 +796,7 @@ async def collect_schedule(bot, ctx: commands.Context, cancel_event: asyncio.Eve
         f"4/8 - PlayerName\n"
         f"```\n"
         f"This will **merge** with the current schedule (existing entries are kept).\n"
-        f"*(Type `!cancel` at any time to stop)*"
+        f"*(Type `/cancel` at any time to stop)*"
     )
 
     # Wait directly for the user's reply
@@ -633,11 +821,11 @@ async def collect_schedule(bot, ctx: commands.Context, cancel_event: asyncio.Eve
             pass
 
     except asyncio.TimeoutError:
-        await channel.send("⏰ Timed out. Use `!schedule` to try again.")
+        await channel.send("⏰ Timed out. Use `/schedule` to try again.")
         return
 
     if not raw:
-        await channel.send("⚠️ No input received. Use `!schedule` to try again.")
+        await channel.send("⚠️ No input received. Use `/schedule` to try again.")
         return
 
     # Parse all lines
@@ -831,7 +1019,7 @@ async def run_wizard_steps(bot, channel, user, prefilled_name: str = None):
                 pass
             return reply.content.strip()
         except asyncio.TimeoutError:
-            await channel.send("⏰ Wizard timed out. Use `!train` to start again.")
+            await channel.send("⏰ Wizard timed out. Use `/train` to start again.")
             return None
 
     async def wait_for_view(view, msg):
@@ -857,14 +1045,14 @@ async def run_wizard_steps(bot, channel, user, prefilled_name: str = None):
             await channel.send(
                 f"🚂 **Train Blurb Wizard** — started by {user.mention}\n\n"
                 f"👤 **Name pre-filled:** {name}\n"
-                f"*(Type `!cancel` at any time to stop)*"
+                f"*(Type `/cancel` at any time to stop)*"
             )
         else:
             await channel.send(
                 f"🚂 **Train Blurb Wizard** — started by {user.mention}\n\n"
                 f"**Step 1 of 4 — Member Name**\n"
                 f"Type the member's name exactly as it should appear:\n"
-                f"*(Type `!cancel` at any time to stop)*"
+                f"*(Type `/cancel` at any time to stop)*"
             )
             name = await ask("")
             if not name or cancel_event.is_set():
@@ -877,7 +1065,7 @@ async def run_wizard_steps(bot, channel, user, prefilled_name: str = None):
         if not await wait_for_view(theme_view, theme_msg):
             return False
         if theme_view.selected is None:
-            await channel.send("⏰ Wizard timed out. Use `!train` to start again.")
+            await channel.send("⏰ Wizard timed out. Use `/train` to start again.")
             return False
         theme = theme_view.selected
         if theme == "Custom":
@@ -892,7 +1080,7 @@ async def run_wizard_steps(bot, channel, user, prefilled_name: str = None):
         if not await wait_for_view(tone_view, tone_msg):
             return False
         if tone_view.selected is None:
-            await channel.send("⏰ Wizard timed out. Use `!train` to start again.")
+            await channel.send("⏰ Wizard timed out. Use `/train` to start again.")
             return False
         tone = tone_view.selected
 
@@ -924,7 +1112,7 @@ async def run_wizard_steps(bot, channel, user, prefilled_name: str = None):
         if not await wait_for_view(confirm_view, discord.utils.MISSING):
             return False
         if confirm_view.action != "prompt":
-            await channel.send("❌ Cancelled. Use `!train` to start over.")
+            await channel.send("❌ Cancelled. Use `/train` to start over.")
             return False
 
         prompt = build_chatgpt_prompt(name, theme, tone, notes)
@@ -939,12 +1127,37 @@ async def run_wizard_steps(bot, channel, user, prefilled_name: str = None):
         active_wizards.pop(user.id, None)
 
 
-async def run_train_wizard(ctx: commands.Context):
-    await run_wizard_steps(ctx.bot, ctx.channel, ctx.author)
+async def run_train_wizard(interaction: discord.Interaction):
+    await run_wizard_steps(interaction.client, interaction.channel, interaction.user)
 
 
 async def run_train_wizard_prefilled(bot, channel, user, name: str):
     await run_wizard_steps(bot, channel, user, prefilled_name=name)
+
+
+# ── Slash command guards ───────────────────────────────────────────────────────
+
+GUILD_ID = 1266229297723605052
+GUILD    = discord.Object(id=GUILD_ID)
+
+def _is_leadership(interaction: discord.Interaction) -> bool:
+    return REQUIRED_ROLE_NAME in [r.name for r in interaction.user.roles]
+
+def _in_channel(interaction: discord.Interaction) -> bool:
+    return interaction.channel_id == LEADERSHIP_CHANNEL_ID
+
+async def _guard(interaction: discord.Interaction) -> bool:
+    if not _in_channel(interaction):
+        await interaction.response.send_message(
+            "⛔ This command can only be used in the leadership channel.", ephemeral=True
+        )
+        return False
+    if not _is_leadership(interaction):
+        await interaction.response.send_message(
+            f"⛔ You need the **{REQUIRED_ROLE_NAME}** role to use this command.", ephemeral=True
+        )
+        return False
+    return True
 
 
 # ── Cog ────────────────────────────────────────────────────────────────────────
@@ -959,94 +1172,129 @@ class TrainCog(commands.Cog):
     def cog_unload(self):
         self.check_reminder.cancel()
 
-    def _has_role(self, ctx_or_member) -> bool:
-        if hasattr(ctx_or_member, "author"):
-            roles = ctx_or_member.author.roles
-        else:
-            roles = ctx_or_member.roles
-        return REQUIRED_ROLE_NAME in [r.name for r in roles]
+    # ── /setbirthdays ──────────────────────────────────────────────────────────
 
-    def _in_channel(self, ctx) -> bool:
-        return ctx.channel.id == LEADERSHIP_CHANNEL_ID
+    @app_commands.command(
+        name="setbirthdays",
+        description="Set the member sheet tab name used for birthday lookups",
+    )
+    @app_commands.describe(tab_name="Exact name of the tab, e.g. 'Season 6 - Off-Season'")
+    @app_commands.guilds(GUILD)
+    async def setbirthdays(self, interaction: discord.Interaction, tab_name: str):
+        if not await _guard(interaction):
+            return
 
-    async def _guard(self, ctx) -> bool:
-        """Delete command message and return False if checks fail."""
+        # Verify the tab actually exists before saving
         try:
-            await ctx.message.delete()
-        except discord.HTTPException:
-            pass
-        if not self._in_channel(ctx):
-            return False
-        if not self._has_role(ctx):
-            await ctx.channel.send(
-                f"⛔ You need the **{REQUIRED_ROLE_NAME}** role to use this command.",
-                delete_after=10,
+            _get_member_sheet(tab_name)
+        except Exception:
+            await interaction.response.send_message(
+                f"⚠️ Could not find a tab named **{tab_name}** in your Google Sheet. "
+                f"Please check the spelling and try again.",
+                ephemeral=True,
             )
-            return False
-        return True
-
-    # ── !cancel ────────────────────────────────────────────────────────────────
-
-    @commands.command(name="cancel")
-    async def cancel(self, ctx: commands.Context):
-        try:
-            await ctx.message.delete()
-        except discord.HTTPException:
-            pass
-        if not self._in_channel(ctx):
             return
-        if ctx.author.id in active_wizards:
-            active_wizards[ctx.author.id].set()
-            await ctx.channel.send(f"❌ Wizard cancelled by {ctx.author.mention}.", delete_after=10)
+
+        set_member_tab_name(tab_name)
+        await interaction.response.send_message(
+            f"✅ Birthday source tab updated to **{tab_name}**.\n"
+            f"The next nightly check at 10pm ET will use this tab.",
+            ephemeral=True,
+        )
+
+    # ── /cancel ────────────────────────────────────────────────────────────────
+
+    @app_commands.command(name="cancel", description="Cancel your active wizard session")
+    @app_commands.guilds(GUILD)
+    async def cancel(self, interaction: discord.Interaction):
+        if not await _guard(interaction):
+            return
+        if interaction.user.id in active_wizards:
+            active_wizards[interaction.user.id].set()
+            await interaction.response.send_message(
+                f"❌ Wizard cancelled.", ephemeral=True
+            )
         else:
-            await ctx.channel.send("ℹ️ You don't have an active wizard running.", delete_after=10)
+            await interaction.response.send_message(
+                "ℹ️ You don't have an active wizard running.", ephemeral=True
+            )
 
-    # ── !train ─────────────────────────────────────────────────────────────────
+    # ── /train ─────────────────────────────────────────────────────────────────
 
-    @commands.command(name="train")
-    async def train(self, ctx: commands.Context):
-        if not await self._guard(ctx):
+    @app_commands.command(name="train", description="Launch the train blurb wizard to build a ChatGPT prompt")
+    @app_commands.guilds(GUILD)
+    async def train(self, interaction: discord.Interaction):
+        if not await _guard(interaction):
             return
-        await run_train_wizard(ctx)
+        if interaction.user.id in active_wizards:
+            await interaction.response.send_message(
+                "⚠️ You already have an active session running. Use `/cancel` to stop it first.",
+                ephemeral=True,
+            )
+            return
+        await interaction.response.send_message("🚂 Starting wizard...", ephemeral=True)
+        await run_train_wizard(interaction)
 
-    # ── !schedule ──────────────────────────────────────────────────────────────
+    # ── /schedule ──────────────────────────────────────────────────────────────
 
-    @commands.command(name="schedule")
-    async def schedule(self, ctx: commands.Context, subcommand: str = None):
-        if not await self._guard(ctx):
+    @app_commands.command(name="schedule", description="Input, view, or clear the train schedule")
+    @app_commands.describe(action="What to do: input (default), list, or clear")
+    @app_commands.choices(action=[
+        app_commands.Choice(name="Input new schedule", value="input"),
+        app_commands.Choice(name="List current schedule", value="list"),
+        app_commands.Choice(name="Clear schedule", value="clear"),
+    ])
+    @app_commands.guilds(GUILD)
+    async def schedule(self, interaction: discord.Interaction, action: str = "input"):
+        if not await _guard(interaction):
             return
 
-        if subcommand and subcommand.lower() == "list":
-            await self._post_schedule_embed(ctx.channel)
+        if action == "list":
+            await interaction.response.defer()
+            await self._post_schedule_embed(interaction.channel)
+            await interaction.delete_original_response()
             return
 
-        if subcommand and subcommand.lower() == "clear":
+        if action == "clear":
             save_schedule({})
-            await ctx.channel.send("🗑️ Train schedule cleared.")
+            await interaction.response.send_message("🗑️ Train schedule cleared.")
             return
 
-        # Input mode — guard against double-triggering
-        if ctx.author.id in active_wizards:
-            await ctx.channel.send(
-                "⚠️ You already have an active session running. Type `!cancel` to stop it first.",
-                delete_after=10,
+        # Input mode
+        if interaction.user.id in active_wizards:
+            await interaction.response.send_message(
+                "⚠️ You already have an active session running. Use `/cancel` to stop it first.",
+                ephemeral=True,
             )
             return
+
+        await interaction.response.send_message("📋 Starting schedule input...", ephemeral=True)
 
         cancel_event = asyncio.Event()
-        active_wizards[ctx.author.id] = cancel_event
+        active_wizards[interaction.user.id] = cancel_event
+
+        # Build a fake ctx-like object so collect_schedule can send messages
+        class FakeCtx:
+            channel = interaction.channel
+            author  = interaction.user
+        fake_ctx = FakeCtx()
+        fake_ctx.channel = interaction.channel
+
         try:
-            await collect_schedule(self.bot, ctx, cancel_event)
+            await collect_schedule(self.bot, fake_ctx, cancel_event)
         finally:
-            active_wizards.pop(ctx.author.id, None)
+            active_wizards.pop(interaction.user.id, None)
 
-    # ── !trainschedule ─────────────────────────────────────────────────────────
+    # ── /trainschedule ─────────────────────────────────────────────────────────
 
-    @commands.command(name="trainschedule")
-    async def trainschedule(self, ctx: commands.Context):
-        if not await self._guard(ctx):
+    @app_commands.command(name="trainschedule", description="View the current train schedule")
+    @app_commands.guilds(GUILD)
+    async def trainschedule(self, interaction: discord.Interaction):
+        if not await _guard(interaction):
             return
-        await self._post_schedule_embed(ctx.channel)
+        await interaction.response.defer()
+        await self._post_schedule_embed(interaction.channel)
+        await interaction.delete_original_response()
 
     async def _post_schedule_embed(self, channel):
         schedule  = load_schedule()
@@ -1061,66 +1309,75 @@ class TrainCog(commands.Cog):
             if not upcoming:
                 lines.append("*No upcoming entries.*")
             for date_str, entry in upcoming.items():
-                d    = date.fromisoformat(date_str)
-                name = entry.get("name", "Unknown")
-                done = "✅" if date_str in blurb_log else ("📋" if any(entry.get(k) for k in ("theme", "notes")) else "⏳")
+                d         = date.fromisoformat(date_str)
+                name      = entry.get("name", "Unknown")
+                done      = "✅" if date_str in blurb_log else ("📋" if any(entry.get(k) for k in ("theme", "notes")) else "⏳")
                 today_tag = " — **TODAY**" if d == today else ""
                 lines.append(f"{done} **{d.strftime('%a, %b %-d')}** — {name}{today_tag}")
             await channel.send("\n".join(lines))
 
-    # ── !trainprompt ───────────────────────────────────────────────────────────
+    # ── /trainprompt ───────────────────────────────────────────────────────────
 
-    @commands.command(name="trainprompt")
-    async def trainprompt(self, ctx: commands.Context, *, date_arg: str = None):
-        """
-        Retrieve the stored prompt for a scheduled person.
-        Defaults to today. Pass a date to retrieve a specific entry:
-          !trainprompt April 5
-          !trainprompt 4/5
-        """
-        if not await self._guard(ctx):
+    @app_commands.command(name="trainprompt", description="Retrieve a stored ChatGPT prompt for a scheduled person")
+    @app_commands.describe(date="Date to retrieve, e.g. 'April 5' or '4/5' (defaults to today)")
+    @app_commands.guilds(GUILD)
+    async def trainprompt(self, interaction: discord.Interaction, date: str = None):
+        if not await _guard(interaction):
             return
+
+        await interaction.response.defer()
 
         schedule  = load_schedule()
         blurb_log = load_blurb_log()
 
-        if date_arg:
-            d, _ = parse_date_and_name(f"{date_arg} - placeholder")
+        if date:
+            d, _, _ = parse_date_and_name(f"{date} - placeholder")
             if d is None:
-                await ctx.channel.send(
-                    f"⚠️ Could not parse date `{date_arg}`. Try formats like `April 5` or `4/5`."
+                await interaction.followup.send(
+                    f"⚠️ Could not parse date `{date}`. Try formats like `April 5` or `4/5`.",
+                    ephemeral=True,
                 )
                 return
             date_str = d.isoformat()
         else:
-            date_str = date.today().isoformat()
+            date_str = date_cls.today().isoformat()
 
         if date_str not in schedule:
-            d_label = date.fromisoformat(date_str).strftime("%A, %B %-d")
-            await ctx.channel.send(f"ℹ️ Nothing scheduled for **{d_label}**.")
+            d_label = date_cls.fromisoformat(date_str).strftime("%A, %B %-d")
+            await interaction.followup.send(f"ℹ️ Nothing scheduled for **{d_label}**.", ephemeral=True)
             return
 
+        await interaction.delete_original_response()
         entry = schedule[date_str]
-        await retrieve_and_confirm(self.bot, ctx.channel, ctx.author, date_str, entry, blurb_log)
+        await retrieve_and_confirm(self.bot, interaction.channel, interaction.user, date_str, entry, blurb_log)
 
     # ── Reminder loop ──────────────────────────────────────────────────────────
 
     @tasks.loop(minutes=1)
     async def check_reminder(self):
         now   = datetime.now(tz=ET)
-        today = date.today()
+        today = date_cls.today()
 
         if self.last_reminder_date != today:
             self.last_reminder_date  = today
             self.reminder_sent_today = False
 
-        # Train reminder fires exactly at 10pm ET (00:00 server reset)
-        # This marks the start of the new train day — the train itself
-        # can be run any time after this
         if now.hour != 22 or now.minute != 0:
             return
         if self.reminder_sent_today:
             return
+
+        # ── Birthday auto-population ───────────────────────────────────────────
+        # Run once at reset — load schedule, add any upcoming birthdays, save back
+        try:
+            current_schedule = load_schedule()
+            updated_schedule = check_and_add_birthdays(current_schedule)
+            if updated_schedule != current_schedule:
+                save_schedule(updated_schedule)
+        except Exception as e:
+            print(f"[BIRTHDAY] Error during birthday check: {e}")
+
+        # ── Train reminder ─────────────────────────────────────────────────────
 
         schedule  = load_schedule()
         today_str = today.isoformat()
@@ -1149,5 +1406,10 @@ class TrainCog(commands.Cog):
         await self.bot.wait_until_ready()
 
 
+# Alias to avoid conflict with `date` parameter name in slash commands
+date_cls = date
+
+
 async def setup(bot: commands.Bot):
     await bot.add_cog(TrainCog(bot))
+

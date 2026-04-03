@@ -473,12 +473,13 @@ async def run_ds_edit_step(bot, channel, user, team: str, current_zones: dict,
 # ── Guards ─────────────────────────────────────────────────────────────────────
 
 async def _guard(interaction: discord.Interaction) -> bool:
-    # Accept commands in the leadership channel or any thread inside it
-    in_channel = interaction.channel_id == LEADERSHIP_CHANNEL_ID
-    if not in_channel:
-        channel = interaction.channel
-        if isinstance(channel, discord.Thread) and channel.parent_id == LEADERSHIP_CHANNEL_ID:
-            in_channel = True
+    # Accept commands in any channel or thread within the leadership category
+    channel = interaction.channel
+    if isinstance(channel, discord.Thread):
+        parent = channel.parent
+        in_channel = parent is not None and getattr(parent, "category_id", None) == 1266243885743603783
+    else:
+        in_channel = getattr(channel, "category_id", None) == 1266243885743603783
     if not in_channel:
         await interaction.response.send_message(
             "⛔ This command can only be used in the leadership channel.", ephemeral=True

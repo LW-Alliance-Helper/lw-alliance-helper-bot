@@ -37,13 +37,12 @@ def is_leadership(interaction: discord.Interaction) -> bool:
     return LEADERSHIP_ROLE_NAME in [r.name for r in interaction.user.roles]
 
 def in_leadership_channel(interaction: discord.Interaction) -> bool:
-    """Accept commands in the leadership channel or any thread inside it."""
-    if interaction.channel_id == LEADERSHIP_CHANNEL_ID:
-        return True
+    """Accept commands in any channel or thread within the leadership category."""
     channel = interaction.channel
-    if isinstance(channel, discord.Thread) and channel.parent_id == LEADERSHIP_CHANNEL_ID:
-        return True
-    return False
+    if isinstance(channel, discord.Thread):
+        parent = channel.parent
+        return parent is not None and getattr(parent, "category_id", None) == 1266243885743603783
+    return getattr(channel, "category_id", None) == 1266243885743603783
 
 async def guard(interaction: discord.Interaction) -> bool:
     """Check role and channel. Respond with an error and return False if either fails."""

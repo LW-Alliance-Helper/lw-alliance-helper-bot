@@ -885,10 +885,24 @@ async def collect_schedule(bot, ctx: commands.Context, cancel_event: asyncio.Eve
             pass
 
         if skip_view.action == "done":
+            # Add current entry
             existing_entry["name"] = existing_name
             if theme_hint and not existing_entry.get("theme"):
                 existing_entry["theme"] = theme_hint
             schedule[date_str] = existing_entry
+
+            # Also add all remaining unparsed entries with just their names
+            # so nothing in the list gets silently dropped
+            for remaining_d, remaining_name, remaining_hint in parsed[i+1:]:
+                remaining_str   = remaining_d.isoformat()
+                remaining_entry = schedule.get(remaining_str, {})
+                if isinstance(remaining_entry, dict):
+                    remaining_entry["name"] = remaining_entry.get("name", remaining_name)
+                else:
+                    remaining_entry = {"name": remaining_name}
+                if remaining_hint and not remaining_entry.get("theme"):
+                    remaining_entry["theme"] = remaining_hint
+                schedule[remaining_str] = remaining_entry
             break
 
         if skip_view.action == "skip":

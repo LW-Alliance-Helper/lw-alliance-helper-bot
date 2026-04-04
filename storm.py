@@ -969,7 +969,7 @@ class CSTimeSelectView(discord.ui.View):
         super().__init__(timeout=WIZARD_TIMEOUT)
         self.selected = None
 
-    @discord.ui.button(label="10AM EST / 12:00 Server", style=discord.ButtonStyle.primary)
+    @discord.ui.button(label="10AM EST / 12:00 Server", style=discord.ButtonStyle.secondary)
     async def pick_10am(self, interaction: discord.Interaction, button: discord.ui.Button):
         self.selected = "10am"
         await interaction.response.defer()

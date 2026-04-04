@@ -551,5 +551,498 @@ class StormCog(commands.Cog):
         await run_ds_edit_step(self.bot, channel, interaction.user, team, zones, subs)
 
 
+    @app_commands.command(
+        name="draftcs",
+        description="Generate a Canyon Storm mail draft for Team A or Team B",
+    )
+    @app_commands.guilds(GUILD)
+    async def draftcs(self, interaction: discord.Interaction):
+        if not await _guard(interaction):
+            return
+
+        await interaction.response.defer(ephemeral=True)
+        channel = interaction.channel
+        if channel is None:
+            await interaction.followup.send("⚠️ Could not find the channel.", ephemeral=True)
+            return
+
+        # Step 1: Pick team
+        team_msg  = await channel.send(
+            f"⚡ **Canyon Storm Draft** — started by {interaction.user.mention}\n\n"
+            f"Which team are you drafting for?"
+        )
+        team_view = TeamSelectView()
+        await team_msg.edit(view=team_view)
+        await team_view.wait()
+        try:
+            await team_msg.delete()
+        except discord.HTTPException:
+            pass
+
+        if team_view.selected is None:
+            await channel.send("⏰ Timed out. Use `/draftcs` to start again.")
+            await interaction.followup.send("⏰ Timed out.", ephemeral=True)
+            return
+
+        team = team_view.selected
+
+        # Step 2: Load and post the template
+        zones    = await asyncio.get_event_loop().run_in_executor(None, load_cs_assignments, team)
+        template = build_cs_template(zones)
+
+        await channel.send(
+            f"⚡ **Canyon Storm Team {team} Draft**\n\n"
+            f"Copy the block below, make your changes, and paste it back. "
+            f"Anything that hasn't changed can stay as-is.\n"
+            f"```\n{template}\n```"
+        )
+        await interaction.followup.send(f"✅ Team {team} template posted.", ephemeral=True)
+
+        # Step 3: Wait for edits, pick time, preview, approve
+        await run_cs_edit_step(self.bot, channel, interaction.user, team, zones)
+
+
 async def setup(bot: commands.Bot):
     await bot.add_cog(StormCog(bot))
+
+# ══════════════════════════════════════════════════════════════════════════════
+# CANYON STORM (CS)
+# ══════════════════════════════════════════════════════════════════════════════
+
+CS_TIMES = {
+    "10am": ("10:00am ET", "12:00 server"),
+    "9pm":  ("9:00pm ET",  "23:00 server"),
+}
+
+CS_SHEET_NAME = "DS Assignments"   # stored in same tab under CS_A_* / CS_B_* headers
+
+# ── CS Defaults ───────────────────────────────────────────────────────────────
+
+DEFAULT_CS_B = {
+    "s1_power_tower":    "Jon, Lionel, Ice, Sunshine",
+    "s1_dc1":            "Gonza, Glick, Bobby",
+    "s1_dc2":            "MG, Chuck, Kimberdog",
+    "s1_sw1":            "Mer, Lito",
+    "s1_sw2":            "Catie, Woozy",
+    "s1_sw3":            "Dingo, Miss Goose",
+    "s1_sw4":            "Anuedii, Drezy1",
+    "s1_floaters":       "Toxic, Legit",
+    "s2_ds1":            "Mer, Lito",
+    "s2_ds2":            "Catie, Woozy",
+    "s2_sf1":            "Dingo, Miss Goose",
+    "s2_sf2":            "Anuedii, Drezy1",
+    "s2_floaters":       "Toxic, Legit",
+    "s3_virus_lab":      "Jon, Lionel, Ice, Sunshine",
+    "s3_power_tower":    "MG, Gonza, Glick, Bobby",
+    "s3_dc1":            "Toxic, Legit",
+    "s3_dc2":            "Chuck, Kimberdog",
+    "s3_ds1":            "Mer, Lito",
+    "s3_ds2":            "Catie, Woozy",
+    "s3_sf1":            "Dingo, Miss Goose",
+    "s3_sf2":            "Anuedii, Drezy1",
+    "s3_pop_pair1":      "Dingo & Mer and Aneudii & Legit",
+}
+
+DEFAULT_CS_A = {
+    "s1_power_tower":    "Pink, TRC, Lunar, Blades",
+    "s1_dc1":            "Corporal, Fosk, Monk",
+    "s1_dc2":            "AD, Kale, Death",
+    "s1_sw1":            "Loki, Loki BBG",
+    "s1_sw2":            "DSP, Raven",
+    "s1_sw3":            "Mrs. C, Landers",
+    "s1_sw4":            "Joy, Chaos",
+    "s1_floaters":       "Snacks, Arthur",
+    "s2_ds1":            "Loki, Loki BBG",
+    "s2_ds2":            "DSP, Raven",
+    "s2_sf1":            "Mrs. C, Landers",
+    "s2_sf2":            "Joy, Chaos",
+    "s2_floaters":       "Snacks, Arthur",
+    "s3_virus_lab":      "Pink, TRC, Lunar, Corporal",
+    "s3_power_tower":    "Kale, AD, Blades, Fosk",
+    "s3_dc1":            "Death, Monk",
+    "s3_dc2":            "Snacks, Arthur",
+    "s3_ds1":            "Loki, Loki BBG",
+    "s3_ds2":            "DSP, Raven",
+    "s3_sf1":            "Mrs. C, Landers",
+    "s3_sf2":            "Joy, Chaos",
+    "s3_pop_pair1":      "Arthur & Chaos and Raven & Loki",
+}
+
+CS_DEFAULTS = {"A": DEFAULT_CS_A, "B": DEFAULT_CS_B}
+
+# ── CS Sheets persistence ──────────────────────────────────────────────────────
+
+def load_cs_assignments(team: str) -> dict:
+    zone_key = f"CS_{team}_ZONES"
+    try:
+        sh   = _get_spreadsheet()
+        ws   = sh.worksheet(CS_SHEET_NAME)
+        rows = ws.get_all_values()
+        zones   = {}
+        section = None
+        for row in rows:
+            if not row or not row[0].strip():
+                continue
+            key = row[0].strip()
+            if key == zone_key:
+                section = "zones"
+                continue
+            if key.startswith("CS_") or key.startswith("DS_"):
+                if key != zone_key:
+                    section = None
+                    continue
+            if section == "zones" and len(row) >= 2:
+                zones[key] = row[1].strip()
+        if zones:
+            print(f"[STORM] Loaded CS Team {team} assignments ({len(zones)} zones)")
+            return zones
+        else:
+            print(f"[STORM] No saved CS Team {team} assignments — using defaults")
+            return dict(CS_DEFAULTS[team])
+    except Exception as e:
+        print(f"[STORM] Error loading CS Team {team} assignments: {e}")
+        return dict(CS_DEFAULTS[team])
+
+
+def save_cs_assignments(team: str, zones: dict):
+    """Save CS assignments for one team without affecting DS or the other CS team."""
+    try:
+        sh = _get_spreadsheet()
+        ws = sh.worksheet(CS_SHEET_NAME)
+        existing = ws.get_all_values()
+
+        # Rebuild full sheet: preserve all DS and CS rows, replace this team's CS section
+        other_cs = "B" if team == "A" else "A"
+        other_cs_zones = load_cs_assignments(other_cs)
+        ds_a_zones, ds_a_subs = load_ds_assignments("A")
+        ds_b_zones, ds_b_subs = load_ds_assignments("B")
+
+        rows = []
+        for t, t_zones, t_subs in [("A", ds_a_zones, ds_a_subs), ("B", ds_b_zones, ds_b_subs)]:
+            rows.append([f"DS_{t}_ZONES", ""])
+            for z, m in t_zones.items():
+                rows.append([z, m])
+            rows.append(["", ""])
+            rows.append([f"DS_{t}_SUBS", ""])
+            for starter, sub in t_subs:
+                rows.append([starter, sub])
+            rows.append(["", ""])
+
+        for t, t_zones in [("A", zones if team == "A" else other_cs_zones),
+                            ("B", zones if team == "B" else other_cs_zones)]:
+            rows.append([f"CS_{t}_ZONES", ""])
+            for z, m in t_zones.items():
+                rows.append([z, m])
+            rows.append(["", ""])
+
+        ws.clear()
+        ws.update("A1", rows, value_input_option="USER_ENTERED")
+        print(f"[STORM] CS Team {team} assignments saved ({len(zones)} zones)")
+    except Exception as e:
+        print(f"[STORM] Error saving CS Team {team} assignments: {e}")
+
+
+# ── CS Template builder & parser ───────────────────────────────────────────────
+
+def build_cs_template(z: dict) -> str:
+    lines = [
+        "STAGE 1",
+        f"Power Tower: {z.get('s1_power_tower', '')}",
+        f"Data Center 1: {z.get('s1_dc1', '')}",
+        f"Data Center 2: {z.get('s1_dc2', '')}",
+        f"Sample Warehouse 1: {z.get('s1_sw1', '')}",
+        f"Sample Warehouse 2: {z.get('s1_sw2', '')}",
+        f"Sample Warehouse 3: {z.get('s1_sw3', '')}",
+        f"Sample Warehouse 4: {z.get('s1_sw4', '')}",
+        f"Floaters: {z.get('s1_floaters', '')}",
+        "",
+        "STAGE 2",
+        f"Defense System 1: {z.get('s2_ds1', '')}",
+        f"Defense System 2: {z.get('s2_ds2', '')}",
+        f"Serum Factory 1: {z.get('s2_sf1', '')}",
+        f"Serum Factory 2: {z.get('s2_sf2', '')}",
+        f"Floaters: {z.get('s2_floaters', '')}",
+        "",
+        "STAGE 3",
+        f"Virus Lab: {z.get('s3_virus_lab', '')}",
+        f"Power Tower: {z.get('s3_power_tower', '')}",
+        f"Data Center 1: {z.get('s3_dc1', '')}",
+        f"Data Center 2: {z.get('s3_dc2', '')}",
+        f"Defense System 1: {z.get('s3_ds1', '')}",
+        f"Defense System 2: {z.get('s3_ds2', '')}",
+        f"Serum Factory 1: {z.get('s3_sf1', '')}",
+        f"Serum Factory 2: {z.get('s3_sf2', '')}",
+        f"Pop Pairs (last 30 sec): {z.get('s3_pop_pair1', '')}",
+    ]
+    return "\n".join(lines)
+
+
+def parse_cs_template(text: str) -> tuple[dict, list]:
+    zones  = {}
+    errors = []
+    stage  = None
+    key_map = {
+        "power tower":        {1: "s1_power_tower", 3: "s3_power_tower"},
+        "data center 1":      {1: "s1_dc1",         3: "s3_dc1"},
+        "data center 2":      {1: "s1_dc2",         3: "s3_dc2"},
+        "sample warehouse 1": {1: "s1_sw1"},
+        "sample warehouse 2": {1: "s1_sw2"},
+        "sample warehouse 3": {1: "s1_sw3"},
+        "sample warehouse 4": {1: "s1_sw4"},
+        "floaters":           {1: "s1_floaters",    2: "s2_floaters"},
+        "defense system 1":   {2: "s2_ds1",         3: "s3_ds1"},
+        "defense system 2":   {2: "s2_ds2",         3: "s3_ds2"},
+        "serum factory 1":    {2: "s2_sf1",         3: "s3_sf1"},
+        "serum factory 2":    {2: "s2_sf2",         3: "s3_sf2"},
+        "virus lab":          {3: "s3_virus_lab"},
+        "pop pairs (last 30 sec)": {3: "s3_pop_pair1"},
+    }
+    for line in text.strip().splitlines():
+        line = line.strip()
+        if not line:
+            continue
+        if line.upper() == "STAGE 1":
+            stage = 1; continue
+        if line.upper() == "STAGE 2":
+            stage = 2; continue
+        if line.upper() == "STAGE 3":
+            stage = 3; continue
+        if ":" in line:
+            label, _, value = line.partition(":")
+            label_lower = label.strip().lower()
+            if label_lower in key_map and stage in key_map[label_lower]:
+                field = key_map[label_lower][stage]
+                zones[field] = value.strip()
+            else:
+                errors.append(f"Unrecognized line in Stage {stage}: {line}")
+        else:
+            errors.append(f"Could not parse: {line}")
+    return zones, errors
+
+
+# ── CS Mail builder ────────────────────────────────────────────────────────────
+
+def build_cs_mail(team: str, z: dict, time_key: str) -> str:
+    et_time, server_time = CS_TIMES.get(time_key, CS_TIMES["10am"])
+
+    return "\n".join([
+        "⚡ **OGV Warriors — Canyon Storm**",
+        "Let's hit our zones fast, hold coordination across all three stages, and finish strong.",
+        "",
+        "🏁 **Stage 1**",
+        "",
+        f"**Power Tower**",
+        z.get("s1_power_tower", "(open)"),
+        "",
+        f"**Data Center 1**",
+        z.get("s1_dc1", "(open)"),
+        "",
+        f"**Data Center 2**",
+        z.get("s1_dc2", "(open)"),
+        "",
+        f"**Sample Warehouse 1**",
+        z.get("s1_sw1", "(open)"),
+        "",
+        f"**Sample Warehouse 2**",
+        z.get("s1_sw2", "(open)"),
+        "",
+        f"**Sample Warehouse 3**",
+        z.get("s1_sw3", "(open)"),
+        "",
+        f"**Sample Warehouse 4**",
+        z.get("s1_sw4", "(open)"),
+        "",
+        f"**Stage 1 Floaters**",
+        z.get("s1_floaters", "(open)"),
+        "Stage 1 Floaters will assess where help is needed between Power Tower & Data Centers",
+        "",
+        "",
+        "🔁 **Stage 2**",
+        "",
+        f"**Defense System 1**",
+        z.get("s2_ds1", "(open)"),
+        "",
+        f"**Defense System 2**",
+        z.get("s2_ds2", "(open)"),
+        "",
+        f"**Serum Factory 1**",
+        z.get("s2_sf1", "(open)"),
+        "",
+        f"**Serum Factory 2**",
+        z.get("s2_sf2", "(open)"),
+        "",
+        f"**Stage 2 Floaters**",
+        z.get("s2_floaters", "(open)"),
+        "Stage 2 Floaters will assess where help is needed between Defense Systems & Serum Factories",
+        "",
+        "Stage 2 we'll abandon the Sample Warehouses for the Defense System & Serum Factories. In doing this we'll let them build points for last minute pops.",
+        "",
+        "",
+        "🧬 **Stage 3**",
+        "",
+        f"**Virus Lab**",
+        z.get("s3_virus_lab", "(open)"),
+        "",
+        f"**Power Tower**",
+        z.get("s3_power_tower", "(open)"),
+        "",
+        f"**Data Center 1**",
+        z.get("s3_dc1", "(open)"),
+        "",
+        f"**Data Center 2**",
+        z.get("s3_dc2", "(open)"),
+        "",
+        f"**Defense System 1**",
+        z.get("s3_ds1", "(open)"),
+        "",
+        f"**Defense System 2**",
+        z.get("s3_ds2", "(open)"),
+        "",
+        f"**Serum Factory 1**",
+        z.get("s3_sf1", "(open)"),
+        "",
+        f"**Serum Factory 2**",
+        z.get("s3_sf2", "(open)"),
+        "",
+        f"Stage 3 in the last 30 seconds teams {z.get('s3_pop_pair1', '???')} will all break off and pop the 4 Sample Warehouses that we've let build points.",
+        "",
+        "⏳ **Timing**",
+        f"{et_time} ({server_time})",
+    ])
+
+
+# ── CS Approval view ───────────────────────────────────────────────────────────
+
+class CSApprovalView(discord.ui.View):
+    def __init__(self, bot, team: str, mail: str, zones: dict, time_key: str):
+        super().__init__(timeout=3600)
+        self.bot      = bot
+        self.team     = team
+        self.mail     = mail
+        self.zones    = zones
+        self.time_key = time_key
+
+    async def _disable(self, interaction: discord.Interaction):
+        for item in self.children:
+            item.disabled = True
+        await interaction.message.edit(view=self)
+
+    @discord.ui.button(label="✅ Looks Good — Save & Copy", style=discord.ButtonStyle.success)
+    async def approve(self, interaction: discord.Interaction, button: discord.ui.Button):
+        await interaction.response.defer()
+        await self._disable(interaction)
+        await asyncio.get_event_loop().run_in_executor(None, save_cs_assignments, self.team, self.zones)
+        channel = interaction.channel
+        if channel:
+            await channel.send(
+                f"✅ **Canyon Storm Team {self.team} mail — ready to copy:**\n"
+                f"```\n{self.mail}\n```"
+            )
+        self.stop()
+
+    @discord.ui.button(label="✏️ Edit & Redo", style=discord.ButtonStyle.primary)
+    async def edit(self, interaction: discord.Interaction, button: discord.ui.Button):
+        await interaction.response.defer()
+        await self._disable(interaction)
+        channel = interaction.channel
+        if channel:
+            template = build_cs_template(self.zones)
+            await channel.send(
+                f"✏️ {interaction.user.mention} — copy and edit the block below, then paste it back:\n"
+                f"```\n{template}\n```"
+            )
+            await run_cs_edit_step(self.bot, channel, interaction.user, self.team, self.zones, self.time_key)
+        self.stop()
+
+    @discord.ui.button(label="❌ Cancel", style=discord.ButtonStyle.danger)
+    async def cancel(self, interaction: discord.Interaction, button: discord.ui.Button):
+        await interaction.response.defer()
+        await self._disable(interaction)
+        await interaction.followup.send("❌ Draft cancelled.", ephemeral=True)
+        self.stop()
+
+
+# ── CS Time selection ──────────────────────────────────────────────────────────
+
+class CSTimeSelectView(discord.ui.View):
+    def __init__(self):
+        super().__init__(timeout=WIZARD_TIMEOUT)
+        self.selected = None
+
+    @discord.ui.button(label="10AM EST / 12:00 Server", style=discord.ButtonStyle.primary)
+    async def pick_10am(self, interaction: discord.Interaction, button: discord.ui.Button):
+        self.selected = "10am"
+        await interaction.response.defer()
+        self.stop()
+
+    @discord.ui.button(label="9PM EST / 23:00 Server", style=discord.ButtonStyle.secondary)
+    async def pick_9pm(self, interaction: discord.Interaction, button: discord.ui.Button):
+        self.selected = "9pm"
+        await interaction.response.defer()
+        self.stop()
+
+
+# ── CS Core wizard flow ────────────────────────────────────────────────────────
+
+async def run_cs_edit_step(bot, channel, user, team: str, current_zones: dict, time_key: str = None):
+    def check(m):
+        return m.author == user and m.channel == channel
+
+    if time_key is None:
+        time_msg  = await channel.send("⏰ What time is Canyon Storm this week?")
+        time_view = CSTimeSelectView()
+        await time_msg.edit(view=time_view)
+        await time_view.wait()
+        try:
+            await time_msg.delete()
+        except discord.HTTPException:
+            pass
+        if time_view.selected is None:
+            await channel.send("⏰ Timed out. Use `/draftcs` to start again.")
+            return
+        time_key = time_view.selected
+
+    prompt = await channel.send(
+        f"📋 {user.mention} — paste your edited assignments below.\n"
+        f"*(10 minutes to respond — type `cancel` to stop)*"
+    )
+    try:
+        reply = await bot.wait_for("message", check=check, timeout=WIZARD_TIMEOUT)
+    except asyncio.TimeoutError:
+        await channel.send("⏰ Timed out. Use `/draftcs` to start again.")
+        try:
+            await prompt.delete()
+        except discord.HTTPException:
+            pass
+        return
+
+    try:
+        await prompt.delete()
+        await reply.delete()
+    except discord.HTTPException:
+        pass
+
+    if reply.content.strip().lower() == "cancel":
+        await channel.send("❌ Draft cancelled.")
+        return
+
+    zones, errors = parse_cs_template(reply.content)
+
+    if not zones:
+        await channel.send(
+            "⚠️ Could not parse any assignments. "
+            "Make sure the format matches the template and try `/draftcs` again."
+        )
+        return
+
+    if errors:
+        await channel.send(
+            "⚠️ Some lines were skipped:\n" + "\n".join(f"• {e}" for e in errors)
+        )
+
+    mail          = build_cs_mail(team, zones, time_key)
+    approval_view = CSApprovalView(bot=bot, team=team, mail=mail, zones=zones, time_key=time_key)
+    await channel.send(
+        f"📬 **Canyon Storm Team {team} mail preview:**\n\n{mail}\n\nDoes this look right?",
+        view=approval_view,
+    )

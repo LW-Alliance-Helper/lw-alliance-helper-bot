@@ -322,6 +322,7 @@ async def help_slash(interaction: discord.Interaction):
         name="⚔️ Storm Mails",
         value=(
             "`/draftds` — Generate a Desert Storm mail draft from last week's assignments\n"
+            "`/draftcs` — Generate a Canyon Storm mail draft from last week's assignments\n"
             "Edit the pre-filled template, paste it back, preview the mail, then approve to save"
         ),
         inline=False,

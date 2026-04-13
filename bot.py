@@ -307,9 +307,9 @@ async def help_slash(interaction: discord.Interaction):
     embed.add_field(
         name="🚂 Train Schedule",
         value=(
-            "`/train` — Launch the blurb wizard to build a ChatGPT prompt\n"
-            "`/schedule` — Input, view, or clear the train schedule\n"
-            "`/trainschedule` — Quick view of the schedule\n"
+            "`/schedule` — View the current train schedule\n"
+            "`/schedule_set` — Add or update entries in the schedule\n"
+            "`/schedule_clear` — Clear the entire schedule\n"
             "`/trainprompt [date]` — Retrieve a stored ChatGPT prompt\n"
             "`/setbirthdays [tab]` — Set the member tab used for birthday lookups\n"
             "`/checkbirthdays` — Manually run the birthday check now\n"

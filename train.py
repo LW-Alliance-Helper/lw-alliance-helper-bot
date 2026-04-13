@@ -282,23 +282,25 @@ def load_birthdays(tab_name: str) -> list[dict]:
         return []
 
 
-def check_and_add_birthdays(schedule: dict) -> dict:
+def check_and_add_birthdays(schedule: dict) -> tuple[dict, list[str]]:
     """
     Look ahead BIRTHDAY_LOOKAHEAD days from today.
     For each member whose birthday falls in that window:
-      - Check if that member's name already appears in the schedule
-        on their birthday ±1 day (person-specific conflict check)
-      - If no conflict, add them with theme=Birthday
-    Returns the updated schedule dict.
+      - Skip if this member's name already appears in the schedule on bday-1, bday, or bday+1
+      - Otherwise try to place them: prefer bday, then bday-1, then bday+1
+      - If all three dates are occupied by someone else, do NOT schedule and add a
+        high-priority alert string to the returned alerts list.
+    Returns (updated_schedule, alerts) where alerts is a list of alert strings.
     """
     tab_name = get_member_tab_name()
     members  = load_birthdays(tab_name)
     if not members:
-        return schedule
+        return schedule, []
 
     today       = date.today()
     check_year  = today.year
     added_count = 0
+    alerts      = []
 
     for member in members:
         month = member["month"]
@@ -324,36 +326,66 @@ def check_and_add_birthdays(schedule: dict) -> dict:
             continue
 
         # Person-specific conflict check: is this member's name already
-        # in the schedule on bday-1, bday, or bday+1?
-        conflict = False
+        # in the schedule on bday-1, bday, or bday+1? If so, skip entirely.
+        already_scheduled = False
         for delta in (-1, 0, 1):
             check_date = (bday + timedelta(days=delta)).isoformat()
             if check_date in schedule:
                 existing_name = schedule[check_date].get("name", "").strip().lower()
                 if existing_name == name.lower():
-                    conflict = True
+                    already_scheduled = True
                     break
 
-        if conflict:
+        if already_scheduled:
             print(f"[BIRTHDAY] Skipping {name} — already in schedule near {bday.isoformat()}")
             continue
 
-        # Add birthday entry
-        bday_str = bday.isoformat()
-        schedule[bday_str] = {
+        # Try to place: bday first, then bday-1, then bday+1
+        placed_date = None
+        for candidate in (bday, bday - timedelta(days=1), bday + timedelta(days=1)):
+            if candidate.isoformat() not in schedule:
+                placed_date = candidate
+                break
+
+        if placed_date is None:
+            # All three dates occupied — alert leadership and leave schedule untouched
+            bday_fmt  = bday.strftime("%A, %B %-d")
+            taken = []
+            for candidate in (bday, bday - timedelta(days=1), bday + timedelta(days=1)):
+                occupant = schedule[candidate.isoformat()].get("name", "someone")
+                taken.append(f"{candidate.strftime('%b %-d')} ({occupant})")
+            alert = (
+                f"🚨 **Birthday scheduling conflict — manual action needed!**\n"
+                f"**{name}'s** birthday is **{bday_fmt}** but all three surrounding dates are taken:\n"
+                + "\n".join(f"• {t}" for t in taken)
+                + f"\nPlease manually add {name} to the schedule."
+            )
+            alerts.append(alert)
+            print(f"[BIRTHDAY] CONFLICT — could not place {name} around {bday.isoformat()}")
+            continue
+
+        # Schedule the birthday entry on the chosen date
+        note = "Auto-added from birthday sheet"
+        if placed_date != bday:
+            direction = "day before" if placed_date < bday else "day after"
+            note = f"Auto-added from birthday sheet (placed {direction} due to conflict on actual birthday)"
+            print(f"[BIRTHDAY] {name} placed on {placed_date.isoformat()} ({direction} birthday {bday.isoformat()})")
+        else:
+            print(f"[BIRTHDAY] Added {name} on {placed_date.isoformat()}")
+
+        schedule[placed_date.isoformat()] = {
             "name":             name,
             "theme":            "Birthday",
             "tone":             "",
-            "notes":            "Auto-added from birthday sheet",
+            "notes":            note,
             "prompt_retrieved": False,
         }
         added_count += 1
-        print(f"[BIRTHDAY] Added {name} on {bday_str}")
 
     if added_count:
         print(f"[BIRTHDAY] Added {added_count} birthday entr{'y' if added_count == 1 else 'ies'} to schedule")
 
-    return schedule
+    return schedule, alerts
 
 
 # ── Schedule date parsing ──────────────────────────────────────────────────────
@@ -486,78 +518,72 @@ def build_schedule_embed(schedule: dict, blurb_log: set) -> discord.Embed:
     """Build a scannable embed showing the upcoming train schedule."""
     today = date.today()
 
-    if not schedule:
-        embed = discord.Embed(
-            title="🚂 OGV Train Schedule",
-            description="*No schedule set. Use `/schedule` to add entries.*",
-            color=discord.Color.gold(),
-        )
-        return embed
-
-    upcoming = {k: v for k, v in sorted(schedule.items()) if date.fromisoformat(k) >= today}
-    past     = {k: v for k, v in sorted(schedule.items()) if date.fromisoformat(k) < today}
-
     embed = discord.Embed(
         title="🚂 OGV Train Schedule",
         color=discord.Color.gold(),
         timestamp=datetime.now(tz=ET),
     )
 
-    # ── Upcoming entries ───────────────────────────────────────────────────────
-    if upcoming:
-        for date_str, entry in upcoming.items():
-            d           = date.fromisoformat(date_str)
-            name        = entry.get("name", "Unknown")
-            is_today    = d == today
-            has_details = any(entry.get(k) for k in ("theme", "notes"))
-            prompted    = date_str in blurb_log
+    if not schedule:
+        embed.description = "*No schedule set. Use `/schedule_set` to add entries.*"
+        return embed
 
-            # Status badge
-            if prompted:
-                status = "✅ Prompt Retrieved"
-            elif has_details:
-                status = "📋 Details Stored"
+    # ── Upcoming: always show at least 7 days ─────────────────────────────────
+    upcoming_lines = []
+    for i in range(7):
+        d        = today + timedelta(days=i)
+        date_str = d.isoformat()
+        entry    = schedule.get(date_str)
+        day_str  = d.strftime("%A, %B %-d")
+
+        if i == 0:
+            # Today
+            if entry:
+                name    = entry.get("name", "Unknown")
+                is_bday = entry.get("theme", "").lower() == "birthday"
+                bday    = " 🎂" if is_bday else ""
+                done    = date_str in blurb_log
+                status  = "✅ Done" if done else "⏳ Pending"
+                upcoming_lines.append(f"🟢 {day_str} — {name}{bday} — {status}")
             else:
-                status = "⏳ Pending"
-
-            # Field name — highlight today
-            if is_today:
-                field_name = f"🔴 TODAY — {d.strftime('%A, %B %-d')}"
+                upcoming_lines.append(f"🟢 {day_str} — [Empty]")
+        else:
+            if entry:
+                name    = entry.get("name", "Unknown")
+                is_bday = entry.get("theme", "").lower() == "birthday"
+                bday    = " 🎂" if is_bday else ""
+                upcoming_lines.append(f"{day_str} — {name}{bday}")
             else:
-                days_away  = (d - today).days
-                day_label  = f"in {days_away} day{'s' if days_away != 1 else ''}"
-                field_name = f"📅 {d.strftime('%A, %B %-d')} ({day_label})"
+                upcoming_lines.append(f"{day_str} — [Empty]")
 
-            # Field value — details summary if stored
-            lines = [f"**{name}**", f"Status: {status}"]
-            if entry.get("theme"):
-                lines.append(f"Theme: {entry['theme']}")
-            if entry.get("tone") and entry["tone"] != "Default (match the theme)":
-                lines.append(f"Tone: {entry['tone']}")
-            if entry.get("notes"):
-                # Truncate long notes for scannability
-                notes = entry["notes"]
-                if len(notes) > 60:
-                    notes = notes[:57] + "..."
-                lines.append(f"Notes: *{notes}*")
+    # Any additional scheduled entries beyond 7 days
+    for date_str, entry in sorted(schedule.items()):
+        d = date.fromisoformat(date_str)
+        if d < today + timedelta(days=7):
+            continue
+        name    = entry.get("name", "Unknown")
+        is_bday = entry.get("theme", "").lower() == "birthday"
+        bday    = " 🎂" if is_bday else ""
+        upcoming_lines.append(f"{d.strftime('%A, %B %-d')} — {name}{bday}")
 
-            embed.add_field(name=field_name, value="\n".join(lines), inline=False)
+    embed.description = "\n".join(upcoming_lines)
 
-    # ── Recent past entries (compact) ─────────────────────────────────────────
-    if past:
-        past_lines = []
-        for date_str, entry in list(past.items())[-5:]:
-            d    = date.fromisoformat(date_str)
-            name = entry.get("name", "Unknown")
-            icon = "✅" if date_str in blurb_log else "—"
-            past_lines.append(f"{icon} ~~{d.strftime('%b %-d')}~~ — {name}")
+    # ── Past 7 days ───────────────────────────────────────────────────────────
+    past_names = []
+    for i in range(1, 8):
+        d        = today - timedelta(days=i)
+        date_str = d.isoformat()
+        entry    = schedule.get(date_str)
+        if entry:
+            past_names.append(entry.get("name", "Unknown"))
+
+    if past_names:
         embed.add_field(
-            name="📁 Recent Past",
-            value="\n".join(past_lines),
+            name="✅ Past 7 Days",
+            value=", ".join(past_names),
             inline=False,
         )
 
-    embed.set_footer(text="✅ Prompt retrieved  📋 Details stored  ⏳ Pending  |  Use !trainprompt to retrieve")
     return embed
 
 
@@ -865,7 +891,9 @@ async def collect_schedule(bot, ctx: commands.Context, cancel_event: asyncio.Eve
     for i, (d, name, theme_hint) in enumerate(parsed):
         date_str       = d.isoformat()
         existing_entry = schedule.get(date_str, {})
-        existing_name  = existing_entry.get("name", name) if isinstance(existing_entry, dict) else name
+        # New input always overrides the name — if someone re-enters a date
+        # with a different name, the new name wins
+        existing_name  = name
 
         hint_note = f" *(theme hint detected: **{theme_hint}**)*" if theme_hint else ""
         skip_view = SkipOrFillView()
@@ -1207,14 +1235,33 @@ class TrainCog(commands.Cog):
         try:
             current_schedule = load_schedule()
             before_count     = len(current_schedule)
-            updated_schedule = check_and_add_birthdays(current_schedule)
+            updated_schedule, alerts = check_and_add_birthdays(current_schedule)
             after_count      = len(updated_schedule)
             added            = after_count - before_count
 
-            if added > 0:
+            if added > 0 or alerts:
                 save_schedule(updated_schedule)
+
+            # Post any conflict alerts to the channel directly (high visibility)
+            channel = interaction.channel
+            for alert in alerts:
+                if channel:
+                    await channel.send(alert)
+
+            if added > 0 and not alerts:
                 await interaction.followup.send(
                     f"✅ Birthday check complete — added **{added}** birthday entr{'y' if added == 1 else 'ies'} to the schedule.",
+                    ephemeral=True,
+                )
+            elif added > 0 and alerts:
+                await interaction.followup.send(
+                    f"✅ Birthday check complete — added **{added}** birthday entr{'y' if added == 1 else 'ies'} to the schedule. "
+                    f"⚠️ **{len(alerts)}** conflict(s) posted above require manual action.",
+                    ephemeral=True,
+                )
+            elif alerts:
+                await interaction.followup.send(
+                    f"⚠️ Birthday check complete — **{len(alerts)}** conflict(s) posted above require manual action.",
                     ephemeral=True,
                 )
             else:
@@ -1291,32 +1338,28 @@ class TrainCog(commands.Cog):
         await interaction.response.send_message("🚂 Starting wizard...", ephemeral=True)
         await run_train_wizard(interaction)
 
-    # ── /schedule ──────────────────────────────────────────────────────────────
+    # ── /schedule (view) ───────────────────────────────────────────────────────
 
-    @app_commands.command(name="schedule", description="Input, view, or clear the train schedule")
-    @app_commands.describe(action="What to do: input (default), list, or clear")
-    @app_commands.choices(action=[
-        app_commands.Choice(name="Input new schedule", value="input"),
-        app_commands.Choice(name="List current schedule", value="list"),
-        app_commands.Choice(name="Clear schedule", value="clear"),
-    ])
+    @app_commands.command(name="schedule", description="View the current train schedule")
     @app_commands.guilds(GUILD)
-    async def schedule(self, interaction: discord.Interaction, action: str = "input"):
+    async def schedule(self, interaction: discord.Interaction):
+        if not await _guard(interaction):
+            return
+        await interaction.response.defer()
+        await self._post_schedule_embed(interaction.channel)
+        try:
+            await interaction.delete_original_response()
+        except discord.HTTPException:
+            pass
+
+    # ── /schedule set ──────────────────────────────────────────────────────────
+
+    @app_commands.command(name="schedule_set", description="Add or update entries in the train schedule")
+    @app_commands.guilds(GUILD)
+    async def schedule_set(self, interaction: discord.Interaction):
         if not await _guard(interaction):
             return
 
-        if action == "list":
-            await interaction.response.defer()
-            await self._post_schedule_embed(interaction.channel)
-            await interaction.delete_original_response()
-            return
-
-        if action == "clear":
-            save_schedule({})
-            await interaction.response.send_message("🗑️ Train schedule cleared.")
-            return
-
-        # Input mode
         if interaction.user.id in active_wizards:
             await interaction.response.send_message(
                 "⚠️ You already have an active session running. Use `/cancel` to stop it first.",
@@ -1329,11 +1372,9 @@ class TrainCog(commands.Cog):
         cancel_event = asyncio.Event()
         active_wizards[interaction.user.id] = cancel_event
 
-        # Build a fake ctx-like object so collect_schedule can send messages
-        # Use the channel the command was invoked in (works in threads too)
         class FakeCtx:
             pass
-        fake_ctx = FakeCtx()
+        fake_ctx         = FakeCtx()
         fake_ctx.channel = interaction.channel
         fake_ctx.author  = interaction.user
 
@@ -1342,19 +1383,40 @@ class TrainCog(commands.Cog):
         finally:
             active_wizards.pop(interaction.user.id, None)
 
-    # ── /trainschedule ─────────────────────────────────────────────────────────
+    # ── /schedule clear ────────────────────────────────────────────────────────
 
-    @app_commands.command(name="trainschedule", description="View the current train schedule")
+    @app_commands.command(name="schedule_clear", description="Clear the entire train schedule")
     @app_commands.guilds(GUILD)
-    async def trainschedule(self, interaction: discord.Interaction):
+    async def schedule_clear(self, interaction: discord.Interaction):
         if not await _guard(interaction):
             return
-        await interaction.response.defer()
-        await self._post_schedule_embed(interaction.channel)
-        try:
-            await interaction.delete_original_response()
-        except discord.HTTPException:
-            pass
+
+        class ConfirmClearView(discord.ui.View):
+            def __init__(self):
+                super().__init__(timeout=60)
+                self.confirmed = False
+
+            @discord.ui.button(label="Yes, clear it", style=discord.ButtonStyle.danger)
+            async def confirm(self, inner_interaction: discord.Interaction, button: discord.ui.Button):
+                self.confirmed = True
+                await inner_interaction.response.defer()
+                self.stop()
+
+            @discord.ui.button(label="Cancel", style=discord.ButtonStyle.secondary)
+            async def cancel(self, inner_interaction: discord.Interaction, button: discord.ui.Button):
+                await inner_interaction.response.defer()
+                self.stop()
+
+        view = ConfirmClearView()
+        await interaction.response.send_message(
+            "⚠️ Are you sure you want to clear the entire train schedule? This cannot be undone.",
+            view=view,
+            ephemeral=True,
+        )
+        await view.wait()
+        if view.confirmed:
+            save_schedule({})
+            await interaction.channel.send("🗑️ Train schedule cleared.")
 
     async def _post_schedule_embed(self, channel):
         schedule  = load_schedule()
@@ -1431,9 +1493,15 @@ class TrainCog(commands.Cog):
         # Run once at reset — load schedule, add any upcoming birthdays, save back
         try:
             current_schedule = load_schedule()
-            updated_schedule = check_and_add_birthdays(current_schedule)
-            if updated_schedule != current_schedule:
+            updated_schedule, alerts = check_and_add_birthdays(current_schedule)
+            if updated_schedule != current_schedule or alerts:
                 save_schedule(updated_schedule)
+            # Post any conflict alerts to leadership
+            if alerts:
+                alert_channel = self.bot.get_channel(LEADERSHIP_CHANNEL_ID)
+                if alert_channel:
+                    for alert in alerts:
+                        await alert_channel.send(alert)
         except Exception as e:
             print(f"[BIRTHDAY] Error during birthday check: {e}")
 

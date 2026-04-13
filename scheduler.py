@@ -262,6 +262,14 @@ class EventEditorView(discord.ui.View):
         )
         await interaction.message.edit(content=content, view=self)
 
+    async def on_timeout(self):
+        """Disable buttons when the view expires."""
+        try:
+            # We don't have the message reference here, so just stop cleanly
+            pass
+        except Exception:
+            pass
+
     @discord.ui.button(label="➕ Add Event", style=discord.ButtonStyle.primary, row=0)
     async def add_event(self, interaction: discord.Interaction, button: discord.ui.Button):
         # Only show events not already in the list
@@ -499,12 +507,28 @@ class EventEditorView(discord.ui.View):
     async def build_announcement_btn(self, interaction: discord.Interaction, button: discord.ui.Button):
         await interaction.response.defer()
 
-        # Disable all buttons
-        for item in self.children:
-            item.disabled = True
-        await interaction.message.edit(view=self)
+        if not self.event_list:
+            await interaction.followup.send(
+                "⚠️ No events in the list. Use `/events` to open a fresh editor.",
+                ephemeral=True,
+            )
+            return
 
-        announcement = build_announcement(self.event_list, self.notes)
+        try:
+            # Disable all buttons
+            for item in self.children:
+                item.disabled = True
+            await interaction.message.edit(view=self)
+        except discord.HTTPException:
+            pass
+
+        try:
+            announcement = build_announcement(self.event_list, self.notes)
+        except Exception as e:
+            print(f"[SCHEDULER] Error building announcement: {e}")
+            await interaction.followup.send(f"⚠️ Error building announcement: {e}", ephemeral=True)
+            return
+
         view = ApprovalView(
             bot=self.bot,
             draft_message=announcement,
@@ -519,6 +543,8 @@ class EventEditorView(discord.ui.View):
                 f"📣 **Announcement draft — please review and approve:**\n\n{announcement}",
                 view=view,
             )
+        else:
+            await interaction.followup.send("⚠️ Could not find the leadership channel.", ephemeral=True)
 
         self.stop()
 

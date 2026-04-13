@@ -1455,7 +1455,8 @@ class TrainCog(commands.Cog):
         view = ReminderView(cog=self, date_str=today_str, name=name)
         await channel.send(
             f"🚂 **Reset! Today's train is for {name}.**\n\n"
-            f"Click below whenever you're ready to get the ChatGPT prompt — no rush, run it when the team is available.",
+            f"Click below whenever you're ready to get the ChatGPT prompt — no rush, run it when the team is available.\n\n"
+            f"⚠️ *If the button stops working (e.g. after a bot restart), use `/trainprompt` instead — it does the same thing.*",
             view=view,
         )
         self.reminder_sent_today = True

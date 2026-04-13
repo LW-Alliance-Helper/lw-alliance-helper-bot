@@ -556,16 +556,6 @@ def build_schedule_embed(schedule: dict, blurb_log: set) -> discord.Embed:
             else:
                 upcoming_lines.append(f"{day_str} — [Empty]")
 
-    # Any additional scheduled entries beyond 7 days
-    for date_str, entry in sorted(schedule.items()):
-        d = date.fromisoformat(date_str)
-        if d < today + timedelta(days=7):
-            continue
-        name    = entry.get("name", "Unknown")
-        is_bday = entry.get("theme", "").lower() == "birthday"
-        bday    = " 🎂" if is_bday else ""
-        upcoming_lines.append(f"{d.strftime('%A, %B %-d')} — {name}{bday}")
-
     embed.description = "\n".join(upcoming_lines)
 
     # ── Past 7 days ───────────────────────────────────────────────────────────
@@ -821,7 +811,7 @@ async def collect_schedule(bot, ctx: commands.Context, cancel_event: asyncio.Eve
         f"April 5 - PlayerName\n"
         f"4/8 - PlayerName\n"
         f"```\n"
-        f"This will **merge** with the current schedule (existing entries are kept).\n"
+        f"If a date already exists in the schedule, the new entry will **overwrite** it.\n"
         f"*(Type `/cancel` at any time to stop)*"
     )
 
@@ -878,7 +868,7 @@ async def collect_schedule(bot, ctx: commands.Context, cancel_event: asyncio.Eve
         )
         return
 
-    # Load existing schedule to merge into
+    # Load existing schedule — new entries will overwrite on matching dates
     schedule = load_schedule()
 
     # Step 2: For each parsed entry, offer to add details

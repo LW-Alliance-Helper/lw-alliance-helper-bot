@@ -125,6 +125,12 @@ async def on_ready():
     if "storm" not in bot.extensions:
         await bot.load_extension("storm")
         print(f"[INFO] Storm cog loaded")
+    if "logging" not in bot.extensions:
+        await bot.load_extension("logging")
+        print(f"[INFO] Log cog loaded")
+    if "sitout_log" not in bot.extensions:
+        await bot.load_extension("sitout_log")
+        print(f"[INFO] Sit-out log cog loaded")
 
     # Sync slash commands to the guild (safe to run again on reconnect)
     bot.tree.copy_global_to(guild=GUILD)
@@ -311,7 +317,7 @@ async def help_slash(interaction: discord.Interaction):
             "`/schedule_set` — Add or update entries in the schedule\n"
             "`/schedule_clear` — Clear the entire schedule\n"
             "`/trainprompt [date]` — Retrieve a stored ChatGPT prompt\n"
-            "`/setbirthdays [tab]` — Set the member tab used for birthday lookups\n"
+            "`/setmembertab [tab]` — Set the active member tab (birthdays + DS/CS rosters)\n"
             "`/checkbirthdays` — Manually run the birthday check now\n"
             "`/cancel` — Cancel your active wizard session"
         ),
@@ -324,6 +330,16 @@ async def help_slash(interaction: discord.Interaction):
             "`/draftds` — Generate a Desert Storm mail draft from last week's assignments\n"
             "`/draftcs` — Generate a Canyon Storm mail draft from last week's assignments\n"
             "Edit the pre-filled template, paste it back, preview the mail, then approve to save"
+        ),
+        inline=False,
+    )
+
+    embed.add_field(
+        name="📊 Storm Logging",
+        value=(
+            "`/logds` — Log Desert Storm participation (votes, RTF no-vote, sit-outs)\n"
+            "`/logcs` — Log Canyon Storm participation (sit-outs, prior sit-out no-request)\n"
+            "Results saved to the DS-CS Sit-outs sheet and posted to the log thread"
         ),
         inline=False,
     )

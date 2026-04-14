@@ -1265,15 +1265,15 @@ class TrainCog(commands.Cog):
                 ephemeral=True,
             )
 
-    # ── /setbirthdays ──────────────────────────────────────────────────────────
+    # ── /setmembertab ──────────────────────────────────────────────────────────
 
     @app_commands.command(
-        name="setbirthdays",
-        description="Set the member sheet tab name used for birthday lookups",
+        name="setmembertab",
+        description="Set the active member sheet tab (used for birthdays and DS/CS rosters)",
     )
     @app_commands.describe(tab_name="Exact name of the tab, e.g. 'Season 6 - Off-Season'")
     @app_commands.guilds(GUILD)
-    async def setbirthdays(self, interaction: discord.Interaction, tab_name: str):
+    async def setmembertab(self, interaction: discord.Interaction, tab_name: str):
         if not await _guard(interaction):
             return
 
@@ -1290,8 +1290,8 @@ class TrainCog(commands.Cog):
 
         set_member_tab_name(tab_name)
         await interaction.response.send_message(
-            f"✅ Birthday source tab updated to **{tab_name}**.\n"
-            f"The next nightly check at 10pm ET will use this tab.",
+            f"✅ Active member tab updated to **{tab_name}**.\n"
+            f"Birthdays and DS/CS rosters will now pull from this tab.",
             ephemeral=True,
         )
 

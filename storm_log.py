@@ -184,43 +184,124 @@ class NameEntryModal(discord.ui.Modal):
         self.stop()
 
 
+class UnrecognizedView(discord.ui.View):
+    """
+    Shown when unrecognized names are submitted. Lets the user save as-is
+    (visitor) or go back and re-enter.
+    """
+    def __init__(self, unrecognized: list):
+        super().__init__(timeout=WIZARD_TIMEOUT)
+        self.unrecognized = unrecognized
+        self.save_as_is   = False
+        self.redo         = False
+
+    @discord.ui.button(label="Save as Visitor", style=discord.ButtonStyle.secondary, row=0)
+    async def save(self, interaction: discord.Interaction, button: discord.ui.Button):
+        self.save_as_is = True
+        for item in self.children:
+            item.disabled = True
+        await interaction.response.edit_message(view=self)
+        self.stop()
+
+    @discord.ui.button(label="Re-enter Names", style=discord.ButtonStyle.primary, row=0)
+    async def redo_btn(self, interaction: discord.Interaction, button: discord.ui.Button):
+        self.redo = True
+        for item in self.children:
+            item.disabled = True
+        await interaction.response.edit_message(view=self)
+        self.stop()
+
+
 class NameEntryView(discord.ui.View):
     """
-    Posts the full roster for reference and an Enter Names button that
-    opens the modal. Also has a Skip button for when no one applies.
+    Shows an Enter Names button that opens a modal.
+    If unrecognized names are submitted, asks the user to save as visitor or re-enter.
+    Loops until the user is satisfied or skips.
     """
     def __init__(self, all_names: list, label: str):
         super().__init__(timeout=WIZARD_TIMEOUT)
-        self.all_names  = all_names
-        self.label      = label
-        self.confirmed  = False
-        self.selected   = []
+        self.all_names    = all_names
+        self.label        = label
+        self.confirmed    = False
+        self.selected     = []
         self.unrecognized = []
-        self._modal     = None
 
     @discord.ui.button(label="✏️ Enter Names", style=discord.ButtonStyle.primary, row=0)
     async def enter_names(self, interaction: discord.Interaction, button: discord.ui.Button):
-        modal = NameEntryModal(self.all_names, self.label)
-        await interaction.response.send_modal(modal)
-        await modal.wait()
-        self.selected     = modal.selected
-        self.unrecognized = modal.unrecognized
-        self.confirmed    = True
-        for item in self.children:
-            item.disabled = True
-        # Update the message to show what was entered
-        result_lines = []
-        if self.selected:
-            result_lines.append(f"**Entered ({len(self.selected)}):** {', '.join(self.selected)}")
-        if self.unrecognized:
-            result_lines.append(f"⚠️ **Not recognized:** {', '.join(self.unrecognized)} *(saved as-is)*")
-        if not result_lines:
-            result_lines.append("*None entered.*")
-        try:
-            await interaction.message.edit(content="\n".join(result_lines), view=self)
-        except discord.HTTPException:
-            pass
-        self.stop()
+        while True:
+            modal = NameEntryModal(self.all_names, self.label)
+            await interaction.response.send_modal(modal)
+            timed_out = await modal.wait()
+            if timed_out or not modal.confirmed:
+                return  # Let outer timeout handler deal with it
+
+            recognized   = modal.selected
+            unrecognized = modal.unrecognized
+
+            if not unrecognized:
+                # All names recognized — done
+                self.selected     = recognized
+                self.unrecognized = []
+                self.confirmed    = True
+                for item in self.children:
+                    item.disabled = True
+                result = f"**Entered ({len(recognized)}):** {', '.join(recognized)}" if recognized else "*None entered.*"
+                try:
+                    await interaction.message.edit(content=result, view=self)
+                except discord.HTTPException:
+                    pass
+                self.stop()
+                return
+
+            # Some unrecognized — ask what to do
+            unrecog_str  = ", ".join(unrecognized)
+            unrecog_view = UnrecognizedView(unrecognized)
+            try:
+                await interaction.message.edit(
+                    content=(
+                        f"⚠️ **Not recognized:** {unrecog_str}\n"
+                        "These names aren't in the roster. Are they visitors or did you make a typo?"
+                    ),
+                    view=unrecog_view,
+                )
+            except discord.HTTPException:
+                pass
+
+            await unrecog_view.wait()
+
+            if unrecog_view.save_as_is:
+                # Save recognized + unrecognized (visitors)
+                self.selected     = recognized
+                self.unrecognized = unrecognized
+                self.confirmed    = True
+                for item in self.children:
+                    item.disabled = True
+                lines = []
+                if recognized:
+                    lines.append(f"**Entered ({len(recognized)}):** {', '.join(recognized)}")
+                if unrecognized:
+                    lines.append(f"**Visitors:** {unrecog_str}")
+                result = "\n".join(lines) if lines else "*None entered.*"
+                try:
+                    await interaction.message.edit(content=result, view=self)
+                except discord.HTTPException:
+                    pass
+                self.stop()
+                return
+
+            if unrecog_view.redo:
+                # Restore the Enter Names button so they can try again
+                try:
+                    await interaction.message.edit(
+                        content="*Re-enter names — press Enter Names again:*",
+                        view=self,
+                    )
+                except discord.HTTPException:
+                    pass
+                # Loop back to modal
+                # Need a new interaction — can't reuse the old one after message edit
+                # So we just stop and let the button be clickable again
+                return
 
     @discord.ui.button(label="Skip (none)", style=discord.ButtonStyle.secondary, row=0)
     async def skip(self, interaction: discord.Interaction, button: discord.ui.Button):
@@ -380,29 +461,10 @@ async def run_log_flow(bot, channel, user, event_type):
             await channel.send("⚠️ Could not load member names. Check `/setmembertab` and try again.")
             return
 
-        # ── Step 3 (DS only): RTF but no vote ─────────────────────────────────
-        rtf_no_vote = []
-        if is_ds:
-            roster_preview = ", ".join(names)
-            rtf_view = NameEntryView(names, "RTF No Vote")
-            rtf_msg  = await channel.send(
-                "**Step 3 — Requested to Fight but did not vote**\n"
-                "Press **Enter Names** to type who submitted RTF but did not vote. "
-                "Press **Skip** if none.\n"
-                f"*Roster: {roster_preview}*",
-                view=rtf_view,
-            )
-            if not await wait_for_view(rtf_view, rtf_msg):
-                if cancel_event.is_set():
-                    await channel.send("❌ Log cancelled.")
-                return
-            rtf_no_vote = sorted(rtf_view.selected)
-            if rtf_view.unrecognized:
-                rtf_no_vote += sorted(rtf_view.unrecognized)
-
-        # ── Step 4: Sitting out this week ─────────────────────────────────────
-        step_num     = 4 if is_ds else 2
         roster_preview = ", ".join(names)
+
+        # ── Step 3: Sitting out this week ─────────────────────────────────────
+        step_num = 3 if is_ds else 2
         sit_view = NameEntryView(names, "Sitting Out")
         sit_msg  = await channel.send(
             f"**Step {step_num} — Sitting out this week**\n"
@@ -418,6 +480,25 @@ async def run_log_flow(bot, channel, user, event_type):
         sitting_out = sorted(sit_view.selected)
         if sit_view.unrecognized:
             sitting_out += sorted(sit_view.unrecognized)
+
+        # ── Step 4 (DS only): RTF but no vote ─────────────────────────────────
+        rtf_no_vote = []
+        if is_ds:
+            rtf_view = NameEntryView(names, "RTF No Vote")
+            rtf_msg  = await channel.send(
+                "**Step 4 — Requested to Fight but did not vote**\n"
+                "Press **Enter Names** to type who submitted RTF but did not vote. "
+                "Press **Skip** if none.\n"
+                f"*Roster: {roster_preview}*",
+                view=rtf_view,
+            )
+            if not await wait_for_view(rtf_view, rtf_msg):
+                if cancel_event.is_set():
+                    await channel.send("❌ Log cancelled.")
+                return
+            rtf_no_vote = sorted(rtf_view.selected)
+            if rtf_view.unrecognized:
+                rtf_no_vote += sorted(rtf_view.unrecognized)
 
         # ── Step 5: Prior sit-outs who didn't request ─────────────────────────
         step_num    = 5 if is_ds else 3
@@ -446,7 +527,6 @@ async def run_log_flow(bot, channel, user, event_type):
                 "*(No prior sit-outs found in last log — skipping)*",
                 delete_after=5,
             )
-
         # ── Save to sheet ─────────────────────────────────────────────────────
         await channel.send("💾 Saving log...")
         try:

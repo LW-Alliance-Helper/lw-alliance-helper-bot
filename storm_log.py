@@ -122,76 +122,136 @@ def get_prior_sitouts(event_type):
         return []
 
 
-# ── Paginated name select view ─────────────────────────────────────────────────
+# ── Name entry modal ──────────────────────────────────────────────────────────
 
-class NameSelectView(discord.ui.View):
+class NameEntryModal(discord.ui.Modal):
     """
-    Single paginated dropdown — 25 names per page with Prev/Next navigation.
-    Selected names accumulate across pages. Done confirms, Skip clears and confirms.
+    Popup text box where the user types names comma-separated or one per line.
+    Validates against the known roster and reports any unrecognized names.
     """
-    def __init__(self, names, label, optional=False):
+    def __init__(self, all_names: list, label: str):
+        super().__init__(title=label[:45])  # Modal title max 45 chars
+        self.all_names   = [n.lower() for n in all_names]
+        self.name_map    = {n.lower(): n for n in all_names}  # lower → original case
+        self.confirmed   = False
+        self.selected    = []
+        self.unrecognized = []
+
+        self.text_input = discord.ui.TextInput(
+            label="Names (comma-separated or one per line)",
+            style=discord.TextStyle.paragraph,
+            placeholder="e.g. Jon, Lionel, Ice — or leave blank and submit for none",
+            required=False,
+            max_length=1000,
+        )
+        self.add_item(self.text_input)
+
+    async def on_submit(self, interaction: discord.Interaction):
+        raw = self.text_input.value.strip()
+        if not raw:
+            self.selected     = []
+            self.unrecognized = []
+            self.confirmed    = True
+            await interaction.response.defer()
+            self.stop()
+            return
+
+        # Split on commas or newlines
+        import re
+        parts = [p.strip() for p in re.split(r"[,\n]+", raw) if p.strip()]
+
+        recognized   = []
+        unrecognized = []
+        for part in parts:
+            lower = part.lower()
+            if lower in self.name_map:
+                recognized.append(self.name_map[lower])
+            else:
+                # Fuzzy: check if input is contained in a name or vice versa
+                match = next(
+                    (self.name_map[n] for n in self.all_names if lower in n or n in lower),
+                    None
+                )
+                if match:
+                    recognized.append(match)
+                else:
+                    unrecognized.append(part)
+
+        self.selected     = recognized
+        self.unrecognized = unrecognized
+        self.confirmed    = True
+        await interaction.response.defer()
+        self.stop()
+
+
+class NameEntryView(discord.ui.View):
+    """
+    Posts the full roster for reference and an Enter Names button that
+    opens the modal. Also has a Skip button for when no one applies.
+    """
+    def __init__(self, all_names: list, label: str):
         super().__init__(timeout=WIZARD_TIMEOUT)
-        self.all_names = names
-        self.label     = label
-        self.optional  = optional
-        self.selected  = set()
+        self.all_names  = all_names
+        self.label      = label
+        self.confirmed  = False
+        self.selected   = []
+        self.unrecognized = []
+        self._modal     = None
+
+    @discord.ui.button(label="✏️ Enter Names", style=discord.ButtonStyle.primary, row=0)
+    async def enter_names(self, interaction: discord.Interaction, button: discord.ui.Button):
+        modal = NameEntryModal(self.all_names, self.label)
+        await interaction.response.send_modal(modal)
+        await modal.wait()
+        self.selected     = modal.selected
+        self.unrecognized = modal.unrecognized
+        self.confirmed    = True
+        for item in self.children:
+            item.disabled = True
+        # Update the message to show what was entered
+        result_lines = []
+        if self.selected:
+            result_lines.append(f"**Entered ({len(self.selected)}):** {', '.join(self.selected)}")
+        if self.unrecognized:
+            result_lines.append(f"⚠️ **Not recognized:** {', '.join(self.unrecognized)} *(saved as-is)*")
+        if not result_lines:
+            result_lines.append("*None entered.*")
+        try:
+            await interaction.message.edit(content="\n".join(result_lines), view=self)
+        except discord.HTTPException:
+            pass
+        self.stop()
+
+    @discord.ui.button(label="Skip (none)", style=discord.ButtonStyle.secondary, row=0)
+    async def skip(self, interaction: discord.Interaction, button: discord.ui.Button):
+        self.confirmed    = True
+        self.selected     = []
+        self.unrecognized = []
+        for item in self.children:
+            item.disabled = True
+        await interaction.response.edit_message(content="*Skipped — none.*", view=self)
+        self.stop()
+
+
+class ShortSelectView(discord.ui.View):
+    """Simple single-page select for short lists (e.g. prior sit-outs, always < 25)."""
+    def __init__(self, names: list, label: str):
+        super().__init__(timeout=WIZARD_TIMEOUT)
         self.confirmed = False
-        self.page      = 0
-        self.page_size = 25
-        self._build_select()
+        self.selected  = set()
 
-    @property
-    def total_pages(self):
-        return max(1, -(-len(self.all_names) // self.page_size))
-
-    def _page_names(self):
-        start = self.page * self.page_size
-        return self.all_names[start:start + self.page_size]
-
-    def _build_select(self):
-        for item in list(self.children):
-            if isinstance(item, discord.ui.Select):
-                self.remove_item(item)
-        page_names = self._page_names()
         select = discord.ui.Select(
-            placeholder=f"{self.label} — page {self.page + 1}/{self.total_pages}",
-            options=[
-                discord.SelectOption(label=n, value=n, default=(n in self.selected))
-                for n in page_names
-            ],
+            placeholder=label,
+            options=[discord.SelectOption(label=n, value=n) for n in names],
             min_values=0,
-            max_values=len(page_names),
+            max_values=len(names),
             row=0,
         )
         async def _cb(interaction: discord.Interaction):
-            for n in page_names:
-                if n in select.values:
-                    self.selected.add(n)
-                else:
-                    self.selected.discard(n)
-            self._build_select()
-            await interaction.response.edit_message(content=self._selected_text(), view=self)
+            self.selected = set(select.values)
+            await interaction.response.defer()
         select.callback = _cb
         self.add_item(select)
-
-    def _selected_text(self):
-        if self.selected:
-            return f"**Selected ({len(self.selected)}):** {', '.join(sorted(self.selected))}"
-        return "*No one selected yet — use the dropdown or press Skip.*"
-
-    @discord.ui.button(label="◀ Prev", style=discord.ButtonStyle.secondary, row=1)
-    async def prev_page(self, interaction: discord.Interaction, button: discord.ui.Button):
-        if self.page > 0:
-            self.page -= 1
-            self._build_select()
-        await interaction.response.edit_message(content=self._selected_text(), view=self)
-
-    @discord.ui.button(label="Next ▶", style=discord.ButtonStyle.secondary, row=1)
-    async def next_page(self, interaction: discord.Interaction, button: discord.ui.Button):
-        if self.page < self.total_pages - 1:
-            self.page += 1
-            self._build_select()
-        await interaction.response.edit_message(content=self._selected_text(), view=self)
 
     @discord.ui.button(label="✅ Done", style=discord.ButtonStyle.success, row=1)
     async def done(self, interaction: discord.Interaction, button: discord.ui.Button):
@@ -247,21 +307,26 @@ async def run_log_flow(bot, channel, user, event_type):
             await channel.send("⏰ Timed out. Use the log command to start again.")
             return None
 
-    async def wait_for_select(view, prompt_msg):
+    async def wait_for_view(view, prompt_msg):
+        """Wait for any view (NameEntryView or ShortSelectView). Returns False if cancelled/timed out."""
         view_task   = asyncio.ensure_future(view.wait())
         cancel_task = asyncio.ensure_future(cancel_event.wait())
         done, pending = await asyncio.wait([view_task, cancel_task], return_when=asyncio.FIRST_COMPLETED)
         for t in pending:
             t.cancel()
-        try:
-            await prompt_msg.delete()
-        except discord.HTTPException:
-            pass
         if cancel_event.is_set():
             for item in view.children:
                 item.disabled = True
+            try:
+                await prompt_msg.edit(view=view)
+            except discord.HTTPException:
+                pass
             return False
         if not view.confirmed:
+            try:
+                await prompt_msg.delete()
+            except discord.HTTPException:
+                pass
             await channel.send("⏰ Timed out. Use the log command to start again.")
             return False
         return True
@@ -318,32 +383,41 @@ async def run_log_flow(bot, channel, user, event_type):
         # ── Step 3 (DS only): RTF but no vote ─────────────────────────────────
         rtf_no_vote = []
         if is_ds:
-            rtf_view = NameSelectView(names, "Select members who RTF'd but didn't vote")
+            roster_preview = ", ".join(names)
+            rtf_view = NameEntryView(names, "RTF No Vote")
             rtf_msg  = await channel.send(
                 "**Step 3 — Requested to Fight but did not vote**\n"
-                "Select any members who submitted RTF but did not vote in the poll. "
-                "Press **Skip** if none.",
+                "Press **Enter Names** to type who submitted RTF but did not vote. "
+                "Press **Skip** if none.\n"
+                f"*Roster: {roster_preview}*",
                 view=rtf_view,
             )
-            if not await wait_for_select(rtf_view, rtf_msg):
+            if not await wait_for_view(rtf_view, rtf_msg):
                 if cancel_event.is_set():
                     await channel.send("❌ Log cancelled.")
                 return
             rtf_no_vote = sorted(rtf_view.selected)
+            if rtf_view.unrecognized:
+                rtf_no_vote += sorted(rtf_view.unrecognized)
 
         # ── Step 4: Sitting out this week ─────────────────────────────────────
-        step_num = 4 if is_ds else 2
-        sit_view = NameSelectView(names, "Select members sitting out this week")
+        step_num     = 4 if is_ds else 2
+        roster_preview = ", ".join(names)
+        sit_view = NameEntryView(names, "Sitting Out")
         sit_msg  = await channel.send(
             f"**Step {step_num} — Sitting out this week**\n"
-            "Select any members sitting out today. Press **Skip** if none.",
+            "Press **Enter Names** to type who is sitting out today. "
+            "Press **Skip** if none.\n"
+            f"*Roster: {roster_preview}*",
             view=sit_view,
         )
-        if not await wait_for_select(sit_view, sit_msg):
+        if not await wait_for_view(sit_view, sit_msg):
             if cancel_event.is_set():
                 await channel.send("❌ Log cancelled.")
             return
         sitting_out = sorted(sit_view.selected)
+        if sit_view.unrecognized:
+            sitting_out += sorted(sit_view.unrecognized)
 
         # ── Step 5: Prior sit-outs who didn't request ─────────────────────────
         step_num    = 5 if is_ds else 3
@@ -354,14 +428,14 @@ async def run_log_flow(bot, channel, user, event_type):
         prior_no_request = []
         if prior_names:
             action_word = "vote" if is_ds else "request to fight"
-            prior_view  = NameSelectView(prior_names, "Select prior sit-outs who didn't participate")
+            prior_view  = ShortSelectView(prior_names, "Select prior sit-outs who didn't participate")
             prior_msg   = await channel.send(
                 f"**Step {step_num} — Prior sit-outs who did not {action_word} this week**\n"
                 "These members sat out last time. Select any who did not participate this week. "
                 "Press **Skip** if none.",
                 view=prior_view,
             )
-            if not await wait_for_select(prior_view, prior_msg):
+            if not await wait_for_view(prior_view, prior_msg):
                 if cancel_event.is_set():
                     await channel.send("❌ Log cancelled.")
                 return

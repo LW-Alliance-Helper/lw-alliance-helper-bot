@@ -125,8 +125,8 @@ async def on_ready():
     if "storm" not in bot.extensions:
         await bot.load_extension("storm")
         print(f"[INFO] Storm cog loaded")
-    if "logging" not in bot.extensions:
-        await bot.load_extension("logging")
+    if "storm_log" not in bot.extensions:
+        await bot.load_extension("storm_log")
         print(f"[INFO] Log cog loaded")
     if "sitout_log" not in bot.extensions:
         await bot.load_extension("sitout_log")

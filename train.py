@@ -1297,19 +1297,27 @@ class TrainCog(commands.Cog):
 
     # ── /cancel ────────────────────────────────────────────────────────────────
 
-    @app_commands.command(name="cancel", description="Cancel your active wizard session")
+    @app_commands.command(name="cancel", description="Cancel your active wizard or log session")
     @app_commands.guilds(GUILD)
     async def cancel(self, interaction: discord.Interaction):
         if not await _guard(interaction):
             return
+        cancelled = False
         if interaction.user.id in active_wizards:
             active_wizards[interaction.user.id].set()
-            await interaction.response.send_message(
-                f"❌ Wizard cancelled.", ephemeral=True
-            )
+            cancelled = True
+        try:
+            from storm_log import active_logs
+            if interaction.user.id in active_logs:
+                active_logs[interaction.user.id].set()
+                cancelled = True
+        except ImportError:
+            pass
+        if cancelled:
+            await interaction.response.send_message("❌ Session cancelled.", ephemeral=True)
         else:
             await interaction.response.send_message(
-                "ℹ️ You don't have an active wizard running.", ephemeral=True
+                "ℹ️ You don't have an active session running.", ephemeral=True
             )
 
     # ── /train ─────────────────────────────────────────────────────────────────

@@ -259,17 +259,18 @@ def load_birthdays(tab_name: str) -> list[dict]:
     """
     Load all members with birthdays from the member sheet.
     Returns a list of { "name": str, "month": int, "day": int }
-    Data starts at row 10 (index 9). Name = col E (index 4), Birthday = col H (index 7).
+    Data starts at row 10 (index 9).
+    Col E (index 4) = Name, Col F (index 5) = Alias, Col I (index 8) = Birthday.
     """
     try:
         ws   = _get_member_sheet(tab_name)
         rows = ws.get_all_values()
         members = []
         for row in rows[9:]:  # data starts at row 10
-            if len(row) < 8:
+            if len(row) < 9:
                 continue
             name     = row[4].strip()   # Column E
-            bday_raw = row[7].strip()   # Column H
+            bday_raw = row[8].strip()   # Column I (shifted from H after alias col added)
             if not name or not bday_raw:
                 continue
             parsed = parse_birthday(bday_raw)

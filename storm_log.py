@@ -87,22 +87,33 @@ def append_log_row(event_type, log_date, vote_count, rtf_no_vote, sitting_out, p
 
 
 def load_member_names():
+    """
+    Load member names and aliases from the active member tab.
+    Col E (index 4) = Name, Col F (index 5) = Alias (optional), starting row 10.
+    Returns (names, alias_map) where alias_map is { alias.lower(): full_name }.
+    """
     try:
         from train import get_member_tab_name, _get_member_sheet
-        tab_name = get_member_tab_name()
-        ws       = _get_member_sheet(tab_name)
-        rows     = ws.get_all_values()
-        names    = []
+        tab_name  = get_member_tab_name()
+        ws        = _get_member_sheet(tab_name)
+        rows      = ws.get_all_values()
+        names     = []
+        alias_map = {}
         for row in rows[9:]:
             if len(row) >= 5:
                 name = row[4].strip()
                 if name:
                     names.append(name)
-        print(f"[LOG] Loaded {len(names)} member names from '{tab_name}'")
-        return names
+                    # Read alias from col F if present
+                    if len(row) >= 6:
+                        alias = row[5].strip()
+                        if alias:
+                            alias_map[alias.lower()] = name
+        print(f"[LOG] Loaded {len(names)} members ({len(alias_map)} aliases) from '{tab_name}'")
+        return names, alias_map
     except Exception as e:
         print(f"[LOG] Error loading member names: {e}")
-        return []
+        return [], {}
 
 
 def get_prior_sitouts(event_type):
@@ -127,14 +138,15 @@ def get_prior_sitouts(event_type):
 class NameEntryModal(discord.ui.Modal):
     """
     Popup text box where the user types names comma-separated or one per line.
-    Validates against the known roster and reports any unrecognized names.
+    Matches against the known roster by exact name or alias (col F in member tab).
     """
-    def __init__(self, all_names: list, label: str):
-        super().__init__(title=label[:45])  # Modal title max 45 chars
-        self.all_names   = [n.lower() for n in all_names]
-        self.name_map    = {n.lower(): n for n in all_names}  # lower → original case
-        self.confirmed   = False
-        self.selected    = []
+    def __init__(self, all_names: list, label: str, alias_map: dict = None):
+        super().__init__(title=label[:45])
+        self.all_names  = all_names
+        self.name_map   = {n.lower(): n for n in all_names}  # lower → original
+        self.alias_map  = alias_map or {}                     # alias.lower() → original name
+        self.confirmed  = False
+        self.selected   = []
         self.unrecognized = []
 
         self.text_input = discord.ui.TextInput(
@@ -156,7 +168,6 @@ class NameEntryModal(discord.ui.Modal):
             self.stop()
             return
 
-        # Split on commas or newlines
         import re
         parts = [p.strip() for p in re.split(r"[,\n]+", raw) if p.strip()]
 
@@ -165,17 +176,13 @@ class NameEntryModal(discord.ui.Modal):
         for part in parts:
             lower = part.lower()
             if lower in self.name_map:
+                # Exact case-insensitive match
                 recognized.append(self.name_map[lower])
+            elif lower in self.alias_map:
+                # Alias match (e.g. "INSH4F" or "landers" → full decorated name)
+                recognized.append(self.alias_map[lower])
             else:
-                # Fuzzy: check if input is contained in a name or vice versa
-                match = next(
-                    (self.name_map[n] for n in self.all_names if lower in n or n in lower),
-                    None
-                )
-                if match:
-                    recognized.append(match)
-                else:
-                    unrecognized.append(part)
+                unrecognized.append(part)
 
         self.selected     = recognized
         self.unrecognized = unrecognized
@@ -218,10 +225,11 @@ class NameEntryView(discord.ui.View):
     If unrecognized names are submitted, asks the user to save as visitor or re-enter.
     Loops until the user is satisfied or skips.
     """
-    def __init__(self, all_names: list, label: str):
+    def __init__(self, all_names: list, label: str, alias_map: dict = None):
         super().__init__(timeout=WIZARD_TIMEOUT)
         self.all_names    = all_names
         self.label        = label
+        self.alias_map    = alias_map or {}
         self.confirmed    = False
         self.selected     = []
         self.unrecognized = []
@@ -229,7 +237,7 @@ class NameEntryView(discord.ui.View):
     @discord.ui.button(label="✏️ Enter Names", style=discord.ButtonStyle.primary, row=0)
     async def enter_names(self, interaction: discord.Interaction, button: discord.ui.Button):
         while True:
-            modal = NameEntryModal(self.all_names, self.label)
+            modal = NameEntryModal(self.all_names, self.label, self.alias_map)
             await interaction.response.send_modal(modal)
             timed_out = await modal.wait()
             if timed_out or not modal.confirmed:
@@ -457,7 +465,7 @@ async def run_log_flow(bot, channel, user, event_type):
 
         # ── Load member names ─────────────────────────────────────────────────
         loading_msg = await channel.send("⏳ Gathering member list...")
-        names = await asyncio.get_event_loop().run_in_executor(None, load_member_names)
+        names, alias_map = await asyncio.get_event_loop().run_in_executor(None, load_member_names)
         try:
             await loading_msg.delete()
         except discord.HTTPException:
@@ -470,7 +478,7 @@ async def run_log_flow(bot, channel, user, event_type):
 
         # ── Step 3: Sitting out this week ─────────────────────────────────────
         step_num = 3 if is_ds else 2
-        sit_view = NameEntryView(names, "Sitting Out")
+        sit_view = NameEntryView(names, "Sitting Out", alias_map)
         sit_msg  = await channel.send(
             f"**Step {step_num} — Sitting out this week**\n"
             "Press **Enter Names** to type who is sitting out today. "
@@ -489,7 +497,7 @@ async def run_log_flow(bot, channel, user, event_type):
         # ── Step 4 (DS only): RTF but no vote ─────────────────────────────────
         rtf_no_vote = []
         if is_ds:
-            rtf_view = NameEntryView(names, "RTF No Vote")
+            rtf_view = NameEntryView(names, "RTF No Vote", alias_map)
             rtf_msg  = await channel.send(
                 "**Step 4 — Requested to Fight but did not vote**\n"
                 "Press **Enter Names** to type who submitted RTF but did not vote. "

@@ -128,9 +128,6 @@ async def on_ready():
     if "storm_log" not in bot.extensions:
         await bot.load_extension("storm_log")
         print(f"[INFO] Log cog loaded")
-    if "sitout_log" not in bot.extensions:
-        await bot.load_extension("sitout_log")
-        print(f"[INFO] Sit-out log cog loaded")
 
     # Sync slash commands to the guild (safe to run again on reconnect)
     bot.tree.copy_global_to(guild=GUILD)

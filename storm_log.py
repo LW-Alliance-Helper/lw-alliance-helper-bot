@@ -456,7 +456,12 @@ async def run_log_flow(bot, channel, user, event_type):
                 return
 
         # ── Load member names ─────────────────────────────────────────────────
+        loading_msg = await channel.send("⏳ Gathering member list...")
         names = await asyncio.get_event_loop().run_in_executor(None, load_member_names)
+        try:
+            await loading_msg.delete()
+        except discord.HTTPException:
+            pass
         if not names:
             await channel.send("⚠️ Could not load member names. Check `/setmembertab` and try again.")
             return
@@ -501,10 +506,15 @@ async def run_log_flow(bot, channel, user, event_type):
                 rtf_no_vote += sorted(rtf_view.unrecognized)
 
         # ── Step 5: Prior sit-outs who didn't request ─────────────────────────
-        step_num    = 5 if is_ds else 3
-        prior_names = await asyncio.get_event_loop().run_in_executor(
+        step_num      = 5 if is_ds else 3
+        loading_msg   = await channel.send("⏳ Checking previous log...")
+        prior_names   = await asyncio.get_event_loop().run_in_executor(
             None, get_prior_sitouts, event_type
         )
+        try:
+            await loading_msg.delete()
+        except discord.HTTPException:
+            pass
 
         prior_no_request = []
         if prior_names:

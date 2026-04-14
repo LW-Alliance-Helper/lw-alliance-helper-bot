@@ -336,6 +336,7 @@ async def help_slash(interaction: discord.Interaction):
         value=(
             "`/logds` — Log Desert Storm participation (votes, RTF no-vote, sit-outs)\n"
             "`/logcs` — Log Canyon Storm participation (sit-outs, prior sit-out no-request)\n"
+            "`/viewlog [event] [date]` — View a full log entry for a specific event and date\n"
             "Results saved to the DS-CS Sit-outs sheet and posted to the log thread"
         ),
         inline=False,

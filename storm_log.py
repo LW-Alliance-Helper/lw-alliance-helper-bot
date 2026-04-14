@@ -583,6 +583,51 @@ async def run_log_flow(bot, channel, user, event_type):
         active_logs.pop(user.id, None)
 
 
+# ── Log lookup ─────────────────────────────────────────────────────────────────
+
+def lookup_log_entry(event_type: str, log_date: date):
+    """
+    Find the most recent log row matching event_type and log_date.
+    Returns a dict of the row data, or None if not found.
+    """
+    try:
+        ws   = _get_log_sheet()
+        rows = ws.get_all_values()
+        if len(rows) <= 1:
+            return None
+        target_date = log_date.strftime("%-m/%-d/%Y")
+        for row in reversed(rows[1:]):
+            if len(row) < 2:
+                continue
+            if row[1].strip().upper() != event_type.upper():
+                continue
+            # Normalize date for comparison
+            row_date = row[0].strip()
+            try:
+                # Parse various date formats that might be in the sheet
+                from datetime import datetime
+                for fmt in ("%-m/%-d/%Y", "%m/%d/%Y", "%Y-%m-%d"):
+                    try:
+                        parsed = datetime.strptime(row_date, fmt).date()
+                        if parsed == log_date:
+                            return {
+                                "date":             row[0] if len(row) > 0 else "",
+                                "event":            row[1] if len(row) > 1 else "",
+                                "vote_count":       row[2] if len(row) > 2 else "",
+                                "rtf_no_vote":      row[3] if len(row) > 3 else "",
+                                "sitting_out":      row[4] if len(row) > 4 else "",
+                                "prior_no_request": row[5] if len(row) > 5 else "",
+                            }
+                    except ValueError:
+                        continue
+            except Exception:
+                continue
+        return None
+    except Exception as e:
+        print(f"[LOG] Error looking up log entry: {e}")
+        return None
+
+
 # ── Guard ──────────────────────────────────────────────────────────────────────
 
 def _in_channel(interaction: discord.Interaction) -> bool:
@@ -640,6 +685,57 @@ class LogCog(commands.Cog):
             return
         await interaction.response.send_message("📋 Starting CS log...", ephemeral=True)
         await run_log_flow(self.bot, interaction.channel, interaction.user, "CS")
+
+
+    @app_commands.command(name="viewlog", description="View a logged event entry for a specific date")
+    @app_commands.describe(
+        event="DS or CS",
+        date="Date to look up, e.g. 'April 14' or '4/14'",
+    )
+    @app_commands.choices(event=[
+        app_commands.Choice(name="Desert Storm (DS)", value="DS"),
+        app_commands.Choice(name="Canyon Storm (CS)", value="CS"),
+    ])
+    @app_commands.guilds(GUILD)
+    async def viewlog(self, interaction: discord.Interaction, event: str, date: str):
+        if not await _guard(interaction):
+            return
+
+        await interaction.response.defer()
+
+        # Parse the date
+        from train import parse_date_and_name
+        parsed_d, _, _ = parse_date_and_name(f"{date} - placeholder")
+        if not parsed_d:
+            await interaction.followup.send(
+                f"⚠️ Could not parse date **{date}**. Try a format like `April 14` or `4/14`.",
+                ephemeral=True,
+            )
+            return
+
+        entry = await asyncio.get_event_loop().run_in_executor(
+            None, lookup_log_entry, event, parsed_d
+        )
+
+        if entry is None:
+            await interaction.followup.send(
+                f"❌ No **{event}** log found for **{parsed_d.strftime('%B %-d, %Y')}**.",
+                ephemeral=True,
+            )
+            return
+
+        event_label  = "Desert Storm" if event == "DS" else "Canyon Storm"
+        date_str     = parsed_d.strftime("%A, %B %-d, %Y")
+        action_label = "Vote" if event == "DS" else "Request"
+
+        lines = [f"📋 **{event_label} Log — {date_str}**"]
+        if event == "DS":
+            lines.append(f"**Votes:** {entry['vote_count'] or 'Not recorded'}")
+            lines.append(f"**RTF No Vote:** {entry['rtf_no_vote'] or 'None'}")
+        lines.append(f"**Sitting Out:** {entry['sitting_out'] or 'None'}")
+        lines.append(f"**Prior Sit-Out No {action_label}:** {entry['prior_no_request'] or 'None'}")
+
+        await interaction.followup.send("\n".join(lines))
 
 
 async def setup(bot: commands.Bot):

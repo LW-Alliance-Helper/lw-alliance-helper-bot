@@ -62,7 +62,7 @@ pending_warnings: dict[str, datetime] = {}
 EVENT_LIBRARY = {
     "marauder": {
         "name":     "Plague Marauder",
-        "blurb":    "Marauder at {time} ({server} server). Make sure to have offline participation checked!",
+        "blurb":    "Marauder (AE) at {time} ({server} server). Make sure to have offline participation checked!",
         "optional": False,
     },
     "siege": {
@@ -188,7 +188,7 @@ def build_warning_message(event_list: list[dict]) -> str:
     key   = first["key"]
     if key == "marauder":
         return (
-            "Marauder in 5 minutes! Make sure you hop online and get your points! "
+            "Marauder (AE) in 5 minutes! Make sure you hop online and get your points! "
             "Zombies right after, check your wall to make sure you have squads on it!"
         )
     name = EVENT_LIBRARY.get(key, {}).get("name", key)

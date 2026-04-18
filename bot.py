@@ -128,6 +128,9 @@ async def on_ready():
     if "storm_log" not in bot.extensions:
         await bot.load_extension("storm_log")
         print(f"[INFO] Log cog loaded")
+    if "survey" not in bot.extensions:
+        await bot.load_extension("survey")
+        print(f"[INFO] Survey cog loaded")
 
     # Sync slash commands to the guild (safe to run again on reconnect)
     bot.tree.copy_global_to(guild=GUILD)
@@ -347,6 +350,15 @@ async def help_slash(interaction: discord.Interaction):
         value=(
             "`/rungrowth` — Manually run the monthly squad power snapshot\n"
             "Snapshots also run automatically on the 1st of each month at 10pm ET"
+        ),
+        inline=False,
+    )
+
+    embed.add_field(
+        name="📊 Squad Powers Survey",
+        value=(
+            "`/postsurvey` — Post (or repost) the survey button in the survey channel\n"
+            "Members click Answer to open a private thread and submit their stats"
         ),
         inline=False,
     )

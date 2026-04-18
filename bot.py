@@ -6,7 +6,6 @@ import re
 import os
 from datetime import datetime, date, timedelta
 from dotenv import load_dotenv
-from sheets import find_and_update_or_create_row
 from scheduler import (
     run_scheduler, post_editor, get_event_datetimes, default_event_list,
     next_event_dates, is_friday,
@@ -16,8 +15,7 @@ from zoneinfo import ZoneInfo
 
 load_dotenv()
 
-DISCORD_TOKEN      = os.getenv("DISCORD_TOKEN")
-WATCHED_CHANNEL_ID = int(os.getenv("WATCHED_CHANNEL_ID"))
+DISCORD_TOKEN = os.getenv("DISCORD_TOKEN")
 
 ET                    = ZoneInfo("America/New_York")
 GUILD_ID              = 1266229297723605052
@@ -60,64 +58,11 @@ async def guard(interaction: discord.Interaction) -> bool:
     return True
 
 
-# ── Survey embed parsing ───────────────────────────────────────────────────────
-
-def parse_survey_embeds(embeds):
-    if not embeds or len(embeds) < 10:
-        print(f"[WARN] Expected at least 10 embeds, got {len(embeds)}")
-        return None
-
-    main_description = embeds[0].description or ""
-    print(f"[DEBUG] Main embed description:\n{main_description}\n")
-
-    discord_id_match = re.search(r"<@!?(\d+)>", main_description)
-    discord_id = discord_id_match.group(1) if discord_id_match else None
-
-    name_match = re.search(r"\*\*Name\s*\*\*\s*\n(.+)", main_description)
-    username = None
-    if name_match:
-        name_line = name_match.group(1).strip()
-        username = re.sub(r"\s*<@!?\d+>", "", name_line).strip()
-
-    if not discord_id:
-        print("[ERROR] Could not extract Discord ID from embed description.")
-        return None
-
-    def get_field_value(embed_index):
-        try:
-            fields = embeds[embed_index].fields
-            if fields:
-                return fields[0].value.strip()
-        except (IndexError, AttributeError):
-            pass
-        return None
-
-    date_modified = datetime.now().strftime("%-m/%-d/%Y")
-
-    data = {
-        "Username":       username,
-        "Discord ID":     discord_id,
-        "1st Squad":      get_field_value(1),
-        "1st Squad Type": get_field_value(2),
-        "2nd Squad":      get_field_value(3),
-        "2nd Squad Type": get_field_value(4),
-        "3rd Squad":      get_field_value(5),
-        "3rd Squad Type": get_field_value(6),
-        "Gorilla Level":  get_field_value(8),
-        "Drone Level":    get_field_value(9),
-        "Date Modified":  date_modified,
-    }
-
-    print(f"[INFO] Parsed data: {data}")
-    return data
-
-
 # ── Bot events ─────────────────────────────────────────────────────────────────
 
 @bot.event
 async def on_ready():
     print(f"[INFO] Logged in as {bot.user} (ID: {bot.user.id})")
-    print(f"[INFO] Watching channel ID: {WATCHED_CHANNEL_ID}")
 
     # Load cogs — skip if already loaded (happens on reconnect)
     if "train" not in bot.extensions:
@@ -179,22 +124,6 @@ async def before_growth_task():
 async def on_message(message):
     if message.author == bot.user:
         return
-
-    if message.channel.id == WATCHED_CHANNEL_ID:
-        if message.author.bot and message.embeds:
-            first_embed = message.embeds[0]
-            if first_embed.title and "New Response" in first_embed.title:
-                print(f"[INFO] Survey response detected from {message.author}")
-                data = parse_survey_embeds(message.embeds)
-                if not data:
-                    print("[ERROR] Failed to parse embed data.")
-                    return
-                try:
-                    result = find_and_update_or_create_row(data)
-                    print(f"[INFO] Sheet update result: {result}")
-                except Exception as e:
-                    print(f"[ERROR] Failed to update Google Sheet: {e}")
-
     await bot.process_commands(message)
 
 

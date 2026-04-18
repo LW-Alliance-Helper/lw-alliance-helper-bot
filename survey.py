@@ -26,6 +26,7 @@ from discord.ext import commands
 GUILD_ID            = 1266229297723605052
 GUILD               = discord.Object(id=GUILD_ID)
 SURVEY_CHANNEL_ID   = 1399401720026759198
+SURVEY_NOTIFY_ID    = 1405930574253920408
 REQUIRED_ROLE_NAME  = "OGV"
 LEADERSHIP_CAT_ID   = 1266243885743603783
 SURVEY_TIMEOUT      = 600  # 10 minutes per step
@@ -302,7 +303,42 @@ async def run_survey(bot, thread: discord.Thread, user: discord.Member):
         print(f"[SURVEY] Error saving for {user.display_name}: {e}")
         return
 
-    # ── Completion message ────────────────────────────────────────────────────
+    # ── Notify leadership ─────────────────────────────────────────────────────
+    try:
+        notify_channel = bot.get_channel(SURVEY_NOTIFY_ID)
+        if notify_channel:
+            date_str = datetime.now(timezone.utc).strftime("%B %-d, %Y at %-I:%M %p UTC")
+            profession_line = data.get("profession", "")
+            if data.get("banner"):
+                profession_line += f" — Charge Banner: {data['banner']}"
+            elif data.get("aid_removal"):
+                profession_line += f" — Medical Aid/Ruin Removal: {data['aid_removal']}"
+
+            embed = discord.Embed(
+                title="📋 New Survey Response",
+                color=discord.Color.blurple(),
+            )
+            embed.add_field(name="Member", value=user.mention, inline=True)
+            embed.add_field(name="Submitted", value=date_str, inline=True)
+            embed.add_field(name="\u200b", value="\u200b", inline=True)
+            embed.add_field(
+                name="Responses",
+                value=(
+                    f"**1st Squad Power:** {data.get('squad1_power', '—')}\n"
+                    f"**1st Squad Type:** {data.get('squad1_type', '—')}\n"
+                    f"**2nd Squad Power:** {data.get('squad2_power', '—')}\n"
+                    f"**3rd Squad Power:** {data.get('squad3_power', '—')}\n"
+                    f"**Drone Level:** {data.get('drone_level', '—')}\n"
+                    f"**Gorilla Level:** {data.get('gorilla_level', '—')}\n"
+                    f"**THP:** {data.get('thp', '—')}M\n"
+                    f"**Total Kills:** {data.get('total_kills', '—')}M\n"
+                    f"**Profession:** {profession_line}"
+                ),
+                inline=False,
+            )
+            await notify_channel.send(embed=embed)
+    except Exception as e:
+        print(f"[SURVEY] Error sending leadership notification: {e}")
     class CloseThreadView(discord.ui.View):
         def __init__(self):
             super().__init__(timeout=60)

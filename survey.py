@@ -149,11 +149,12 @@ def append_survey_history(discord_id: str, username: str, data: dict):
 # ── Dropdown views ─────────────────────────────────────────────────────────────
 
 class DropdownView(discord.ui.View):
-    """Generic single-select dropdown that stops on selection."""
-    def __init__(self, placeholder: str, options: list):
+    """Generic single-select dropdown that persists the selected value after selection."""
+    def __init__(self, placeholder: str, options: list, label: str = ""):
         super().__init__(timeout=SURVEY_TIMEOUT)
         self.selected  = None
         self.confirmed = False
+        self.label     = label
 
         select = discord.ui.Select(
             placeholder=placeholder,
@@ -164,7 +165,10 @@ class DropdownView(discord.ui.View):
             self.selected  = select.values[0]
             self.confirmed = True
             select.disabled = True
-            await interaction.response.edit_message(view=self)
+            await interaction.response.edit_message(
+                content=f"**{self.label}** {self.selected}",
+                view=self,
+            )
             self.stop()
         select.callback = _cb
         self.add_item(select)
@@ -180,25 +184,21 @@ async def run_survey(bot, thread: discord.Thread, user: discord.Member):
 
     async def ask_number(prompt: str, max_chars: int = 10) -> str | None:
         """Post a prompt and wait for a typed number reply."""
-        msg = await thread.send(prompt)
+        await thread.send(prompt)
         try:
             reply = await bot.wait_for("message", check=check, timeout=SURVEY_TIMEOUT)
         except asyncio.TimeoutError:
             await thread.send("⏰ Survey timed out. You can start again by clicking the Answer button.")
             return None
-        try:
-            await msg.delete()
-        except discord.HTTPException:
-            pass
         val = reply.content.strip()
         if len(val) > max_chars:
             await thread.send(f"⚠️ That entry is too long (max {max_chars} characters). Please try the survey again.")
             return None
         return val
 
-    async def ask_dropdown(prompt: str, options: list, placeholder: str) -> str | None:
+    async def ask_dropdown(prompt: str, options: list, placeholder: str, label: str = "") -> str | None:
         """Post a prompt with a dropdown and wait for selection."""
-        view = DropdownView(placeholder, options)
+        view = DropdownView(placeholder, options, label=label)
         msg  = await thread.send(prompt, view=view)
         await view.wait()
         if not view.confirmed:
@@ -215,7 +215,7 @@ async def run_survey(bot, thread: discord.Thread, user: discord.Member):
     data["squad1_power"] = val
 
     # ── Q2: 1st Squad Type ────────────────────────────────────────────────────
-    val = await ask_dropdown("**1st Squad Type**", SQUAD_TYPES, "Select squad type...")
+    val = await ask_dropdown("**1st Squad Type**", SQUAD_TYPES, "Select squad type...", label="1st Squad Type:")
     if val is None:
         return
     data["squad1_type"] = val
@@ -260,7 +260,7 @@ async def run_survey(bot, thread: discord.Thread, user: discord.Member):
     data["total_kills"] = val
 
     # ── Q9: Profession ────────────────────────────────────────────────────────
-    val = await ask_dropdown("**What is your Profession?**", PROFESSIONS, "Select profession...")
+    val = await ask_dropdown("**What is your Profession?**", PROFESSIONS, "Select profession...", label="Profession:")
     if val is None:
         return
     data["profession"] = val
@@ -271,6 +271,7 @@ async def run_survey(bot, thread: discord.Thread, user: discord.Member):
             "**Do you have a charge banner?**",
             BANNER_OPTIONS,
             "Select...",
+            label="Charge Banner:",
         )
         if follow is None:
             return
@@ -281,6 +282,7 @@ async def run_survey(bot, thread: discord.Thread, user: discord.Member):
             "**Do you have medical aid and ruin removal?**",
             AID_REMOVAL_OPTIONS,
             "Select...",
+            label="Medical Aid / Ruin Removal:",
         )
         if follow is None:
             return
@@ -306,24 +308,32 @@ async def run_survey(bot, thread: discord.Thread, user: discord.Member):
             super().__init__(timeout=60)
             self.closed = False
 
-        @discord.ui.button(label="❌ Close Thread", style=discord.ButtonStyle.danger)
+        @discord.ui.button(label="❌ Close Thread", style=discord.ButtonStyle.secondary)
         async def close_now(self, interaction: discord.Interaction, button: discord.ui.Button):
             self.closed = True
-            await interaction.response.send_message("Closing thread...", ephemeral=True)
+            await interaction.response.defer()
             self.stop()
 
         async def on_timeout(self):
             self.closed = True
             self.stop()
 
-    close_view = CloseThreadView()
-    await thread.send(
-        f"✅ **Survey Complete!**\n\n"
-        f"Your response has been saved successfully! Thanks for keeping your stats up to date, "
-        f"it helps us to balance teams, track alliance growth, and prepare for season events.\n\n"
-        f"This thread will be deleted in 60 seconds or you can close it now.",
-        view=close_view,
+    embed = discord.Embed(
+        title="✅ Survey Complete!",
+        color=discord.Color.green(),
     )
+    embed.add_field(
+        name="Thank you!",
+        value=(
+            "Your response has been saved successfully! Thanks for keeping your stats up to date, "
+            "it helps us to balance teams, track alliance growth, and prepare for season events."
+        ),
+        inline=False,
+    )
+    embed.set_footer(text="This thread will be deleted in 60 seconds or you can close it now.")
+
+    close_view = CloseThreadView()
+    await thread.send(embed=embed, view=close_view)
 
     await close_view.wait()
     await asyncio.sleep(2)
@@ -378,6 +388,11 @@ class SurveyButtonView(discord.ui.View):
                 ephemeral=True,
             )
             return
+
+        await interaction.followup.send(
+            f"🚀 Your thread is ready — head over here to get started: {thread.mention}",
+            ephemeral=True,
+        )
 
         await run_survey(interaction.client, thread, interaction.user)
 

@@ -35,7 +35,7 @@ SP_SQUAD2_COL     = 4   # E
 SP_SQUAD3_COL     = 6   # G
 
 
-def _get_spreadsheet():
+def _get_spreadsheet(guild_id: int = None):
     """Return an authenticated gspread Spreadsheet object."""
     import gspread
     from google.oauth2.service_account import Credentials
@@ -50,8 +50,8 @@ def _get_spreadsheet():
         creds    = Credentials.from_service_account_file(key_file, scopes=scopes)
 
     gc = gspread.authorize(creds)
-    from config import get_spreadsheet_id
-    sheet_id = get_spreadsheet_id(guild_id) if guild_id else os.getenv("SPREADSHEET_ID", "")
+    from config import get_spreadsheet_id, OGV_GUILD_ID
+    sheet_id = get_spreadsheet_id(guild_id or OGV_GUILD_ID)
     return gc.open_by_key(sheet_id)
 
 
@@ -63,13 +63,16 @@ def _safe_float(val: str) -> float:
         return 0.0
 
 
-def load_squad_powers() -> dict:
+def load_squad_powers(guild_id: int = None) -> dict:
     """
     Load current squad powers from the Squad Powers tab.
     Returns { discord_id: { "name": str, "combined": float } }
     """
-    sh   = _get_spreadsheet()
-    ws   = sh.worksheet(SQUAD_POWERS_TAB)
+    from config import get_config, OGV_GUILD_ID
+    gid  = guild_id or OGV_GUILD_ID
+    cfg  = get_config(gid)
+    sh   = _get_spreadsheet(gid)
+    ws   = sh.worksheet(cfg.tab_squad_powers if cfg else "Squad Powers")
     rows = ws.get_all_values()
 
     members = {}
@@ -92,27 +95,42 @@ def load_squad_powers() -> dict:
 
 def run_growth_snapshot():
     """
-    Take a monthly snapshot and write it to the Growth Tracking tab.
+    Take a monthly snapshot for all configured guilds.
     This is the main entry point called by the scheduler.
     """
-    import traceback
+    import traceback, sqlite3
+    from config import DB_PATH
     try:
-        _run_growth_snapshot_inner()
+        with sqlite3.connect(DB_PATH) as conn:
+            rows = conn.execute(
+                "SELECT guild_id FROM guild_configs WHERE setup_complete = 1"
+            ).fetchall()
+        guild_ids = [row[0] for row in rows] or [None]
     except Exception as e:
-        print(f"[GROWTH] Snapshot failed: {e}")
-        print(f"[GROWTH] Traceback:\n{traceback.format_exc()}")
+        print(f"[GROWTH] Could not read guild list: {e}")
+        guild_ids = [None]
+
+    for gid in guild_ids:
+        try:
+            _run_growth_snapshot_inner(gid)
+        except Exception as e:
+            print(f"[GROWTH] Snapshot failed for guild {gid}: {e}")
+            print(f"[GROWTH] Traceback:\n{traceback.format_exc()}")
 
 
-def _run_growth_snapshot_inner():
+def _run_growth_snapshot_inner(guild_id: int = None):
+    from config import get_config, OGV_GUILD_ID
+    gid  = guild_id or OGV_GUILD_ID
+    cfg  = get_config(gid)
     now        = datetime.now(tz=ET)
-    month_label = now.strftime("%b %Y")   # e.g. "Apr 2026"
+    month_label = now.strftime("%b %Y")
     col_header  = f"Combined Power\n{month_label}"
 
-    print(f"[GROWTH] Running snapshot for {month_label}")
+    print(f"[GROWTH] Running snapshot for {month_label} (guild {gid})")
 
-    sh      = _get_spreadsheet()
-    ws      = sh.worksheet(GROWTH_TAB)
-    members = load_squad_powers()
+    sh      = _get_spreadsheet(gid)
+    ws      = sh.worksheet(cfg.tab_growth_tracking if cfg else "Growth Tracking")
+    members = load_squad_powers(gid)
 
     # Read entire Growth Tracking sheet
     all_values = ws.get_all_values()

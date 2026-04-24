@@ -251,13 +251,15 @@ class EventEditorView(discord.ui.View):
     the announcement.
     """
 
-    def __init__(self, bot, event_list: list[dict], event_key: str, run_date: date):
+    def __init__(self, bot, event_list: list[dict], event_key: str, run_date: date, guild_id: int = None):
         super().__init__(timeout=BUTTON_TIMEOUT)
         self.bot        = bot
         self.event_list = deepcopy(event_list)
         self.event_key  = event_key
         self.run_date   = run_date
         self.notes      = ""
+        from config import OGV_GUILD_ID
+        self.guild_id   = guild_id if guild_id is not None else OGV_GUILD_ID
 
     def format_event_list_text(self) -> str:
         lines = []

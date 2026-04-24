@@ -100,7 +100,9 @@ async def _run_growth_on_startup():
         print(f"[GROWTH] Running initial snapshot on startup")
         await asyncio.get_event_loop().run_in_executor(None, run_growth_snapshot)
     except Exception as e:
+        import traceback
         print(f"[GROWTH] Error during startup snapshot: {e}")
+        print(f"[GROWTH] Traceback:\n{traceback.format_exc()}")
 
 
 @tasks.loop(hours=1)

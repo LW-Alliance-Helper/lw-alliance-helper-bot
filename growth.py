@@ -94,6 +94,15 @@ def run_growth_snapshot():
     Take a monthly snapshot and write it to the Growth Tracking tab.
     This is the main entry point called by the scheduler.
     """
+    import traceback
+    try:
+        _run_growth_snapshot_inner()
+    except Exception as e:
+        print(f"[GROWTH] Snapshot failed: {e}")
+        print(f"[GROWTH] Traceback:\n{traceback.format_exc()}")
+
+
+def _run_growth_snapshot_inner():
     now        = datetime.now(tz=ET)
     month_label = now.strftime("%b %Y")   # e.g. "Apr 2026"
     col_header  = f"Combined Power\n{month_label}"

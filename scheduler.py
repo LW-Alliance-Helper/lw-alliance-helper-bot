@@ -25,26 +25,18 @@ from zoneinfo import ZoneInfo
 
 import discord
 import discord.ext.commands
+from config import get_config, init_db
 
 # ── Channel IDs ────────────────────────────────────────────────────────────────
-ANNOUNCEMENT_CHANNEL_ID = 1414725199257010336
-LEADERSHIP_CHANNEL_ID   = 1488693874938482799
-
-# The role mention to tag in public announcements
-OGV_ROLE_MENTION = "<@&1266235041600503880>"
-
 ET = ZoneInfo("America/New_York")
 
-# ── Schedule constants ─────────────────────────────────────────────────────────
-ANCHOR_DATE  = date(2026, 3, 30)
-CYCLE_DAYS   = 3
+from config import get_config
 
-NORMAL_MARAUDER_TIME   = (22, 15)
-NORMAL_SIEGE_TIME      = (22, 45)
-SATURDAY_MARAUDER_TIME = (17,  0)
-SATURDAY_SIEGE_TIME    = (17, 30)
+# ── Per-guild config helpers ───────────────────────────────────────────────────
 
-FRIDAY_SHIELD_WARNING_TIME = (21, 55)
+def get_guild_cfg(guild_id: int):
+    from config import get_config as _gc
+    return _gc(guild_id)
 
 BUTTON_TIMEOUT = 3600
 
@@ -88,16 +80,28 @@ OPTIONAL_EVENTS = {k: v for k, v in EVENT_LIBRARY.items() if v["optional"]}
 # ── Schedule helpers ───────────────────────────────────────────────────────────
 
 def next_event_dates(from_date: date = None, count: int = 6) -> list[date]:
+    """Public wrapper using OGV defaults — kept for backward compatibility."""
+    from config import get_config, OGV_GUILD_ID
+    cfg = get_config(OGV_GUILD_ID)
+    anchor = cfg.anchor_date_parsed() if cfg else date(2026, 3, 30)
+    cycle  = cfg.cycle_days if cfg else 3
+    return _next_event_dates(from_date, count, anchor, cycle)
+
+
+def _next_event_dates(from_date: date = None, count: int = 6,
+                      anchor: date = None, cycle: int = 3) -> list[date]:
     if from_date is None:
         from_date = date.today()
-    days_since = (from_date - ANCHOR_DATE).days
-    remainder  = days_since % CYCLE_DAYS
-    offset     = 0 if remainder == 0 else CYCLE_DAYS - remainder
+    if anchor is None:
+        anchor = date(2026, 3, 30)
+    days_since = (from_date - anchor).days
+    remainder  = days_since % cycle
+    offset     = 0 if remainder == 0 else cycle - remainder
     results    = []
     candidate  = from_date + timedelta(days=offset)
     while len(results) < count:
         results.append(candidate)
-        candidate += timedelta(days=CYCLE_DAYS)
+        candidate += timedelta(days=cycle)
     return results
 
 
@@ -106,14 +110,26 @@ def is_friday(d: date) -> bool:
 
 
 def get_event_datetimes(event_date: date) -> tuple[datetime, datetime]:
+    """Public wrapper using OGV defaults."""
+    from config import get_config, OGV_GUILD_ID
+    cfg = get_config(OGV_GUILD_ID)
+    norm_m = cfg.parse_time(cfg.marauder_time_normal) if cfg else (22, 15)
+    norm_s = cfg.parse_time(cfg.siege_time_normal)    if cfg else (22, 45)
+    sat_m  = cfg.parse_time(cfg.marauder_time_saturday) if cfg else (17, 0)
+    sat_s  = cfg.parse_time(cfg.siege_time_saturday)    if cfg else (17, 30)
+    return _get_event_datetimes(event_date, norm_m, norm_s, sat_m, sat_s)
+
+
+def _get_event_datetimes(event_date: date,
+                         norm_m, norm_s, sat_m, sat_s) -> tuple[datetime, datetime]:
     if is_friday(event_date):
         run_date = event_date + timedelta(days=1)
-        m_h, m_m = SATURDAY_MARAUDER_TIME
-        s_h, s_m = SATURDAY_SIEGE_TIME
+        m_h, m_m = sat_m
+        s_h, s_m = sat_s
     else:
         run_date = event_date
-        m_h, m_m = NORMAL_MARAUDER_TIME
-        s_h, s_m = NORMAL_SIEGE_TIME
+        m_h, m_m = norm_m
+        s_h, s_m = norm_s
     marauder_dt = datetime(run_date.year, run_date.month, run_date.day, m_h, m_m, tzinfo=ET)
     siege_dt    = datetime(run_date.year, run_date.month, run_date.day, s_h, s_m, tzinfo=ET)
     return marauder_dt, siege_dt
@@ -127,7 +143,7 @@ def format_et(dt: datetime) -> str:
     return dt.strftime("%-I:%M%p").lower()
 
 
-def noon_dt_for(event_date: date) -> datetime:
+def __noon_dt_for(event_date: date) -> datetime:
     run_date = event_date + timedelta(days=1) if is_friday(event_date) else event_date
     return datetime(run_date.year, run_date.month, run_date.day, 12, 0, tzinfo=ET)
 
@@ -147,7 +163,7 @@ def default_event_list(marauder_dt: datetime, siege_dt: datetime) -> list[dict]:
     ]
 
 
-def build_announcement(event_list: list[dict], notes: str = "") -> str:
+def build_announcement(event_list: list[dict], notes: str = "", role_mention: str = "@everyone") -> str:
     """
     Craft the full announcement message from the event list.
     Format:
@@ -169,7 +185,7 @@ def build_announcement(event_list: list[dict], notes: str = "") -> str:
         bullet_lines.append("- " + blurb.format(time=et_str, server=sv_str))
 
     lines = [
-        f"Hey {OGV_ROLE_MENTION}!",
+        f"Hey {role_mention}!",
         "Here is the schedule for events today:",
         "",
     ] + bullet_lines
@@ -523,7 +539,10 @@ class EventEditorView(discord.ui.View):
             pass
 
         try:
-            announcement = build_announcement(self.event_list, self.notes)
+            from config import get_config
+            cfg = get_config(self.guild_id)
+            role_mention = cfg.role_mention if cfg else "@everyone"
+            announcement = build_announcement(self.event_list, self.notes, role_mention=role_mention)
         except Exception as e:
             print(f"[SCHEDULER] Error building announcement: {e}")
             await interaction.followup.send(f"⚠️ Error building announcement: {e}", ephemeral=True)
@@ -535,9 +554,11 @@ class EventEditorView(discord.ui.View):
             event_list=self.event_list,
             event_key=self.event_key,
             is_shield=False,
+            guild_id=self.guild_id,
         )
 
-        channel = self.bot.get_channel(LEADERSHIP_CHANNEL_ID)
+        cfg = get_config(self.guild_id)
+        channel = self.bot.get_channel(cfg.leadership_channel_id) if cfg else None
         if channel:
             await channel.send(
                 f"📣 **Announcement draft — please review and approve:**\n\n{announcement}",
@@ -553,16 +574,22 @@ class EventEditorView(discord.ui.View):
 
 class ApprovalView(discord.ui.View):
     def __init__(self, bot, draft_message: str, event_key: str,
-                 event_list: list[dict] = None, is_shield: bool = False):
+                 event_list: list[dict] = None, is_shield: bool = False, guild_id: int = None):
         super().__init__(timeout=BUTTON_TIMEOUT)
         self.bot           = bot
         self.draft_message = draft_message
         self.event_key     = event_key
         self.event_list    = event_list or []
         self.is_shield     = is_shield
+        self.guild_id      = guild_id
+        from config import OGV_GUILD_ID
+        if self.guild_id is None:
+            self.guild_id = OGV_GUILD_ID
 
     async def _post_to_announcements(self, message: str):
-        channel = self.bot.get_channel(ANNOUNCEMENT_CHANNEL_ID)
+        from config import get_config
+        cfg = get_config(self.guild_id)
+        channel = self.bot.get_channel(cfg.announcement_channel_id) if cfg else None
         if channel is None:
             print("[SCHEDULER][ERROR] Announcements channel not found")
             return
@@ -573,7 +600,7 @@ class ApprovalView(discord.ui.View):
         if not self.is_shield and self.event_list:
             warn_dt = first_event_warning_dt(self.event_list)
             if warn_dt:
-                pending_warnings[self.event_key] = (warn_dt, self.event_list)
+                pending_warnings[self.event_key] = (warn_dt, self.event_list, self.guild_id)
                 print(f"[SCHEDULER] 5-min warning scheduled for {warn_dt.strftime('%Y-%m-%d %H:%M %Z')}")
 
     async def _disable_buttons(self, interaction: discord.Interaction):
@@ -587,7 +614,9 @@ class ApprovalView(discord.ui.View):
         await self._disable_buttons(interaction)
         await self._post_to_announcements(self.draft_message)
 
-        leadership = self.bot.get_channel(LEADERSHIP_CHANNEL_ID)
+        from config import get_config
+        cfg = get_config(self.guild_id)
+        leadership = self.bot.get_channel(cfg.leadership_channel_id) if cfg else None
         if leadership:
             await leadership.send(
                 f"✅ **Approved by {interaction.user.display_name} at "
@@ -601,7 +630,9 @@ class ApprovalView(discord.ui.View):
         await interaction.response.defer()
         await self._disable_buttons(interaction)
 
-        channel = self.bot.get_channel(LEADERSHIP_CHANNEL_ID)
+        from config import get_config
+        cfg = get_config(self.guild_id)
+        channel = self.bot.get_channel(cfg.leadership_channel_id) if cfg else None
         if channel is None:
             return
 
@@ -612,7 +643,7 @@ class ApprovalView(discord.ui.View):
         )
 
         def check(m):
-            return m.author == interaction.user and m.channel.id == LEADERSHIP_CHANNEL_ID
+            return m.author == interaction.user and m.channel.id == (cfg.leadership_channel_id if cfg else 0)
 
         try:
             reply        = await self.bot.wait_for("message", check=check, timeout=300)
@@ -630,6 +661,7 @@ class ApprovalView(discord.ui.View):
                 event_key=self.event_key,
                 event_list=self.event_list,
                 is_shield=self.is_shield,
+                guild_id=self.guild_id,
             )
             await channel.send(
                 f"📝 **Revised draft** (edited by {interaction.user.display_name}):\n\n{revised_text}",
@@ -655,45 +687,71 @@ async def run_scheduler(bot: discord.ext.commands.Bot):
     print("[SCHEDULER] Started.")
 
     while not bot.is_closed():
-        now    = datetime.now(tz=ET)
-        today  = now.date()
-        events = next_event_dates(from_date=today, count=4)
+        now   = datetime.now(tz=ET)
+        today = now.date()
 
         triggers = []
 
-        for event_date in events:
-            marauder_dt, siege_dt = get_event_datetimes(event_date)
-            event_key  = f"event-{event_date.isoformat()}"
-            noon_time  = noon_dt_for(event_date)
-            event_list = default_event_list(marauder_dt, siege_dt)
+        # Build triggers for every configured guild
+        import sqlite3
+        from config import DB_PATH
+        with sqlite3.connect(DB_PATH) as conn:
+            conn.row_factory = sqlite3.Row
+            rows = conn.execute(
+                "SELECT * FROM guild_configs WHERE setup_complete = 1"
+            ).fetchall()
 
-            # Noon draft
-            triggers.append((
-                noon_time,
-                f"noon-draft-{event_date}",
-                lambda el=event_list, k=event_key, rd=marauder_dt.date(): post_editor(bot, el, k, rd),
-            ))
+        for row in rows:
+            from config import GuildConfig
+            cfg = GuildConfig(**dict(row))
 
-            # Friday shield reminder
-            if is_friday(event_date):
-                shield_dt = datetime(
-                    event_date.year, event_date.month, event_date.day,
-                    *FRIDAY_SHIELD_WARNING_TIME, tzinfo=ET,
+            # Parse per-guild timing
+            anchor   = cfg.anchor_date_parsed()
+            cycle    = cfg.cycle_days
+            norm_m   = cfg.parse_time(cfg.marauder_time_normal)
+            norm_s   = cfg.parse_time(cfg.siege_time_normal)
+            sat_m    = cfg.parse_time(cfg.marauder_time_saturday)
+            sat_s    = cfg.parse_time(cfg.siege_time_saturday)
+            shield_t = cfg.parse_time(cfg.shield_warning_time)
+
+            events = _next_event_dates(from_date=today, count=4, anchor=anchor, cycle=cycle)
+
+            for event_date in events:
+                marauder_dt, siege_dt = _get_event_datetimes(
+                    event_date, norm_m, norm_s, sat_m, sat_s
                 )
+                event_key  = f"event-{cfg.guild_id}-{event_date.isoformat()}"
+                noon_time  = __noon_dt_for(event_date)
+                event_list = default_event_list(marauder_dt, siege_dt)
+
                 triggers.append((
-                    shield_dt,
-                    f"shield-draft-{event_date}",
-                    lambda k=f"shield-{event_date}": post_shield_draft(bot, k),
+                    noon_time,
+                    f"noon-draft-{cfg.guild_id}-{event_date}",
+                    lambda el=event_list, k=event_key, rd=marauder_dt.date(), c=cfg: post_editor(bot, el, k, rd, c),
                 ))
+
+                if is_friday(event_date):
+                    sh, sm = shield_t
+                    shield_dt = datetime(
+                        event_date.year, event_date.month, event_date.day,
+                        sh, sm, tzinfo=ET,
+                    )
+                    triggers.append((
+                        shield_dt,
+                        f"shield-draft-{cfg.guild_id}-{event_date}",
+                        lambda k=f"shield-{cfg.guild_id}-{event_date}", c=cfg: post_shield_draft(bot, k, c),
+                    ))
 
         # Pending 5-minute warnings
         for key, val in list(pending_warnings.items()):
-            warn_dt, event_list = val
-            triggers.append((
-                warn_dt,
-                f"5min-warning-{key}",
-                lambda k=key, el=event_list: fire_warning(bot, k, el),
-            ))
+            warn_dt, event_list, guild_id = val
+            cfg = get_config(guild_id)
+            if cfg:
+                triggers.append((
+                    warn_dt,
+                    f"5min-warning-{key}",
+                    lambda k=key, el=event_list, c=cfg: fire_warning(bot, k, el, c),
+                ))
 
         cutoff   = now - timedelta(seconds=60)
         upcoming = [(dt, label, fn) for dt, label, fn in triggers if dt > cutoff]
@@ -721,14 +779,19 @@ async def run_scheduler(bot: discord.ext.commands.Bot):
 
 # ── Trigger actions ────────────────────────────────────────────────────────────
 
-async def post_editor(bot, event_list: list[dict], event_key: str, run_date: date):
+async def post_editor(bot, event_list: list[dict], event_key: str, run_date: date, cfg=None):
     """Post the event editor to leadership at noon."""
-    channel = bot.get_channel(LEADERSHIP_CHANNEL_ID)
+    if cfg is None:
+        from config import get_config, OGV_GUILD_ID
+        cfg = get_config(OGV_GUILD_ID)
+    if cfg is None:
+        return
+    channel = bot.get_channel(cfg.leadership_channel_id)
     if channel is None:
         print("[SCHEDULER][ERROR] Leadership channel not found")
         return
 
-    view = EventEditorView(bot=bot, event_list=event_list, event_key=event_key, run_date=run_date)
+    view = EventEditorView(bot=bot, event_list=event_list, event_key=event_key, run_date=run_date, guild_id=cfg.guild_id)
 
     lines = []
     for event in event_list:
@@ -746,8 +809,13 @@ async def post_editor(bot, event_list: list[dict], event_key: str, run_date: dat
     print(f"[SCHEDULER] Event editor posted for {event_key}")
 
 
-async def post_shield_draft(bot, event_key: str):
-    channel = bot.get_channel(LEADERSHIP_CHANNEL_ID)
+async def post_shield_draft(bot, event_key: str, cfg=None):
+    if cfg is None:
+        from config import get_config, OGV_GUILD_ID
+        cfg = get_config(OGV_GUILD_ID)
+    if cfg is None:
+        return
+    channel = bot.get_channel(cfg.leadership_channel_id)
     if channel is None:
         return
 
@@ -756,6 +824,7 @@ async def post_shield_draft(bot, event_key: str):
         draft_message=SHIELD_REMINDER,
         event_key=event_key,
         is_shield=True,
+        guild_id=cfg.guild_id,
     )
     await channel.send(
         f"🛡️ **Friday shield reminder — please review and approve:**\n\n{SHIELD_REMINDER}",
@@ -764,15 +833,28 @@ async def post_shield_draft(bot, event_key: str):
     print("[SCHEDULER] Shield reminder draft posted")
 
 
-async def fire_warning(bot, event_key: str, event_list: list[dict]):
-    channel = bot.get_channel(ANNOUNCEMENT_CHANNEL_ID)
+async def fire_warning(bot, event_key: str, event_list: list[dict], cfg=None):
+    if cfg is None:
+        from config import get_config, OGV_GUILD_ID
+        cfg = get_config(OGV_GUILD_ID)
+    if cfg is None:
+        return
+    channel = bot.get_channel(cfg.announcement_channel_id)
     if channel is None:
         return
 
     message = build_warning_message(event_list)
     await channel.send(message)
 
-    leadership = bot.get_channel(LEADERSHIP_CHANNEL_ID)
+    leadership = bot.get_channel(cfg.leadership_channel_id)
+    if leadership:
+        await leadership.send(
+            f"⏱️ **5-minute warning auto-posted** at "
+            f"{datetime.now(tz=ET).strftime('%-I:%M%p ET').lower()}"
+        )
+
+    pending_warnings.pop(event_key, None)
+    print(f"[SCHEDULER] 5-minute warning fired for {event_key}")
     if leadership:
         await leadership.send(
             f"⏱️ **5-minute warning auto-posted** at "

@@ -28,9 +28,9 @@ from zoneinfo import ZoneInfo
 
 ET = ZoneInfo("America/New_York")
 
-LEADERSHIP_CHANNEL_ID = 1488693874938482799
-REQUIRED_ROLE_NAME    = "OGV Leadership"
-TRAIN_SHEET_NAME      = "Train Schedule"
+
+
+
 
 WIZARD_TIMEOUT = 300  # seconds
 
@@ -64,8 +64,13 @@ def _get_train_sheet():
         creds    = Credentials.from_service_account_file(key_file, scopes=scopes)
 
     gc = gspread.authorize(creds)
-    sh = gc.open_by_key(os.getenv("SPREADSHEET_ID"))
-    return sh.worksheet(TRAIN_SHEET_NAME)
+    from config import get_spreadsheet_id
+    sheet_id = get_spreadsheet_id(guild_id) if 'guild_id' in dir() and guild_id else os.getenv("SPREADSHEET_ID", "")
+    sh = gc.open_by_key(sheet_id)
+    from config import get_config, OGV_GUILD_ID
+    cfg = get_config(OGV_GUILD_ID)
+    tab = cfg.tab_train_schedule if cfg else "Train Schedule"
+    return sh.worksheet(tab)
 
 
 def load_schedule() -> dict:
@@ -179,26 +184,28 @@ DEFAULT_MEMBER_TAB = "Season 5 - Off-Season"
 BIRTHDAY_LOOKAHEAD = 14  # days ahead to check for birthdays
 
 
-def get_member_tab_name() -> str:
-    """Read the active member tab name from H1 of the Train Schedule tab."""
-    try:
-        ws  = _get_train_sheet()
-        val = ws.acell("H1").value
-        return val.strip() if val and val.strip() else DEFAULT_MEMBER_TAB
-    except Exception as e:
-        print(f"[BIRTHDAY] Error reading member tab name: {e}")
-        return DEFAULT_MEMBER_TAB
+def get_member_tab_name(guild_id: int = None) -> str:
+    """Get the active member tab name from the config database."""
+    from config import get_member_tab, OGV_GUILD_ID
+    if guild_id is None:
+        guild_id = OGV_GUILD_ID
+    return get_member_tab(guild_id) or DEFAULT_MEMBER_TAB
 
 
-def set_member_tab_name(name: str):
-    """Write the active member tab name to H1 of the Train Schedule tab."""
+def set_member_tab_name(name: str, guild_id: int = None):
+    """Save the active member tab name to the config database and the sheet."""
+    from config import set_member_tab, OGV_GUILD_ID
+    if guild_id is None:
+        guild_id = OGV_GUILD_ID
+    set_member_tab(guild_id, name)
+    # Also write to sheet cell for legacy reference
     try:
         ws = _get_train_sheet()
         ws.update("G1", [["Active Member Tab:"]], value_input_option="USER_ENTERED")
         ws.update("H1", [[name]], value_input_option="USER_ENTERED")
         print(f"[BIRTHDAY] Member tab name set to: {name}")
     except Exception as e:
-        print(f"[BIRTHDAY] Error setting member tab name: {e}")
+        print(f"[BIRTHDAY] Error writing member tab to sheet: {e}")
 
 
 def _get_member_sheet(tab_name: str):
@@ -216,7 +223,9 @@ def _get_member_sheet(tab_name: str):
         creds    = Credentials.from_service_account_file(key_file, scopes=scopes)
 
     gc = gspread.authorize(creds)
-    sh = gc.open_by_key(os.getenv("SPREADSHEET_ID"))
+    from config import get_spreadsheet_id
+    sheet_id = get_spreadsheet_id(guild_id) if 'guild_id' in dir() and guild_id else os.getenv("SPREADSHEET_ID", "")
+    sh = gc.open_by_key(sheet_id)
     return sh.worksheet(tab_name)
 
 
@@ -689,9 +698,12 @@ class ReminderView(discord.ui.View):
     @discord.ui.button(label="📋 View & Get Prompt", style=discord.ButtonStyle.success)
     async def launch(self, interaction: discord.Interaction, button: discord.ui.Button):
         role_names = [r.name for r in interaction.user.roles]
-        if REQUIRED_ROLE_NAME not in role_names:
+        from config import get_config
+        cfg = get_config(interaction.guild_id)
+        req_role = cfg.leadership_role_name if cfg else "OGV Leadership"
+        if req_role not in role_names:
             await interaction.response.send_message(
-                f"⛔ You need the **{REQUIRED_ROLE_NAME}** role.", ephemeral=True
+                f"⛔ You need the **{req_role}** role.", ephemeral=True
             )
             return
 
@@ -1170,21 +1182,31 @@ async def run_train_wizard_prefilled(bot, channel, user, name: str):
 
 # ── Slash command guards ───────────────────────────────────────────────────────
 
-GUILD_ID = 1266229297723605052
-GUILD    = discord.Object(id=GUILD_ID)
-
 def _is_leadership(interaction: discord.Interaction) -> bool:
-    return REQUIRED_ROLE_NAME in [r.name for r in interaction.user.roles]
+    cfg = get_config(interaction.guild_id)
+    if not cfg:
+        return False
+    return cfg.leadership_role_name in [r.name for r in interaction.user.roles]
 
 def _in_channel(interaction: discord.Interaction) -> bool:
     """Accept commands in any channel or thread within the leadership category."""
+    cfg = get_config(interaction.guild_id)
+    if not cfg:
+        return False
+    cat_id = cfg.leadership_category_id
     channel = interaction.channel
     if isinstance(channel, discord.Thread):
         parent = channel.parent
-        return parent is not None and getattr(parent, "category_id", None) == 1266243885743603783
-    return getattr(channel, "category_id", None) == 1266243885743603783
+        return parent is not None and getattr(parent, "category_id", None) == cat_id
+    return getattr(channel, "category_id", None) == cat_id
 
 async def _guard(interaction: discord.Interaction) -> bool:
+    cfg = get_config(interaction.guild_id)
+    if not cfg or not cfg.setup_complete:
+        await interaction.response.send_message(
+            "⚙️ This bot hasn't been set up yet. Run `/setup` to get started.", ephemeral=True
+        )
+        return False
     if not _in_channel(interaction):
         await interaction.response.send_message(
             "⛔ This command can only be used in the leadership channel.", ephemeral=True
@@ -1192,7 +1214,7 @@ async def _guard(interaction: discord.Interaction) -> bool:
         return False
     if not _is_leadership(interaction):
         await interaction.response.send_message(
-            f"⛔ You need the **{REQUIRED_ROLE_NAME}** role to use this command.", ephemeral=True
+            f"⛔ You need the **{cfg.leadership_role_name}** role to use this command.", ephemeral=True
         )
         return False
     return True
@@ -1216,7 +1238,6 @@ class TrainCog(commands.Cog):
         name="checkbirthdays",
         description="Manually run the birthday check and add upcoming birthdays to the schedule",
     )
-    @app_commands.guilds(GUILD)
     async def checkbirthdays(self, interaction: discord.Interaction):
         if not await _guard(interaction):
             return
@@ -1273,7 +1294,6 @@ class TrainCog(commands.Cog):
         description="Set the active member sheet tab (used for birthdays and DS/CS rosters)",
     )
     @app_commands.describe(tab_name="Exact name of the tab, e.g. 'Season 6 - Off-Season'")
-    @app_commands.guilds(GUILD)
     async def setmembertab(self, interaction: discord.Interaction, tab_name: str):
         if not await _guard(interaction):
             return
@@ -1299,7 +1319,6 @@ class TrainCog(commands.Cog):
     # ── /cancel ────────────────────────────────────────────────────────────────
 
     @app_commands.command(name="cancel", description="Cancel your active wizard or log session")
-    @app_commands.guilds(GUILD)
     async def cancel(self, interaction: discord.Interaction):
         if not await _guard(interaction):
             return
@@ -1324,7 +1343,6 @@ class TrainCog(commands.Cog):
     # ── /train ─────────────────────────────────────────────────────────────────
 
     @app_commands.command(name="train", description="Launch the train blurb wizard to build a ChatGPT prompt")
-    @app_commands.guilds(GUILD)
     async def train(self, interaction: discord.Interaction):
         if not await _guard(interaction):
             return
@@ -1340,7 +1358,6 @@ class TrainCog(commands.Cog):
     # ── /schedule (view) ───────────────────────────────────────────────────────
 
     @app_commands.command(name="schedule", description="View the current train schedule")
-    @app_commands.guilds(GUILD)
     async def schedule(self, interaction: discord.Interaction):
         if not await _guard(interaction):
             return
@@ -1354,7 +1371,6 @@ class TrainCog(commands.Cog):
     # ── /schedule set ──────────────────────────────────────────────────────────
 
     @app_commands.command(name="schedule_set", description="Add or update entries in the train schedule")
-    @app_commands.guilds(GUILD)
     async def schedule_set(self, interaction: discord.Interaction):
         if not await _guard(interaction):
             return
@@ -1385,7 +1401,6 @@ class TrainCog(commands.Cog):
     # ── /schedule clear ────────────────────────────────────────────────────────
 
     @app_commands.command(name="schedule_clear", description="Clear the entire train schedule")
-    @app_commands.guilds(GUILD)
     async def schedule_clear(self, interaction: discord.Interaction):
         if not await _guard(interaction):
             return
@@ -1441,7 +1456,6 @@ class TrainCog(commands.Cog):
 
     @app_commands.command(name="trainprompt", description="Retrieve a stored ChatGPT prompt for a scheduled person")
     @app_commands.describe(date="Date to retrieve, e.g. 'April 5' or '4/5' (defaults to today)")
-    @app_commands.guilds(GUILD)
     async def trainprompt(self, interaction: discord.Interaction, date: str = None):
         if not await _guard(interaction):
             return
@@ -1489,18 +1503,20 @@ class TrainCog(commands.Cog):
             return
 
         # ── Birthday auto-population ───────────────────────────────────────────
-        # Run once at reset — load schedule, add any upcoming birthdays, save back
         try:
             current_schedule = load_schedule()
             updated_schedule, alerts = check_and_add_birthdays(current_schedule)
             if updated_schedule != current_schedule or alerts:
                 save_schedule(updated_schedule)
-            # Post any conflict alerts to leadership
             if alerts:
-                alert_channel = self.bot.get_channel(LEADERSHIP_CHANNEL_ID)
-                if alert_channel:
-                    for alert in alerts:
-                        await alert_channel.send(alert)
+                from config import get_config
+                for guild in self.bot.guilds:
+                    cfg = get_config(guild.id)
+                    if cfg and cfg.setup_complete:
+                        alert_channel = self.bot.get_channel(cfg.leadership_channel_id)
+                        if alert_channel:
+                            for alert in alerts:
+                                await alert_channel.send(alert)
         except Exception as e:
             print(f"[BIRTHDAY] Error during birthday check: {e}")
 
@@ -1513,19 +1529,23 @@ class TrainCog(commands.Cog):
         if blurb_generated_today():
             return
 
-        entry   = schedule[today_str]
-        name    = entry.get("name", "Unknown")
-        channel = self.bot.get_channel(LEADERSHIP_CHANNEL_ID)
-        if channel is None:
-            return
+        entry = schedule[today_str]
+        name  = entry.get("name", "Unknown")
 
-        view = ReminderView(cog=self, date_str=today_str, name=name)
-        await channel.send(
-            f"🚂 **Reset! Today's train is for {name}.**\n\n"
-            f"Click below whenever you're ready to get the ChatGPT prompt — no rush, run it when the team is available.\n\n"
-            f"⚠️ *If the button stops working (e.g. after a bot restart), use `/trainprompt` instead — it does the same thing.*",
-            view=view,
-        )
+        from config import get_config
+        for guild in self.bot.guilds:
+            cfg = get_config(guild.id)
+            if cfg and cfg.setup_complete:
+                channel = self.bot.get_channel(cfg.leadership_channel_id)
+                if channel is None:
+                    continue
+                view = ReminderView(cog=self, date_str=today_str, name=name)
+                await channel.send(
+                    f"🚂 **Reset! Today's train is for {name}.**\n\n"
+                    f"Click below whenever you're ready to get the ChatGPT prompt — no rush, run it when the team is available.\n\n"
+                    f"⚠️ *If the button stops working (e.g. after a bot restart), use `/trainprompt` instead — it does the same thing.*",
+                    view=view,
+                )
         self.reminder_sent_today = True
         print(f"[TRAIN] Reminder sent for {name} on {today_str}")
 

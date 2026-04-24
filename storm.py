@@ -24,16 +24,13 @@ import os
 import discord
 from discord import app_commands
 from discord.ext import commands
+from config import get_config
 from zoneinfo import ZoneInfo
 
 ET = ZoneInfo("America/New_York")
 
-LEADERSHIP_CHANNEL_ID = 1488693874938482799
-REQUIRED_ROLE_NAME    = "OGV Leadership"
-DS_SHEET_NAME         = "DS Assignments"
+DS_SHEET_NAME         = "DS Assignments"  # overridden per-guild at runtime
 
-GUILD_ID = 1266229297723605052
-GUILD    = discord.Object(id=GUILD_ID)
 
 WIZARD_TIMEOUT = 600  # 10 minutes
 
@@ -110,7 +107,9 @@ def _get_spreadsheet():
         creds    = Credentials.from_service_account_file(key_file, scopes=scopes)
 
     gc = gspread.authorize(creds)
-    return gc.open_by_key(os.getenv("SPREADSHEET_ID"))
+    from config import get_spreadsheet_id
+    sheet_id = get_spreadsheet_id(guild_id) if guild_id else os.getenv("SPREADSHEET_ID", "")
+    return gc.open_by_key(sheet_id)
 
 
 def load_ds_assignments(team: str) -> tuple[dict, list]:
@@ -473,21 +472,29 @@ async def run_ds_edit_step(bot, channel, user, team: str, current_zones: dict,
 # ── Guards ─────────────────────────────────────────────────────────────────────
 
 async def _guard(interaction: discord.Interaction) -> bool:
-    # Accept commands in any channel or thread within the leadership category
+    cfg     = get_config(interaction.guild_id)
     channel = interaction.channel
     if isinstance(channel, discord.Thread):
         parent = channel.parent
-        in_channel = parent is not None and getattr(parent, "category_id", None) == 1266243885743603783
+        cat_id = cfg.leadership_category_id if cfg else 0
+        in_channel = parent is not None and getattr(parent, "category_id", None) == cat_id
     else:
-        in_channel = getattr(channel, "category_id", None) == 1266243885743603783
+        cat_id = cfg.leadership_category_id if cfg else 0
+        in_channel = getattr(channel, "category_id", None) == cat_id
+
+    if not cfg or not cfg.setup_complete:
+        await interaction.response.send_message(
+            "⚙️ This bot hasn't been set up yet. Run `/setup` to get started.", ephemeral=True
+        )
+        return False
     if not in_channel:
         await interaction.response.send_message(
             "⛔ This command can only be used in the leadership channel.", ephemeral=True
         )
         return False
-    if REQUIRED_ROLE_NAME not in [r.name for r in interaction.user.roles]:
+    if cfg.leadership_role_name not in [r.name for r in interaction.user.roles]:
         await interaction.response.send_message(
-            f"⛔ You need the **{REQUIRED_ROLE_NAME}** role to use this command.", ephemeral=True
+            f"⛔ You need the **{cfg.leadership_role_name}** role to use this command.", ephemeral=True
         )
         return False
     return True
@@ -503,7 +510,6 @@ class StormCog(commands.Cog):
         name="draftds",
         description="Generate a Desert Storm mail draft for Team A or Team B",
     )
-    @app_commands.guilds(GUILD)
     async def draftds(self, interaction: discord.Interaction):
         if not await _guard(interaction):
             return
@@ -555,7 +561,6 @@ class StormCog(commands.Cog):
         name="draftcs",
         description="Generate a Canyon Storm mail draft for Team A or Team B",
     )
-    @app_commands.guilds(GUILD)
     async def draftcs(self, interaction: discord.Interaction):
         if not await _guard(interaction):
             return

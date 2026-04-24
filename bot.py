@@ -12,17 +12,13 @@ from scheduler import (
 )
 from growth import run_growth_snapshot
 from zoneinfo import ZoneInfo
+from config import init_db, get_config, get_or_create_config, OGV_GUILD_ID
 
 load_dotenv()
 
 DISCORD_TOKEN = os.getenv("DISCORD_TOKEN")
 
-ET                    = ZoneInfo("America/New_York")
-GUILD_ID              = 1266229297723605052
-LEADERSHIP_CHANNEL_ID = 1488693874938482799
-LEADERSHIP_ROLE_NAME  = "OGV Leadership"
-
-GUILD = discord.Object(id=GUILD_ID)
+ET = ZoneInfo("America/New_York")
 
 intents = discord.Intents.default()
 intents.message_content = True
@@ -33,18 +29,32 @@ bot = commands.Bot(command_prefix="!", intents=intents)
 # ── Guards ─────────────────────────────────────────────────────────────────────
 
 def is_leadership(interaction: discord.Interaction) -> bool:
-    return LEADERSHIP_ROLE_NAME in [r.name for r in interaction.user.roles]
+    cfg = get_config(interaction.guild_id)
+    if not cfg:
+        return False
+    return cfg.leadership_role_name in [r.name for r in interaction.user.roles]
+
 
 def in_leadership_channel(interaction: discord.Interaction) -> bool:
     """Accept commands in any channel or thread within the leadership category."""
+    cfg = get_config(interaction.guild_id)
+    if not cfg:
+        return False
     channel = interaction.channel
     if isinstance(channel, discord.Thread):
         parent = channel.parent
-        return parent is not None and getattr(parent, "category_id", None) == 1266243885743603783
-    return getattr(channel, "category_id", None) == 1266243885743603783
+        return parent is not None and getattr(parent, "category_id", None) == cfg.leadership_category_id
+    return getattr(channel, "category_id", None) == cfg.leadership_category_id
+
 
 async def guard(interaction: discord.Interaction) -> bool:
     """Check role and channel. Respond with an error and return False if either fails."""
+    cfg = get_config(interaction.guild_id)
+    if not cfg or not cfg.setup_complete:
+        await interaction.response.send_message(
+            "⚙️ This bot hasn't been set up yet. Run `/setup` to get started.", ephemeral=True
+        )
+        return False
     if not in_leadership_channel(interaction):
         await interaction.response.send_message(
             "⛔ This command can only be used in the leadership channel.", ephemeral=True
@@ -52,7 +62,7 @@ async def guard(interaction: discord.Interaction) -> bool:
         return False
     if not is_leadership(interaction):
         await interaction.response.send_message(
-            f"⛔ You need the **{LEADERSHIP_ROLE_NAME}** role to use this command.", ephemeral=True
+            f"⛔ You need the **{cfg.leadership_role_name}** role to use this command.", ephemeral=True
         )
         return False
     return True
@@ -62,6 +72,8 @@ async def guard(interaction: discord.Interaction) -> bool:
 
 @bot.event
 async def on_ready():
+    # Initialise the config database and seed OGV defaults
+    init_db()
     print(f"[INFO] Logged in as {bot.user} (ID: {bot.user.id})")
 
     # Load cogs — skip if already loaded (happens on reconnect)
@@ -77,11 +89,13 @@ async def on_ready():
     if "survey" not in bot.extensions:
         await bot.load_extension("survey")
         print(f"[INFO] Survey cog loaded")
+    if "setup_cog" not in bot.extensions:
+        await bot.load_extension("setup_cog")
+        print(f"[INFO] Setup cog loaded")
 
-    # Sync slash commands to the guild (safe to run again on reconnect)
-    bot.tree.copy_global_to(guild=GUILD)
-    synced = await bot.tree.sync(guild=GUILD)
-    print(f"[INFO] Synced {len(synced)} slash commands to guild {GUILD_ID}")
+    # Sync slash commands globally so they work in any server
+    synced = await bot.tree.sync()
+    print(f"[INFO] Synced {len(synced)} slash commands globally")
 
     # Only start background tasks once — they persist across reconnects
     if not hasattr(bot, "_tasks_started"):
@@ -132,7 +146,6 @@ async def on_message(message):
 @bot.tree.command(
     name="rungrowth",
     description="Manually run the monthly squad power growth snapshot",
-    guild=GUILD,
 )
 async def rungrowth_slash(interaction: discord.Interaction):
     if not await guard(interaction):
@@ -156,7 +169,6 @@ async def rungrowth_slash(interaction: discord.Interaction):
 @bot.tree.command(
     name="events",
     description="Open the event editor for today or a specific date",
-    guild=GUILD,
 )
 @app_commands.describe(date="Optional date, e.g. 'April 5' or '4/5' (defaults to today)")
 async def events_slash(interaction: discord.Interaction, date: str = None):
@@ -233,7 +245,6 @@ async def events_slash(interaction: discord.Interaction, date: str = None):
 @bot.tree.command(
     name="help",
     description="Show all available bot commands",
-    guild=GUILD,
 )
 async def help_slash(interaction: discord.Interaction):
     embed = discord.Embed(

@@ -20,15 +20,10 @@ from datetime import datetime, timezone
 import discord
 from discord import app_commands
 from discord.ext import commands
+from config import get_config
 
 # ── Config ─────────────────────────────────────────────────────────────────────
 
-GUILD_ID            = 1266229297723605052
-GUILD               = discord.Object(id=GUILD_ID)
-SURVEY_CHANNEL_ID   = 1399401720026759198
-SURVEY_NOTIFY_ID    = 1405930574253920408
-REQUIRED_ROLE_NAME  = "OGV"
-LEADERSHIP_CAT_ID   = 1266243885743603783
 SURVEY_TIMEOUT      = 600  # 10 minutes per step
 
 SQUAD_POWERS_TAB    = "Squad Powers"
@@ -65,7 +60,9 @@ def _get_spreadsheet():
         key_file = os.getenv("GOOGLE_SERVICE_ACCOUNT_FILE", "service_account.json")
         creds    = Credentials.from_service_account_file(key_file, scopes=scopes)
     gc = gspread.authorize(creds)
-    return gc.open_by_key(os.getenv("SPREADSHEET_ID"))
+    from config import get_spreadsheet_id
+    sheet_id = get_spreadsheet_id(guild_id) if guild_id else os.getenv("SPREADSHEET_ID", "")
+    return gc.open_by_key(sheet_id)
 
 
 def _to_millions(val: str) -> str:
@@ -305,7 +302,10 @@ async def run_survey(bot, thread: discord.Thread, user: discord.Member):
 
     # ── Notify leadership ─────────────────────────────────────────────────────
     try:
-        notify_channel = bot.get_channel(SURVEY_NOTIFY_ID)
+        from config import get_config as _sgc
+        _scfg = _sgc(user.guild.id) if hasattr(user, 'guild') else None
+        _notify_id = _scfg.survey_notify_channel_id if _scfg else 0
+        notify_channel = bot.get_channel(_notify_id)
         if notify_channel:
             date_str = datetime.now(timezone.utc).strftime("%B %-d, %Y at %-I:%M %p UTC")
             profession_line = data.get("profession", "")
@@ -396,9 +396,11 @@ class SurveyButtonView(discord.ui.View):
     )
     async def answer(self, interaction: discord.Interaction, button: discord.ui.Button):
         # Check OGV role
-        if REQUIRED_ROLE_NAME not in [r.name for r in interaction.user.roles]:
+        cfg = get_config(interaction.guild_id)
+        member_role = cfg.member_role_name if cfg else "OGV"
+        if member_role not in [r.name for r in interaction.user.roles]:
             await interaction.response.send_message(
-                f"⛔ You need the **{REQUIRED_ROLE_NAME}** role to fill out this survey.",
+                f"⛔ You need the **{member_role}** role to fill out this survey.",
                 ephemeral=True,
             )
             return
@@ -436,22 +438,32 @@ class SurveyButtonView(discord.ui.View):
 # ── Guard (leadership only) ────────────────────────────────────────────────────
 
 def _in_leadership(interaction: discord.Interaction) -> bool:
+    cfg = get_config(interaction.guild_id)
+    if not cfg:
+        return False
+    cat_id = cfg.leadership_category_id
     channel = interaction.channel
     if isinstance(channel, discord.Thread):
         parent = channel.parent
-        return parent is not None and getattr(parent, "category_id", None) == LEADERSHIP_CAT_ID
-    return getattr(channel, "category_id", None) == LEADERSHIP_CAT_ID
+        return parent is not None and getattr(parent, "category_id", None) == cat_id
+    return getattr(channel, "category_id", None) == cat_id
 
 
 async def _guard(interaction: discord.Interaction) -> bool:
+    cfg = get_config(interaction.guild_id)
+    if not cfg or not cfg.setup_complete:
+        await interaction.response.send_message(
+            "⚙️ This bot hasn't been set up yet. Run `/setup` to get started.", ephemeral=True
+        )
+        return False
     if not _in_leadership(interaction):
         await interaction.response.send_message(
             "⛔ This command can only be used in the leadership channel.", ephemeral=True
         )
         return False
-    if REQUIRED_ROLE_NAME not in [r.name for r in interaction.user.roles]:
+    if cfg.leadership_role_name not in [r.name for r in interaction.user.roles]:
         await interaction.response.send_message(
-            f"⛔ You need the **{REQUIRED_ROLE_NAME}** role to use this command.", ephemeral=True
+            f"⛔ You need the **{cfg.leadership_role_name}** role to use this command.", ephemeral=True
         )
         return False
     return True
@@ -469,7 +481,6 @@ class SurveyCog(commands.Cog):
         name="postsurvey",
         description="Post (or repost) the squad powers survey button in the survey channel",
     )
-    @app_commands.guilds(GUILD)
     async def postsurvey(self, interaction: discord.Interaction):
         if not await _guard(interaction):
             return

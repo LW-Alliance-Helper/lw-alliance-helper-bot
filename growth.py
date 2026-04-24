@@ -25,8 +25,7 @@ from zoneinfo import ZoneInfo
 
 ET = ZoneInfo("America/New_York")
 
-SQUAD_POWERS_TAB  = "Squad Powers"
-GROWTH_TAB        = "Growth Tracking"
+
 
 # Column indices in Squad Powers (0-based)
 SP_USERNAME_COL   = 0   # A
@@ -51,7 +50,9 @@ def _get_spreadsheet():
         creds    = Credentials.from_service_account_file(key_file, scopes=scopes)
 
     gc = gspread.authorize(creds)
-    return gc.open_by_key(os.getenv("SPREADSHEET_ID"))
+    from config import get_spreadsheet_id
+    sheet_id = get_spreadsheet_id(guild_id) if guild_id else os.getenv("SPREADSHEET_ID", "")
+    return gc.open_by_key(sheet_id)
 
 
 def _safe_float(val: str) -> float:

@@ -23,15 +23,11 @@ from datetime import date
 import discord
 from discord import app_commands
 from discord.ext import commands
+from config import get_config
 
 # ── Config ─────────────────────────────────────────────────────────────────────
 
-GUILD_ID            = 1266229297723605052
-GUILD               = discord.Object(id=GUILD_ID)
-STORM_LOG_THREAD_ID = 1483977424231469229
 LOG_SHEET_NAME      = "DS-CS Sit-outs"
-REQUIRED_ROLE_NAME  = "OGV"
-LEADERSHIP_CAT_ID   = 1266243885743603783
 WIZARD_TIMEOUT      = 600  # 10 minutes
 
 # Active log sessions — user_id → asyncio.Event (cancel signal)
@@ -58,7 +54,9 @@ def _get_spreadsheet():
         key_file = os.getenv("GOOGLE_SERVICE_ACCOUNT_FILE", "service_account.json")
         creds    = Credentials.from_service_account_file(key_file, scopes=scopes)
     gc = gspread.authorize(creds)
-    return gc.open_by_key(os.getenv("SPREADSHEET_ID"))
+    from config import get_spreadsheet_id
+    sheet_id = get_spreadsheet_id(guild_id) if guild_id else os.getenv("SPREADSHEET_ID", "")
+    return gc.open_by_key(sheet_id)
 
 
 def _get_log_sheet():
@@ -572,8 +570,11 @@ async def run_log_flow(bot, channel, user, event_type):
 
         # Only post to the log thread if we're not already in it
         try:
-            if channel.id != STORM_LOG_THREAD_ID:
-                thread = bot.get_channel(STORM_LOG_THREAD_ID)
+            from config import get_config as _slcfg
+            cfg_sl   = _slcfg(channel.guild.id) if hasattr(channel, 'guild') else None
+            thread_id = cfg_sl.storm_log_thread_id if cfg_sl else 0
+            if channel.id != thread_id:
+                thread = bot.get_channel(thread_id)
                 if thread:
                     await thread.send(summary)
         except Exception as e:
@@ -631,22 +632,32 @@ def lookup_log_entry(event_type: str, log_date: date):
 # ── Guard ──────────────────────────────────────────────────────────────────────
 
 def _in_channel(interaction: discord.Interaction) -> bool:
+    cfg = get_config(interaction.guild_id)
+    if not cfg:
+        return False
+    cat_id = cfg.leadership_category_id
     channel = interaction.channel
     if isinstance(channel, discord.Thread):
         parent = channel.parent
-        return parent is not None and getattr(parent, "category_id", None) == LEADERSHIP_CAT_ID
-    return getattr(channel, "category_id", None) == LEADERSHIP_CAT_ID
+        return parent is not None and getattr(parent, "category_id", None) == cat_id
+    return getattr(channel, "category_id", None) == cat_id
 
 
 async def _guard(interaction: discord.Interaction) -> bool:
+    cfg = get_config(interaction.guild_id)
+    if not cfg or not cfg.setup_complete:
+        await interaction.response.send_message(
+            "⚙️ This bot hasn't been set up yet. Run `/setup` to get started.", ephemeral=True
+        )
+        return False
     if not _in_channel(interaction):
         await interaction.response.send_message(
             "⛔ This command can only be used in the leadership channel.", ephemeral=True
         )
         return False
-    if REQUIRED_ROLE_NAME not in [r.name for r in interaction.user.roles]:
+    if cfg.leadership_role_name not in [r.name for r in interaction.user.roles]:
         await interaction.response.send_message(
-            f"⛔ You need the **{REQUIRED_ROLE_NAME}** role to use this command.", ephemeral=True
+            f"⛔ You need the **{cfg.leadership_role_name}** role to use this command.", ephemeral=True
         )
         return False
     return True
@@ -659,7 +670,6 @@ class LogCog(commands.Cog):
         self.bot = bot
 
     @app_commands.command(name="logds", description="Log Desert Storm participation data")
-    @app_commands.guilds(GUILD)
     async def logds(self, interaction: discord.Interaction):
         if not await _guard(interaction):
             return
@@ -673,7 +683,6 @@ class LogCog(commands.Cog):
         await run_log_flow(self.bot, interaction.channel, interaction.user, "DS")
 
     @app_commands.command(name="logcs", description="Log Canyon Storm participation data")
-    @app_commands.guilds(GUILD)
     async def logcs(self, interaction: discord.Interaction):
         if not await _guard(interaction):
             return
@@ -696,7 +705,6 @@ class LogCog(commands.Cog):
         app_commands.Choice(name="Desert Storm (DS)", value="DS"),
         app_commands.Choice(name="Canyon Storm (CS)", value="CS"),
     ])
-    @app_commands.guilds(GUILD)
     async def viewlog(self, interaction: discord.Interaction, event: str, date: str):
         if not await _guard(interaction):
             return

@@ -144,6 +144,14 @@ def init_db():
         """)
         conn.commit()
 
+        # Add spreadsheet_id column if upgrading from an older schema that didn't have it
+        try:
+            conn.execute("ALTER TABLE guild_configs ADD COLUMN spreadsheet_id TEXT DEFAULT ''")
+            conn.commit()
+            print("[CONFIG] Added spreadsheet_id column to existing database")
+        except Exception:
+            pass  # Column already exists — expected on fresh or already-upgraded installs
+
         # Seed OGV defaults if not already present
         existing = conn.execute(
             "SELECT guild_id FROM guild_configs WHERE guild_id = ?",

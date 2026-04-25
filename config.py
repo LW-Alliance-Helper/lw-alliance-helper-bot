@@ -17,7 +17,6 @@ from datetime import date
 from typing import Optional
 
 DB_PATH       = os.getenv("CONFIG_DB_PATH",    "/app/data/guild_configs.db")
-SHEETS_MAP_PATH = os.getenv("SHEETS_MAP_PATH", "/app/data/guild_sheets.json")
 
 # ── OGV default values (seeded on first run) ───────────────────────────────────
 
@@ -144,6 +143,28 @@ def init_db():
         """)
         conn.commit()
 
+        # guild_events — one row per event type per guild
+        conn.execute("""
+            CREATE TABLE IF NOT EXISTS guild_events (
+                id                      INTEGER PRIMARY KEY AUTOINCREMENT,
+                guild_id                INTEGER NOT NULL,
+                short_key               TEXT    NOT NULL,
+                name                    TEXT    NOT NULL,
+                timezone                TEXT    NOT NULL DEFAULT 'America/New_York',
+                default_time            TEXT    NOT NULL DEFAULT '22:00',
+                announcement_blurb      TEXT    NOT NULL DEFAULT '',
+                schedule_type           TEXT    NOT NULL DEFAULT 'repeating',
+                anchor_date             TEXT    DEFAULT '',
+                interval_days           INTEGER DEFAULT 3,
+                draft_channel_id        INTEGER DEFAULT 0,
+                announcement_channel_id INTEGER DEFAULT 0,
+                draft_time              TEXT    DEFAULT '12:00',
+                five_min_warning        INTEGER DEFAULT 1,
+                active                  INTEGER DEFAULT 1,
+                UNIQUE(guild_id, short_key)
+            )
+        """)
+
         # Add spreadsheet_id column if upgrading from an older schema that didn't have it
         try:
             conn.execute("ALTER TABLE guild_configs ADD COLUMN spreadsheet_id TEXT DEFAULT ''")
@@ -183,6 +204,9 @@ def init_db():
                 )
                 conn.commit()
                 print(f"[CONFIG] Persisted SPREADSHEET_ID env var to database for OGV")
+
+    # Seed OGV events after table is ready
+    seed_ogv_events()
 
 
 def get_config(guild_id: int) -> Optional[GuildConfig]:
@@ -249,33 +273,106 @@ def get_member_tab(guild_id: int) -> str:
 
 
 def get_spreadsheet_id(guild_id: int) -> str:
-    """
-    Get the Google Sheet ID for a guild.
-    Checks: 1) database spreadsheet_id field, 2) guild_sheets.json, 3) SPREADSHEET_ID env var.
-    """
-    # Check database first
+    """Get the Google Sheet ID for a guild from the config database."""
     cfg = get_config(guild_id)
-    if cfg and cfg.spreadsheet_id:
-        return cfg.spreadsheet_id
-
-    # Check JSON file (used by /setup for new servers)
-    import json
-    try:
-        with open(SHEETS_MAP_PATH) as f:
-            sheet_map = json.load(f)
-        sheet_id = sheet_map.get(str(guild_id))
-        if sheet_id:
-            # Persist to database for future lookups
-            update_config_field(guild_id, "spreadsheet_id", sheet_id)
-            return sheet_id
-    except (FileNotFoundError, json.JSONDecodeError):
-        pass
-
-    # Fall back to env var (covers OGV and single-server deploys)
-    return os.getenv("SPREADSHEET_ID", "")
+    return cfg.spreadsheet_id if cfg and cfg.spreadsheet_id else ""
 
 
 def is_setup_complete(guild_id: int) -> bool:
     """Check if a guild has completed setup."""
     cfg = get_config(guild_id)
     return cfg.setup_complete if cfg else False
+
+
+# ── Guild event helpers ────────────────────────────────────────────────────────
+
+def get_guild_events(guild_id: int, active_only: bool = True) -> list:
+    """Return all event configs for a guild as dicts."""
+    with _get_conn() as conn:
+        if active_only:
+            rows = conn.execute(
+                "SELECT * FROM guild_events WHERE guild_id = ? AND active = 1 ORDER BY id",
+                (guild_id,)
+            ).fetchall()
+        else:
+            rows = conn.execute(
+                "SELECT * FROM guild_events WHERE guild_id = ? ORDER BY id",
+                (guild_id,)
+            ).fetchall()
+        return [dict(r) for r in rows]
+
+
+def get_guild_event(guild_id: int, short_key: str) -> dict | None:
+    """Return a single event config by short_key."""
+    with _get_conn() as conn:
+        row = conn.execute(
+            "SELECT * FROM guild_events WHERE guild_id = ? AND short_key = ?",
+            (guild_id, short_key)
+        ).fetchone()
+        return dict(row) if row else None
+
+
+def save_guild_event(guild_id: int, event: dict):
+    """Insert or replace an event config for a guild."""
+    event["guild_id"] = guild_id
+    cols         = ", ".join(event.keys())
+    placeholders = ", ".join(["?"] * len(event))
+    updates      = ", ".join(f"{k} = excluded.{k}" for k in event if k not in ("id", "guild_id", "short_key"))
+    with _get_conn() as conn:
+        conn.execute(
+            f"INSERT INTO guild_events ({cols}) VALUES ({placeholders}) "
+            f"ON CONFLICT(guild_id, short_key) DO UPDATE SET {updates}",
+            list(event.values()),
+        )
+        conn.commit()
+
+
+def delete_guild_event(guild_id: int, short_key: str):
+    """Soft-delete an event by marking it inactive."""
+    with _get_conn() as conn:
+        conn.execute(
+            "UPDATE guild_events SET active = 0 WHERE guild_id = ? AND short_key = ?",
+            (guild_id, short_key)
+        )
+        conn.commit()
+
+
+def seed_ogv_events():
+    """Seed OGV's two default events if they don't already exist."""
+    ogv_events = [
+        {
+            "short_key":               "marauder",
+            "name":                    "Plague Marauder (AE)",
+            "timezone":                "America/New_York",
+            "default_time":            "22:15",
+            "announcement_blurb":      "Plague Marauder (AE) at {time} ({server_time} Server Time). Make sure to have offline participation checked!",
+            "schedule_type":           "repeating",
+            "anchor_date":             "2026-03-30",
+            "interval_days":           3,
+            "draft_channel_id":        1488693874938482799,
+            "announcement_channel_id": 1414725199257010336,
+            "draft_time":              "12:00",
+            "five_min_warning":        1,
+            "active":                  1,
+        },
+        {
+            "short_key":               "siege",
+            "name":                    "Zombie Siege",
+            "timezone":                "America/New_York",
+            "default_time":            "22:45",
+            "announcement_blurb":      "Zombie Siege at {time} ({server_time} Server Time).",
+            "schedule_type":           "repeating",
+            "anchor_date":             "2026-03-30",
+            "interval_days":           3,
+            "draft_channel_id":        1488693874938482799,
+            "announcement_channel_id": 1414725199257010336,
+            "draft_time":              "12:00",
+            "five_min_warning":        1,
+            "active":                  1,
+        },
+    ]
+    for event in ogv_events:
+        existing = get_guild_event(OGV_GUILD_ID, event["short_key"])
+        if not existing:
+            save_guild_event(OGV_GUILD_ID, event)
+    print("[CONFIG] OGV events seeded")

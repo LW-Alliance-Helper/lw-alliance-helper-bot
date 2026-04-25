@@ -166,23 +166,24 @@ def default_event_list(marauder_dt: datetime, siege_dt: datetime) -> list[dict]:
 def build_announcement(event_list: list[dict], notes: str = "", role_mention: str = "@everyone") -> str:
     """
     Craft the full announcement message from the event list.
-    Format:
-      Hey @OGV!
-      Here is the schedule for events today:
-      • [event blurb]
-      • [event blurb]
-
-      [notes if any]
+    Uses blurb from the event dict if present (database-driven),
+    falls back to EVENT_LIBRARY for backward compatibility.
+    Placeholders: {time} = local time, {server_time} = UTC/Server Time
     """
     bullet_lines = []
     for event in event_list:
         key    = event["key"]
         dt     = event["dt"]
-        lib    = EVENT_LIBRARY.get(key, {})
-        blurb  = lib.get("blurb", f"{key} at {{time}} ({{server}} server).")
         et_str = format_et(dt)
         sv_str = to_server_time_str(dt)
-        bullet_lines.append("- " + blurb.format(time=et_str, server=sv_str))
+
+        # Use stored blurb if available, otherwise fall back to EVENT_LIBRARY
+        blurb = event.get("blurb") or ""
+        if not blurb:
+            lib   = EVENT_LIBRARY.get(key, {})
+            blurb = lib.get("blurb", f"{key} at {{time}} ({{server_time}} Server Time).")
+
+        bullet_lines.append("- " + blurb.format(time=et_str, server_time=sv_str, server=sv_str))
 
     lines = [
         f"Hey {role_mention}!",
@@ -701,44 +702,91 @@ async def run_scheduler(bot: discord.ext.commands.Bot):
             ).fetchall()
 
         for row in rows:
-            from config import GuildConfig
-            cfg = GuildConfig(**dict(row))
+            from config import GuildConfig, get_guild_events
+            cfg    = GuildConfig(**dict(row))
+            events = get_guild_events(cfg.guild_id, active_only=True)
 
-            # Parse per-guild timing
-            anchor   = cfg.anchor_date_parsed()
-            cycle    = cfg.cycle_days
-            norm_m   = cfg.parse_time(cfg.marauder_time_normal)
-            norm_s   = cfg.parse_time(cfg.siege_time_normal)
-            sat_m    = cfg.parse_time(cfg.marauder_time_saturday)
-            sat_s    = cfg.parse_time(cfg.siege_time_saturday)
-            shield_t = cfg.parse_time(cfg.shield_warning_time)
+            if not events:
+                continue
 
-            events = _next_event_dates(from_date=today, count=4, anchor=anchor, cycle=cycle)
+            # Group events that share the same anchor/interval — same in-game day = same draft
+            # Key: (anchor_date, interval_days) → list of event configs
+            from collections import defaultdict
+            groups = defaultdict(list)
+            manual_events = []
+            for ev in events:
+                if ev["schedule_type"] == "repeating" and ev["anchor_date"]:
+                    groups[(ev["anchor_date"], ev["interval_days"])].append(ev)
+                else:
+                    manual_events.append(ev)
 
-            for event_date in events:
-                marauder_dt, siege_dt = _get_event_datetimes(
-                    event_date, norm_m, norm_s, sat_m, sat_s
-                )
-                event_key  = f"event-{cfg.guild_id}-{event_date.isoformat()}"
-                noon_time  = __noon_dt_for(event_date)
-                event_list = default_event_list(marauder_dt, siege_dt)
+            for (anchor_str, interval), group_events in groups.items():
+                try:
+                    from datetime import date as _date
+                    anchor = _date.fromisoformat(anchor_str)
+                except ValueError:
+                    continue
 
-                triggers.append((
-                    noon_time,
-                    f"noon-draft-{cfg.guild_id}-{event_date}",
-                    lambda el=event_list, k=event_key, rd=marauder_dt.date(), c=cfg: post_editor(bot, el, k, rd, c),
-                ))
+                event_dates = _next_event_dates(from_date=today, count=4, anchor=anchor, cycle=interval)
 
-                if is_friday(event_date):
-                    sh, sm = shield_t
-                    shield_dt = datetime(
-                        event_date.year, event_date.month, event_date.day,
-                        sh, sm, tzinfo=ET,
-                    )
+                for event_date in event_dates:
+                    # Build event list for this date from all events in the group
+                    event_list = []
+                    draft_channel_id     = 0
+                    announcement_chan_id = 0
+                    draft_h, draft_m     = 12, 0
+                    five_min_warn        = False
+                    tz_str               = "America/New_York"
+
+                    for ev in group_events:
+                        try:
+                            from zoneinfo import ZoneInfo as _ZI
+                            ev_tz   = _ZI(ev["timezone"])
+                            t_h, t_m = int(ev["default_time"].split(":")[0]), int(ev["default_time"].split(":")[1])
+                            ev_dt   = datetime(event_date.year, event_date.month, event_date.day, t_h, t_m, tzinfo=ev_tz)
+                            event_list.append({
+                                "key":   ev["short_key"],
+                                "name":  ev["name"],
+                                "dt":    ev_dt,
+                                "blurb": ev["announcement_blurb"],
+                            })
+                            draft_channel_id     = ev["draft_channel_id"] or draft_channel_id
+                            announcement_chan_id = ev["announcement_channel_id"] or announcement_chan_id
+                            if ev["draft_time"]:
+                                draft_h = int(ev["draft_time"].split(":")[0])
+                                draft_m = int(ev["draft_time"].split(":")[1])
+                            if ev["five_min_warning"]:
+                                five_min_warn = True
+                            tz_str = ev["timezone"]
+                        except Exception as e:
+                            print(f"[SCHEDULER] Error processing event {ev['short_key']}: {e}")
+
+                    if not event_list:
+                        continue
+
+                    event_list.sort(key=lambda x: x["dt"])
+
+                    try:
+                        from zoneinfo import ZoneInfo as _ZI2
+                        ev_tz2    = _ZI2(tz_str)
+                        draft_dt  = datetime(event_date.year, event_date.month, event_date.day, draft_h, draft_m, tzinfo=ev_tz2)
+                    except Exception:
+                        draft_dt = datetime(event_date.year, event_date.month, event_date.day, 12, 0, tzinfo=ET)
+
+                    event_key = f"event-{cfg.guild_id}-{event_date.isoformat()}"
+
+                    # Draft trigger
                     triggers.append((
-                        shield_dt,
-                        f"shield-draft-{cfg.guild_id}-{event_date}",
-                        lambda k=f"shield-{cfg.guild_id}-{event_date}", c=cfg: post_shield_draft(bot, k, c),
+                        draft_dt,
+                        f"noon-draft-{cfg.guild_id}-{event_date}",
+                        lambda el=event_list, k=event_key, rd=event_date,
+                               dc=draft_channel_id, ac=announcement_chan_id,
+                               fw=five_min_warn, c=cfg: post_editor(
+                            bot, el, k, rd, c,
+                            draft_channel_id=dc,
+                            announcement_channel_id=ac,
+                            five_min_warning=fw,
+                        ),
                     ))
 
         # Pending 5-minute warnings
@@ -778,13 +826,17 @@ async def run_scheduler(bot: discord.ext.commands.Bot):
 
 # ── Trigger actions ────────────────────────────────────────────────────────────
 
-async def post_editor(bot, event_list: list[dict], event_key: str, run_date: date, cfg=None):
-    """Post the event editor to leadership at noon."""
+async def post_editor(bot, event_list: list[dict], event_key: str, run_date: date,
+                      cfg=None, draft_channel_id: int = 0,
+                      announcement_channel_id: int = 0, five_min_warning: bool = True):
+    """Post the event editor to the draft channel."""
     if cfg is None:
         return
-    channel = bot.get_channel(cfg.leadership_channel_id)
+    # Use per-event channel if set, fall back to guild leadership channel
+    channel_id = draft_channel_id or cfg.leadership_channel_id
+    channel    = bot.get_channel(channel_id)
     if channel is None:
-        print("[SCHEDULER][ERROR] Leadership channel not found")
+        print("[SCHEDULER][ERROR] Draft channel not found")
         return
 
     view = EventEditorView(bot=bot, event_list=event_list, event_key=event_key, run_date=run_date, guild_id=cfg.guild_id)

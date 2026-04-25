@@ -35,8 +35,8 @@ from config import get_config
 # ── Per-guild config helpers ───────────────────────────────────────────────────
 
 def get_guild_cfg(guild_id: int):
-    from config import get_config as _gc
-    return _gc(guild_id)
+    from config import get_config
+    return get_config(guild_id)
 
 BUTTON_TIMEOUT = 3600
 
@@ -81,8 +81,8 @@ OPTIONAL_EVENTS = {k: v for k, v in EVENT_LIBRARY.items() if v["optional"]}
 
 def next_event_dates(from_date: date = None, count: int = 6) -> list[date]:
     """Public wrapper using OGV defaults — kept for backward compatibility."""
-    from config import get_config, OGV_GUILD_ID
-    cfg = get_config(OGV_GUILD_ID)
+    from config import get_config
+    cfg = get_config(None)
     anchor = cfg.anchor_date_parsed() if cfg else date(2026, 3, 30)
     cycle  = cfg.cycle_days if cfg else 3
     return _next_event_dates(from_date, count, anchor, cycle)
@@ -111,8 +111,8 @@ def is_friday(d: date) -> bool:
 
 def get_event_datetimes(event_date: date) -> tuple[datetime, datetime]:
     """Public wrapper using OGV defaults."""
-    from config import get_config, OGV_GUILD_ID
-    cfg = get_config(OGV_GUILD_ID)
+    from config import get_config
+    cfg = get_config(None)
     norm_m = cfg.parse_time(cfg.marauder_time_normal) if cfg else (22, 15)
     norm_s = cfg.parse_time(cfg.siege_time_normal)    if cfg else (22, 45)
     sat_m  = cfg.parse_time(cfg.marauder_time_saturday) if cfg else (17, 0)
@@ -258,8 +258,7 @@ class EventEditorView(discord.ui.View):
         self.event_key  = event_key
         self.run_date   = run_date
         self.notes      = ""
-        from config import OGV_GUILD_ID
-        self.guild_id   = guild_id if guild_id is not None else OGV_GUILD_ID
+        self.guild_id   = guild_id
 
     def format_event_list_text(self) -> str:
         lines = []
@@ -584,9 +583,7 @@ class ApprovalView(discord.ui.View):
         self.event_list    = event_list or []
         self.is_shield     = is_shield
         self.guild_id      = guild_id
-        from config import OGV_GUILD_ID
-        if self.guild_id is None:
-            self.guild_id = OGV_GUILD_ID
+        # guild_id will be set by the caller
 
     async def _post_to_announcements(self, message: str):
         from config import get_config
@@ -784,9 +781,6 @@ async def run_scheduler(bot: discord.ext.commands.Bot):
 async def post_editor(bot, event_list: list[dict], event_key: str, run_date: date, cfg=None):
     """Post the event editor to leadership at noon."""
     if cfg is None:
-        from config import get_config, OGV_GUILD_ID
-        cfg = get_config(OGV_GUILD_ID)
-    if cfg is None:
         return
     channel = bot.get_channel(cfg.leadership_channel_id)
     if channel is None:
@@ -813,9 +807,6 @@ async def post_editor(bot, event_list: list[dict], event_key: str, run_date: dat
 
 async def post_shield_draft(bot, event_key: str, cfg=None):
     if cfg is None:
-        from config import get_config, OGV_GUILD_ID
-        cfg = get_config(OGV_GUILD_ID)
-    if cfg is None:
         return
     channel = bot.get_channel(cfg.leadership_channel_id)
     if channel is None:
@@ -836,9 +827,6 @@ async def post_shield_draft(bot, event_key: str, cfg=None):
 
 
 async def fire_warning(bot, event_key: str, event_list: list[dict], cfg=None):
-    if cfg is None:
-        from config import get_config, OGV_GUILD_ID
-        cfg = get_config(OGV_GUILD_ID)
     if cfg is None:
         return
     channel = bot.get_channel(cfg.announcement_channel_id)

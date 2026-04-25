@@ -12,7 +12,7 @@ from scheduler import (
 )
 from growth import run_growth_snapshot
 from zoneinfo import ZoneInfo
-from config import init_db, get_config, get_or_create_config, OGV_GUILD_ID
+from config import init_db, get_config, get_or_create_config
 
 load_dotenv()
 

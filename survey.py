@@ -26,8 +26,6 @@ from config import get_config
 
 SURVEY_TIMEOUT      = 600  # 10 minutes per step
 
-SQUAD_POWERS_TAB    = "Squad Powers"
-SURVEY_HISTORY_TAB  = "Survey History"
 SQUAD_TYPES         = ["Missile", "Air", "Tank"]
 PROFESSIONS         = ["War Leader", "Engineer"]
 BANNER_OPTIONS      = ["Yes", "No"]
@@ -60,8 +58,8 @@ def _get_spreadsheet(guild_id: int = None):
         key_file = os.getenv("GOOGLE_SERVICE_ACCOUNT_FILE", "service_account.json")
         creds    = Credentials.from_service_account_file(key_file, scopes=scopes)
     gc = gspread.authorize(creds)
-    from config import get_spreadsheet_id, OGV_GUILD_ID
-    sheet_id = get_spreadsheet_id(guild_id or OGV_GUILD_ID)
+    from config import get_spreadsheet_id
+    sheet_id = get_spreadsheet_id(guild_id)
     return gc.open_by_key(sheet_id)
 
 
@@ -78,10 +76,9 @@ def update_squad_powers(discord_id: str, username: str, data: dict, guild_id: in
     Update or insert a member's row in the Squad Powers sheet.
     Matches on Discord ID (col B). Appends if not found.
     """
-    from config import get_config, OGV_GUILD_ID
-    gid  = guild_id or OGV_GUILD_ID
-    cfg  = get_config(gid)
-    sh   = _get_spreadsheet(gid)
+    from config import get_config
+    cfg  = get_config(guild_id)
+    sh   = _get_spreadsheet(guild_id)
     ws   = sh.worksheet(cfg.tab_squad_powers if cfg else "Squad Powers")
     rows = ws.get_all_values()
 
@@ -115,10 +112,9 @@ def update_squad_powers(discord_id: str, username: str, data: dict, guild_id: in
 
 def append_survey_history(discord_id: str, username: str, data: dict, guild_id: int = None):
     """Append a timestamped row to the Survey History sheet."""
-    from config import get_config, OGV_GUILD_ID
-    gid  = guild_id or OGV_GUILD_ID
-    cfg  = get_config(gid)
-    sh   = _get_spreadsheet(gid)
+    from config import get_config
+    cfg  = get_config(guild_id)
+    sh   = _get_spreadsheet(guild_id)
     ws   = sh.worksheet(cfg.tab_survey_history if cfg else "Survey History")
 
     existing = ws.row_values(1)
@@ -404,10 +400,12 @@ class SurveyButtonView(discord.ui.View):
     async def answer(self, interaction: discord.Interaction, button: discord.ui.Button):
         # Check OGV role
         cfg = get_config(interaction.guild_id)
-        member_role = cfg.member_role_name if cfg else "OGV"
-        if member_role not in [r.name for r in interaction.user.roles]:
+        if not cfg or not cfg.setup_complete:
+            await interaction.response.send_message("⚙️ This bot hasn't been set up yet.", ephemeral=True)
+            return
+        if cfg.member_role_name not in [r.name for r in interaction.user.roles]:
             await interaction.response.send_message(
-                f"⛔ You need the **{member_role}** role to fill out this survey.",
+                f"⛔ You need the **{cfg.member_role_name}** role to fill out this survey.",
                 ephemeral=True,
             )
             return
@@ -494,7 +492,12 @@ class SurveyCog(commands.Cog):
 
         await interaction.response.defer(ephemeral=True)
 
-        channel = self.bot.get_channel(SURVEY_CHANNEL_ID)
+        from config import get_config
+        cfg     = get_config(interaction.guild_id)
+        if not cfg:
+            await interaction.followup.send("⚙️ Bot not configured. Run `/setup` first.", ephemeral=True)
+            return
+        channel = self.bot.get_channel(cfg.survey_channel_id)
         if channel is None:
             await interaction.followup.send("⚠️ Could not find the survey channel.", ephemeral=True)
             return

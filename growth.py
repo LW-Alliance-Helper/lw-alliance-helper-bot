@@ -50,8 +50,8 @@ def _get_spreadsheet(guild_id: int = None):
         creds    = Credentials.from_service_account_file(key_file, scopes=scopes)
 
     gc = gspread.authorize(creds)
-    from config import get_spreadsheet_id, OGV_GUILD_ID
-    sheet_id = get_spreadsheet_id(guild_id or OGV_GUILD_ID)
+    from config import get_spreadsheet_id
+    sheet_id = get_spreadsheet_id(guild_id)
     return gc.open_by_key(sheet_id)
 
 
@@ -68,10 +68,9 @@ def load_squad_powers(guild_id: int = None) -> dict:
     Load current squad powers from the Squad Powers tab.
     Returns { discord_id: { "name": str, "combined": float } }
     """
-    from config import get_config, OGV_GUILD_ID
-    gid  = guild_id or OGV_GUILD_ID
-    cfg  = get_config(gid)
-    sh   = _get_spreadsheet(gid)
+    from config import get_config
+    cfg  = get_config(guild_id)
+    sh   = _get_spreadsheet(guild_id)
     ws   = sh.worksheet(cfg.tab_squad_powers if cfg else "Squad Powers")
     rows = ws.get_all_values()
 
@@ -119,18 +118,17 @@ def run_growth_snapshot():
 
 
 def _run_growth_snapshot_inner(guild_id: int = None):
-    from config import get_config, OGV_GUILD_ID
-    gid  = guild_id or OGV_GUILD_ID
-    cfg  = get_config(gid)
+    from config import get_config
+    cfg  = get_config(guild_id)
     now        = datetime.now(tz=ET)
     month_label = now.strftime("%b %Y")
     col_header  = f"Combined Power\n{month_label}"
 
-    print(f"[GROWTH] Running snapshot for {month_label} (guild {gid})")
+    print(f"[GROWTH] Running snapshot for {month_label} (guild {guild_id})")
 
-    sh      = _get_spreadsheet(gid)
+    sh      = _get_spreadsheet(guild_id)
     ws      = sh.worksheet(cfg.tab_growth_tracking if cfg else "Growth Tracking")
-    members = load_squad_powers(gid)
+    members = load_squad_powers(guild_id)
 
     # Read entire Growth Tracking sheet
     all_values = ws.get_all_values()

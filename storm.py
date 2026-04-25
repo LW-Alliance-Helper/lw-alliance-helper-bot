@@ -29,7 +29,6 @@ from zoneinfo import ZoneInfo
 
 ET = ZoneInfo("America/New_York")
 
-DS_SHEET_NAME         = "DS Assignments"  # overridden per-guild at runtime
 
 
 WIZARD_TIMEOUT = 600  # 10 minutes
@@ -107,8 +106,8 @@ def _get_spreadsheet(guild_id: int = None):
         creds    = Credentials.from_service_account_file(key_file, scopes=scopes)
 
     gc = gspread.authorize(creds)
-    from config import get_spreadsheet_id, OGV_GUILD_ID
-    sheet_id = get_spreadsheet_id(guild_id or OGV_GUILD_ID)
+    from config import get_spreadsheet_id
+    sheet_id = get_spreadsheet_id(guild_id)
     return gc.open_by_key(sheet_id)
 
 
@@ -122,7 +121,7 @@ def load_ds_assignments(team: str) -> tuple[dict, list]:
 
     try:
         sh   = _get_spreadsheet()
-        ws   = sh.worksheet(DS_SHEET_NAME)
+        ws   = sh.worksheet(cfg.tab_ds_assignments if cfg else "DS Assignments")
         rows = ws.get_all_values()
 
         zones   = {}
@@ -177,7 +176,7 @@ def save_ds_assignments(team: str, zones: dict, subs: list):
 
     try:
         sh = _get_spreadsheet()
-        ws = sh.worksheet(DS_SHEET_NAME)
+        ws = sh.worksheet(cfg.tab_ds_assignments if cfg else "DS Assignments")
 
         # Load the other team's current data so we don't lose it
         other_zones, other_subs = load_ds_assignments(other)
@@ -619,7 +618,6 @@ CS_TIMES = {
     "9pm":  ("9:00pm ET",  "23:00 server"),
 }
 
-CS_SHEET_NAME = "DS Assignments"   # stored in same tab under CS_A_* / CS_B_* headers
 
 # ── CS Defaults ───────────────────────────────────────────────────────────────
 
@@ -680,11 +678,10 @@ CS_DEFAULTS = {"A": DEFAULT_CS_A, "B": DEFAULT_CS_B}
 def load_cs_assignments(team: str, guild_id: int = None) -> dict:
     zone_key = f"CS_{team}_ZONES"
     try:
-        from config import get_config, OGV_GUILD_ID
-        gid = guild_id or OGV_GUILD_ID
-        cfg = get_config(gid)
-        sh   = _get_spreadsheet(gid)
-        ws   = sh.worksheet(CS_SHEET_NAME)
+        from config import get_config
+        cfg = get_config(guild_id)
+        sh   = _get_spreadsheet(guild_id)
+        ws   = sh.worksheet(cfg.tab_ds_assignments if cfg else "DS Assignments")
         rows = ws.get_all_values()
         zones   = {}
         section = None
@@ -715,9 +712,8 @@ def load_cs_assignments(team: str, guild_id: int = None) -> dict:
 def save_cs_assignments(team: str, zones: dict, guild_id: int = None):
     """Save CS assignments for one team without affecting DS or the other CS team."""
     try:
-        from config import OGV_GUILD_ID
-        sh = _get_spreadsheet(guild_id or OGV_GUILD_ID)
-        ws = sh.worksheet(CS_SHEET_NAME)
+        sh = _get_spreadsheet(guild_id)
+        ws = sh.worksheet(cfg.tab_ds_assignments if cfg else "DS Assignments")
         existing = ws.get_all_values()
 
         # Rebuild full sheet: preserve all DS and CS rows, replace this team's CS section

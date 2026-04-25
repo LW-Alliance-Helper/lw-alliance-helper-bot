@@ -49,7 +49,7 @@ active_wizards: dict[int, asyncio.Event] = {}
 #
 # All reads/writes go through gspread using the same service account as sheets.py
 
-def _get_train_sheet():
+def _get_train_sheet(guild_id: int = None):
     """Return the Train Schedule worksheet."""
     import gspread
     from google.oauth2.service_account import Credentials
@@ -64,11 +64,9 @@ def _get_train_sheet():
         creds    = Credentials.from_service_account_file(key_file, scopes=scopes)
 
     gc = gspread.authorize(creds)
-    from config import get_spreadsheet_id
-    sheet_id = get_spreadsheet_id(guild_id) if 'guild_id' in dir() and guild_id else os.getenv("SPREADSHEET_ID", "")
-    sh = gc.open_by_key(sheet_id)
-    from config import get_config, OGV_GUILD_ID
-    cfg = get_config(OGV_GUILD_ID)
+    from config import get_spreadsheet_id, get_config
+    sh  = gc.open_by_key(get_spreadsheet_id(guild_id))
+    cfg = get_config(guild_id)
     tab = cfg.tab_train_schedule if cfg else "Train Schedule"
     return sh.worksheet(tab)
 
@@ -186,17 +184,18 @@ BIRTHDAY_LOOKAHEAD = 14  # days ahead to check for birthdays
 
 def get_member_tab_name(guild_id: int = None) -> str:
     """Get the active member tab name from the config database."""
-    from config import get_member_tab, OGV_GUILD_ID
+    from config import get_member_tab
     if guild_id is None:
-        guild_id = OGV_GUILD_ID
-    return get_member_tab(guild_id) or DEFAULT_MEMBER_TAB
+        guild_id = None
+    tab = get_member_tab(guild_id)
+    return tab if tab else "Season 5 - Off-Season"
 
 
 def set_member_tab_name(name: str, guild_id: int = None):
     """Save the active member tab name to the config database and the sheet."""
-    from config import set_member_tab, OGV_GUILD_ID
+    from config import set_member_tab
     if guild_id is None:
-        guild_id = OGV_GUILD_ID
+        guild_id = None
     set_member_tab(guild_id, name)
     # Also write to sheet cell for legacy reference
     try:
@@ -224,8 +223,7 @@ def _get_member_sheet(tab_name: str):
 
     gc = gspread.authorize(creds)
     from config import get_spreadsheet_id
-    sheet_id = get_spreadsheet_id(guild_id) if 'guild_id' in dir() and guild_id else os.getenv("SPREADSHEET_ID", "")
-    sh = gc.open_by_key(sheet_id)
+    sh = gc.open_by_key(get_spreadsheet_id(guild_id))
     return sh.worksheet(tab_name)
 
 
@@ -700,7 +698,10 @@ class ReminderView(discord.ui.View):
         role_names = [r.name for r in interaction.user.roles]
         from config import get_config
         cfg = get_config(interaction.guild_id)
-        req_role = cfg.leadership_role_name if cfg else "OGV Leadership"
+        if not cfg:
+            await interaction.response.send_message("⚙️ Bot not configured. Run `/setup`.", ephemeral=True)
+            return
+        req_role = cfg.leadership_role_name
         if req_role not in role_names:
             await interaction.response.send_message(
                 f"⛔ You need the **{req_role}** role.", ephemeral=True

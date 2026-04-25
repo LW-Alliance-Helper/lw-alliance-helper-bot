@@ -6,7 +6,7 @@ Slash commands:
   /logcs  — Log Canyon Storm participation data
 
 Writes to the "DS-CS Sit-outs" tab in Google Sheets and posts a
-summary to the dedicated log thread (STORM_LOG_THREAD_ID).
+summary to the dedicated log thread configured for this guild.
 
 DS columns:
   Date | Event | Vote Count | RTF No Vote | Sitting Out | Prior Sit-Out No Request
@@ -27,7 +27,6 @@ from config import get_config
 
 # ── Config ─────────────────────────────────────────────────────────────────────
 
-LOG_SHEET_NAME      = "DS-CS Sit-outs"
 WIZARD_TIMEOUT      = 600  # 10 minutes
 
 # Active log sessions — user_id → asyncio.Event (cancel signal)
@@ -54,17 +53,16 @@ def _get_spreadsheet(guild_id: int = None):
         key_file = os.getenv("GOOGLE_SERVICE_ACCOUNT_FILE", "service_account.json")
         creds    = Credentials.from_service_account_file(key_file, scopes=scopes)
     gc = gspread.authorize(creds)
-    from config import get_spreadsheet_id, OGV_GUILD_ID
-    sheet_id = get_spreadsheet_id(guild_id or OGV_GUILD_ID)
+    from config import get_spreadsheet_id
+    sheet_id = get_spreadsheet_id(guild_id)
     return gc.open_by_key(sheet_id)
 
 
 def _get_log_sheet(guild_id: int = None):
-    from config import get_config, OGV_GUILD_ID
-    gid = guild_id or OGV_GUILD_ID
-    cfg = get_config(gid)
+    from config import get_config
+    cfg = get_config(guild_id)
     tab = cfg.tab_sitouts if cfg else "DS-CS Sit-outs"
-    return _get_spreadsheet(gid).worksheet(tab)
+    return _get_spreadsheet(guild_id).worksheet(tab)
 
 
 def _ensure_headers(ws):

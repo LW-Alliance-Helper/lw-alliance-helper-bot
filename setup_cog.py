@@ -22,6 +22,56 @@ from config import (
 WIZARD_TIMEOUT = 120  # 2 minutes per step
 
 
+def _parse_12h_time(raw: str) -> str:
+    """
+    Parse a user-entered time like '10:15pm', '9am', '9:00 AM' into
+    HH:MM 24h string for storage. Returns None if unparseable.
+    """
+    import re
+    raw = raw.strip().lower().replace(" ", "")
+    m = re.match(r"^(\d{1,2})(?::(\d{2}))?(am|pm)$", raw)
+    if not m:
+        return None
+    hour, minute, period = int(m.group(1)), int(m.group(2) or 0), m.group(3)
+    if hour < 1 or hour > 12 or minute < 0 or minute > 59:
+        return None
+    if period == "am":
+        hour = 0 if hour == 12 else hour
+    else:
+        hour = 12 if hour == 12 else hour + 12
+    return f"{hour:02d}:{minute:02d}"
+
+
+def _parse_month_day(raw: str) -> str:
+    """
+    Parse 'Month Day' into YYYY-MM-DD using the most recent occurrence.
+    Always looks backward — never assumes a future date.
+    Examples (today = April 25 2026):
+      'February 20' → 2026-02-20  (already passed this year)
+      'December 3'  → 2025-12-03  (hasn't happened yet this year, so last year)
+      'May 2'       → 2026-05-02  (upcoming this year, but within ~5 days so still this year)
+    Rule: if the date this year is in the future beyond today, use last year.
+    """
+    import re
+    from datetime import date, datetime
+    raw = raw.strip()
+    try:
+        parsed = datetime.strptime(raw, "%B %d")
+    except ValueError:
+        try:
+            parsed = datetime.strptime(raw, "%b %d")
+        except ValueError:
+            return None
+    today     = date.today()
+    this_year = date(today.year, parsed.month, parsed.day)
+    last_year = date(today.year - 1, parsed.month, parsed.day)
+    # Allow up to 31 days in the future (next upcoming event within a month)
+    # Anything further out uses last year's date
+    if (this_year - today).days > 31:
+        return last_year.isoformat()
+    return this_year.isoformat()
+
+
 # ── Step views ─────────────────────────────────────────────────────────────────
 
 class CreateRoleModal(discord.ui.Modal):
@@ -365,42 +415,56 @@ async def run_setup(interaction: discord.Interaction, bot):
     # ── Step 8: Google Sheet ID ────────────────────────────────────────────────
     await channel.send(
         "**Step 8 of 9 — Google Sheet ID**\n"
-        "Enter your Google Sheet ID. This is the long string in your sheet's URL:\n"
-        "`https://docs.google.com/spreadsheets/d/`**`YOUR_SHEET_ID`**`/edit`\n\n"
-        f"Also make sure you've shared your sheet with **`sheet-connector@lw-alliance-helper.iam.gserviceaccount.com`** (Editor access)."
+        "Enter your Google Sheet ID — the long string from your sheet's URL:\n"
+        "`https://docs.google.com/spreadsheets/d/`**`YOUR_SHEET_ID`**`/edit`"
     )
-    modal    = TextInputModal("Google Sheet ID", "Sheet ID", placeholder="1BxiMVs0XRA5nFMdKvBdBZjgmUUqptlbs74OgVE2upms")
-    modal_v  = ModalLaunchView(modal)
-    await channel.send("\u200b", view=modal_v)
-    await modal_v.wait()
-    if not modal_v.confirmed:
-        await channel.send("⏰ Setup timed out. Run `/setup` to start again.")
-        return
-    import os
-    # Store sheet ID as an environment variable override per guild
-    # For now store in a simple way — future enhancement: per-guild sheet IDs
-    # We'll save it in the config notes field for now and use os.environ
-    sheet_id = modal.value
-
-    # ── Step 9: Event anchor date ──────────────────────────────────────────────
-    await channel.send(
-        "**Step 9 of 9 — Event Cycle Anchor Date**\n"
-        "Enter a date when your alliance events ran (used to calculate the 3-day cycle).\n"
-        "Format: `YYYY-MM-DD` (e.g. `2026-03-30`)"
-    )
-    modal   = TextInputModal("Event Anchor Date", "Anchor date (YYYY-MM-DD)", placeholder="2026-03-30", default=cfg.anchor_date)
+    modal   = TextInputModal("Google Sheet ID", "Sheet ID", placeholder="1BxiMVs0XRA5nFMdKvBdBZjgmUUqptlbs74OgVE2upms")
     modal_v = ModalLaunchView(modal)
     await channel.send("\u200b", view=modal_v)
     await modal_v.wait()
     if not modal_v.confirmed:
         await channel.send("⏰ Setup timed out. Run `/setup` to start again.")
         return
-    try:
-        from datetime import date
-        date.fromisoformat(modal.value)
-        cfg.anchor_date = modal.value
-    except ValueError:
-        await channel.send(f"⚠️ Invalid date format `{modal.value}` — using default `{cfg.anchor_date}`.")
+    sheet_id = modal.value
+
+    # ── Step 9: Share sheet with service account ───────────────────────────────
+    SERVICE_ACCOUNT_EMAIL = "sheet-connector@lw-alliance-helper.iam.gserviceaccount.com"
+    sharing_url = f"https://docs.google.com/spreadsheets/d/{sheet_id}/edit#sharing"
+
+    share_embed = discord.Embed(
+        title="**Step 9 of 9 — Share Your Google Sheet**",
+        description=(
+            "Before finishing, you need to give the bot access to your sheet.\n\n"
+            "**Follow these steps:**\n"
+            "1️⃣ Click the link below to open your sheet's sharing settings\n"
+            "2️⃣ Click **Share** in the top right corner\n"
+            "3️⃣ Paste the email address below into the share field\n"
+            "4️⃣ Set permission to **Editor**\n"
+            "5️⃣ Click **Send** — then come back here and confirm"
+        ),
+        color=discord.Color.yellow(),
+    )
+    share_embed.add_field(
+        name="📋 Service Account Email (click to copy)",
+        value=f"`{SERVICE_ACCOUNT_EMAIL}`",
+        inline=False,
+    )
+    share_embed.add_field(
+        name="🔗 Open Your Sheet",
+        value=f"[Click here to open sharing settings]({sharing_url})",
+        inline=False,
+    )
+
+    done_view = ConfirmView()
+    done_view.children[0].label = "✅ I've shared the sheet"
+    done_view.children[1].label = "❌ Cancel setup"
+
+    await channel.send(embed=share_embed, view=done_view)
+    await done_view.wait()
+
+    if not done_view.confirmed:
+        await channel.send("❌ Setup cancelled. Run `/setup` to start again.")
+        return
 
     # ── Confirm and save ───────────────────────────────────────────────────────
     embed = discord.Embed(
@@ -415,8 +479,7 @@ async def run_setup(interaction: discord.Interaction, bot):
     embed.add_field(name="Announcements",      value=f"<#{cfg.announcement_channel_id}>",  inline=True)
     embed.add_field(name="Survey Channel",     value=f"<#{cfg.survey_channel_id}>",        inline=True)
     embed.add_field(name="Survey Notifs",      value=f"<#{cfg.survey_notify_channel_id}>", inline=True)
-    embed.add_field(name="Storm Log Thread",   value=f"<#{cfg.storm_log_thread_id}>",      inline=True)
-    embed.add_field(name="Anchor Date",        value=cfg.anchor_date,                      inline=True)
+    embed.add_field(name="Storm Log Channel",  value=f"<#{cfg.storm_log_thread_id}>",      inline=True)
     embed.add_field(name="Sheet ID",           value=f"`{sheet_id[:20]}...`",              inline=False)
 
     confirm_view = ConfirmView()
@@ -427,7 +490,7 @@ async def run_setup(interaction: discord.Interaction, bot):
         await channel.send("❌ Setup cancelled. Run `/setup` to start again.")
         return
 
-    # Save config — including the sheet ID in the database
+    # Save config
     cfg.setup_complete  = True
     cfg.spreadsheet_id  = sheet_id
     save_config(cfg)
@@ -435,6 +498,7 @@ async def run_setup(interaction: discord.Interaction, bot):
     await channel.send(
         "✅ **Setup complete!** The bot is ready to use.\n\n"
         "**Next steps:**\n"
+        "• Run `/setup_events` to configure your event announcements\n"
         "• Run `/postsurvey` to post the survey button in your survey channel\n"
         "• Run `/schedule_set` to add your first train schedule entries\n"
         "• Run `/setmembertab` to set your active member sheet tab\n"
@@ -719,22 +783,26 @@ async def run_event_setup(interaction: discord.Interaction, bot):
     channel  = interaction.channel
     user     = interaction.user
 
+    TOTAL_STEPS = 9
+
     def check(m):
         return m.author == user and m.channel == channel
 
     async def ask_text(prompt: str, max_chars: int = 200):
-        msg = await channel.send(prompt)
+        """Post a prompt, wait for reply. Both stay visible."""
+        await channel.send(prompt)
         try:
             reply = await bot.wait_for("message", check=check, timeout=120)
         except asyncio.TimeoutError:
             await channel.send("⏰ Timed out. Run `/setup_events` to start again.")
             return None
-        try:
-            await msg.delete()
-            await reply.delete()
-        except discord.HTTPException:
-            pass
         return reply.content.strip()[:max_chars]
+
+    async def ask_view(prompt: str, view: discord.ui.View):
+        """Post a prompt with a view. Message stays visible, view disables on selection."""
+        await channel.send(prompt, view=view)
+        await view.wait()
+        return view
 
     await channel.send(
         "⚙️ **Event Setup** — let's configure one event type.\n"
@@ -743,34 +811,22 @@ async def run_event_setup(interaction: discord.Interaction, bot):
 
     # ── Step 1: Event name ────────────────────────────────────────────────────
     name = await ask_text(
-        "**Step 1 — Event name**\n"
+        f"**Step 1 of {TOTAL_STEPS} — Event name**\n"
         "What is this event called? (e.g. `Plague Marauder (AE)`, `Zombie Siege`)"
     )
     if not name:
         return
 
-    # ── Step 2: Short key ─────────────────────────────────────────────────────
-    await channel.send(
-        f"**Step 2 — Short key**\n"
-        f"Enter a short internal identifier for **{name}** — no spaces, lowercase.\n"
-        f"*(e.g. `marauder`, `siege`, `blimp`)* This is used internally and never shown to members."
-    )
-    short_key = await ask_text("Short key:", max_chars=30)
-    if not short_key:
-        return
-    short_key = short_key.lower().replace(" ", "_")
+    # Auto-generate short key from name — users never need to see or set this
+    import re as _re
+    short_key = _re.sub(r"[^a-z0-9]+", "_", name.lower()).strip("_")
 
-    # ── Step 3: Timezone ──────────────────────────────────────────────────────
+    # ── Step 2: Timezone ──────────────────────────────────────────────────────
     tz_view = TimezoneSelectView()
-    tz_msg  = await channel.send(
-        "**Step 3 — Your timezone**\nSelect the timezone your leadership uses for event times:",
-        view=tz_view,
+    await ask_view(
+        f"**Step 2 of {TOTAL_STEPS} — Your timezone**\nSelect the timezone your leadership uses for event times:",
+        tz_view,
     )
-    await tz_view.wait()
-    try:
-        await tz_msg.delete()
-    except discord.HTTPException:
-        pass
     if not tz_view.confirmed:
         await channel.send("⏰ Timed out. Run `/setup_events` to start again.")
         return
@@ -778,30 +834,24 @@ async def run_event_setup(interaction: discord.Interaction, bot):
 
     # ── Step 4: Default event time ────────────────────────────────────────────
     time_raw = await ask_text(
-        f"**Step 4 — Default event time**\n"
-        f"What time does **{name}** usually start? Enter in 24h format.\n"
-        f"*(e.g. `22:15` for 10:15pm in your timezone)*"
+        f"**Step 3 of {TOTAL_STEPS} — Default event time**\n"
+        f"What time does **{name}** usually start?\n"
+        f"*(e.g. `10:15pm`, `9:00am`)*"
     )
     if not time_raw:
         return
-    # Validate HH:MM format
     import re
-    if not re.match(r"^\d{1,2}:\d{2}$", time_raw):
-        await channel.send("⚠️ Invalid time format. Use HH:MM (e.g. `22:15`). Run `/setup_events` to try again.")
+    default_time = _parse_12h_time(time_raw)
+    if not default_time:
+        await channel.send("⚠️ Could not read that time. Try something like `10:15pm` or `9:00am`. Run `/setup_events` to try again.")
         return
-    default_time = time_raw
 
     # ── Step 5: Schedule type ─────────────────────────────────────────────────
     sched_view = ScheduleTypeView()
-    sched_msg  = await channel.send(
-        "**Step 5 — Schedule**\nDoes this event repeat on a fixed cycle, or do you add it manually each time?",
-        view=sched_view,
+    await ask_view(
+        f"**Step 4 of {TOTAL_STEPS} — Schedule**\nDoes this event repeat on a fixed cycle, or do you add it manually each time?",
+        sched_view,
     )
-    await sched_view.wait()
-    try:
-        await sched_msg.delete()
-    except discord.HTTPException:
-        pass
     if not sched_view.selected:
         await channel.send("⏰ Timed out. Run `/setup_events` to start again.")
         return
@@ -811,22 +861,19 @@ async def run_event_setup(interaction: discord.Interaction, bot):
     interval_days = 0
     if schedule_type == "repeating":
         anchor_raw = await ask_text(
-            "**Step 5a — Anchor date**\n"
+            f"**Step 4a of {TOTAL_STEPS} — Anchor date**\n"
             "Enter a date when this event occurred (used to calculate the repeating cycle).\n"
             "Format: `YYYY-MM-DD` (e.g. `2026-03-30`)"
         )
         if not anchor_raw:
             return
-        try:
-            from datetime import date
-            date.fromisoformat(anchor_raw)
-            anchor_date = anchor_raw
-        except ValueError:
-            await channel.send("⚠️ Invalid date. Run `/setup_events` to try again.")
+        anchor_date = _parse_month_day(anchor_raw)
+        if not anchor_date:
+            await channel.send("⚠️ Could not read that date. Try something like `March 30` or `April 14`. Run `/setup_events` to try again.")
             return
 
         interval_raw = await ask_text(
-            "**Step 5b — Cycle interval**\n"
+            f"**Step 4b of {TOTAL_STEPS} — Cycle interval**\n"
             "How many days between each occurrence? (e.g. `3` for every 3 days)"
         )
         if not interval_raw:
@@ -839,16 +886,11 @@ async def run_event_setup(interaction: discord.Interaction, bot):
 
     # ── Step 6: Draft channel ─────────────────────────────────────────────────
     draft_ch_view = ChannelSelectStep("Select the channel for announcement drafts...", suggested_name="event-drafts")
-    draft_ch_msg  = await channel.send(
-        "**Step 6 — Draft channel**\n"
+    await ask_view(
+        f"**Step 5 of {TOTAL_STEPS} — Draft channel**\n"
         "Which channel should the bot post the draft announcement for leadership to review?",
-        view=draft_ch_view,
+        draft_ch_view,
     )
-    await draft_ch_view.wait()
-    try:
-        await draft_ch_msg.delete()
-    except discord.HTTPException:
-        pass
     if not draft_ch_view.confirmed:
         await channel.send("⏰ Timed out. Run `/setup_events` to start again.")
         return
@@ -856,16 +898,11 @@ async def run_event_setup(interaction: discord.Interaction, bot):
 
     # ── Step 7: Announcement channel ──────────────────────────────────────────
     ann_ch_view = ChannelSelectStep("Select the public announcement channel...", suggested_name="announcements")
-    ann_ch_msg  = await channel.send(
-        "**Step 7 — Announcement channel**\n"
+    await ask_view(
+        f"**Step 6 of {TOTAL_STEPS} — Announcement channel**\n"
         "Which channel should the final approved announcement be posted to?",
-        view=ann_ch_view,
+        ann_ch_view,
     )
-    await ann_ch_view.wait()
-    try:
-        await ann_ch_msg.delete()
-    except discord.HTTPException:
-        pass
     if not ann_ch_view.confirmed:
         await channel.send("⏰ Timed out. Run `/setup_events` to start again.")
         return
@@ -873,29 +910,24 @@ async def run_event_setup(interaction: discord.Interaction, bot):
 
     # ── Step 8: Draft time ────────────────────────────────────────────────────
     draft_time_raw = await ask_text(
-        "**Step 8 — Draft posting time**\n"
+        f"**Step 7 of {TOTAL_STEPS} — Draft posting time**\n"
         "What time should the bot post the draft for leadership to review? (24h format in your timezone)\n"
         "*(e.g. `12:00` for noon)*"
     )
     if not draft_time_raw:
         return
-    if not re.match(r"^\d{1,2}:\d{2}$", draft_time_raw):
-        await channel.send("⚠️ Invalid time format. Use HH:MM. Run `/setup_events` to try again.")
+    draft_time = _parse_12h_time(draft_time_raw)
+    if not draft_time:
+        await channel.send("⚠️ Could not read that time. Try something like `12:00pm` or `9:00am`. Run `/setup_events` to try again.")
         return
-    draft_time = draft_time_raw
 
     # ── Step 9: 5-minute warning ──────────────────────────────────────────────
     warn_view = YesNoView()
-    warn_msg  = await channel.send(
-        "**Step 9 — 5-minute warning**\n"
+    await ask_view(
+        f"**Step 8 of {TOTAL_STEPS} — 5-minute warning**\n"
         "Should the bot automatically post a 5-minute warning to the announcement channel before the event?",
-        view=warn_view,
+        warn_view,
     )
-    await warn_view.wait()
-    try:
-        await warn_msg.delete()
-    except discord.HTTPException:
-        pass
     if warn_view.selected is None:
         await channel.send("⏰ Timed out. Run `/setup_events` to start again.")
         return
@@ -903,7 +935,7 @@ async def run_event_setup(interaction: discord.Interaction, bot):
 
     # ── Step 10: Announcement blurb ───────────────────────────────────────────
     blurb_raw = await ask_text(
-        "**Step 10 — Announcement blurb**\n"
+        f"**Step 9 of {TOTAL_STEPS} — Announcement blurb**\n"
         "Write the message that gets posted when this event fires. Use these placeholders:\n"
         "• `{time}` — event time in your timezone (e.g. `10:15pm ET`)\n"
         "• `{server_time}` — event time in Server Time (UTC)\n\n"

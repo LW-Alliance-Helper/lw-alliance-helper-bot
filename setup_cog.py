@@ -141,7 +141,7 @@ class ChannelSelectStep(discord.ui.View):
         select.callback = _cb
         self.add_item(select)
 
-        # Only show create button for text channels, not threads
+        # Show create button for text channels only
         has_threads = channel_types and any(
             t in channel_types for t in [discord.ChannelType.public_thread, discord.ChannelType.private_thread]
         )
@@ -183,24 +183,6 @@ class ChannelSelectStep(discord.ui.View):
                     )
             create_btn.callback = _create_cb
             self.add_item(create_btn)
-        elif has_threads:
-            # Add an info button explaining threads must be created manually
-            info_btn = discord.ui.Button(
-                label="ℹ️ How to create a thread",
-                style=discord.ButtonStyle.secondary,
-                row=1,
-            )
-            async def _info_cb(interaction: discord.Interaction):
-                await interaction.response.send_message(
-                    "**Creating a thread:**\n"
-                    "1. Go to the channel where you want the thread\n"
-                    "2. Click the **+** icon or right-click a message → **Create Thread**\n"
-                    "3. Name it (e.g. `storm-log`) and create it\n"
-                    "4. Come back here and select it from the dropdown above.",
-                    ephemeral=True,
-                )
-            info_btn.callback = _info_cb
-            self.add_item(info_btn)
 
 
 class ConfirmView(discord.ui.View):
@@ -364,19 +346,13 @@ async def run_setup(interaction: discord.Interaction, bot):
         return
     cfg.survey_notify_channel_id = v.selected_channel.id
 
-    # ── Step 7: Storm log thread ───────────────────────────────────────────────
+    # ── Step 7: Storm log channel ──────────────────────────────────────────────
     await channel.send(
-        "**Step 7 of 9 — Storm Log Channel/Thread**\n"
-        "Select where DS/CS participation logs will be posted. This can be a channel or a thread.\n"
-        "*(If you need to create a thread first, click the **ℹ️ How to create a thread** button below)*"
+        "**Step 7 of 9 — Storm Log Channel**\n"
+        "Select the channel where DS/CS participation logs will be posted:"
     )
     v = ChannelSelectStep(
-        "Select storm log channel or thread...",
-        channel_types=[
-            discord.ChannelType.text,
-            discord.ChannelType.public_thread,
-            discord.ChannelType.private_thread,
-        ],
+        "Select storm log channel...",
         suggested_name="storm-log",
     )
     await channel.send("\u200b", view=v)

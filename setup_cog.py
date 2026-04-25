@@ -313,11 +313,12 @@ async def run_setup(interaction: discord.Interaction, bot):
         await channel.send("❌ Setup cancelled. Run `/setup` to start again.")
         return
 
-    # Save config
-    cfg.setup_complete = True
+    # Save config — including the sheet ID in the database
+    cfg.setup_complete  = True
+    cfg.spreadsheet_id  = sheet_id
     save_config(cfg)
 
-    # Store sheet ID per guild
+    # Also write to JSON file for backward compatibility
     import json
     from config import SHEETS_MAP_PATH
     try:

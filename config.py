@@ -34,6 +34,7 @@ OGV_DEFAULTS = {
     "survey_channel_id":         1399401720026759198,
     "survey_notify_channel_id":  1405930574253920408,
     "storm_log_thread_id":       1483977424231469229,
+    "spreadsheet_id":            "",   # populated from SPREADSHEET_ID env var on first run
     # Sheet tab names
     "tab_squad_powers":          "Squad Powers",
     "tab_growth_tracking":       "Growth Tracking",
@@ -67,6 +68,7 @@ class GuildConfig:
     survey_channel_id:        int        = 0
     survey_notify_channel_id: int        = 0
     storm_log_thread_id:      int        = 0
+    spreadsheet_id:           str        = ""
     tab_squad_powers:         str        = "Squad Powers"
     tab_growth_tracking:      str        = "Growth Tracking"
     tab_train_schedule:       str        = "Train Schedule"
@@ -122,6 +124,7 @@ def init_db():
                 survey_channel_id        INTEGER DEFAULT 0,
                 survey_notify_channel_id INTEGER DEFAULT 0,
                 storm_log_thread_id      INTEGER DEFAULT 0,
+                spreadsheet_id           TEXT    DEFAULT '',
                 tab_squad_powers         TEXT    DEFAULT 'Squad Powers',
                 tab_growth_tracking      TEXT    DEFAULT 'Growth Tracking',
                 tab_train_schedule       TEXT    DEFAULT 'Train Schedule',
@@ -147,15 +150,31 @@ def init_db():
             (OGV_GUILD_ID,)
         ).fetchone()
         if not existing:
-            cols   = ", ".join(OGV_DEFAULTS.keys())
+            cols         = ", ".join(OGV_DEFAULTS.keys())
             placeholders = ", ".join(["?"] * len(OGV_DEFAULTS))
-            values = list(OGV_DEFAULTS.values())
+            values       = list(OGV_DEFAULTS.values())
             conn.execute(
                 f"INSERT INTO guild_configs ({cols}, setup_complete) VALUES ({placeholders}, 1)",
                 values,
             )
             conn.commit()
             print(f"[CONFIG] Seeded OGV default config for guild {OGV_GUILD_ID}")
+
+        # Ensure OGV's spreadsheet_id is populated from env var if not already stored.
+        # This treats OGV the same as any other server — everything lives in the database.
+        row = conn.execute(
+            "SELECT spreadsheet_id FROM guild_configs WHERE guild_id = ?",
+            (OGV_GUILD_ID,)
+        ).fetchone()
+        if row and not row[0]:
+            env_sheet_id = os.getenv("SPREADSHEET_ID", "")
+            if env_sheet_id:
+                conn.execute(
+                    "UPDATE guild_configs SET spreadsheet_id = ? WHERE guild_id = ?",
+                    (env_sheet_id, OGV_GUILD_ID),
+                )
+                conn.commit()
+                print(f"[CONFIG] Persisted SPREADSHEET_ID env var to database for OGV")
 
 
 def get_config(guild_id: int) -> Optional[GuildConfig]:
@@ -224,17 +243,27 @@ def get_member_tab(guild_id: int) -> str:
 def get_spreadsheet_id(guild_id: int) -> str:
     """
     Get the Google Sheet ID for a guild.
-    Falls back to the SPREADSHEET_ID env var (used for OGV and single-server deploys).
+    Checks: 1) database spreadsheet_id field, 2) guild_sheets.json, 3) SPREADSHEET_ID env var.
     """
+    # Check database first
+    cfg = get_config(guild_id)
+    if cfg and cfg.spreadsheet_id:
+        return cfg.spreadsheet_id
+
+    # Check JSON file (used by /setup for new servers)
     import json
     try:
         with open(SHEETS_MAP_PATH) as f:
             sheet_map = json.load(f)
         sheet_id = sheet_map.get(str(guild_id))
         if sheet_id:
+            # Persist to database for future lookups
+            update_config_field(guild_id, "spreadsheet_id", sheet_id)
             return sheet_id
     except (FileNotFoundError, json.JSONDecodeError):
         pass
+
+    # Fall back to env var (covers OGV and single-server deploys)
     return os.getenv("SPREADSHEET_ID", "")
 
 

@@ -30,7 +30,7 @@ class CreateRoleModal(discord.ui.Modal):
         self.role_name = None
         self.field = discord.ui.TextInput(
             label="Role name",
-            placeholder="e.g. Alliance Member, OGV, Leadership",
+            placeholder="e.g. Member, Alliance Member, Leadership",
             required=True,
             max_length=100,
         )
@@ -94,11 +94,32 @@ class RoleSelectStep(discord.ui.View):
             )
 
 
+class CreateChannelModal(discord.ui.Modal):
+    def __init__(self, suggested_name: str = ""):
+        super().__init__(title="Create a New Channel")
+        self.channel_name = None
+        self.field = discord.ui.TextInput(
+            label="Channel name",
+            placeholder=suggested_name or "e.g. announcements",
+            default=suggested_name,
+            required=True,
+            max_length=100,
+        )
+        self.add_item(self.field)
+
+    async def on_submit(self, interaction: discord.Interaction):
+        self.channel_name = self.field.value.strip().lower().replace(" ", "-")
+        await interaction.response.defer()
+        self.stop()
+
+
 class ChannelSelectStep(discord.ui.View):
-    def __init__(self, placeholder: str, channel_types=None):
+    def __init__(self, placeholder: str, channel_types=None, suggested_name: str = "", allow_create: bool = True):
         super().__init__(timeout=WIZARD_TIMEOUT)
         self.selected_channel = None
         self.confirmed        = False
+        self.suggested_name   = suggested_name
+        self.allow_create     = allow_create
 
         types  = channel_types or [discord.ChannelType.text]
         select = discord.ui.ChannelSelect(
@@ -106,6 +127,7 @@ class ChannelSelectStep(discord.ui.View):
             min_values=1,
             max_values=1,
             channel_types=types,
+            row=0,
         )
         async def _cb(interaction: discord.Interaction):
             self.selected_channel = select.values[0]
@@ -118,6 +140,67 @@ class ChannelSelectStep(discord.ui.View):
             self.stop()
         select.callback = _cb
         self.add_item(select)
+
+        # Only show create button for text channels, not threads
+        has_threads = channel_types and any(
+            t in channel_types for t in [discord.ChannelType.public_thread, discord.ChannelType.private_thread]
+        )
+        if allow_create and not has_threads:
+            create_btn = discord.ui.Button(
+                label="➕ Create a new channel",
+                style=discord.ButtonStyle.secondary,
+                row=1,
+            )
+            async def _create_cb(interaction: discord.Interaction):
+                modal = CreateChannelModal(suggested_name=self.suggested_name)
+                await interaction.response.send_modal(modal)
+                await modal.wait()
+                if not modal.channel_name:
+                    return
+                try:
+                    new_channel = await interaction.guild.create_text_channel(
+                        name=modal.channel_name,
+                        reason=f"Created during Alliance Helper setup by {interaction.user.display_name}",
+                    )
+                    self.selected_channel = new_channel
+                    self.confirmed        = True
+                    for item in self.children:
+                        item.disabled = True
+                    await interaction.message.edit(
+                        content=f"✅ Created and selected: **#{new_channel.name}**",
+                        view=self,
+                    )
+                    self.stop()
+                except discord.Forbidden:
+                    await interaction.followup.send(
+                        "⚠️ I don't have permission to create channels. Please create it manually first, then run `/setup` again.",
+                        ephemeral=True,
+                    )
+                except Exception as e:
+                    await interaction.followup.send(
+                        f"⚠️ Could not create channel: {e}",
+                        ephemeral=True,
+                    )
+            create_btn.callback = _create_cb
+            self.add_item(create_btn)
+        elif has_threads:
+            # Add an info button explaining threads must be created manually
+            info_btn = discord.ui.Button(
+                label="ℹ️ How to create a thread",
+                style=discord.ButtonStyle.secondary,
+                row=1,
+            )
+            async def _info_cb(interaction: discord.Interaction):
+                await interaction.response.send_message(
+                    "**Creating a thread:**\n"
+                    "1. Go to the channel where you want the thread\n"
+                    "2. Click the **+** icon or right-click a message → **Create Thread**\n"
+                    "3. Name it (e.g. `storm-log`) and create it\n"
+                    "4. Come back here and select it from the dropdown above.",
+                    ephemeral=True,
+                )
+            info_btn.callback = _info_cb
+            self.add_item(info_btn)
 
 
 class ConfirmView(discord.ui.View):
@@ -233,7 +316,7 @@ async def run_setup(interaction: discord.Interaction, bot):
         "**Step 3 of 9 — Leadership Channel**\n"
         "Select the private channel where leadership commands will be used:"
     )
-    v = ChannelSelectStep("Select leadership channel...")
+    v = ChannelSelectStep("Select leadership channel...", suggested_name="leadership")
     await channel.send("\u200b", view=v)
     await v.wait()
     if not v.confirmed:
@@ -247,7 +330,7 @@ async def run_setup(interaction: discord.Interaction, bot):
         "**Step 4 of 9 — Announcement Channel**\n"
         "Select the public channel where event announcements will be posted:"
     )
-    v = ChannelSelectStep("Select announcement channel...")
+    v = ChannelSelectStep("Select announcement channel...", suggested_name="announcements")
     await channel.send("\u200b", view=v)
     await v.wait()
     if not v.confirmed:
@@ -260,7 +343,7 @@ async def run_setup(interaction: discord.Interaction, bot):
         "**Step 5 of 9 — Survey Channel**\n"
         "Select the channel where the squad powers survey button will live:"
     )
-    v = ChannelSelectStep("Select survey channel...")
+    v = ChannelSelectStep("Select survey channel...", suggested_name="squad-survey")
     await channel.send("\u200b", view=v)
     await v.wait()
     if not v.confirmed:
@@ -273,7 +356,7 @@ async def run_setup(interaction: discord.Interaction, bot):
         "**Step 6 of 9 — Survey Notification Channel**\n"
         "Select the channel where leadership will see new survey submissions:"
     )
-    v = ChannelSelectStep("Select survey notification channel...")
+    v = ChannelSelectStep("Select survey notification channel...", suggested_name="survey-responses")
     await channel.send("\u200b", view=v)
     await v.wait()
     if not v.confirmed:
@@ -283,13 +366,18 @@ async def run_setup(interaction: discord.Interaction, bot):
 
     # ── Step 7: Storm log thread ───────────────────────────────────────────────
     await channel.send(
-        "**Step 7 of 9 — Storm Log Thread**\n"
-        "Select the thread where DS/CS participation logs will be posted:\n"
-        "*(Create a thread in your leadership channel first if you haven't already)*"
+        "**Step 7 of 9 — Storm Log Channel/Thread**\n"
+        "Select where DS/CS participation logs will be posted. This can be a channel or a thread.\n"
+        "*(If you need to create a thread first, click the **ℹ️ How to create a thread** button below)*"
     )
     v = ChannelSelectStep(
-        "Select storm log thread...",
-        channel_types=[discord.ChannelType.public_thread, discord.ChannelType.private_thread],
+        "Select storm log channel or thread...",
+        channel_types=[
+            discord.ChannelType.text,
+            discord.ChannelType.public_thread,
+            discord.ChannelType.private_thread,
+        ],
+        suggested_name="storm-log",
     )
     await channel.send("\u200b", view=v)
     await v.wait()
@@ -774,7 +862,7 @@ async def run_event_setup(interaction: discord.Interaction, bot):
             return
 
     # ── Step 6: Draft channel ─────────────────────────────────────────────────
-    draft_ch_view = ChannelSelectStep("Select the channel for announcement drafts...")
+    draft_ch_view = ChannelSelectStep("Select the channel for announcement drafts...", suggested_name="event-drafts")
     draft_ch_msg  = await channel.send(
         "**Step 6 — Draft channel**\n"
         "Which channel should the bot post the draft announcement for leadership to review?",
@@ -791,7 +879,7 @@ async def run_event_setup(interaction: discord.Interaction, bot):
     draft_channel_id = draft_ch_view.selected_channel.id
 
     # ── Step 7: Announcement channel ──────────────────────────────────────────
-    ann_ch_view = ChannelSelectStep("Select the public announcement channel...")
+    ann_ch_view = ChannelSelectStep("Select the public announcement channel...", suggested_name="announcements")
     ann_ch_msg  = await channel.send(
         "**Step 7 — Announcement channel**\n"
         "Which channel should the final approved announcement be posted to?",

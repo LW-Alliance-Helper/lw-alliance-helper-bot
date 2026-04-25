@@ -93,7 +93,7 @@ DS_TIMES = {
 
 # ── Google Sheets persistence ──────────────────────────────────────────────────
 
-def _get_spreadsheet():
+def _get_spreadsheet(guild_id: int = None):
     import gspread
     from google.oauth2.service_account import Credentials
 
@@ -107,8 +107,8 @@ def _get_spreadsheet():
         creds    = Credentials.from_service_account_file(key_file, scopes=scopes)
 
     gc = gspread.authorize(creds)
-    from config import get_spreadsheet_id
-    sheet_id = get_spreadsheet_id(guild_id) if guild_id else os.getenv("SPREADSHEET_ID", "")
+    from config import get_spreadsheet_id, OGV_GUILD_ID
+    sheet_id = get_spreadsheet_id(guild_id or OGV_GUILD_ID)
     return gc.open_by_key(sheet_id)
 
 
@@ -677,10 +677,13 @@ CS_DEFAULTS = {"A": DEFAULT_CS_A, "B": DEFAULT_CS_B}
 
 # ── CS Sheets persistence ──────────────────────────────────────────────────────
 
-def load_cs_assignments(team: str) -> dict:
+def load_cs_assignments(team: str, guild_id: int = None) -> dict:
     zone_key = f"CS_{team}_ZONES"
     try:
-        sh   = _get_spreadsheet()
+        from config import get_config, OGV_GUILD_ID
+        gid = guild_id or OGV_GUILD_ID
+        cfg = get_config(gid)
+        sh   = _get_spreadsheet(gid)
         ws   = sh.worksheet(CS_SHEET_NAME)
         rows = ws.get_all_values()
         zones   = {}
@@ -709,10 +712,11 @@ def load_cs_assignments(team: str) -> dict:
         return dict(CS_DEFAULTS[team])
 
 
-def save_cs_assignments(team: str, zones: dict):
+def save_cs_assignments(team: str, zones: dict, guild_id: int = None):
     """Save CS assignments for one team without affecting DS or the other CS team."""
     try:
-        sh = _get_spreadsheet()
+        from config import OGV_GUILD_ID
+        sh = _get_spreadsheet(guild_id or OGV_GUILD_ID)
         ws = sh.worksheet(CS_SHEET_NAME)
         existing = ws.get_all_values()
 

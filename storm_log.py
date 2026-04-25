@@ -42,7 +42,7 @@ LOG_HEADERS = [
 
 # ── Sheets helpers ─────────────────────────────────────────────────────────────
 
-def _get_spreadsheet():
+def _get_spreadsheet(guild_id: int = None):
     import gspread
     from google.oauth2.service_account import Credentials
     scopes           = ["https://www.googleapis.com/auth/spreadsheets"]
@@ -54,13 +54,17 @@ def _get_spreadsheet():
         key_file = os.getenv("GOOGLE_SERVICE_ACCOUNT_FILE", "service_account.json")
         creds    = Credentials.from_service_account_file(key_file, scopes=scopes)
     gc = gspread.authorize(creds)
-    from config import get_spreadsheet_id
-    sheet_id = get_spreadsheet_id(guild_id) if guild_id else os.getenv("SPREADSHEET_ID", "")
+    from config import get_spreadsheet_id, OGV_GUILD_ID
+    sheet_id = get_spreadsheet_id(guild_id or OGV_GUILD_ID)
     return gc.open_by_key(sheet_id)
 
 
-def _get_log_sheet():
-    return _get_spreadsheet().worksheet(LOG_SHEET_NAME)
+def _get_log_sheet(guild_id: int = None):
+    from config import get_config, OGV_GUILD_ID
+    gid = guild_id or OGV_GUILD_ID
+    cfg = get_config(gid)
+    tab = cfg.tab_sitouts if cfg else "DS-CS Sit-outs"
+    return _get_spreadsheet(gid).worksheet(tab)
 
 
 def _ensure_headers(ws):
@@ -69,8 +73,8 @@ def _ensure_headers(ws):
         ws.update("A1", [LOG_HEADERS], value_input_option="USER_ENTERED")
 
 
-def append_log_row(event_type, log_date, vote_count, rtf_no_vote, sitting_out, prior_no_request):
-    ws = _get_log_sheet()
+def append_log_row(event_type, log_date, vote_count, rtf_no_vote, sitting_out, prior_no_request, guild_id=None):
+    ws = _get_log_sheet(guild_id)
     _ensure_headers(ws)
     row = [
         log_date.strftime("%-m/%-d/%Y"),
@@ -114,9 +118,9 @@ def load_member_names():
         return [], {}
 
 
-def get_prior_sitouts(event_type):
+def get_prior_sitouts(event_type, guild_id=None):
     try:
-        ws   = _get_log_sheet()
+        ws   = _get_log_sheet(guild_id)
         rows = ws.get_all_values()
         if len(rows) <= 1:
             return []
@@ -514,8 +518,9 @@ async def run_log_flow(bot, channel, user, event_type):
         # ── Step 5: Prior sit-outs who didn't request ─────────────────────────
         step_num      = 5 if is_ds else 3
         loading_msg   = await channel.send("⏳ Checking previous log...")
+        _gid2 = channel.guild.id if hasattr(channel, "guild") and channel.guild else None
         prior_names   = await asyncio.get_event_loop().run_in_executor(
-            None, get_prior_sitouts, event_type
+            None, get_prior_sitouts, event_type, _gid2
         )
         try:
             await loading_msg.delete()
@@ -586,13 +591,13 @@ async def run_log_flow(bot, channel, user, event_type):
 
 # ── Log lookup ─────────────────────────────────────────────────────────────────
 
-def lookup_log_entry(event_type: str, log_date: date):
+def lookup_log_entry(event_type: str, log_date: date, guild_id=None):
     """
     Find the most recent log row matching event_type and log_date.
     Returns a dict of the row data, or None if not found.
     """
     try:
-        ws   = _get_log_sheet()
+        ws   = _get_log_sheet(guild_id)
         rows = ws.get_all_values()
         if len(rows) <= 1:
             return None

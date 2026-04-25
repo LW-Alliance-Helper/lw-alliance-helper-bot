@@ -48,7 +48,7 @@ HISTORY_HEADERS = [
 
 # ── Sheets helpers ─────────────────────────────────────────────────────────────
 
-def _get_spreadsheet():
+def _get_spreadsheet(guild_id: int = None):
     import gspread
     from google.oauth2.service_account import Credentials
     scopes           = ["https://www.googleapis.com/auth/spreadsheets"]
@@ -60,8 +60,8 @@ def _get_spreadsheet():
         key_file = os.getenv("GOOGLE_SERVICE_ACCOUNT_FILE", "service_account.json")
         creds    = Credentials.from_service_account_file(key_file, scopes=scopes)
     gc = gspread.authorize(creds)
-    from config import get_spreadsheet_id
-    sheet_id = get_spreadsheet_id(guild_id) if guild_id else os.getenv("SPREADSHEET_ID", "")
+    from config import get_spreadsheet_id, OGV_GUILD_ID
+    sheet_id = get_spreadsheet_id(guild_id or OGV_GUILD_ID)
     return gc.open_by_key(sheet_id)
 
 
@@ -73,13 +73,16 @@ def _to_millions(val: str) -> str:
         return val
 
 
-def update_squad_powers(discord_id: str, username: str, data: dict):
+def update_squad_powers(discord_id: str, username: str, data: dict, guild_id: int = None):
     """
     Update or insert a member's row in the Squad Powers sheet.
     Matches on Discord ID (col B). Appends if not found.
     """
-    sh   = _get_spreadsheet()
-    ws   = sh.worksheet(SQUAD_POWERS_TAB)
+    from config import get_config, OGV_GUILD_ID
+    gid  = guild_id or OGV_GUILD_ID
+    cfg  = get_config(gid)
+    sh   = _get_spreadsheet(gid)
+    ws   = sh.worksheet(cfg.tab_squad_powers if cfg else "Squad Powers")
     rows = ws.get_all_values()
 
     now_str = datetime.now(timezone.utc).strftime("%-m/%-d/%Y")
@@ -110,10 +113,13 @@ def update_squad_powers(discord_id: str, username: str, data: dict):
     print(f"[SURVEY] Appended new Squad Powers row for {username}")
 
 
-def append_survey_history(discord_id: str, username: str, data: dict):
+def append_survey_history(discord_id: str, username: str, data: dict, guild_id: int = None):
     """Append a timestamped row to the Survey History sheet."""
-    sh = _get_spreadsheet()
-    ws = sh.worksheet(SURVEY_HISTORY_TAB)
+    from config import get_config, OGV_GUILD_ID
+    gid  = guild_id or OGV_GUILD_ID
+    cfg  = get_config(gid)
+    sh   = _get_spreadsheet(gid)
+    ws   = sh.worksheet(cfg.tab_survey_history if cfg else "Survey History")
 
     existing = ws.row_values(1)
     if not any(existing):
@@ -293,8 +299,9 @@ async def run_survey(bot, thread: discord.Thread, user: discord.Member):
         discord_id = str(user.id)
         username   = user.display_name
         loop       = asyncio.get_event_loop()
-        await loop.run_in_executor(None, update_squad_powers,    discord_id, username, data)
-        await loop.run_in_executor(None, append_survey_history,  discord_id, username, data)
+        gid = user.guild.id if hasattr(user, "guild") and user.guild else None
+        await loop.run_in_executor(None, update_squad_powers,   discord_id, username, data, gid)
+        await loop.run_in_executor(None, append_survey_history, discord_id, username, data, gid)
     except Exception as e:
         await thread.send(f"⚠️ There was an error saving your responses: {e}\nPlease let leadership know.")
         print(f"[SURVEY] Error saving for {user.display_name}: {e}")

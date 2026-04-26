@@ -1,0 +1,92 @@
+name: Test & Deploy
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+
+jobs:
+  # ── Unit & Integration Tests ────────────────────────────────────────────────
+  unit-and-integration:
+    name: Unit & Integration Tests
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+
+      - name: Cache pip packages
+        uses: actions/cache@v4
+        with:
+          path: ~/.cache/pip
+          key: ${{ runner.os }}-pip-${{ hashFiles('requirements.txt') }}
+          restore-keys: |
+            ${{ runner.os }}-pip-
+
+      - name: Install dependencies
+        run: |
+          python -m pip install --upgrade pip
+          pip install -r requirements.txt
+          pip install pytest pytest-asyncio pytest-mock
+
+      - name: Run unit tests
+        run: |
+          pytest tests/unit/ -v --tb=short -m "not sheets"
+
+      - name: Run integration tests
+        run: |
+          pytest tests/integration/ -v --tb=short -m "not sheets"
+
+  # ── Sheet Integration Tests (main branch only) ──────────────────────────────
+  sheet-tests:
+    name: Sheet Integration Tests
+    runs-on: ubuntu-latest
+    if: github.ref == 'refs/heads/main'
+    needs: unit-and-integration
+
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+
+      - name: Install dependencies
+        run: |
+          python -m pip install --upgrade pip
+          pip install -r requirements.txt
+          pip install pytest pytest-asyncio pytest-mock
+
+      - name: Run sheet integration tests
+        env:
+          GOOGLE_CREDENTIALS_JSON: ${{ secrets.GOOGLE_CREDENTIALS_JSON }}
+          TEST_SHEET_ID: ${{ secrets.TEST_SHEET_ID }}
+        run: |
+          pytest tests/sheets/ -v --tb=short -m "sheets"
+
+  # ── Deploy gate ─────────────────────────────────────────────────────────────
+  # Railway watches the main branch and deploys automatically.
+  # By requiring both test jobs to pass before this job,
+  # we prevent Railway from seeing a successful "deploy" signal
+  # if tests fail. If you want Railway to only deploy after CI,
+  # enable "Wait for CI checks" in Railway's GitHub integration settings.
+  deploy-ready:
+    name: All Tests Passed
+    runs-on: ubuntu-latest
+    if: github.ref == 'refs/heads/main'
+    needs: [unit-and-integration, sheet-tests]
+
+    steps:
+      - name: Signal deployment readiness
+        run: |
+          echo "✅ All tests passed. Railway deployment can proceed."
+          echo "Commit: ${{ github.sha }}"
+          echo "Branch: ${{ github.ref_name }}"

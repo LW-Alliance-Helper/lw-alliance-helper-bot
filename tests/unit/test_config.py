@@ -1,0 +1,323 @@
+"""
+Unit tests for config.py — database schema, save/load round-trips,
+per-guild config functions, migrations.
+"""
+import pytest
+import sys, os
+sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__)))))
+
+from tests.conftest import TEST_GUILD_ID
+
+
+class TestGuildConfig:
+    """Test GuildConfig save/load round-trips."""
+
+    def test_get_or_create_returns_default(self, temp_db):
+        import config
+        cfg = config.get_or_create_config(TEST_GUILD_ID)
+        assert cfg.guild_id == TEST_GUILD_ID
+        assert cfg.setup_complete == False
+        assert cfg.timezone == "America/New_York"
+
+    def test_save_and_reload(self, temp_db):
+        import config
+        cfg = config.get_or_create_config(TEST_GUILD_ID)
+        cfg.member_role_name      = "Alliance Member"
+        cfg.leadership_role_name  = "R4/R5"
+        cfg.timezone              = "America/Chicago"
+        cfg.spreadsheet_id        = "abc123xyz"
+        cfg.setup_complete        = True
+        config.save_config(cfg)
+
+        loaded = config.get_config(TEST_GUILD_ID)
+        assert loaded.member_role_name     == "Alliance Member"
+        assert loaded.leadership_role_name == "R4/R5"
+        assert loaded.timezone             == "America/Chicago"
+        assert loaded.spreadsheet_id       == "abc123xyz"
+        assert loaded.setup_complete       == True
+
+    def test_get_config_returns_none_for_unknown_guild(self, temp_db):
+        import config
+        result = config.get_config(9999999999999999)
+        assert result is None
+
+    def test_update_config_field(self, temp_db):
+        import config
+        config.get_or_create_config(TEST_GUILD_ID)
+        config.update_config_field(TEST_GUILD_ID, "timezone", "Europe/London")
+        cfg = config.get_config(TEST_GUILD_ID)
+        assert cfg.timezone == "Europe/London"
+
+    def test_is_setup_complete_false_by_default(self, temp_db):
+        import config
+        config.get_or_create_config(TEST_GUILD_ID)
+        assert config.is_setup_complete(TEST_GUILD_ID) == False
+
+    def test_is_setup_complete_true_after_save(self, temp_db):
+        import config
+        cfg = config.get_or_create_config(TEST_GUILD_ID)
+        cfg.setup_complete = True
+        config.save_config(cfg)
+        assert config.is_setup_complete(TEST_GUILD_ID) == True
+
+    def test_multiple_guilds_isolated(self, temp_db):
+        import config
+        guild_a = 1000000000000000001
+        guild_b = 1000000000000000002
+        cfg_a   = config.get_or_create_config(guild_a)
+        cfg_b   = config.get_or_create_config(guild_b)
+        cfg_a.timezone = "America/New_York"
+        cfg_b.timezone = "Asia/Tokyo"
+        config.save_config(cfg_a)
+        config.save_config(cfg_b)
+
+        assert config.get_config(guild_a).timezone == "America/New_York"
+        assert config.get_config(guild_b).timezone == "Asia/Tokyo"
+
+
+class TestTrainConfig:
+    """Test guild_train_config save/load."""
+
+    def test_default_train_config(self, temp_db):
+        import config
+        cfg = config.get_train_config(TEST_GUILD_ID)
+        assert cfg["tab_name"] == "Train Schedule"
+        assert isinstance(cfg["themes"], list)
+        assert len(cfg["themes"]) > 0
+        assert cfg["reminders_enabled"] in (0, 1)
+
+    def test_save_and_reload_train_config(self, temp_db):
+        import config
+        themes = ["Welcome", "Birthday", "Custom"]
+        tones  = ["Default", "Casual", "Intense"]
+        config.save_train_config(
+            TEST_GUILD_ID,
+            tab_name="My Train Tab",
+            themes=themes,
+            tones=tones,
+            prompt_template="Write a blurb for {name}.",
+            default_tone="Default",
+            blurbs_enabled=1,
+            reminders_enabled=1,
+            reminder_channel_id=123456,
+            reminder_time="22:00",
+        )
+        cfg = config.get_train_config(TEST_GUILD_ID)
+        assert cfg["tab_name"]            == "My Train Tab"
+        assert cfg["themes"]              == themes
+        assert cfg["tones"]               == tones
+        assert cfg["prompt_template"]     == "Write a blurb for {name}."
+        assert cfg["default_tone"]        == "Default"
+        assert cfg["blurbs_enabled"]      == 1
+        assert cfg["reminders_enabled"]   == 1
+        assert cfg["reminder_channel_id"] == 123456
+        assert cfg["reminder_time"]       == "22:00"
+
+
+class TestBirthdayConfig:
+    """Test guild_birthday_config save/load."""
+
+    def test_default_birthday_config(self, temp_db):
+        import config
+        cfg = config.get_birthday_config(TEST_GUILD_ID)
+        assert cfg["enabled"]      == 0
+        assert cfg["tab_name"]     == "Birthdays"
+        assert cfg["name_col"]     == 0
+        assert cfg["birthday_col"] == 1
+
+    def test_save_and_reload_birthday_config(self, temp_db):
+        import config
+        config.save_birthday_config(
+            guild_id=TEST_GUILD_ID,
+            tab_name="Member Roster",
+            name_col=3,
+            birthday_col=7,
+            discord_id_col=2,
+            data_start_row=2,
+            enabled=1,
+            train_integration=1,
+            flexible_placement=1,
+            lookahead_days=21,
+            reminders_enabled=1,
+            reminder_channel_id=777777,
+            reminder_time="08:00",
+        )
+        cfg = config.get_birthday_config(TEST_GUILD_ID)
+        assert cfg["tab_name"]           == "Member Roster"
+        assert cfg["name_col"]           == 3
+        assert cfg["birthday_col"]       == 7
+        assert cfg["discord_id_col"]     == 2
+        assert cfg["lookahead_days"]     == 21
+        assert cfg["train_integration"]  == 1
+        assert cfg["flexible_placement"] == 1
+        assert cfg["reminders_enabled"]  == 1
+        assert cfg["reminder_channel_id"]== 777777
+        assert cfg["reminder_time"]      == "08:00"
+
+
+class TestStormConfig:
+    """Test guild_storm_config save/load."""
+
+    def test_default_storm_config(self, temp_db):
+        import config
+        cfg = config.get_storm_config(TEST_GUILD_ID, "DS")
+        assert cfg["event_type"]  == "DS"
+        assert "mail_template" in cfg
+
+    def test_save_and_reload_storm_config(self, temp_db):
+        import config
+        config.save_storm_config(
+            TEST_GUILD_ID, "DS",
+            tab_name="DS Zones",
+            mail_template="**{alliance_name}**\n{zones}\n{subs}\n{time}",
+            t1_label="", t1_local="", t1_server="",
+            t2_label="", t2_local="", t2_server="",
+            timezone="America/New_York",
+            log_channel_id=888888,
+        )
+        cfg = config.get_storm_config(TEST_GUILD_ID, "DS")
+        assert cfg["tab_name"]        == "DS Zones"
+        assert "{alliance_name}" in cfg["mail_template"]
+        assert cfg["log_channel_id"]  == 888888
+
+    def test_ds_and_cs_isolated(self, temp_db):
+        import config
+        config.save_storm_config(TEST_GUILD_ID, "DS", "DS Tab", "DS template",
+                                 "", "", "", "", "", "", "America/New_York", 0)
+        config.save_storm_config(TEST_GUILD_ID, "CS", "CS Tab", "CS template",
+                                 "", "", "", "", "", "", "America/New_York", 0)
+        ds = config.get_storm_config(TEST_GUILD_ID, "DS")
+        cs = config.get_storm_config(TEST_GUILD_ID, "CS")
+        assert ds["tab_name"]      == "DS Tab"
+        assert cs["tab_name"]      == "CS Tab"
+        assert ds["mail_template"] != cs["mail_template"]
+
+
+class TestSurveyConfig:
+    """Test guild_survey_config save/load."""
+
+    def test_default_survey_config(self, temp_db):
+        import config
+        cfg = config.get_survey_config(TEST_GUILD_ID)
+        assert cfg["tab_squad_powers"] == "Squad Powers"
+        assert cfg["tab_history"]      == "Survey History"
+        assert isinstance(cfg["questions"], list)
+
+    def test_save_and_reload_survey_config(self, temp_db):
+        import config
+        questions = [
+            {"key": "squad1", "label": "1st Squad Power", "type": "text",
+             "options": [], "placeholder": "e.g. 43.27", "max_chars": 5},
+            {"key": "profession", "label": "Profession", "type": "dropdown",
+             "options": ["War Leader", "Engineer"], "placeholder": "", "max_chars": 0},
+        ]
+        config.save_survey_config(
+            TEST_GUILD_ID, "Squad Powers", "Survey History",
+            questions, "Please fill out the survey each week!"
+        )
+        cfg = config.get_survey_config(TEST_GUILD_ID)
+        assert len(cfg["questions"])        == 2
+        assert cfg["questions"][0]["key"]   == "squad1"
+        assert cfg["questions"][1]["type"]  == "dropdown"
+        assert cfg["intro_message"]         == "Please fill out the survey each week!"
+
+
+class TestGrowthConfig:
+    """Test guild_growth_config save/load."""
+
+    def test_default_growth_config(self, temp_db):
+        import config
+        cfg = config.get_growth_config(TEST_GUILD_ID)
+        assert cfg["enabled"]            == 0
+        assert cfg["tab_growth"]         == "Growth Tracking"
+        assert cfg["snapshot_frequency"] == "monthly"
+
+    def test_save_and_reload_growth_config(self, temp_db):
+        import config
+        metrics = [
+            {"col": "E", "label": "1st Squad Power"},
+            {"col": "I", "label": "THP"},
+        ]
+        config.save_growth_config(
+            TEST_GUILD_ID, enabled=1,
+            tab_source="Squad Powers", name_col="D",
+            metrics=metrics, tab_growth="Growth Tracking",
+            snapshot_frequency="monthly", snapshot_day=1,
+            snapshot_interval=30, data_start_row=2,
+        )
+        cfg = config.get_growth_config(TEST_GUILD_ID)
+        assert cfg["enabled"]     == 1
+        assert cfg["tab_source"]  == "Squad Powers"
+        assert cfg["name_col"]    == "D"
+        assert len(cfg["metrics"])== 2
+        assert cfg["metrics"][0]["label"] == "1st Squad Power"
+        assert cfg["metrics"][1]["col"]   == "I"
+
+
+class TestGuildEvents:
+    """Test guild_events save/load/delete."""
+
+    def test_save_and_load_event(self, temp_db):
+        import config
+        event = {
+            "short_key": "marauder",
+            "name": "Plague Marauder (AE)",
+            "timezone": "America/New_York",
+            "default_time": "22:15",
+            "announcement_blurb": "Marauder at {time}!",
+            "schedule_type": "repeating",
+            "anchor_date": "2026-03-30",
+            "interval_days": 3,
+            "draft_channel_id": 111,
+            "announcement_channel_id": 222,
+            "draft_time": "12:00",
+            "five_min_warning": 1,
+            "active": 1,
+        }
+        config.save_guild_event(TEST_GUILD_ID, event)
+        loaded = config.get_guild_event(TEST_GUILD_ID, "marauder")
+        assert loaded["name"]           == "Plague Marauder (AE)"
+        assert loaded["interval_days"]  == 3
+        assert loaded["schedule_type"]  == "repeating"
+
+    def test_get_guild_events_returns_list(self, temp_db):
+        import config
+        for key, name in [("siege", "Zombie Siege"), ("marauder", "Plague Marauder")]:
+            config.save_guild_event(TEST_GUILD_ID, {
+                "short_key": key, "name": name, "timezone": "America/New_York",
+                "default_time": "22:00", "announcement_blurb": "Event!",
+                "schedule_type": "manual", "anchor_date": "", "interval_days": 0,
+                "draft_channel_id": 0, "announcement_channel_id": 0,
+                "draft_time": "12:00", "five_min_warning": 0, "active": 1,
+            })
+        events = config.get_guild_events(TEST_GUILD_ID)
+        assert len(events) == 2
+
+    def test_delete_event(self, temp_db):
+        import config
+        config.save_guild_event(TEST_GUILD_ID, {
+            "short_key": "siege", "name": "Zombie Siege", "timezone": "America/New_York",
+            "default_time": "22:00", "announcement_blurb": "!", "schedule_type": "manual",
+            "anchor_date": "", "interval_days": 0, "draft_channel_id": 0,
+            "announcement_channel_id": 0, "draft_time": "12:00",
+            "five_min_warning": 0, "active": 1,
+        })
+        config.delete_guild_event(TEST_GUILD_ID, "siege")
+        # Events are soft-deleted (active=0), not removed
+        # get_guild_events with active_only=True should exclude it
+        active_events = config.get_guild_events(TEST_GUILD_ID, active_only=True)
+        assert not any(e["short_key"] == "siege" for e in active_events)
+
+    def test_events_isolated_per_guild(self, temp_db):
+        import config
+        event = {
+            "short_key": "marauder", "name": "Marauder", "timezone": "America/New_York",
+            "default_time": "22:00", "announcement_blurb": "!", "schedule_type": "manual",
+            "anchor_date": "", "interval_days": 0, "draft_channel_id": 0,
+            "announcement_channel_id": 0, "draft_time": "12:00",
+            "five_min_warning": 0, "active": 1,
+        }
+        guild_a = 1000000000000000001
+        config.save_guild_event(guild_a, event)
+        assert config.get_guild_events(TEST_GUILD_ID) == []
+        assert len(config.get_guild_events(guild_a))  == 1

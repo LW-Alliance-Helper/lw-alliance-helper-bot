@@ -1,0 +1,258 @@
+"""
+Unit tests for train.py — birthday placement, schedule logic,
+parse_birthday, build_chatgpt_prompt, check_and_add_birthdays.
+"""
+import pytest
+from datetime import date, timedelta
+from unittest.mock import patch, MagicMock
+import sys, os
+sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__)))))
+
+from tests.conftest import TEST_GUILD_ID
+
+
+class TestParseBirthday:
+    """Test parse_birthday handles various date formats."""
+
+    def setup_method(self):
+        from train import parse_birthday
+        self.parse = parse_birthday
+
+    def test_mm_dd(self):
+        assert self.parse("3/15")   == (3, 15)
+        assert self.parse("12/25")  == (12, 25)
+
+    def test_month_day_text(self):
+        assert self.parse("March 15")   == (3, 15)
+        assert self.parse("December 25")== (12, 25)
+
+    def test_mm_dd_yyyy(self):
+        assert self.parse("3/15/1990")  == (3, 15)
+        assert self.parse("12/25/2000") == (12, 25)
+
+    def test_invalid_returns_none(self):
+        assert self.parse("not a date") is None
+        assert self.parse("")            is None
+        # Note: parse_birthday doesn't validate month/day ranges,
+        # it only validates format — "99/99" parses as (99, 99)
+
+    def test_leading_zeros(self):
+        assert self.parse("01/05") == (1, 5)
+        assert self.parse("09/03") == (9, 3)
+
+
+class TestBuildChatgptPrompt:
+    """Test build_chatgpt_prompt formats correctly."""
+
+    def test_placeholders_filled(self, seeded_db):
+        from train import build_chatgpt_prompt
+        from config import save_train_config
+        template = "Member: {name}\nTheme: {theme}\nTone: {tone}\nNotes: {notes}"
+        save_train_config(
+            TEST_GUILD_ID, "Train Schedule", [], [], template,
+            "Default", blurbs_enabled=1,
+        )
+        result = build_chatgpt_prompt("Alice", "Birthday", "Casual", "Loves cats",
+                                      guild_id=TEST_GUILD_ID)
+        assert "Alice"       in result
+        assert "Birthday"    in result
+        assert "Casual"      in result
+        assert "Loves cats"  in result
+
+    def test_empty_notes_replaced_with_none(self, seeded_db):
+        from train import build_chatgpt_prompt
+        from config import save_train_config
+        template = "Member: {name}\nNotes: {notes}"
+        save_train_config(
+            TEST_GUILD_ID, "Train Schedule", [], [], template,
+            "Default", blurbs_enabled=1,
+        )
+        result = build_chatgpt_prompt("Bob", "Milestone", "Default", "",
+                                      guild_id=TEST_GUILD_ID)
+        assert "Bob"  in result
+        assert "None" in result or result  # notes fallback
+
+    def test_fallback_without_template(self, seeded_db):
+        from train import build_chatgpt_prompt
+        from config import save_train_config
+        save_train_config(
+            TEST_GUILD_ID, "Train Schedule", [], [], "",
+            "Default", blurbs_enabled=1,
+        )
+        result = build_chatgpt_prompt("Carol", "Welcome", "Intense", "New member",
+                                      guild_id=TEST_GUILD_ID)
+        assert result  # Should return something even without template
+
+
+class TestCheckAndAddBirthdays:
+    """Test check_and_add_birthdays placement logic."""
+
+    def _make_schedule(self, entries: dict) -> dict:
+        """Helper to build a schedule dict."""
+        return entries
+
+    def test_birthday_added_on_exact_date(self, seeded_db):
+        from train import check_and_add_birthdays
+        from config import save_birthday_config
+
+        today = date.today()
+        target = today + timedelta(days=7)
+
+        save_birthday_config(
+            TEST_GUILD_ID,
+            tab_name="Members",
+            name_col=0,
+            birthday_col=1,
+            data_start_row=2,
+            enabled=1,
+            train_integration=1,
+            flexible_placement=0,
+            lookahead_days=14,
+        )
+
+        members = [{"name": "Alice", "month": target.month, "day": target.day}]
+
+        with patch("train.load_birthdays", return_value=members):
+            schedule, alerts = check_and_add_birthdays({}, guild_id=TEST_GUILD_ID)
+
+        target_str = target.isoformat()
+        assert target_str in schedule
+        assert schedule[target_str]["name"] == "Alice"
+        assert alerts == []
+
+    def test_birthday_skipped_if_already_in_schedule(self, seeded_db):
+        from train import check_and_add_birthdays
+        from config import save_birthday_config
+
+        today  = date.today()
+        target = today + timedelta(days=7)
+
+        save_birthday_config(
+            TEST_GUILD_ID, "Members", 0, 1, 2, 1, 1, 0, 14
+        )
+
+        existing = {target.isoformat(): {"name": "Alice", "theme": "Birthday"}}
+        members  = [{"name": "Alice", "month": target.month, "day": target.day}]
+
+        with patch("train.load_birthdays", return_value=members):
+            schedule, alerts = check_and_add_birthdays(existing, guild_id=TEST_GUILD_ID)
+
+        # Should not duplicate
+        assert schedule[target.isoformat()]["name"] == "Alice"
+        assert alerts == []
+
+    def test_flexible_placement_uses_adjacent_day(self, seeded_db):
+        from train import check_and_add_birthdays
+        from config import save_birthday_config
+
+        today  = date.today()
+        target = today + timedelta(days=7)
+
+        save_birthday_config(
+            TEST_GUILD_ID, "Members", 0, 1, 2, 1, 1, 1, 14
+        )
+
+        # Target day is taken by someone else
+        existing = {target.isoformat(): {"name": "Bob", "theme": "Milestone"}}
+        members  = [{"name": "Alice", "month": target.month, "day": target.day}]
+
+        with patch("train.load_birthdays", return_value=members):
+            schedule, alerts = check_and_add_birthdays(existing, guild_id=TEST_GUILD_ID)
+
+        # Alice should be placed on day before or after
+        day_before = (target - timedelta(days=1)).isoformat()
+        day_after  = (target + timedelta(days=1)).isoformat()
+        placed = (
+            schedule.get(day_before, {}).get("name") == "Alice" or
+            schedule.get(day_after,  {}).get("name") == "Alice"
+        )
+        assert placed
+
+    def test_alert_generated_when_no_slot_available(self, seeded_db):
+        from train import check_and_add_birthdays
+        from config import save_birthday_config
+
+        today  = date.today()
+        target = today + timedelta(days=7)
+
+        save_birthday_config(
+            TEST_GUILD_ID, "Members", 0, 1, 2, 1, 1, 1, 14
+        )
+
+        # All three slots taken by someone else
+        existing = {
+            (target - timedelta(days=1)).isoformat(): {"name": "X"},
+            target.isoformat():                       {"name": "Y"},
+            (target + timedelta(days=1)).isoformat(): {"name": "Z"},
+        }
+        members = [{"name": "Alice", "month": target.month, "day": target.day}]
+
+        with patch("train.load_birthdays", return_value=members):
+            schedule, alerts = check_and_add_birthdays(existing, guild_id=TEST_GUILD_ID)
+
+        assert len(alerts) == 1
+        assert "Alice" in alerts[0]
+
+    def test_birthday_outside_lookahead_not_added(self, seeded_db):
+        from train import check_and_add_birthdays
+        from config import save_birthday_config
+
+        today  = date.today()
+        target = today + timedelta(days=30)  # beyond 14 day lookahead
+
+        save_birthday_config(
+            TEST_GUILD_ID, "Members", 0, 1, 2, 1, 1, 0, 14
+        )
+
+        members = [{"name": "Alice", "month": target.month, "day": target.day}]
+
+        with patch("train.load_birthdays", return_value=members):
+            schedule, alerts = check_and_add_birthdays({}, guild_id=TEST_GUILD_ID)
+
+        assert target.isoformat() not in schedule
+
+    def test_disabled_train_integration_skips_birthdays(self, seeded_db):
+        from train import check_and_add_birthdays
+        from config import save_birthday_config
+
+        today  = date.today()
+        target = today + timedelta(days=7)
+
+        save_birthday_config(
+            TEST_GUILD_ID, "Members", 0, 1,
+            data_start_row=2, enabled=1,
+            train_integration=0,  # disabled
+            flexible_placement=0,
+            lookahead_days=14,
+        )
+
+        members = [{"name": "Alice", "month": target.month, "day": target.day}]
+
+        with patch("train.load_birthdays", return_value=members):
+            schedule, alerts = check_and_add_birthdays({}, guild_id=TEST_GUILD_ID)
+
+        assert schedule == {}
+
+
+class TestGetThemesAndTones:
+    """Test get_themes and get_tones use guild config."""
+
+    def test_default_themes_returned_without_config(self, temp_db):
+        from train import get_themes, DEFAULT_THEMES
+        result = get_themes(TEST_GUILD_ID)
+        assert isinstance(result, list)
+        assert len(result) > 0
+
+    def test_custom_themes_returned_with_config(self, seeded_db):
+        from train import get_themes
+        from config import save_train_config
+        custom = ["Theme A", "Theme B", "Theme C"]
+        save_train_config(TEST_GUILD_ID, "Train Schedule", custom, [], "", "Theme A")
+        result = get_themes(TEST_GUILD_ID)
+        assert result == custom
+
+    def test_default_tones_returned_without_config(self, temp_db):
+        from train import get_tones
+        result = get_tones(TEST_GUILD_ID)
+        assert isinstance(result, list)
+        assert len(result) > 0

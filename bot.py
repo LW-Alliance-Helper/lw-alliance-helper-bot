@@ -121,14 +121,52 @@ async def _run_growth_on_startup():
 
 @tasks.loop(hours=1)
 async def growth_task():
-    """Check every hour — run the snapshot on the 1st of the month at 10pm ET."""
+    """Check every hour — run snapshots for guilds whose schedule is due."""
+    from config import DB_PATH, get_growth_config
+    import sqlite3
     now = datetime.now(tz=ET)
-    if now.day == 1 and now.hour == 22 and now.minute < 60:
-        try:
-            print(f"[GROWTH] Monthly snapshot triggered for {now.strftime('%B %Y')}")
-            await asyncio.get_event_loop().run_in_executor(None, run_growth_snapshot)
-        except Exception as e:
-            print(f"[GROWTH] Error during monthly snapshot: {e}")
+
+    try:
+        with sqlite3.connect(DB_PATH) as conn:
+            rows = conn.execute(
+                "SELECT guild_id FROM guild_configs WHERE setup_complete = 1"
+            ).fetchall()
+        guild_ids = [r[0] for r in rows]
+    except Exception as e:
+        print(f"[GROWTH] Could not read guild list: {e}")
+        return
+
+    for gid in guild_ids:
+        gcfg = get_growth_config(gid)
+        if not gcfg.get("enabled"):
+            continue
+
+        should_run = False
+        freq = gcfg.get("snapshot_frequency", "monthly")
+
+        if freq == "monthly":
+            day = gcfg.get("snapshot_day", 1)
+            if now.day == day and now.hour == 22:
+                should_run = True
+        elif freq == "interval":
+            # Use a simple check: run at 10pm ET if today is a multiple of interval days
+            # from a fixed epoch (Jan 1 2026)
+            from datetime import date as _date
+            epoch   = _date(2026, 1, 1)
+            delta   = (_date.today() - epoch).days
+            interval = gcfg.get("snapshot_interval", 30)
+            if delta % interval == 0 and now.hour == 22:
+                should_run = True
+
+        if should_run:
+            try:
+                print(f"[GROWTH] Scheduled snapshot triggered for guild {gid}")
+                from growth import _run_growth_snapshot_inner
+                await asyncio.get_event_loop().run_in_executor(
+                    None, _run_growth_snapshot_inner, gid
+                )
+            except Exception as e:
+                print(f"[GROWTH] Error during scheduled snapshot for guild {gid}: {e}")
 
 
 @growth_task.before_loop
@@ -145,16 +183,25 @@ async def on_message(message):
 
 @bot.tree.command(
     name="rungrowth",
-    description="Manually run the monthly squad power growth snapshot",
+    description="Manually run a growth snapshot for this server",
 )
 async def rungrowth_slash(interaction: discord.Interaction):
     if not await guard(interaction):
         return
+    from config import get_growth_config
+    gcfg = get_growth_config(interaction.guild_id)
+    if not gcfg.get("enabled"):
+        await interaction.response.send_message(
+            "⚠️ Growth tracking isn't configured yet. Run `/setup_growth` to set it up.",
+            ephemeral=True,
+        )
+        return
     await interaction.response.defer(ephemeral=True)
     try:
-        run_growth_snapshot()
+        from growth import _run_growth_snapshot_inner
+        _run_growth_snapshot_inner(interaction.guild_id)
         await interaction.followup.send(
-            "✅ Growth snapshot complete — check the Growth Tracking tab.",
+            f"✅ Growth snapshot complete — check the **{gcfg.get('tab_growth', 'Growth Tracking')}** tab.",
             ephemeral=True,
         )
     except Exception as e:
@@ -343,9 +390,11 @@ async def help_slash(interaction: discord.Interaction):
     embed.add_field(
         name="📈 Growth Tracking",
         value=(
-            "Take monthly snapshots of squad powers to track alliance growth over time. "
-            "Snapshots are saved to your Google Sheet automatically each month.\n"
-            "`/rungrowth` — Manually run the monthly squad power snapshot"
+            "Take periodic snapshots of your members' stats to track alliance growth over time. "
+            "You define which metrics to track and how often — snapshots are saved to your Google Sheet.\n"
+
+            "`/setup_growth` — Configure source tab, metrics to track, and snapshot schedule\n\n"
+            "`/rungrowth` — Manually run a growth snapshot"
         ),
         inline=False,
     )

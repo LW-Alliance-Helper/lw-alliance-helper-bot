@@ -18,7 +18,7 @@ A Discord bot built for Last War alliance leadership. Alliance Helper takes care
 
 **📋 Survey** — Let members submit their stats through a private Discord thread. Responses are saved directly to your Google Sheet and leadership gets a notification for each submission.
 
-**📈 Growth Tracking** — Take monthly snapshots of squad powers across your alliance and track growth over time in your Google Sheet.
+**📈 Growth Tracking** — Track your alliance's growth over time by taking periodic snapshots of any stats you choose — squad powers, THP, total kills, or anything else in your sheet. You define the metrics, the source, and the schedule.
 
 ---
 
@@ -207,6 +207,28 @@ The question builder supports two question types:
 
 ---
 
+### 📈 Growth Tracking — `/setup_growth`
+
+**What to create in your sheet:** A tab for your member roster (can be the same tab used by the survey, or any other tab), and a separate tab where snapshots will be written (e.g. `Growth Tracking`). The bot will create the growth tab automatically if it doesn't exist.
+
+Run `/setup_growth` to configure growth tracking:
+
+1. **Enable** — opt in to growth tracking
+2. **Source tab** — which tab contains your member data
+3. **Data start row** — which row your data starts on (usually row 2, after a header)
+4. **Name column** — the column letter containing member names
+5. **Metrics** — which columns to snapshot, each with a label and column letter. You can track as many as you want (e.g. `1st Squad Power` → column E, `THP` → column I)
+6. **Growth tab** — where snapshots are written. Created automatically if it doesn't exist.
+7. **Snapshot schedule** — monthly on a specific day, or every X days
+
+The growth tab will have a column per metric per snapshot period, so you can see how each metric changed over time.
+
+**Day-to-day use:**
+- Snapshots run automatically on your configured schedule
+- Use `/rungrowth` to take a manual snapshot at any time
+
+---
+
 ## Day-to-Day Quick Reference
 
 | Situation | Command |
@@ -224,6 +246,7 @@ The question builder supports two question types:
 | Log Canyon Storm participation | `/logcs` |
 | Look up a past log entry | `/viewlog [DS or CS] [date]` |
 | Run a growth snapshot manually | `/rungrowth` |
+| Configure growth tracking | `/setup_growth` |
 | See all commands | `/help` |
 
 ---

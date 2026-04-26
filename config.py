@@ -206,6 +206,24 @@ def init_db():
         # Seed OGV train config
         _seed_ogv_train_config(conn)
 
+        # guild_growth_config — per-guild growth tracking settings
+        conn.execute("""
+            CREATE TABLE IF NOT EXISTS guild_growth_config (
+                guild_id             INTEGER PRIMARY KEY,
+                enabled              INTEGER DEFAULT 0,
+                tab_source           TEXT    DEFAULT '',
+                name_col             TEXT    DEFAULT 'A',
+                metrics              TEXT    DEFAULT '',
+                tab_growth           TEXT    DEFAULT 'Growth Tracking',
+                snapshot_frequency   TEXT    DEFAULT 'monthly',
+                snapshot_day         INTEGER DEFAULT 1,
+                snapshot_interval    INTEGER DEFAULT 30,
+                data_start_row       INTEGER DEFAULT 2
+            )
+        """)
+        conn.commit()
+        _seed_ogv_growth_config(conn)
+
         # guild_survey_config — per-guild survey questions and sheet settings
         conn.execute("""
             CREATE TABLE IF NOT EXISTS guild_survey_config (
@@ -686,6 +704,86 @@ OGV_SURVEY_INTRO = (
     "squad powers, better balance our Desert Storm teams, track alliance growth, "
     "and prepare for season events!"
 )
+
+
+def _seed_ogv_growth_config(conn):
+    """Seed OGV's growth config if not already present."""
+    import json
+    existing = conn.execute(
+        "SELECT guild_id FROM guild_growth_config WHERE guild_id = ?",
+        (OGV_GUILD_ID,)
+    ).fetchone()
+    if not existing:
+        ogv_metrics = [
+            {"col": "E", "label": "1st Squad Power"},
+            {"col": "G", "label": "2nd Squad Power"},
+            {"col": "H", "label": "3rd Squad Power"},
+        ]
+        conn.execute(
+            "INSERT INTO guild_growth_config "
+            "(guild_id, enabled, tab_source, name_col, metrics, tab_growth, "
+            "snapshot_frequency, snapshot_day, snapshot_interval, data_start_row) "
+            "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+            (OGV_GUILD_ID, 1, "Squad Powers", "D", json.dumps(ogv_metrics),
+             "Growth Tracking", "monthly", 1, 30, 10)
+        )
+        conn.commit()
+        print("[CONFIG] Seeded OGV growth config")
+
+
+def get_growth_config(guild_id: int) -> dict:
+    """Return growth config for a guild."""
+    import json
+    with _get_conn() as conn:
+        row = conn.execute(
+            "SELECT * FROM guild_growth_config WHERE guild_id = ?",
+            (guild_id,)
+        ).fetchone()
+    if row:
+        d = dict(row)
+        try:
+            d["metrics"] = json.loads(d["metrics"]) if d["metrics"] else []
+        except (json.JSONDecodeError, TypeError):
+            d["metrics"] = []
+        return d
+    return {
+        "guild_id":           guild_id,
+        "enabled":            0,
+        "tab_source":         "",
+        "name_col":           "A",
+        "metrics":            [],
+        "tab_growth":         "Growth Tracking",
+        "snapshot_frequency": "monthly",
+        "snapshot_day":       1,
+        "snapshot_interval":  30,
+        "data_start_row":     2,
+    }
+
+
+def save_growth_config(guild_id: int, enabled: int, tab_source: str,
+                       name_col: str, metrics: list, tab_growth: str,
+                       snapshot_frequency: str, snapshot_day: int,
+                       snapshot_interval: int, data_start_row: int):
+    """Insert or replace a guild's growth config."""
+    import json
+    with _get_conn() as conn:
+        conn.execute(
+            "INSERT INTO guild_growth_config "
+            "(guild_id, enabled, tab_source, name_col, metrics, tab_growth, "
+            "snapshot_frequency, snapshot_day, snapshot_interval, data_start_row) "
+            "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?) "
+            "ON CONFLICT(guild_id) DO UPDATE SET "
+            "enabled=excluded.enabled, tab_source=excluded.tab_source, "
+            "name_col=excluded.name_col, metrics=excluded.metrics, "
+            "tab_growth=excluded.tab_growth, "
+            "snapshot_frequency=excluded.snapshot_frequency, "
+            "snapshot_day=excluded.snapshot_day, "
+            "snapshot_interval=excluded.snapshot_interval, "
+            "data_start_row=excluded.data_start_row",
+            (guild_id, enabled, tab_source, name_col, json.dumps(metrics),
+             tab_growth, snapshot_frequency, snapshot_day, snapshot_interval, data_start_row)
+        )
+        conn.commit()
 
 
 def _seed_ogv_survey_config(conn):

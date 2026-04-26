@@ -487,7 +487,8 @@ async def run_setup(interaction: discord.Interaction, bot):
         "🎂 `/setup_birthdays` — Birthday tracking and announcements\n"
         "⚔️ `/setup_desertstorm` — Desert Storm mail drafts and participation logs\n"
         "🏜️ `/setup_canyonstorm` — Canyon Storm mail drafts and participation logs\n"
-        "📋 `/setup_survey` — Squad powers survey\n\n"
+        "📋 `/setup_survey` — Squad powers survey\n"
+        "📈 `/setup_growth` — Growth tracking (snapshot your members' stats over time)\n\n"
         "You can set up as many or as few of these as you need. Use `/help` at any time to see all available commands."
     )
     print(f"[SETUP] Guild {guild_id} core setup complete")
@@ -2412,9 +2413,302 @@ class SetupCog(commands.Cog):
         )
         await run_train_setup(interaction, self.bot)
     @app_commands.command(
-        name="setup_survey",
-        description="Configure the squad powers survey — questions, tabs, and intro message"
+        name="setup_growth",
+        description="Configure growth tracking — source tab, metrics, and snapshot frequency"
     )
+    async def setup_growth(self, interaction: discord.Interaction):
+        if not interaction.user.guild_permissions.administrator:
+            await interaction.response.send_message(
+                "⛔ Only server administrators can run `/setup_growth`.", ephemeral=True
+            )
+            return
+        await interaction.response.send_message(
+            "⚙️ Starting growth tracking setup — check the channel for prompts!", ephemeral=True
+        )
+        await run_growth_setup(interaction, self.bot)
+
+
+async def run_growth_setup(interaction: discord.Interaction, bot):
+    """Walk an admin through configuring growth tracking."""
+    guild_id = interaction.guild_id
+    channel  = interaction.channel
+    user     = interaction.user
+
+    def check(m):
+        return m.author == user and m.channel == channel
+
+    async def ask_text(prompt: str, max_chars: int = 200):
+        await channel.send(prompt)
+        try:
+            reply = await bot.wait_for("message", check=check, timeout=120)
+        except asyncio.TimeoutError:
+            await channel.send("⏰ Timed out. Run `/setup_growth` to start again.")
+            return None
+        return reply.content.strip()[:max_chars]
+
+    from config import get_growth_config, save_growth_config
+    current = get_growth_config(guild_id)
+
+    await channel.send(
+        "⚙️ **Growth Tracking Setup**\n"
+        "Configure how the bot tracks your alliance's growth over time. "
+        "Each month (or on your chosen schedule), the bot takes a snapshot of your members' stats "
+        "and records them in your Google Sheet so you can track progress."
+    )
+
+    # ── Step 1: Enable? ───────────────────────────────────────────────────────
+    enabled_view = YesNoView()
+    await channel.send(
+        "**Step 1 — Enable growth tracking?**\n"
+        "Should the bot automatically take snapshots of your members' stats on a schedule?",
+        view=enabled_view,
+    )
+    await enabled_view.wait()
+    if enabled_view.selected is None:
+        await channel.send("⏰ Timed out. Run `/setup_growth` to start again.")
+        return
+    if not enabled_view.selected:
+        save_growth_config(
+            guild_id, enabled=0,
+            tab_source=current.get("tab_source", ""),
+            name_col=current.get("name_col", "A"),
+            metrics=current.get("metrics", []),
+            tab_growth=current.get("tab_growth", "Growth Tracking"),
+            snapshot_frequency=current.get("snapshot_frequency", "monthly"),
+            snapshot_day=current.get("snapshot_day", 1),
+            snapshot_interval=current.get("snapshot_interval", 30),
+            data_start_row=current.get("data_start_row", 2),
+        )
+        await channel.send("✅ Growth tracking disabled.")
+        return
+
+    # ── Step 2: Source tab ────────────────────────────────────────────────────
+    cur_tab = current.get("tab_source") or ""
+    tab_raw = await ask_text(
+        f"**Step 2 — Source Tab**\n"
+        f"Which tab in your Google Sheet contains your member data?\n"
+        f"⚠️ *Make sure this tab exists in your sheet.*\n"
+        f"*(e.g. `Squad Powers`, `Members`, `Roster`)*"
+        + (f"\n*(Current: `{cur_tab}`)*" if cur_tab else "")
+    )
+    if tab_raw is None:
+        return
+    tab_source = tab_raw.strip() or cur_tab
+
+    # ── Step 3: Data start row ────────────────────────────────────────────────
+    cur_start = current.get("data_start_row", 2)
+    start_raw = await ask_text(
+        f"**Step 3 — Data Start Row**\n"
+        f"Which row does your member data start on? (Row 1 is usually the header)\n"
+        f"*(Current: row {cur_start})*"
+    )
+    if start_raw is None:
+        return
+    try:
+        data_start_row = int(start_raw.strip())
+    except ValueError:
+        await channel.send("⚠️ Please enter a row number like `2`. Run `/setup_growth` to try again.")
+        return
+
+    # ── Step 4: Name column ───────────────────────────────────────────────────
+    cur_name = current.get("name_col", "A")
+    name_raw = await ask_text(
+        f"**Step 4 — Name Column**\n"
+        f"Which column contains the member's name? Type the column letter.\n"
+        f"*(Current: `{cur_name}`)*"
+    )
+    if name_raw is None:
+        return
+    name_col = name_raw.strip().upper()
+    if len(name_col) != 1 or not name_col.isalpha():
+        await channel.send("⚠️ Please enter a single column letter like `A`. Run `/setup_growth` to try again.")
+        return
+
+    # ── Step 5: Metrics ───────────────────────────────────────────────────────
+    cur_metrics = current.get("metrics", [])
+    metrics     = list(cur_metrics)
+
+    await channel.send(
+        "**Step 5 — Metrics to Track**\n"
+        "Define which columns the bot should snapshot each period. "
+        "You can track as many metrics as you want — for example:\n"
+        "• `1st Squad Power` — column E\n"
+        "• `2nd Squad Power` — column G\n"
+        "• `THP` — column I\n"
+        "• `Total Kills` — column J\n\n"
+        "You'll add them one at a time."
+    )
+
+    if cur_metrics:
+        cur_display = "\n".join(f"• **{m['label']}** — column {m['col']}" for m in cur_metrics)
+
+        class MetricsStartView(discord.ui.View):
+            def __init__(self):
+                super().__init__(timeout=120)
+                self.choice = None
+
+            @discord.ui.button(label="✅ Keep current metrics", style=discord.ButtonStyle.success)
+            async def keep(self, inter: discord.Interaction, button: discord.ui.Button):
+                self.choice = "keep"
+                for item in self.children: item.disabled = True
+                await inter.response.edit_message(content="✅ Keeping current metrics.", view=self)
+                self.stop()
+
+            @discord.ui.button(label="🔄 Start fresh", style=discord.ButtonStyle.secondary)
+            async def fresh(self, inter: discord.Interaction, button: discord.ui.Button):
+                self.choice = "fresh"
+                for item in self.children: item.disabled = True
+                await inter.response.edit_message(view=self)
+                self.stop()
+
+        metrics_view = MetricsStartView()
+        await channel.send(
+            f"**Current metrics:**\n{cur_display}",
+            view=metrics_view,
+        )
+        await metrics_view.wait()
+        if not metrics_view.choice:
+            await channel.send("⏰ Timed out. Run `/setup_growth` to start again.")
+            return
+        if metrics_view.choice == "fresh":
+            metrics = []
+
+    if not metrics:
+        await channel.send("Let's add your metrics. Type `done` when finished.")
+
+        while True:
+            label_raw = await ask_text(
+                f"**Metric {len(metrics) + 1} — Label** (or type `done` to finish):\n"
+                f"*(e.g. `1st Squad Power`, `THP`, `Total Kills`)*"
+            )
+            if label_raw is None:
+                return
+            if label_raw.strip().lower() == "done":
+                break
+
+            col_raw = await ask_text(
+                f"**{label_raw.strip()} — Column Letter**\n"
+                f"Which column contains this value? (e.g. `E`, `G`)"
+            )
+            if col_raw is None:
+                return
+            col = col_raw.strip().upper()
+            if not col.isalpha():
+                await channel.send("⚠️ Please enter a column letter. Skipping this metric.")
+                continue
+
+            metrics.append({"col": col, "label": label_raw.strip()})
+            await channel.send(f"✅ Added: **{label_raw.strip()}** (column {col}) — {len(metrics)} metric(s) so far.")
+
+    if not metrics:
+        await channel.send("⚠️ No metrics defined. Run `/setup_growth` to try again.")
+        return
+
+    # ── Step 6: Growth tracking tab ───────────────────────────────────────────
+    cur_growth_tab = current.get("tab_growth", "Growth Tracking")
+    growth_tab_view = TextInputModal("Growth Tracking Tab", "Tab name", default=cur_growth_tab)
+    growth_tab_launch = ModalLaunchView(growth_tab_view)
+    await channel.send(
+        f"**Step 6 — Growth Tracking Tab**\n"
+        f"Which tab should snapshots be written to?\n"
+        f"⚠️ *If the tab doesn't exist, the bot will create it automatically.*\n"
+        f"*(Current: `{cur_growth_tab}`)*",
+        view=growth_tab_launch,
+    )
+    await growth_tab_launch.wait()
+    if not growth_tab_launch.confirmed:
+        await channel.send("⏰ Timed out. Run `/setup_growth` to start again.")
+        return
+    tab_growth = growth_tab_view.value or cur_growth_tab
+
+    # ── Step 7: Snapshot frequency ────────────────────────────────────────────
+    class FrequencyView(discord.ui.View):
+        def __init__(self):
+            super().__init__(timeout=120)
+            self.selected = None
+
+        @discord.ui.button(label="📅 Monthly (1st of each month)", style=discord.ButtonStyle.primary)
+        async def monthly(self, inter: discord.Interaction, button: discord.ui.Button):
+            self.selected = "monthly"
+            for item in self.children: item.disabled = True
+            await inter.response.edit_message(content="✅ Frequency: **Monthly**", view=self)
+            self.stop()
+
+        @discord.ui.button(label="🔁 Custom interval (every X days)", style=discord.ButtonStyle.secondary)
+        async def custom(self, inter: discord.Interaction, button: discord.ui.Button):
+            self.selected = "interval"
+            for item in self.children: item.disabled = True
+            await inter.response.edit_message(view=self)
+            self.stop()
+
+    freq_view = FrequencyView()
+    await channel.send(
+        "**Step 7 — Snapshot Frequency**\n"
+        "How often should the bot take a snapshot?",
+        view=freq_view,
+    )
+    await freq_view.wait()
+    if not freq_view.selected:
+        await channel.send("⏰ Timed out. Run `/setup_growth` to start again.")
+        return
+
+    snapshot_frequency = freq_view.selected
+    snapshot_day       = 1
+    snapshot_interval  = 30
+
+    if snapshot_frequency == "monthly":
+        day_raw = await ask_text(
+            "**Step 7a — Snapshot Day**\n"
+            "Which day of the month should the snapshot run? (e.g. `1` for the 1st)\n"
+            f"*(Current: day {current.get('snapshot_day', 1)})*"
+        )
+        if day_raw is None:
+            return
+        try:
+            snapshot_day = max(1, min(28, int(day_raw.strip())))
+        except ValueError:
+            snapshot_day = 1
+    else:
+        interval_raw = await ask_text(
+            "**Step 7a — Interval (days)**\n"
+            "How many days between each snapshot? (e.g. `30`)\n"
+            f"*(Current: {current.get('snapshot_interval', 30)} days)*"
+        )
+        if interval_raw is None:
+            return
+        try:
+            snapshot_interval = max(1, int(interval_raw.strip()))
+        except ValueError:
+            snapshot_interval = 30
+
+    # ── Save ───────────────────────────────────────────────────────────────────
+    save_growth_config(
+        guild_id, enabled=1,
+        tab_source=tab_source, name_col=name_col,
+        metrics=metrics, tab_growth=tab_growth,
+        snapshot_frequency=snapshot_frequency,
+        snapshot_day=snapshot_day,
+        snapshot_interval=snapshot_interval,
+        data_start_row=data_start_row,
+    )
+
+    freq_desc  = (
+        f"Monthly on day {snapshot_day}"
+        if snapshot_frequency == "monthly"
+        else f"Every {snapshot_interval} days"
+    )
+    metrics_display = "\n".join(f"• **{m['label']}** — column {m['col']}" for m in metrics)
+
+    embed = discord.Embed(title="✅ Growth Tracking Configured", color=discord.Color.green())
+    embed.add_field(name="Source Tab",        value=tab_source,          inline=False)
+    embed.add_field(name="Name Column",       value=f"Column {name_col}", inline=True)
+    embed.add_field(name="Data Start Row",    value=str(data_start_row),  inline=True)
+    embed.add_field(name="Growth Tab",        value=tab_growth,           inline=False)
+    embed.add_field(name="Snapshot Schedule", value=freq_desc,            inline=False)
+    embed.add_field(name="Metrics",           value=metrics_display,      inline=False)
+    embed.set_footer(text="Run /setup_growth again to update. Run /rungrowth to take a manual snapshot.")
+    await channel.send(embed=embed)
+    print(f"[SETUP] Growth config saved for guild {guild_id}")
     async def setup_survey(self, interaction: discord.Interaction):
         if not interaction.user.guild_permissions.administrator:
             await interaction.response.send_message(

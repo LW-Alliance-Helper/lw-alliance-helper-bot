@@ -302,8 +302,55 @@ def init_db():
             print("[CONFIG] Added log_channel_id column to guild_storm_config")
         except Exception:
             pass
-        except Exception:
-            pass
+
+        # ── guild_train_config migrations ──────────────────────────────────────
+        for col, definition in [
+            ("blurbs_enabled",      "INTEGER DEFAULT 1"),
+            ("reminders_enabled",   "INTEGER DEFAULT 1"),
+            ("reminder_channel_id", "INTEGER DEFAULT 0"),
+            ("reminder_time",       "TEXT DEFAULT '22:00'"),
+        ]:
+            try:
+                conn.execute(f"ALTER TABLE guild_train_config ADD COLUMN {col} {definition}")
+                conn.commit()
+                print(f"[CONFIG] Added {col} to guild_train_config")
+            except Exception:
+                pass
+
+        # ── guild_birthday_config migrations ───────────────────────────────────
+        for col, definition in [
+            ("discord_id_col",      "INTEGER DEFAULT -1"),
+            ("train_integration",   "INTEGER DEFAULT 0"),
+            ("flexible_placement",  "INTEGER DEFAULT 1"),
+            ("reminders_enabled",   "INTEGER DEFAULT 0"),
+            ("reminder_channel_id", "INTEGER DEFAULT 0"),
+            ("reminder_time",       "TEXT DEFAULT '08:00'"),
+        ]:
+            try:
+                conn.execute(f"ALTER TABLE guild_birthday_config ADD COLUMN {col} {definition}")
+                conn.commit()
+                print(f"[CONFIG] Added {col} to guild_birthday_config")
+            except Exception:
+                pass
+
+        # ── guild_configs event/survey channel migrations ──────────────────────
+        for col, definition in [
+            ("event_draft_channel_id",    "INTEGER DEFAULT 0"),
+            ("event_announce_channel_id", "INTEGER DEFAULT 0"),
+            ("event_draft_time",          "TEXT DEFAULT '12:00'"),
+            ("event_five_min_warning",    "INTEGER DEFAULT 1"),
+            ("survey_channel_id",         "INTEGER DEFAULT 0"),
+            ("survey_notify_channel_id",  "INTEGER DEFAULT 0"),
+            ("ds_log_channel_id",         "INTEGER DEFAULT 0"),
+            ("cs_log_channel_id",         "INTEGER DEFAULT 0"),
+            ("timezone",                  "TEXT DEFAULT 'America/New_York'"),
+        ]:
+            try:
+                conn.execute(f"ALTER TABLE guild_configs ADD COLUMN {col} {definition}")
+                conn.commit()
+                print(f"[CONFIG] Added {col} to guild_configs")
+            except Exception:
+                pass
 
         try:
             conn.execute("ALTER TABLE guild_configs ADD COLUMN timezone TEXT DEFAULT 'America/New_York'")

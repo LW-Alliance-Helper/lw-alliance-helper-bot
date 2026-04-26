@@ -345,6 +345,8 @@ def check_and_add_birthdays(schedule: dict, guild_id: int = None) -> tuple[dict,
     bcfg       = get_birthday_config(guild_id) if guild_id else {}
     if not bcfg.get("enabled", 0) and guild_id:
         return schedule, []
+    if not bcfg.get("train_integration", 1) and guild_id:
+        return schedule, []
 
     tab_name  = bcfg.get("tab_name") or get_member_tab_name(guild_id)
     lookahead = bcfg.get("lookahead_days", BIRTHDAY_LOOKAHEAD)

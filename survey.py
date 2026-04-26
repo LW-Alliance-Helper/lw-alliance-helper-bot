@@ -74,31 +74,27 @@ def _to_millions(val: str) -> str:
 def update_squad_powers(discord_id: str, username: str, data: dict, guild_id: int = None):
     """
     Update or insert a member's row in the Squad Powers sheet.
-    Matches on Discord ID (col B). Appends if not found.
+    Columns are derived from the guild's survey question config.
     """
-    from config import get_config
-    cfg  = get_config(guild_id)
-    sh   = _get_spreadsheet(guild_id)
-    ws   = sh.worksheet(cfg.tab_squad_powers if cfg else "Squad Powers")
-    rows = ws.get_all_values()
+    from config import get_config, get_survey_config
+    survey_cfg = get_survey_config(guild_id) if guild_id else {}
+    questions  = survey_cfg.get("questions") or []
+    cfg        = get_config(guild_id)
+    sh         = _get_spreadsheet(guild_id)
+    ws         = sh.worksheet(cfg.tab_squad_powers if cfg else survey_cfg.get("tab_squad_powers", "Squad Powers"))
+    rows       = ws.get_all_values()
 
-    now_str = datetime.now(timezone.utc).strftime("%-m/%-d/%Y")
-    new_row = [
-        username,
-        discord_id,
-        data.get("squad1_power", ""),
-        data.get("squad1_type", ""),
-        data.get("squad2_power", ""),
-        data.get("squad3_power", ""),
-        data.get("drone_level", ""),
-        data.get("gorilla_level", ""),
-        _to_millions(data.get("thp", "")),
-        _to_millions(data.get("total_kills", "")),
-        data.get("profession", ""),
-        data.get("banner", ""),
-        data.get("aid_removal", ""),
-        now_str,
-    ]
+    now_str  = datetime.now(timezone.utc).strftime("%-m/%-d/%Y")
+    q_keys   = [q.get("key", f"field_{i}") for i, q in enumerate(questions)]
+    q_labels = [q.get("label", k) for k, q in zip(q_keys, questions)]
+
+    # Ensure header row exists
+    if not rows or not any(rows[0]):
+        header = ["Username", "Discord ID"] + q_labels + ["Date Modified"]
+        ws.update("A1", [header], value_input_option="USER_ENTERED")
+        rows = ws.get_all_values()
+
+    new_row = [username, discord_id] + [data.get(k, "") for k in q_keys] + [now_str]
 
     for i, row in enumerate(rows):
         if len(row) >= 2 and row[1].strip() == discord_id:
@@ -112,36 +108,27 @@ def update_squad_powers(discord_id: str, username: str, data: dict, guild_id: in
 
 def append_survey_history(discord_id: str, username: str, data: dict, guild_id: int = None):
     """Append a timestamped row to the Survey History sheet."""
-    from config import get_config
-    cfg  = get_config(guild_id)
-    sh   = _get_spreadsheet(guild_id)
-    ws   = sh.worksheet(cfg.tab_survey_history if cfg else "Survey History")
+    from config import get_config, get_survey_config
+    survey_cfg = get_survey_config(guild_id) if guild_id else {}
+    questions  = survey_cfg.get("questions") or []
+    cfg        = get_config(guild_id)
+    sh         = _get_spreadsheet(guild_id)
+    ws         = sh.worksheet(cfg.tab_survey_history if cfg else survey_cfg.get("tab_history", "Survey History"))
+
+    q_keys   = [q.get("key", f"field_{i}") for i, q in enumerate(questions)]
+    q_labels = [q.get("label", k) for k, q in zip(q_keys, questions)]
 
     existing = ws.row_values(1)
     if not any(existing):
-        ws.update("A1", [HISTORY_HEADERS], value_input_option="USER_ENTERED")
+        header = ["Timestamp", "Discord ID", "Username"] + q_labels
+        ws.update("A1", [header], value_input_option="USER_ENTERED")
         try:
             ws.set_basic_filter()
         except Exception:
             pass
 
     now_str = datetime.now(timezone.utc).strftime("%-m/%-d/%Y %H:%M UTC")
-    row = [
-        now_str,
-        discord_id,
-        username,
-        data.get("squad1_power", ""),
-        data.get("squad1_type", ""),
-        data.get("squad2_power", ""),
-        data.get("squad3_power", ""),
-        data.get("drone_level", ""),
-        data.get("gorilla_level", ""),
-        _to_millions(data.get("thp", "")),
-        _to_millions(data.get("total_kills", "")),
-        data.get("profession", ""),
-        data.get("banner", ""),
-        data.get("aid_removal", ""),
-    ]
+    row     = [now_str, discord_id, username] + [data.get(k, "") for k in q_keys]
     ws.append_row(row, value_input_option="USER_ENTERED")
     print(f"[SURVEY] Appended Survey History row for {username}")
 
@@ -177,13 +164,21 @@ class DropdownView(discord.ui.View):
 # ── Survey flow ────────────────────────────────────────────────────────────────
 
 async def run_survey(bot, thread: discord.Thread, user: discord.Member):
-    """Walk the user through all survey questions in their private thread."""
+    """Walk the user through all survey questions from the guild's config."""
+    gid = user.guild.id if hasattr(user, "guild") and user.guild else None
+
+    from config import get_survey_config
+    survey_cfg = get_survey_config(gid) if gid else {}
+    questions  = survey_cfg.get("questions") or []
+
+    if not questions:
+        await thread.send("⚠️ No survey questions configured. Ask leadership to run `/setup_survey`.")
+        return
 
     def check(m):
         return m.author == user and m.channel == thread
 
     async def ask_number(prompt: str, max_chars: int = 10) -> str | None:
-        """Post a prompt and wait for a typed number reply."""
         await thread.send(prompt)
         try:
             reply = await bot.wait_for("message", check=check, timeout=SURVEY_TIMEOUT)
@@ -197,9 +192,8 @@ async def run_survey(bot, thread: discord.Thread, user: discord.Member):
         return val
 
     async def ask_dropdown(prompt: str, options: list, placeholder: str, label: str = "") -> str | None:
-        """Post a prompt with a dropdown and wait for selection."""
         view = DropdownView(placeholder, options, label=label)
-        msg  = await thread.send(prompt, view=view)
+        await thread.send(prompt, view=view)
         await view.wait()
         if not view.confirmed:
             await thread.send("⏰ Survey timed out. You can start again by clicking the Answer button.")
@@ -208,86 +202,32 @@ async def run_survey(bot, thread: discord.Thread, user: discord.Member):
 
     data = {}
 
-    # ── Q1: 1st Squad Power ───────────────────────────────────────────────────
-    val = await ask_number("**1st Squad Power** (e.g. 43.27)\n*Maximum characters: 5*", max_chars=5)
-    if val is None:
-        return
-    data["squad1_power"] = val
+    for i, q in enumerate(questions):
+        key         = q.get("key", f"field_{i}")
+        label       = q.get("label", f"Question {i+1}")
+        qtype       = q.get("type", "text")
+        options     = q.get("options", [])
+        placeholder = q.get("placeholder", "")
+        max_chars   = q.get("max_chars", 10) or 10
 
-    # ── Q2: 1st Squad Type ────────────────────────────────────────────────────
-    val = await ask_dropdown("**1st Squad Type**", SQUAD_TYPES, "Select squad type...", label="1st Squad Type:")
-    if val is None:
-        return
-    data["squad1_type"] = val
+        if qtype == "text":
+            hint = f"\n*{placeholder}*" if placeholder else ""
+            if max_chars:
+                hint += f"\n*Maximum characters: {max_chars}*"
+            val = await ask_number(f"**{label}**{hint}", max_chars=max_chars)
+        elif qtype == "dropdown":
+            val = await ask_dropdown(
+                f"**{label}**",
+                options,
+                placeholder or f"Select {label}...",
+                label=f"{label}:",
+            )
+        else:
+            val = await ask_number(f"**{label}**", max_chars=max_chars)
 
-    # ── Q3: 2nd Squad Power ───────────────────────────────────────────────────
-    val = await ask_number("**2nd Squad Power** (e.g. 43.27)\n*Maximum characters: 5*", max_chars=5)
-    if val is None:
-        return
-    data["squad2_power"] = val
-
-    # ── Q4: 3rd Squad Power ───────────────────────────────────────────────────
-    val = await ask_number("**3rd Squad Power** (e.g. 43.27)\n*Maximum characters: 5*", max_chars=5)
-    if val is None:
-        return
-    data["squad3_power"] = val
-
-    # ── Q5: Drone Level ───────────────────────────────────────────────────────
-    val = await ask_number("**Drone Level** (e.g. 243)")
-    if val is None:
-        return
-    data["drone_level"] = val
-
-    # ── Q6: Gorilla Level ─────────────────────────────────────────────────────
-    val = await ask_number("**Gorilla Level** (e.g. 70)")
-    if val is None:
-        return
-    data["gorilla_level"] = val
-
-    # ── Q7: Total Hero Power ──────────────────────────────────────────────────
-    val = await ask_number(
-        "**Total Hero Power (THP)**\n*Rounded to nearest million (e.g. 301)\nMaximum characters: 3*",
-        max_chars=3,
-    )
-    if val is None:
-        return
-    data["thp"] = val
-
-    # ── Q8: Total Kills ───────────────────────────────────────────────────────
-    val = await ask_number("**Total Kills** (e.g. 55.40)\n*Maximum characters: 5*", max_chars=5)
-    if val is None:
-        return
-    data["total_kills"] = val
-
-    # ── Q9: Profession ────────────────────────────────────────────────────────
-    val = await ask_dropdown("**What is your Profession?**", PROFESSIONS, "Select profession...", label="Profession:")
-    if val is None:
-        return
-    data["profession"] = val
-
-    # ── Q10: Profession follow-up ─────────────────────────────────────────────
-    if val == "War Leader":
-        follow = await ask_dropdown(
-            "**Do you have a charge banner?**",
-            BANNER_OPTIONS,
-            "Select...",
-            label="Charge Banner:",
-        )
-        if follow is None:
+        if val is None:
             return
-        data["banner"]      = follow
-        data["aid_removal"] = ""
-    else:
-        follow = await ask_dropdown(
-            "**Do you have medical aid and ruin removal?**",
-            AID_REMOVAL_OPTIONS,
-            "Select...",
-            label="Medical Aid / Ruin Removal:",
-        )
-        if follow is None:
-            return
-        data["aid_removal"] = follow
-        data["banner"]      = ""
+        data[key] = val
 
     # ── Save to sheets ────────────────────────────────────────────────────────
     await thread.send("⏳ Saving your responses...")
@@ -295,7 +235,6 @@ async def run_survey(bot, thread: discord.Thread, user: discord.Member):
         discord_id = str(user.id)
         username   = user.display_name
         loop       = asyncio.get_event_loop()
-        gid = user.guild.id if hasattr(user, "guild") and user.guild else None
         await loop.run_in_executor(None, update_squad_powers,   discord_id, username, data, gid)
         await loop.run_in_executor(None, append_survey_history, discord_id, username, data, gid)
     except Exception as e:

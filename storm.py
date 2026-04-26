@@ -38,56 +38,40 @@ WIZARD_TIMEOUT = 600  # 10 minutes
 
 # Team A — starts empty, leadership fills on first use
 DEFAULT_A_ZONES = {
-    "Nuclear Silo":       "(open)",
-    "Oil Refinery I":     "(open)",
-    "Oil Refinery II":    "(open)",
-    "Science Hub":        "(open)",
-    "Info Center":        "(open)",
-    "Field Hospital I":   "(open)",
-    "Field Hospital II":  "(open)",
-    "Field Hospital III": "(open)",
-    "Field Hospital IV":  "(open)",
-    "Arsenal":            "(open)",
-    "Mercenary Factory":  "(open)",
+    "Nuclear Silo":       "Member Name",
+    "Oil Refinery I":     "Member Name",
+    "Oil Refinery II":    "Member Name",
+    "Science Hub":        "Member Name",
+    "Info Center":        "Member Name",
+    "Field Hospital I":   "Member Name",
+    "Field Hospital II":  "Member Name",
+    "Field Hospital III": "Member Name",
+    "Field Hospital IV":  "Member Name",
+    "Arsenal":            "Member Name",
+    "Mercenary Factory":  "Member Name",
 }
 DEFAULT_A_SUBS = []
 
-# Team B — current assignments
+# Team B — starts with placeholders
 DEFAULT_B_ZONES = {
-    "Nuclear Silo":       "Jon, Spartan, Death",
-    "Oil Refinery I":     "Death, Lito, Jc, Redneck, Chose",
-    "Oil Refinery II":    "Jon, Legit, Mer, Spartan, BadFosk",
-    "Science Hub":        "Kimber, Ice",
-    "Info Center":        "MotherGoose, Toxic",
-    "Field Hospital I":   "Lareyna, Rodrigo",
-    "Field Hospital II":  "FieryOnion, Walrus",
-    "Field Hospital III": "Bad Pew, Abe",
-    "Field Hospital IV":  "(open)",
-    "Arsenal":            "MotherGoose, FieryOnion",
-    "Mercenary Factory":  "Ice, Walrus",
+    "Nuclear Silo":       "Member Name",
+    "Oil Refinery I":     "Member Name",
+    "Oil Refinery II":    "Member Name",
+    "Science Hub":        "Member Name",
+    "Info Center":        "Member Name",
+    "Field Hospital I":   "Member Name",
+    "Field Hospital II":  "Member Name",
+    "Field Hospital III": "Member Name",
+    "Field Hospital IV":  "Member Name",
+    "Arsenal":            "Member Name",
+    "Mercenary Factory":  "Member Name",
 }
-DEFAULT_B_SUBS = [
-    ("Rodrigo",    "Adrian"),
-    ("Redneck",    "Sylvia"),
-    ("Kimber",     "Olddave"),
-    ("Abe",        "cmath"),
-    ("Lareyna",    "swaggy"),
-    ("Toxic",      "Bryce"),
-    ("Walrus",     "Drezy"),
-    ("Chose",      "Missgoose"),
-    ("FieryOnion", "Soka"),
-    ("Bad Pew",    "Catie"),
-]
-
+DEFAULT_B_SUBS = []
 DEFAULTS = {
     "A": (DEFAULT_A_ZONES, DEFAULT_A_SUBS),
     "B": (DEFAULT_B_ZONES, DEFAULT_B_SUBS),
 }
 
-DS_TIMES = {
-    "4pm": ("4:00pm ET", "18:00 server"),
-    "9pm": ("9:00pm ET", "01:00 server"),
-}
 
 
 # ── Google Sheets persistence ──────────────────────────────────────────────────
@@ -257,47 +241,50 @@ def parse_ds_template(text: str) -> tuple[dict, list, list]:
 
 # ── Mail builder ───────────────────────────────────────────────────────────────
 
-def build_ds_mail(team: str, zones: dict, subs: list, time_key: str) -> str:
-    est_time, server_time = DS_TIMES.get(time_key, DS_TIMES["4pm"])
+def build_ds_mail(team: str, zones: dict, subs: list, time_key: str,
+                  guild_id: int = None) -> str:
+    """Build DS mail using the guild's stored template."""
+    from config import get_storm_config
+    cfg       = get_storm_config(guild_id, "DS") if guild_id else {}
+    template  = cfg.get("mail_template") or ""
+
+    # Build time string from config time options
+    if time_key == "1":
+        local_time  = cfg.get("time_option_1_local", "")
+        server_time = cfg.get("time_option_1_server", "")
+    else:
+        local_time  = cfg.get("time_option_2_local", "")
+        server_time = cfg.get("time_option_2_server", "")
+    time_str = f"{local_time} ({server_time})" if local_time else time_key
 
     zone_lines = []
     for zone, members in zones.items():
         zone_lines.append(f"**{zone}**")
         zone_lines.append(members)
-        zone_lines.append("")  # blank line between zones
+        zone_lines.append("")
+    zones_block = "\n".join(zone_lines).strip()
 
-    sub_lines = [f"{starter} - {sub}" for starter, sub in subs]
-    sub_block = "\n".join(sub_lines) if sub_lines else "(no sub pairs set)"
+    subs_block = "\n".join(f"{s} - {sub}" for s, sub in subs) if subs else "(none)"
 
+    if template:
+        return template.format(
+            alliance_name="Alliance",
+            zones=zones_block,
+            subs=subs_block,
+            time=time_str,
+        )
+
+    # Fallback plain format
     return "\n".join([
-        "🔥 **OGV Warriors — Desert Storm**",
-        "We've got a strong setup going into this. If we stay coordinated and flexible, we're in a great spot to control the map early and close strong.",
+        "**Desert Storm**",
         "",
-        "🎯 **Objective & Game Plan**",
-        "We hit our zones fast, secure early control, and stay coordinated to hold momentum.",
-        "* We move quickly at the start to lock in our zones",
-        "* We hold position as a team, avoiding unnecessary solo fights",
-        "* We call out pressure early so reinforcements can respond fast",
-        "* If a zone is stable, we shift support to nearby teammates",
+        "**Zone Assignments**",
+        zones_block,
         "",
+        "**Sub Pairs**",
+        subs_block,
         "",
-        "🏆 **Zone Assignments**",
-        "",
-        "\n".join(zone_lines),
-        "🔄 **Subs & Coordination**",
-        "* Subs check in with your starter before match start",
-        "* Starters confirm your sub is ready before stepping out",
-        "* DM > AC (keeps things from getting buried)",
-        "* Rotate out when troops are empty or by ~15 min latest",
-        "",
-        "**Sub pairs:**",
-        sub_block,
-        "",
-        "⚠️ **Key Focus**",
-        "If we're behind with <10 min left, prioritize: Silo, Refineries, Arsenal, Mercenary Factory",
-        "",
-        "⏳ **Timing**",
-        f"{est_time} ({server_time})",
+        f"**Time:** {time_str}",
     ])
 
 
@@ -322,21 +309,37 @@ class TeamSelectView(discord.ui.View):
 
 
 class TimeSelectView(discord.ui.View):
-    def __init__(self):
+    """Dynamic time select — buttons built from guild storm config."""
+    def __init__(self, event_type: str = "DS", guild_id: int = None):
         super().__init__(timeout=WIZARD_TIMEOUT)
         self.selected = None
+        from config import get_storm_config
+        cfg = get_storm_config(guild_id, event_type) if guild_id else {}
+        t1_label = cfg.get("time_option_1_label") or "Option 1"
+        t2_label = cfg.get("time_option_2_label") or "Option 2"
+        t1_local = cfg.get("time_option_1_local", "")
+        t1_server = cfg.get("time_option_1_server", "")
+        t2_local = cfg.get("time_option_2_local", "")
+        t2_server = cfg.get("time_option_2_server", "")
+        btn1_label = f"{t1_label}: {t1_local} ({t1_server})" if t1_local else t1_label
+        btn2_label = f"{t2_label}: {t2_local} ({t2_server})" if t2_local else t2_label
 
-    @discord.ui.button(label="4:00pm ET (18:00 server)", style=discord.ButtonStyle.secondary)
-    async def pick_4pm(self, interaction: discord.Interaction, button: discord.ui.Button):
-        self.selected = "4pm"
-        await interaction.response.defer()
-        self.stop()
+        b1 = discord.ui.Button(label=btn1_label[:80], style=discord.ButtonStyle.secondary)
+        b2 = discord.ui.Button(label=btn2_label[:80], style=discord.ButtonStyle.secondary)
 
-    @discord.ui.button(label="9:00pm ET (01:00 server)", style=discord.ButtonStyle.secondary)
-    async def pick_9pm(self, interaction: discord.Interaction, button: discord.ui.Button):
-        self.selected = "9pm"
-        await interaction.response.defer()
-        self.stop()
+        async def pick_1(interaction: discord.Interaction):
+            self.selected = "1"
+            await interaction.response.defer()
+            self.stop()
+        async def pick_2(interaction: discord.Interaction):
+            self.selected = "2"
+            await interaction.response.defer()
+            self.stop()
+
+        b1.callback = pick_1
+        b2.callback = pick_2
+        self.add_item(b1)
+        self.add_item(b2)
 
 
 class StormApprovalView(discord.ui.View):
@@ -613,10 +616,6 @@ async def setup(bot: commands.Bot):
 # CANYON STORM (CS)
 # ══════════════════════════════════════════════════════════════════════════════
 
-CS_TIMES = {
-    "10am": ("10:00am ET", "12:00 server"),
-    "9pm":  ("9:00pm ET",  "23:00 server"),
-}
 
 
 # ── CS Defaults ───────────────────────────────────────────────────────────────
@@ -827,92 +826,50 @@ def parse_cs_template(text: str) -> tuple[dict, list]:
 
 # ── CS Mail builder ────────────────────────────────────────────────────────────
 
-def build_cs_mail(team: str, z: dict, time_key: str) -> str:
-    et_time, server_time = CS_TIMES.get(time_key, CS_TIMES["10am"])
+def build_cs_mail(team: str, z: dict, time_key: str, guild_id: int = None) -> str:
+    """Build CS mail using the guild's stored template."""
+    from config import get_storm_config
+    cfg       = get_storm_config(guild_id, "CS") if guild_id else {}
+    template  = cfg.get("mail_template") or ""
+
+    if time_key == "1":
+        local_time  = cfg.get("time_option_1_local", "")
+        server_time = cfg.get("time_option_1_server", "")
+    else:
+        local_time  = cfg.get("time_option_2_local", "")
+        server_time = cfg.get("time_option_2_server", "")
+    time_str = f"{local_time} ({server_time})" if local_time else time_key
+
+    # Build zones block from the zone dict
+    zone_lines = []
+    for key, members in z.items():
+        if members and members != "(open)":
+            label = key.replace("_", " ").replace("s1 ", "").replace("s2 ", "").replace("s3 ", "").title()
+            zone_lines.append(f"**{label}**")
+            zone_lines.append(members)
+            zone_lines.append("")
+    zones_block = "\n".join(zone_lines).strip()
+
+    subs_block = z.get("s3_pop_pair1", "(none)")
+
+    if template:
+        return template.format(
+            alliance_name="Alliance",
+            zones=zones_block,
+            subs_list=subs_block,
+            time=time_str,
+        )
 
     return "\n".join([
-        "⚡ **OGV Warriors — Canyon Storm**",
-        "Let's hit our zones fast, hold coordination across all three stages, and finish strong.",
+        "**Canyon Storm**",
         "",
-        "🏁 **Stage 1**",
+        "**Zone Assignments**",
+        zones_block,
         "",
-        f"**Power Tower**",
-        z.get("s1_power_tower", "(open)"),
+        "**Subs**",
+        subs_block,
         "",
-        f"**Data Center 1**",
-        z.get("s1_dc1", "(open)"),
-        "",
-        f"**Data Center 2**",
-        z.get("s1_dc2", "(open)"),
-        "",
-        f"**Sample Warehouse 1**",
-        z.get("s1_sw1", "(open)"),
-        "",
-        f"**Sample Warehouse 2**",
-        z.get("s1_sw2", "(open)"),
-        "",
-        f"**Sample Warehouse 3**",
-        z.get("s1_sw3", "(open)"),
-        "",
-        f"**Sample Warehouse 4**",
-        z.get("s1_sw4", "(open)"),
-        "",
-        f"**Stage 1 Floaters**",
-        z.get("s1_floaters", "(open)"),
-        "Stage 1 Floaters will assess where help is needed between Power Tower & Data Centers",
-        "",
-        "",
-        "🔁 **Stage 2**",
-        "",
-        f"**Defense System 1**",
-        z.get("s2_ds1", "(open)"),
-        "",
-        f"**Defense System 2**",
-        z.get("s2_ds2", "(open)"),
-        "",
-        f"**Serum Factory 1**",
-        z.get("s2_sf1", "(open)"),
-        "",
-        f"**Serum Factory 2**",
-        z.get("s2_sf2", "(open)"),
-        "",
-        f"**Stage 2 Floaters**",
-        z.get("s2_floaters", "(open)"),
-        "Stage 2 Floaters will assess where help is needed between Defense Systems & Serum Factories",
-        "",
-        "Stage 2 we'll abandon the Sample Warehouses for the Defense System & Serum Factories. In doing this we'll let them build points for last minute pops.",
-        "",
-        "",
-        "🧬 **Stage 3**",
-        "",
-        f"**Virus Lab**",
-        z.get("s3_virus_lab", "(open)"),
-        "",
-        f"**Power Tower**",
-        z.get("s3_power_tower", "(open)"),
-        "",
-        f"**Data Center 1**",
-        z.get("s3_dc1", "(open)"),
-        "",
-        f"**Data Center 2**",
-        z.get("s3_dc2", "(open)"),
-        "",
-        f"**Defense System 1**",
-        z.get("s3_ds1", "(open)"),
-        "",
-        f"**Defense System 2**",
-        z.get("s3_ds2", "(open)"),
-        "",
-        f"**Serum Factory 1**",
-        z.get("s3_sf1", "(open)"),
-        "",
-        f"**Serum Factory 2**",
-        z.get("s3_sf2", "(open)"),
-        "",
-        f"Stage 3 in the last 30 seconds teams {z.get('s3_pop_pair1', '???')} will all break off and pop the 4 Sample Warehouses that we've let build points.",
-        "",
-        "⏳ **Timing**",
-        f"{et_time} ({server_time})",
+        f"**Time:** {time_str}",
     ])
 
 

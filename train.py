@@ -179,7 +179,47 @@ def load_blurb_log() -> set:
 # Default value if not set: "Season 5 - Off-Season"
 
 DEFAULT_MEMBER_TAB = "Season 5 - Off-Season"
-BIRTHDAY_LOOKAHEAD = 14  # days ahead to check for birthdays
+BIRTHDAY_LOOKAHEAD = 14  # default, overridden per-guild by database
+
+
+def get_birthday_lookahead(guild_id: int = None) -> int:
+    """Return the birthday lookahead days for a guild."""
+    from config import get_birthday_config
+    cfg = get_birthday_config(guild_id) if guild_id else {}
+    return cfg.get("lookahead_days", 14)
+
+
+def load_birthdays(tab_name: str, guild_id: int = None) -> list[dict]:
+    """
+    Load all members with birthdays from the member sheet.
+    Column indices and data start row come from guild birthday config.
+    Returns a list of { "name": str, "month": int, "day": int }
+    """
+    from config import get_birthday_config
+    bcfg         = get_birthday_config(guild_id) if guild_id else {}
+    name_col     = bcfg.get("name_col", 4)
+    bday_col     = bcfg.get("birthday_col", 8)
+    start_row    = bcfg.get("data_start_row", 10)
+    min_cols     = max(name_col, bday_col) + 1
+    try:
+        ws   = _get_member_sheet(tab_name, guild_id)
+        rows = ws.get_all_values()
+        members = []
+        for row in rows[start_row - 1:]:
+            if len(row) < min_cols:
+                continue
+            name     = row[name_col].strip()
+            bday_raw = row[bday_col].strip()
+            if not name or not bday_raw:
+                continue
+            parsed = parse_birthday(bday_raw)
+            if parsed:
+                members.append({"name": name, "month": parsed[0], "day": parsed[1]})
+        print(f"[BIRTHDAY] Loaded {len(members)} members with birthdays from '{tab_name}'")
+        return members
+    except Exception as e:
+        print(f"[BIRTHDAY] Error loading birthdays from '{tab_name}': {e}")
+        return []
 
 
 def get_member_tab_name(guild_id: int = None) -> str:
@@ -290,18 +330,19 @@ def load_birthdays(tab_name: str) -> list[dict]:
         return []
 
 
-def check_and_add_birthdays(schedule: dict) -> tuple[dict, list[str]]:
+def check_and_add_birthdays(schedule: dict, guild_id: int = None) -> tuple[dict, list[str]]:
     """
-    Look ahead BIRTHDAY_LOOKAHEAD days from today.
-    For each member whose birthday falls in that window:
-      - Skip if this member's name already appears in the schedule on bday-1, bday, or bday+1
-      - Otherwise try to place them: prefer bday, then bday-1, then bday+1
-      - If all three dates are occupied by someone else, do NOT schedule and add a
-        high-priority alert string to the returned alerts list.
-    Returns (updated_schedule, alerts) where alerts is a list of alert strings.
+    Look ahead lookahead_days from today (from guild birthday config).
+    Uses configured tab, name column, and birthday column.
     """
-    tab_name = get_member_tab_name()
-    members  = load_birthdays(tab_name)
+    from config import get_birthday_config
+    bcfg       = get_birthday_config(guild_id) if guild_id else {}
+    if not bcfg.get("enabled", 0) and guild_id:
+        return schedule, []
+
+    tab_name  = bcfg.get("tab_name") or get_member_tab_name(guild_id)
+    lookahead = bcfg.get("lookahead_days", BIRTHDAY_LOOKAHEAD)
+    members   = load_birthdays(tab_name, guild_id)
     if not members:
         return schedule, []
 
@@ -330,7 +371,7 @@ def check_and_add_birthdays(schedule: dict) -> tuple[dict, list[str]]:
 
         # Only care about birthdays in the lookahead window
         days_until = (bday - today).days
-        if days_until > BIRTHDAY_LOOKAHEAD:
+        if days_until > lookahead:
             continue
 
         # Person-specific conflict check: is this member's name already
@@ -487,9 +528,11 @@ def parse_date_and_name(line: str) -> tuple[date, str, str | None] | tuple[None,
 
 
 # ── Theme and tone options ─────────────────────────────────────────────────────
+# These are now per-guild via the database. The functions below load them
+# dynamically. These defaults are only used as a final fallback.
 
-THEMES = [
-    "Welcome to OGV",
+DEFAULT_THEMES = [
+    "Welcome to the Alliance",
     "Birthday",
     "Milestone",
     "War / Performance",
@@ -498,7 +541,7 @@ THEMES = [
     "Custom",
 ]
 
-TONES = [
+DEFAULT_TONES = [
     "Default (match the theme)",
     "More casual",
     "More intense",
@@ -507,16 +550,46 @@ TONES = [
     "Cinematic / Dramatic",
 ]
 
+
+def get_themes(guild_id: int = None) -> list:
+    """Return the theme list for a guild."""
+    from config import get_train_config
+    cfg = get_train_config(guild_id) if guild_id else {}
+    return cfg.get("themes") or DEFAULT_THEMES
+
+
+def get_tones(guild_id: int = None) -> list:
+    """Return the tone list for a guild."""
+    from config import get_train_config
+    cfg = get_train_config(guild_id) if guild_id else {}
+    return cfg.get("tones") or DEFAULT_TONES
+
+
+def get_prompt_template(guild_id: int = None) -> str:
+    """Return the ChatGPT prompt template for a guild."""
+    from config import get_train_config
+    cfg = get_train_config(guild_id) if guild_id else {}
+    return cfg.get("prompt_template") or ""
+
 # ── Prompt builder ─────────────────────────────────────────────────────────────
 
-def build_chatgpt_prompt(name: str, theme: str, tone: str, notes: str) -> str:
-    """Format a ready-to-paste ChatGPT thread prompt from stored entry data."""
+def build_chatgpt_prompt(name: str, theme: str, tone: str, notes: str, guild_id: int = None) -> str:
+    """Format a ready-to-paste ChatGPT prompt using the guild's stored template."""
+    template = get_prompt_template(guild_id)
+    if template:
+        return template.format(
+            name=name,
+            theme=theme,
+            tone=tone if tone else "Default",
+            notes=notes if notes else "None",
+        )
+    # Fallback if no template configured
     lines = [
-        f"1. {name}",
-        f"3. {theme}" + (f" — {tone}" if tone and tone != "Default (match the theme)" else ""),
+        f"Member: {name}",
+        f"Theme: {theme}" + (f" — {tone}" if tone and tone != "Default (match the theme)" else ""),
     ]
     if notes:
-        lines.append(f"4. {notes}")
+        lines.append(f"Notes: {notes}")
     return "\n".join(lines)
 
 
@@ -527,7 +600,7 @@ def build_schedule_embed(schedule: dict, blurb_log: set) -> discord.Embed:
     today = date.today()
 
     embed = discord.Embed(
-        title="🚂 OGV Train Schedule",
+        title="🚂 Alliance Train Schedule",
         color=discord.Color.gold(),
         timestamp=datetime.now(tz=ET),
     )
@@ -610,12 +683,13 @@ def build_entry_embed(date_str: str, entry: dict, blurb_log: set) -> discord.Emb
 # ── UI Views ───────────────────────────────────────────────────────────────────
 
 class ThemeSelectView(discord.ui.View):
-    def __init__(self):
+    def __init__(self, guild_id: int = None):
         super().__init__(timeout=WIZARD_TIMEOUT)
         self.selected = None
+        themes = get_themes(guild_id)
         select = discord.ui.Select(
             placeholder="Choose a theme...",
-            options=[discord.SelectOption(label=t, value=t) for t in THEMES],
+            options=[discord.SelectOption(label=t, value=t) for t in themes],
         )
         select.callback = self._on_select
         self.add_item(select)
@@ -627,12 +701,13 @@ class ThemeSelectView(discord.ui.View):
 
 
 class ToneSelectView(discord.ui.View):
-    def __init__(self):
+    def __init__(self, guild_id: int = None):
         super().__init__(timeout=WIZARD_TIMEOUT)
         self.selected = None
+        tones = get_tones(guild_id)
         select = discord.ui.Select(
             placeholder="Choose a tone...",
-            options=[discord.SelectOption(label=t, value=t) for t in TONES],
+            options=[discord.SelectOption(label=t, value=t) for t in tones],
         )
         select.callback = self._on_select
         self.add_item(select)
@@ -753,6 +828,7 @@ async def retrieve_and_confirm(bot, channel, user, date_str: str, entry: dict, b
         theme=entry.get("theme", ""),
         tone=entry.get("tone", ""),
         notes=entry.get("notes", ""),
+        guild_id=interaction.guild_id,
     )
     await channel.send(
         f"✅ **ChatGPT prompt for {name}** — copy and paste into the thread:\n```\n{prompt}\n```"
@@ -950,7 +1026,7 @@ async def collect_schedule(bot, ctx: commands.Context, cancel_event: asyncio.Eve
 
         # Theme
         theme_msg  = await channel.send(f"🎯 **Theme** for {existing_name}:")
-        theme_view = ThemeSelectView()
+        theme_view = ThemeSelectView(guild_id=interaction.guild_id)
         await theme_msg.edit(view=theme_view)
         ok = await wait_for_view(theme_view, theme_msg)
         if not ok:
@@ -973,7 +1049,7 @@ async def collect_schedule(bot, ctx: commands.Context, cancel_event: asyncio.Eve
 
         # Tone
         tone_msg  = await channel.send(f"🎭 **Tone** for {existing_name}:")
-        tone_view = ToneSelectView()
+        tone_view = ToneSelectView(guild_id=interaction.guild_id)
         await tone_msg.edit(view=tone_view)
         ok = await wait_for_view(tone_view, tone_msg)
         if not ok:
@@ -1106,7 +1182,7 @@ async def run_wizard_steps(bot, channel, user, prefilled_name: str = None):
 
         # Step 2: Theme
         theme_msg  = await channel.send("**Step 2 of 4 — Theme**\nSelect the theme for this train:")
-        theme_view = ThemeSelectView()
+        theme_view = ThemeSelectView(guild_id=interaction.guild_id)
         await theme_msg.edit(view=theme_view)
         if not await wait_for_view(theme_view, theme_msg):
             return False
@@ -1121,7 +1197,7 @@ async def run_wizard_steps(bot, channel, user, prefilled_name: str = None):
 
         # Step 3: Tone
         tone_msg  = await channel.send("**Step 3 of 4 — Tone**\nSelect the tone:")
-        tone_view = ToneSelectView()
+        tone_view = ToneSelectView(guild_id=interaction.guild_id)
         await tone_msg.edit(view=tone_view)
         if not await wait_for_view(tone_view, tone_msg):
             return False
@@ -1161,7 +1237,7 @@ async def run_wizard_steps(bot, channel, user, prefilled_name: str = None):
             await channel.send("❌ Cancelled. Use `/train` to start over.")
             return False
 
-        prompt = build_chatgpt_prompt(name, theme, tone, notes)
+        prompt = build_chatgpt_prompt(name, theme, tone, notes, guild_id=interaction.guild_id)
         await channel.send(
             f"✅ **ChatGPT prompt for {name}** — copy and paste into the thread:\n"
             f"```\n{prompt}\n```"
@@ -1248,7 +1324,7 @@ class TrainCog(commands.Cog):
         try:
             current_schedule = load_schedule()
             before_count     = len(current_schedule)
-            updated_schedule, alerts = check_and_add_birthdays(current_schedule)
+            updated_schedule, alerts = check_and_add_birthdays(current_schedule, guild_id=interaction.guild_id if hasattr(interaction, "guild_id") else None)
             after_count      = len(updated_schedule)
             added            = after_count - before_count
 
@@ -1505,19 +1581,20 @@ class TrainCog(commands.Cog):
 
         # ── Birthday auto-population ───────────────────────────────────────────
         try:
-            current_schedule = load_schedule()
-            updated_schedule, alerts = check_and_add_birthdays(current_schedule)
-            if updated_schedule != current_schedule or alerts:
-                save_schedule(updated_schedule)
-            if alerts:
-                from config import get_config
-                for guild in self.bot.guilds:
-                    cfg = get_config(guild.id)
-                    if cfg and cfg.setup_complete:
-                        alert_channel = self.bot.get_channel(cfg.leadership_channel_id)
-                        if alert_channel:
-                            for alert in alerts:
-                                await alert_channel.send(alert)
+            from config import get_config
+            for guild in self.bot.guilds:
+                cfg = get_config(guild.id)
+                if not cfg or not cfg.setup_complete:
+                    continue
+                current_schedule = load_schedule(guild.id)
+                updated_schedule, alerts = check_and_add_birthdays(current_schedule, guild_id=guild.id)
+                if updated_schedule != current_schedule or alerts:
+                    save_schedule(updated_schedule, guild.id)
+                if alerts:
+                    alert_channel = self.bot.get_channel(cfg.leadership_channel_id)
+                    if alert_channel:
+                        for alert in alerts:
+                            await alert_channel.send(alert)
         except Exception as e:
             print(f"[BIRTHDAY] Error during birthday check: {e}")
 

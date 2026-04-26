@@ -248,9 +248,27 @@ async def events_slash(interaction: discord.Interaction, date: str = None):
 )
 async def help_slash(interaction: discord.Interaction):
     embed = discord.Embed(
-        title="🤖 OGV Bot Commands",
+        title="🤖 Alliance Helper — Commands",
         color=discord.Color.blurple(),
-        description="All commands are restricted to the leadership channel and require the OGV Leadership role.",
+        description="Leadership commands require the configured leadership role and channel.",
+    )
+
+    embed.add_field(
+        name="⚙️ Server Setup",
+        value=(
+            "`/setup` — Configure the bot for your server (roles, channels, sheet)\n"
+            "`/setup_events` — Add or update an event type (Marauder, Siege, etc.)\n"
+            "`/setup_events_list` — View all configured events\n"
+            "`/setup_events_remove` — Deactivate an event\n"
+            "`/setup_train` — Configure train schedule tab, themes, tones, and prompt\n"
+            "`/setup_birthdays` — Configure birthday tracking\n"
+            "`/setup_desertstorm` — Configure DS mail template and time options\n"
+            "`/setup_canyonstorm` — Configure CS mail template and time options\n"
+            "`/setup_survey` — Configure survey questions and sheet tabs\n"
+            "`/setup_status` — View current server configuration\n"
+            "`/setup_reset` — Clear server configuration and start over"
+        ),
+        inline=False,
     )
 
     embed.add_field(
@@ -260,9 +278,9 @@ async def help_slash(interaction: discord.Interaction):
             "`/schedule_set` — Add or update entries in the schedule\n"
             "`/schedule_clear` — Clear the entire schedule\n"
             "`/trainprompt [date]` — Retrieve a stored ChatGPT prompt\n"
-            "`/setmembertab [tab]` — Set the active member tab (birthdays + DS/CS rosters)\n"
-            "`/checkbirthdays` — Manually run the birthday check now\n"
-            "`/cancel` — Cancel your active wizard session"
+            "`/setmembertab [tab]` — Set the active member sheet tab\n"
+            "`/checkbirthdays` — Manually run the birthday check\n"
+            "`/cancel` — Cancel your active wizard or log session"
         ),
         inline=False,
     )
@@ -270,9 +288,9 @@ async def help_slash(interaction: discord.Interaction):
     embed.add_field(
         name="⚔️ Storm Mails",
         value=(
-            "`/draftds` — Generate a Desert Storm mail draft from last week's assignments\n"
-            "`/draftcs` — Generate a Canyon Storm mail draft from last week's assignments\n"
-            "Edit the pre-filled template, paste it back, preview the mail, then approve to save"
+            "`/draftds` — Generate a Desert Storm mail draft for Team A or B\n"
+            "`/draftcs` — Generate a Canyon Storm mail draft for Team A or B\n"
+            "Edit the pre-filled template, paste it back, preview, then approve to save"
         ),
         inline=False,
     )
@@ -280,10 +298,9 @@ async def help_slash(interaction: discord.Interaction):
     embed.add_field(
         name="📊 Storm Logging",
         value=(
-            "`/logds` — Log Desert Storm participation (votes, RTF no-vote, sit-outs)\n"
-            "`/logcs` — Log Canyon Storm participation (sit-outs, prior sit-out no-request)\n"
-            "`/viewlog [event] [date]` — View a full log entry for a specific event and date\n"
-            "Results saved to the DS-CS Sit-outs sheet and posted to the log thread"
+            "`/logds` — Log Desert Storm participation data\n"
+            "`/logcs` — Log Canyon Storm participation data\n"
+            "`/viewlog [event] [date]` — View a full log entry for a specific date"
         ),
         inline=False,
     )
@@ -292,13 +309,13 @@ async def help_slash(interaction: discord.Interaction):
         name="📈 Growth Tracking",
         value=(
             "`/rungrowth` — Manually run the monthly squad power snapshot\n"
-            "Snapshots also run automatically on the 1st of each month at 10pm ET"
+            "Snapshots also run automatically on the 1st of each month"
         ),
         inline=False,
     )
 
     embed.add_field(
-        name="📊 Squad Powers Survey",
+        name="📋 Squad Powers Survey",
         value=(
             "`/postsurvey` — Post (or repost) the survey button in the survey channel\n"
             "Members click Answer to open a private thread and submit their stats"
@@ -310,33 +327,12 @@ async def help_slash(interaction: discord.Interaction):
         name="📣 Event Announcements",
         value=(
             "`/events [date]` — Open the event editor for today or a specific date\n"
-            "Events are also automatically posted at noon on event days for review"
+            "Drafts are also automatically posted at your configured draft time on event days"
         ),
         inline=False,
     )
 
-    embed.add_field(
-        name="📋 How Announcements Work",
-        value=(
-            "At noon on event days the bot posts a draft to this channel.\n"
-            "Use the editor to add/remove events and adjust times, then build the announcement.\n"
-            "Approve it or edit before it posts publicly to Announcements."
-        ),
-        inline=False,
-    )
-
-    embed.add_field(
-        name="🛡️ Scheduled Reminders",
-        value=(
-            "**10pm ET (reset)** — Birthday check runs + train day reminder if someone is scheduled\n"
-            "**Noon on event days** — Event announcement draft posted for review\n"
-            "**9:55pm ET Fridays** — Buster day shield reminder for approval\n"
-            "**5 min before first event** — Auto-posted warning to Announcements"
-        ),
-        inline=False,
-    )
-
-    embed.set_footer(text="OGV Squad Powers Bot")
+    embed.set_footer(text="Alliance Helper — lw-alliance-helper.iam.gserviceaccount.com")
     await interaction.response.send_message(embed=embed, ephemeral=True)
 
 

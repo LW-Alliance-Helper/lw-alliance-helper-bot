@@ -7,7 +7,7 @@ from unittest.mock import patch, MagicMock, call
 import sys, os
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__)))))
 
-from tests.conftest import TEST_GUILD_ID
+from tests.constants import TEST_GUILD_ID
 
 
 class TestLoadMemberData:
@@ -222,7 +222,8 @@ class TestRunGrowthSnapshotInner:
         save_growth_config(
             TEST_GUILD_ID, enabled=1, tab_source="Powers", name_col="A",
             metrics=[{"col": "B", "label": "Power"}],
-            tab_growth="Growth Tracking", snapshot_frequency="monthly",
+            tab_growth="New Growth Tab",  # tab that doesn't exist yet
+            snapshot_frequency="monthly",
             snapshot_day=1, snapshot_interval=30, data_start_row=2,
         )
 
@@ -230,16 +231,27 @@ class TestRunGrowthSnapshotInner:
         mock_new_ws.row_count      = 10
         mock_new_ws.row_values     = MagicMock(return_value=[])
         mock_new_ws.get_all_values = MagicMock(return_value=[])
+        mock_new_ws.update         = MagicMock()
+        mock_new_ws.batch_update   = MagicMock()
+
+        mock_source_ws = MagicMock()
+        mock_source_ws.get_all_values = MagicMock(return_value=[
+            ["Name", "Power"],
+            ["Alice", "43.27"],
+        ])
+
+        def fake_worksheet(name):
+            if name == "Powers":
+                return mock_source_ws
+            raise gspread.exceptions.WorksheetNotFound(name)
+
         mock_sh = MagicMock()
-        mock_sh.worksheet = MagicMock(
-            side_effect=gspread.exceptions.WorksheetNotFound("Growth Tracking")
-        )
+        mock_sh.worksheet     = MagicMock(side_effect=fake_worksheet)
         mock_sh.add_worksheet = MagicMock(return_value=mock_new_ws)
 
-        with patch("growth._get_spreadsheet", return_value=mock_sh), \
-             patch("growth.load_member_data", return_value=[]):
+        with patch("growth._get_spreadsheet", return_value=mock_sh):
             _run_growth_snapshot_inner(TEST_GUILD_ID)
 
         mock_sh.add_worksheet.assert_called_once_with(
-            title="Growth Tracking", rows=500, cols=50
+            title="New Growth Tab", rows=500, cols=50
         )

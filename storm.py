@@ -260,11 +260,19 @@ def build_ds_mail(team: str, zones: dict, subs: list, time_key: str,
     zone_lines = []
     for zone, members in zones.items():
         zone_lines.append(f"**{zone}**")
-        zone_lines.append(members)
+        if isinstance(members, list):
+            zone_lines.append("\n".join(str(m) for m in members))
+        else:
+            zone_lines.append(str(members))
         zone_lines.append("")
     zones_block = "\n".join(zone_lines).strip()
 
-    subs_block = "\n".join(f"{s} - {sub}" for s, sub in subs) if subs else "(none)"
+    if isinstance(subs, list) and subs:
+        subs_block = "\n".join(str(s) for s in subs)
+    elif subs:
+        subs_block = str(subs)
+    else:
+        subs_block = "(none)"
 
     if template:
         return template.format(
@@ -846,11 +854,17 @@ def build_cs_mail(team: str, z: dict, time_key: str, guild_id: int = None) -> st
         if members and members != "(open)":
             label = key.replace("_", " ").replace("s1 ", "").replace("s2 ", "").replace("s3 ", "").title()
             zone_lines.append(f"**{label}**")
-            zone_lines.append(members)
+            if isinstance(members, list):
+                zone_lines.append("\n".join(str(m) for m in members))
+            else:
+                zone_lines.append(str(members))
             zone_lines.append("")
     zones_block = "\n".join(zone_lines).strip()
 
-    subs_block = z.get("s3_pop_pair1", "(none)")
+    if isinstance(z.get("s3_pop_pair1"), list):
+        subs_block = "\n".join(str(s) for s in z["s3_pop_pair1"])
+    else:
+        subs_block = z.get("s3_pop_pair1", "(none)") or "(none)"
 
     if template:
         return template.format(

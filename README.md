@@ -278,4 +278,4 @@ Discord buttons lose their connection to the bot when it restarts. Use the corre
 | Survey button | `/postsurvey` |
 
 **Something else isn't working**
-Use `/help` to see all available commands and make sure the relevant feature has been configured with its `/setup_*` command. 
+Use `/help` to see all available commands and make sure the relevant feature has been configured with its `/setup_*` command.

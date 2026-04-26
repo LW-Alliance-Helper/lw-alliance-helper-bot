@@ -33,7 +33,7 @@ jobs:
         run: |
           python -m pip install --upgrade pip
           pip install -r requirements.txt
-          pip install pytest pytest-asyncio pytest-mock
+          pip install pytest pytest-asyncio pytest-mock pytest-timeout
 
       - name: Run unit tests
         run: |
@@ -41,7 +41,7 @@ jobs:
 
       - name: Run integration tests
         run: |
-          pytest tests/integration/ -v --tb=short -m "not sheets"
+          pytest tests/integration/ -v --tb=short -m "not sheets" --timeout=30
 
   # ── Sheet Integration Tests (main branch only) ──────────────────────────────
   sheet-tests:
@@ -63,7 +63,7 @@ jobs:
         run: |
           python -m pip install --upgrade pip
           pip install -r requirements.txt
-          pip install pytest pytest-asyncio pytest-mock
+          pip install pytest pytest-asyncio pytest-mock pytest-timeout
 
       - name: Run sheet integration tests
         env:

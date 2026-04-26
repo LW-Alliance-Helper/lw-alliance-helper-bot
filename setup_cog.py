@@ -299,8 +299,346 @@ class ModalLaunchView(discord.ui.View):
         self.stop()
 
 
-# ── Setup wizard flow ──────────────────────────────────────────────────────────
+# ── Define Various Setup Commands ────────────────────────────────────────────────────────────────────────
 
+class SetupCog(commands.Cog):
+    def __init__(self, bot):
+        self.bot = bot
+
+    @app_commands.command(name="setup", description="Configure Alliance Helper for your server")
+    async def setup(self, interaction: discord.Interaction):
+        # Only admins can run setup
+        if not interaction.user.guild_permissions.administrator:
+            await interaction.response.send_message(
+                "⛔ Only server administrators can run `/setup`.", ephemeral=True
+            )
+            return
+
+        await interaction.response.send_message(
+            "⚙️ Starting setup — check the channel for prompts!", ephemeral=True
+        )
+        await run_setup(interaction, self.bot)
+
+    @app_commands.command(name="setup_status", description="Show the current bot configuration for this server")
+    async def setup_status(self, interaction: discord.Interaction):
+        if not interaction.user.guild_permissions.administrator:
+            await interaction.response.send_message(
+                "⛔ Only server administrators can view setup status.", ephemeral=True
+            )
+            return
+
+        cfg = get_config(interaction.guild_id)
+        if not cfg or not cfg.setup_complete:
+            await interaction.response.send_message(
+                "⚙️ This server hasn't been set up yet. Run `/setup` to get started.",
+                ephemeral=True,
+            )
+            return
+
+        embed = discord.Embed(
+            title="⚙️ Current Configuration",
+            color=discord.Color.blurple(),
+        )
+        embed.add_field(name="Member Role",        value=cfg.member_role_name,                  inline=True)
+        embed.add_field(name="Leadership Role",    value=cfg.leadership_role_name,              inline=True)
+        embed.add_field(name="\u200b",             value="\u200b",                              inline=True)
+        embed.add_field(name="Leadership Channel", value=f"<#{cfg.leadership_channel_id}>",    inline=True)
+        embed.add_field(name="Announcements",      value=f"<#{cfg.announcement_channel_id}>",  inline=True)
+        embed.add_field(name="Survey Channel",     value=f"<#{cfg.survey_channel_id}>",        inline=True)
+        embed.add_field(name="Survey Notifs",      value=f"<#{cfg.survey_notify_channel_id}>", inline=True)
+        embed.add_field(name="Storm Log Thread",   value=f"<#{cfg.storm_log_thread_id}>",      inline=True)
+        embed.add_field(name="Member Tab",         value=cfg.tab_member_default,               inline=True)
+        embed.add_field(name="Anchor Date",        value=cfg.anchor_date,                      inline=True)
+        embed.add_field(name="Cycle Days",         value=str(cfg.cycle_days),                  inline=True)
+
+        await interaction.response.send_message(embed=embed, ephemeral=True)
+
+    @app_commands.command(name="setup_reset", description="Clear this server's configuration and start over")
+    async def setup_reset(self, interaction: discord.Interaction):
+        if not interaction.user.guild_permissions.administrator:
+            await interaction.response.send_message(
+                "⛔ Only server administrators can reset the configuration.", ephemeral=True
+            )
+            return
+
+        class ConfirmResetView(discord.ui.View):
+            def __init__(self):
+                super().__init__(timeout=60)
+                self.confirmed = False
+
+            @discord.ui.button(label="Yes, reset everything", style=discord.ButtonStyle.danger)
+            async def confirm(self, inner: discord.Interaction, button: discord.ui.Button):
+                self.confirmed = True
+                await inner.response.defer()
+                self.stop()
+
+            @discord.ui.button(label="Cancel", style=discord.ButtonStyle.secondary)
+            async def cancel(self, inner: discord.Interaction, button: discord.ui.Button):
+                await inner.response.defer()
+                self.stop()
+
+        view = ConfirmResetView()
+        await interaction.response.send_message(
+            "⚠️ Are you sure you want to reset the bot configuration for this server? "
+            "This cannot be undone.",
+            view=view,
+            ephemeral=True,
+        )
+        await view.wait()
+        if view.confirmed:
+            from config import save_config, GuildConfig
+            save_config(GuildConfig(guild_id=interaction.guild_id))
+            await interaction.followup.send(
+                "✅ Configuration reset. Run `/setup` to configure the bot again.",
+                ephemeral=True,
+            )
+
+    @app_commands.command(name="setup_train", description="Configure the train schedule — tab, themes, tones, and prompt template")
+    async def setup_train(self, interaction: discord.Interaction):
+        if not interaction.user.guild_permissions.administrator:
+            await interaction.response.send_message(
+                "⛔ Only server administrators can run `/setup_train`.", ephemeral=True
+            )
+            return
+        await interaction.response.send_message(
+            "⚙️ Starting train setup — check the channel for prompts!", ephemeral=True
+        )
+        await run_train_setup(interaction, self.bot)
+
+    @app_commands.command(name="setup_growth", description="Configure growth tracking — source tab, metrics, and snapshot frequency")
+    async def setup_growth(self, interaction: discord.Interaction):
+        if not interaction.user.guild_permissions.administrator:
+            await interaction.response.send_message(
+                "⛔ Only server administrators can run `/setup_growth`.", ephemeral=True
+            )
+            return
+        await interaction.response.send_message(
+            "⚙️ Starting growth tracking setup — check the channel for prompts!", ephemeral=True
+        )
+        await run_growth_setup(interaction, self.bot)
+
+    @app_commands.command(name="setup_birthdays", description="Configure birthday tracking — sheet tab, columns, and lookahead days")
+    async def setup_birthdays(self, interaction: discord.Interaction):
+        if not interaction.user.guild_permissions.administrator:
+            await interaction.response.send_message(
+                "⛔ Only server administrators can run `/setup_birthdays`.", ephemeral=True
+            )
+            return
+        await interaction.response.send_message(
+            "⚙️ Starting birthday setup — check the channel for prompts!", ephemeral=True
+        )
+        await run_birthday_setup(interaction, self.bot)
+
+    @app_commands.command(name="setup_desertstorm", description="Configure Desert Storm mail template and time options")
+    async def setup_desertstorm(self, interaction: discord.Interaction):
+        if not interaction.user.guild_permissions.administrator:
+            await interaction.response.send_message(
+                "⛔ Only server administrators can run `/setup_desertstorm`.", ephemeral=True
+            )
+            return
+        await interaction.response.send_message(
+            "⚙️ Starting Desert Storm setup — check the channel for prompts!", ephemeral=True
+        )
+        await run_storm_setup(interaction, self.bot, "DS")
+
+    @app_commands.command(name="setup_canyonstorm", description="Configure Canyon Storm mail template and time options")
+    async def setup_canyonstorm(self, interaction: discord.Interaction):
+        if not interaction.user.guild_permissions.administrator:
+            await interaction.response.send_message(
+                "⛔ Only server administrators can run `/setup_canyonstorm`.", ephemeral=True
+            )
+            return
+        await interaction.response.send_message(
+            "⚙️ Starting Canyon Storm setup — check the channel for prompts!", ephemeral=True
+        )
+        await run_storm_setup(interaction, self.bot, "CS")
+
+    @app_commands.command(name="setup_events", description="Add or edit an event type for announcements (Marauder, Siege, etc.)")
+    async def setup_events(self, interaction: discord.Interaction):
+        if not interaction.user.guild_permissions.administrator:
+            await interaction.response.send_message(
+                "⛔ Only server administrators can run `/setup_events`.", ephemeral=True
+            )
+            return
+        await interaction.response.send_message(
+            "⚙️ Starting event setup — check the channel for prompts!", ephemeral=True
+        )
+        await run_event_setup(interaction, self.bot)
+
+    @app_commands.command(name="setup_events_list", description="View all configured event types for this server")
+    async def setup_events_list(self, interaction: discord.Interaction):
+        if not interaction.user.guild_permissions.administrator:
+            await interaction.response.send_message(
+                "⛔ Only server administrators can view event configuration.", ephemeral=True
+            )
+            return
+        from config import get_guild_events
+        events = get_guild_events(interaction.guild_id, active_only=False)
+        if not events:
+            await interaction.response.send_message(
+                "No events configured yet. Run `/setup_events` to add one.", ephemeral=True
+            )
+            return
+        lines = []
+        for e in events:
+            status = "✅ Active" if e["active"] else "❌ Inactive"
+            lines.append(
+                f"**{e['name']}** (`{e['short_key']}`)\n"
+                f"Time: {e['default_time']} {e['timezone']} | "
+                f"Schedule: {e['schedule_type']} | {status}"
+            )
+        embed = discord.Embed(
+            title="⚙️ Configured Events",
+            description="\n\n".join(lines),
+            color=discord.Color.blurple(),
+        )
+        await interaction.response.send_message(embed=embed, ephemeral=True)
+
+    @app_commands.command(name="setup_events_remove", description="Deactivate an event type")
+    @app_commands.describe(short_key="The short key of the event to remove (e.g. marauder)")
+    async def setup_events_remove(self, interaction: discord.Interaction, short_key: str):
+        if not interaction.user.guild_permissions.administrator:
+            await interaction.response.send_message(
+                "⛔ Only server administrators can remove events.", ephemeral=True
+            )
+            return
+        from config import get_guild_event, delete_guild_event
+        event = get_guild_event(interaction.guild_id, short_key)
+        if not event:
+            await interaction.response.send_message(
+                f"⚠️ No event found with key `{short_key}`.", ephemeral=True
+            )
+            return
+        delete_guild_event(interaction.guild_id, short_key)
+        await interaction.response.send_message(
+            f"✅ **{event['name']}** has been deactivated. Run `/setup_events` to re-add it.",
+            ephemeral=True,
+        )
+
+    @app_commands.command(name="setup_survey", description="Configure survey — channels, sheet tabs, intro message, and questions")
+    async def setup_survey(self, interaction: discord.Interaction):
+        if not interaction.user.guild_permissions.administrator:
+            await interaction.response.send_message(
+                "⛔ Only server administrators can run `/setup_survey`.", ephemeral=True
+            )
+            return
+        await interaction.response.send_message(
+            "⚙️ Starting survey setup — check the channel for prompts!", ephemeral=True
+        )
+        await run_survey_setup(interaction, self.bot)
+
+# ── /Define Various Setup Commands ───────────────────────────────────────────────────────
+
+# Common timezones for the selector
+# ── Timezone configuration ─────────────────────────────────────────────────────
+# Format: (tz_database_name, display_label)
+# Labels show (UTC offset, timezone name, and example cities
+# Note: offsets shown are standard time — DST-observing zones shift +1 in summer
+
+TIMEZONE_OPTIONS = [
+    ("Pacific/Honolulu",                  "(UTC-10) Hawaii (Honolulu)"),
+    ("America/Anchorage",                 "(UTC-9) Alaska (Anchorage)"),
+    ("America/Los_Angeles",               "(UTC-8) Pacific (Los Angeles, Seattle, Vancouver)"),
+    ("America/Denver",                    "(UTC-7) Mountain (Denver, Phoenix, Calgary)"),
+    ("America/Chicago",                   "(UTC-6) Central (Chicago, Dallas, Mexico City)"),
+    ("America/New_York",                  "(UTC-5) Eastern (New York, Toronto, Miami)"),
+    ("America/Sao_Paulo",                 "(UTC-3) Brazil (São Paulo, Rio de Janeiro)"),
+    ("America/Argentina/Buenos_Aires",    "(UTC-3) Argentina (Buenos Aires)"),
+    ("Atlantic/Azores",                   "(UTC-1) Azores"),
+    ("Europe/London",                     "(UTC+0) GMT/BST (London, Dublin, Lisbon)"),
+    ("Europe/Paris",                      "(UTC+1) Central European (Paris, Berlin, Rome)"),
+    ("Europe/Helsinki",                   "(UTC+2) Eastern European (Helsinki, Athens, Cairo)"),
+    ("Europe/Moscow",                     "(UTC+3) Moscow (Moscow, Istanbul, Riyadh)"),
+    ("Asia/Dubai",                        "(UTC+4) Gulf (Dubai, Abu Dhabi)"),
+    ("Asia/Karachi",                      "(UTC+5) Pakistan (Karachi, Islamabad)"),
+    ("Asia/Kolkata",                      "(UTC+5:30) India (Mumbai, Delhi, Bangalore)"),
+    ("Asia/Dhaka",                        "(UTC+6) Bangladesh (Dhaka)"),
+    ("Asia/Bangkok",                      "(UTC+7) Indochina (Bangkok, Jakarta, Hanoi)"),
+    ("Asia/Shanghai",                     "(UTC+8) China/Singapore (Shanghai, Beijing, Singapore)"),
+    ("Asia/Tokyo",                        "(UTC+9) Japan/Korea (Tokyo, Seoul)"),
+    ("Australia/Sydney",                  "(UTC+10) Eastern Australia (Sydney, Melbourne)"),
+    ("Pacific/Auckland",                  "(UTC+12) New Zealand (Auckland, Wellington)"),
+]
+
+# Map from tz_database_name → display label
+TIMEZONE_LABELS = {tz: label for tz, label in TIMEZONE_OPTIONS}
+
+
+class TimezoneSelectView(discord.ui.View):
+    """Single dropdown covering all supported timezones, ordered by (UTC offset."""
+    def __init__(self):
+        super().__init__(timeout=WIZARD_TIMEOUT)
+        self.selected  = None
+        self.confirmed = False
+
+        select = discord.ui.Select(
+            placeholder="Select your timezone...",
+            options=[
+                discord.SelectOption(label=label[:100], value=tz)
+                for tz, label in TIMEZONE_OPTIONS
+            ],
+            row=0,
+        )
+
+        async def _cb(interaction: discord.Interaction):
+            self.selected    = select.values[0]
+            self.confirmed   = True
+            select.disabled  = True
+            label = TIMEZONE_LABELS.get(self.selected, self.selected)
+            await interaction.response.edit_message(
+                content=f"✅ Timezone: **{label}**", view=self
+            )
+            self.stop()
+
+        select.callback = _cb
+        self.add_item(select)
+
+
+class ScheduleTypeView(discord.ui.View):
+    def __init__(self):
+        super().__init__(timeout=120)
+        self.selected  = None
+
+    @discord.ui.button(label="🔁 Repeating cycle", style=discord.ButtonStyle.primary)
+    async def repeating(self, interaction: discord.Interaction, button: discord.ui.Button):
+        self.selected = "repeating"
+        for item in self.children:
+            item.disabled = True
+        await interaction.response.edit_message(content="✅ Schedule: **Repeating cycle**", view=self)
+        self.stop()
+
+    @discord.ui.button(label="📅 Add manually each time", style=discord.ButtonStyle.secondary)
+    async def manual(self, interaction: discord.Interaction, button: discord.ui.Button):
+        self.selected = "manual"
+        for item in self.children:
+            item.disabled = True
+        await interaction.response.edit_message(content="✅ Schedule: **Manual (add per event)**", view=self)
+        self.stop()
+
+
+class YesNoView(discord.ui.View):
+    def __init__(self, yes_label="Yes", no_label="No"):
+        super().__init__(timeout=120)
+        self.selected = None
+
+    @discord.ui.button(label="Yes", style=discord.ButtonStyle.success)
+    async def yes(self, interaction: discord.Interaction, button: discord.ui.Button):
+        self.selected = True
+        for item in self.children:
+            item.disabled = True
+        await interaction.response.edit_message(view=self)
+        self.stop()
+
+    @discord.ui.button(label="No", style=discord.ButtonStyle.secondary)
+    async def no(self, interaction: discord.Interaction, button: discord.ui.Button):
+        self.selected = False
+        for item in self.children:
+            item.disabled = True
+        await interaction.response.edit_message(view=self)
+        self.stop()
+
+
+# ── Run Various Setups ───────────────────────────────────────────────────────
 
 async def run_setup(interaction: discord.Interaction, bot):
     guild_id = interaction.guild_id
@@ -493,12 +831,8 @@ async def run_setup(interaction: discord.Interaction, bot):
     )
     print(f"[SETUP] Guild {guild_id} core setup complete")
 
-
-# ── Birthday setup wizard ──────────────────────────────────────────────────────
-
-
-async def run_birthday_setup(interaction: discord.Interaction, bot):
-    """Walk an admin through configuring birthday tracking."""
+async def run_growth_setup(interaction: discord.Interaction, bot):
+    """Walk an admin through configuring growth tracking."""
     guild_id = interaction.guild_id
     channel  = interaction.channel
     user     = interaction.user
@@ -511,277 +845,273 @@ async def run_birthday_setup(interaction: discord.Interaction, bot):
         try:
             reply = await bot.wait_for("message", check=check, timeout=120)
         except asyncio.TimeoutError:
-            await channel.send("⏰ Timed out. Run `/setup_birthdays` to start again.")
+            await channel.send("⏰ Timed out. Run `/setup_growth` to start again.")
             return None
         return reply.content.strip()[:max_chars]
 
-    def col_letter_to_index(raw: str) -> int:
-        """Convert 'A' or 'a' to 0, 'B' to 1, etc. Returns -1 if invalid."""
-        raw = raw.strip().upper()
-        if len(raw) == 1 and raw.isalpha():
-            return ord(raw) - ord('A')
-        return -1
-
-    def index_to_letter(idx: int) -> str:
-        return chr(ord('A') + idx) if idx >= 0 else "—"
-
-    from config import get_birthday_config
-    current = get_birthday_config(guild_id)
+    from config import get_growth_config, save_growth_config
+    current = get_growth_config(guild_id)
 
     await channel.send(
-        "⚙️ **Birthday Tracking Setup**\n"
-        "Configure how the bot tracks member birthdays."
+        "⚙️ **Growth Tracking Setup**\n"
+        "Configure how the bot tracks your alliance's growth over time. "
+        "Each month (or on your chosen schedule), the bot takes a snapshot of your members' stats "
+        "and records them in your Google Sheet so you can track progress."
     )
 
     # ── Step 1: Enable? ───────────────────────────────────────────────────────
     enabled_view = YesNoView()
     await channel.send(
-        "**Step 1 of 9 — Enable birthday tracking?**\n"
-        "Should the bot track member birthdays from your Google Sheet?",
+        "**Step 1 of 7 — Enable growth tracking?**\n"
+        "Should the bot automatically take snapshots of your members' stats on a schedule?",
         view=enabled_view,
     )
     await enabled_view.wait()
     if enabled_view.selected is None:
-        await channel.send("⏰ Timed out. Run `/setup_birthdays` to start again.")
+        await channel.send("⏰ Timed out. Run `/setup_growth` to start again.")
         return
     if not enabled_view.selected:
-        from config import save_birthday_config
-        save_birthday_config(guild_id, enabled=0, **{k: v for k, v in current.items() if k not in ('guild_id', 'enabled')})
-        await channel.send("✅ Birthday tracking disabled.")
+        save_growth_config(
+            guild_id, enabled=0,
+            tab_source=current.get("tab_source", ""),
+            name_col=current.get("name_col", "A"),
+            metrics=current.get("metrics", []),
+            tab_growth=current.get("tab_growth", "Growth Tracking"),
+            snapshot_frequency=current.get("snapshot_frequency", "monthly"),
+            snapshot_day=current.get("snapshot_day", 1),
+            snapshot_interval=current.get("snapshot_interval", 30),
+            data_start_row=current.get("data_start_row", 2),
+        )
+        await channel.send("✅ Growth tracking disabled.")
         return
 
-    # ── Step 2: Sheet tab ─────────────────────────────────────────────────────
-    current_tab = current.get("tab_name") or "Birthdays"
+    # ── Step 2: Source tab ────────────────────────────────────────────────────
+    cur_tab = current.get("tab_source") or ""
+    tab_raw = await ask_text(
+        f"**Step 2 of 7 — Source Tab**\n"
+        f"Which tab in your Google Sheet contains your member data?\n"
+        f"⚠️ *Make sure this tab exists in your sheet.*\n"
+        f"*(e.g. `Squad Powers`, `Members`, `Roster`)*"
+        + (f"\n*(Current: `{cur_tab}`)*" if cur_tab else "")
+    )
+    if tab_raw is None:
+        return
+    tab_source = tab_raw.strip() or cur_tab
 
-    class TabConfirmView(discord.ui.View):
-        def __init__(self):
-            super().__init__(timeout=120)
-            self.tab_name  = None
-            self.confirmed = False
+    # ── Step 3: Data start row ────────────────────────────────────────────────
+    cur_start = current.get("data_start_row", 2)
+    start_raw = await ask_text(
+        f"**Step 3 of 7 — Data Start Row**\n"
+        f"Which row does your member data start on? (Row 1 is usually the header)\n"
+        f"*(Current: row {cur_start})*"
+    )
+    if start_raw is None:
+        return
+    try:
+        data_start_row = int(start_raw.strip())
+    except ValueError:
+        await channel.send("⚠️ Please enter a row number like `2`. Run `/setup_growth` to try again.")
+        return
 
-        @discord.ui.button(label="✅ Keep current tab", style=discord.ButtonStyle.success)
-        async def keep(self, inter: discord.Interaction, button: discord.ui.Button):
-            self.tab_name  = current_tab
-            self.confirmed = True
-            for item in self.children: item.disabled = True
-            await inter.response.edit_message(
-                content=f"✅ Using sheet tab: **{current_tab}**", view=self
-            )
-            self.stop()
+    # ── Step 4: Name column ───────────────────────────────────────────────────
+    cur_name = current.get("name_col", "A")
+    name_raw = await ask_text(
+        f"**Step 4 of 7 — Name Column**\n"
+        f"Which column contains the member's name? Type the column letter.\n"
+        f"*(Current: `{cur_name}`)*"
+    )
+    if name_raw is None:
+        return
+    name_col = name_raw.strip().upper()
+    if len(name_col) != 1 or not name_col.isalpha():
+        await channel.send("⚠️ Please enter a single column letter like `A`. Run `/setup_growth` to try again.")
+        return
 
-        @discord.ui.button(label="✏️ Enter a different tab name", style=discord.ButtonStyle.secondary)
-        async def change(self, inter: discord.Interaction, button: discord.ui.Button):
-            modal = TextInputModal("Sheet Tab Name", "Tab name", default=current_tab)
-            await inter.response.send_modal(modal)
-            await modal.wait()
-            self.tab_name  = modal.value or current_tab
-            self.confirmed = True
-            for item in self.children: item.disabled = True
-            try:
-                await inter.message.edit(
-                    content=f"✅ Using sheet tab: **{self.tab_name}**", view=self
-                )
-            except discord.HTTPException:
-                pass
-            self.stop()
+    # ── Step 5: Metrics ───────────────────────────────────────────────────────
+    cur_metrics = current.get("metrics", [])
+    metrics     = list(cur_metrics)
 
-    tab_view = TabConfirmView()
     await channel.send(
-        f"**Step 2 of 9 — Sheet Tab**\n"
-        f"Which tab in your Google Sheet contains birthday data?\n"
-        f"⚠️ *Make sure this tab exists in your sheet before continuing.*\n"
-        f"*(Current: `{current_tab}`)*",
-        view=tab_view,
+        "**Step 5 of 7 — Metrics to Track**\n"
+        "Define which columns the bot should snapshot each period. "
+        "You can track as many metrics as you want — for example:\n"
+        "• `1st Squad Power` — column E\n"
+        "• `2nd Squad Power` — column G\n"
+        "• `THP` — column I\n"
+        "• `Total Kills` — column J\n\n"
+        "You'll add them one at a time."
     )
-    await tab_view.wait()
-    if not tab_view.confirmed:
-        await channel.send("⏰ Timed out. Run `/setup_birthdays` to start again.")
-        return
-    tab_name = tab_view.tab_name
 
-    # ── Step 3: Name column ────────────────────────────────────────────────────
-    cur_name_letter = index_to_letter(current.get("name_col", 0))
-    name_col_raw = await ask_text(
-        f"**Step 3 of 9 — Name Column**\n"
-        f"Which column contains the member's name?\n"
-        f"Type the column letter (e.g. `A`, `B`, `C`)\n"
-        f"*(Current: column `{cur_name_letter}`)*"
-    )
-    if name_col_raw is None:
-        return
-    name_col = col_letter_to_index(name_col_raw)
-    if name_col < 0:
-        await channel.send("⚠️ Please enter a single column letter like `A`. Run `/setup_birthdays` to try again.")
-        return
+    if cur_metrics:
+        cur_display = "\n".join(f"• **{m['label']}** — column {m['col']}" for m in cur_metrics)
 
-    # ── Step 4: Birthday column ────────────────────────────────────────────────
-    cur_bday_letter = index_to_letter(current.get("birthday_col", 1))
-    bday_col_raw = await ask_text(
-        f"**Step 4 of 9 — Birthday Column**\n"
-        f"Which column contains the member's birthday?\n"
-        f"Type the column letter (e.g. `A`, `B`, `C`)\n"
-        f"*(Current: column `{cur_bday_letter}`)*"
-    )
-    if bday_col_raw is None:
-        return
-    birthday_col = col_letter_to_index(bday_col_raw)
-    if birthday_col < 0:
-        await channel.send("⚠️ Please enter a single column letter like `B`. Run `/setup_birthdays` to try again.")
-        return
-
-    # ── Step 5: Train integration ─────────────────────────────────────────────
-    train_view = YesNoView()
-    await channel.send(
-        "**Step 5 — Train Schedule Integration**\n"
-        "Should the bot automatically add members to the train schedule on their birthday?",
-        view=train_view,
-    )
-    await train_view.wait()
-    if train_view.selected is None:
-        await channel.send("⏰ Timed out. Run `/setup_birthdays` to start again.")
-        return
-    train_integration = 1 if train_view.selected else 0
-
-    flexible_placement = 0
-    lookahead_days     = 14
-
-    if train_integration:
-        # ── Step 6: Flexible placement ─────────────────────────────────────────
-        class PlacementView(discord.ui.View):
+        class MetricsStartView(discord.ui.View):
             def __init__(self):
                 super().__init__(timeout=120)
-                self.selected = None
+                self.choice = None
 
-            @discord.ui.button(label="🎂 Birthday only", style=discord.ButtonStyle.primary)
-            async def birthday_only(self, inter: discord.Interaction, button: discord.ui.Button):
-                self.selected = 0
+            @discord.ui.button(label="✅ Keep current metrics", style=discord.ButtonStyle.success)
+            async def keep(self, inter: discord.Interaction, button: discord.ui.Button):
+                self.choice = "keep"
                 for item in self.children: item.disabled = True
-                await inter.response.edit_message(content="✅ Placement: **Birthday only**", view=self)
+                await inter.response.edit_message(content="✅ Keeping current metrics.", view=self)
                 self.stop()
 
-            @discord.ui.button(label="📅 Assign nearby if taken", style=discord.ButtonStyle.secondary)
-            async def flexible(self, inter: discord.Interaction, button: discord.ui.Button):
-                self.selected = 1
+            @discord.ui.button(label="🔄 Start fresh", style=discord.ButtonStyle.secondary)
+            async def fresh(self, inter: discord.Interaction, button: discord.ui.Button):
+                self.choice = "fresh"
                 for item in self.children: item.disabled = True
-                await inter.response.edit_message(content="✅ Placement: **Assign 1 day before or after if birthday is taken**", view=self)
+                await inter.response.edit_message(view=self)
                 self.stop()
 
-        placement_view = PlacementView()
+        metrics_view = MetricsStartView()
         await channel.send(
-            "**Step 7 of 9 — Birthday Placement**\n"
-            "If the member's birthday is already taken on the train schedule, what should the bot do?",
-            view=placement_view,
+            f"**Current metrics:**\n{cur_display}",
+            view=metrics_view,
         )
-        await placement_view.wait()
-        if placement_view.selected is None:
-            await channel.send("⏰ Timed out. Run `/setup_birthdays` to start again.")
+        await metrics_view.wait()
+        if not metrics_view.choice:
+            await channel.send("⏰ Timed out. Run `/setup_growth` to start again.")
             return
-        flexible_placement = placement_view.selected
+        if metrics_view.choice == "fresh":
+            metrics = []
 
-        # ── Step 7: Lookahead days ─────────────────────────────────────────────
-        lookahead_raw = await ask_text(
-            "**Step 8 of 9 — Lookahead Days**\n"
-            "How many days in advance should birthdays be added to the train schedule?\n"
-            f"*(Current: {current.get('lookahead_days', 14)} days — we recommend 14)*"
+    if not metrics:
+        await channel.send("Let's add your metrics. Type `done` when finished.")
+
+        while True:
+            label_raw = await ask_text(
+                f"**Metric {len(metrics) + 1} — Label** (or type `done` to finish):\n"
+                f"*(e.g. `1st Squad Power`, `THP`, `Total Kills`)*"
+            )
+            if label_raw is None:
+                return
+            if label_raw.strip().lower() == "done":
+                break
+
+            col_raw = await ask_text(
+                f"**{label_raw.strip()} — Column Letter**\n"
+                f"Which column contains this value? (e.g. `E`, `G`)"
+            )
+            if col_raw is None:
+                return
+            col = col_raw.strip().upper()
+            if not col.isalpha():
+                await channel.send("⚠️ Please enter a column letter. Skipping this metric.")
+                continue
+
+            metrics.append({"col": col, "label": label_raw.strip()})
+            await channel.send(f"✅ Added: **{label_raw.strip()}** (column {col}) — {len(metrics)} metric(s) so far.")
+
+    if not metrics:
+        await channel.send("⚠️ No metrics defined. Run `/setup_growth` to try again.")
+        return
+
+    # ── Step 6: Growth tracking tab ───────────────────────────────────────────
+    cur_growth_tab = current.get("tab_growth", "Growth Tracking")
+    growth_tab_view = TextInputModal("Growth Tracking Tab", "Tab name", default=cur_growth_tab)
+    growth_tab_launch = ModalLaunchView(growth_tab_view)
+    await channel.send(
+        f"**Step 6 of 7 — Growth Tracking Tab**\n"
+        f"Which tab should snapshots be written to?\n"
+        f"⚠️ *If the tab doesn't exist, the bot will create it automatically.*\n"
+        f"*(Current: `{cur_growth_tab}`)*",
+        view=growth_tab_launch,
+    )
+    await growth_tab_launch.wait()
+    if not growth_tab_launch.confirmed:
+        await channel.send("⏰ Timed out. Run `/setup_growth` to start again.")
+        return
+    tab_growth = growth_tab_view.value or cur_growth_tab
+
+    # ── Step 7: Snapshot frequency ────────────────────────────────────────────
+    class FrequencyView(discord.ui.View):
+        def __init__(self):
+            super().__init__(timeout=120)
+            self.selected = None
+
+        @discord.ui.button(label="📅 Monthly (1st of each month)", style=discord.ButtonStyle.primary)
+        async def monthly(self, inter: discord.Interaction, button: discord.ui.Button):
+            self.selected = "monthly"
+            for item in self.children: item.disabled = True
+            await inter.response.edit_message(content="✅ Frequency: **Monthly**", view=self)
+            self.stop()
+
+        @discord.ui.button(label="🔁 Custom interval (every X days)", style=discord.ButtonStyle.secondary)
+        async def custom(self, inter: discord.Interaction, button: discord.ui.Button):
+            self.selected = "interval"
+            for item in self.children: item.disabled = True
+            await inter.response.edit_message(view=self)
+            self.stop()
+
+    freq_view = FrequencyView()
+    await channel.send(
+        "**Step 7 of 7 — Snapshot Frequency**\n"
+        "How often should the bot take a snapshot?",
+        view=freq_view,
+    )
+    await freq_view.wait()
+    if not freq_view.selected:
+        await channel.send("⏰ Timed out. Run `/setup_growth` to start again.")
+        return
+
+    snapshot_frequency = freq_view.selected
+    snapshot_day       = 1
+    snapshot_interval  = 30
+
+    if snapshot_frequency == "monthly":
+        day_raw = await ask_text(
+            "**Step 7a of 7 — Snapshot Day**\n"
+            "Which day of the month should the snapshot run? (e.g. `1` for the 1st)\n"
+            f"*(Current: day {current.get('snapshot_day', 1)})*"
         )
-        if lookahead_raw is None:
+        if day_raw is None:
             return
         try:
-            lookahead_days = int(lookahead_raw.strip())
-            if lookahead_days < 1:
-                raise ValueError
+            snapshot_day = max(1, min(28, int(day_raw.strip())))
         except ValueError:
-            await channel.send("⚠️ Please enter a number like `14`. Run `/setup_birthdays` to try again.")
-            return
-
-    # ── Step 8: Birthday reminders ─────────────────────────────────────────────
-    remind_view = YesNoView()
-    await channel.send(
-        "**Step 9 of 9 — Birthday Reminders**\n"
-        "Should the bot post a message in Discord on a member's birthday?\n"
-        f"*(It will post: \"🎂 Today is **[name]**'s birthday!\")*",
-        view=remind_view,
-    )
-    await remind_view.wait()
-    if remind_view.selected is None:
-        await channel.send("⏰ Timed out. Run `/setup_birthdays` to start again.")
-        return
-    reminders_enabled    = 1 if remind_view.selected else 0
-    reminder_channel_id  = 0
-    reminder_time        = "08:00"
-
-    if reminders_enabled:
-        # ── Step 8a: Reminder channel ──────────────────────────────────────────
-        remind_ch_view = ChannelSelectStep(
-            "Select the birthday announcement channel...",
-            suggested_name="birthdays",
+            snapshot_day = 1
+    else:
+        interval_raw = await ask_text(
+            "**Step 7a of 7 — Interval (days)**\n"
+            "How many days between each snapshot? (e.g. `30`)\n"
+            f"*(Current: {current.get('snapshot_interval', 30)} days)*"
         )
-        await channel.send(
-            "**Step 9a of 9 — Birthday Announcement Channel**\n"
-            "Which channel should birthday announcements be posted in?",
-            view=remind_ch_view,
-        )
-        await remind_ch_view.wait()
-        if not remind_ch_view.confirmed:
-            await channel.send("⏰ Timed out. Run `/setup_birthdays` to start again.")
+        if interval_raw is None:
             return
-        reminder_channel_id = remind_ch_view.selected_channel.id
-
-        # ── Step 8b: Reminder time ─────────────────────────────────────────────
-        from config import get_config
-        guild_cfg = get_config(guild_id)
-        tz_label  = TIMEZONE_LABELS.get(guild_cfg.timezone if guild_cfg else "America/New_York", "your timezone")
-        time_raw  = await ask_text(
-            f"**Step 9b of 9 — Reminder Time**\n"
-            f"What time should birthday announcements be posted? *(in {tz_label})*\n"
-            f"*(e.g. `8:00am`, `12:00pm`)*"
-        )
-        if time_raw is None:
-            return
-        parsed = _parse_12h_time(time_raw)
-        if not parsed:
-            await channel.send("⚠️ Could not read that time. Using `8:00am` as default.")
-            parsed = "08:00"
-        reminder_time = parsed
+        try:
+            snapshot_interval = max(1, int(interval_raw.strip()))
+        except ValueError:
+            snapshot_interval = 30
 
     # ── Save ───────────────────────────────────────────────────────────────────
-    from config import save_birthday_config
-    save_birthday_config(
-        guild_id        = guild_id,
-        tab_name        = tab_name,
-        name_col        = name_col,
-        birthday_col    = birthday_col,
-        discord_id_col  = discord_id_col,
-        data_start_row  = 2,
-        enabled         = 1,
-        train_integration   = train_integration,
-        flexible_placement  = flexible_placement,
-        lookahead_days      = lookahead_days,
-        reminders_enabled   = reminders_enabled,
-        reminder_channel_id = reminder_channel_id,
-        reminder_time       = reminder_time,
+    save_growth_config(
+        guild_id, enabled=1,
+        tab_source=tab_source, name_col=name_col,
+        metrics=metrics, tab_growth=tab_growth,
+        snapshot_frequency=snapshot_frequency,
+        snapshot_day=snapshot_day,
+        snapshot_interval=snapshot_interval,
+        data_start_row=data_start_row,
     )
 
-    embed = discord.Embed(title="✅ Birthday Tracking Configured", color=discord.Color.green())
-    embed.add_field(name="Sheet Tab",           value=tab_name,                            inline=True)
-    embed.add_field(name="Name Column",         value=f"Column {index_to_letter(name_col)}",     inline=True)
-    embed.add_field(name="Birthday Column",     value=f"Column {index_to_letter(birthday_col)}", inline=True)
-    embed.add_field(name="Discord ID Column",   value=f"Column {index_to_letter(discord_id_col)}" if discord_id_col >= 0 else "Not stored", inline=True)
-    embed.add_field(name="Train Integration",   value="Enabled" if train_integration else "Disabled", inline=True)
-    if train_integration:
-        embed.add_field(name="Placement",       value="Flexible (±1 day)" if flexible_placement else "Birthday only", inline=True)
-        embed.add_field(name="Lookahead",       value=f"{lookahead_days} days",           inline=True)
-    embed.add_field(name="Reminders",           value="Enabled" if reminders_enabled else "Disabled", inline=True)
-    if reminders_enabled:
-        embed.add_field(name="Reminder Channel", value=f"<#{reminder_channel_id}>",       inline=True)
-        embed.add_field(name="Reminder Time",    value=reminder_time,                     inline=True)
-    embed.set_footer(text="Run /setup_birthdays again to update these settings.")
+    freq_desc  = (
+        f"Monthly on day {snapshot_day}"
+        if snapshot_frequency == "monthly"
+        else f"Every {snapshot_interval} days"
+    )
+    metrics_display = "\n".join(f"• **{m['label']}** — column {m['col']}" for m in metrics)
+
+    embed = discord.Embed(title="✅ Growth Tracking Configured", color=discord.Color.green())
+    embed.add_field(name="Source Tab",        value=tab_source,          inline=False)
+    embed.add_field(name="Name Column",       value=f"Column {name_col}", inline=True)
+    embed.add_field(name="Data Start Row",    value=str(data_start_row),  inline=True)
+    embed.add_field(name="Growth Tab",        value=tab_growth,           inline=False)
+    embed.add_field(name="Snapshot Schedule", value=freq_desc,            inline=False)
+    embed.add_field(name="Metrics",           value=metrics_display,      inline=False)
+    embed.set_footer(text="Run /setup_growth again to update. Run /rungrowth to take a manual snapshot.")
     await channel.send(embed=embed)
-    print(f"[SETUP] Birthday config saved for guild {guild_id}")
-
-
-# ── Cog ────────────────────────────────────────────────────────────────────────
-
+    print(f"[SETUP] Growth config saved for guild {guild_id}")
 
 async def run_train_setup(interaction: discord.Interaction, bot):
     """Walk an admin through configuring the train schedule."""
@@ -1120,8 +1450,6 @@ async def run_train_setup(interaction: discord.Interaction, bot):
     embed.set_footer(text="Run /setup_train again to update any of these settings.")
     await channel.send(embed=embed)
     print(f"[SETUP] Train config saved for guild {guild_id}")
-
-
 
 async def run_survey_setup(interaction: discord.Interaction, bot):
     """Walk an admin through configuring the squad powers survey."""
@@ -2301,365 +2629,8 @@ async def run_event_setup(interaction: discord.Interaction, bot):
     await channel.send(embed=embed)
     print(f"[SETUP] Events saved for guild {guild_id}")
 
-
-
-# ── Cog ────────────────────────────────────────────────────────────────────────
-
-class SetupCog(commands.Cog):
-    def __init__(self, bot):
-        self.bot = bot
-
-    @app_commands.command(name="setup", description="Configure Alliance Helper for your server")
-    async def setup(self, interaction: discord.Interaction):
-        # Only admins can run setup
-        if not interaction.user.guild_permissions.administrator:
-            await interaction.response.send_message(
-                "⛔ Only server administrators can run `/setup`.", ephemeral=True
-            )
-            return
-
-        await interaction.response.send_message(
-            "⚙️ Starting setup — check the channel for prompts!", ephemeral=True
-        )
-        await run_setup(interaction, self.bot)
-
-    @app_commands.command(name="setup_status", description="Show the current bot configuration for this server")
-    async def setup_status(self, interaction: discord.Interaction):
-        if not interaction.user.guild_permissions.administrator:
-            await interaction.response.send_message(
-                "⛔ Only server administrators can view setup status.", ephemeral=True
-            )
-            return
-
-        cfg = get_config(interaction.guild_id)
-        if not cfg or not cfg.setup_complete:
-            await interaction.response.send_message(
-                "⚙️ This server hasn't been set up yet. Run `/setup` to get started.",
-                ephemeral=True,
-            )
-            return
-
-        embed = discord.Embed(
-            title="⚙️ Current Configuration",
-            color=discord.Color.blurple(),
-        )
-        embed.add_field(name="Member Role",        value=cfg.member_role_name,                  inline=True)
-        embed.add_field(name="Leadership Role",    value=cfg.leadership_role_name,              inline=True)
-        embed.add_field(name="\u200b",             value="\u200b",                              inline=True)
-        embed.add_field(name="Leadership Channel", value=f"<#{cfg.leadership_channel_id}>",    inline=True)
-        embed.add_field(name="Announcements",      value=f"<#{cfg.announcement_channel_id}>",  inline=True)
-        embed.add_field(name="Survey Channel",     value=f"<#{cfg.survey_channel_id}>",        inline=True)
-        embed.add_field(name="Survey Notifs",      value=f"<#{cfg.survey_notify_channel_id}>", inline=True)
-        embed.add_field(name="Storm Log Thread",   value=f"<#{cfg.storm_log_thread_id}>",      inline=True)
-        embed.add_field(name="Member Tab",         value=cfg.tab_member_default,               inline=True)
-        embed.add_field(name="Anchor Date",        value=cfg.anchor_date,                      inline=True)
-        embed.add_field(name="Cycle Days",         value=str(cfg.cycle_days),                  inline=True)
-
-        await interaction.response.send_message(embed=embed, ephemeral=True)
-
-    @app_commands.command(name="setup_reset", description="Clear this server's configuration and start over")
-    async def setup_reset(self, interaction: discord.Interaction):
-        if not interaction.user.guild_permissions.administrator:
-            await interaction.response.send_message(
-                "⛔ Only server administrators can reset the configuration.", ephemeral=True
-            )
-            return
-
-        class ConfirmResetView(discord.ui.View):
-            def __init__(self):
-                super().__init__(timeout=60)
-                self.confirmed = False
-
-            @discord.ui.button(label="Yes, reset everything", style=discord.ButtonStyle.danger)
-            async def confirm(self, inner: discord.Interaction, button: discord.ui.Button):
-                self.confirmed = True
-                await inner.response.defer()
-                self.stop()
-
-            @discord.ui.button(label="Cancel", style=discord.ButtonStyle.secondary)
-            async def cancel(self, inner: discord.Interaction, button: discord.ui.Button):
-                await inner.response.defer()
-                self.stop()
-
-        view = ConfirmResetView()
-        await interaction.response.send_message(
-            "⚠️ Are you sure you want to reset the bot configuration for this server? "
-            "This cannot be undone.",
-            view=view,
-            ephemeral=True,
-        )
-        await view.wait()
-        if view.confirmed:
-            from config import save_config, GuildConfig
-            save_config(GuildConfig(guild_id=interaction.guild_id))
-            await interaction.followup.send(
-                "✅ Configuration reset. Run `/setup` to configure the bot again.",
-                ephemeral=True,
-            )
-
-
-    @app_commands.command(
-        name="setup_train",
-        description="Configure the train schedule — tab, themes, tones, and prompt template"
-    )
-    async def setup_train(self, interaction: discord.Interaction):
-        if not interaction.user.guild_permissions.administrator:
-            await interaction.response.send_message(
-                "⛔ Only server administrators can run `/setup_train`.", ephemeral=True
-            )
-            return
-        await interaction.response.send_message(
-            "⚙️ Starting train setup — check the channel for prompts!", ephemeral=True
-        )
-        await run_train_setup(interaction, self.bot)
-    @app_commands.command(
-        name="setup_growth",
-        description="Configure growth tracking — source tab, metrics, and snapshot frequency"
-    )
-    async def setup_growth(self, interaction: discord.Interaction):
-        if not interaction.user.guild_permissions.administrator:
-            await interaction.response.send_message(
-                "⛔ Only server administrators can run `/setup_growth`.", ephemeral=True
-            )
-            return
-        await interaction.response.send_message(
-            "⚙️ Starting growth tracking setup — check the channel for prompts!", ephemeral=True
-        )
-        await run_growth_setup(interaction, self.bot)
-
-
-    @app_commands.command(
-        name="setup_birthdays",
-        description="Configure birthday tracking — sheet tab, columns, and lookahead days"
-    )
-    async def setup_birthdays(self, interaction: discord.Interaction):
-        if not interaction.user.guild_permissions.administrator:
-            await interaction.response.send_message(
-                "⛔ Only server administrators can run `/setup_birthdays`.", ephemeral=True
-            )
-            return
-        await interaction.response.send_message(
-            "⚙️ Starting birthday setup — check the channel for prompts!", ephemeral=True
-        )
-        await run_birthday_setup(interaction, self.bot)
-
-    @app_commands.command(
-        name="setup_desertstorm",
-        description="Configure Desert Storm mail template and time options"
-    )
-    async def setup_desertstorm(self, interaction: discord.Interaction):
-        if not interaction.user.guild_permissions.administrator:
-            await interaction.response.send_message(
-                "⛔ Only server administrators can run `/setup_desertstorm`.", ephemeral=True
-            )
-            return
-        await interaction.response.send_message(
-            "⚙️ Starting Desert Storm setup — check the channel for prompts!", ephemeral=True
-        )
-        await run_storm_setup(interaction, self.bot, "DS")
-
-    @app_commands.command(
-        name="setup_canyonstorm",
-        description="Configure Canyon Storm mail template and time options"
-    )
-    async def setup_canyonstorm(self, interaction: discord.Interaction):
-        if not interaction.user.guild_permissions.administrator:
-            await interaction.response.send_message(
-                "⛔ Only server administrators can run `/setup_canyonstorm`.", ephemeral=True
-            )
-            return
-        await interaction.response.send_message(
-            "⚙️ Starting Canyon Storm setup — check the channel for prompts!", ephemeral=True
-        )
-        await run_storm_setup(interaction, self.bot, "CS")
-
-
-    @app_commands.command(
-        name="setup_events",
-        description="Add or edit an event type for announcements (Marauder, Siege, etc.)"
-    )
-    async def setup_events(self, interaction: discord.Interaction):
-        if not interaction.user.guild_permissions.administrator:
-            await interaction.response.send_message(
-                "⛔ Only server administrators can run `/setup_events`.", ephemeral=True
-            )
-            return
-        await interaction.response.send_message(
-            "⚙️ Starting event setup — check the channel for prompts!", ephemeral=True
-        )
-        await run_event_setup(interaction, self.bot)
-
-    @app_commands.command(
-        name="setup_events_list",
-        description="View all configured event types for this server"
-    )
-    async def setup_events_list(self, interaction: discord.Interaction):
-        if not interaction.user.guild_permissions.administrator:
-            await interaction.response.send_message(
-                "⛔ Only server administrators can view event configuration.", ephemeral=True
-            )
-            return
-        from config import get_guild_events
-        events = get_guild_events(interaction.guild_id, active_only=False)
-        if not events:
-            await interaction.response.send_message(
-                "No events configured yet. Run `/setup_events` to add one.", ephemeral=True
-            )
-            return
-        lines = []
-        for e in events:
-            status = "✅ Active" if e["active"] else "❌ Inactive"
-            lines.append(
-                f"**{e['name']}** (`{e['short_key']}`)\n"
-                f"Time: {e['default_time']} {e['timezone']} | "
-                f"Schedule: {e['schedule_type']} | {status}"
-            )
-        embed = discord.Embed(
-            title="⚙️ Configured Events",
-            description="\n\n".join(lines),
-            color=discord.Color.blurple(),
-        )
-        await interaction.response.send_message(embed=embed, ephemeral=True)
-
-    @app_commands.command(
-        name="setup_events_remove",
-        description="Deactivate an event type"
-    )
-    @app_commands.describe(short_key="The short key of the event to remove (e.g. marauder)")
-    async def setup_events_remove(self, interaction: discord.Interaction, short_key: str):
-        if not interaction.user.guild_permissions.administrator:
-            await interaction.response.send_message(
-                "⛔ Only server administrators can remove events.", ephemeral=True
-            )
-            return
-        from config import get_guild_event, delete_guild_event
-        event = get_guild_event(interaction.guild_id, short_key)
-        if not event:
-            await interaction.response.send_message(
-                f"⚠️ No event found with key `{short_key}`.", ephemeral=True
-            )
-            return
-        delete_guild_event(interaction.guild_id, short_key)
-        await interaction.response.send_message(
-            f"✅ **{event['name']}** has been deactivated. Run `/setup_events` to re-add it.",
-            ephemeral=True,
-        )
-
-
-# ── /setup events wizard ───────────────────────────────────────────────────────
-
-# Common timezones for the selector
-# ── Timezone configuration ─────────────────────────────────────────────────────
-# Format: (tz_database_name, display_label)
-# Labels show UTC offset, timezone name, and example cities
-# Note: offsets shown are standard time — DST-observing zones shift +1 in summer
-
-TIMEZONE_OPTIONS = [
-    ("Pacific/Honolulu",                  "UTC-10 | Hawaii (Honolulu)"),
-    ("America/Anchorage",                 "UTC-9  | Alaska (Anchorage)"),
-    ("America/Los_Angeles",               "UTC-8  | Pacific (Los Angeles, Seattle, Vancouver)"),
-    ("America/Denver",                    "UTC-7  | Mountain (Denver, Phoenix, Calgary)"),
-    ("America/Chicago",                   "UTC-6  | Central (Chicago, Dallas, Mexico City)"),
-    ("America/New_York",                  "UTC-5  | Eastern (New York, Toronto, Miami)"),
-    ("America/Sao_Paulo",                 "UTC-3  | Brazil (São Paulo, Rio de Janeiro)"),
-    ("America/Argentina/Buenos_Aires",    "UTC-3  | Argentina (Buenos Aires)"),
-    ("Atlantic/Azores",                   "UTC-1  | Azores"),
-    ("Europe/London",                     "UTC+0  | GMT/BST (London, Dublin, Lisbon)"),
-    ("Europe/Paris",                      "UTC+1  | Central European (Paris, Berlin, Rome)"),
-    ("Europe/Helsinki",                   "UTC+2  | Eastern European (Helsinki, Athens, Cairo)"),
-    ("Europe/Moscow",                     "UTC+3  | Moscow (Moscow, Istanbul, Riyadh)"),
-    ("Asia/Dubai",                        "UTC+4  | Gulf (Dubai, Abu Dhabi)"),
-    ("Asia/Karachi",                      "UTC+5  | Pakistan (Karachi, Islamabad)"),
-    ("Asia/Kolkata",                      "UTC+5:30 | India (Mumbai, Delhi, Bangalore)"),
-    ("Asia/Dhaka",                        "UTC+6  | Bangladesh (Dhaka)"),
-    ("Asia/Bangkok",                      "UTC+7  | Indochina (Bangkok, Jakarta, Hanoi)"),
-    ("Asia/Shanghai",                     "UTC+8  | China/Singapore (Shanghai, Beijing, Singapore)"),
-    ("Asia/Tokyo",                        "UTC+9  | Japan/Korea (Tokyo, Seoul)"),
-    ("Australia/Sydney",                  "UTC+10 | Eastern Australia (Sydney, Melbourne)"),
-    ("Pacific/Auckland",                  "UTC+12 | New Zealand (Auckland, Wellington)"),
-]
-
-# Map from tz_database_name → display label
-TIMEZONE_LABELS = {tz: label for tz, label in TIMEZONE_OPTIONS}
-
-
-class TimezoneSelectView(discord.ui.View):
-    """Single dropdown covering all supported timezones, ordered by UTC offset."""
-    def __init__(self):
-        super().__init__(timeout=WIZARD_TIMEOUT)
-        self.selected  = None
-        self.confirmed = False
-
-        select = discord.ui.Select(
-            placeholder="Select your timezone...",
-            options=[
-                discord.SelectOption(label=label[:100], value=tz)
-                for tz, label in TIMEZONE_OPTIONS
-            ],
-            row=0,
-        )
-
-        async def _cb(interaction: discord.Interaction):
-            self.selected    = select.values[0]
-            self.confirmed   = True
-            select.disabled  = True
-            label = TIMEZONE_LABELS.get(self.selected, self.selected)
-            await interaction.response.edit_message(
-                content=f"✅ Timezone: **{label}**", view=self
-            )
-            self.stop()
-
-        select.callback = _cb
-        self.add_item(select)
-
-
-class ScheduleTypeView(discord.ui.View):
-    def __init__(self):
-        super().__init__(timeout=120)
-        self.selected  = None
-
-    @discord.ui.button(label="🔁 Repeating cycle", style=discord.ButtonStyle.primary)
-    async def repeating(self, interaction: discord.Interaction, button: discord.ui.Button):
-        self.selected = "repeating"
-        for item in self.children:
-            item.disabled = True
-        await interaction.response.edit_message(content="✅ Schedule: **Repeating cycle**", view=self)
-        self.stop()
-
-    @discord.ui.button(label="📅 Add manually each time", style=discord.ButtonStyle.secondary)
-    async def manual(self, interaction: discord.Interaction, button: discord.ui.Button):
-        self.selected = "manual"
-        for item in self.children:
-            item.disabled = True
-        await interaction.response.edit_message(content="✅ Schedule: **Manual (add per event)**", view=self)
-        self.stop()
-
-
-class YesNoView(discord.ui.View):
-    def __init__(self, yes_label="Yes", no_label="No"):
-        super().__init__(timeout=120)
-        self.selected = None
-
-    @discord.ui.button(label="Yes", style=discord.ButtonStyle.success)
-    async def yes(self, interaction: discord.Interaction, button: discord.ui.Button):
-        self.selected = True
-        for item in self.children:
-            item.disabled = True
-        await interaction.response.edit_message(view=self)
-        self.stop()
-
-    @discord.ui.button(label="No", style=discord.ButtonStyle.secondary)
-    async def no(self, interaction: discord.Interaction, button: discord.ui.Button):
-        self.selected = False
-        for item in self.children:
-            item.disabled = True
-        await interaction.response.edit_message(view=self)
-        self.stop()
-
-
-
-async def run_growth_setup(interaction: discord.Interaction, bot):
-    """Walk an admin through configuring growth tracking."""
+async def run_birthday_setup(interaction: discord.Interaction, bot):
+    """Walk an admin through configuring birthday tracking."""
     guild_id = interaction.guild_id
     channel  = interaction.channel
     user     = interaction.user
@@ -2672,284 +2643,273 @@ async def run_growth_setup(interaction: discord.Interaction, bot):
         try:
             reply = await bot.wait_for("message", check=check, timeout=120)
         except asyncio.TimeoutError:
-            await channel.send("⏰ Timed out. Run `/setup_growth` to start again.")
+            await channel.send("⏰ Timed out. Run `/setup_birthdays` to start again.")
             return None
         return reply.content.strip()[:max_chars]
 
-    from config import get_growth_config, save_growth_config
-    current = get_growth_config(guild_id)
+    def col_letter_to_index(raw: str) -> int:
+        """Convert 'A' or 'a' to 0, 'B' to 1, etc. Returns -1 if invalid."""
+        raw = raw.strip().upper()
+        if len(raw) == 1 and raw.isalpha():
+            return ord(raw) - ord('A')
+        return -1
+
+    def index_to_letter(idx: int) -> str:
+        return chr(ord('A') + idx) if idx >= 0 else "—"
+
+    from config import get_birthday_config
+    current = get_birthday_config(guild_id)
 
     await channel.send(
-        "⚙️ **Growth Tracking Setup**\n"
-        "Configure how the bot tracks your alliance's growth over time. "
-        "Each month (or on your chosen schedule), the bot takes a snapshot of your members' stats "
-        "and records them in your Google Sheet so you can track progress."
+        "⚙️ **Birthday Tracking Setup**\n"
+        "Configure how the bot tracks member birthdays."
     )
 
     # ── Step 1: Enable? ───────────────────────────────────────────────────────
     enabled_view = YesNoView()
     await channel.send(
-        "**Step 1 of 7 — Enable growth tracking?**\n"
-        "Should the bot automatically take snapshots of your members' stats on a schedule?",
+        "**Step 1 of 9 — Enable birthday tracking?**\n"
+        "Should the bot track member birthdays from your Google Sheet?",
         view=enabled_view,
     )
     await enabled_view.wait()
     if enabled_view.selected is None:
-        await channel.send("⏰ Timed out. Run `/setup_growth` to start again.")
+        await channel.send("⏰ Timed out. Run `/setup_birthdays` to start again.")
         return
     if not enabled_view.selected:
-        save_growth_config(
-            guild_id, enabled=0,
-            tab_source=current.get("tab_source", ""),
-            name_col=current.get("name_col", "A"),
-            metrics=current.get("metrics", []),
-            tab_growth=current.get("tab_growth", "Growth Tracking"),
-            snapshot_frequency=current.get("snapshot_frequency", "monthly"),
-            snapshot_day=current.get("snapshot_day", 1),
-            snapshot_interval=current.get("snapshot_interval", 30),
-            data_start_row=current.get("data_start_row", 2),
-        )
-        await channel.send("✅ Growth tracking disabled.")
+        from config import save_birthday_config
+        save_birthday_config(guild_id, enabled=0, **{k: v for k, v in current.items() if k not in ('guild_id', 'enabled')})
+        await channel.send("✅ Birthday tracking disabled.")
         return
 
-    # ── Step 2: Source tab ────────────────────────────────────────────────────
-    cur_tab = current.get("tab_source") or ""
-    tab_raw = await ask_text(
-        f"**Step 2 of 7 — Source Tab**\n"
-        f"Which tab in your Google Sheet contains your member data?\n"
-        f"⚠️ *Make sure this tab exists in your sheet.*\n"
-        f"*(e.g. `Squad Powers`, `Members`, `Roster`)*"
-        + (f"\n*(Current: `{cur_tab}`)*" if cur_tab else "")
-    )
-    if tab_raw is None:
-        return
-    tab_source = tab_raw.strip() or cur_tab
+    # ── Step 2: Sheet tab ─────────────────────────────────────────────────────
+    current_tab = current.get("tab_name") or "Birthdays"
 
-    # ── Step 3: Data start row ────────────────────────────────────────────────
-    cur_start = current.get("data_start_row", 2)
-    start_raw = await ask_text(
-        f"**Step 3 of 7 — Data Start Row**\n"
-        f"Which row does your member data start on? (Row 1 is usually the header)\n"
-        f"*(Current: row {cur_start})*"
-    )
-    if start_raw is None:
-        return
-    try:
-        data_start_row = int(start_raw.strip())
-    except ValueError:
-        await channel.send("⚠️ Please enter a row number like `2`. Run `/setup_growth` to try again.")
-        return
-
-    # ── Step 4: Name column ───────────────────────────────────────────────────
-    cur_name = current.get("name_col", "A")
-    name_raw = await ask_text(
-        f"**Step 4 of 7 — Name Column**\n"
-        f"Which column contains the member's name? Type the column letter.\n"
-        f"*(Current: `{cur_name}`)*"
-    )
-    if name_raw is None:
-        return
-    name_col = name_raw.strip().upper()
-    if len(name_col) != 1 or not name_col.isalpha():
-        await channel.send("⚠️ Please enter a single column letter like `A`. Run `/setup_growth` to try again.")
-        return
-
-    # ── Step 5: Metrics ───────────────────────────────────────────────────────
-    cur_metrics = current.get("metrics", [])
-    metrics     = list(cur_metrics)
-
-    await channel.send(
-        "**Step 5 of 7 — Metrics to Track**\n"
-        "Define which columns the bot should snapshot each period. "
-        "You can track as many metrics as you want — for example:\n"
-        "• `1st Squad Power` — column E\n"
-        "• `2nd Squad Power` — column G\n"
-        "• `THP` — column I\n"
-        "• `Total Kills` — column J\n\n"
-        "You'll add them one at a time."
-    )
-
-    if cur_metrics:
-        cur_display = "\n".join(f"• **{m['label']}** — column {m['col']}" for m in cur_metrics)
-
-        class MetricsStartView(discord.ui.View):
-            def __init__(self):
-                super().__init__(timeout=120)
-                self.choice = None
-
-            @discord.ui.button(label="✅ Keep current metrics", style=discord.ButtonStyle.success)
-            async def keep(self, inter: discord.Interaction, button: discord.ui.Button):
-                self.choice = "keep"
-                for item in self.children: item.disabled = True
-                await inter.response.edit_message(content="✅ Keeping current metrics.", view=self)
-                self.stop()
-
-            @discord.ui.button(label="🔄 Start fresh", style=discord.ButtonStyle.secondary)
-            async def fresh(self, inter: discord.Interaction, button: discord.ui.Button):
-                self.choice = "fresh"
-                for item in self.children: item.disabled = True
-                await inter.response.edit_message(view=self)
-                self.stop()
-
-        metrics_view = MetricsStartView()
-        await channel.send(
-            f"**Current metrics:**\n{cur_display}",
-            view=metrics_view,
-        )
-        await metrics_view.wait()
-        if not metrics_view.choice:
-            await channel.send("⏰ Timed out. Run `/setup_growth` to start again.")
-            return
-        if metrics_view.choice == "fresh":
-            metrics = []
-
-    if not metrics:
-        await channel.send("Let's add your metrics. Type `done` when finished.")
-
-        while True:
-            label_raw = await ask_text(
-                f"**Metric {len(metrics) + 1} — Label** (or type `done` to finish):\n"
-                f"*(e.g. `1st Squad Power`, `THP`, `Total Kills`)*"
-            )
-            if label_raw is None:
-                return
-            if label_raw.strip().lower() == "done":
-                break
-
-            col_raw = await ask_text(
-                f"**{label_raw.strip()} — Column Letter**\n"
-                f"Which column contains this value? (e.g. `E`, `G`)"
-            )
-            if col_raw is None:
-                return
-            col = col_raw.strip().upper()
-            if not col.isalpha():
-                await channel.send("⚠️ Please enter a column letter. Skipping this metric.")
-                continue
-
-            metrics.append({"col": col, "label": label_raw.strip()})
-            await channel.send(f"✅ Added: **{label_raw.strip()}** (column {col}) — {len(metrics)} metric(s) so far.")
-
-    if not metrics:
-        await channel.send("⚠️ No metrics defined. Run `/setup_growth` to try again.")
-        return
-
-    # ── Step 6: Growth tracking tab ───────────────────────────────────────────
-    cur_growth_tab = current.get("tab_growth", "Growth Tracking")
-    growth_tab_view = TextInputModal("Growth Tracking Tab", "Tab name", default=cur_growth_tab)
-    growth_tab_launch = ModalLaunchView(growth_tab_view)
-    await channel.send(
-        f"**Step 6 of 7 — Growth Tracking Tab**\n"
-        f"Which tab should snapshots be written to?\n"
-        f"⚠️ *If the tab doesn't exist, the bot will create it automatically.*\n"
-        f"*(Current: `{cur_growth_tab}`)*",
-        view=growth_tab_launch,
-    )
-    await growth_tab_launch.wait()
-    if not growth_tab_launch.confirmed:
-        await channel.send("⏰ Timed out. Run `/setup_growth` to start again.")
-        return
-    tab_growth = growth_tab_view.value or cur_growth_tab
-
-    # ── Step 7: Snapshot frequency ────────────────────────────────────────────
-    class FrequencyView(discord.ui.View):
+    class TabConfirmView(discord.ui.View):
         def __init__(self):
             super().__init__(timeout=120)
-            self.selected = None
+            self.tab_name  = None
+            self.confirmed = False
 
-        @discord.ui.button(label="📅 Monthly (1st of each month)", style=discord.ButtonStyle.primary)
-        async def monthly(self, inter: discord.Interaction, button: discord.ui.Button):
-            self.selected = "monthly"
+        @discord.ui.button(label="✅ Keep current tab", style=discord.ButtonStyle.success)
+        async def keep(self, inter: discord.Interaction, button: discord.ui.Button):
+            self.tab_name  = current_tab
+            self.confirmed = True
             for item in self.children: item.disabled = True
-            await inter.response.edit_message(content="✅ Frequency: **Monthly**", view=self)
+            await inter.response.edit_message(
+                content=f"✅ Using sheet tab: **{current_tab}**", view=self
+            )
             self.stop()
 
-        @discord.ui.button(label="🔁 Custom interval (every X days)", style=discord.ButtonStyle.secondary)
-        async def custom(self, inter: discord.Interaction, button: discord.ui.Button):
-            self.selected = "interval"
+        @discord.ui.button(label="✏️ Enter a different tab name", style=discord.ButtonStyle.secondary)
+        async def change(self, inter: discord.Interaction, button: discord.ui.Button):
+            modal = TextInputModal("Sheet Tab Name", "Tab name", default=current_tab)
+            await inter.response.send_modal(modal)
+            await modal.wait()
+            self.tab_name  = modal.value or current_tab
+            self.confirmed = True
             for item in self.children: item.disabled = True
-            await inter.response.edit_message(view=self)
+            try:
+                await inter.message.edit(
+                    content=f"✅ Using sheet tab: **{self.tab_name}**", view=self
+                )
+            except discord.HTTPException:
+                pass
             self.stop()
 
-    freq_view = FrequencyView()
+    tab_view = TabConfirmView()
     await channel.send(
-        "**Step 7 of 7 — Snapshot Frequency**\n"
-        "How often should the bot take a snapshot?",
-        view=freq_view,
+        f"**Step 2 of 9 — Sheet Tab**\n"
+        f"Which tab in your Google Sheet contains birthday data?\n"
+        f"⚠️ *Make sure this tab exists in your sheet before continuing.*\n"
+        f"*(Current: `{current_tab}`)*",
+        view=tab_view,
     )
-    await freq_view.wait()
-    if not freq_view.selected:
-        await channel.send("⏰ Timed out. Run `/setup_growth` to start again.")
+    await tab_view.wait()
+    if not tab_view.confirmed:
+        await channel.send("⏰ Timed out. Run `/setup_birthdays` to start again.")
+        return
+    tab_name = tab_view.tab_name
+
+    # ── Step 3: Name column ────────────────────────────────────────────────────
+    cur_name_letter = index_to_letter(current.get("name_col", 0))
+    name_col_raw = await ask_text(
+        f"**Step 3 of 9 — Name Column**\n"
+        f"Which column contains the member's name?\n"
+        f"Type the column letter (e.g. `A`, `B`, `C`)\n"
+        f"*(Current: column `{cur_name_letter}`)*"
+    )
+    if name_col_raw is None:
+        return
+    name_col = col_letter_to_index(name_col_raw)
+    if name_col < 0:
+        await channel.send("⚠️ Please enter a single column letter like `A`. Run `/setup_birthdays` to try again.")
         return
 
-    snapshot_frequency = freq_view.selected
-    snapshot_day       = 1
-    snapshot_interval  = 30
+    # ── Step 4: Birthday column ────────────────────────────────────────────────
+    cur_bday_letter = index_to_letter(current.get("birthday_col", 1))
+    bday_col_raw = await ask_text(
+        f"**Step 4 of 9 — Birthday Column**\n"
+        f"Which column contains the member's birthday?\n"
+        f"Type the column letter (e.g. `A`, `B`, `C`)\n"
+        f"*(Current: column `{cur_bday_letter}`)*"
+    )
+    if bday_col_raw is None:
+        return
+    birthday_col = col_letter_to_index(bday_col_raw)
+    if birthday_col < 0:
+        await channel.send("⚠️ Please enter a single column letter like `B`. Run `/setup_birthdays` to try again.")
+        return
 
-    if snapshot_frequency == "monthly":
-        day_raw = await ask_text(
-            "**Step 7a of 7 — Snapshot Day**\n"
-            "Which day of the month should the snapshot run? (e.g. `1` for the 1st)\n"
-            f"*(Current: day {current.get('snapshot_day', 1)})*"
+    # ── Step 5: Train integration ─────────────────────────────────────────────
+    train_view = YesNoView()
+    await channel.send(
+        "**Step 5 — Train Schedule Integration**\n"
+        "Should the bot automatically add members to the train schedule on their birthday?",
+        view=train_view,
+    )
+    await train_view.wait()
+    if train_view.selected is None:
+        await channel.send("⏰ Timed out. Run `/setup_birthdays` to start again.")
+        return
+    train_integration = 1 if train_view.selected else 0
+
+    flexible_placement = 0
+    lookahead_days     = 14
+
+    if train_integration:
+        # ── Step 6: Flexible placement ─────────────────────────────────────────
+        class PlacementView(discord.ui.View):
+            def __init__(self):
+                super().__init__(timeout=120)
+                self.selected = None
+
+            @discord.ui.button(label="🎂 Birthday only", style=discord.ButtonStyle.primary)
+            async def birthday_only(self, inter: discord.Interaction, button: discord.ui.Button):
+                self.selected = 0
+                for item in self.children: item.disabled = True
+                await inter.response.edit_message(content="✅ Placement: **Birthday only**", view=self)
+                self.stop()
+
+            @discord.ui.button(label="📅 Assign nearby if taken", style=discord.ButtonStyle.secondary)
+            async def flexible(self, inter: discord.Interaction, button: discord.ui.Button):
+                self.selected = 1
+                for item in self.children: item.disabled = True
+                await inter.response.edit_message(content="✅ Placement: **Assign 1 day before or after if birthday is taken**", view=self)
+                self.stop()
+
+        placement_view = PlacementView()
+        await channel.send(
+            "**Step 7 of 9 — Birthday Placement**\n"
+            "If the member's birthday is already taken on the train schedule, what should the bot do?",
+            view=placement_view,
         )
-        if day_raw is None:
+        await placement_view.wait()
+        if placement_view.selected is None:
+            await channel.send("⏰ Timed out. Run `/setup_birthdays` to start again.")
+            return
+        flexible_placement = placement_view.selected
+
+        # ── Step 7: Lookahead days ─────────────────────────────────────────────
+        lookahead_raw = await ask_text(
+            "**Step 8 of 9 — Lookahead Days**\n"
+            "How many days in advance should birthdays be added to the train schedule?\n"
+            f"*(Current: {current.get('lookahead_days', 14)} days — we recommend 14)*"
+        )
+        if lookahead_raw is None:
             return
         try:
-            snapshot_day = max(1, min(28, int(day_raw.strip())))
+            lookahead_days = int(lookahead_raw.strip())
+            if lookahead_days < 1:
+                raise ValueError
         except ValueError:
-            snapshot_day = 1
-    else:
-        interval_raw = await ask_text(
-            "**Step 7a of 7 — Interval (days)**\n"
-            "How many days between each snapshot? (e.g. `30`)\n"
-            f"*(Current: {current.get('snapshot_interval', 30)} days)*"
-        )
-        if interval_raw is None:
+            await channel.send("⚠️ Please enter a number like `14`. Run `/setup_birthdays` to try again.")
             return
-        try:
-            snapshot_interval = max(1, int(interval_raw.strip()))
-        except ValueError:
-            snapshot_interval = 30
+
+    # ── Step 8: Birthday reminders ─────────────────────────────────────────────
+    remind_view = YesNoView()
+    await channel.send(
+        "**Step 9 of 9 — Birthday Reminders**\n"
+        "Should the bot post a message in Discord on a member's birthday?\n"
+        f"*(It will post: \"🎂 Today is **[name]**'s birthday!\")*",
+        view=remind_view,
+    )
+    await remind_view.wait()
+    if remind_view.selected is None:
+        await channel.send("⏰ Timed out. Run `/setup_birthdays` to start again.")
+        return
+    reminders_enabled    = 1 if remind_view.selected else 0
+    reminder_channel_id  = 0
+    reminder_time        = "08:00"
+
+    if reminders_enabled:
+        # ── Step 8a: Reminder channel ──────────────────────────────────────────
+        remind_ch_view = ChannelSelectStep(
+            "Select the birthday announcement channel...",
+            suggested_name="birthdays",
+        )
+        await channel.send(
+            "**Step 9a of 9 — Birthday Announcement Channel**\n"
+            "Which channel should birthday announcements be posted in?",
+            view=remind_ch_view,
+        )
+        await remind_ch_view.wait()
+        if not remind_ch_view.confirmed:
+            await channel.send("⏰ Timed out. Run `/setup_birthdays` to start again.")
+            return
+        reminder_channel_id = remind_ch_view.selected_channel.id
+
+        # ── Step 8b: Reminder time ─────────────────────────────────────────────
+        from config import get_config
+        guild_cfg = get_config(guild_id)
+        tz_label  = TIMEZONE_LABELS.get(guild_cfg.timezone if guild_cfg else "America/New_York", "your timezone")
+        time_raw  = await ask_text(
+            f"**Step 9b of 9 — Reminder Time**\n"
+            f"What time should birthday announcements be posted? *(in {tz_label})*\n"
+            f"*(e.g. `8:00am`, `12:00pm`)*"
+        )
+        if time_raw is None:
+            return
+        parsed = _parse_12h_time(time_raw)
+        if not parsed:
+            await channel.send("⚠️ Could not read that time. Using `8:00am` as default.")
+            parsed = "08:00"
+        reminder_time = parsed
 
     # ── Save ───────────────────────────────────────────────────────────────────
-    save_growth_config(
-        guild_id, enabled=1,
-        tab_source=tab_source, name_col=name_col,
-        metrics=metrics, tab_growth=tab_growth,
-        snapshot_frequency=snapshot_frequency,
-        snapshot_day=snapshot_day,
-        snapshot_interval=snapshot_interval,
-        data_start_row=data_start_row,
+    from config import save_birthday_config
+    save_birthday_config(
+        guild_id        = guild_id,
+        tab_name        = tab_name,
+        name_col        = name_col,
+        birthday_col    = birthday_col,
+        discord_id_col  = discord_id_col,
+        data_start_row  = 2,
+        enabled         = 1,
+        train_integration   = train_integration,
+        flexible_placement  = flexible_placement,
+        lookahead_days      = lookahead_days,
+        reminders_enabled   = reminders_enabled,
+        reminder_channel_id = reminder_channel_id,
+        reminder_time       = reminder_time,
     )
 
-    freq_desc  = (
-        f"Monthly on day {snapshot_day}"
-        if snapshot_frequency == "monthly"
-        else f"Every {snapshot_interval} days"
-    )
-    metrics_display = "\n".join(f"• **{m['label']}** — column {m['col']}" for m in metrics)
-
-    embed = discord.Embed(title="✅ Growth Tracking Configured", color=discord.Color.green())
-    embed.add_field(name="Source Tab",        value=tab_source,          inline=False)
-    embed.add_field(name="Name Column",       value=f"Column {name_col}", inline=True)
-    embed.add_field(name="Data Start Row",    value=str(data_start_row),  inline=True)
-    embed.add_field(name="Growth Tab",        value=tab_growth,           inline=False)
-    embed.add_field(name="Snapshot Schedule", value=freq_desc,            inline=False)
-    embed.add_field(name="Metrics",           value=metrics_display,      inline=False)
-    embed.set_footer(text="Run /setup_growth again to update. Run /rungrowth to take a manual snapshot.")
+    embed = discord.Embed(title="✅ Birthday Tracking Configured", color=discord.Color.green())
+    embed.add_field(name="Sheet Tab",           value=tab_name,                            inline=True)
+    embed.add_field(name="Name Column",         value=f"Column {index_to_letter(name_col)}",     inline=True)
+    embed.add_field(name="Birthday Column",     value=f"Column {index_to_letter(birthday_col)}", inline=True)
+    embed.add_field(name="Discord ID Column",   value=f"Column {index_to_letter(discord_id_col)}" if discord_id_col >= 0 else "Not stored", inline=True)
+    embed.add_field(name="Train Integration",   value="Enabled" if train_integration else "Disabled", inline=True)
+    if train_integration:
+        embed.add_field(name="Placement",       value="Flexible (±1 day)" if flexible_placement else "Birthday only", inline=True)
+        embed.add_field(name="Lookahead",       value=f"{lookahead_days} days",           inline=True)
+    embed.add_field(name="Reminders",           value="Enabled" if reminders_enabled else "Disabled", inline=True)
+    if reminders_enabled:
+        embed.add_field(name="Reminder Channel", value=f"<#{reminder_channel_id}>",       inline=True)
+        embed.add_field(name="Reminder Time",    value=reminder_time,                     inline=True)
+    embed.set_footer(text="Run /setup_birthdays again to update these settings.")
     await channel.send(embed=embed)
-    print(f"[SETUP] Growth config saved for guild {guild_id}")
-    async def setup_survey(self, interaction: discord.Interaction):
-        if not interaction.user.guild_permissions.administrator:
-            await interaction.response.send_message(
-                "⛔ Only server administrators can run `/setup_survey`.", ephemeral=True
-            )
-            return
-        await interaction.response.send_message(
-            "⚙️ Starting survey setup — check the channel for prompts!", ephemeral=True
-        )
-        await run_survey_setup(interaction, self.bot)
-
+    print(f"[SETUP] Birthday config saved for guild {guild_id}")
 
 async def setup(bot: commands.Bot):
     await bot.add_cog(SetupCog(bot))

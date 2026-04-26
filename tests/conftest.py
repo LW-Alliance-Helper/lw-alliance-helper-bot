@@ -18,10 +18,8 @@ import pytest_asyncio
 # ── Add project root to path ───────────────────────────────────────────────────
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
-# ── Test constants ─────────────────────────────────────────────────────────────
-TEST_GUILD_ID   = 1497432945827516639
-TEST_SHEET_ID   = os.environ.get("TEST_SHEET_ID", "1iRwiwT7-K4jGvqkC1hixNCsNf5twNZ-zDOd8DlZ1kO0")
-OGV_GUILD_ID    = 1266229297723605052
+# ── Test constants (also importable from tests.constants) ─────────────────────
+from tests.constants import TEST_GUILD_ID, TEST_SHEET_ID, OGV_GUILD_ID
 
 
 # ── Temp database fixture ──────────────────────────────────────────────────────

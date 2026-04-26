@@ -308,6 +308,46 @@ async def run_setup(interaction: discord.Interaction, bot):
     channel  = interaction.channel
     user     = interaction.user
 
+    # ── If already configured, show summary and offer edit or cancel ──────────
+    if cfg.setup_complete:
+        tz_label = TIMEZONE_LABELS.get(cfg.timezone, cfg.timezone)
+        existing_embed = discord.Embed(
+            title="⚙️ Current Core Setup",
+            description="Your server is already configured. Would you like to edit these settings?",
+            color=discord.Color.blurple(),
+        )
+        existing_embed.add_field(name="Member Role",        value=cfg.member_role_name,              inline=False)
+        existing_embed.add_field(name="Leadership Role",    value=cfg.leadership_role_name,          inline=False)
+        existing_embed.add_field(name="Leadership Channel", value=f"<#{cfg.leadership_channel_id}>", inline=False)
+        existing_embed.add_field(name="Timezone",           value=tz_label,                          inline=False)
+        existing_embed.add_field(name="Sheet ID",           value=f"`{cfg.spreadsheet_id[:20]}...`" if cfg.spreadsheet_id else "Not set", inline=False)
+
+        class EditOrCancelView(discord.ui.View):
+            def __init__(self):
+                super().__init__(timeout=60)
+                self.proceed = None
+
+            @discord.ui.button(label="✏️ Edit settings", style=discord.ButtonStyle.primary)
+            async def edit(self, inter: discord.Interaction, button: discord.ui.Button):
+                self.proceed = True
+                for item in self.children: item.disabled = True
+                await inter.response.edit_message(view=self)
+                self.stop()
+
+            @discord.ui.button(label="✅ No changes needed", style=discord.ButtonStyle.secondary)
+            async def cancel(self, inter: discord.Interaction, button: discord.ui.Button):
+                self.proceed = False
+                for item in self.children: item.disabled = True
+                await inter.response.edit_message(view=self)
+                self.stop()
+
+        eoc_view = EditOrCancelView()
+        await channel.send(embed=existing_embed, view=eoc_view)
+        await eoc_view.wait()
+        if not eoc_view.proceed:
+            await channel.send("✅ No changes made. Your existing setup is still active.")
+            return
+
     await channel.send(
         "⚙️ **Alliance Helper Setup**\n\n"
         "I'll walk you through the core configuration for your server. "
@@ -370,7 +410,7 @@ async def run_setup(interaction: discord.Interaction, bot):
         "Enter your Google Sheet ID — the long string from your sheet's URL:\n"
         "`https://docs.google.com/spreadsheets/d/`**`YOUR_SHEET_ID`**`/edit`"
     )
-    modal   = TextInputModal("Google Sheet ID", "Sheet ID", placeholder="1BxiMVs0XRA5nFMdKvBdBZjgmUUqptlbs74OgVE2upms")
+    modal   = TextInputModal("Google Sheet ID", "Sheet ID", placeholder="Paste your Sheet ID here...")
     modal_v = ModalLaunchView(modal)
     await channel.send("\u200b", view=modal_v)
     await modal_v.wait()
@@ -419,15 +459,14 @@ async def run_setup(interaction: discord.Interaction, bot):
     tz_label = TIMEZONE_LABELS.get(cfg.timezone, cfg.timezone)
     embed = discord.Embed(
         title="⚙️ Setup Summary",
-        description="Please confirm these settings:",
+        description="Please confirm these settings before saving:",
         color=discord.Color.blurple(),
     )
-    embed.add_field(name="Member Role",        value=cfg.member_role_name,               inline=True)
-    embed.add_field(name="Leadership Role",    value=cfg.leadership_role_name,           inline=True)
-    embed.add_field(name="\u200b",             value="\u200b",                           inline=True)
-    embed.add_field(name="Leadership Channel", value=f"<#{cfg.leadership_channel_id}>",  inline=True)
-    embed.add_field(name="Timezone",           value=tz_label,                           inline=True)
-    embed.add_field(name="Sheet ID",           value=f"`{sheet_id[:20]}...`",            inline=False)
+    embed.add_field(name="Member Role",        value=cfg.member_role_name,              inline=False)
+    embed.add_field(name="Leadership Role",    value=cfg.leadership_role_name,          inline=False)
+    embed.add_field(name="Leadership Channel", value=f"<#{cfg.leadership_channel_id}>", inline=False)
+    embed.add_field(name="Timezone",           value=tz_label,                          inline=False)
+    embed.add_field(name="Sheet ID",           value=f"`{sheet_id[:20]}...`",           inline=False)
 
     confirm_view = ConfirmView()
     await channel.send(embed=embed, view=confirm_view)
@@ -442,14 +481,14 @@ async def run_setup(interaction: discord.Interaction, bot):
 
     await channel.send(
         "✅ **Core setup complete!**\n\n"
-        "Now configure the features you want to use:\n\n"
-        "📣 `/setup_events` — Event announcements (Marauder, Siege, etc.)\n"
+        "Now configure the features you want to use. Run each of the commands below for any feature you'd like to enable:\n\n"
+        "📣 `/setup_events` — Event announcements (Plague Marauder, Zombie Siege, etc.)\n"
         "🚂 `/setup_train` — Train schedule, blurb generation, and reminders\n"
         "🎂 `/setup_birthdays` — Birthday tracking and announcements\n"
         "⚔️ `/setup_desertstorm` — Desert Storm mail drafts and participation logs\n"
         "🏜️ `/setup_canyonstorm` — Canyon Storm mail drafts and participation logs\n"
         "📋 `/setup_survey` — Squad powers survey\n\n"
-        "Use `/help` to see all available commands at any time."
+        "You can set up as many or as few of these as you need. Use `/help` at any time to see all available commands."
     )
     print(f"[SETUP] Guild {guild_id} core setup complete")
 
@@ -1825,88 +1864,164 @@ async def run_event_setup(interaction: discord.Interaction, bot):
         await view.wait()
         return view
 
-    from config import get_config, get_guild_events, save_guild_event, get_or_create_config
+    from config import get_config, get_guild_events, save_guild_event, get_or_create_config, update_config_field
     import re as _re
 
     guild_cfg = get_config(guild_id) or get_or_create_config(guild_id)
     timezone  = guild_cfg.timezone if guild_cfg.timezone else "America/New_York"
+    tz_label  = TIMEZONE_LABELS.get(timezone, timezone)
+    events    = get_guild_events(guild_id, active_only=True)
 
-    await channel.send(
-        "⚙️ **Event Setup**\n"
-        "Configure your alliance events. All events share the same draft channel, "
-        "announcement channel, draft time, and 5-minute warning setting."
-    )
+    draft_channel_id    = guild_cfg.event_draft_channel_id or 0
+    announce_channel_id = guild_cfg.event_announce_channel_id or 0
+    draft_time          = guild_cfg.event_draft_time or "12:00"
+    five_min_warning    = guild_cfg.event_five_min_warning if guild_cfg.event_five_min_warning is not None else 1
 
-    # ── Step 1: Draft channel (guild-level) ───────────────────────────────────
-    current_draft_id = guild_cfg.event_draft_channel_id or 0
-    draft_ch_view    = ChannelSelectStep("Select the draft channel...", suggested_name="event-drafts")
-    await channel.send(
-        "**Step 1 — Draft Channel**\n"
-        "Which channel should the bot post event announcement drafts for leadership to review?\n"
-        "*(This applies to all events)*"
-        + (f"\n*(Current: <#{current_draft_id}>)*" if current_draft_id else ""),
-        view=draft_ch_view,
-    )
-    await draft_ch_view.wait()
-    if not draft_ch_view.confirmed:
-        await channel.send("⏰ Timed out. Run `/setup_events` to start again.")
-        return
-    draft_channel_id = draft_ch_view.selected_channel.id
+    # ── If already configured, show summary with action options ───────────────
+    if draft_channel_id and events:
+        summary_embed = discord.Embed(
+            title="📣 Event Setup",
+            description="Your events are already configured. What would you like to do?",
+            color=discord.Color.blurple(),
+        )
+        summary_embed.add_field(name="Draft Channel",        value=f"<#{draft_channel_id}>",    inline=False)
+        summary_embed.add_field(name="Announcement Channel", value=f"<#{announce_channel_id}>", inline=False)
+        summary_embed.add_field(name="Draft Time",           value=draft_time,                  inline=False)
+        summary_embed.add_field(name="5-min Warning",        value="Yes" if five_min_warning else "No", inline=False)
+        ev_list = "\n".join(f"• **{e['name']}** — {e['default_time']} {tz_label}" for e in events)
+        summary_embed.add_field(name="Events", value=ev_list, inline=False)
 
-    # ── Step 2: Announcement channel (guild-level) ────────────────────────────
-    current_ann_id = guild_cfg.event_announce_channel_id or 0
-    ann_ch_view    = ChannelSelectStep("Select the announcement channel...", suggested_name="announcements")
-    await channel.send(
-        "**Step 2 — Announcement Channel**\n"
-        "Which channel should approved announcements be posted to?\n"
-        "*(This applies to all events)*"
-        + (f"\n*(Current: <#{current_ann_id}>)*" if current_ann_id else ""),
-        view=ann_ch_view,
-    )
-    await ann_ch_view.wait()
-    if not ann_ch_view.confirmed:
-        await channel.send("⏰ Timed out. Run `/setup_events` to start again.")
-        return
-    announce_channel_id = ann_ch_view.selected_channel.id
+        class EventActionView(discord.ui.View):
+            def __init__(self):
+                super().__init__(timeout=60)
+                self.choice = None
 
-    # ── Step 3: Draft time (guild-level) ─────────────────────────────────────
-    tz_label       = TIMEZONE_LABELS.get(timezone, timezone)
-    current_dtime  = guild_cfg.event_draft_time or "12:00"
-    draft_time_raw = await ask_text(
-        f"**Step 3 — Draft Posting Time**\n"
-        f"What time should the bot post the draft each event day? *(in {tz_label})*\n"
-        f"*(e.g. `12:00pm` for noon)*\n"
-        f"*(Current: `{current_dtime}`)*"
-    )
-    if not draft_time_raw:
-        return
-    draft_time = _parse_12h_time(draft_time_raw)
-    if not draft_time:
-        await channel.send("⚠️ Could not read that time. Try `12:00pm`. Run `/setup_events` to try again.")
-        return
+            @discord.ui.button(label="⚙️ Edit Event Settings", style=discord.ButtonStyle.primary, row=0)
+            async def edit_settings(self, inter: discord.Interaction, button: discord.ui.Button):
+                self.choice = "settings"
+                for item in self.children: item.disabled = True
+                await inter.response.edit_message(view=self)
+                self.stop()
 
-    # ── Step 4: 5-minute warning (guild-level) ────────────────────────────────
-    warn_view = YesNoView()
-    await channel.send(
-        "**Step 4 — 5-Minute Warning**\n"
-        "Should the bot automatically post a 5-minute warning before events?\n"
-        "*(This applies to all events)*",
-        view=warn_view,
-    )
-    await warn_view.wait()
-    if warn_view.selected is None:
-        await channel.send("⏰ Timed out. Run `/setup_events` to start again.")
-        return
-    five_min_warning = 1 if warn_view.selected else 0
+            @discord.ui.button(label="➕ Add Event", style=discord.ButtonStyle.success, row=0)
+            async def add_event(self, inter: discord.Interaction, button: discord.ui.Button):
+                self.choice = "add"
+                for item in self.children: item.disabled = True
+                await inter.response.edit_message(view=self)
+                self.stop()
 
-    # Save guild-level event settings
-    from config import update_config_field
-    update_config_field(guild_id, "event_draft_channel_id",    draft_channel_id)
-    update_config_field(guild_id, "event_announce_channel_id", announce_channel_id)
-    update_config_field(guild_id, "event_draft_time",          draft_time)
-    update_config_field(guild_id, "event_five_min_warning",    five_min_warning)
+            @discord.ui.button(label="✏️ Edit Event", style=discord.ButtonStyle.secondary, row=1)
+            async def edit_event(self, inter: discord.Interaction, button: discord.ui.Button):
+                self.choice = "edit"
+                for item in self.children: item.disabled = True
+                await inter.response.edit_message(view=self)
+                self.stop()
 
-    # ── Step 5: Event list ────────────────────────────────────────────────────
+            @discord.ui.button(label="🗑️ Delete Event", style=discord.ButtonStyle.danger, row=1)
+            async def delete_event(self, inter: discord.Interaction, button: discord.ui.Button):
+                self.choice = "delete"
+                for item in self.children: item.disabled = True
+                await inter.response.edit_message(view=self)
+                self.stop()
+
+            @discord.ui.button(label="✅ No changes needed", style=discord.ButtonStyle.secondary, row=2)
+            async def done(self, inter: discord.Interaction, button: discord.ui.Button):
+                self.choice = "done"
+                for item in self.children: item.disabled = True
+                await inter.response.edit_message(view=self)
+                self.stop()
+
+        action_view = EventActionView()
+        await channel.send(embed=summary_embed, view=action_view)
+        await action_view.wait()
+
+        if not action_view.choice or action_view.choice == "done":
+            await channel.send("✅ No changes made.")
+            return
+
+        # Jump straight to event list for add/edit/delete
+        # We already have all the settings values — skip the settings wizard
+        # and fall through directly to the event list below
+        if action_view.choice in ("add", "edit", "delete"):
+            pass  # fall through to event list at end of function
+
+        # Fall through to full settings wizard for "settings"
+        elif action_view.choice == "settings":
+            await channel.send("⚙️ Let's update your event settings...")
+
+        skip_settings = action_view.choice in ("add", "edit", "delete")
+    else:
+        skip_settings = False
+
+    if not skip_settings:
+        await channel.send(
+            "⚙️ **Event Setup**\n"
+            "Configure your alliance events. All events share the same draft channel, "
+            "announcement channel, draft time, and 5-minute warning setting."
+        )
+
+    # ── Steps 1-4: Channel/time settings (skipped if coming from action menu) ──
+    if not skip_settings:
+        current_draft_id = guild_cfg.event_draft_channel_id or 0
+        draft_ch_view    = ChannelSelectStep("Select the draft channel...", suggested_name="event-drafts")
+        await channel.send(
+            "**Step 1 — Draft Channel**\n"
+            "Which channel should the bot post event announcement drafts for leadership to review?\n"
+            "*(This applies to all events)*",
+            view=draft_ch_view,
+        )
+        await draft_ch_view.wait()
+        if not draft_ch_view.confirmed:
+            await channel.send("⏰ Timed out. Run `/setup_events` to start again.")
+            return
+        draft_channel_id = draft_ch_view.selected_channel.id
+
+        current_ann_id = guild_cfg.event_announce_channel_id or 0
+        ann_ch_view    = ChannelSelectStep("Select the announcement channel...", suggested_name="announcements")
+        await channel.send(
+            "**Step 2 — Announcement Channel**\n"
+            "Which channel should approved announcements be posted to?\n"
+            "*(This applies to all events)*",
+            view=ann_ch_view,
+        )
+        await ann_ch_view.wait()
+        if not ann_ch_view.confirmed:
+            await channel.send("⏰ Timed out. Run `/setup_events` to start again.")
+            return
+        announce_channel_id = ann_ch_view.selected_channel.id
+
+        tz_label       = TIMEZONE_LABELS.get(timezone, timezone)
+        draft_time_raw = await ask_text(
+            f"**Step 3 — Draft Posting Time**\n"
+            f"What time should the bot post the draft each event day? *(in {tz_label})*\n"
+            f"*(e.g. `12:00pm` for noon)*"
+        )
+        if not draft_time_raw:
+            return
+        draft_time = _parse_12h_time(draft_time_raw)
+        if not draft_time:
+            await channel.send("⚠️ Could not read that time. Try `12:00pm`. Run `/setup_events` to try again.")
+            return
+
+        warn_view = YesNoView()
+        await channel.send(
+            "**Step 4 — 5-Minute Warning**\n"
+            "Should the bot automatically post a 5-minute warning before events?\n"
+            "*(This applies to all events)*",
+            view=warn_view,
+        )
+        await warn_view.wait()
+        if warn_view.selected is None:
+            await channel.send("⏰ Timed out. Run `/setup_events` to start again.")
+            return
+        five_min_warning = 1 if warn_view.selected else 0
+
+        update_config_field(guild_id, "event_draft_channel_id",    draft_channel_id)
+        update_config_field(guild_id, "event_announce_channel_id", announce_channel_id)
+        update_config_field(guild_id, "event_draft_time",          draft_time)
+        update_config_field(guild_id, "event_five_min_warning",    five_min_warning)
+
+    # ── Event list ────────────────────────────────────────────────────────────
     events = get_guild_events(guild_id, active_only=False)
 
     async def build_event_list():
@@ -2079,20 +2194,71 @@ async def run_event_setup(interaction: discord.Interaction, bot):
                         return False
 
                 # Blurb
-                cur_blurb = existing.get('announcement_blurb', '') if existing else ''
-                blurb_raw = await ask_text(
+                cur_blurb    = existing.get('announcement_blurb', '') if existing else ''
+                default_blurb = f"{name} at {{time}} ({{server_time}} Server Time)."
+
+                class BlurbChoiceView(discord.ui.View):
+                    def __init__(self, has_existing: bool):
+                        super().__init__(timeout=120)
+                        self.choice = None
+
+                    @discord.ui.button(label="✅ Use default blurb", style=discord.ButtonStyle.success)
+                    async def use_default(self, inter: discord.Interaction, button: discord.ui.Button):
+                        self.choice = "default"
+                        for item in self.children: item.disabled = True
+                        await inter.response.edit_message(
+                            content=f"✅ Using default blurb:\n`{default_blurb}`", view=self
+                        )
+                        self.stop()
+
+                    @discord.ui.button(label="✏️ Enter my own", style=discord.ButtonStyle.secondary)
+                    async def enter_own(self, inter: discord.Interaction, button: discord.ui.Button):
+                        self.choice = "custom"
+                        for item in self.children: item.disabled = True
+                        await inter.response.edit_message(view=self)
+                        self.stop()
+
+                blurb_view = BlurbChoiceView(has_existing=bool(cur_blurb))
+                if cur_blurb:
+                    keep_btn = discord.ui.Button(
+                        label="⏭️ Keep existing", style=discord.ButtonStyle.secondary, row=1
+                    )
+                    async def _keep_cb(inter: discord.Interaction):
+                        blurb_view.choice = "keep"
+                        for item in blurb_view.children: item.disabled = True
+                        await inter.response.edit_message(content="✅ Keeping existing blurb.", view=blurb_view)
+                        blurb_view.stop()
+                    keep_btn.callback = _keep_cb
+                    blurb_view.add_item(keep_btn)
+
+                blurb_msg = (
                     f"**{name} — Announcement Blurb**\n"
-                    "Write the message that gets posted when this event fires.\n"
-                    "• `{time}` — event time in your timezone\n"
-                    "• `{server_time}` — event time in Server Time\n\n"
-                    "**Example:**\n"
-                    "`Plague Marauder (AE) at {time} ({server_time} Server Time). Make sure to have offline participation checked!`"
-                    + (f"\n*(Current blurb shown above — type new one or press Enter to keep)*" if cur_blurb else ""),
-                    max_chars=1000,
+                    "This message gets posted when this event fires.\n"
+                    "Use `{time}` for the event time in your timezone and `{server_time}` for Server Time.\n\n"
+                    f"**Default:** `{default_blurb}`"
                 )
-                if blurb_raw is None:
+                if cur_blurb:
+                    blurb_msg += f"\n**Current:** `{cur_blurb[:100]}{'...' if len(cur_blurb) > 100 else ''}`"
+
+                await channel.send(blurb_msg, view=blurb_view)
+                await blurb_view.wait()
+                if not blurb_view.choice:
+                    await channel.send("⏰ Timed out. Run `/setup_events` to start again.")
                     return False
-                blurb = blurb_raw.strip() or cur_blurb
+
+                if blurb_view.choice == "default":
+                    blurb = default_blurb
+                elif blurb_view.choice == "keep":
+                    blurb = cur_blurb
+                else:
+                    blurb_raw = await ask_text(
+                        "Enter your announcement blurb:\n"
+                        "*(Use `{time}` and `{server_time}` as placeholders)*",
+                        max_chars=1000,
+                    )
+                    if blurb_raw is None:
+                        return False
+                    blurb = blurb_raw.strip() or default_blurb
 
                 # Save event
                 event = {
@@ -2123,10 +2289,10 @@ async def run_event_setup(interaction: discord.Interaction, bot):
     tz_label = TIMEZONE_LABELS.get(timezone, timezone)
 
     embed = discord.Embed(title="✅ Events Configured", color=discord.Color.green())
-    embed.add_field(name="Draft Channel",        value=f"<#{draft_channel_id}>",    inline=True)
-    embed.add_field(name="Announcement Channel", value=f"<#{announce_channel_id}>", inline=True)
-    embed.add_field(name="Draft Time",           value=draft_time,                  inline=True)
-    embed.add_field(name="5-min Warning",        value="Yes" if five_min_warning else "No", inline=True)
+    embed.add_field(name="Draft Channel",        value=f"<#{draft_channel_id}>",    inline=False)
+    embed.add_field(name="Announcement Channel", value=f"<#{announce_channel_id}>", inline=False)
+    embed.add_field(name="Draft Time",           value=draft_time,                  inline=False)
+    embed.add_field(name="5-min Warning",        value="Yes" if five_min_warning else "No", inline=False)
     if events:
         ev_list = "\n".join(f"• **{e['name']}** — {e['default_time']} {tz_label}" for e in events)
         embed.add_field(name="Events", value=ev_list, inline=False)

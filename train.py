@@ -214,7 +214,13 @@ def load_birthdays(tab_name: str, guild_id: int = None) -> list[dict]:
                 continue
             parsed = parse_birthday(bday_raw)
             if parsed:
-                members.append({"name": name, "month": parsed[0], "day": parsed[1]})
+                entry = {"name": name, "month": parsed[0], "day": parsed[1]}
+                # Include Discord ID if configured and available
+                if "discord_id_col" in bcfg and bcfg["discord_id_col"] >= 0:
+                    did_col = bcfg["discord_id_col"]
+                    if len(row) > did_col and row[did_col].strip():
+                        entry["discord_id"] = row[did_col].strip()
+                members.append(entry)
         print(f"[BIRTHDAY] Loaded {len(members)} members with birthdays from '{tab_name}'")
         return members
     except Exception as e:
@@ -1302,8 +1308,9 @@ async def _guard(interaction: discord.Interaction) -> bool:
 class TrainCog(commands.Cog):
     def __init__(self, bot):
         self.bot                 = bot
-        self.reminder_sent_today = False
+        self.reminder_sent_today = False  # kept for backward compat
         self.last_reminder_date  = None
+        self.reminders_fired     = set()
         self.check_reminder.start()
 
     def cog_unload(self):
@@ -1567,65 +1574,144 @@ class TrainCog(commands.Cog):
 
     @tasks.loop(minutes=1)
     async def check_reminder(self):
+        from config import get_config, get_train_config
+        from zoneinfo import ZoneInfo
+
         now   = datetime.now(tz=ET)
         today = date_cls.today()
 
+        # Reset daily flag at midnight ET
         if self.last_reminder_date != today:
             self.last_reminder_date  = today
             self.reminder_sent_today = False
+            self.reminders_fired     = set()  # track which guilds already fired today
 
-        if now.hour != 22 or now.minute != 0:
-            return
-        if self.reminder_sent_today:
-            return
+        if not hasattr(self, "reminders_fired"):
+            self.reminders_fired = set()
 
-        # ── Birthday auto-population ───────────────────────────────────────────
+        # ── Birthday auto-population and Discord announcements ────────────────
         try:
-            from config import get_config
+            from config import get_config, get_birthday_config
+            from datetime import date as _date
+            from zoneinfo import ZoneInfo as _ZI
+            today_iso = _date.today().isoformat()
+
             for guild in self.bot.guilds:
-                cfg = get_config(guild.id)
-                if not cfg or not cfg.setup_complete:
+                cfg      = get_config(guild.id)
+                bcfg     = get_birthday_config(guild.id)
+                if not cfg or not cfg.setup_complete or not bcfg.get("enabled"):
                     continue
-                current_schedule = load_schedule(guild.id)
-                updated_schedule, alerts = check_and_add_birthdays(current_schedule, guild_id=guild.id)
-                if updated_schedule != current_schedule or alerts:
-                    save_schedule(updated_schedule, guild.id)
-                if alerts:
-                    alert_channel = self.bot.get_channel(cfg.leadership_channel_id)
-                    if alert_channel:
-                        for alert in alerts:
-                            await alert_channel.send(alert)
+
+                # Birthday auto-population into train schedule
+                if bcfg.get("train_integration"):
+                    current_schedule = load_schedule(guild.id)
+                    updated_schedule, alerts = check_and_add_birthdays(current_schedule, guild_id=guild.id)
+                    if updated_schedule != current_schedule or alerts:
+                        save_schedule(updated_schedule, guild.id)
+                    if alerts:
+                        alert_channel = self.bot.get_channel(cfg.leadership_channel_id)
+                        if alert_channel:
+                            for alert in alerts:
+                                await alert_channel.send(alert)
+
+                # Birthday Discord announcements
+                if not bcfg.get("reminders_enabled"):
+                    continue
+
+                reminder_time = bcfg.get("reminder_time", "08:00")
+                try:
+                    r_h, r_m  = int(reminder_time.split(":")[0]), int(reminder_time.split(":")[1])
+                    guild_tz  = _ZI(cfg.timezone or "America/New_York")
+                    guild_now = datetime.now(tz=guild_tz)
+                    if guild_now.hour != r_h or guild_now.minute != r_m:
+                        continue
+                except Exception:
+                    continue
+
+                bday_channel = self.bot.get_channel(bcfg.get("reminder_channel_id", 0))
+                if not bday_channel:
+                    continue
+
+                # Find today's birthdays
+                tab_name     = bcfg.get("tab_name", "Birthdays")
+                members      = load_birthdays(tab_name, guild.id)
+                from datetime import date as _d2
+                today        = _d2.today()
+                todays_bdays = [m for m in members if m["month"] == today.month and m["day"] == today.day]
+
+                for member in todays_bdays:
+                    name = member.get("name", "a member")
+                    # @mention if Discord ID available
+                    discord_id = member.get("discord_id")
+                    if discord_id:
+                        mention = f"<@{discord_id}>"
+                    else:
+                        mention = f"**{name}**"
+                    await bday_channel.send(f"🎂 Today is {mention}'s birthday!")
+
         except Exception as e:
+            import traceback
             print(f"[BIRTHDAY] Error during birthday check: {e}")
+            print(f"[BIRTHDAY] Traceback:\n{traceback.format_exc()}")
 
-        # ── Train reminder ─────────────────────────────────────────────────────
-
-        schedule  = load_schedule()
-        today_str = today.isoformat()
-        if today_str not in schedule:
-            return
-        if blurb_generated_today():
-            return
-
-        entry = schedule[today_str]
-        name  = entry.get("name", "Unknown")
-
-        from config import get_config
+        # ── Per-guild train reminders ──────────────────────────────────────────
         for guild in self.bot.guilds:
-            cfg = get_config(guild.id)
-            if cfg and cfg.setup_complete:
-                channel = self.bot.get_channel(cfg.leadership_channel_id)
-                if channel is None:
+            if guild.id in self.reminders_fired:
+                continue
+
+            cfg        = get_config(guild.id)
+            train_cfg  = get_train_config(guild.id)
+
+            if not cfg or not cfg.setup_complete:
+                continue
+            if not train_cfg.get("reminders_enabled", 1):
+                continue
+
+            # Parse reminder time and compare to current time in guild's timezone
+            reminder_time = train_cfg.get("reminder_time", "22:00")
+            try:
+                r_h, r_m  = int(reminder_time.split(":")[0]), int(reminder_time.split(":")[1])
+                guild_tz  = ZoneInfo(cfg.timezone or "America/New_York")
+                guild_now = datetime.now(tz=guild_tz)
+                if guild_now.hour != r_h or guild_now.minute != r_m:
                     continue
+            except Exception:
+                continue
+
+            # Check if someone is scheduled today
+            today_str = today.isoformat()
+            schedule  = load_schedule(guild.id)
+            if today_str not in schedule:
+                self.reminders_fired.add(guild.id)
+                continue
+
+            entry = schedule[today_str]
+            name  = entry.get("name", "Unknown")
+
+            # Get reminder channel — fall back to leadership channel
+            channel_id = train_cfg.get("reminder_channel_id") or cfg.leadership_channel_id
+            channel    = self.bot.get_channel(channel_id)
+            if channel is None:
+                self.reminders_fired.add(guild.id)
+                continue
+
+            blurbs_on = train_cfg.get("blurbs_enabled", 1)
+            if blurbs_on:
                 view = ReminderView(cog=self, date_str=today_str, name=name)
-                await channel.send(
+                msg  = (
                     f"🚂 **Reset! Today's train is for {name}.**\n\n"
-                    f"Click below whenever you're ready to get the ChatGPT prompt — no rush, run it when the team is available.\n\n"
-                    f"⚠️ *If the button stops working (e.g. after a bot restart), use `/trainprompt` instead — it does the same thing.*",
-                    view=view,
+                    f"Click below whenever you're ready to get the ChatGPT prompt — "
+                    f"no rush, run it when the team is available.\n\n"
+                    f"⚠️ *If the button stops working after a bot restart, use `/trainprompt` instead.*"
                 )
-        self.reminder_sent_today = True
-        print(f"[TRAIN] Reminder sent for {name} on {today_str}")
+                await channel.send(msg, view=view)
+            else:
+                await channel.send(
+                    f"🚂 **Reset! Today's train is for {name}.**"
+                )
+
+            self.reminders_fired.add(guild.id)
+            print(f"[TRAIN] Reminder sent for guild {guild.id} — {name} on {today_str}")
 
     @check_reminder.before_loop
     async def before_check_reminder(self):

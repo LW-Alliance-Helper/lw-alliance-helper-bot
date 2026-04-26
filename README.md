@@ -1,169 +1,258 @@
-# OGV Alliance Bot
+# Alliance Helper
 
-A Discord bot built for the OGV alliance that automates member data tracking, event announcements, train schedule management, Desert Storm and Canyon Storm operations, and monthly growth reporting.
-
-All commands are restricted to members with the **OGV** role. Most commands are further restricted to the leadership channel or leadership category. Use `/help` at any time to see the full command list in Discord.
+A Discord bot built for Last War alliance leadership. Alliance Helper takes care of the time-consuming coordination work — event announcements, train scheduling, Desert Storm and Canyon Storm mail generation, member stat tracking, and more — so your leadership team can stay focused on the game.
 
 ---
 
 ## What It Does
 
-### 📋 Squad Powers Survey
-Members submit their stats directly through the bot. A persistent **Answer** button lives in the survey channel — clicking it opens a private thread that walks the member through all questions (squad powers, squad type, drone level, gorilla level, THP, total kills, and profession). On completion:
-- The member's row in the **Squad Powers** sheet is updated (or a new row is created)
-- A timestamped entry is appended to the **Survey History** sheet for trend tracking
-- A notification embed is posted to the leadership responses channel showing the member's name (clickable mention) and all their submitted values
-- The private thread is deleted after 60 seconds (or immediately if the member clicks Close Thread)
+**📣 Event Announcements** — Schedule Plague Marauder, Zombie Siege, and any other recurring events. The bot posts a draft to leadership for review at your chosen time each event day, then sends the final announcement to your public channel once approved. A 5-minute warning fires automatically before the event starts.
 
-### 📣 Event Announcements
-On event days (Plague Marauder (AE) and Zombie Siege run on a 3-day cycle), the bot posts a draft announcement to the leadership channel at noon for review. Leadership uses the event editor to adjust times, add or remove optional events (Glacieradon, Blimp), and add notes. Once ready, the announcement goes through an approval flow before posting publicly. A 5-minute warning fires automatically after approval.
+**🚂 Train Schedule** — Track who gets the alliance train each day and generate a personalised ChatGPT prompt to help write a blurb for that member. Birthdays can be automatically added to the schedule in advance.
 
-On Friday nights, a Buster Day shield reminder is posted to leadership for approval at 9:55pm ET.
+**🎂 Birthdays** — Read birthday data from your Google Sheet and optionally add members to the train schedule on their birthday, post birthday announcements in Discord, or both.
 
-If a button stops working after a bot restart, use `/events` to reopen a fresh editor.
+**⚔️ Desert Storm** — Generate ready-to-copy team mail drafts for Team A and Team B each week. Log sit-outs and participation data after each event.
 
-### 🚂 Train Schedule
-Leadership inputs the upcoming train schedule using `/schedule_set`. At 10pm ET (server reset), if someone is scheduled the bot posts a reminder with a button to pull up the ChatGPT prompt. `/trainprompt` is always available as a manual fallback.
+**🏜️ Canyon Storm** — Same as Desert Storm — mail generation, team tracking, and participation logging.
 
-Birthdays are automatically added to the train schedule 14 days in advance. The birthday theme is pre-filled automatically. Placement logic:
-1. Schedule on the birthday if free
-2. Try the day before if the birthday is taken
-3. Try the day after if both are taken
-4. If all three dates are occupied, post a high-priority alert to leadership and skip — do not override
+**📋 Survey** — Let members submit their stats through a private Discord thread. Responses are saved directly to your Google Sheet and leadership gets a notification for each submission.
 
-If two members share a birthday, the second one independently follows the same placement logic, naturally landing on the day before or after.
-
-### ⚔️ Desert Storm & Canyon Storm Mails
-Leadership generates ready-to-copy event mails using `/draftds` and `/draftcs`. Each command:
-1. Asks which team (A or B)
-2. Posts the pre-filled template from last week's saved assignments
-3. Accepts an edited paste-back
-4. Shows a preview for approval
-5. On approval, saves the new assignments and posts a copyable mail block
-
-If a button stops working after a bot restart, re-run the draft command to start fresh.
-
-### 📊 Storm Logging
-After each DS or CS event, leadership logs participation data using `/logds` or `/logcs`. The flow walks through each data point with name entry via modal (validated against the member roster) and saves to the **DS-CS Sit-outs** sheet. A summary is posted to the dedicated log thread.
-
-Members with special characters in their names (e.g. `ʟᴀɴᴅɛʀʂლ`) can be entered using a plain-text alias stored in the member sheet (col F).
-
-Previous sit-out lists are automatically surfaced in step 5 to make it easy to flag members who sat out again.
-
-Use `/viewlog` to look up any past log entry by event type and date.
-
-### 📈 Growth Tracking
-On the 1st of every month at 10pm ET, the bot snapshots every member's combined squad power and writes it to the **Growth Tracking** sheet with a percentage growth column. A startup snapshot also runs each time the bot launches for a baseline.
+**📈 Growth Tracking** — Take monthly snapshots of squad powers across your alliance and track growth over time in your Google Sheet.
 
 ---
 
-## Slash Commands
+## Before You Start
 
-### Squad Powers Survey
-| Command | Description |
-|---|---|
-| `/postsurvey` | Post (or repost) the persistent survey button in the survey channel |
+You'll need:
 
-### Event Announcements
-| Command | Description |
-|---|---|
-| `/events [date]` | Open the event editor for today or a specific date (e.g. `April 5` or `4/5`) |
+- **A Discord server** where you have Administrator permissions
+- **A Google Sheet** — this is where all your data lives. One sheet per alliance, shared with the bot's service account (details below)
 
-### Train Schedule
-| Command | Description |
-|---|---|
-| `/schedule` | View the current train schedule |
-| `/schedule_set` | Add or update entries in the schedule |
-| `/schedule_clear` | Clear the entire schedule (requires confirmation) |
-| `/trainprompt [date]` | Retrieve a stored ChatGPT prompt for today or a specific date |
-| `/cancel` | Cancel your active wizard or log session |
-
-### Birthday Management
-| Command | Description |
-|---|---|
-| `/checkbirthdays` | Manually run the birthday check and add upcoming birthdays to the schedule |
-| `/setmembertab [tab]` | Set the active member sheet tab — use this at the start of each new season. Used for birthdays, DS/CS rosters, and survey alias lookups |
-
-### Desert Storm & Canyon Storm
-| Command | Description |
-|---|---|
-| `/draftds` | Generate a Desert Storm mail draft for Team A or Team B |
-| `/draftcs` | Generate a Canyon Storm mail draft for Team A or Team B |
-
-### Storm Logging
-| Command | Description |
-|---|---|
-| `/logds` | Log Desert Storm participation data |
-| `/logcs` | Log Canyon Storm participation data |
-| `/viewlog [event] [date]` | View a full log entry for a specific event and date |
-
-### Growth Tracking
-| Command | Description |
-|---|---|
-| `/rungrowth` | Manually run the monthly squad power snapshot |
-
-### General
-| Command | Description |
-|---|---|
-| `/help` | Show all available commands in Discord |
+That's it. No coding, no Google Cloud setup — just a sheet and a Discord server.
 
 ---
 
-## Automatic Schedule
+## Inviting the Bot
 
-| Time | What Happens |
-|---|---|
-| **Noon ET on event days** | Event announcement draft posted to leadership for review |
-| **10pm ET nightly** | Birthday check runs — upcoming birthdays added to train schedule |
-| **10pm ET nightly** | Train day reminder posted if someone is scheduled and prompt hasn't been pulled |
-| **9:55pm ET Fridays** | Buster Day shield reminder posted to leadership for approval |
-| **5 min before first event** | Warning auto-posted to Announcements (fires after noon announcement is approved) |
-| **1st of every month at 10pm ET** | Squad power growth snapshot written to Growth Tracking sheet |
-| **Bot startup** | Initial growth snapshot runs for baseline |
+Use the invite link provided by your bot administrator to add Alliance Helper to your server. When prompted, select your server from the dropdown and click **Authorise**.
+
+Once the bot has joined, you'll see it appear in your member list. It won't do anything until you run `/setup`.
 
 ---
 
-## Google Sheet Structure
+## Setting Up Your Google Sheet
 
-| Tab | Purpose |
-|---|---|
-| **Squad Powers** | Member squad data — updated on every survey submission. Columns: Username, Discord ID, 1st Squad, 1st Squad Type, 2nd Squad, 3rd Squad, Drone Level, Gorilla Level, THP, Total Kills, Profession, Banner, Aid/Removal, Date Modified |
-| **Survey History** | Timestamped record of every survey submission for trend tracking |
-| **Train Schedule** | Upcoming train entries with theme, tone, notes, and prompt status. Also stores the active member tab name in cell H1 |
-| **Growth Tracking** | Monthly combined squad power snapshots with % growth columns |
-| **DS Assignments** | Saved zone and sub-pair assignments for DS Team A and B, and zone assignments for CS Team A and B |
-| **DS-CS Sit-outs** | Event participation log — one row per DS or CS event with votes, RTF no-vote, sit-outs, and prior sit-out data |
-| **[Active Member Tab]** | Season member roster (e.g. Season 5 - Off-Season). Used for birthday lookups, DS/CS name validation, and alias resolution. Col E = Name, Col F = Alias, Col I = Birthday |
+Before running `/setup`, create a new Google Sheet. You don't need to add any tabs or columns yet — the bot will tell you what to create as you go through each feature's setup.
 
----
+The one thing you need to do upfront is **share your sheet** with the bot's service account so it can read and write data. You'll be prompted to do this during `/setup` with a direct link to your sheet's sharing settings and the exact email address to use.
 
-## Files
+Set the permission to **Editor** when sharing.
 
-| File | Purpose |
-|---|---|
-| `bot.py` | Main bot — event handling, growth scheduler, help command |
-| `scheduler.py` | Event announcement scheduler and approval workflow |
-| `train.py` | Train schedule management, birthday auto-population, prompt retrieval |
-| `storm.py` | DS and CS mail generation |
-| `storm_log.py` | DS and CS participation logging |
-| `survey.py` | Squad powers survey — persistent button, private thread flow, sheet sync |
-| `growth.py` | Monthly squad power snapshot logic |
-| `sheets.py` | Google Sheets authentication and helper functions |
-| `requirements.txt` | Python dependencies |
-| `Procfile` | Railway start command |
+> **Keep your Sheet ID handy.** You can find it in your sheet's URL:
+> `https://docs.google.com/spreadsheets/d/`**`YOUR_SHEET_ID_HERE`**`/edit`
 
 ---
 
-## Button Reconnect Reference
+## Core Setup
 
-Discord buttons lose their state if the bot restarts while they're active. If a button shows "interaction failed", here's the manual fallback for each:
+Run `/setup` in your leadership channel to get started. This covers the essentials that every feature depends on.
 
-| Button | Fallback |
+**What it asks for:**
+
+1. **Member role** — the role all alliance members have. Used to gate the survey.
+2. **Leadership role** — the elevated role for alliance leadership. Required to use most commands.
+3. **Leadership channel** — the private channel where commands are used and drafts appear.
+4. **Timezone** — your alliance's local timezone. Used for all event times, reminders, and Desert Storm/Canyon Storm time displays throughout the bot.
+5. **Google Sheet ID** — paste the ID from your sheet's URL.
+6. **Sheet sharing** — a guided step to share your sheet with the bot's service account.
+
+Once complete, the bot will list all the available feature setup commands so you know what to configure next.
+
+> **Tip:** You can run `/setup` again at any time to update any of these settings.
+
+---
+
+## Feature Setup
+
+Each feature is configured independently. Set up only what you need — features you don't configure simply won't be active.
+
+---
+
+### 📣 Event Announcements — `/setup_events`
+
+**What to create in your sheet:** Nothing required for this feature.
+
+Run `/setup_events` to configure your events. The wizard first asks for settings that apply to all events:
+
+- **Draft channel** — where leadership sees the draft before it goes public
+- **Announcement channel** — where the final approved announcement posts
+- **Draft posting time** — when the draft is posted each event day
+- **5-minute warning** — whether the bot auto-posts a warning before events start
+
+You'll then see your event list with options to add, edit, or remove events. For each event you add:
+
+- **Event name** (e.g. `Plague Marauder (AE)`, `Zombie Siege`)
+- **Default time** — when this event usually starts, in your timezone
+- **Schedule** — repeating cycle (with anchor date and interval) or manual
+- **Announcement blurb** — the message posted when this event fires, using `{time}` and `{server_time}` as placeholders
+
+> **Example blurb:** `Plague Marauder (AE) at {time} ({server_time} Server Time). Make sure to have offline participation checked!`
+
+---
+
+### 🚂 Train Schedule — `/setup_train`
+
+**What to create in your sheet:** A tab for your train schedule (e.g. `Train Schedule`).
+
+Run `/setup_train` to configure the train schedule:
+
+1. **Schedule tab** — which tab in your sheet stores the train schedule
+2. **Blurb generation** — whether you want the bot to generate a ChatGPT prompt each day. If yes:
+   - **Themes** — a list of themes leadership can choose from (e.g. `Birthday, Milestone, Welcome`)
+   - **Tones** — a list of tone options (e.g. `Default, More casual, More intense`)
+   - **Default tone** — which tone is pre-selected
+   - **Prompt template** — the full prompt you'd give ChatGPT, using `{name}`, `{theme}`, `{tone}`, and `{notes}` as placeholders
+3. **Reminders** — whether the bot should post a reminder when someone is assigned the train, and if so, which channel and what time
+
+**Day-to-day use:**
+- Use `/schedule_set` to add upcoming train entries
+- Use `/schedule` to view the current schedule
+- At your configured reminder time, the bot posts a reminder in your chosen channel. If blurb generation is enabled, a button lets you pull up the ChatGPT prompt instantly
+- Use `/trainprompt [date]` as a manual fallback at any time
+
+---
+
+### 🎂 Birthdays — `/setup_birthdays`
+
+**What to create in your sheet:** A tab containing your member roster with name and birthday columns (e.g. `Birthdays`, or your existing member tab).
+
+Run `/setup_birthdays` to configure birthday tracking:
+
+1. **Sheet tab** — which tab contains birthday data
+2. **Name column** — the column letter containing member names (e.g. `A`)
+3. **Birthday column** — the column letter containing birthdays (e.g. `B`)
+4. **Discord ID column** *(optional)* — if you store Discord IDs, the bot can @mention members in birthday announcements
+5. **Train integration** — whether birthdays are automatically added to the train schedule
+   - If yes: choose whether to place on the exact birthday only, or allow 1 day before/after if the birthday is taken
+   - If yes: how many days in advance to look ahead (we recommend 14)
+6. **Birthday reminders** — whether the bot posts a birthday message in Discord
+   - If yes: which channel and what time
+
+Birthday messages say: *🎂 Today is **[name]**'s birthday!*
+
+---
+
+### ⚔️ Desert Storm — `/setup_desertstorm`
+
+**What to create in your sheet:** A tab for Desert Storm assignments (e.g. `DS Assignments`).
+
+Run `/setup_desertstorm` to configure Desert Storm:
+
+1. **Sheet tab** — the bot manages the data structure here automatically, no formatting needed
+2. **Teams** — whether you run Team A & B, Team A only, or Team B only
+3. **Log channel** — where participation logs are posted after each event
+4. **Mail template** — if you run both teams, choose one template for both or separate templates per team. A default template is provided — use it as-is or paste your own
+
+**Available placeholders in your template:**
+- `{alliance_name}` — your alliance name
+- `{zones}` — zone assignments block
+- `{subs}` — substitute members
+- `{time}` — event time (auto-filled when drafting)
+
+**Day-to-day use:**
+- Use `/draftds` to generate a mail draft. You'll select the team and time slot (Desert Storm runs at 18:00 and 23:00 Server Time, displayed in your timezone)
+- Review the pre-filled draft, edit as needed, then approve to save and get a copyable mail block
+- After the event, use `/logds` to record participation data
+- Use `/viewlog DS [date]` to look up past log entries
+
+---
+
+### 🏜️ Canyon Storm — `/setup_canyonstorm`
+
+**What to create in your sheet:** A tab for Canyon Storm assignments (e.g. `CS Assignments`).
+
+Run `/setup_canyonstorm` — the setup is identical to Desert Storm above.
+
+Canyon Storm runs at 12:00 and 23:00 Server Time (displayed in your timezone).
+
+**Day-to-day use:**
+- `/draftcs` — generate a Canyon Storm mail draft
+- `/logcs` — log participation after the event
+- `/viewlog CS [date]` — look up past log entries
+
+---
+
+### 📋 Survey — `/setup_survey`
+
+**What to create in your sheet:** Two tabs — one for current member stats (e.g. `Squad Powers`) and one for submission history (e.g. `Survey History`).
+
+Run `/setup_survey` to configure the survey:
+
+1. **Survey channel** — where the survey button is posted for members to access
+2. **Notification channel** — where leadership is notified when a member submits
+3. **Stats tab** — updated with each submission (one row per member)
+4. **History tab** — a timestamped record of every submission
+5. **Intro message** — the message members see before starting the survey
+6. **Questions** — choose from the default Last War question set, edit individual questions, or build your own from scratch
+
+The question builder supports two question types:
+- **Text** — the member types a value, with an optional help text hint
+- **Dropdown** — the member picks from a list of options you define (up to 25)
+
+**Day-to-day use:**
+- Run `/postsurvey` to post the survey button in your survey channel
+- Members click **Answer**, complete the survey in a private thread, and their data is saved automatically
+- Leadership sees a notification embed in the notification channel for each submission
+
+---
+
+## Day-to-Day Quick Reference
+
+| Situation | Command |
 |---|---|
-| Event editor (Build Announcement etc.) | `/events` |
-| Event approval | `/events` again to rebuild |
-| Train reminder (View & Get Prompt) | `/trainprompt` |
+| Post or repost the survey button | `/postsurvey` |
+| View the train schedule | `/schedule` |
+| Add entries to the train schedule | `/schedule_set` |
+| Get a ChatGPT prompt for today's train | `/trainprompt` |
+| Update the active member tab for a new season | `/setmembertab [tab name]` |
+| Manually run the birthday check | `/checkbirthdays` |
+| Open the event editor | `/events` |
+| Generate a Desert Storm mail draft | `/draftds` |
+| Generate a Canyon Storm mail draft | `/draftcs` |
+| Log Desert Storm participation | `/logds` |
+| Log Canyon Storm participation | `/logcs` |
+| Look up a past log entry | `/viewlog [DS or CS] [date]` |
+| Run a growth snapshot manually | `/rungrowth` |
+| See all commands | `/help` |
+
+---
+
+## Troubleshooting
+
+**Commands aren't showing up in Discord**
+Slash commands can take up to an hour to appear after the bot first joins your server. If they still aren't showing after that, try removing and re-inviting the bot.
+
+**"You don't have permission to use this command"**
+Make sure you're using the command in the leadership channel and that you have the leadership role configured during `/setup`. Both are required.
+
+**"This bot hasn't been set up yet"**
+Run `/setup` first. The bot won't respond to feature commands until core setup is complete.
+
+**"Permission error" when the bot tries to access your sheet**
+The bot's service account doesn't have access to your sheet. Go to your sheet's sharing settings and make sure the service account email has been added as an **Editor**. You can find the email address by running `/setup` and checking Step 6.
+
+**A button stopped working after a bot restart**
+Discord buttons lose their connection to the bot when it restarts. Use the corresponding command to start a fresh flow:
+
+| Button | Use instead |
+|---|---|
+| Event editor or approval | `/events` |
+| Train reminder prompt button | `/trainprompt` |
 | Desert Storm approval | `/draftds` |
 | Canyon Storm approval | `/draftcs` |
 | DS/CS log steps | `/logds` or `/logcs` |
-| Survey button | `/postsurvey` to repost |
+| Survey button | `/postsurvey` |
+
+**Something else isn't working**
+Use `/help` to see all available commands and make sure the relevant feature has been configured with its `/setup_*` command.

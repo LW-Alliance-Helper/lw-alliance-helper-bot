@@ -856,7 +856,7 @@ def build_cs_mail(team: str, z: dict, time_key: str, guild_id: int = None) -> st
         return template.format(
             alliance_name="Alliance",
             zones=zones_block,
-            subs_list=subs_block,
+            subs=subs_block,
             time=time_str,
         )
 

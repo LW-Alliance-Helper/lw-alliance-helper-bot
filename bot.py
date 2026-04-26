@@ -250,21 +250,17 @@ async def help_slash(interaction: discord.Interaction):
     embed = discord.Embed(
         title="🤖 Alliance Helper — Commands",
         color=discord.Color.blurple(),
-        description="Leadership commands require the configured leadership role and channel.",
+        description=(
+            "All commands require the configured leadership role and must be used in the leadership channel.\n"
+            "Run `/setup` first if you haven't configured the bot yet."
+        ),
     )
 
     embed.add_field(
-        name="⚙️ Server Setup",
+        name="⚙️ Core Setup",
         value=(
-            "`/setup` — Configure the bot for your server (roles, channels, sheet)\n"
-            "`/setup_events` — Add or update an event type (Marauder, Siege, etc.)\n"
-            "`/setup_events_list` — View all configured events\n"
-            "`/setup_events_remove` — Deactivate an event\n"
-            "`/setup_train` — Configure train schedule tab, themes, tones, and prompt\n"
-            "`/setup_birthdays` — Configure birthday tracking\n"
-            "`/setup_desertstorm` — Configure DS mail template and time options\n"
-            "`/setup_canyonstorm` — Configure CS mail template and time options\n"
-            "`/setup_survey` — Configure survey questions and sheet tabs\n"
+            "Configure the bot for your server. Start here before using any other features.\n"
+            "`/setup` — Configure roles, leadership channel, timezone, and Google Sheet\n"
             "`/setup_status` — View current server configuration\n"
             "`/setup_reset` — Clear server configuration and start over"
         ),
@@ -272,51 +268,72 @@ async def help_slash(interaction: discord.Interaction):
     )
 
     embed.add_field(
+        name="📣 Event Announcements",
+        value=(
+            "Automate event scheduling for Plague Marauder, Zombie Siege, and any other recurring events. "
+            "Drafts are posted to leadership for review before going public.\n"
+            "`/setup_events` — Configure events, announcement channels, draft time, and 5-min warning\n"
+            "`/events [date]` — Open the event editor for today or a specific date"
+        ),
+        inline=False,
+    )
+
+    embed.add_field(
         name="🚂 Train Schedule",
         value=(
+            "Track who is assigned the alliance train each day and optionally generate a personalised "
+            "ChatGPT prompt to write a blurb for that member's announcement.\n"
+            "`/setup_train` — Configure the train tab, blurb generation, and reminders\n"
             "`/schedule` — View the current train schedule\n"
-            "`/schedule_set` — Add or update entries in the schedule\n"
+            "`/schedule_set` — Add or update schedule entries\n"
             "`/schedule_clear` — Clear the entire schedule\n"
-            "`/trainprompt [date]` — Retrieve a stored ChatGPT prompt\n"
+            "`/trainprompt [date]` — Get the ChatGPT prompt for a scheduled member\n"
             "`/setmembertab [tab]` — Set the active member sheet tab\n"
-            "`/checkbirthdays` — Manually run the birthday check\n"
-            "`/cancel` — Cancel your active wizard or log session"
+            "`/checkbirthdays` — Manually run the birthday check now"
         ),
         inline=False,
     )
 
     embed.add_field(
-        name="⚔️ Storm Mails",
+        name="🎂 Birthdays",
         value=(
+            "Track member birthdays from your Google Sheet and optionally post announcements "
+            "in Discord and assign members to the train schedule on their birthday.\n"
+            "`/setup_birthdays` — Configure birthday tracking, train integration, and announcements"
+        ),
+        inline=False,
+    )
+
+    embed.add_field(
+        name="⚔️ Desert Storm",
+        value=(
+            "Generate and manage Desert Storm team mail drafts and log participation each week.\n"
+            "`/setup_desertstorm` — Configure teams, sheet tab, log channel, and mail template\n"
             "`/draftds` — Generate a Desert Storm mail draft for Team A or B\n"
-            "`/draftcs` — Generate a Canyon Storm mail draft for Team A or B\n"
-            "Edit the pre-filled template, paste it back, preview, then approve to save"
-        ),
-        inline=False,
-    )
-
-    embed.add_field(
-        name="📊 Storm Logging",
-        value=(
             "`/logds` — Log Desert Storm participation data\n"
+            "`/viewlog DS [date]` — View a Desert Storm log entry for a specific date"
+        ),
+        inline=False,
+    )
+
+    embed.add_field(
+        name="🏜️ Canyon Storm",
+        value=(
+            "Generate and manage Canyon Storm team mail drafts and log participation each week.\n"
+            "`/setup_canyonstorm` — Configure teams, sheet tab, log channel, and mail template\n"
+            "`/draftcs` — Generate a Canyon Storm mail draft for Team A or B\n"
             "`/logcs` — Log Canyon Storm participation data\n"
-            "`/viewlog [event] [date]` — View a full log entry for a specific date"
+            "`/viewlog CS [date]` — View a Canyon Storm log entry for a specific date"
         ),
         inline=False,
     )
 
     embed.add_field(
-        name="📈 Growth Tracking",
+        name="📋 Survey",
         value=(
-            "`/rungrowth` — Manually run the monthly squad power snapshot\n"
-            "Snapshots also run automatically on the 1st of each month"
-        ),
-        inline=False,
-    )
-
-    embed.add_field(
-        name="📋 Squad Powers Survey",
-        value=(
+            "Collect member statistics through a private Discord thread survey. "
+            "Responses are saved directly to your Google Sheet.\n"
+            "`/setup_survey` — Configure survey questions, channels, and sheet tabs\n"
             "`/postsurvey` — Post (or repost) the survey button in the survey channel\n"
             "Members click Answer to open a private thread and submit their stats"
         ),
@@ -324,15 +341,22 @@ async def help_slash(interaction: discord.Interaction):
     )
 
     embed.add_field(
-        name="📣 Event Announcements",
+        name="📈 Growth Tracking",
         value=(
-            "`/events [date]` — Open the event editor for today or a specific date\n"
-            "Drafts are also automatically posted at your configured draft time on event days"
+            "Take monthly snapshots of squad powers to track alliance growth over time. "
+            "Snapshots are saved to your Google Sheet automatically each month.\n"
+            "`/rungrowth` — Manually run the monthly squad power snapshot"
         ),
         inline=False,
     )
 
-    embed.set_footer(text="Alliance Helper — lw-alliance-helper.iam.gserviceaccount.com")
+    embed.add_field(
+        name="🔧 Utilities",
+        value="`/cancel` — Cancel your active wizard or log session",
+        inline=False,
+    )
+
+    embed.set_footer(text="Alliance Helper — Run /setup to get started")
     await interaction.response.send_message(embed=embed, ephemeral=True)
 
 

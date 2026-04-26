@@ -301,29 +301,22 @@ class ModalLaunchView(discord.ui.View):
 
 # ── Setup wizard flow ──────────────────────────────────────────────────────────
 
+
 async def run_setup(interaction: discord.Interaction, bot):
     guild_id = interaction.guild_id
     cfg      = get_or_create_config(guild_id)
     channel  = interaction.channel
     user     = interaction.user
 
-    def check_interaction(i: discord.Interaction):
-        return i.user == user and i.guild_id == guild_id
-
-    async def send_step(content: str, view: discord.ui.View):
-        msg = await channel.send(content, view=view)
-        await view.wait()
-        return view
-
     await channel.send(
         "⚙️ **Alliance Helper Setup**\n\n"
-        "I'll walk you through configuring the bot for your server. "
-        "This should take about 2 minutes.\n\n"
-        "*You can run `/setup` again at any time to update your settings.*"
+        "I'll walk you through the core configuration for your server. "
+        "This covers your roles, leadership channel, timezone and Google Sheet.\n\n"
+        "*You can run `/setup` again at any time to update these settings.*"
     )
 
     # ── Step 1: Member role ────────────────────────────────────────────────────
-    await channel.send("**Step 1 of 10 — Member Role**\nSelect the role that all alliance members have:")
+    await channel.send("**Step 1 of 6 — Member Role**\nSelect the role that all alliance members have:")
     v = RoleSelectStep("Select member role...")
     await channel.send("\u200b", view=v)
     await v.wait()
@@ -334,7 +327,7 @@ async def run_setup(interaction: discord.Interaction, bot):
     cfg.member_role_id   = v.selected_role.id
 
     # ── Step 2: Leadership role ────────────────────────────────────────────────
-    await channel.send("**Step 2 of 10 — Leadership Role**\nSelect the elevated role for alliance leadership:")
+    await channel.send("**Step 2 of 6 — Leadership Role**\nSelect the elevated role for alliance leadership:")
     v = RoleSelectStep("Select leadership role...")
     await channel.send("\u200b", view=v)
     await v.wait()
@@ -345,7 +338,7 @@ async def run_setup(interaction: discord.Interaction, bot):
 
     # ── Step 3: Leadership channel ─────────────────────────────────────────────
     await channel.send(
-        "**Step 3 of 10 — Leadership Channel**\n"
+        "**Step 3 of 6 — Leadership Channel**\n"
         "Select the private channel where leadership commands will be used:"
     )
     v = ChannelSelectStep("Select leadership channel...", suggested_name="leadership")
@@ -354,68 +347,13 @@ async def run_setup(interaction: discord.Interaction, bot):
     if not v.confirmed:
         await channel.send("⏰ Setup timed out. Run `/setup` to start again.")
         return
-    cfg.leadership_channel_id    = v.selected_channel.id
-    cfg.leadership_category_id   = getattr(v.selected_channel, "category_id", 0) or 0
+    cfg.leadership_channel_id  = v.selected_channel.id
+    cfg.leadership_category_id = getattr(v.selected_channel, "category_id", 0) or 0
 
-    # ── Step 4: Announcement channel ──────────────────────────────────────────
-    await channel.send(
-        "**Step 4 of 10 — Announcement Channel**\n"
-        "Select the public channel where event announcements will be posted:"
-    )
-    v = ChannelSelectStep("Select announcement channel...", suggested_name="announcements")
-    await channel.send("\u200b", view=v)
-    await v.wait()
-    if not v.confirmed:
-        await channel.send("⏰ Setup timed out. Run `/setup` to start again.")
-        return
-    cfg.announcement_channel_id = v.selected_channel.id
-
-    # ── Step 5: Survey channel ─────────────────────────────────────────────────
-    await channel.send(
-        "**Step 5 of 10 — Survey Channel**\n"
-        "Select the channel where the squad powers survey button will live:"
-    )
-    v = ChannelSelectStep("Select survey channel...", suggested_name="squad-survey")
-    await channel.send("\u200b", view=v)
-    await v.wait()
-    if not v.confirmed:
-        await channel.send("⏰ Setup timed out. Run `/setup` to start again.")
-        return
-    cfg.survey_channel_id = v.selected_channel.id
-
-    # ── Step 6: Survey notification channel ───────────────────────────────────
-    await channel.send(
-        "**Step 6 of 10 — Survey Notification Channel**\n"
-        "Select the channel where leadership will see new survey submissions:"
-    )
-    v = ChannelSelectStep("Select survey notification channel...", suggested_name="survey-responses")
-    await channel.send("\u200b", view=v)
-    await v.wait()
-    if not v.confirmed:
-        await channel.send("⏰ Setup timed out. Run `/setup` to start again.")
-        return
-    cfg.survey_notify_channel_id = v.selected_channel.id
-
-    # ── Step 7: Storm log channel ──────────────────────────────────────────────
-    await channel.send(
-        "**Step 7 of 10 — Storm Log Channel**\n"
-        "Select the channel where DS/CS participation logs will be posted:"
-    )
-    v = ChannelSelectStep(
-        "Select storm log channel...",
-        suggested_name="storm-log",
-    )
-    await channel.send("\u200b", view=v)
-    await v.wait()
-    if not v.confirmed:
-        await channel.send("⏰ Setup timed out. Run `/setup` to start again.")
-        return
-    cfg.storm_log_thread_id = v.selected_channel.id
-
-    # ── Step 8: Timezone ───────────────────────────────────────────────────────
+    # ── Step 4: Timezone ───────────────────────────────────────────────────────
     tz_view = TimezoneSelectView()
     await channel.send(
-        "**Step 8 of 10 — Timezone**\n"
+        "**Step 4 of 6 — Timezone**\n"
         "Select your alliance's timezone. This is used for displaying event times, "
         "Desert Storm/Canyon Storm times, and train reminders throughout the bot:"
     )
@@ -426,9 +364,9 @@ async def run_setup(interaction: discord.Interaction, bot):
         return
     cfg.timezone = tz_view.selected
 
-    # ── Step 9: Google Sheet ID ────────────────────────────────────────────────
+    # ── Step 5: Google Sheet ID ────────────────────────────────────────────────
     await channel.send(
-        "**Step 9 of 10 — Google Sheet ID**\n"
+        "**Step 5 of 6 — Google Sheet ID**\n"
         "Enter your Google Sheet ID — the long string from your sheet's URL:\n"
         "`https://docs.google.com/spreadsheets/d/`**`YOUR_SHEET_ID`**`/edit`"
     )
@@ -441,12 +379,12 @@ async def run_setup(interaction: discord.Interaction, bot):
         return
     sheet_id = modal.value
 
-    # ── Step 10: Share sheet with service account ──────────────────────────────
+    # ── Step 6: Share sheet ────────────────────────────────────────────────────
     SERVICE_ACCOUNT_EMAIL = "sheet-connector@lw-alliance-helper.iam.gserviceaccount.com"
     sharing_url = f"https://docs.google.com/spreadsheets/d/{sheet_id}/edit#sharing"
 
     share_embed = discord.Embed(
-        title="**Step 10 of 10 — Share Your Google Sheet**",
+        title="**Step 6 of 6 — Share Your Google Sheet**",
         description=(
             "Before finishing, you need to give the bot access to your sheet.\n\n"
             "**Follow these steps:**\n"
@@ -468,14 +406,11 @@ async def run_setup(interaction: discord.Interaction, bot):
         value=f"[Click here to open sharing settings]({sharing_url})",
         inline=False,
     )
-
     done_view = ConfirmView()
     done_view.children[0].label = "✅ I've shared the sheet"
     done_view.children[1].label = "❌ Cancel setup"
-
     await channel.send(embed=share_embed, view=done_view)
     await done_view.wait()
-
     if not done_view.confirmed:
         await channel.send("❌ Setup cancelled. Run `/setup` to start again.")
         return
@@ -487,49 +422,46 @@ async def run_setup(interaction: discord.Interaction, bot):
         description="Please confirm these settings:",
         color=discord.Color.blurple(),
     )
-    embed.add_field(name="Member Role",        value=cfg.member_role_name,                  inline=True)
-    embed.add_field(name="Leadership Role",    value=cfg.leadership_role_name,              inline=True)
-    embed.add_field(name="\u200b",             value="\u200b",                              inline=True)
-    embed.add_field(name="Leadership Channel", value=f"<#{cfg.leadership_channel_id}>",    inline=True)
-    embed.add_field(name="Announcements",      value=f"<#{cfg.announcement_channel_id}>",  inline=True)
-    embed.add_field(name="Survey Channel",     value=f"<#{cfg.survey_channel_id}>",        inline=True)
-    embed.add_field(name="Survey Notifs",      value=f"<#{cfg.survey_notify_channel_id}>", inline=True)
-    embed.add_field(name="Storm Log Channel",  value=f"<#{cfg.storm_log_thread_id}>",      inline=True)
-    embed.add_field(name="Timezone",           value=tz_label,                             inline=True)
-    embed.add_field(name="Sheet ID",           value=f"`{sheet_id[:20]}...`",              inline=False)
+    embed.add_field(name="Member Role",        value=cfg.member_role_name,               inline=True)
+    embed.add_field(name="Leadership Role",    value=cfg.leadership_role_name,           inline=True)
+    embed.add_field(name="\u200b",             value="\u200b",                           inline=True)
+    embed.add_field(name="Leadership Channel", value=f"<#{cfg.leadership_channel_id}>",  inline=True)
+    embed.add_field(name="Timezone",           value=tz_label,                           inline=True)
+    embed.add_field(name="Sheet ID",           value=f"`{sheet_id[:20]}...`",            inline=False)
 
     confirm_view = ConfirmView()
     await channel.send(embed=embed, view=confirm_view)
     await confirm_view.wait()
-
     if not confirm_view.confirmed:
         await channel.send("❌ Setup cancelled. Run `/setup` to start again.")
         return
 
-    cfg.setup_complete  = True
-    cfg.spreadsheet_id  = sheet_id
+    cfg.setup_complete = True
+    cfg.spreadsheet_id = sheet_id
     save_config(cfg)
 
     await channel.send(
-        "✅ **Setup complete!** The bot is ready to use.\n\n"
-        "**Next steps:**\n"
-        "• Run `/setup_events` to configure your event announcements\n"
-        "• Run `/postsurvey` to post the survey button in your survey channel\n"
-        "• Run `/schedule_set` to add your first train schedule entries\n"
-        "• Run `/setmembertab` to set your active member sheet tab\n"
-        "• Use `/help` to see all available commands"
+        "✅ **Core setup complete!**\n\n"
+        "Now configure the features you want to use:\n\n"
+        "📣 `/setup_events` — Event announcements (Marauder, Siege, etc.)\n"
+        "🚂 `/setup_train` — Train schedule, blurb generation, and reminders\n"
+        "🎂 `/setup_birthdays` — Birthday tracking and announcements\n"
+        "⚔️ `/setup_desertstorm` — Desert Storm mail drafts and participation logs\n"
+        "🏜️ `/setup_canyonstorm` — Canyon Storm mail drafts and participation logs\n"
+        "📋 `/setup_survey` — Squad powers survey\n\n"
+        "Use `/help` to see all available commands at any time."
     )
-    print(f"[SETUP] Guild {guild_id} setup complete")
+    print(f"[SETUP] Guild {guild_id} core setup complete")
 
 
 # ── Birthday setup wizard ──────────────────────────────────────────────────────
+
 
 async def run_birthday_setup(interaction: discord.Interaction, bot):
     """Walk an admin through configuring birthday tracking."""
     guild_id = interaction.guild_id
     channel  = interaction.channel
     user     = interaction.user
-    TOTAL    = 5
 
     def check(m):
         return m.author == user and m.channel == channel
@@ -543,114 +475,1665 @@ async def run_birthday_setup(interaction: discord.Interaction, bot):
             return None
         return reply.content.strip()[:max_chars]
 
+    def col_letter_to_index(raw: str) -> int:
+        """Convert 'A' or 'a' to 0, 'B' to 1, etc. Returns -1 if invalid."""
+        raw = raw.strip().upper()
+        if len(raw) == 1 and raw.isalpha():
+            return ord(raw) - ord('A')
+        return -1
+
+    def index_to_letter(idx: int) -> str:
+        return chr(ord('A') + idx) if idx >= 0 else "—"
+
     from config import get_birthday_config
     current = get_birthday_config(guild_id)
 
     await channel.send(
         "⚙️ **Birthday Tracking Setup**\n"
-        "Configure where the bot reads birthday data from your Google Sheet.\n"
-        "*(Tip: column A = 1, column B = 2, etc.)*"
+        "Configure how the bot tracks member birthdays."
     )
 
-    # ── Step 1: Enabled? ───────────────────────────────────────────────────────
+    # ── Step 1: Enable? ───────────────────────────────────────────────────────
     enabled_view = YesNoView()
     await channel.send(
-        f"**Step 1 of {TOTAL} — Enable birthday tracking?**\n"
-        "Should the bot automatically add member birthdays to the train schedule?",
+        "**Step 1 — Enable birthday tracking?**\n"
+        "Should the bot track member birthdays from your Google Sheet?",
         view=enabled_view,
     )
     await enabled_view.wait()
     if enabled_view.selected is None:
         await channel.send("⏰ Timed out. Run `/setup_birthdays` to start again.")
         return
-    enabled = 1 if enabled_view.selected else 0
-
-    if not enabled:
+    if not enabled_view.selected:
         from config import save_birthday_config
-        save_birthday_config(
-            guild_id,
-            current.get("tab_name", ""),
-            current.get("name_col", 4),
-            current.get("birthday_col", 8),
-            current.get("data_start_row", 10),
-            current.get("lookahead_days", 14),
-            enabled=0,
-        )
+        save_birthday_config(guild_id, enabled=0, **{k: v for k, v in current.items() if k not in ('guild_id', 'enabled')})
         await channel.send("✅ Birthday tracking disabled.")
         return
 
-    # ── Step 2: Sheet tab ──────────────────────────────────────────────────────
-    tab_raw = await ask_text(
-        f"**Step 2 of {TOTAL} — Sheet Tab**\n"
-        f"Which tab in your Google Sheet contains your member roster with birthdays?\n"
-        f"*(Current: `{current.get('tab_name') or 'Not set'}`)*"
+    # ── Step 2: Sheet tab ─────────────────────────────────────────────────────
+    current_tab = current.get("tab_name") or "Birthdays"
+
+    class TabConfirmView(discord.ui.View):
+        def __init__(self):
+            super().__init__(timeout=120)
+            self.tab_name  = None
+            self.confirmed = False
+
+        @discord.ui.button(label="✅ Keep current tab", style=discord.ButtonStyle.success)
+        async def keep(self, inter: discord.Interaction, button: discord.ui.Button):
+            self.tab_name  = current_tab
+            self.confirmed = True
+            for item in self.children: item.disabled = True
+            await inter.response.edit_message(
+                content=f"✅ Using sheet tab: **{current_tab}**", view=self
+            )
+            self.stop()
+
+        @discord.ui.button(label="✏️ Enter a different tab name", style=discord.ButtonStyle.secondary)
+        async def change(self, inter: discord.Interaction, button: discord.ui.Button):
+            modal = TextInputModal("Sheet Tab Name", "Tab name", default=current_tab)
+            await inter.response.send_modal(modal)
+            await modal.wait()
+            self.tab_name  = modal.value or current_tab
+            self.confirmed = True
+            for item in self.children: item.disabled = True
+            try:
+                await inter.message.edit(
+                    content=f"✅ Using sheet tab: **{self.tab_name}**", view=self
+                )
+            except discord.HTTPException:
+                pass
+            self.stop()
+
+    tab_view = TabConfirmView()
+    await channel.send(
+        f"**Step 2 — Sheet Tab**\n"
+        f"Which tab in your Google Sheet contains birthday data?\n"
+        f"⚠️ *Make sure this tab exists in your sheet before continuing.*\n"
+        f"*(Current: `{current_tab}`)*",
+        view=tab_view,
     )
-    if tab_raw is None:
+    await tab_view.wait()
+    if not tab_view.confirmed:
+        await channel.send("⏰ Timed out. Run `/setup_birthdays` to start again.")
         return
-    tab_name = tab_raw.strip() or current.get("tab_name", "")
+    tab_name = tab_view.tab_name
 
     # ── Step 3: Name column ────────────────────────────────────────────────────
-    cur_name_col = current.get("name_col", 4) + 1
+    cur_name_letter = index_to_letter(current.get("name_col", 0))
     name_col_raw = await ask_text(
-        f"**Step 3 of {TOTAL} — Name Column**\n"
-        f"Which column number contains the member's name? (A=1, B=2, C=3...)\n"
-        f"*(Current: column {cur_name_col} = {chr(64 + cur_name_col)})*"
+        f"**Step 3 — Name Column**\n"
+        f"Which column contains the member's name?\n"
+        f"Type the column letter (e.g. `A`, `B`, `C`)\n"
+        f"*(Current: column `{cur_name_letter}`)*"
     )
     if name_col_raw is None:
         return
-    try:
-        name_col = int(name_col_raw.strip()) - 1
-        if name_col < 0:
-            raise ValueError
-    except ValueError:
-        await channel.send("⚠️ Please enter a column number like `5`. Run `/setup_birthdays` to try again.")
+    name_col = col_letter_to_index(name_col_raw)
+    if name_col < 0:
+        await channel.send("⚠️ Please enter a single column letter like `A`. Run `/setup_birthdays` to try again.")
         return
 
     # ── Step 4: Birthday column ────────────────────────────────────────────────
-    cur_bday_col = current.get("birthday_col", 8) + 1
+    cur_bday_letter = index_to_letter(current.get("birthday_col", 1))
     bday_col_raw = await ask_text(
-        f"**Step 4 of {TOTAL} — Birthday Column**\n"
-        f"Which column number contains the member's birthday?\n"
-        f"*(Current: column {cur_bday_col} = {chr(64 + cur_bday_col)})*"
+        f"**Step 4 — Birthday Column**\n"
+        f"Which column contains the member's birthday?\n"
+        f"Type the column letter (e.g. `A`, `B`, `C`)\n"
+        f"*(Current: column `{cur_bday_letter}`)*"
     )
     if bday_col_raw is None:
         return
-    try:
-        birthday_col = int(bday_col_raw.strip()) - 1
-        if birthday_col < 0:
-            raise ValueError
-    except ValueError:
-        await channel.send("⚠️ Please enter a column number like `9`. Run `/setup_birthdays` to try again.")
+    birthday_col = col_letter_to_index(bday_col_raw)
+    if birthday_col < 0:
+        await channel.send("⚠️ Please enter a single column letter like `B`. Run `/setup_birthdays` to try again.")
         return
 
-    # ── Step 5: Lookahead days ─────────────────────────────────────────────────
-    lookahead_raw = await ask_text(
-        f"**Step 5 of {TOTAL} — Lookahead Days**\n"
-        f"How many days in advance should birthdays be added to the train schedule?\n"
-        f"*(Current: {current.get('lookahead_days', 14)} days — we recommend 14)*"
+    # ── Step 5: Train integration ─────────────────────────────────────────────
+    train_view = YesNoView()
+    await channel.send(
+        "**Step 5 — Train Schedule Integration**\n"
+        "Should the bot automatically add members to the train schedule on their birthday?",
+        view=train_view,
     )
-    if lookahead_raw is None:
+    await train_view.wait()
+    if train_view.selected is None:
+        await channel.send("⏰ Timed out. Run `/setup_birthdays` to start again.")
         return
-    try:
-        lookahead_days = int(lookahead_raw.strip())
-        if lookahead_days < 1:
-            raise ValueError
-    except ValueError:
-        await channel.send("⚠️ Please enter a number like `14`. Run `/setup_birthdays` to try again.")
+    train_integration = 1 if train_view.selected else 0
+
+    flexible_placement = 0
+    lookahead_days     = 14
+
+    if train_integration:
+        # ── Step 6: Flexible placement ─────────────────────────────────────────
+        class PlacementView(discord.ui.View):
+            def __init__(self):
+                super().__init__(timeout=120)
+                self.selected = None
+
+            @discord.ui.button(label="🎂 Birthday only", style=discord.ButtonStyle.primary)
+            async def birthday_only(self, inter: discord.Interaction, button: discord.ui.Button):
+                self.selected = 0
+                for item in self.children: item.disabled = True
+                await inter.response.edit_message(content="✅ Placement: **Birthday only**", view=self)
+                self.stop()
+
+            @discord.ui.button(label="📅 Assign nearby if taken", style=discord.ButtonStyle.secondary)
+            async def flexible(self, inter: discord.Interaction, button: discord.ui.Button):
+                self.selected = 1
+                for item in self.children: item.disabled = True
+                await inter.response.edit_message(content="✅ Placement: **Assign 1 day before or after if birthday is taken**", view=self)
+                self.stop()
+
+        placement_view = PlacementView()
+        await channel.send(
+            "**Step 7 — Birthday Placement**\n"
+            "If the member's birthday is already taken on the train schedule, what should the bot do?",
+            view=placement_view,
+        )
+        await placement_view.wait()
+        if placement_view.selected is None:
+            await channel.send("⏰ Timed out. Run `/setup_birthdays` to start again.")
+            return
+        flexible_placement = placement_view.selected
+
+        # ── Step 7: Lookahead days ─────────────────────────────────────────────
+        lookahead_raw = await ask_text(
+            "**Step 8 — Lookahead Days**\n"
+            "How many days in advance should birthdays be added to the train schedule?\n"
+            f"*(Current: {current.get('lookahead_days', 14)} days — we recommend 14)*"
+        )
+        if lookahead_raw is None:
+            return
+        try:
+            lookahead_days = int(lookahead_raw.strip())
+            if lookahead_days < 1:
+                raise ValueError
+        except ValueError:
+            await channel.send("⚠️ Please enter a number like `14`. Run `/setup_birthdays` to try again.")
+            return
+
+    # ── Step 8: Birthday reminders ─────────────────────────────────────────────
+    remind_view = YesNoView()
+    await channel.send(
+        "**Step 9 — Birthday Reminders**\n"
+        "Should the bot post a message in Discord on a member's birthday?\n"
+        f"*(It will post: \"🎂 Today is **[name]**'s birthday!\")*",
+        view=remind_view,
+    )
+    await remind_view.wait()
+    if remind_view.selected is None:
+        await channel.send("⏰ Timed out. Run `/setup_birthdays` to start again.")
         return
+    reminders_enabled    = 1 if remind_view.selected else 0
+    reminder_channel_id  = 0
+    reminder_time        = "08:00"
+
+    if reminders_enabled:
+        # ── Step 8a: Reminder channel ──────────────────────────────────────────
+        remind_ch_view = ChannelSelectStep(
+            "Select the birthday announcement channel...",
+            suggested_name="birthdays",
+        )
+        await channel.send(
+            "**Step 9a — Birthday Announcement Channel**\n"
+            "Which channel should birthday announcements be posted in?",
+            view=remind_ch_view,
+        )
+        await remind_ch_view.wait()
+        if not remind_ch_view.confirmed:
+            await channel.send("⏰ Timed out. Run `/setup_birthdays` to start again.")
+            return
+        reminder_channel_id = remind_ch_view.selected_channel.id
+
+        # ── Step 8b: Reminder time ─────────────────────────────────────────────
+        from config import get_config
+        guild_cfg = get_config(guild_id)
+        tz_label  = TIMEZONE_LABELS.get(guild_cfg.timezone if guild_cfg else "America/New_York", "your timezone")
+        time_raw  = await ask_text(
+            f"**Step 9b — Reminder Time**\n"
+            f"What time should birthday announcements be posted? *(in {tz_label})*\n"
+            f"*(e.g. `8:00am`, `12:00pm`)*"
+        )
+        if time_raw is None:
+            return
+        parsed = _parse_12h_time(time_raw)
+        if not parsed:
+            await channel.send("⚠️ Could not read that time. Using `8:00am` as default.")
+            parsed = "08:00"
+        reminder_time = parsed
 
     # ── Save ───────────────────────────────────────────────────────────────────
     from config import save_birthday_config
-    save_birthday_config(guild_id, tab_name, name_col, birthday_col, 10, lookahead_days, enabled)
+    save_birthday_config(
+        guild_id        = guild_id,
+        tab_name        = tab_name,
+        name_col        = name_col,
+        birthday_col    = birthday_col,
+        discord_id_col  = discord_id_col,
+        data_start_row  = 2,
+        enabled         = 1,
+        train_integration   = train_integration,
+        flexible_placement  = flexible_placement,
+        lookahead_days      = lookahead_days,
+        reminders_enabled   = reminders_enabled,
+        reminder_channel_id = reminder_channel_id,
+        reminder_time       = reminder_time,
+    )
 
     embed = discord.Embed(title="✅ Birthday Tracking Configured", color=discord.Color.green())
-    embed.add_field(name="Sheet Tab",       value=tab_name,                                       inline=True)
-    embed.add_field(name="Name Column",     value=f"Column {name_col + 1} ({chr(64 + name_col + 1)})",     inline=True)
-    embed.add_field(name="Birthday Column", value=f"Column {birthday_col + 1} ({chr(64 + birthday_col + 1)})", inline=True)
-    embed.add_field(name="Lookahead",       value=f"{lookahead_days} days",                       inline=True)
+    embed.add_field(name="Sheet Tab",           value=tab_name,                            inline=True)
+    embed.add_field(name="Name Column",         value=f"Column {index_to_letter(name_col)}",     inline=True)
+    embed.add_field(name="Birthday Column",     value=f"Column {index_to_letter(birthday_col)}", inline=True)
+    embed.add_field(name="Discord ID Column",   value=f"Column {index_to_letter(discord_id_col)}" if discord_id_col >= 0 else "Not stored", inline=True)
+    embed.add_field(name="Train Integration",   value="Enabled" if train_integration else "Disabled", inline=True)
+    if train_integration:
+        embed.add_field(name="Placement",       value="Flexible (±1 day)" if flexible_placement else "Birthday only", inline=True)
+        embed.add_field(name="Lookahead",       value=f"{lookahead_days} days",           inline=True)
+    embed.add_field(name="Reminders",           value="Enabled" if reminders_enabled else "Disabled", inline=True)
+    if reminders_enabled:
+        embed.add_field(name="Reminder Channel", value=f"<#{reminder_channel_id}>",       inline=True)
+        embed.add_field(name="Reminder Time",    value=reminder_time,                     inline=True)
     embed.set_footer(text="Run /setup_birthdays again to update these settings.")
     await channel.send(embed=embed)
     print(f"[SETUP] Birthday config saved for guild {guild_id}")
+
+
+# ── Cog ────────────────────────────────────────────────────────────────────────
+
+
+async def run_train_setup(interaction: discord.Interaction, bot):
+    """Walk an admin through configuring the train schedule."""
+    guild_id = interaction.guild_id
+    channel  = interaction.channel
+    user     = interaction.user
+
+    def check(m):
+        return m.author == user and m.channel == channel
+
+    async def ask_text(prompt: str, max_chars: int = 2000):
+        """Send prompt and wait for typed reply. Both stay visible."""
+        await channel.send(prompt)
+        try:
+            reply = await bot.wait_for("message", check=check, timeout=300)
+        except asyncio.TimeoutError:
+            await channel.send("⏰ Timed out. Run `/setup_train` to start again.")
+            return None
+        return reply.content.strip()[:max_chars]
+
+    from config import get_train_config
+    current = get_train_config(guild_id)
+
+    await channel.send(
+        "⚙️ **Train Schedule Setup**\n"
+        "*Configure how the train schedule works for your alliance.*"
+    )
+
+    # ── Step 1: Sheet tab ──────────────────────────────────────────────────────
+    current_tab = current["tab_name"]
+
+    class TabConfirmView(discord.ui.View):
+        def __init__(self):
+            super().__init__(timeout=120)
+            self.tab_name  = None
+            self.confirmed = False
+
+        @discord.ui.button(label=f"✅ Keep current tab", style=discord.ButtonStyle.success)
+        async def keep(self, inter: discord.Interaction, button: discord.ui.Button):
+            self.tab_name  = current_tab
+            self.confirmed = True
+            for item in self.children:
+                item.disabled = True
+            await inter.response.edit_message(
+                content=f"✅ Using sheet tab: **{current_tab}**", view=self
+            )
+            self.stop()
+
+        @discord.ui.button(label="✏️ Enter a different tab name", style=discord.ButtonStyle.secondary)
+        async def change(self, inter: discord.Interaction, button: discord.ui.Button):
+            modal = TextInputModal("Sheet Tab Name", "Tab name", default=current_tab)
+            await inter.response.send_modal(modal)
+            await modal.wait()
+            self.tab_name  = modal.value or current_tab
+            self.confirmed = True
+            for item in self.children:
+                item.disabled = True
+            try:
+                await inter.message.edit(
+                    content=f"✅ Using sheet tab: **{self.tab_name}**", view=self
+                )
+            except discord.HTTPException:
+                pass
+            self.stop()
+
+    tab_view = TabConfirmView()
+    await channel.send(
+        f"**Step 1 — Schedule Sheet Tab**\n"
+        f"The train schedule is stored in the **`{current_tab}`** tab of your Google Sheet.\n"
+        f"⚠️ *Make sure this tab exists in your sheet before continuing.*",
+        view=tab_view,
+    )
+    await tab_view.wait()
+    if not tab_view.confirmed:
+        await channel.send("⏰ Timed out. Run `/setup_train` to start again.")
+        return
+    tab_name = tab_view.tab_name
+
+    # ── Step 2: Generate blurbs? ───────────────────────────────────────────────
+    blurb_view = YesNoView()
+    await channel.send(
+        "**Step 2 — ChatGPT Blurb Generation**\n"
+        "Would you like the bot to help generate a ChatGPT prompt each day when you assign a train?\n"
+        "This lets you quickly produce a personalised announcement blurb for the member.\n"
+        "*(You can always set this up later by running `/setup_train` again)*",
+        view=blurb_view,
+    )
+    await blurb_view.wait()
+    if blurb_view.selected is None:
+        await channel.send("⏰ Timed out. Run `/setup_train` to start again.")
+        return
+    blurbs_enabled = 1 if blurb_view.selected else 0
+
+    themes        = current["themes"]
+    tones         = current["tones"]
+    default_tone  = current["default_tone"]
+    prompt_template = current.get("prompt_template", "")
+
+    if blurbs_enabled:
+        # ── Step 3: Themes ─────────────────────────────────────────────────────
+        current_themes = ", ".join(current["themes"])
+
+        class KeepOrChangeView(discord.ui.View):
+            def __init__(self, label: str):
+                super().__init__(timeout=120)
+                self.keep_current = None
+                self._label = label
+
+            @discord.ui.button(label="✅ Keep current", style=discord.ButtonStyle.success)
+            async def keep(self, inter: discord.Interaction, button: discord.ui.Button):
+                self.keep_current = True
+                for item in self.children: item.disabled = True
+                await inter.response.edit_message(
+                    content=f"✅ Keeping current {self._label}.", view=self
+                )
+                self.stop()
+
+            @discord.ui.button(label="✏️ Enter new list", style=discord.ButtonStyle.secondary)
+            async def change(self, inter: discord.Interaction, button: discord.ui.Button):
+                self.keep_current = False
+                for item in self.children: item.disabled = True
+                await inter.response.edit_message(view=self)
+                self.stop()
+
+        themes_keep_view = KeepOrChangeView("themes")
+        await channel.send(
+            f"**Step 3 — Themes**\n"
+            f"These appear as options when selecting a theme for a member's train day.\n\n"
+            f"**Current themes:**\n`{current_themes}`\n\n"
+            f"**Example themes:**\n"
+            f"`Welcome to the Alliance, Birthday, Milestone, War / Performance, General Celebration, Contest / Raffle, Custom`",
+            view=themes_keep_view,
+        )
+        await themes_keep_view.wait()
+        if themes_keep_view.keep_current is None:
+            await channel.send("⏰ Timed out. Run `/setup_train` to start again.")
+            return
+
+        if not themes_keep_view.keep_current:
+            themes_raw = await ask_text("Enter your themes as a comma-separated list:")
+            if themes_raw is None:
+                return
+            themes = [t.strip() for t in themes_raw.split(",") if t.strip()] or current["themes"]
+
+        # ── Step 4: Tones ──────────────────────────────────────────────────────
+        current_tones = ", ".join(current["tones"])
+
+        tones_keep_view = KeepOrChangeView("tones")
+        await channel.send(
+            f"**Step 4 — Tones**\n"
+            f"These let leadership adjust the writing style of the generated blurb.\n\n"
+            f"**Current tones:**\n`{current_tones}`\n\n"
+            f"**Example tones:**\n"
+            f"`Default (match the theme), More casual, More intense, Funny, Serious, Cinematic / Dramatic`",
+            view=tones_keep_view,
+        )
+        await tones_keep_view.wait()
+        if tones_keep_view.keep_current is None:
+            await channel.send("⏰ Timed out. Run `/setup_train` to start again.")
+            return
+
+        if not tones_keep_view.keep_current:
+            tones_raw = await ask_text("Enter your tones as a comma-separated list:")
+            if tones_raw is None:
+                return
+            tones = [t.strip() for t in tones_raw.split(",") if t.strip()] or current["tones"]
+
+        # ── Step 5: Default tone ───────────────────────────────────────────────
+        class ToneDefaultView(discord.ui.View):
+            def __init__(self, tone_list: list):
+                super().__init__(timeout=120)
+                self.selected = None
+                select = discord.ui.Select(
+                    placeholder="Select default tone...",
+                    options=[discord.SelectOption(label=t, value=t) for t in tone_list],
+                )
+                async def _cb(inter: discord.Interaction):
+                    self.selected = select.values[0]
+                    select.disabled = True
+                    await inter.response.edit_message(
+                        content=f"✅ Default tone: **{self.selected}**", view=self
+                    )
+                    self.stop()
+                select.callback = _cb
+                self.add_item(select)
+
+        tone_default_view = ToneDefaultView(tones)
+        await channel.send(
+            f"**Step 5 — Default Tone**\n"
+            f"Which tone should be pre-selected by default?",
+            view=tone_default_view,
+        )
+        await tone_default_view.wait()
+        if not tone_default_view.selected:
+            await channel.send("⏰ Timed out. Run `/setup_train` to start again.")
+            return
+        default_tone = tone_default_view.selected
+
+        # ── Step 6: Prompt template ────────────────────────────────────────────
+        class SkipTemplateView(discord.ui.View):
+            def __init__(self):
+                super().__init__(timeout=300)
+                self.skipped = False
+
+            @discord.ui.button(label="⏭️ Skip — keep existing template", style=discord.ButtonStyle.secondary)
+            async def skip(self, inter: discord.Interaction, button: discord.ui.Button):
+                self.skipped = True
+                for item in self.children: item.disabled = True
+                await inter.response.edit_message(
+                    content="✅ Keeping existing prompt template.", view=self
+                )
+                self.stop()
+
+        skip_view = SkipTemplateView()
+        await channel.send(
+            "**Step 6 — Prompt Template**\n"
+            "Enter a template that you would write for ChatGPT to generate a blurb about the day's train. "
+            "Use these placeholders:\n"
+            "• `{name}` — the member's name\n"
+            "• `{theme}` — the selected theme\n"
+            "• `{tone}` — the selected tone\n"
+            "• `{notes}` — any notes stored for this member\n\n"
+            "**Example:**\n"
+            "```\n"
+            "You are writing a short motivational blurb for a Last War alliance announcement.\n"
+            "Keep it under 3 sentences and make it feel personal and energetic.\n\n"
+            "Member: {name}\n"
+            "Theme: {theme}\n"
+            "Tone: {tone}\n"
+            "Notes: {notes}\n\n"
+            "Write the blurb:\n"
+            "```\n"
+            "*This form will time out in 5 minutes. You can run `/setup_train` again to add your template if it times out.*",
+            view=skip_view,
+        )
+
+        # Wait for either a typed message or the skip button
+        done = asyncio.Event()
+        new_template = None
+
+        async def wait_for_message():
+            nonlocal new_template
+            try:
+                reply = await bot.wait_for("message", check=check, timeout=300)
+                new_template = reply.content.strip()
+                done.set()
+                skip_view.stop()
+            except asyncio.TimeoutError:
+                done.set()
+
+        msg_task = asyncio.create_task(wait_for_message())
+        await skip_view.wait()
+        msg_task.cancel()
+
+        if skip_view.skipped:
+            pass  # keep existing template
+        elif new_template:
+            prompt_template = new_template
+        else:
+            await channel.send("⏰ Timed out. Run `/setup_train` to start again.")
+            return
+
+    # ── Step 7: Reminders ─────────────────────────────────────────────────────
+    reminder_view = YesNoView()
+    await channel.send(
+        "**Step 7 — Train Reminders**\n"
+        "Should the bot post a reminder to leadership when someone is assigned the train each day?",
+        view=reminder_view,
+    )
+    await reminder_view.wait()
+    if reminder_view.selected is None:
+        await channel.send("⏰ Timed out. Run `/setup_train` to start again.")
+        return
+    reminders_enabled  = 1 if reminder_view.selected else 0
+    reminder_channel_id = 0
+    reminder_time       = "22:00"
+
+    if reminders_enabled:
+        # ── Step 7a: Reminder channel ──────────────────────────────────────────
+        reminder_ch_view = ChannelSelectStep(
+            "Select the reminder channel...",
+            suggested_name="leadership",
+        )
+        await channel.send(
+            "**Step 7a — Reminder Channel**\n"
+            "Which channel should the train reminder be posted to?",
+            view=reminder_ch_view,
+        )
+        await reminder_ch_view.wait()
+        if not reminder_ch_view.confirmed:
+            await channel.send("⏰ Timed out. Run `/setup_train` to start again.")
+            return
+        reminder_channel_id = reminder_ch_view.selected_channel.id
+
+        # ── Step 7b: Reminder time ─────────────────────────────────────────────
+        from config import get_config
+        guild_cfg = get_config(guild_id)
+        tz_label  = TIMEZONE_LABELS.get(guild_cfg.timezone if guild_cfg else "America/New_York", "ET")
+        time_raw  = await ask_text(
+            f"**Step 7b — Reminder Time**\n"
+            f"What time should the reminder fire? *(in your timezone: {tz_label})*\n"
+            f"*(e.g. `10:00pm`, `9:00am`)*"
+        )
+        if time_raw is None:
+            return
+        parsed = _parse_12h_time(time_raw)
+        if not parsed:
+            await channel.send("⚠️ Could not read that time. Using `10:00pm` as default.")
+            parsed = "22:00"
+        reminder_time = parsed
+
+    # ── Save ───────────────────────────────────────────────────────────────────
+    from config import save_train_config
+    save_train_config(
+        guild_id, tab_name, themes, tones, prompt_template, default_tone,
+        blurbs_enabled=blurbs_enabled,
+        reminders_enabled=reminders_enabled,
+        reminder_channel_id=reminder_channel_id,
+        reminder_time=reminder_time,
+    )
+
+    embed = discord.Embed(title="✅ Train Schedule Configured", color=discord.Color.green())
+    embed.add_field(name="Sheet Tab",       value=tab_name,                        inline=True)
+    embed.add_field(name="Blurb Generation",value="Enabled" if blurbs_enabled else "Disabled", inline=True)
+    embed.add_field(name="Reminders",       value="Enabled" if reminders_enabled else "Disabled", inline=True)
+    if reminders_enabled:
+        embed.add_field(name="Reminder Channel", value=f"<#{reminder_channel_id}>", inline=True)
+        embed.add_field(name="Reminder Time",    value=reminder_time,               inline=True)
+    if blurbs_enabled:
+        embed.add_field(name="Default Tone", value=default_tone,          inline=True)
+        embed.add_field(name="Themes",       value=", ".join(themes),     inline=False)
+        embed.add_field(name="Tones",        value=", ".join(tones),      inline=False)
+        if prompt_template:
+            preview = prompt_template[:200] + ("..." if len(prompt_template) > 200 else "")
+            embed.add_field(name="Template Preview", value=f"```{preview}```", inline=False)
+    embed.set_footer(text="Run /setup_train again to update any of these settings.")
+    await channel.send(embed=embed)
+    print(f"[SETUP] Train config saved for guild {guild_id}")
+
+
+
+async def run_survey_setup(interaction: discord.Interaction, bot):
+    """Walk an admin through configuring the squad powers survey."""
+    guild_id = interaction.guild_id
+    channel  = interaction.channel
+    user     = interaction.user
+
+    def check(m):
+        return m.author == user and m.channel == channel
+
+    from config import get_survey_config, save_survey_config, OGV_SURVEY_QUESTIONS
+    current   = get_survey_config(guild_id)
+    questions = list(current.get("questions") or [])
+
+    await channel.send(
+        "⚙️ **Survey Setup**\n"
+        "Configure the squad powers survey for your alliance."
+    )
+
+    # ── Helper: tab keep/change view ──────────────────────────────────────────
+    def make_tab_view(current_tab: str) -> discord.ui.View:
+        class TabView(discord.ui.View):
+            def __init__(self):
+                super().__init__(timeout=120)
+                self.tab_name  = None
+                self.confirmed = False
+
+            @discord.ui.button(label="✅ Keep current tab", style=discord.ButtonStyle.success)
+            async def keep(self, inter: discord.Interaction, button: discord.ui.Button):
+                self.tab_name  = current_tab
+                self.confirmed = True
+                for item in self.children: item.disabled = True
+                await inter.response.edit_message(
+                    content=f"✅ Using tab: **{current_tab}**", view=self
+                )
+                self.stop()
+
+            @discord.ui.button(label="✏️ Enter a different tab name", style=discord.ButtonStyle.secondary)
+            async def change(self, inter: discord.Interaction, button: discord.ui.Button):
+                modal = TextInputModal("Tab Name", "Tab name", default=current_tab)
+                await inter.response.send_modal(modal)
+                await modal.wait()
+                self.tab_name  = modal.value or current_tab
+                self.confirmed = True
+                for item in self.children: item.disabled = True
+                try:
+                    await inter.message.edit(
+                        content=f"✅ Using tab: **{self.tab_name}**", view=self
+                    )
+                except discord.HTTPException:
+                    pass
+                self.stop()
+        return TabView()
+
+    # ── Step 1: Survey channel ─────────────────────────────────────────────────
+    survey_ch_view = ChannelSelectStep(
+        "Select the survey channel...", suggested_name="squad-survey"
+    )
+    await channel.send(
+        "**Step 1 — Survey Channel**\n"
+        "Select the channel where the survey button will be posted for members to access:",
+        view=survey_ch_view,
+    )
+    await survey_ch_view.wait()
+    if not survey_ch_view.confirmed:
+        await channel.send("⏰ Timed out. Run `/setup_survey` to start again.")
+        return
+    survey_channel_id = survey_ch_view.selected_channel.id
+
+    # ── Step 2: Survey notification channel ───────────────────────────────────
+    notify_ch_view = ChannelSelectStep(
+        "Select the survey notification channel...", suggested_name="survey-responses"
+    )
+    await channel.send(
+        "**Step 2 — Survey Notification Channel**\n"
+        "Select the channel where leadership will be notified when a member submits the survey:",
+        view=notify_ch_view,
+    )
+    await notify_ch_view.wait()
+    if not notify_ch_view.confirmed:
+        await channel.send("⏰ Timed out. Run `/setup_survey` to start again.")
+        return
+    survey_notify_channel_id = notify_ch_view.selected_channel.id
+
+    # ── Step 3: Squad Powers tab ───────────────────────────────────────────────
+    current_sp_tab = current.get("tab_squad_powers", "Squad Powers")
+    sp_view = make_tab_view(current_sp_tab)
+    await channel.send(
+        f"**Step 3 — Member Statistics Tab**\n"
+        f"Which tab stores your members' statistics? We will update this sheet on each submission.\n"
+        f"⚠️ *Make sure this tab exists in your sheet before continuing.*\n"
+        f"*(Current: `{current_sp_tab}`)*",
+        view=sp_view,
+    )
+    await sp_view.wait()
+    if not sp_view.confirmed:
+        await channel.send("⏰ Timed out. Run `/setup_survey` to start again.")
+        return
+    tab_squad_powers = sp_view.tab_name
+
+    # ── Step 4: Survey History tab ─────────────────────────────────────────────
+    current_hist_tab = current.get("tab_history", "Survey History")
+    hist_view = make_tab_view(current_hist_tab)
+    await channel.send(
+        f"**Step 4 — Survey History Tab**\n"
+        f"Which tab stores the full history of all submissions?\n"
+        f"⚠️ *Make sure this tab exists in your sheet before continuing.*\n"
+        f"*(Current: `{current_hist_tab}`)*",
+        view=hist_view,
+    )
+    await hist_view.wait()
+    if not hist_view.confirmed:
+        await channel.send("⏰ Timed out. Run `/setup_survey` to start again.")
+        return
+    tab_history = hist_view.tab_name
+
+    # ── Step 5: Intro message ──────────────────────────────────────────────────
+    await channel.send(
+        "**Step 5 — Survey Intro Message**\n"
+        "When your survey is posted, what introductory message do you want your members to see "
+        "before they take the survey?\n\n"
+        "**Example:**\n"
+        "*Please fill out this survey each week to help us track squad powers, "
+        "balance our teams, and prepare for season events!*"
+    )
+    try:
+        intro_reply = await bot.wait_for("message", check=check, timeout=300)
+        intro_message = intro_reply.content.strip()
+    except asyncio.TimeoutError:
+        await channel.send("⏰ Timed out. Run `/setup_survey` to start again.")
+        return
+
+    # ── Step 6: Survey Questions ───────────────────────────────────────────────
+    # Show default questions and ask keep/edit/scratch
+    default_q_list = "\n".join(
+        f"{i+1}. **{q['label']}** — {'dropdown: ' + ', '.join(q['options']) if q['type'] == 'dropdown' else 'text'}"
+        for i, q in enumerate(OGV_SURVEY_QUESTIONS)
+    )
+    current_q_list = "\n".join(
+        f"{i+1}. **{q['label']}** — {'dropdown: ' + ', '.join(q['options']) if q['type'] == 'dropdown' else 'text'}"
+        for i, q in enumerate(questions)
+    ) if questions else "*(no questions configured yet)*"
+
+    class QuestionStartView(discord.ui.View):
+        def __init__(self):
+            super().__init__(timeout=120)
+            self.choice = None
+
+        @discord.ui.button(label="✅ Use default questions", style=discord.ButtonStyle.success)
+        async def use_default(self, inter: discord.Interaction, button: discord.ui.Button):
+            self.choice = "default"
+            for item in self.children: item.disabled = True
+            await inter.response.edit_message(content="✅ Using default questions.", view=self)
+            self.stop()
+
+        @discord.ui.button(label="✏️ Edit current questions", style=discord.ButtonStyle.primary)
+        async def edit_current(self, inter: discord.Interaction, button: discord.ui.Button):
+            self.choice = "edit"
+            for item in self.children: item.disabled = True
+            await inter.response.edit_message(content="✏️ Entering edit mode...", view=self)
+            self.stop()
+
+        @discord.ui.button(label="🔄 Start from scratch", style=discord.ButtonStyle.secondary)
+        async def start_scratch(self, inter: discord.Interaction, button: discord.ui.Button):
+            self.choice = "scratch"
+            for item in self.children: item.disabled = True
+            await inter.response.edit_message(content="🔄 Starting from scratch...", view=self)
+            self.stop()
+
+    q_start_view = QuestionStartView()
+    await channel.send(
+        "**Step 6 — Survey Questions**\n\n"
+        f"**Default questions (Last War):**\n{default_q_list}\n\n"
+        f"**Your current questions:**\n{current_q_list}\n\n"
+        "Would you like to use the defaults, edit your current questions, or start from scratch?",
+        view=q_start_view,
+    )
+    await q_start_view.wait()
+    if not q_start_view.choice:
+        await channel.send("⏰ Timed out. Run `/setup_survey` to start again.")
+        return
+
+    if q_start_view.choice == "default":
+        questions = list(OGV_SURVEY_QUESTIONS)
+
+    elif q_start_view.choice in ("edit", "scratch"):
+        if q_start_view.choice == "scratch":
+            questions = []
+
+        # ── Question builder loop ──────────────────────────────────────────────
+        async def build_question_list():
+            """Show current question list with Add and Finish buttons."""
+            nonlocal questions
+
+            while True:
+                # Build display
+                if questions:
+                    q_display = "\n".join(
+                        f"{i+1}. **{q['label']}** — "
+                        + ('dropdown: ' + ', '.join(q['options']) if q['type'] == 'dropdown' else 'text')
+                        + (f" *(help: {q['placeholder']})*" if q.get('placeholder') else "")
+                        for i, q in enumerate(questions)
+                    )
+                else:
+                    q_display = "*(no questions added yet)*"
+
+                class QuestionListView(discord.ui.View):
+                    def __init__(self, q_count: int):
+                        super().__init__(timeout=300)
+                        self.action     = None
+                        self.edit_index = None
+                        self.del_index  = None
+
+                        if q_count > 0:
+                            # Edit dropdown
+                            edit_select = discord.ui.Select(
+                                placeholder="✏️ Edit a question...",
+                                options=[discord.SelectOption(label=f"Edit: {questions[i]['label']}", value=str(i))
+                                         for i in range(q_count)],
+                                row=0,
+                            )
+                            async def _edit_cb(inter: discord.Interaction):
+                                self.action     = "edit"
+                                self.edit_index = int(edit_select.values[0])
+                                for item in self.children: item.disabled = True
+                                await inter.response.edit_message(view=self)
+                                self.stop()
+                            edit_select.callback = _edit_cb
+                            self.add_item(edit_select)
+
+                            # Delete dropdown
+                            del_select = discord.ui.Select(
+                                placeholder="🗑️ Delete a question...",
+                                options=[discord.SelectOption(label=f"Delete: {questions[i]['label']}", value=str(i))
+                                         for i in range(q_count)],
+                                row=1,
+                            )
+                            async def _del_cb(inter: discord.Interaction):
+                                self.action    = "delete"
+                                self.del_index = int(del_select.values[0])
+                                for item in self.children: item.disabled = True
+                                await inter.response.edit_message(view=self)
+                                self.stop()
+                            del_select.callback = _del_cb
+                            self.add_item(del_select)
+
+                    @discord.ui.button(label="➕ Add Question", style=discord.ButtonStyle.primary, row=2)
+                    async def add_q(self, inter: discord.Interaction, button: discord.ui.Button):
+                        self.action = "add"
+                        for item in self.children: item.disabled = True
+                        await inter.response.edit_message(view=self)
+                        self.stop()
+
+                    @discord.ui.button(label="✅ Finish Survey Setup", style=discord.ButtonStyle.success, row=2)
+                    async def finish(self, inter: discord.Interaction, button: discord.ui.Button):
+                        self.action = "finish"
+                        for item in self.children: item.disabled = True
+                        await inter.response.edit_message(view=self)
+                        self.stop()
+
+                list_view = QuestionListView(len(questions))
+                await channel.send(
+                    f"**Current Questions:**\n{q_display}",
+                    view=list_view,
+                )
+                await list_view.wait()
+
+                if not list_view.action:
+                    await channel.send("⏰ Timed out. Run `/setup_survey` to start again.")
+                    return False
+
+                if list_view.action == "finish":
+                    return True
+
+                elif list_view.action == "delete":
+                    idx     = list_view.del_index
+                    removed = questions.pop(idx)
+                    await channel.send(f"🗑️ Removed: **{removed['label']}**")
+
+                elif list_view.action in ("add", "edit"):
+                    # ── Question builder ───────────────────────────────────────
+                    if list_view.action == "edit":
+                        idx      = list_view.edit_index
+                        existing = questions[idx]
+                        q_num    = f"Question {idx + 1}"
+                    else:
+                        existing = {}
+                        q_num    = f"Question {len(questions) + 1}"
+
+                    # Label
+                    await channel.send(
+                        f"**{q_num} — Label**\n"
+                        f"What is the label for this question? (e.g. `1st Squad Power`, `Profession`)"
+                        + (f"\n*(Current: `{existing.get('label', '')}`)*" if existing else "")
+                    )
+                    try:
+                        label_reply = await bot.wait_for("message", check=check, timeout=120)
+                        q_label     = label_reply.content.strip() or existing.get("label", "")
+                    except asyncio.TimeoutError:
+                        await channel.send("⏰ Timed out. Run `/setup_survey` to start again.")
+                        return False
+
+                    q_key = q_label.lower().replace(" ", "_").replace("(", "").replace(")", "").replace("/", "_")
+
+                    # Type
+                    class TypeView(discord.ui.View):
+                        def __init__(self):
+                            super().__init__(timeout=120)
+                            self.selected = None
+                            select = discord.ui.Select(
+                                placeholder="Select answer type...",
+                                options=[
+                                    discord.SelectOption(label="Text — member types their answer", value="text"),
+                                    discord.SelectOption(label="Dropdown — member selects from a list", value="dropdown"),
+                                ],
+                            )
+                            async def _cb(inter: discord.Interaction):
+                                self.selected = select.values[0]
+                                select.disabled = True
+                                await inter.response.edit_message(
+                                    content=f"✅ Type: **{'Text' if self.selected == 'text' else 'Dropdown'}**",
+                                    view=self,
+                                )
+                                self.stop()
+                            select.callback = _cb
+                            self.add_item(select)
+
+                    type_view = TypeView()
+                    current_type = existing.get("type", "text")
+                    await channel.send(
+                        f"**{q_num} — Answer Type**\n"
+                        f"Does your member answer by typing or selecting from a dropdown list?"
+                        + (f"\n*(Current: `{current_type}`)*" if existing else ""),
+                        view=type_view,
+                    )
+                    await type_view.wait()
+                    if not type_view.selected:
+                        await channel.send("⏰ Timed out. Run `/setup_survey` to start again.")
+                        return False
+                    q_type = type_view.selected
+
+                    # Help text
+                    await channel.send(
+                        f"**{q_num} — Help Text**\n"
+                        f"Do you want to show help text for this question? "
+                        f"This appears as a hint to help members answer correctly.\n"
+                        f"*(e.g. `e.g. 43.27` or `What is your first squad's current power?`)*\n"
+                        f"Type your help text, or type `none` to skip."
+                        + (f"\n*(Current: `{existing.get('placeholder', 'none')}`)*" if existing else "")
+                    )
+                    try:
+                        help_reply  = await bot.wait_for("message", check=check, timeout=120)
+                        help_raw    = help_reply.content.strip()
+                        placeholder = "" if help_raw.lower() == "none" else help_raw
+                    except asyncio.TimeoutError:
+                        await channel.send("⏰ Timed out. Run `/setup_survey` to start again.")
+                        return False
+
+                    # Dropdown options (if dropdown type)
+                    options = []
+                    if q_type == "dropdown":
+                        cur_opts = ", ".join(existing.get("options", [])) if existing else ""
+                        await channel.send(
+                            f"**{q_num} — Dropdown Options**\n"
+                            f"Enter the options you want your members to be able to select from, "
+                            f"as comma-separated values. Maximum of 25 options.\n"
+                            f"*(e.g. `Missile, Air, Tank`)*"
+                            + (f"\n*(Current: `{cur_opts}`)*" if cur_opts else "")
+                        )
+                        try:
+                            opts_reply = await bot.wait_for("message", check=check, timeout=120)
+                            options    = [o.strip() for o in opts_reply.content.split(",") if o.strip()][:25]
+                        except asyncio.TimeoutError:
+                            await channel.send("⏰ Timed out. Run `/setup_survey` to start again.")
+                            return False
+
+                    new_q = {
+                        "key":         q_key,
+                        "label":       q_label,
+                        "type":        q_type,
+                        "options":     options,
+                        "placeholder": placeholder,
+                        "max_chars":   0,
+                    }
+
+                    if list_view.action == "edit":
+                        questions[list_view.edit_index] = new_q
+                        await channel.send(f"✅ Updated: **{q_label}**")
+                    else:
+                        questions.append(new_q)
+                        await channel.send(f"✅ Added: **{q_label}** — {len(questions)} question(s) so far.")
+
+        result = await build_question_list()
+        if not result:
+            return
+
+    if not questions:
+        await channel.send("⚠️ No questions defined. Run `/setup_survey` to try again.")
+        return
+
+    # ── Save — including channel IDs ───────────────────────────────────────────
+    save_survey_config(guild_id, tab_squad_powers, tab_history, questions, intro_message)
+
+    # Also persist survey channels to guild_configs
+    from config import update_config_field
+    update_config_field(guild_id, "survey_channel_id",        survey_channel_id)
+    update_config_field(guild_id, "survey_notify_channel_id", survey_notify_channel_id)
+
+    q_summary = "\n".join(
+        f"• **{q['label']}** — {q['type']}"
+        + (f" ({', '.join(q['options'])})" if q['type'] == 'dropdown' else "")
+        for q in questions
+    )
+    embed = discord.Embed(title="✅ Survey Configured", color=discord.Color.green())
+    embed.add_field(name="Survey Channel",      value=f"<#{survey_channel_id}>",        inline=True)
+    embed.add_field(name="Notification Channel",value=f"<#{survey_notify_channel_id}>", inline=True)
+    embed.add_field(name="Stats Tab",           value=tab_squad_powers,                  inline=True)
+    embed.add_field(name="History Tab",         value=tab_history,                       inline=True)
+    embed.add_field(name="Questions",           value=q_summary[:1024],                  inline=False)
+    embed.set_footer(text="Run /setup_survey again to update. Run /postsurvey to post the survey button.")
+    await channel.send(embed=embed)
+    print(f"[SETUP] Survey config saved for guild {guild_id} — {len(questions)} questions")
+
+async def run_storm_setup(interaction: discord.Interaction, bot, event_type: str):
+    """Shared setup wizard for Desert Storm and Canyon Storm."""
+    guild_id = interaction.guild_id
+    channel  = interaction.channel
+    user     = interaction.user
+    label    = "Desert Storm" if event_type == "DS" else "Canyon Storm"
+    cmd_name = "setup_desertstorm" if event_type == "DS" else "setup_canyonstorm"
+
+    def check(m):
+        return m.author == user and m.channel == channel
+
+    async def ask_text(prompt: str, max_chars: int = 2000):
+        await channel.send(prompt)
+        try:
+            reply = await bot.wait_for("message", check=check, timeout=300)
+        except asyncio.TimeoutError:
+            await channel.send(f"⏰ Timed out. Run `/{cmd_name}` to start again.")
+            return None
+        return reply.content.strip()[:max_chars]
+
+    from config import get_storm_config, get_config, GENERIC_DS_TEMPLATE, GENERIC_CS_TEMPLATE
+    current   = get_storm_config(guild_id, event_type)
+    guild_cfg = get_config(guild_id)
+    timezone  = guild_cfg.timezone if guild_cfg and guild_cfg.timezone else "America/New_York"
+    tz_label  = TIMEZONE_LABELS.get(timezone, timezone)
+
+    # Default template and placeholders per event type
+    if event_type == "DS":
+        default_template  = GENERIC_DS_TEMPLATE
+        placeholder_info  = (
+            "• `{alliance_name}` — your alliance name\n"
+            "• `{zones}` — zone assignments block\n"
+            "• `{subs}` — substitute members\n"
+            "• `{time}` — event time (auto-filled when drafting)"
+        )
+    else:
+        default_template  = GENERIC_CS_TEMPLATE
+        placeholder_info  = (
+            "• `{alliance_name}` — your alliance name\n"
+            "• `{zones}` — zone assignments block\n"
+            "• `{subs}` — substitute members\n"
+            "• `{time}` — event time (auto-filled when drafting)"
+        )
+
+    await channel.send(f"⚙️ **{label} Setup**")
+
+    # ── Step 1: Sheet tab ──────────────────────────────────────────────────────
+    current_tab = current.get("tab_name") or ("DS Assignments" if event_type == "DS" else "CS Assignments")
+
+    class TabConfirmView(discord.ui.View):
+        def __init__(self):
+            super().__init__(timeout=120)
+            self.tab_name  = None
+            self.confirmed = False
+
+        @discord.ui.button(label="✅ Keep current tab", style=discord.ButtonStyle.success)
+        async def keep(self, inter: discord.Interaction, button: discord.ui.Button):
+            self.tab_name  = current_tab
+            self.confirmed = True
+            for item in self.children: item.disabled = True
+            await inter.response.edit_message(
+                content=f"✅ Using sheet tab: **{current_tab}**", view=self
+            )
+            self.stop()
+
+        @discord.ui.button(label="✏️ Enter a different tab name", style=discord.ButtonStyle.secondary)
+        async def change(self, inter: discord.Interaction, button: discord.ui.Button):
+            modal = TextInputModal("Sheet Tab Name", "Tab name", default=current_tab)
+            await inter.response.send_modal(modal)
+            await modal.wait()
+            self.tab_name  = modal.value or current_tab
+            self.confirmed = True
+            for item in self.children: item.disabled = True
+            try:
+                await inter.message.edit(
+                    content=f"✅ Using sheet tab: **{self.tab_name}**", view=self
+                )
+            except discord.HTTPException:
+                pass
+            self.stop()
+
+    tab_view = TabConfirmView()
+    await channel.send(
+        f"**Step 1 of 3 — Sheet Tab**\n"
+        f"Which tab in your Google Sheet stores the {label} zone assignments?\n"
+        f"⚠️ *Make sure this tab exists in your sheet before continuing.*\n"
+        f"ℹ️ *The bot will manage the data structure of this tab automatically — "
+        f"you don't need to set up any specific columns or formatting beforehand.*\n"
+        f"*(Current: `{current_tab}`)*",
+        view=tab_view,
+    )
+    await tab_view.wait()
+    if not tab_view.confirmed:
+        await channel.send(f"⏰ Timed out. Run `/{cmd_name}` to start again.")
+        return
+    tab_name = tab_view.tab_name
+
+    # ── Step 2: Which teams? ───────────────────────────────────────────────────
+    class TeamChoiceView(discord.ui.View):
+        def __init__(self):
+            super().__init__(timeout=120)
+            self.selected = None
+
+        @discord.ui.button(label="Team A & Team B", style=discord.ButtonStyle.primary)
+        async def both(self, inter: discord.Interaction, button: discord.ui.Button):
+            self.selected = "both"
+            for item in self.children: item.disabled = True
+            await inter.response.edit_message(content="✅ Teams: **Team A & Team B**", view=self)
+            self.stop()
+
+        @discord.ui.button(label="Team A only", style=discord.ButtonStyle.secondary)
+        async def a_only(self, inter: discord.Interaction, button: discord.ui.Button):
+            self.selected = "A"
+            for item in self.children: item.disabled = True
+            await inter.response.edit_message(content="✅ Teams: **Team A only**", view=self)
+            self.stop()
+
+        @discord.ui.button(label="Team B only", style=discord.ButtonStyle.secondary)
+        async def b_only(self, inter: discord.Interaction, button: discord.ui.Button):
+            self.selected = "B"
+            for item in self.children: item.disabled = True
+            await inter.response.edit_message(content="✅ Teams: **Team B only**", view=self)
+            self.stop()
+
+    team_view = TeamChoiceView()
+    await channel.send(
+        f"**Step 2 of 3 — Which teams do you run for {label}?**",
+        view=team_view,
+    )
+    await team_view.wait()
+    if not team_view.selected:
+        await channel.send(f"⏰ Timed out. Run `/{cmd_name}` to start again.")
+        return
+    teams = team_view.selected
+
+    # ── Step 3: Storm log channel ─────────────────────────────────────────────
+    log_ch_view = ChannelSelectStep(
+        f"Select the {label} log channel...",
+        suggested_name="storm-log",
+    )
+    await channel.send(
+        f"**Step 3 of 4 — Storm Log Channel**\n"
+        f"Select the channel where {label} participation logs will be posted:",
+        view=log_ch_view,
+    )
+    await log_ch_view.wait()
+    if not log_ch_view.confirmed:
+        await channel.send(f"⏰ Timed out. Run `/{cmd_name}` to start again.")
+        return
+    log_channel_id = log_ch_view.selected_channel.id
+
+    # ── Step 4: Mail template(s) ───────────────────────────────────────────────
+
+    async def get_template(team_label: str) -> str | None:
+        """Get template for one team — show default with use/edit choice."""
+        class TemplateChoiceView(discord.ui.View):
+            def __init__(self):
+                super().__init__(timeout=300)
+                self.use_default = None
+
+            @discord.ui.button(label="✅ Use default template", style=discord.ButtonStyle.success)
+            async def use_def(self, inter: discord.Interaction, button: discord.ui.Button):
+                self.use_default = True
+                for item in self.children: item.disabled = True
+                await inter.response.edit_message(
+                    content=f"✅ Using default template for {team_label}.", view=self
+                )
+                self.stop()
+
+            @discord.ui.button(label="✏️ Edit template", style=discord.ButtonStyle.secondary)
+            async def edit(self, inter: discord.Interaction, button: discord.ui.Button):
+                self.use_default = False
+                for item in self.children: item.disabled = True
+                await inter.response.edit_message(view=self)
+                self.stop()
+
+        choice_view = TemplateChoiceView()
+        await channel.send(
+            f"**{label} Mail Template — {team_label}**\n"
+            f"When you draft the mail each week, you will be able to select the time slot "
+            f"when you are running that team's {label}.\n\n"
+            f"Here is the default template:\n"
+            f"```\n{default_template}\n```\n"
+            f"Would you like to use this or edit it?",
+            view=choice_view,
+        )
+        await choice_view.wait()
+        if choice_view.use_default is None:
+            await channel.send(f"⏰ Timed out. Run `/{cmd_name}` to start again.")
+            return None
+        if choice_view.use_default:
+            return default_template
+
+        # User wants to edit — show variables and ask for input
+        await channel.send(
+            f"Paste your custom template for **{team_label}**. "
+            f"You can copy the default above and modify it, or write your own.\n\n"
+            f"**Available placeholders:**\n{placeholder_info}\n\n"
+            f"*This form will time out in 5 minutes. "
+            f"You can run `/{cmd_name}` again if it times out.*"
+        )
+        try:
+            reply = await bot.wait_for("message", check=check, timeout=300)
+            return reply.content.strip() or default_template
+        except asyncio.TimeoutError:
+            await channel.send(f"⏰ Timed out. Run `/{cmd_name}` to start again.")
+            return None
+
+    if teams == "both":
+        # Ask if one template for both or separate
+        class SharedTemplateView(discord.ui.View):
+            def __init__(self):
+                super().__init__(timeout=120)
+                self.selected = None
+
+            @discord.ui.button(label="One template for both teams", style=discord.ButtonStyle.primary)
+            async def shared(self, inter: discord.Interaction, button: discord.ui.Button):
+                self.selected = "shared"
+                for item in self.children: item.disabled = True
+                await inter.response.edit_message(
+                    content="✅ **One shared template** for Team A & B", view=self
+                )
+                self.stop()
+
+            @discord.ui.button(label="Separate templates per team", style=discord.ButtonStyle.secondary)
+            async def separate(self, inter: discord.Interaction, button: discord.ui.Button):
+                self.selected = "separate"
+                for item in self.children: item.disabled = True
+                await inter.response.edit_message(
+                    content="✅ **Separate templates** for Team A & Team B", view=self
+                )
+                self.stop()
+
+        shared_view = SharedTemplateView()
+        await channel.send(
+            "**Step 3 of 3 — Mail Template**\n"
+            "Do you want one template that applies to both teams, or separate templates per team?",
+            view=shared_view,
+        )
+        await shared_view.wait()
+        if not shared_view.selected:
+            await channel.send(f"⏰ Timed out. Run `/{cmd_name}` to start again.")
+            return
+
+        template_a = await get_template("Team A & B" if shared_view.selected == "shared" else "Team A")
+        if template_a is None:
+            return
+        if shared_view.selected == "separate":
+            template_b = await get_template("Team B")
+            if template_b is None:
+                return
+        else:
+            template_b = template_a
+
+    else:
+        team_label = "Team A" if teams == "A" else "Team B"
+        await channel.send(f"**Step 4 of 4 — Mail Template**")
+        template = await get_template(team_label)
+        if template is None:
+            return
+        template_a = template if teams == "A" else ""
+        template_b = template if teams == "B" else ""
+
+    # ── Save ───────────────────────────────────────────────────────────────────
+    from config import save_storm_config, update_config_field
+    if template_a:
+        save_storm_config(guild_id, f"{event_type}_A", tab_name, template_a,
+                          "", "", "", "", "", "", timezone, log_channel_id)
+    if template_b:
+        save_storm_config(guild_id, f"{event_type}_B", tab_name, template_b,
+                          "", "", "", "", "", "", timezone, log_channel_id)
+    save_storm_config(guild_id, event_type, tab_name, template_a or template_b,
+                      "", "", "", "", "", "", timezone, log_channel_id)
+
+    # Persist the log channel to guild_configs so storm_log.py can read it
+    if event_type == "DS":
+        update_config_field(guild_id, "ds_log_channel_id", log_channel_id)
+    else:
+        update_config_field(guild_id, "cs_log_channel_id", log_channel_id)
+
+    embed = discord.Embed(title=f"✅ {label} Configured", color=discord.Color.green())
+    embed.add_field(name="Sheet Tab",    value=tab_name, inline=True)
+    embed.add_field(name="Teams",        value={"both": "A & B", "A": "A only", "B": "B only"}[teams], inline=True)
+    embed.add_field(name="Timezone",     value=tz_label, inline=True)
+    embed.add_field(name="Log Channel",  value=f"<#{log_channel_id}>", inline=True)
+    if template_a:
+        embed.add_field(name="Template A Preview",
+                        value=f"```{template_a[:150]}{'...' if len(template_a) > 150 else ''}```",
+                        inline=False)
+    if template_b and template_b != template_a:
+        embed.add_field(name="Template B Preview",
+                        value=f"```{template_b[:150]}{'...' if len(template_b) > 150 else ''}```",
+                        inline=False)
+    embed.set_footer(text=f"Run /{cmd_name} again to update.")
+    await channel.send(embed=embed)
+    print(f"[SETUP] {label} config saved for guild {guild_id}")
+
+async def run_event_setup(interaction: discord.Interaction, bot):
+    """Walk an admin through configuring event types."""
+    guild_id = interaction.guild_id
+    channel  = interaction.channel
+    user     = interaction.user
+
+    def check(m):
+        return m.author == user and m.channel == channel
+
+    async def ask_text(prompt: str, max_chars: int = 200):
+        await channel.send(prompt)
+        try:
+            reply = await bot.wait_for("message", check=check, timeout=120)
+        except asyncio.TimeoutError:
+            await channel.send("⏰ Timed out. Run `/setup_events` to start again.")
+            return None
+        return reply.content.strip()[:max_chars]
+
+    async def ask_view(prompt: str, view: discord.ui.View):
+        await channel.send(prompt, view=view)
+        await view.wait()
+        return view
+
+    from config import get_config, get_guild_events, save_guild_event, get_or_create_config
+    import re as _re
+
+    guild_cfg = get_config(guild_id) or get_or_create_config(guild_id)
+    timezone  = guild_cfg.timezone if guild_cfg.timezone else "America/New_York"
+
+    await channel.send(
+        "⚙️ **Event Setup**\n"
+        "Configure your alliance events. All events share the same draft channel, "
+        "announcement channel, draft time, and 5-minute warning setting."
+    )
+
+    # ── Step 1: Draft channel (guild-level) ───────────────────────────────────
+    current_draft_id = guild_cfg.event_draft_channel_id or 0
+    draft_ch_view    = ChannelSelectStep("Select the draft channel...", suggested_name="event-drafts")
+    await channel.send(
+        "**Step 1 — Draft Channel**\n"
+        "Which channel should the bot post event announcement drafts for leadership to review?\n"
+        "*(This applies to all events)*"
+        + (f"\n*(Current: <#{current_draft_id}>)*" if current_draft_id else ""),
+        view=draft_ch_view,
+    )
+    await draft_ch_view.wait()
+    if not draft_ch_view.confirmed:
+        await channel.send("⏰ Timed out. Run `/setup_events` to start again.")
+        return
+    draft_channel_id = draft_ch_view.selected_channel.id
+
+    # ── Step 2: Announcement channel (guild-level) ────────────────────────────
+    current_ann_id = guild_cfg.event_announce_channel_id or 0
+    ann_ch_view    = ChannelSelectStep("Select the announcement channel...", suggested_name="announcements")
+    await channel.send(
+        "**Step 2 — Announcement Channel**\n"
+        "Which channel should approved announcements be posted to?\n"
+        "*(This applies to all events)*"
+        + (f"\n*(Current: <#{current_ann_id}>)*" if current_ann_id else ""),
+        view=ann_ch_view,
+    )
+    await ann_ch_view.wait()
+    if not ann_ch_view.confirmed:
+        await channel.send("⏰ Timed out. Run `/setup_events` to start again.")
+        return
+    announce_channel_id = ann_ch_view.selected_channel.id
+
+    # ── Step 3: Draft time (guild-level) ─────────────────────────────────────
+    tz_label       = TIMEZONE_LABELS.get(timezone, timezone)
+    current_dtime  = guild_cfg.event_draft_time or "12:00"
+    draft_time_raw = await ask_text(
+        f"**Step 3 — Draft Posting Time**\n"
+        f"What time should the bot post the draft each event day? *(in {tz_label})*\n"
+        f"*(e.g. `12:00pm` for noon)*\n"
+        f"*(Current: `{current_dtime}`)*"
+    )
+    if not draft_time_raw:
+        return
+    draft_time = _parse_12h_time(draft_time_raw)
+    if not draft_time:
+        await channel.send("⚠️ Could not read that time. Try `12:00pm`. Run `/setup_events` to try again.")
+        return
+
+    # ── Step 4: 5-minute warning (guild-level) ────────────────────────────────
+    warn_view = YesNoView()
+    await channel.send(
+        "**Step 4 — 5-Minute Warning**\n"
+        "Should the bot automatically post a 5-minute warning before events?\n"
+        "*(This applies to all events)*",
+        view=warn_view,
+    )
+    await warn_view.wait()
+    if warn_view.selected is None:
+        await channel.send("⏰ Timed out. Run `/setup_events` to start again.")
+        return
+    five_min_warning = 1 if warn_view.selected else 0
+
+    # Save guild-level event settings
+    from config import update_config_field
+    update_config_field(guild_id, "event_draft_channel_id",    draft_channel_id)
+    update_config_field(guild_id, "event_announce_channel_id", announce_channel_id)
+    update_config_field(guild_id, "event_draft_time",          draft_time)
+    update_config_field(guild_id, "event_five_min_warning",    five_min_warning)
+
+    # ── Step 5: Event list ────────────────────────────────────────────────────
+    events = get_guild_events(guild_id, active_only=False)
+
+    async def build_event_list():
+        """Show event list with Add/Edit/Delete/Finish controls."""
+        nonlocal events
+
+        while True:
+            events = get_guild_events(guild_id, active_only=False)
+
+            if events:
+                event_display = "\n".join(
+                    f"{i+1}. **{e['name']}** — "
+                    f"{'🔁 ' + str(e['interval_days']) + '-day cycle' if e['schedule_type'] == 'repeating' else '📅 Manual'} "
+                    f"at {e['default_time']}"
+                    + (" *(inactive)*" if not e['active'] else "")
+                    for i, e in enumerate(events)
+                )
+            else:
+                event_display = "*(no events configured yet)*"
+
+            class EventListView(discord.ui.View):
+                def __init__(self, event_list):
+                    super().__init__(timeout=300)
+                    self.action     = None
+                    self.edit_key   = None
+                    self.delete_key = None
+
+                    if event_list:
+                        edit_select = discord.ui.Select(
+                            placeholder="✏️ Edit an event...",
+                            options=[discord.SelectOption(
+                                label=f"Edit: {e['name']}", value=e['short_key']
+                            ) for e in event_list],
+                            row=0,
+                        )
+                        async def _edit_cb(inter: discord.Interaction):
+                            self.action   = "edit"
+                            self.edit_key = edit_select.values[0]
+                            for item in self.children: item.disabled = True
+                            await inter.response.edit_message(view=self)
+                            self.stop()
+                        edit_select.callback = _edit_cb
+                        self.add_item(edit_select)
+
+                        del_select = discord.ui.Select(
+                            placeholder="🗑️ Delete an event...",
+                            options=[discord.SelectOption(
+                                label=f"Delete: {e['name']}", value=e['short_key']
+                            ) for e in event_list],
+                            row=1,
+                        )
+                        async def _del_cb(inter: discord.Interaction):
+                            self.action     = "delete"
+                            self.delete_key = del_select.values[0]
+                            for item in self.children: item.disabled = True
+                            await inter.response.edit_message(view=self)
+                            self.stop()
+                        del_select.callback = _del_cb
+                        self.add_item(del_select)
+
+                @discord.ui.button(label="➕ Add Event", style=discord.ButtonStyle.primary, row=2)
+                async def add_btn(self, inter: discord.Interaction, button: discord.ui.Button):
+                    self.action = "add"
+                    for item in self.children: item.disabled = True
+                    await inter.response.edit_message(view=self)
+                    self.stop()
+
+                @discord.ui.button(label="✅ Finish", style=discord.ButtonStyle.success, row=2)
+                async def finish_btn(self, inter: discord.Interaction, button: discord.ui.Button):
+                    self.action = "finish"
+                    for item in self.children: item.disabled = True
+                    await inter.response.edit_message(view=self)
+                    self.stop()
+
+            list_view = EventListView(events)
+            await channel.send(
+                f"**Step 5 — Your Events:**\n{event_display}",
+                view=list_view,
+            )
+            await list_view.wait()
+
+            if not list_view.action:
+                await channel.send("⏰ Timed out. Run `/setup_events` to start again.")
+                return False
+
+            if list_view.action == "finish":
+                return True
+
+            elif list_view.action == "delete":
+                from config import delete_guild_event, get_guild_event
+                ev = get_guild_event(guild_id, list_view.delete_key)
+                delete_guild_event(guild_id, list_view.delete_key)
+                await channel.send(f"🗑️ Removed: **{ev['name'] if ev else list_view.delete_key}**")
+
+            elif list_view.action in ("add", "edit"):
+                existing = None
+                if list_view.action == "edit":
+                    from config import get_guild_event
+                    existing = get_guild_event(guild_id, list_view.edit_key)
+
+                # ── Event builder ──────────────────────────────────────────────
+                # Name
+                name_raw = await ask_text(
+                    "**Event Name**\n"
+                    "What is this event called? (e.g. `Plague Marauder (AE)`, `Zombie Siege`)"
+                    + (f"\n*(Current: `{existing['name']}`)*" if existing else "")
+                )
+                if not name_raw:
+                    return False
+                name      = name_raw.strip() or (existing['name'] if existing else "")
+                short_key = existing['short_key'] if existing else _re.sub(r"[^a-z0-9]+", "_", name.lower()).strip("_")
+
+                # Time
+                cur_time  = existing['default_time'] if existing else ""
+                time_raw  = await ask_text(
+                    f"**{name} — Event Time**\n"
+                    f"What time does this event usually start? *(in {tz_label})*\n"
+                    f"*(e.g. `10:15pm`, `9:00am`)*"
+                    + (f"\n*(Current: `{cur_time}`)*" if cur_time else "")
+                )
+                if not time_raw:
+                    return False
+                default_time = _parse_12h_time(time_raw)
+                if not default_time:
+                    await channel.send("⚠️ Could not read that time. Try `10:15pm`. Run `/setup_events` to try again.")
+                    return False
+
+                # Schedule
+                sched_view = ScheduleTypeView()
+                await channel.send(
+                    f"**{name} — Schedule**\n"
+                    "Does this event repeat on a fixed cycle, or do you add it manually each time?",
+                    view=sched_view,
+                )
+                await sched_view.wait()
+                if not sched_view.selected:
+                    await channel.send("⏰ Timed out. Run `/setup_events` to start again.")
+                    return False
+                schedule_type = sched_view.selected
+
+                anchor_date   = existing.get('anchor_date', '') if existing else ''
+                interval_days = existing.get('interval_days', 3) if existing else 3
+
+                if schedule_type == "repeating":
+                    anchor_raw = await ask_text(
+                        f"**{name} — Anchor Date**\n"
+                        "Enter a recent or upcoming date when this event occurs.\n"
+                        "Type the month and day (e.g. `March 30`, `April 14`)"
+                        + (f"\n*(Current: `{anchor_date}`)*" if anchor_date else "")
+                    )
+                    if not anchor_raw:
+                        return False
+                    parsed_anchor = _parse_month_day(anchor_raw)
+                    if not parsed_anchor:
+                        await channel.send("⚠️ Could not read that date. Try `March 30`. Run `/setup_events` to try again.")
+                        return False
+                    anchor_date = parsed_anchor
+
+                    interval_raw = await ask_text(
+                        f"**{name} — Cycle Interval**\n"
+                        "How many days between each occurrence? (e.g. `3`)"
+                        + (f"\n*(Current: `{interval_days}`)*" if interval_days else "")
+                    )
+                    if not interval_raw:
+                        return False
+                    try:
+                        interval_days = int(interval_raw)
+                    except ValueError:
+                        await channel.send("⚠️ Please enter a whole number. Run `/setup_events` to try again.")
+                        return False
+
+                # Blurb
+                cur_blurb = existing.get('announcement_blurb', '') if existing else ''
+                blurb_raw = await ask_text(
+                    f"**{name} — Announcement Blurb**\n"
+                    "Write the message that gets posted when this event fires.\n"
+                    "• `{time}` — event time in your timezone\n"
+                    "• `{server_time}` — event time in Server Time\n\n"
+                    "**Example:**\n"
+                    "`Plague Marauder (AE) at {time} ({server_time} Server Time). Make sure to have offline participation checked!`"
+                    + (f"\n*(Current blurb shown above — type new one or press Enter to keep)*" if cur_blurb else ""),
+                    max_chars=1000,
+                )
+                if blurb_raw is None:
+                    return False
+                blurb = blurb_raw.strip() or cur_blurb
+
+                # Save event
+                event = {
+                    "short_key":               short_key,
+                    "name":                    name,
+                    "timezone":                timezone,
+                    "default_time":            default_time,
+                    "announcement_blurb":      blurb,
+                    "schedule_type":           schedule_type,
+                    "anchor_date":             anchor_date,
+                    "interval_days":           interval_days,
+                    "draft_channel_id":        draft_channel_id,
+                    "announcement_channel_id": announce_channel_id,
+                    "draft_time":              draft_time,
+                    "five_min_warning":        five_min_warning,
+                    "active":                  1,
+                }
+                save_guild_event(guild_id, event)
+                action_word = "Updated" if existing else "Added"
+                await channel.send(f"✅ {action_word}: **{name}**")
+
+    result = await build_event_list()
+    if not result:
+        return
+
+    # ── Summary ────────────────────────────────────────────────────────────────
+    events   = get_guild_events(guild_id, active_only=True)
+    tz_label = TIMEZONE_LABELS.get(timezone, timezone)
+
+    embed = discord.Embed(title="✅ Events Configured", color=discord.Color.green())
+    embed.add_field(name="Draft Channel",        value=f"<#{draft_channel_id}>",    inline=True)
+    embed.add_field(name="Announcement Channel", value=f"<#{announce_channel_id}>", inline=True)
+    embed.add_field(name="Draft Time",           value=draft_time,                  inline=True)
+    embed.add_field(name="5-min Warning",        value="Yes" if five_min_warning else "No", inline=True)
+    if events:
+        ev_list = "\n".join(f"• **{e['name']}** — {e['default_time']} {tz_label}" for e in events)
+        embed.add_field(name="Events", value=ev_list, inline=False)
+    embed.set_footer(text="Run /setup_events again to add or edit events.")
+    await channel.send(embed=embed)
+    print(f"[SETUP] Events saved for guild {guild_id}")
+
 
 
 # ── Cog ────────────────────────────────────────────────────────────────────────
@@ -762,134 +2245,6 @@ class SetupCog(commands.Cog):
             "⚙️ Starting train setup — check the channel for prompts!", ephemeral=True
         )
         await run_train_setup(interaction, self.bot)
-
-
-async def run_train_setup(interaction: discord.Interaction, bot):
-    """Walk an admin through configuring the train schedule."""
-    guild_id = interaction.guild_id
-    channel  = interaction.channel
-    user     = interaction.user
-    TOTAL    = 5
-
-    def check(m):
-        return m.author == user and m.channel == channel
-
-    async def ask_text(prompt: str, max_chars: int = 2000):
-        await channel.send(prompt)
-        try:
-            reply = await bot.wait_for("message", check=check, timeout=300)
-        except asyncio.TimeoutError:
-            await channel.send("⏰ Timed out. Run `/setup_train` to start again.")
-            return None
-        return reply.content.strip()[:max_chars]
-
-    await channel.send(
-        "⚙️ **Train Schedule Setup**\n"
-        "*Configure how the train schedule works for your alliance.*"
-    )
-
-    # ── Step 1: Sheet tab name ─────────────────────────────────────────────────
-    from config import get_train_config
-    current = get_train_config(guild_id)
-
-    tab_raw = await ask_text(
-        f"**Step 1 of {TOTAL} — Schedule Sheet Tab**\n"
-        f"What is the name of the tab in your Google Sheet that stores the train schedule?\n"
-        f"*(Current: `{current['tab_name']}` — type it again to keep it, or enter a new name)*"
-    )
-    if tab_raw is None:
-        return
-    tab_name = tab_raw.strip() or current["tab_name"]
-
-    # ── Step 2: Themes ─────────────────────────────────────────────────────────
-    current_themes = ", ".join(current["themes"])
-    themes_raw = await ask_text(
-        f"**Step 2 of {TOTAL} — Themes**\n"
-        f"Enter your available themes as a comma-separated list.\n"
-        f"These appear as options when selecting a theme for a member's train day.\n\n"
-        f"**Example themes:**\n"
-        f"`Welcome to the Alliance, Birthday, Milestone, War / Performance, General Celebration, Contest / Raffle, Custom`\n\n"
-        f"*(Current: `{current_themes}`)*"
-    )
-    if themes_raw is None:
-        return
-    themes = [t.strip() for t in themes_raw.split(",") if t.strip()] or current["themes"]
-
-    # ── Step 3: Tones ──────────────────────────────────────────────────────────
-    current_tones = ", ".join(current["tones"])
-    tones_raw = await ask_text(
-        f"**Step 3 of {TOTAL} — Tones**\n"
-        f"Enter your available tones as a comma-separated list.\n"
-        f"These let leadership adjust the style of the generated blurb.\n\n"
-        f"**Example tones:**\n"
-        f"`Default (match the theme), More casual, More intense, Funny, Serious, Cinematic / Dramatic`\n\n"
-        f"*(Current: `{current_tones}`)*"
-    )
-    if tones_raw is None:
-        return
-    tones = [t.strip() for t in tones_raw.split(",") if t.strip()] or current["tones"]
-
-    # ── Step 4: Default tone ───────────────────────────────────────────────────
-    tones_display = "\n".join(f"{i+1}. {t}" for i, t in enumerate(tones))
-    default_tone_raw = await ask_text(
-        f"**Step 4 of {TOTAL} — Default Tone**\n"
-        f"Which tone should be selected by default?\n"
-        f"Type the exact tone name from your list:\n\n{tones_display}\n\n"
-        f"*(Current: `{current['default_tone']}`)*"
-    )
-    if default_tone_raw is None:
-        return
-    default_tone = default_tone_raw.strip() if default_tone_raw.strip() in tones else tones[0]
-
-    # ── Step 5: Prompt template ────────────────────────────────────────────────
-    await channel.send(
-        f"**Step 5 of {TOTAL} — Prompt Template**\n"
-        "Paste your full ChatGPT prompt template. Use these placeholders:\n"
-        "• `{name}` — the member's name\n"
-        "• `{theme}` — the selected theme\n"
-        "• `{tone}` — the selected tone\n"
-        "• `{notes}` — any notes stored for this member\n\n"
-        "**Example template:**\n"
-        "```\n"
-        "You are writing a short motivational alliance announcement blurb for a mobile strategy game.\n"
-        "Keep it under 3 sentences. It should feel energetic and personal.\n\n"
-        "Member name: {name}\n"
-        "Theme: {theme}\n"
-        "Tone: {tone}\n"
-        "Notes: {notes}\n\n"
-        "Write the blurb now:\n"
-        "```\n"
-        "*(Paste your template below — you have 5 minutes)*"
-    )
-    try:
-        reply = await bot.wait_for("message", check=check, timeout=300)
-    except asyncio.TimeoutError:
-        await channel.send("⏰ Timed out. Run `/setup_train` to start again.")
-        return
-    prompt_template = reply.content.strip()
-
-    if not prompt_template:
-        await channel.send("⚠️ No template entered. Run `/setup_train` to try again.")
-        return
-
-    # ── Save ───────────────────────────────────────────────────────────────────
-    from config import save_train_config
-    save_train_config(guild_id, tab_name, themes, tones, prompt_template, default_tone)
-
-    embed = discord.Embed(
-        title="✅ Train Schedule Configured",
-        color=discord.Color.green(),
-    )
-    embed.add_field(name="Sheet Tab",     value=tab_name,                   inline=True)
-    embed.add_field(name="Default Tone",  value=default_tone,               inline=True)
-    embed.add_field(name="Themes",        value=", ".join(themes),          inline=False)
-    embed.add_field(name="Tones",         value=", ".join(tones),           inline=False)
-    embed.add_field(name="Prompt Template", value=f"```{prompt_template[:200]}...```" if len(prompt_template) > 200 else f"```{prompt_template}```", inline=False)
-    embed.set_footer(text="Run /setup_train again to update any of these settings.")
-    await channel.send(embed=embed)
-    print(f"[SETUP] Train config saved for guild {guild_id}")
-
-
     @app_commands.command(
         name="setup_survey",
         description="Configure the squad powers survey — questions, tabs, and intro message"
@@ -906,179 +2261,10 @@ async def run_train_setup(interaction: discord.Interaction, bot):
         await run_survey_setup(interaction, self.bot)
 
 
-async def run_survey_setup(interaction: discord.Interaction, bot):
-    """Walk an admin through configuring the squad powers survey."""
-    guild_id = interaction.guild_id
-    channel  = interaction.channel
-    user     = interaction.user
-
-    def check(m):
-        return m.author == user and m.channel == channel
-
-    async def ask_text(prompt: str, max_chars: int = 500):
-        await channel.send(prompt)
-        try:
-            reply = await bot.wait_for("message", check=check, timeout=300)
-        except asyncio.TimeoutError:
-            await channel.send("⏰ Timed out. Run `/setup_survey` to start again.")
-            return None
-        return reply.content.strip()[:max_chars]
-
-    from config import get_survey_config, save_survey_config, OGV_SURVEY_QUESTIONS
-    current   = get_survey_config(guild_id)
-    questions = list(current.get("questions") or OGV_SURVEY_QUESTIONS)
-
-    await channel.send(
-        "⚙️ **Survey Setup**\n"
-        "Configure the questions your members answer when they submit their stats.\n\n"
-        "**Example questions from Last War:**\n"
-        "```\n"
-        "1st Squad Power — text — e.g. 43.27 — max 5 chars\n"
-        "1st Squad Type  — dropdown — Missile, Air, Tank\n"
-        "2nd Squad Power — text — e.g. 43.27 — max 5 chars\n"
-        "3rd Squad Power — text — e.g. 43.27 — max 5 chars\n"
-        "Drone Level     — text — e.g. 243\n"
-        "Gorilla Level   — text — e.g. 70\n"
-        "Total Hero Power (THP) — text — e.g. 301 — max 3 chars\n"
-        "Total Kills     — text — e.g. 55.40 — max 5 chars\n"
-        "Profession      — dropdown — War Leader, Engineer\n"
-        "```"
+    @app_commands.command(
+        name="setup_birthdays",
+        description="Configure birthday tracking — sheet tab, columns, and lookahead days"
     )
-
-    # ── Step 1: Squad Powers tab ───────────────────────────────────────────────
-    tab_sp = await ask_text(
-        f"**Step 1 — Squad Powers Tab**\n"
-        f"Which tab stores member stats (updated on each submission)?\n"
-        f"*(Current: `{current.get('tab_squad_powers', 'Squad Powers')}`)*"
-    )
-    if tab_sp is None:
-        return
-    tab_squad_powers = tab_sp.strip() or current.get("tab_squad_powers", "Squad Powers")
-
-    # ── Step 2: Survey History tab ─────────────────────────────────────────────
-    tab_hist = await ask_text(
-        f"**Step 2 — Survey History Tab**\n"
-        f"Which tab stores the full history of all submissions?\n"
-        f"*(Current: `{current.get('tab_history', 'Survey History')}`)*"
-    )
-    if tab_hist is None:
-        return
-    tab_history = tab_hist.strip() or current.get("tab_history", "Survey History")
-
-    # ── Step 3: Intro message ──────────────────────────────────────────────────
-    intro_raw = await ask_text(
-        "**Step 3 — Survey Intro Message**\n"
-        "What message should appear on the survey button post in your survey channel?\n\n"
-        "**Example:**\n"
-        "*Please fill out this survey each week to help us track squad powers, "
-        "balance teams, and prepare for season events!*"
-    )
-    if intro_raw is None:
-        return
-    intro_message = intro_raw.strip()
-
-    # ── Step 4: Build questions ────────────────────────────────────────────────
-    await channel.send(
-        "**Step 4 — Survey Questions**\n"
-        "Now let's define your questions. You'll add them one at a time.\n"
-        f"Currently you have **{len(questions)} question(s)** configured.\n\n"
-        "Type `keep` to keep the current questions, or `reset` to start fresh."
-    )
-    try:
-        reply = await bot.wait_for("message", check=check, timeout=120)
-    except asyncio.TimeoutError:
-        await channel.send("⏰ Timed out. Run `/setup_survey` to start again.")
-        return
-
-    if reply.content.strip().lower() == "keep":
-        pass  # keep existing questions
-    else:
-        questions = []
-        await channel.send(
-            "Let's add your questions. For each one I'll ask:\n"
-            "1. The question label (e.g. `1st Squad Power`)\n"
-            "2. The type: `text` or `dropdown`\n"
-            "3. For text: an example hint and max characters\n"
-            "4. For dropdown: the options (comma-separated)\n\n"
-            "Type `done` when you've finished adding questions."
-        )
-
-        while True:
-            q_label_raw = await ask_text(
-                f"**Question {len(questions) + 1} — Label** (or type `done` to finish):"
-            )
-            if q_label_raw is None:
-                return
-            if q_label_raw.strip().lower() == "done":
-                break
-
-            q_label = q_label_raw.strip()
-            q_key   = q_label.lower().replace(" ", "_").replace("(", "").replace(")", "").replace("/", "_")
-
-            q_type_raw = await ask_text(
-                f"**Question: {q_label}**\nType: `text` (user types a value) or `dropdown` (user picks from a list)?"
-            )
-            if q_type_raw is None:
-                return
-            q_type = "dropdown" if "drop" in q_type_raw.lower() else "text"
-
-            if q_type == "text":
-                hint_raw = await ask_text(
-                    f"**{q_label} — Example hint** (shown to user, e.g. `e.g. 43.27`) or type `none`:"
-                )
-                if hint_raw is None:
-                    return
-                placeholder = "" if hint_raw.strip().lower() == "none" else hint_raw.strip()
-
-                max_raw = await ask_text(
-                    f"**{q_label} — Max characters** (e.g. `5`) or `0` for no limit:"
-                )
-                if max_raw is None:
-                    return
-                try:
-                    max_chars = int(max_raw.strip())
-                except ValueError:
-                    max_chars = 0
-
-                questions.append({
-                    "key": q_key, "label": q_label, "type": "text",
-                    "options": [], "placeholder": placeholder, "max_chars": max_chars,
-                })
-
-            else:
-                opts_raw = await ask_text(
-                    f"**{q_label} — Options** (comma-separated, e.g. `Option A, Option B, Option C`):"
-                )
-                if opts_raw is None:
-                    return
-                options = [o.strip() for o in opts_raw.split(",") if o.strip()]
-
-                questions.append({
-                    "key": q_key, "label": q_label, "type": "dropdown",
-                    "options": options, "placeholder": f"Select {q_label}...", "max_chars": 0,
-                })
-
-            await channel.send(f"✅ Added: **{q_label}** ({q_type}) — {len(questions)} question(s) so far.")
-
-    if not questions:
-        await channel.send("⚠️ No questions defined. Run `/setup_survey` to try again.")
-        return
-
-    # ── Save ───────────────────────────────────────────────────────────────────
-    save_survey_config(guild_id, tab_squad_powers, tab_history, questions, intro_message)
-
-    q_summary = "\n".join(
-        f"• **{q['label']}** — {q['type']}" +
-        (f" ({', '.join(q['options'])})" if q['type'] == 'dropdown' else "")
-        for q in questions
-    )
-    embed = discord.Embed(title="✅ Survey Configured", color=discord.Color.green())
-    embed.add_field(name="Squad Powers Tab", value=tab_squad_powers, inline=True)
-    embed.add_field(name="History Tab",      value=tab_history,      inline=True)
-    embed.add_field(name="Questions",        value=q_summary[:1024], inline=False)
-    embed.set_footer(text="Run /setup_survey again to update. Run /postsurvey to post the survey button.")
-    await channel.send(embed=embed)
-    print(f"[SETUP] Survey config saved for guild {guild_id} — {len(questions)} questions")
     async def setup_birthdays(self, interaction: discord.Interaction):
         if not interaction.user.guild_permissions.administrator:
             await interaction.response.send_message(
@@ -1119,220 +2305,6 @@ async def run_survey_setup(interaction: discord.Interaction, bot):
             "⚙️ Starting Canyon Storm setup — check the channel for prompts!", ephemeral=True
         )
         await run_storm_setup(interaction, self.bot, "CS")
-
-
-async def run_storm_setup(interaction: discord.Interaction, bot, event_type: str):
-    """Shared setup wizard for Desert Storm and Canyon Storm."""
-    guild_id = interaction.guild_id
-    channel  = interaction.channel
-    user     = interaction.user
-    label    = "Desert Storm" if event_type == "DS" else "Canyon Storm"
-    cmd_name = "setup_desertstorm" if event_type == "DS" else "setup_canyonstorm"
-
-    def check(m):
-        return m.author == user and m.channel == channel
-
-    async def ask_text(prompt: str, max_chars: int = 2000):
-        await channel.send(prompt)
-        try:
-            reply = await bot.wait_for("message", check=check, timeout=300)
-        except asyncio.TimeoutError:
-            await channel.send(f"⏰ Timed out. Run `/{cmd_name}` to start again.")
-            return None
-        return reply.content.strip()[:max_chars]
-
-    from config import get_storm_config, get_config, GENERIC_DS_TEMPLATE, GENERIC_CS_TEMPLATE, get_storm_time_labels
-    current   = get_storm_config(guild_id, event_type)
-    guild_cfg = get_config(guild_id)
-    timezone  = guild_cfg.timezone if guild_cfg and guild_cfg.timezone else "America/New_York"
-    tz_label  = TIMEZONE_LABELS.get(timezone, timezone)
-
-    # Pre-compute time labels from Server Time constants in guild's timezone
-    time_labels = get_storm_time_labels(event_type, guild_id)
-
-    await channel.send(
-        f"⚙️ **{label} Setup**\n"
-        f"*Times will be displayed in your configured timezone: **{tz_label}***"
-    )
-
-    # ── Step 1: Sheet tab ──────────────────────────────────────────────────────
-    tab_raw = await ask_text(
-        f"**Step 1 of 4 — Sheet Tab**\n"
-        f"Which tab in your Google Sheet stores the {label} zone assignments?\n"
-        f"⚠️ *Make sure this tab exists in your sheet before continuing.*\n"
-        f"*(Current: `{current.get('tab_name', 'DS Assignments')}`)*"
-    )
-    if tab_raw is None:
-        return
-    tab_name = tab_raw.strip() or current.get("tab_name", "DS Assignments")
-
-    # ── Step 2: Which teams? ───────────────────────────────────────────────────
-    class TeamChoiceView(discord.ui.View):
-        def __init__(self):
-            super().__init__(timeout=120)
-            self.selected = None
-
-        @discord.ui.button(label="Team A & Team B", style=discord.ButtonStyle.primary)
-        async def both(self, interaction: discord.Interaction, button: discord.ui.Button):
-            self.selected = "both"
-            for item in self.children: item.disabled = True
-            await interaction.response.edit_message(content="✅ Teams: **Team A & Team B**", view=self)
-            self.stop()
-
-        @discord.ui.button(label="Team A only", style=discord.ButtonStyle.secondary)
-        async def a_only(self, interaction: discord.Interaction, button: discord.ui.Button):
-            self.selected = "A"
-            for item in self.children: item.disabled = True
-            await interaction.response.edit_message(content="✅ Teams: **Team A only**", view=self)
-            self.stop()
-
-        @discord.ui.button(label="Team B only", style=discord.ButtonStyle.secondary)
-        async def b_only(self, interaction: discord.Interaction, button: discord.ui.Button):
-            self.selected = "B"
-            for item in self.children: item.disabled = True
-            await interaction.response.edit_message(content="✅ Teams: **Team B only**", view=self)
-            self.stop()
-
-    team_view = TeamChoiceView()
-    await channel.send(f"**Step 2 of 4 — Which teams do you run for {label}?**", view=team_view)
-    await team_view.wait()
-    if not team_view.selected:
-        await channel.send(f"⏰ Timed out. Run `/{cmd_name}` to start again.")
-        return
-    teams = team_view.selected  # "both", "A", or "B"
-
-    # ── Step 3: Mail template(s) ───────────────────────────────────────────────
-    placeholder_info = (
-        "• `{alliance_name}` — your alliance name\n"
-        "• `{zones}` — zone assignments block\n"
-        "• `{subs}` — sub pairs\n"
-        "• `{time}` — event time (auto-filled when drafting)"
-    ) if event_type == "DS" else (
-        "• `{alliance_name}` — your alliance name\n"
-        "• `{zones}` — zone assignments block\n"
-        "• `{subs_list}` — substitute members\n"
-        "• `{time}` — event time (auto-filled when drafting)"
-    )
-    example = GENERIC_DS_TEMPLATE if event_type == "DS" else GENERIC_CS_TEMPLATE
-
-    time_display = " | ".join(f"{lbl}" for lbl, _ in time_labels)
-
-    # Show what the time buttons will look like
-    await channel.send(
-        f"ℹ️ When drafting, your time buttons will show:\n"
-        + "\n".join(f"  • **{lbl}**" for lbl, _ in time_labels)
-    )
-
-    if teams == "both":
-        # Ask if one template for both or separate
-        class SharedTemplateView(discord.ui.View):
-            def __init__(self):
-                super().__init__(timeout=120)
-                self.selected = None
-
-            @discord.ui.button(label="One template for both teams", style=discord.ButtonStyle.primary)
-            async def shared(self, interaction: discord.Interaction, button: discord.ui.Button):
-                self.selected = "shared"
-                for item in self.children: item.disabled = True
-                await interaction.response.edit_message(content="✅ **One shared template** for Team A & B", view=self)
-                self.stop()
-
-            @discord.ui.button(label="Separate templates per team", style=discord.ButtonStyle.secondary)
-            async def separate(self, interaction: discord.Interaction, button: discord.ui.Button):
-                self.selected = "separate"
-                for item in self.children: item.disabled = True
-                await interaction.response.edit_message(content="✅ **Separate templates** for Team A & Team B", view=self)
-                self.stop()
-
-        shared_view = SharedTemplateView()
-        await channel.send(
-            "**Step 3 of 4 — Mail Template**\n"
-            "Do you want one template that applies to both teams, or separate templates per team?",
-            view=shared_view,
-        )
-        await shared_view.wait()
-        if not shared_view.selected:
-            await channel.send(f"⏰ Timed out. Run `/{cmd_name}` to start again.")
-            return
-
-        await channel.send(
-            f"Paste your mail template below. Use these placeholders:\n{placeholder_info}\n\n"
-            f"**Example:**\n```\n{example}\n```\n*(5 minutes to respond)*"
-        )
-        try:
-            reply = await bot.wait_for("message", check=check, timeout=300)
-        except asyncio.TimeoutError:
-            await channel.send(f"⏰ Timed out. Run `/{cmd_name}` to start again.")
-            return
-        template_a = reply.content.strip()
-
-        if shared_view.selected == "separate":
-            await channel.send(
-                f"Now paste the **Team B** template:\n*(5 minutes to respond)*"
-            )
-            try:
-                reply_b = await bot.wait_for("message", check=check, timeout=300)
-            except asyncio.TimeoutError:
-                await channel.send(f"⏰ Timed out. Run `/{cmd_name}` to start again.")
-                return
-            template_b = reply_b.content.strip()
-        else:
-            template_b = template_a
-
-    else:
-        team_label = "Team A" if teams == "A" else "Team B"
-        await channel.send(
-            f"**Step 3 of 4 — Mail Template**\n"
-            f"This template will apply to **{team_label}**.\n"
-            f"Paste your template below. Use these placeholders:\n{placeholder_info}\n\n"
-            f"**Example:**\n```\n{example}\n```\n*(5 minutes to respond)*"
-        )
-        try:
-            reply = await bot.wait_for("message", check=check, timeout=300)
-        except asyncio.TimeoutError:
-            await channel.send(f"⏰ Timed out. Run `/{cmd_name}` to start again.")
-            return
-        template_a = reply.content.strip() if teams == "A" else ""
-        template_b = reply.content.strip() if teams == "B" else ""
-
-    if not template_a and not template_b:
-        await channel.send(f"⚠️ No template entered. Run `/{cmd_name}` to try again.")
-        return
-
-    # ── Step 4: Default zone names ─────────────────────────────────────────────
-    # (no step needed — zones use "Member Name" placeholder by default)
-
-    # ── Save ───────────────────────────────────────────────────────────────────
-    from config import save_storm_config
-    # Save team A template
-    if template_a:
-        save_storm_config(
-            guild_id, f"{event_type}_A", tab_name, template_a,
-            "", "", "", "", "", "", timezone,
-        )
-    # Save team B template
-    if template_b:
-        save_storm_config(
-            guild_id, f"{event_type}_B", tab_name, template_b,
-            "", "", "", "", "", "", timezone,
-        )
-    # Save base event type record
-    save_storm_config(
-        guild_id, event_type, tab_name, template_a or template_b,
-        "", "", "", "", "", "", timezone,
-    )
-
-    embed = discord.Embed(title=f"✅ {label} Configured", color=discord.Color.green())
-    embed.add_field(name="Sheet Tab",    value=tab_name, inline=True)
-    embed.add_field(name="Timezone",     value=tz_label, inline=True)
-    embed.add_field(name="Teams",        value={"both": "A & B", "A": "A only", "B": "B only"}[teams], inline=True)
-    embed.add_field(name="Time Options", value="\n".join(f"• {lbl}" for lbl, _ in time_labels), inline=False)
-    embed.add_field(name="Template A Preview", value=f"```{(template_a or '—')[:150]}{'...' if len(template_a or '') > 150 else ''}```", inline=False)
-    if template_b and template_b != template_a:
-        embed.add_field(name="Template B Preview", value=f"```{template_b[:150]}{'...' if len(template_b) > 150 else ''}```", inline=False)
-    embed.set_footer(text=f"Run /{cmd_name} again to update.")
-    await channel.send(embed=embed)
-    print(f"[SETUP] {label} config saved for guild {guild_id}")
 
 
     @app_commands.command(
@@ -1410,58 +2382,66 @@ async def run_storm_setup(interaction: discord.Interaction, bot, event_type: str
 # ── /setup events wizard ───────────────────────────────────────────────────────
 
 # Common timezones for the selector
-COMMON_TIMEZONES = [
-    "America/New_York", "America/Chicago", "America/Denver", "America/Los_Angeles",
-    "America/Sao_Paulo", "Europe/London", "Europe/Paris", "Europe/Berlin",
-    "Europe/Moscow", "Asia/Dubai", "Asia/Kolkata", "Asia/Bangkok",
-    "Asia/Shanghai", "Asia/Tokyo", "Asia/Seoul", "Australia/Sydney",
-    "Pacific/Auckland",
+# ── Timezone configuration ─────────────────────────────────────────────────────
+# Format: (tz_database_name, display_label)
+# Labels show UTC offset, timezone name, and example cities
+# Note: offsets shown are standard time — DST-observing zones shift +1 in summer
+
+TIMEZONE_OPTIONS = [
+    ("Pacific/Honolulu",                  "UTC-10 | Hawaii (Honolulu)"),
+    ("America/Anchorage",                 "UTC-9  | Alaska (Anchorage)"),
+    ("America/Los_Angeles",               "UTC-8  | Pacific (Los Angeles, Seattle, Vancouver)"),
+    ("America/Denver",                    "UTC-7  | Mountain (Denver, Phoenix, Calgary)"),
+    ("America/Chicago",                   "UTC-6  | Central (Chicago, Dallas, Mexico City)"),
+    ("America/New_York",                  "UTC-5  | Eastern (New York, Toronto, Miami)"),
+    ("America/Sao_Paulo",                 "UTC-3  | Brazil (São Paulo, Rio de Janeiro)"),
+    ("America/Argentina/Buenos_Aires",    "UTC-3  | Argentina (Buenos Aires)"),
+    ("Atlantic/Azores",                   "UTC-1  | Azores"),
+    ("Europe/London",                     "UTC+0  | GMT/BST (London, Dublin, Lisbon)"),
+    ("Europe/Paris",                      "UTC+1  | Central European (Paris, Berlin, Rome)"),
+    ("Europe/Helsinki",                   "UTC+2  | Eastern European (Helsinki, Athens, Cairo)"),
+    ("Europe/Moscow",                     "UTC+3  | Moscow (Moscow, Istanbul, Riyadh)"),
+    ("Asia/Dubai",                        "UTC+4  | Gulf (Dubai, Abu Dhabi)"),
+    ("Asia/Karachi",                      "UTC+5  | Pakistan (Karachi, Islamabad)"),
+    ("Asia/Kolkata",                      "UTC+5:30 | India (Mumbai, Delhi, Bangalore)"),
+    ("Asia/Dhaka",                        "UTC+6  | Bangladesh (Dhaka)"),
+    ("Asia/Bangkok",                      "UTC+7  | Indochina (Bangkok, Jakarta, Hanoi)"),
+    ("Asia/Shanghai",                     "UTC+8  | China/Singapore (Shanghai, Beijing, Singapore)"),
+    ("Asia/Tokyo",                        "UTC+9  | Japan/Korea (Tokyo, Seoul)"),
+    ("Australia/Sydney",                  "UTC+10 | Eastern Australia (Sydney, Melbourne)"),
+    ("Pacific/Auckland",                  "UTC+12 | New Zealand (Auckland, Wellington)"),
 ]
 
-TIMEZONE_LABELS = {
-    "America/New_York":   "ET — Eastern Time (US)",
-    "America/Chicago":    "CT — Central Time (US)",
-    "America/Denver":     "MT — Mountain Time (US)",
-    "America/Los_Angeles":"PT — Pacific Time (US)",
-    "America/Sao_Paulo":  "BRT — Brazil Time",
-    "Europe/London":      "GMT/BST — London",
-    "Europe/Paris":       "CET — Paris/Madrid",
-    "Europe/Berlin":      "CET — Berlin/Amsterdam",
-    "Europe/Moscow":      "MSK — Moscow",
-    "Asia/Dubai":         "GST — Dubai",
-    "Asia/Kolkata":       "IST — India",
-    "Asia/Bangkok":       "ICT — Bangkok/Jakarta",
-    "Asia/Shanghai":      "CST — China/Singapore",
-    "Asia/Tokyo":         "JST — Japan",
-    "Asia/Seoul":         "KST — Korea",
-    "Australia/Sydney":   "AEST — Sydney",
-    "Pacific/Auckland":   "NZST — New Zealand",
-}
+# Map from tz_database_name → display label
+TIMEZONE_LABELS = {tz: label for tz, label in TIMEZONE_OPTIONS}
 
 
 class TimezoneSelectView(discord.ui.View):
+    """Single dropdown covering all supported timezones, ordered by UTC offset."""
     def __init__(self):
-        super().__init__(timeout=120)
+        super().__init__(timeout=WIZARD_TIMEOUT)
         self.selected  = None
         self.confirmed = False
-        # Split into two selects since we have more than 25 options... actually 17, fits in one
+
         select = discord.ui.Select(
             placeholder="Select your timezone...",
             options=[
-                discord.SelectOption(label=TIMEZONE_LABELS[tz], value=tz)
-                for tz in COMMON_TIMEZONES
+                discord.SelectOption(label=label[:100], value=tz)
+                for tz, label in TIMEZONE_OPTIONS
             ],
             row=0,
         )
+
         async def _cb(interaction: discord.Interaction):
-            self.selected  = select.values[0]
-            self.confirmed = True
-            select.disabled = True
+            self.selected    = select.values[0]
+            self.confirmed   = True
+            select.disabled  = True
+            label = TIMEZONE_LABELS.get(self.selected, self.selected)
             await interaction.response.edit_message(
-                content=f"✅ Timezone: **{TIMEZONE_LABELS[self.selected]}**",
-                view=self,
+                content=f"✅ Timezone: **{label}**", view=self
             )
             self.stop()
+
         select.callback = _cb
         self.add_item(select)
 
@@ -1508,239 +2488,6 @@ class YesNoView(discord.ui.View):
             item.disabled = True
         await interaction.response.edit_message(view=self)
         self.stop()
-
-
-async def run_event_setup(interaction: discord.Interaction, bot):
-    """Walk an admin through setting up one event type."""
-    guild_id = interaction.guild_id
-    channel  = interaction.channel
-    user     = interaction.user
-
-    TOTAL_STEPS = 9
-
-    def check(m):
-        return m.author == user and m.channel == channel
-
-    async def ask_text(prompt: str, max_chars: int = 200):
-        """Post a prompt, wait for reply. Both stay visible."""
-        await channel.send(prompt)
-        try:
-            reply = await bot.wait_for("message", check=check, timeout=120)
-        except asyncio.TimeoutError:
-            await channel.send("⏰ Timed out. Run `/setup_events` to start again.")
-            return None
-        return reply.content.strip()[:max_chars]
-
-    async def ask_view(prompt: str, view: discord.ui.View):
-        """Post a prompt with a view. Message stays visible, view disables on selection."""
-        await channel.send(prompt, view=view)
-        await view.wait()
-        return view
-
-    await channel.send(
-        "⚙️ **Event Setup** — let's configure one event type.\n"
-        "*You can run `/setup_events` again to add more events or update existing ones.*"
-    )
-
-    # ── Step 1: Event name ────────────────────────────────────────────────────
-    name = await ask_text(
-        f"**Step 1 of {TOTAL_STEPS} — Event name**\n"
-        "What is this event called? (e.g. `Plague Marauder (AE)`, `Zombie Siege`)"
-    )
-    if not name:
-        return
-
-    # Auto-generate short key from name — users never need to see or set this
-    import re as _re
-    short_key = _re.sub(r"[^a-z0-9]+", "_", name.lower()).strip("_")
-
-    # Pull timezone from guild config (set during /setup)
-    from config import get_config
-    guild_cfg = get_config(guild_id)
-    timezone  = guild_cfg.timezone if guild_cfg and guild_cfg.timezone else "America/New_York"
-
-    # ── Step 2: Default event time ────────────────────────────────────────────
-    time_raw = await ask_text(
-        f"**Step 2 of {TOTAL_STEPS} — Default event time**\n"
-        f"What time does **{name}** usually start?\n"
-        f"*(e.g. `10:15pm`, `9:00am`)*"
-    )
-    if not time_raw:
-        return
-    import re
-    default_time = _parse_12h_time(time_raw)
-    if not default_time:
-        await channel.send("⚠️ Could not read that time. Try something like `10:15pm` or `9:00am`. Run `/setup_events` to try again.")
-        return
-
-    # ── Step 5: Schedule type ─────────────────────────────────────────────────
-    sched_view = ScheduleTypeView()
-    await ask_view(
-        f"**Step 3 of {TOTAL_STEPS} — Schedule**\nDoes this event repeat on a fixed cycle, or do you add it manually each time?",
-        sched_view,
-    )
-    if not sched_view.selected:
-        await channel.send("⏰ Timed out. Run `/setup_events` to start again.")
-        return
-    schedule_type = sched_view.selected
-
-    anchor_date   = ""
-    interval_days = 0
-    if schedule_type == "repeating":
-        anchor_raw = await ask_text(
-            f"**Step 3a of {TOTAL_STEPS} — Anchor date**\n"
-            "Enter a date when this event occurred (used to calculate the repeating cycle).\n"
-            "Format: `YYYY-MM-DD` (e.g. `2026-03-30`)"
-        )
-        if not anchor_raw:
-            return
-        anchor_date = _parse_month_day(anchor_raw)
-        if not anchor_date:
-            await channel.send("⚠️ Could not read that date. Try something like `March 30` or `April 14`. Run `/setup_events` to try again.")
-            return
-
-        interval_raw = await ask_text(
-            f"**Step 3b of {TOTAL_STEPS} — Cycle interval**\n"
-            "How many days between each occurrence? (e.g. `3` for every 3 days)"
-        )
-        if not interval_raw:
-            return
-        try:
-            interval_days = int(interval_raw)
-        except ValueError:
-            await channel.send("⚠️ Please enter a whole number. Run `/setup_events` to try again.")
-            return
-
-    # ── Step 6: Draft channel ─────────────────────────────────────────────────
-    draft_ch_view = ChannelSelectStep("Select the channel for announcement drafts...", suggested_name="event-drafts")
-    await ask_view(
-        f"**Step 4 of {TOTAL_STEPS} — Draft channel**\n"
-        "Which channel should the bot post the draft announcement for leadership to review?",
-        draft_ch_view,
-    )
-    if not draft_ch_view.confirmed:
-        await channel.send("⏰ Timed out. Run `/setup_events` to start again.")
-        return
-    draft_channel_id = draft_ch_view.selected_channel.id
-
-    # ── Step 7: Announcement channel ──────────────────────────────────────────
-    ann_ch_view = ChannelSelectStep("Select the public announcement channel...", suggested_name="announcements")
-    await ask_view(
-        f"**Step 5 of {TOTAL_STEPS} — Announcement channel**\n"
-        "Which channel should the final approved announcement be posted to?",
-        ann_ch_view,
-    )
-    if not ann_ch_view.confirmed:
-        await channel.send("⏰ Timed out. Run `/setup_events` to start again.")
-        return
-    announcement_channel_id = ann_ch_view.selected_channel.id
-
-    # ── Step 8: Draft time ────────────────────────────────────────────────────
-    draft_time_raw = await ask_text(
-        f"**Step 6 of {TOTAL_STEPS} — Draft posting time**\n"
-        "What time should the bot post the draft for leadership to review? (24h format in your timezone)\n"
-        "*(e.g. `12:00` for noon)*"
-    )
-    if not draft_time_raw:
-        return
-    draft_time = _parse_12h_time(draft_time_raw)
-    if not draft_time:
-        await channel.send("⚠️ Could not read that time. Try something like `12:00pm` or `9:00am`. Run `/setup_events` to try again.")
-        return
-
-    # ── Step 9: 5-minute warning ──────────────────────────────────────────────
-    warn_view = YesNoView()
-    await ask_view(
-        f"**Step 7 of {TOTAL_STEPS} — 5-minute warning**\n"
-        "Should the bot automatically post a 5-minute warning to the announcement channel before the event?",
-        warn_view,
-    )
-    if warn_view.selected is None:
-        await channel.send("⏰ Timed out. Run `/setup_events` to start again.")
-        return
-    five_min_warning = 1 if warn_view.selected else 0
-
-    # ── Step 10: Announcement blurb ───────────────────────────────────────────
-    blurb_raw = await ask_text(
-        f"**Step 8 of {TOTAL_STEPS} — Announcement blurb**\n"
-        "Write the message that gets posted when this event fires. Use these placeholders:\n"
-        "• `{time}` — event time in your timezone (e.g. `10:15pm ET`)\n"
-        "• `{server_time}` — event time in Server Time (UTC)\n\n"
-        "**Example:**\n"
-        "`Plague Marauder (AE) at {time} ({server_time} Server Time). Make sure to have offline participation checked!`",
-        max_chars=1000,
-    )
-    if not blurb_raw:
-        return
-
-    # ── Save ──────────────────────────────────────────────────────────────────
-    from config import save_guild_event
-    event = {
-        "short_key":               short_key,
-        "name":                    name,
-        "timezone":                timezone,  # from guild config
-        "default_time":            default_time,
-        "announcement_blurb":      blurb_raw,
-        "schedule_type":           schedule_type,
-        "anchor_date":             anchor_date,
-        "interval_days":           interval_days,
-        "draft_channel_id":        draft_channel_id,
-        "announcement_channel_id": announcement_channel_id,
-        "draft_time":              draft_time,
-        "five_min_warning":        five_min_warning,
-        "active":                  1,
-    }
-    save_guild_event(guild_id, event)
-
-    # ── Summary ───────────────────────────────────────────────────────────────
-    tz_label   = TIMEZONE_LABELS.get(timezone, timezone)
-    sched_desc = (
-        f"Repeating every {interval_days} days from {anchor_date}"
-        if schedule_type == "repeating"
-        else "Manual"
-    )
-    embed = discord.Embed(
-        title=f"✅ Event configured: {name}",
-        color=discord.Color.green(),
-    )
-    embed.add_field(name="Short Key",     value=f"`{short_key}`",        inline=True)
-    embed.add_field(name="Timezone",      value=tz_label,                inline=True)
-    embed.add_field(name="Default Time",  value=default_time,            inline=True)
-    embed.add_field(name="Schedule",      value=sched_desc,              inline=False)
-    embed.add_field(name="Draft Channel", value=f"<#{draft_channel_id}>",        inline=True)
-    embed.add_field(name="Announcements", value=f"<#{announcement_channel_id}>", inline=True)
-    embed.add_field(name="Draft Time",    value=draft_time,              inline=True)
-    embed.add_field(name="5-min Warning", value="Yes" if five_min_warning else "No", inline=True)
-    embed.add_field(name="Blurb",         value=blurb_raw[:200],        inline=False)
-    embed.set_footer(text="Run /setup_events again to add another event or update this one.")
-
-    class AddAnotherView(discord.ui.View):
-        def __init__(self):
-            super().__init__(timeout=60)
-            self.add_another = False
-
-        @discord.ui.button(label="➕ Add another event", style=discord.ButtonStyle.primary)
-        async def add_another_btn(self, interaction: discord.Interaction, button: discord.ui.Button):
-            self.add_another = True
-            for item in self.children:
-                item.disabled = True
-            await interaction.response.edit_message(view=self)
-            self.stop()
-
-        @discord.ui.button(label="✅ Done", style=discord.ButtonStyle.secondary)
-        async def done_btn(self, interaction: discord.Interaction, button: discord.ui.Button):
-            for item in self.children:
-                item.disabled = True
-            await interaction.response.edit_message(view=self)
-            self.stop()
-
-    another_view = AddAnotherView()
-    await channel.send(embed=embed, view=another_view)
-    print(f"[SETUP] Event '{short_key}' saved for guild {guild_id}")
-
-    await another_view.wait()
-    if another_view.add_another:
-        await run_event_setup(interaction, bot)
 
 
 async def setup(bot: commands.Bot):

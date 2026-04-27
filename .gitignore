@@ -1,0 +1,34 @@
+# Secrets — never commit these
+.env
+.env.*
+service_account.json
+*.pem
+*.key
+
+# Python
+__pycache__/
+*.pyc
+*.pyo
+*.pyd
+*.egg-info/
+.pytest_cache/
+.coverage
+htmlcov/
+venv/
+.venv/
+
+# Local databases / state
+*.db
+*.sqlite
+*.sqlite3
+
+# Claude Code
+.claude/settings.local.json
+.claude/worktrees/
+
+# IDE / OS noise
+.vscode/
+.idea/
+*.swp
+.DS_Store
+Thumbs.db

@@ -319,11 +319,11 @@ class SetupCog(commands.Cog):
         )
         await run_setup(interaction, self.bot)
 
-    @app_commands.command(name="setup_status", description="Show the current bot configuration for this server")
-    async def setup_status(self, interaction: discord.Interaction):
+    @app_commands.command(name="view_configuration", description="View all configured settings across every setup wizard")
+    async def view_configuration(self, interaction: discord.Interaction):
         if not interaction.user.guild_permissions.administrator:
             await interaction.response.send_message(
-                "⛔ Only server administrators can view setup status.", ephemeral=True
+                "⛔ Only server administrators can view configuration.", ephemeral=True
             )
             return
 
@@ -335,23 +335,7 @@ class SetupCog(commands.Cog):
             )
             return
 
-        embed = discord.Embed(
-            title="⚙️ Current Configuration",
-            color=discord.Color.blurple(),
-        )
-        embed.add_field(name="Member Role",        value=cfg.member_role_name,                  inline=True)
-        embed.add_field(name="Leadership Role",    value=cfg.leadership_role_name,              inline=True)
-        embed.add_field(name="\u200b",             value="\u200b",                              inline=True)
-        embed.add_field(name="Leadership Channel", value=f"<#{cfg.leadership_channel_id}>",    inline=True)
-        embed.add_field(name="Announcements",      value=f"<#{cfg.announcement_channel_id}>",  inline=True)
-        embed.add_field(name="Survey Channel",     value=f"<#{cfg.survey_channel_id}>",        inline=True)
-        embed.add_field(name="Survey Notifs",      value=f"<#{cfg.survey_notify_channel_id}>", inline=True)
-        embed.add_field(name="Storm Log Thread",   value=f"<#{cfg.storm_log_thread_id}>",      inline=True)
-        embed.add_field(name="Member Tab",         value=cfg.tab_member_default,               inline=True)
-        embed.add_field(name="Anchor Date",        value=cfg.anchor_date,                      inline=True)
-        embed.add_field(name="Cycle Days",         value=str(cfg.cycle_days),                  inline=True)
-
-        await interaction.response.send_message(embed=embed, ephemeral=True)
+        await _send_view_configuration(interaction, cfg)
 
     @app_commands.command(name="setup_reset", description="Clear this server's configuration and start over")
     async def setup_reset(self, interaction: discord.Interaction):
@@ -588,13 +572,177 @@ class YesNoView(discord.ui.View):
         self.stop()
 
 
+# ── /view_configuration helper ───────────────────────────────────────────────
+
+async def _send_view_configuration(interaction: discord.Interaction, cfg) -> None:
+    """Build and send a single embed summarising every wizard's configuration."""
+    await interaction.response.defer(ephemeral=True)
+
+    from config import (
+        get_train_config, get_birthday_config, get_storm_config,
+        get_survey_config, get_growth_config, get_guild_events,
+    )
+    guild_id = interaction.guild_id
+    train    = get_train_config(guild_id)
+    birthday = get_birthday_config(guild_id)
+    ds       = get_storm_config(guild_id, "DS")
+    cs       = get_storm_config(guild_id, "CS")
+    survey   = get_survey_config(guild_id)
+    growth   = get_growth_config(guild_id)
+    events   = get_guild_events(guild_id, active_only=True)
+
+    def _yn(v) -> str:
+        return "✅ Configured" if v else "❌ Not configured"
+
+    def _enabled(v) -> str:
+        return "✅ Enabled" if v else "❌ Disabled"
+
+    def _channel(v) -> str:
+        return f"<#{v}>" if v else "*not set*"
+
+    def _col_letter(idx) -> str:
+        try:
+            idx = int(idx)
+        except (TypeError, ValueError):
+            return "*not set*"
+        return chr(65 + idx) if 0 <= idx <= 25 else str(idx)
+
+    embed = discord.Embed(
+        title="⚙️ Current Configuration",
+        description="All configured settings across the bot's setup wizards.",
+        color=discord.Color.blurple(),
+    )
+
+    tz_label = TIMEZONE_LABELS.get(cfg.timezone, cfg.timezone)
+    sheet_id_display = f"`{cfg.spreadsheet_id[:25]}...`" if cfg.spreadsheet_id else "*not set*"
+    core_lines = [
+        f"**Member Role:** {cfg.member_role_name}",
+        f"**Leadership Role:** {cfg.leadership_role_name}",
+        f"**Leadership Channel:** {_channel(cfg.leadership_channel_id)}",
+        f"**Announcement Channel:** {_channel(cfg.announcement_channel_id)}",
+        f"**Timezone:** {tz_label}",
+        f"**Spreadsheet ID:** {sheet_id_display}",
+        f"**Member Tab:** {cfg.tab_member_default}",
+    ]
+    embed.add_field(name="🛠️ Core", value="\n".join(core_lines)[:1024], inline=False)
+
+    ev_lines = [
+        f"**Draft Channel:** {_channel(cfg.event_draft_channel_id)}",
+        f"**Announcement Channel:** {_channel(cfg.event_announce_channel_id)}",
+        f"**Draft Time:** {cfg.event_draft_time}",
+        f"**5-Min Warning:** {_enabled(cfg.event_five_min_warning)}",
+    ]
+    if events:
+        ev_lines.append(f"**Events ({len(events)}):**")
+        for e in events:
+            ev_lines.append(
+                f"• {e['name']} (`{e['short_key']}`) — {e['default_time']} {e['timezone']} · "
+                f"blurb {_yn(e.get('announcement_blurb'))}"
+            )
+    else:
+        ev_lines.append("**Events:** *none configured*")
+    embed.add_field(name="📣 Events", value="\n".join(ev_lines)[:1024], inline=False)
+
+    train_lines = [
+        f"**Schedule Tab:** {train.get('tab_name', '*not set*')}",
+        f"**Blurbs:** {_enabled(train.get('blurbs_enabled'))}",
+    ]
+    if train.get("blurbs_enabled"):
+        themes = train.get("themes") or []
+        tones  = train.get("tones")  or []
+        train_lines.append(f"**Themes ({len(themes)}):** " + (", ".join(themes) if themes else "*none*"))
+        train_lines.append(f"**Tones ({len(tones)}):** "  + (", ".join(tones)  if tones  else "*none*"))
+        train_lines.append(f"**Default Tone:** {train.get('default_tone', '*not set*')}")
+        train_lines.append(f"**Prompt Template:** {_yn(train.get('prompt_template'))}")
+    train_lines.append(f"**Reminders:** {_enabled(train.get('reminders_enabled'))}")
+    if train.get("reminders_enabled"):
+        train_lines.append(f"**Reminder Channel:** {_channel(train.get('reminder_channel_id'))}")
+        train_lines.append(f"**Reminder Time:** {train.get('reminder_time', '*not set*')}")
+    embed.add_field(name="🚂 Train", value="\n".join(train_lines)[:1024], inline=False)
+
+    b_lines = [
+        f"**Enabled:** {_enabled(birthday.get('enabled'))}",
+        f"**Source Tab:** {birthday.get('tab_name', '*not set*')}",
+        f"**Name Column:** {_col_letter(birthday.get('name_col'))}",
+        f"**Birthday Column:** {_col_letter(birthday.get('birthday_col'))}",
+        f"**Discord ID Column:** "
+        + (_col_letter(birthday.get('discord_id_col'))
+           if birthday.get('discord_id_col', -1) >= 0 else "*not set*"),
+        f"**Data Start Row:** {birthday.get('data_start_row', '*not set*')}",
+        f"**Lookahead Days:** {birthday.get('lookahead_days', '*not set*')}",
+        f"**Train Integration:** {_enabled(birthday.get('train_integration'))}",
+        f"**Reminders:** {_enabled(birthday.get('reminders_enabled'))}",
+    ]
+    if birthday.get("reminders_enabled"):
+        b_lines.append(f"**Reminder Channel:** {_channel(birthday.get('reminder_channel_id'))}")
+        b_lines.append(f"**Reminder Time:** {birthday.get('reminder_time', '*not set*')}")
+    embed.add_field(name="🎂 Birthdays", value="\n".join(b_lines)[:1024], inline=False)
+
+    ds_lines = [
+        f"**Sheet Tab:** {ds.get('tab_name', '*not set*')}",
+        f"**Log Channel:** {_channel(cfg.ds_log_channel_id)}",
+        f"**Time Option 1:** {ds.get('time_option_1_label') or '*not set*'} "
+        f"({ds.get('time_option_1_local') or '?'} local / {ds.get('time_option_1_server') or '?'} server)",
+        f"**Time Option 2:** {ds.get('time_option_2_label') or '*not set*'} "
+        f"({ds.get('time_option_2_local') or '?'} local / {ds.get('time_option_2_server') or '?'} server)",
+        f"**Mail Template:** {_yn(ds.get('mail_template'))}",
+    ]
+    embed.add_field(name="⚔️ Desert Storm", value="\n".join(ds_lines)[:1024], inline=False)
+
+    cs_lines = [
+        f"**Sheet Tab:** {cs.get('tab_name', '*not set*')}",
+        f"**Log Channel:** {_channel(cfg.cs_log_channel_id)}",
+        f"**Time Option 1:** {cs.get('time_option_1_label') or '*not set*'} "
+        f"({cs.get('time_option_1_local') or '?'} local / {cs.get('time_option_1_server') or '?'} server)",
+        f"**Time Option 2:** {cs.get('time_option_2_label') or '*not set*'} "
+        f"({cs.get('time_option_2_local') or '?'} local / {cs.get('time_option_2_server') or '?'} server)",
+        f"**Mail Template:** {_yn(cs.get('mail_template'))}",
+    ]
+    embed.add_field(name="🏜️ Canyon Storm", value="\n".join(cs_lines)[:1024], inline=False)
+
+    s_lines = [
+        f"**Survey Channel:** {_channel(cfg.survey_channel_id)}",
+        f"**Notify Channel:** {_channel(cfg.survey_notify_channel_id)}",
+        f"**Stats Tab:** {survey.get('tab_squad_powers', '*not set*')}",
+        f"**History Tab:** {survey.get('tab_history', '*not set*')}",
+        f"**Questions:** {len(survey.get('questions') or [])}",
+        f"**Intro Message:** {_yn(survey.get('intro_message'))}",
+    ]
+    embed.add_field(name="📋 Survey", value="\n".join(s_lines)[:1024], inline=False)
+
+    g_lines = [f"**Enabled:** {_enabled(growth.get('enabled'))}"]
+    if growth.get("enabled"):
+        metrics = growth.get("metrics") or []
+        freq    = growth.get("snapshot_frequency", "monthly")
+        sched   = (
+            f"Monthly on day {growth.get('snapshot_day', 1)}"
+            if freq == "monthly"
+            else f"Every {growth.get('snapshot_interval', 30)} days"
+        )
+        g_lines += [
+            f"**Source Tab:** {growth.get('tab_source', '*not set*')}",
+            f"**Name Column:** {growth.get('name_col', '*not set*')}",
+            f"**Data Start Row:** {growth.get('data_start_row', '*not set*')}",
+            f"**Growth Tab:** {growth.get('tab_growth', '*not set*')}",
+            f"**Snapshot Schedule:** {sched}",
+            f"**Metrics ({len(metrics)}):** "
+            + (", ".join(f"{m['label']} (col {m['col']})" for m in metrics) if metrics else "*none*"),
+        ]
+    embed.add_field(name="📈 Growth", value="\n".join(g_lines)[:1024], inline=False)
+
+    embed.set_footer(text="Run any /setup_* command to update a section. /help shows all commands.")
+    await interaction.followup.send(embed=embed, ephemeral=True)
+
+
 # ── Run Various Setups ───────────────────────────────────────────────────────
 
 async def run_setup(interaction: discord.Interaction, bot):
+    import wizard_registry
     guild_id = interaction.guild_id
     cfg      = get_or_create_config(guild_id)
     channel  = interaction.channel
     user     = interaction.user
+    cancel_event = wizard_registry.register(user.id)
 
     # ── If already configured, show summary and offer edit or cancel ──────────
     if cfg.setup_complete:
@@ -779,23 +927,31 @@ async def run_setup(interaction: discord.Interaction, bot):
         "📈 `/setup_growth` — Growth tracking (snapshot your members' stats over time)\n\n"
         "You can set up as many or as few of these as you need. Use `/help` at any time to see all available commands."
     )
+    wizard_registry.unregister(user.id, cancel_event)
     print(f"[SETUP] Guild {guild_id} core setup complete")
 
 async def run_growth_setup(interaction: discord.Interaction, bot):
     """Walk an admin through configuring growth tracking."""
+    import wizard_registry
     guild_id = interaction.guild_id
     channel  = interaction.channel
     user     = interaction.user
+    cancel_event = wizard_registry.register(user.id)
 
     def check(m):
         return m.author == user and m.channel == channel
 
     async def ask_text(prompt: str, max_chars: int = 200):
         await channel.send(prompt)
-        try:
-            reply = await bot.wait_for("message", check=check, timeout=WIZARD_TIMEOUT)
-        except asyncio.TimeoutError:
-            await channel.send("⏰ Timed out. Run `/setup_growth` to start again.")
+        reply = await wizard_registry.wait_or_cancel(
+            bot.wait_for("message", check=check, timeout=WIZARD_TIMEOUT),
+            cancel_event,
+        )
+        if reply is None:
+            if cancel_event.is_set():
+                await channel.send("❌ Cancelled.")
+            else:
+                await channel.send("⏰ Timed out. Run `/setup_growth` to start again.")
             return None
         return reply.content.strip()[:max_chars]
 
@@ -1212,15 +1368,18 @@ async def run_growth_setup(interaction: discord.Interaction, bot):
     embed.add_field(name="Growth Tab",        value=tab_growth,           inline=False)
     embed.add_field(name="Snapshot Schedule", value=freq_desc,            inline=False)
     embed.add_field(name="Metrics",           value=metrics_display,      inline=False)
-    embed.set_footer(text="Run /setup_growth again to update. Run /growth_run to take a manual snapshot.")
+    embed.set_footer(text="Run /setup_growth again to update. Use /growth to take a manual snapshot.")
     await channel.send(embed=embed)
+    wizard_registry.unregister(user.id, cancel_event)
     print(f"[SETUP] Growth config saved for guild {guild_id}")
 
 async def run_train_setup(interaction: discord.Interaction, bot):
     """Walk an admin through configuring the train schedule."""
+    import wizard_registry
     guild_id = interaction.guild_id
     channel  = interaction.channel
     user     = interaction.user
+    cancel_event = wizard_registry.register(user.id)
 
     def check(m):
         return m.author == user and m.channel == channel
@@ -1228,10 +1387,15 @@ async def run_train_setup(interaction: discord.Interaction, bot):
     async def ask_text(prompt: str, max_chars: int = 2000):
         """Send prompt and wait for typed reply. Both stay visible."""
         await channel.send(prompt)
-        try:
-            reply = await bot.wait_for("message", check=check, timeout=300)
-        except asyncio.TimeoutError:
-            await channel.send("⏰ Timed out. Run `/setup_train` to start again.")
+        reply = await wizard_registry.wait_or_cancel(
+            bot.wait_for("message", check=check, timeout=300),
+            cancel_event,
+        )
+        if reply is None:
+            if cancel_event.is_set():
+                await channel.send("❌ Cancelled.")
+            else:
+                await channel.send("⏰ Timed out. Run `/setup_train` to start again.")
             return None
         return reply.content.strip()[:max_chars]
 
@@ -1552,13 +1716,16 @@ async def run_train_setup(interaction: discord.Interaction, bot):
             embed.add_field(name="Template Preview", value=f"```{preview}```", inline=False)
     embed.set_footer(text="Run /setup_train again to update any of these settings.")
     await channel.send(embed=embed)
+    wizard_registry.unregister(user.id, cancel_event)
     print(f"[SETUP] Train config saved for guild {guild_id}")
 
 async def run_survey_setup(interaction: discord.Interaction, bot):
     """Walk an admin through configuring the squad powers survey."""
+    import wizard_registry
     guild_id = interaction.guild_id
     channel  = interaction.channel
     user     = interaction.user
+    cancel_event = wizard_registry.register(user.id)
 
     def check(m):
         return m.author == user and m.channel == channel
@@ -1678,12 +1845,17 @@ async def run_survey_setup(interaction: discord.Interaction, bot):
         "*Please fill out this survey each week to help us track squad powers, "
         "balance our teams, and prepare for season events!*"
     )
-    try:
-        intro_reply = await bot.wait_for("message", check=check, timeout=300)
-        intro_message = intro_reply.content.strip()
-    except asyncio.TimeoutError:
-        await channel.send("⏰ Timed out. Run `/setup_survey` to start again.")
+    intro_reply = await wizard_registry.wait_or_cancel(
+        bot.wait_for("message", check=check, timeout=300),
+        cancel_event,
+    )
+    if intro_reply is None:
+        if cancel_event.is_set():
+            await channel.send("❌ Cancelled.")
+        else:
+            await channel.send("⏰ Timed out. Run `/setup_survey` to start again.")
         return
+    intro_message = intro_reply.content.strip()
 
     # ── Step 6: Survey Questions ───────────────────────────────────────────────
     # Show default questions and ask keep/edit/scratch
@@ -1974,25 +2146,33 @@ async def run_survey_setup(interaction: discord.Interaction, bot):
     embed.add_field(name="Questions",           value=q_summary[:1024],                  inline=False)
     embed.set_footer(text="Run /setup_survey again to update. Run /survey_post to post the survey button.")
     await channel.send(embed=embed)
+    wizard_registry.unregister(user.id, cancel_event)
     print(f"[SETUP] Survey config saved for guild {guild_id} — {len(questions)} questions")
 
 async def run_storm_setup(interaction: discord.Interaction, bot, event_type: str):
     """Shared setup wizard for Desert Storm and Canyon Storm."""
+    import wizard_registry
     guild_id = interaction.guild_id
     channel  = interaction.channel
     user     = interaction.user
     label    = "Desert Storm" if event_type == "DS" else "Canyon Storm"
     cmd_name = "setup_desertstorm" if event_type == "DS" else "setup_canyonstorm"
+    cancel_event = wizard_registry.register(user.id)
 
     def check(m):
         return m.author == user and m.channel == channel
 
     async def ask_text(prompt: str, max_chars: int = 2000):
         await channel.send(prompt)
-        try:
-            reply = await bot.wait_for("message", check=check, timeout=300)
-        except asyncio.TimeoutError:
-            await channel.send(f"⏰ Timed out. Run `/{cmd_name}` to start again.")
+        reply = await wizard_registry.wait_or_cancel(
+            bot.wait_for("message", check=check, timeout=300),
+            cancel_event,
+        )
+        if reply is None:
+            if cancel_event.is_set():
+                await channel.send("❌ Cancelled.")
+            else:
+                await channel.send(f"⏰ Timed out. Run `/{cmd_name}` to start again.")
             return None
         return reply.content.strip()[:max_chars]
 
@@ -2271,23 +2451,31 @@ async def run_storm_setup(interaction: discord.Interaction, bot, event_type: str
                         inline=False)
     embed.set_footer(text=f"Run /{cmd_name} again to update.")
     await channel.send(embed=embed)
+    wizard_registry.unregister(user.id, cancel_event)
     print(f"[SETUP] {label} config saved for guild {guild_id}")
 
 async def run_event_setup(interaction: discord.Interaction, bot):
     """Walk an admin through configuring event types."""
+    import wizard_registry
     guild_id = interaction.guild_id
     channel  = interaction.channel
     user     = interaction.user
+    cancel_event = wizard_registry.register(user.id)
 
     def check(m):
         return m.author == user and m.channel == channel
 
     async def ask_text(prompt: str, max_chars: int = 200):
         await channel.send(prompt)
-        try:
-            reply = await bot.wait_for("message", check=check, timeout=120)
-        except asyncio.TimeoutError:
-            await channel.send("⏰ Timed out. Run `/setup_events` to start again.")
+        reply = await wizard_registry.wait_or_cancel(
+            bot.wait_for("message", check=check, timeout=120),
+            cancel_event,
+        )
+        if reply is None:
+            if cancel_event.is_set():
+                await channel.send("❌ Cancelled.")
+            else:
+                await channel.send("⏰ Timed out. Run `/setup_events` to start again.")
             return None
         return reply.content.strip()[:max_chars]
 
@@ -2730,23 +2918,31 @@ async def run_event_setup(interaction: discord.Interaction, bot):
         embed.add_field(name="Events", value=ev_list, inline=False)
     embed.set_footer(text="Run /setup_events again to add or edit events.")
     await channel.send(embed=embed)
+    wizard_registry.unregister(user.id, cancel_event)
     print(f"[SETUP] Events saved for guild {guild_id}")
 
 async def run_birthday_setup(interaction: discord.Interaction, bot):
     """Walk an admin through configuring birthday tracking."""
+    import wizard_registry
     guild_id = interaction.guild_id
     channel  = interaction.channel
     user     = interaction.user
+    cancel_event = wizard_registry.register(user.id)
 
     def check(m):
         return m.author == user and m.channel == channel
 
     async def ask_text(prompt: str, max_chars: int = 200):
         await channel.send(prompt)
-        try:
-            reply = await bot.wait_for("message", check=check, timeout=120)
-        except asyncio.TimeoutError:
-            await channel.send("⏰ Timed out. Run `/setup_birthdays` to start again.")
+        reply = await wizard_registry.wait_or_cancel(
+            bot.wait_for("message", check=check, timeout=120),
+            cancel_event,
+        )
+        if reply is None:
+            if cancel_event.is_set():
+                await channel.send("❌ Cancelled.")
+            else:
+                await channel.send("⏰ Timed out. Run `/setup_birthdays` to start again.")
             return None
         return reply.content.strip()[:max_chars]
 
@@ -3012,6 +3208,7 @@ async def run_birthday_setup(interaction: discord.Interaction, bot):
         embed.add_field(name="Reminder Time",    value=reminder_time,                     inline=True)
     embed.set_footer(text="Run /setup_birthdays again to update these settings.")
     await channel.send(embed=embed)
+    wizard_registry.unregister(user.id, cancel_event)
     print(f"[SETUP] Birthday config saved for guild {guild_id}")
 
 async def setup(bot: commands.Bot):

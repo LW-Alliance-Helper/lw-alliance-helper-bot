@@ -452,6 +452,49 @@ class SurveyCog(commands.Cog):
         )
         await interaction.followup.send("✅ Survey button posted.", ephemeral=True)
 
+    @app_commands.command(
+        name="survey",
+        description="Show the configured survey questions",
+    )
+    async def survey(self, interaction: discord.Interaction):
+        if not await _guard(interaction):
+            return
+
+        from config import get_survey_config
+        scfg = get_survey_config(interaction.guild_id)
+        questions = scfg.get("questions") or []
+
+        embed = discord.Embed(
+            title="📋 Survey Configuration",
+            color=discord.Color.blurple(),
+        )
+
+        if not questions:
+            embed.description = "*No survey questions configured. Run `/setup_survey` to add some.*"
+        else:
+            lines = []
+            for i, q in enumerate(questions, start=1):
+                qtype = q.get("type", "text")
+                if qtype == "dropdown":
+                    options = ", ".join(q.get("options") or [])
+                    lines.append(f"**{i}. {q['label']}** *(dropdown: {options})*")
+                else:
+                    lines.append(f"**{i}. {q['label']}** *(text)*")
+                if q.get("help"):
+                    lines.append(f"   _{q['help']}_")
+            embed.description = "\n".join(lines)[:4000]
+
+        embed.add_field(name="Stats Tab",       value=scfg.get("tab_squad_powers", "*not set*"), inline=False)
+        embed.add_field(name="History Tab",     value=scfg.get("tab_history", "*not set*"),      inline=False)
+        embed.add_field(
+            name="Intro Message",
+            value="✅ Configured" if scfg.get("intro_message") else "❌ Not configured",
+            inline=False,
+        )
+        embed.set_footer(text="Run /setup_survey to update. Run /survey_post to post the button.")
+
+        await interaction.response.send_message(embed=embed, ephemeral=True)
+
 
 async def setup(bot: commands.Bot):
     await bot.add_cog(SurveyCog(bot))

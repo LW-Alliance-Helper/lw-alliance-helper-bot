@@ -116,10 +116,10 @@ Run `/setup_train` to configure the train schedule:
 3. **Reminders** — whether the bot should post a reminder when someone is assigned the train, and if so, which channel and what time
 
 **Day-to-day use:**
-- Use `/schedule_set` to add upcoming train entries
-- Use `/schedule` to view the current schedule
+- Use `/train` to manage the schedule — buttons for **Add**, **Update**, **Generate Prompt**, and **Clear**
 - At your configured reminder time, the bot posts a reminder in your chosen channel. If blurb generation is enabled, a button lets you pull up the ChatGPT prompt instantly
-- Use `/trainprompt [date]` as a manual fallback at any time
+- Use `/train_log [date]` to look up past prompt log entries
+- Use `/train_addbirthdays` to manually add upcoming birthdays to the schedule
 
 ---
 
@@ -141,6 +141,10 @@ Run `/setup_birthdays` to configure birthday tracking:
 
 Birthday messages say: *🎂 Today is **[name]**'s birthday!*
 
+**Day-to-day use:**
+- Use `/birthdays` to see upcoming birthdays in the next 14 days
+- Use `/train_addbirthdays` to manually run the birthday check now
+
 ---
 
 ### ⚔️ Desert Storm — `/setup_desertstorm`
@@ -161,10 +165,11 @@ Run `/setup_desertstorm` to configure Desert Storm:
 - `{time}` — event time (auto-filled when drafting)
 
 **Day-to-day use:**
-- Use `/draftds` to generate a mail draft. You'll select the team and time slot (Desert Storm runs at 18:00 and 23:00 Server Time, displayed in your timezone)
+- Use `/desertstorm` to view current rosters and the configured mail template
+- Use `/desertstorm_draft` to generate a mail draft. You'll select the team and time slot (Desert Storm runs at 18:00 and 23:00 Server Time, displayed in your timezone)
 - Review the pre-filled draft, edit as needed, then approve to save and get a copyable mail block
-- After the event, use `/logds` to record participation data
-- Use `/viewlog DS [date]` to look up past log entries
+- After the event, use `/desertstorm_participation` to record participation data
+- Use `/desertstorm_log [date]` to look up past log entries
 
 ---
 
@@ -177,9 +182,10 @@ Run `/setup_canyonstorm` — the setup is identical to Desert Storm above.
 Canyon Storm runs at 12:00 and 23:00 Server Time (displayed in your timezone).
 
 **Day-to-day use:**
-- `/draftcs` — generate a Canyon Storm mail draft
-- `/logcs` — log participation after the event
-- `/viewlog CS [date]` — look up past log entries
+- `/canyonstorm` — view current rosters and the configured mail template
+- `/canyonstorm_draft` — generate a Canyon Storm mail draft
+- `/canyonstorm_participation` — log participation after the event
+- `/canyonstorm_log [date]` — look up past log entries
 
 ---
 
@@ -201,9 +207,10 @@ The question builder supports two question types:
 - **Dropdown** — the member picks from a list of options you define (up to 25)
 
 **Day-to-day use:**
-- Run `/postsurvey` to post the survey button in your survey channel
+- Run `/survey_post` to post the survey button in your survey channel
 - Members click **Answer**, complete the survey in a private thread, and their data is saved automatically
 - Leadership sees a notification embed in the notification channel for each submission
+- Use `/survey` to see the configured questions any time
 
 ---
 
@@ -225,28 +232,31 @@ The growth tab will have a column per metric per snapshot period, so you can see
 
 **Day-to-day use:**
 - Snapshots run automatically on your configured schedule
-- Use `/rungrowth` to take a manual snapshot at any time
+- Use `/growth` to open an action menu — run a snapshot manually, view the current configuration, or jump back into `/setup_growth`
 
 ---
 
 ## Day-to-Day Quick Reference
 
+For the full list of every slash command and what it does, run `/help` in your leadership channel or check the [Commands reference](https://lw-alliance-helper.github.io/commands.html) on the docs site.
+
 | Situation | Command |
 |---|---|
-| Post or repost the survey button | `/postsurvey` |
-| View the train schedule | `/schedule` |
-| Add entries to the train schedule | `/schedule_set` |
-| Get a ChatGPT prompt for today's train | `/trainprompt` |
-| Update the active member tab for a new season | `/setmembertab [tab name]` |
-| Manually run the birthday check | `/checkbirthdays` |
+| Post or repost the survey button | `/survey_post` |
+| Manage the train schedule (add, update, generate prompt, clear) | `/train` |
+| Add upcoming birthdays to the train schedule | `/train_addbirthdays` |
+| See upcoming birthdays | `/birthdays` |
 | Open the event editor | `/events` |
-| Generate a Desert Storm mail draft | `/draftds` |
-| Generate a Canyon Storm mail draft | `/draftcs` |
-| Log Desert Storm participation | `/logds` |
-| Log Canyon Storm participation | `/logcs` |
-| Look up a past log entry | `/viewlog [DS or CS] [date]` |
-| Run a growth snapshot manually | `/rungrowth` |
-| Configure growth tracking | `/setup_growth` |
+| Look up recently fired events | `/events_log` |
+| Generate a Desert Storm mail draft | `/desertstorm_draft` |
+| Generate a Canyon Storm mail draft | `/canyonstorm_draft` |
+| Log Desert Storm participation | `/desertstorm_participation` |
+| Log Canyon Storm participation | `/canyonstorm_participation` |
+| Look up a past Desert Storm log | `/desertstorm_log [date]` |
+| Look up a past Canyon Storm log | `/canyonstorm_log [date]` |
+| Run a growth snapshot manually | `/growth` |
+| View all configured settings | `/view_configuration` |
+| Cancel an active setup wizard | `/cancel` |
 | See all commands | `/help` |
 
 ---
@@ -271,11 +281,14 @@ Discord buttons lose their connection to the bot when it restarts. Use the corre
 | Button | Use instead |
 |---|---|
 | Event editor or approval | `/events` |
-| Train reminder prompt button | `/trainprompt` |
-| Desert Storm approval | `/draftds` |
-| Canyon Storm approval | `/draftcs` |
-| DS/CS log steps | `/logds` or `/logcs` |
-| Survey button | `/postsurvey` |
+| Train reminder prompt button | `/train` |
+| Desert Storm approval | `/desertstorm_draft` |
+| Canyon Storm approval | `/canyonstorm_draft` |
+| DS/CS log steps | `/desertstorm_participation` or `/canyonstorm_participation` |
+| Survey button | `/survey_post` |
+
+**A setup wizard is stuck or you want to start over**
+Run `/cancel` to abort any active setup wizard, then re-run the relevant `/setup_*` command.
 
 **Something else isn't working**
-Use `/help` to see all available commands and make sure the relevant feature has been configured with its `/setup_*` command.
+Use `/help` to see all available commands and make sure the relevant feature has been configured with its `/setup_*` command. Run `/view_configuration` at any time to see the current settings for every wizard in one place.

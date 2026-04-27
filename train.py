@@ -237,7 +237,7 @@ def get_member_tab_name(guild_id: int = None) -> str:
     return tab if tab else "Season 5 - Off-Season"
 
 
-def _get_member_sheet(tab_name: str):
+def _get_member_sheet(tab_name: str, guild_id: int = None):
     """Return the active member worksheet."""
     import gspread
     from google.oauth2.service_account import Credentials
@@ -290,34 +290,6 @@ def parse_birthday(raw: str) -> tuple[int, int] | None:
                 return None
 
     return None
-
-
-def load_birthdays(tab_name: str) -> list[dict]:
-    """
-    Load all members with birthdays from the member sheet.
-    Returns a list of { "name": str, "month": int, "day": int }
-    Data starts at row 10 (index 9).
-    Col E (index 4) = Name, Col F (index 5) = Alias, Col I (index 8) = Birthday.
-    """
-    try:
-        ws   = _get_member_sheet(tab_name)
-        rows = ws.get_all_values()
-        members = []
-        for row in rows[9:]:  # data starts at row 10
-            if len(row) < 9:
-                continue
-            name     = row[4].strip()   # Column E
-            bday_raw = row[8].strip()   # Column I (shifted from H after alias col added)
-            if not name or not bday_raw:
-                continue
-            parsed = parse_birthday(bday_raw)
-            if parsed:
-                members.append({"name": name, "month": parsed[0], "day": parsed[1]})
-        print(f"[BIRTHDAY] Loaded {len(members)} members with birthdays from '{tab_name}'")
-        return members
-    except Exception as e:
-        print(f"[BIRTHDAY] Error loading birthdays from '{tab_name}': {e}")
-        return []
 
 
 def check_and_add_birthdays(schedule: dict, guild_id: int = None) -> tuple[dict, list[str]]:
@@ -1357,9 +1329,168 @@ class TrainCog(commands.Cog):
                 ephemeral=True,
             )
 
+    # ── /birthdays ─────────────────────────────────────────────────────────────
+
+    @app_commands.command(
+        name="birthdays",
+        description="Show the next 14 days of upcoming birthdays from your member sheet",
+    )
+    async def birthdays(self, interaction: discord.Interaction):
+        if not await _guard(interaction):
+            return
+
+        await interaction.response.defer(ephemeral=True)
+
+        from config import get_birthday_config
+        guild_id = interaction.guild_id if hasattr(interaction, "guild_id") else None
+        bcfg     = get_birthday_config(guild_id) if guild_id else {}
+        tab_name = bcfg.get("tab_name") or get_member_tab_name(guild_id)
+
+        try:
+            members = await asyncio.get_event_loop().run_in_executor(
+                None, load_birthdays, tab_name, guild_id
+            )
+        except Exception as e:
+            await interaction.followup.send(
+                f"⚠️ Could not load birthdays: {e}", ephemeral=True
+            )
+            return
+
+        if not members:
+            await interaction.followup.send(
+                f"⚠️ No birthdays found in **{tab_name}**. Run `/setup_birthdays` to verify the tab and column settings.",
+                ephemeral=True,
+            )
+            return
+
+        today = date.today()
+        upcoming = []
+        for m in members:
+            try:
+                # Find the next occurrence of this birthday on or after today
+                this_year = date(today.year, m["month"], m["day"])
+                if this_year < today:
+                    next_occurrence = date(today.year + 1, m["month"], m["day"])
+                else:
+                    next_occurrence = this_year
+            except ValueError:
+                continue
+            days_away = (next_occurrence - today).days
+            if 0 <= days_away <= 14:
+                upcoming.append((days_away, next_occurrence, m["name"]))
+
+        upcoming.sort(key=lambda t: (t[0], t[2].lower()))
+
+        embed = discord.Embed(
+            title="🎂 Upcoming Birthdays — Next 14 Days",
+            color=discord.Color.magenta(),
+        )
+
+        if not upcoming:
+            embed.description = "*No birthdays in the next 14 days.*"
+        else:
+            lines = []
+            for days_away, when, name in upcoming:
+                if days_away == 0:
+                    label = "**Today!**"
+                elif days_away == 1:
+                    label = "Tomorrow"
+                else:
+                    label = f"in {days_away} days"
+                lines.append(f"• **{when.strftime('%A, %B %-d')}** — {name} *({label})*")
+            embed.description = "\n".join(lines)
+
+        embed.set_footer(text=f"Source: {tab_name} · Run /setup_birthdays to change settings")
+        await interaction.followup.send(embed=embed, ephemeral=True)
+
     # ── /cancel ────────────────────────────────────────────────────────────────
 
-    @app_commands.command(name="cancel", description="Cancel your active train wizard or storm log session")
+    # ── /train_log ─────────────────────────────────────────────────────────────
+
+    @app_commands.command(
+        name="train_log",
+        description="Show the train prompt log (defaults to past 14 days; pass a date to filter)",
+    )
+    @app_commands.describe(date="Optional date, e.g. 'April 14' or '4/14' (defaults to last 14 days)")
+    async def train_log(self, interaction: discord.Interaction, date: str = None):
+        if not await _guard(interaction):
+            return
+
+        await interaction.response.defer(ephemeral=True)
+
+        try:
+            schedule = await asyncio.get_event_loop().run_in_executor(None, load_schedule)
+        except Exception as e:
+            await interaction.followup.send(f"⚠️ Could not load schedule: {e}", ephemeral=True)
+            return
+
+        target_date = None
+        if date:
+            parsed_d, _, _ = parse_date_and_name(f"{date} - placeholder")
+            if not parsed_d:
+                await interaction.followup.send(
+                    f"⚠️ Could not parse date **{date}**. Try a format like `April 14` or `4/14`.",
+                    ephemeral=True,
+                )
+                return
+            target_date = parsed_d
+
+        embed = discord.Embed(
+            title="🚂 Train Prompt Log",
+            color=discord.Color.blurple(),
+        )
+
+        from datetime import date as _date
+        today = _date.today()
+
+        if target_date:
+            entry = schedule.get(target_date.isoformat())
+            if not entry:
+                embed.description = f"*No train entry found for {target_date.strftime('%B %-d, %Y')}.*"
+            else:
+                embed.add_field(name="Date",   value=target_date.strftime("%A, %B %-d, %Y"),         inline=False)
+                embed.add_field(name="Name",   value=entry.get("name") or "*not set*",               inline=False)
+                embed.add_field(name="Theme",  value=entry.get("theme") or "*not set*",              inline=False)
+                embed.add_field(name="Tone",   value=entry.get("tone")  or "*not set*",              inline=False)
+                embed.add_field(name="Notes",  value=(entry.get("notes") or "*none*")[:1024],        inline=False)
+                embed.add_field(
+                    name="Prompt Retrieved",
+                    value="✅ Yes" if entry.get("prompt_retrieved") else "❌ No",
+                    inline=False,
+                )
+        else:
+            cutoff = today - timedelta(days=14)
+            recent = []
+            for date_str, entry in schedule.items():
+                try:
+                    d = _date.fromisoformat(date_str)
+                except ValueError:
+                    continue
+                if cutoff <= d <= today + timedelta(days=14):
+                    recent.append((d, entry))
+            recent.sort(key=lambda t: t[0], reverse=True)
+
+            if not recent:
+                embed.description = "*No train entries in the past 14 days.*"
+            else:
+                lines = []
+                for d, entry in recent[:20]:
+                    retrieved = "✅" if entry.get("prompt_retrieved") else "❌"
+                    name = entry.get("name") or "*unset*"
+                    theme = entry.get("theme") or ""
+                    bits = [f"**{d.strftime('%a %b %-d')}** — {name}"]
+                    if theme:
+                        bits.append(theme)
+                    bits.append(f"prompt {retrieved}")
+                    lines.append("• " + " · ".join(bits))
+                embed.description = "\n".join(lines)[:4000]
+                embed.set_footer(text="Showing the most recent 20 entries within ±14 days. Pass a date to filter.")
+
+        await interaction.followup.send(embed=embed, ephemeral=True)
+
+    # ── /cancel ────────────────────────────────────────────────────────────────
+
+    @app_commands.command(name="cancel", description="Cancel any active wizard or log session")
     async def cancel(self, interaction: discord.Interaction):
         if not await _guard(interaction):
             return
@@ -1371,6 +1502,12 @@ class TrainCog(commands.Cog):
             from storm_log import active_logs
             if interaction.user.id in active_logs:
                 active_logs[interaction.user.id].set()
+                cancelled = True
+        except ImportError:
+            pass
+        try:
+            import wizard_registry
+            if wizard_registry.cancel_user(interaction.user.id):
                 cancelled = True
         except ImportError:
             pass

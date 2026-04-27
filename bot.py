@@ -4,7 +4,7 @@ from discord import app_commands
 from discord.ext import commands, tasks
 import re
 import os
-from datetime import datetime, date, timedelta
+from datetime import datetime, date, timedelta, timezone
 from dotenv import load_dotenv
 from scheduler import (
     run_scheduler, post_editor, get_event_datetimes, default_event_list,
@@ -182,33 +182,71 @@ async def on_message(message):
 
 
 @bot.tree.command(
-    name="rungrowth",
-    description="Manually run a growth snapshot for this server",
+    name="growth",
+    description="Show growth tracking status with options to run a snapshot or edit config",
 )
-async def rungrowth_slash(interaction: discord.Interaction):
+async def growth_slash(interaction: discord.Interaction):
     if not await guard(interaction):
         return
     from config import get_growth_config
-    gcfg = get_growth_config(interaction.guild_id)
-    if not gcfg.get("enabled"):
-        await interaction.response.send_message(
-            "⚠️ Growth tracking isn't configured yet. Run `/setup_growth` to set it up.",
-            ephemeral=True,
-        )
-        return
-    await interaction.response.defer(ephemeral=True)
-    try:
-        from growth import _run_growth_snapshot_inner
-        _run_growth_snapshot_inner(interaction.guild_id)
-        await interaction.followup.send(
-            f"✅ Growth snapshot complete — check the **{gcfg.get('tab_growth', 'Growth Tracking')}** tab.",
-            ephemeral=True,
-        )
-    except Exception as e:
-        await interaction.followup.send(
-            f"⚠️ Growth snapshot failed: {e}",
-            ephemeral=True,
-        )
+    guild_id = interaction.guild_id
+    gcfg = get_growth_config(guild_id)
+
+    metrics = gcfg.get("metrics") or []
+    freq    = gcfg.get("snapshot_frequency", "monthly")
+    sched   = (
+        f"Monthly on day {gcfg.get('snapshot_day', 1)}"
+        if freq == "monthly"
+        else f"Every {gcfg.get('snapshot_interval', 30)} days"
+    )
+    enabled = bool(gcfg.get("enabled"))
+
+    embed = discord.Embed(
+        title="📈 Growth Tracking",
+        color=discord.Color.green() if enabled else discord.Color.greyple(),
+    )
+    embed.add_field(name="Status",         value="✅ Enabled" if enabled else "❌ Disabled",      inline=False)
+    embed.add_field(name="Source Tab",     value=gcfg.get("tab_source", "*not set*"),            inline=False)
+    embed.add_field(name="Growth Tab",     value=gcfg.get("tab_growth", "*not set*"),            inline=False)
+    embed.add_field(name="Snapshot",       value=sched,                                          inline=False)
+    embed.add_field(
+        name=f"Metrics ({len(metrics)})",
+        value=("\n".join(f"• **{m['label']}** — column {m['col']}" for m in metrics) or "*none configured*")[:1024],
+        inline=False,
+    )
+
+    class GrowthActionView(discord.ui.View):
+        def __init__(self):
+            super().__init__(timeout=120)
+            if not enabled:
+                self.run_now.disabled = True
+
+        @discord.ui.button(label="📸 Run Snapshot Now", style=discord.ButtonStyle.success)
+        async def run_now(self, inter: discord.Interaction, button: discord.ui.Button):
+            for item in self.children: item.disabled = True
+            await inter.response.edit_message(view=self)
+            try:
+                from growth import _run_growth_snapshot_inner
+                _run_growth_snapshot_inner(guild_id)
+                await inter.followup.send(
+                    f"✅ Growth snapshot complete — check the **{gcfg.get('tab_growth', 'Growth Tracking')}** tab.",
+                    ephemeral=True,
+                )
+            except Exception as e:
+                await inter.followup.send(f"⚠️ Growth snapshot failed: {e}", ephemeral=True)
+            self.stop()
+
+        @discord.ui.button(label="⚙️ Edit Config", style=discord.ButtonStyle.primary)
+        async def edit_config(self, inter: discord.Interaction, button: discord.ui.Button):
+            for item in self.children: item.disabled = True
+            await inter.response.edit_message(view=self)
+            await inter.followup.send(
+                "Run `/setup_growth` to update the growth tracking configuration.",
+                ephemeral=True,
+            )
+            self.stop()
+
+    await interaction.response.send_message(embed=embed, view=GrowthActionView(), ephemeral=True)
 
 
 # ── /events command ────────────────────────────────────────────────────────────
@@ -287,6 +325,72 @@ async def events_slash(interaction: discord.Interaction, date: str = None):
     print(f"[EVENTS] Manual event editor opened for {event_date} by {interaction.user}")
 
 
+# ── /events_log command ───────────────────────────────────────────────────────
+
+@bot.tree.command(
+    name="events_log",
+    description="Show the last 7 days of approved event posts (who approved, when)",
+)
+async def events_log_slash(interaction: discord.Interaction):
+    if not await guard(interaction):
+        return
+
+    await interaction.response.defer(ephemeral=True)
+
+    from config import get_config
+    cfg = get_config(interaction.guild_id)
+    if not cfg or not cfg.leadership_channel_id:
+        await interaction.followup.send(
+            "⚠️ Leadership channel isn't configured. Run `/setup` to configure it.",
+            ephemeral=True,
+        )
+        return
+
+    leadership = bot.get_channel(cfg.leadership_channel_id)
+    if leadership is None:
+        await interaction.followup.send(
+            "⚠️ Could not access the leadership channel.", ephemeral=True
+        )
+        return
+
+    cutoff = datetime.now(tz=timezone.utc) - timedelta(days=7)
+    matches = []
+    try:
+        async for msg in leadership.history(after=cutoff, limit=500):
+            if msg.author.id != bot.user.id:
+                continue
+            if msg.content.startswith("✅ **Approved by"):
+                matches.append(msg)
+    except discord.Forbidden:
+        await interaction.followup.send(
+            "⚠️ Bot does not have permission to read message history in the leadership channel.",
+            ephemeral=True,
+        )
+        return
+
+    matches.sort(key=lambda m: m.created_at, reverse=True)
+
+    embed = discord.Embed(
+        title="📣 Events Log — Past 7 Days",
+        description="*Showing approved event posts from the past 7 days only.*",
+        color=discord.Color.blurple(),
+    )
+
+    if not matches:
+        embed.add_field(name="No approvals found", value="*No event posts have been approved in the past 7 days.*", inline=False)
+    else:
+        lines = []
+        for msg in matches[:25]:
+            # First line is "✅ **Approved by NAME at H:MMpm et**"
+            header = msg.content.split("\n", 1)[0]
+            local_dt = msg.created_at.astimezone(ET).strftime("%a %b %-d, %-I:%M%p ET").replace("AM", "am").replace("PM", "pm")
+            lines.append(f"• {header} *— logged {local_dt}*")
+        embed.add_field(name=f"Approvals ({len(matches)})", value="\n".join(lines)[:1024], inline=False)
+
+    embed.set_footer(text="Reads from the leadership channel's message history.")
+    await interaction.followup.send(embed=embed, ephemeral=True)
+
+
 # ── /help command ──────────────────────────────────────────────────────────────
 
 @bot.tree.command(
@@ -308,7 +412,7 @@ async def help_slash(interaction: discord.Interaction):
         value=(
             "Configure the bot for your server. Start here before using any other features.\n"
             "`/setup` — Configure roles, leadership channel, timezone, and Google Sheet\n"
-            "`/setup_status` — View current server configuration\n"
+            "`/view_configuration` — View all configured settings across every wizard\n"
             "`/setup_reset` — Clear server configuration and start over"
         ),
         inline=False,
@@ -320,7 +424,8 @@ async def help_slash(interaction: discord.Interaction):
             "Automate event scheduling for Plague Marauder, Zombie Siege, and any other recurring events. "
             "Drafts are posted to leadership for review before going public.\n"
             "`/setup_events` — Configure events, announcement channels, draft time, and 5-min warning\n"
-            "`/events [date]` — Open the event editor for today or a specific date"
+            "`/events [date]` — Open the event editor for today or a specific date\n"
+            "`/events_log` — Show approved event posts from the past 7 days"
         ),
         inline=False,
     )
@@ -331,10 +436,8 @@ async def help_slash(interaction: discord.Interaction):
             "Track who is assigned the alliance train each day and optionally generate a personalised "
             "ChatGPT prompt to write a blurb for that member's announcement.\n"
             "`/setup_train` — Configure the train tab, blurb generation, and reminders\n"
-            "`/schedule` — View the current train schedule\n"
-            "`/schedule_set` — Add or update schedule entries\n"
-            "`/schedule_clear` — Clear the entire schedule\n"
-            "`/trainprompt [date]` — Get the ChatGPT prompt for a scheduled member\n"
+            "`/train` — View the schedule with Add / Update / Generate Prompt / Clear buttons\n"
+            "`/train_log [date]` — Show recent prompt log entries (defaults to last 14 days)\n"
             "`/train_addbirthdays` — Manually run the birthday check now"
         ),
         inline=False,
@@ -345,7 +448,8 @@ async def help_slash(interaction: discord.Interaction):
         value=(
             "Track member birthdays from your Google Sheet and optionally post announcements "
             "in Discord and assign members to the train schedule on their birthday.\n"
-            "`/setup_birthdays` — Configure birthday tracking, train integration, and announcements"
+            "`/setup_birthdays` — Configure birthday tracking, train integration, and announcements\n"
+            "`/birthdays` — Show upcoming birthdays in the next 14 days"
         ),
         inline=False,
     )
@@ -355,6 +459,7 @@ async def help_slash(interaction: discord.Interaction):
         value=(
             "Generate and manage Desert Storm team mail drafts and log participation each week.\n"
             "`/setup_desertstorm` — Configure teams, sheet tab, log channel, and mail template\n"
+            "`/desertstorm` — Show current rosters and the active mail template\n"
             "`/desertstorm_draft` — Generate a Desert Storm mail draft for Team A or B\n"
             "`/desertstorm_participation` — Log Desert Storm participation data\n"
             "`/desertstorm_log [date]` — View a Desert Storm log entry (defaults to today)"
@@ -367,6 +472,7 @@ async def help_slash(interaction: discord.Interaction):
         value=(
             "Generate and manage Canyon Storm team mail drafts and log participation each week.\n"
             "`/setup_canyonstorm` — Configure teams, sheet tab, log channel, and mail template\n"
+            "`/canyonstorm` — Show current rosters and the active mail template\n"
             "`/canyonstorm_draft` — Generate a Canyon Storm mail draft for Team A or B\n"
             "`/canyonstorm_participation` — Log Canyon Storm participation data\n"
             "`/canyonstorm_log [date]` — View a Canyon Storm log entry (defaults to today)"
@@ -380,8 +486,8 @@ async def help_slash(interaction: discord.Interaction):
             "Collect member statistics through a private Discord thread survey. "
             "Responses are saved directly to your Google Sheet.\n"
             "`/setup_survey` — Configure survey questions, channels, and sheet tabs\n"
-            "`/survey_post` — Post (or repost) the survey button in the survey channel\n"
-            "Members click Answer to open a private thread and submit their stats"
+            "`/survey` — Show the configured survey questions\n"
+            "`/survey_post` — Post (or repost) the survey button in the survey channel"
         ),
         inline=False,
     )
@@ -391,16 +497,15 @@ async def help_slash(interaction: discord.Interaction):
         value=(
             "Take periodic snapshots of your members' stats to track alliance growth over time. "
             "You define which metrics to track and how often — snapshots are saved to your Google Sheet.\n"
-
-            "`/setup_growth` — Configure source tab, metrics to track, and snapshot schedule\n\n"
-            "`/rungrowth` — Manually run a growth snapshot"
+            "`/setup_growth` — Configure source tab, metrics to track, and snapshot schedule\n"
+            "`/growth` — Show growth status with options to run a snapshot or edit config"
         ),
         inline=False,
     )
 
     embed.add_field(
         name="🔧 Utilities",
-        value="`/cancel` — Cancel your active train wizard or storm log session",
+        value="`/cancel` — Cancel any active wizard or log session",
         inline=False,
     )
 

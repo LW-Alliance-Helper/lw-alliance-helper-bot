@@ -618,6 +618,86 @@ class StormCog(commands.Cog):
         await run_cs_edit_step(self.bot, channel, interaction.user, team, zones)
 
 
+    @app_commands.command(
+        name="desertstorm",
+        description="Show the configured Desert Storm setup and current rosters",
+    )
+    async def desertstorm(self, interaction: discord.Interaction):
+        if not await _guard(interaction):
+            return
+        await _show_storm_overview(interaction, "DS")
+
+    @app_commands.command(
+        name="canyonstorm",
+        description="Show the configured Canyon Storm setup and current rosters",
+    )
+    async def canyonstorm(self, interaction: discord.Interaction):
+        if not await _guard(interaction):
+            return
+        await _show_storm_overview(interaction, "CS")
+
+
+async def _show_storm_overview(interaction: discord.Interaction, event_type: str):
+    """Render the storm config + the current roster mail template for the given event type."""
+    await interaction.response.defer(ephemeral=True)
+    from config import get_storm_config, get_config
+
+    label    = "Desert Storm" if event_type == "DS" else "Canyon Storm"
+    icon     = "⚔️" if event_type == "DS" else "🏜️"
+    cmd_name = "desertstorm" if event_type == "DS" else "canyonstorm"
+    setup_cmd = "setup_desertstorm" if event_type == "DS" else "setup_canyonstorm"
+
+    cfg  = get_config(interaction.guild_id)
+    scfg = get_storm_config(interaction.guild_id, event_type)
+    log_channel_id = (cfg.ds_log_channel_id if event_type == "DS" else cfg.cs_log_channel_id) if cfg else 0
+
+    embed = discord.Embed(
+        title=f"{icon} {label}",
+        color=discord.Color.dark_red() if event_type == "DS" else discord.Color.gold(),
+    )
+    embed.add_field(name="Sheet Tab",   value=scfg.get("tab_name", "*not set*"),                        inline=False)
+    embed.add_field(name="Log Channel", value=f"<#{log_channel_id}>" if log_channel_id else "*not set*", inline=False)
+    embed.add_field(
+        name="Time Option 1",
+        value=(
+            f"{scfg.get('time_option_1_label') or '*not set*'} — "
+            f"{scfg.get('time_option_1_local') or '?'} local / "
+            f"{scfg.get('time_option_1_server') or '?'} server"
+        ),
+        inline=False,
+    )
+    embed.add_field(
+        name="Time Option 2",
+        value=(
+            f"{scfg.get('time_option_2_label') or '*not set*'} — "
+            f"{scfg.get('time_option_2_local') or '?'} local / "
+            f"{scfg.get('time_option_2_server') or '?'} server"
+        ),
+        inline=False,
+    )
+
+    # Build the rendered mail template — same templating used by /[event]_draft
+    try:
+        if event_type == "DS":
+            zones, subs = await asyncio.get_event_loop().run_in_executor(
+                None, load_ds_assignments, "A"
+            )
+            template = build_ds_template(zones, subs)
+        else:
+            zones = await asyncio.get_event_loop().run_in_executor(
+                None, load_cs_assignments, "A"
+            )
+            template = build_cs_template(zones)
+        # Discord field value cap is 1024 chars
+        preview = template[:1000] + ("\n…" if len(template) > 1000 else "")
+        embed.add_field(name="Current Mail Template (Team A)", value=f"```\n{preview}\n```", inline=False)
+    except Exception as e:
+        embed.add_field(name="Current Mail Template", value=f"⚠️ Could not load: {e}", inline=False)
+
+    embed.set_footer(text=f"Run /{setup_cmd} to update. Run /{cmd_name}_draft to generate a draft.")
+    await interaction.followup.send(embed=embed, ephemeral=True)
+
+
 async def setup(bot: commands.Bot):
     await bot.add_cog(StormCog(bot))
 

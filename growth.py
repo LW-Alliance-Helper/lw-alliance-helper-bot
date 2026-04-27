@@ -234,33 +234,3 @@ def _run_growth_snapshot_inner(guild_id: int = None):
 
     print(f"[GROWTH] Snapshot complete for {month_label} — {len(members)} members (guild {guild_id})")
 
-
-def run_growth_snapshot():
-    """
-    Take a monthly snapshot for all configured guilds.
-    Only runs for guilds that have growth tracking configured (tab names set).
-    """
-    import traceback, sqlite3
-    from config import DB_PATH
-    try:
-        with sqlite3.connect(DB_PATH) as conn:
-            rows = conn.execute(
-                "SELECT guild_id FROM guild_configs WHERE setup_complete = 1"
-            ).fetchall()
-        guild_ids = [row[0] for row in rows] or [None]
-    except Exception as e:
-        print(f"[GROWTH] Could not read guild list: {e}")
-        guild_ids = [None]
-
-    for gid in guild_ids:
-        try:
-            _run_growth_snapshot_inner(gid)
-        except Exception as e:
-            # Catch missing sheet tab gracefully — guild hasn't set up growth tracking yet
-            err_str = str(e)
-            if "WorksheetNotFound" in type(e).__name__ or "WorksheetNotFound" in err_str:
-                print(f"[GROWTH] Skipping guild {gid} — sheet tab not found. Run /setup to configure growth tracking.")
-            else:
-                print(f"[GROWTH] Snapshot failed for guild {gid}: {e}")
-                print(f"[GROWTH] Traceback:\n{traceback.format_exc()}")
-

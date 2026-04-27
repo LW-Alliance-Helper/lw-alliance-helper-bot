@@ -1,13 +1,12 @@
 """
-setup_cog.py — /setup wizard for new guilds
+setup_cog.py — /setup_* wizards for new guilds
 
 Walks a server admin through configuring the bot using Discord's native
 role and channel select menus. All values are saved to the config database.
 
-Commands:
-  /setup        — Run the full setup wizard
-  /setup_status — Show the current config for this server
-  /setup_reset  — Clear this server's config and start over (admin only)
+Holds /setup, /setup_reset, /view_configuration, and the per-feature
+/setup_train, /setup_growth, /setup_birthdays, /setup_desertstorm,
+/setup_canyonstorm, /setup_events, /setup_survey commands.
 """
 
 import asyncio

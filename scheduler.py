@@ -897,11 +897,3 @@ async def fire_warning(bot, event_key: str, event_list: list[dict], cfg=None):
 
     pending_warnings.pop(event_key, None)
     print(f"[SCHEDULER] 5-minute warning fired for {event_key}")
-    if leadership:
-        await leadership.send(
-            f"⏱️ **5-minute warning auto-posted** at "
-            f"{datetime.now(tz=ET).strftime('%-I:%M%p ET').lower()}"
-        )
-
-    pending_warnings.pop(event_key, None)
-    print(f"[SCHEDULER] 5-minute warning fired for {event_key}")

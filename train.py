@@ -517,23 +517,9 @@ async def _guard(interaction: discord.Interaction) -> bool:
     return True
 
 
-# ── Note: /train UI components live in train_ui.py ────────────────────────────
-#
-# The new /train command's view classes (TrainActionView, AddEntryModal,
-# UpdateEntryModal, UpdateSelectView, GeneratePromptSelectView, RunWizardView,
-# ConfirmTrainClearView) and the run_blurb_wizard_for_entry helper were extracted
-# to train_ui.py to keep this file at a manageable size.
-#
-# Both TrainActionView (used by the /train command method below) and
-# run_blurb_wizard_for_entry (used by ReminderView.launch above) are imported
-# lazily inside their call sites to avoid the train ⇆ train_ui circular import
-# at module-load time.
-
-
-# ── Cog ────────────────────────────────────────────────────────────────────────
-#
-# TrainCog (slash commands + reminder loop) was extracted to train_cog.py to
-# keep this file at a manageable size. setup() below imports and registers it.
+# /train UI components live in train_ui.py and are imported lazily at their
+# call sites (TrainActionView from the cog, run_blurb_wizard_for_entry from
+# ReminderView.launch above) to avoid the train ⇆ train_ui circular import.
 
 
 # Alias to avoid conflict with `date` parameter name in slash commands

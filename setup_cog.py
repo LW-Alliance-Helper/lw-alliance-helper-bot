@@ -843,14 +843,73 @@ async def run_growth_setup(interaction: discord.Interaction, bot):
     async def ask_text(prompt: str, max_chars: int = 200):
         await channel.send(prompt)
         try:
-            reply = await bot.wait_for("message", check=check, timeout=120)
+            reply = await bot.wait_for("message", check=check, timeout=WIZARD_TIMEOUT)
         except asyncio.TimeoutError:
             await channel.send("⏰ Timed out. Run `/setup_growth` to start again.")
             return None
         return reply.content.strip()[:max_chars]
 
+    async def ask_keep_or_change(
+        prompt: str,
+        default: str,
+        modal_title: str,
+        modal_label: str,
+    ) -> str | None:
+        """Show a `Keep default / Change` view and return the chosen value."""
+
+        class KeepOrChangeDefaultView(discord.ui.View):
+            def __init__(self):
+                super().__init__(timeout=WIZARD_TIMEOUT)
+                self.value = None
+                self.confirmed = False
+
+            @discord.ui.button(
+                label=f"✅ Keep default: {default}"[:80],
+                style=discord.ButtonStyle.success,
+            )
+            async def keep(self, inter: discord.Interaction, button: discord.ui.Button):
+                self.value = default
+                self.confirmed = True
+                for item in self.children: item.disabled = True
+                await inter.response.edit_message(
+                    content=f"✅ Using **{default}**", view=self
+                )
+                self.stop()
+
+            @discord.ui.button(label="✏️ Change", style=discord.ButtonStyle.secondary)
+            async def change(self, inter: discord.Interaction, button: discord.ui.Button):
+                modal = TextInputModal(modal_title, modal_label, default=default)
+                await inter.response.send_modal(modal)
+                await modal.wait()
+                self.value = (modal.value or default).strip() or default
+                self.confirmed = True
+                for item in self.children: item.disabled = True
+                try:
+                    await inter.message.edit(
+                        content=f"✅ Using **{self.value}**", view=self
+                    )
+                except discord.HTTPException:
+                    pass
+                self.stop()
+
+        view = KeepOrChangeDefaultView()
+        await channel.send(prompt, view=view)
+        await view.wait()
+        if not view.confirmed:
+            await channel.send("⏰ Timed out. Run `/setup_growth` to start again.")
+            return None
+        return view.value
+
     from config import get_growth_config, save_growth_config
     current = get_growth_config(guild_id)
+
+    # Defaults: prefer previously saved value, otherwise hardcoded fallback
+    DEFAULT_TAB_SOURCE     = current.get("tab_source")     or "Squad Powers"
+    DEFAULT_DATA_START_ROW = current.get("data_start_row") or 2
+    DEFAULT_NAME_COL       = current.get("name_col")       or "A"
+    DEFAULT_TAB_GROWTH     = current.get("tab_growth")     or "Growth Tracking"
+    DEFAULT_SNAPSHOT_DAY      = current.get("snapshot_day")      or 1
+    DEFAULT_SNAPSHOT_INTERVAL = current.get("snapshot_interval") or 30
 
     await channel.send(
         "⚙️ **Growth Tracking Setup**\n"
@@ -886,39 +945,40 @@ async def run_growth_setup(interaction: discord.Interaction, bot):
         return
 
     # ── Step 2: Source tab ────────────────────────────────────────────────────
-    cur_tab = current.get("tab_source") or ""
-    tab_raw = await ask_text(
-        f"**Step 2 of 7 — Source Tab**\n"
-        f"Which tab in your Google Sheet contains your member data?\n"
-        f"⚠️ *Make sure this tab exists in your sheet.*\n"
-        f"*(e.g. `Squad Powers`, `Members`, `Roster`)*"
-        + (f"\n*(Current: `{cur_tab}`)*" if cur_tab else "")
+    tab_source = await ask_keep_or_change(
+        "**Step 2 of 7 — Source Tab**\n"
+        "Which tab in your Google Sheet contains your member data?\n"
+        "⚠️ *Make sure this tab exists in your sheet.*",
+        default=DEFAULT_TAB_SOURCE,
+        modal_title="Source Tab",
+        modal_label="Tab name",
     )
-    if tab_raw is None:
+    if tab_source is None:
         return
-    tab_source = tab_raw.strip() or cur_tab
 
     # ── Step 3: Data start row ────────────────────────────────────────────────
-    cur_start = current.get("data_start_row", 2)
-    start_raw = await ask_text(
-        f"**Step 3 of 7 — Data Start Row**\n"
-        f"Which row does your member data start on? (Row 1 is usually the header)\n"
-        f"*(Current: row {cur_start})*"
+    start_raw = await ask_keep_or_change(
+        "**Step 3 of 7 — Data Start Row**\n"
+        "Which row does your member data start on? (Row 1 is usually the header)",
+        default=str(DEFAULT_DATA_START_ROW),
+        modal_title="Data Start Row",
+        modal_label="Row number",
     )
     if start_raw is None:
         return
     try:
-        data_start_row = int(start_raw.strip())
+        data_start_row = int(str(start_raw).strip())
     except ValueError:
         await channel.send("⚠️ Please enter a row number like `2`. Run `/setup_growth` to try again.")
         return
 
     # ── Step 4: Name column ───────────────────────────────────────────────────
-    cur_name = current.get("name_col", "A")
-    name_raw = await ask_text(
-        f"**Step 4 of 7 — Name Column**\n"
-        f"Which column contains the member's name? Type the column letter.\n"
-        f"*(Current: `{cur_name}`)*"
+    name_raw = await ask_keep_or_change(
+        "**Step 4 of 7 — Name Column**\n"
+        "Which column contains the member's name?",
+        default=DEFAULT_NAME_COL,
+        modal_title="Name Column",
+        modal_label="Column letter",
     )
     if name_raw is None:
         return
@@ -928,106 +988,195 @@ async def run_growth_setup(interaction: discord.Interaction, bot):
         return
 
     # ── Step 5: Metrics ───────────────────────────────────────────────────────
-    cur_metrics = current.get("metrics", [])
-    metrics     = list(cur_metrics)
+    metrics = list(current.get("metrics", []))
 
-    await channel.send(
-        "**Step 5 of 7 — Metrics to Track**\n"
-        "Define which columns the bot should snapshot each period. "
-        "You can track as many metrics as you want — for example:\n"
-        "• `1st Squad Power` — column E\n"
-        "• `2nd Squad Power` — column G\n"
-        "• `THP` — column I\n"
-        "• `Total Kills` — column J\n\n"
-        "You'll add them one at a time."
-    )
+    class MetricModal(discord.ui.Modal):
+        def __init__(self, label_default: str = "", col_default: str = ""):
+            super().__init__(title="Metric")
+            self.label_value = None
+            self.col_value = None
+            self._label_input = discord.ui.TextInput(
+                label="Label",
+                placeholder="e.g. 1st Squad Power, THP, Total Kills",
+                default=label_default,
+                required=True,
+                max_length=100,
+            )
+            self._col_input = discord.ui.TextInput(
+                label="Column letter",
+                placeholder="e.g. E",
+                default=col_default,
+                required=True,
+                max_length=2,
+            )
+            self.add_item(self._label_input)
+            self.add_item(self._col_input)
 
-    if cur_metrics:
-        cur_display = "\n".join(f"• **{m['label']}** — column {m['col']}" for m in cur_metrics)
+        async def on_submit(self, interaction: discord.Interaction):
+            self.label_value = self._label_input.value.strip()
+            self.col_value = self._col_input.value.strip().upper()
+            await interaction.response.defer()
+            self.stop()
 
-        class MetricsStartView(discord.ui.View):
+    def _metrics_embed() -> discord.Embed:
+        embed = discord.Embed(
+            title="📊 Step 5 of 7 — Metrics to Track",
+            description=(
+                "Define which columns the bot should snapshot each period. "
+                "Add as many as you want — for example a `1st Squad Power` column, `THP`, `Total Kills`, etc."
+            ),
+            color=discord.Color.blurple(),
+        )
+        if metrics:
+            for m in metrics:
+                embed.add_field(name=m["label"], value=f"Column {m['col']}", inline=False)
+        else:
+            embed.add_field(name="No metrics yet", value="Click **Add Metric** to begin.", inline=False)
+        return embed
+
+    while True:
+        class MetricsActionView(discord.ui.View):
             def __init__(self):
-                super().__init__(timeout=120)
+                super().__init__(timeout=WIZARD_TIMEOUT)
                 self.choice = None
+                if not metrics:
+                    self.edit_btn.disabled = True
+                    self.delete_btn.disabled = True
+                    self.done_btn.disabled = True
 
-            @discord.ui.button(label="✅ Keep current metrics", style=discord.ButtonStyle.success)
-            async def keep(self, inter: discord.Interaction, button: discord.ui.Button):
-                self.choice = "keep"
-                for item in self.children: item.disabled = True
-                await inter.response.edit_message(content="✅ Keeping current metrics.", view=self)
+            @discord.ui.button(label="➕ Add Metric", style=discord.ButtonStyle.success, row=0)
+            async def add_btn(self, inter: discord.Interaction, button: discord.ui.Button):
+                modal = MetricModal()
+                await inter.response.send_modal(modal)
+                await modal.wait()
+                if modal.label_value and modal.col_value and modal.col_value.isalpha():
+                    metrics.append({"label": modal.label_value, "col": modal.col_value})
+                self.choice = "loop"
                 self.stop()
 
-            @discord.ui.button(label="🔄 Start fresh", style=discord.ButtonStyle.secondary)
-            async def fresh(self, inter: discord.Interaction, button: discord.ui.Button):
-                self.choice = "fresh"
+            @discord.ui.button(label="✏️ Edit Metric", style=discord.ButtonStyle.primary, row=0)
+            async def edit_btn(self, inter: discord.Interaction, button: discord.ui.Button):
+                self.choice = "edit"
+                self.stop()
+                await inter.response.defer()
+
+            @discord.ui.button(label="🗑️ Delete Metric", style=discord.ButtonStyle.danger, row=0)
+            async def delete_btn(self, inter: discord.Interaction, button: discord.ui.Button):
+                self.choice = "delete"
+                self.stop()
+                await inter.response.defer()
+
+            @discord.ui.button(label="✅ Done", style=discord.ButtonStyle.secondary, row=1)
+            async def done_btn(self, inter: discord.Interaction, button: discord.ui.Button):
+                self.choice = "done"
+                self.stop()
+                await inter.response.defer()
+
+        action_view = MetricsActionView()
+        await channel.send(embed=_metrics_embed(), view=action_view)
+        await action_view.wait()
+
+        if action_view.choice is None:
+            await channel.send("⏰ Timed out. Run `/setup_growth` to start again.")
+            return
+        if action_view.choice == "done":
+            break
+        if action_view.choice == "loop":
+            continue
+
+        if action_view.choice in ("edit", "delete") and not metrics:
+            continue
+
+        # Pick which metric to edit/delete
+        class PickMetricView(discord.ui.View):
+            def __init__(self):
+                super().__init__(timeout=WIZARD_TIMEOUT)
+                self.index = None
+                options = [
+                    discord.SelectOption(
+                        label=m["label"][:100],
+                        value=str(i),
+                        description=f"Column {m['col']}",
+                    )
+                    for i, m in enumerate(metrics)
+                ]
+                self.select = discord.ui.Select(
+                    placeholder="Choose a metric...",
+                    options=options,
+                    min_values=1, max_values=1,
+                )
+                self.select.callback = self._on_select
+                self.add_item(self.select)
+
+            async def _on_select(self, inter: discord.Interaction):
+                self.index = int(self.select.values[0])
                 for item in self.children: item.disabled = True
                 await inter.response.edit_message(view=self)
                 self.stop()
 
-        metrics_view = MetricsStartView()
-        await channel.send(
-            f"**Current metrics:**\n{cur_display}",
-            view=metrics_view,
-        )
-        await metrics_view.wait()
-        if not metrics_view.choice:
+        pick_view = PickMetricView()
+        verb = "edit" if action_view.choice == "edit" else "delete"
+        await channel.send(f"Which metric do you want to {verb}?", view=pick_view)
+        await pick_view.wait()
+        if pick_view.index is None:
             await channel.send("⏰ Timed out. Run `/setup_growth` to start again.")
             return
-        if metrics_view.choice == "fresh":
-            metrics = []
 
-    if not metrics:
-        await channel.send("Let's add your metrics. Type `done` when finished.")
+        if action_view.choice == "delete":
+            removed = metrics.pop(pick_view.index)
+            await channel.send(f"🗑️ Removed: **{removed['label']}** (column {removed['col']})")
+            continue
 
-        while True:
-            label_raw = await ask_text(
-                f"**Metric {len(metrics) + 1} — Label** (or type `done` to finish):\n"
-                f"*(e.g. `1st Squad Power`, `THP`, `Total Kills`)*"
-            )
-            if label_raw is None:
-                return
-            if label_raw.strip().lower() == "done":
-                break
+        # Edit: open a modal pre-filled with the chosen metric
+        existing = metrics[pick_view.index]
 
-            col_raw = await ask_text(
-                f"**{label_raw.strip()} — Column Letter**\n"
-                f"Which column contains this value? (e.g. `E`, `G`)"
-            )
-            if col_raw is None:
-                return
-            col = col_raw.strip().upper()
-            if not col.isalpha():
-                await channel.send("⚠️ Please enter a column letter. Skipping this metric.")
-                continue
+        class EditLaunchView(discord.ui.View):
+            def __init__(self):
+                super().__init__(timeout=WIZARD_TIMEOUT)
+                self.modal = MetricModal(
+                    label_default=existing["label"], col_default=existing["col"]
+                )
+                self.confirmed = False
 
-            metrics.append({"col": col, "label": label_raw.strip()})
-            await channel.send(f"✅ Added: **{label_raw.strip()}** (column {col}) — {len(metrics)} metric(s) so far.")
+            @discord.ui.button(label="✏️ Edit values", style=discord.ButtonStyle.primary)
+            async def open_modal(self, inter: discord.Interaction, button: discord.ui.Button):
+                await inter.response.send_modal(self.modal)
+                await self.modal.wait()
+                self.confirmed = True
+                self.stop()
+
+        edit_launch = EditLaunchView()
+        await channel.send(
+            f"Editing **{existing['label']}** (column {existing['col']}). Click below to update.",
+            view=edit_launch,
+        )
+        await edit_launch.wait()
+        if edit_launch.modal.label_value and edit_launch.modal.col_value and edit_launch.modal.col_value.isalpha():
+            metrics[pick_view.index] = {
+                "label": edit_launch.modal.label_value,
+                "col":   edit_launch.modal.col_value,
+            }
 
     if not metrics:
         await channel.send("⚠️ No metrics defined. Run `/setup_growth` to try again.")
         return
 
     # ── Step 6: Growth tracking tab ───────────────────────────────────────────
-    cur_growth_tab = current.get("tab_growth", "Growth Tracking")
-    growth_tab_view = TextInputModal("Growth Tracking Tab", "Tab name", default=cur_growth_tab)
-    growth_tab_launch = ModalLaunchView(growth_tab_view)
-    await channel.send(
-        f"**Step 6 of 7 — Growth Tracking Tab**\n"
-        f"Which tab should snapshots be written to?\n"
-        f"⚠️ *If the tab doesn't exist, the bot will create it automatically.*\n"
-        f"*(Current: `{cur_growth_tab}`)*",
-        view=growth_tab_launch,
+    tab_growth = await ask_keep_or_change(
+        "**Step 6 of 7 — Growth Tracking Tab**\n"
+        "Which tab should snapshots be written to?\n"
+        "⚠️ *If the tab doesn't exist, the bot will create it automatically.*",
+        default=DEFAULT_TAB_GROWTH,
+        modal_title="Growth Tracking Tab",
+        modal_label="Tab name",
     )
-    await growth_tab_launch.wait()
-    if not growth_tab_launch.confirmed:
-        await channel.send("⏰ Timed out. Run `/setup_growth` to start again.")
+    if tab_growth is None:
         return
-    tab_growth = growth_tab_view.value or cur_growth_tab
 
     # ── Step 7: Snapshot frequency ────────────────────────────────────────────
     class FrequencyView(discord.ui.View):
         def __init__(self):
-            super().__init__(timeout=120)
+            super().__init__(timeout=WIZARD_TIMEOUT)
             self.selected = None
 
         @discord.ui.button(label="📅 Monthly (1st of each month)", style=discord.ButtonStyle.primary)
@@ -1056,33 +1205,37 @@ async def run_growth_setup(interaction: discord.Interaction, bot):
         return
 
     snapshot_frequency = freq_view.selected
-    snapshot_day       = 1
-    snapshot_interval  = 30
+    snapshot_day       = DEFAULT_SNAPSHOT_DAY
+    snapshot_interval  = DEFAULT_SNAPSHOT_INTERVAL
 
     if snapshot_frequency == "monthly":
-        day_raw = await ask_text(
+        day_raw = await ask_keep_or_change(
             "**Step 7a of 7 — Snapshot Day**\n"
-            "Which day of the month should the snapshot run? (e.g. `1` for the 1st)\n"
-            f"*(Current: day {current.get('snapshot_day', 1)})*"
+            "Which day of the month should the snapshot run? (1–28)",
+            default=str(DEFAULT_SNAPSHOT_DAY),
+            modal_title="Snapshot Day",
+            modal_label="Day of month (1–28)",
         )
         if day_raw is None:
             return
         try:
-            snapshot_day = max(1, min(28, int(day_raw.strip())))
+            snapshot_day = max(1, min(28, int(str(day_raw).strip())))
         except ValueError:
-            snapshot_day = 1
+            snapshot_day = DEFAULT_SNAPSHOT_DAY
     else:
-        interval_raw = await ask_text(
+        interval_raw = await ask_keep_or_change(
             "**Step 7a of 7 — Interval (days)**\n"
-            "How many days between each snapshot? (e.g. `30`)\n"
-            f"*(Current: {current.get('snapshot_interval', 30)} days)*"
+            "How many days between each snapshot?",
+            default=str(DEFAULT_SNAPSHOT_INTERVAL),
+            modal_title="Interval",
+            modal_label="Days between snapshots",
         )
         if interval_raw is None:
             return
         try:
-            snapshot_interval = max(1, int(interval_raw.strip()))
+            snapshot_interval = max(1, int(str(interval_raw).strip()))
         except ValueError:
-            snapshot_interval = 30
+            snapshot_interval = DEFAULT_SNAPSHOT_INTERVAL
 
     # ── Save ───────────────────────────────────────────────────────────────────
     save_growth_config(
@@ -1103,13 +1256,13 @@ async def run_growth_setup(interaction: discord.Interaction, bot):
     metrics_display = "\n".join(f"• **{m['label']}** — column {m['col']}" for m in metrics)
 
     embed = discord.Embed(title="✅ Growth Tracking Configured", color=discord.Color.green())
-    embed.add_field(name="Source Tab",        value=tab_source,          inline=False)
-    embed.add_field(name="Name Column",       value=f"Column {name_col}", inline=True)
-    embed.add_field(name="Data Start Row",    value=str(data_start_row),  inline=True)
+    embed.add_field(name="Source Tab",        value=tab_source,           inline=False)
+    embed.add_field(name="Name Column",       value=f"Column {name_col}", inline=False)
+    embed.add_field(name="Data Start Row",    value=str(data_start_row),  inline=False)
     embed.add_field(name="Growth Tab",        value=tab_growth,           inline=False)
     embed.add_field(name="Snapshot Schedule", value=freq_desc,            inline=False)
     embed.add_field(name="Metrics",           value=metrics_display,      inline=False)
-    embed.set_footer(text="Run /setup_growth again to update. Run /rungrowth to take a manual snapshot.")
+    embed.set_footer(text="Run /setup_growth again to update. Run /growth_run to take a manual snapshot.")
     await channel.send(embed=embed)
     print(f"[SETUP] Growth config saved for guild {guild_id}")
 

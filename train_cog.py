@@ -174,7 +174,7 @@ class TrainCog(commands.Cog):
                     label = "Tomorrow"
                 else:
                     label = f"in {days_away} days"
-                lines.append(f"• **{when.strftime('%A, %B %-d')}** — {name} *({label})*")
+                lines.append(f"• **{when:%A, %B} {when.day}** — {name} *({label})*")
             embed.description = "\n".join(lines)
 
         embed.set_footer(text=f"Source: {tab_name} · Run /setup_birthdays to change settings")
@@ -221,9 +221,9 @@ class TrainCog(commands.Cog):
         if target_date:
             entry = schedule.get(target_date.isoformat())
             if not entry:
-                embed.description = f"*No train entry found for {target_date.strftime('%B %-d, %Y')}.*"
+                embed.description = f"*No train entry found for {target_date:%B} {target_date.day}, {target_date.year}.*"
             else:
-                embed.add_field(name="Date",   value=target_date.strftime("%A, %B %-d, %Y"),         inline=False)
+                embed.add_field(name="Date",   value=f"{target_date:%A, %B} {target_date.day}, {target_date.year}", inline=False)
                 embed.add_field(name="Name",   value=entry.get("name") or "*not set*",               inline=False)
                 embed.add_field(name="Theme",  value=entry.get("theme") or "*not set*",              inline=False)
                 embed.add_field(name="Tone",   value=entry.get("tone")  or "*not set*",              inline=False)
@@ -253,7 +253,7 @@ class TrainCog(commands.Cog):
                     retrieved = "✅" if entry.get("prompt_retrieved") else "❌"
                     name = entry.get("name") or "*unset*"
                     theme = entry.get("theme") or ""
-                    bits = [f"**{d.strftime('%a %b %-d')}** — {name}"]
+                    bits = [f"**{d:%a %b} {d.day}** — {name}"]
                     if theme:
                         bits.append(theme)
                     bits.append(f"prompt {retrieved}")

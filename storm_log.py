@@ -77,7 +77,7 @@ def append_log_row(event_type, log_date, vote_count, rtf_no_vote, sitting_out, p
     ws = _get_log_sheet(guild_id)
     _ensure_headers(ws)
     row = [
-        log_date.strftime("%-m/%-d/%Y"),
+        f"{log_date.month}/{log_date.day}/{log_date.year}",
         event_type,
         str(vote_count) if vote_count is not None else "",
         ", ".join(rtf_no_vote),
@@ -564,7 +564,7 @@ async def run_log_flow(bot, channel, user, event_type):
             return
 
         # ── Summary ───────────────────────────────────────────────────────────
-        date_str     = log_date.strftime("%A, %B %-d, %Y")
+        date_str     = f"{log_date:%A, %B} {log_date.day}, {log_date.year}"
         action_label = "Vote" if is_ds else "Request"
         lines = [f"📋 **{event_label} Log — {date_str}**"]
         if is_ds:
@@ -604,7 +604,7 @@ def lookup_log_entry(event_type: str, log_date: date, guild_id=None):
         rows = ws.get_all_values()
         if len(rows) <= 1:
             return None
-        target_date = log_date.strftime("%-m/%-d/%Y")
+        target_date = f"{log_date.month}/{log_date.day}/{log_date.year}"
         for row in reversed(rows[1:]):
             if len(row) < 2:
                 continue
@@ -754,12 +754,12 @@ async def _show_storm_log(interaction: discord.Interaction, event: str, date: st
 
     if entry is None:
         await interaction.followup.send(
-            f"❌ No **{event_label}** log found for **{parsed_d.strftime('%B %-d, %Y')}**.",
+            f"❌ No **{event_label}** log found for **{parsed_d:%B} {parsed_d.day}, {parsed_d.year}**.",
             ephemeral=True,
         )
         return
 
-    date_str     = parsed_d.strftime("%A, %B %-d, %Y")
+    date_str     = f"{parsed_d:%A, %B} {parsed_d.day}, {parsed_d.year}"
     action_label = "Vote" if event == "DS" else "Request"
 
     lines = [f"📋 **{event_label} Log — {date_str}**"]

@@ -112,7 +112,7 @@ class TestCheckAndAddBirthdays:
 
         members = [{"name": "Alice", "month": target.month, "day": target.day}]
 
-        with patch("train.load_birthdays", return_value=members):
+        with patch("train_birthdays.load_birthdays", return_value=members):
             schedule, alerts = check_and_add_birthdays({}, guild_id=TEST_GUILD_ID)
 
         target_str = target.isoformat()
@@ -134,7 +134,7 @@ class TestCheckAndAddBirthdays:
         existing = {target.isoformat(): {"name": "Alice", "theme": "Birthday"}}
         members  = [{"name": "Alice", "month": target.month, "day": target.day}]
 
-        with patch("train.load_birthdays", return_value=members):
+        with patch("train_birthdays.load_birthdays", return_value=members):
             schedule, alerts = check_and_add_birthdays(existing, guild_id=TEST_GUILD_ID)
 
         # Should not duplicate
@@ -156,7 +156,7 @@ class TestCheckAndAddBirthdays:
         existing = {target.isoformat(): {"name": "Bob", "theme": "Milestone"}}
         members  = [{"name": "Alice", "month": target.month, "day": target.day}]
 
-        with patch("train.load_birthdays", return_value=members):
+        with patch("train_birthdays.load_birthdays", return_value=members):
             schedule, alerts = check_and_add_birthdays(existing, guild_id=TEST_GUILD_ID)
 
         # Alice should be placed on day before or after
@@ -187,7 +187,7 @@ class TestCheckAndAddBirthdays:
         }
         members = [{"name": "Alice", "month": target.month, "day": target.day}]
 
-        with patch("train.load_birthdays", return_value=members):
+        with patch("train_birthdays.load_birthdays", return_value=members):
             schedule, alerts = check_and_add_birthdays(existing, guild_id=TEST_GUILD_ID)
 
         assert len(alerts) == 1
@@ -206,7 +206,7 @@ class TestCheckAndAddBirthdays:
 
         members = [{"name": "Alice", "month": target.month, "day": target.day}]
 
-        with patch("train.load_birthdays", return_value=members):
+        with patch("train_birthdays.load_birthdays", return_value=members):
             schedule, alerts = check_and_add_birthdays({}, guild_id=TEST_GUILD_ID)
 
         assert target.isoformat() not in schedule
@@ -228,7 +228,7 @@ class TestCheckAndAddBirthdays:
 
         members = [{"name": "Alice", "month": target.month, "day": target.day}]
 
-        with patch("train.load_birthdays", return_value=members):
+        with patch("train_birthdays.load_birthdays", return_value=members):
             schedule, alerts = check_and_add_birthdays({}, guild_id=TEST_GUILD_ID)
 
         assert schedule == {}

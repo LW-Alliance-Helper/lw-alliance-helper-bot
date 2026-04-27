@@ -88,7 +88,8 @@ async def run_blurb_wizard_for_entry(bot, channel, user, date_str: str, name: st
         return True
 
     try:
-        d_label = date.fromisoformat(date_str).strftime("%A, %B %-d")
+        _d      = date.fromisoformat(date_str)
+        d_label = f"{_d:%A, %B} {_d.day}"
         await channel.send(
             f"🚂 **Train Blurb Wizard for {name}** — {d_label}\n"
             f"*(Type `/cancel` at any time to stop)*"
@@ -222,7 +223,7 @@ class AddEntryModal(discord.ui.Modal, title="Add Train Entry"):
         save_schedule(schedule, self.guild_id)
 
         verb = "Updated" if existed else "Added"
-        msg  = f"✅ {verb} **{name}** for **{d.strftime('%A, %B %-d')}**."
+        msg  = f"✅ {verb} **{name}** for **{d:%A, %B} {d.day}**."
 
         if self.blurbs_enabled:
             view = RunWizardView(self.bot, self.guild_id, d_iso, name)
@@ -246,7 +247,7 @@ class UpdateEntryModal(discord.ui.Modal, title="Update Train Entry"):
 
         d_obj = date.fromisoformat(original_date_iso)
         self.date_input = discord.ui.TextInput(
-            label="Date", default=d_obj.strftime("%-m/%-d"),
+            label="Date", default=f"{d_obj.month}/{d_obj.day}",
             required=True, max_length=20,
         )
         self.name_input = discord.ui.TextInput(
@@ -285,7 +286,7 @@ class UpdateEntryModal(discord.ui.Modal, title="Update Train Entry"):
         schedule[new_iso] = merged
         save_schedule(schedule, self.guild_id)
 
-        msg = f"✅ Updated → **{new_name}** on **{d.strftime('%A, %B %-d')}**."
+        msg = f"✅ Updated → **{new_name}** on **{d:%A, %B} {d.day}**."
 
         if self.blurbs_enabled:
             view = RunWizardView(self.bot, self.guild_id, new_iso, new_name)
@@ -309,7 +310,7 @@ class UpdateSelectView(discord.ui.View):
         options = []
         for d_iso, entry in entries[:25]:
             d_obj = date.fromisoformat(d_iso)
-            label = f"{d_obj.strftime('%a %b %-d')} — {entry.get('name', '?')}"[:100]
+            label = f"{d_obj:%a %b} {d_obj.day} — {entry.get('name', '?')}"[:100]
             options.append(discord.SelectOption(label=label, value=d_iso))
 
         select = discord.ui.Select(placeholder="Choose an entry to update...", options=options)
@@ -335,7 +336,7 @@ class GeneratePromptSelectView(discord.ui.View):
         options = []
         for d_iso, entry in entries[:25]:
             d_obj = date.fromisoformat(d_iso)
-            label = f"{d_obj.strftime('%a %b %-d')} — {entry.get('name', '?')}"[:100]
+            label = f"{d_obj:%a %b} {d_obj.day} — {entry.get('name', '?')}"[:100]
             options.append(discord.SelectOption(label=label, value=d_iso))
 
         select = discord.ui.Select(placeholder="Choose an entry...", options=options)

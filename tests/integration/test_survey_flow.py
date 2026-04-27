@@ -55,6 +55,9 @@ class TestSurveyFlow:
         thread = self._make_thread()
         user   = self._make_user()
         bot    = AsyncMock()
+        # get_channel is sync on real discord.Bot — return None so the
+        # leadership-notify branch in run_survey skips cleanly.
+        bot.get_channel = MagicMock(return_value=None)
 
         # Simulate user replies
         replies = iter(["43.27"])
@@ -79,7 +82,8 @@ class TestSurveyFlow:
 
         with patch("survey.DropdownView", return_value=mock_dropdown), \
              patch("survey.update_squad_powers",   side_effect=fake_update), \
-             patch("survey.append_survey_history", side_effect=fake_history):
+             patch("survey.append_survey_history", side_effect=fake_history), \
+             patch("survey._finalize_survey_thread", new_callable=AsyncMock):
             await run_survey(bot, thread, user)
 
         assert saved_powers.get("q1")  == "43.27"
@@ -97,6 +101,9 @@ class TestSurveyFlow:
         thread = self._make_thread()
         user   = self._make_user()
         bot    = AsyncMock()
+        # get_channel is sync on real discord.Bot — return None so the
+        # leadership-notify branch in run_survey skips cleanly.
+        bot.get_channel = MagicMock(return_value=None)
 
         with patch("survey.update_squad_powers")   as mock_up, \
              patch("survey.append_survey_history") as mock_ah:
@@ -126,6 +133,9 @@ class TestSurveyFlow:
         thread = self._make_thread()
         user   = self._make_user()
         bot    = AsyncMock()
+        # get_channel is sync on real discord.Bot — return None so the
+        # leadership-notify branch in run_survey skips cleanly.
+        bot.get_channel = MagicMock(return_value=None)
 
         bot.wait_for = AsyncMock(side_effect=asyncio.TimeoutError)
 
@@ -150,6 +160,9 @@ class TestSurveyFlow:
         thread = self._make_thread()
         user   = self._make_user()
         bot    = AsyncMock()
+        # get_channel is sync on real discord.Bot — return None so the
+        # leadership-notify branch in run_survey skips cleanly.
+        bot.get_channel = MagicMock(return_value=None)
 
         # Reply is too long
         bot.wait_for = AsyncMock(
@@ -180,6 +193,9 @@ class TestSurveyFlow:
         thread = self._make_thread()
         user   = self._make_user()
         bot    = AsyncMock()
+        # get_channel is sync on real discord.Bot — return None so the
+        # leadership-notify branch in run_survey skips cleanly.
+        bot.get_channel = MagicMock(return_value=None)
 
         replies = iter(["43.27", "38.50", "35.00"])
         async def fake_wait_for(*a, **kw):
@@ -191,7 +207,8 @@ class TestSurveyFlow:
             captured.update(data)
 
         with patch("survey.update_squad_powers",   side_effect=fake_update), \
-             patch("survey.append_survey_history"):
+             patch("survey.append_survey_history"), \
+             patch("survey._finalize_survey_thread", new_callable=AsyncMock):
             await run_survey(bot, thread, user)
 
         assert captured.get("p1") == "43.27"
@@ -213,6 +230,9 @@ class TestSurveyFlow:
         thread = self._make_thread()
         user   = self._make_user()
         bot    = AsyncMock()
+        # get_channel is sync on real discord.Bot — return None so the
+        # leadership-notify branch in run_survey skips cleanly.
+        bot.get_channel = MagicMock(return_value=None)
 
         bot.wait_for = AsyncMock(
             return_value=make_message("43.27", author=user, channel=thread)

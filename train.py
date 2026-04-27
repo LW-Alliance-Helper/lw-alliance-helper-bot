@@ -362,7 +362,7 @@ def build_train_view_embed(schedule: dict, blurb_log: set) -> discord.Embed:
         d        = today + timedelta(days=i)
         date_str = d.isoformat()
         entry    = schedule.get(date_str)
-        day_str  = d.strftime("%A, %B %-d")
+        day_str  = f"{d:%A, %B} {d.day}"
 
         if i == 0:
             # Today

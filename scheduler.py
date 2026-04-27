@@ -140,7 +140,8 @@ def to_server_time_str(et_dt: datetime) -> str:
 
 
 def format_et(dt: datetime) -> str:
-    return dt.strftime("%-I:%M%p").lower()
+    hour12 = dt.hour % 12 or 12
+    return f"{hour12}:{dt:%M%p}".lower()
 
 
 def __noon_dt_for(event_date: date) -> datetime:
@@ -618,9 +619,11 @@ class ApprovalView(discord.ui.View):
         cfg = get_config(self.guild_id)
         leadership = self.bot.get_channel(cfg.leadership_channel_id) if cfg else None
         if leadership:
+            _now = datetime.now(tz=ET)
+            _h12 = _now.hour % 12 or 12
+            _ts  = f"{_h12}:{_now:%M%p ET}".lower()
             await leadership.send(
-                f"✅ **Approved by {interaction.user.display_name} at "
-                f"{datetime.now(tz=ET).strftime('%-I:%M%p ET').lower()}**\n"
+                f"✅ **Approved by {interaction.user.display_name} at {_ts}**\n"
                 f"```\n{self.draft_message}\n```"
             )
         self.stop()
@@ -890,9 +893,11 @@ async def fire_warning(bot, event_key: str, event_list: list[dict], cfg=None):
 
     leadership = bot.get_channel(cfg.leadership_channel_id)
     if leadership:
+        _now = datetime.now(tz=ET)
+        _h12 = _now.hour % 12 or 12
+        _ts  = f"{_h12}:{_now:%M%p ET}".lower()
         await leadership.send(
-            f"⏱️ **5-minute warning auto-posted** at "
-            f"{datetime.now(tz=ET).strftime('%-I:%M%p ET').lower()}"
+            f"⏱️ **5-minute warning auto-posted** at {_ts}"
         )
 
     pending_warnings.pop(event_key, None)

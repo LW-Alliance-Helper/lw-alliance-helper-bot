@@ -209,11 +209,11 @@ def check_and_add_birthdays(schedule: dict, guild_id: int = None) -> tuple[dict,
 
         if placed_date is None:
             # All three dates occupied — alert leadership and leave schedule untouched
-            bday_fmt  = bday.strftime("%A, %B %-d")
+            bday_fmt  = f"{bday:%A, %B} {bday.day}"
             taken = []
             for candidate in (bday, bday - timedelta(days=1), bday + timedelta(days=1)):
                 occupant = schedule[candidate.isoformat()].get("name", "someone")
-                taken.append(f"{candidate.strftime('%b %-d')} ({occupant})")
+                taken.append(f"{candidate:%b} {candidate.day} ({occupant})")
             alert = (
                 f"🚨 **Birthday scheduling conflict — manual action needed!**\n"
                 f"**{name}'s** birthday is **{bday_fmt}** but all three surrounding dates are taken:\n"

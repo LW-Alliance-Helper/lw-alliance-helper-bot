@@ -311,8 +311,8 @@ async def events_slash(interaction: discord.Interaction, date: str = None):
 
     if days_diff > 0:
         await interaction.followup.send(
-            f"ℹ️ **{target_date.strftime('%B %-d')}** is not an event day. "
-            f"Showing the next event date: **{event_date.strftime('%A, %B %-d')}**.",
+            f"ℹ️ **{target_date:%B} {target_date.day}** is not an event day. "
+            f"Showing the next event date: **{event_date:%A, %B} {event_date.day}**.",
             ephemeral=True,
         )
 
@@ -383,7 +383,9 @@ async def events_log_slash(interaction: discord.Interaction):
         for msg in matches[:25]:
             # First line is "✅ **Approved by NAME at H:MMpm et**"
             header = msg.content.split("\n", 1)[0]
-            local_dt = msg.created_at.astimezone(ET).strftime("%a %b %-d, %-I:%M%p ET").replace("AM", "am").replace("PM", "pm")
+            _ldt     = msg.created_at.astimezone(ET)
+            _hr12    = _ldt.hour % 12 or 12
+            local_dt = f"{_ldt:%a %b} {_ldt.day}, {_hr12}:{_ldt:%M%p} ET".replace("AM", "am").replace("PM", "pm")
             lines.append(f"• {header} *— logged {local_dt}*")
         embed.add_field(name=f"Approvals ({len(matches)})", value="\n".join(lines)[:1024], inline=False)
 

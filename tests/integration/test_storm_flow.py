@@ -142,16 +142,18 @@ class TestTemplateRoundTrip:
     def test_ds_template_roundtrip(self):
         from storm import build_ds_template, parse_ds_template
         zones = {
-            "Zone 1": ["Alice", "Bob"],
-            "Zone 2": ["Carol"],
+            "Zone 1": "Alice, Bob",
+            "Zone 2": "Carol",
         }
-        subs  = ["Dave", "Eve"]
+        subs  = [("Dave", "Frank"), ("Eve", "Gina")]
         text  = build_ds_template(zones, subs)
         parsed_zones, parsed_subs, _ = parse_ds_template(text)
 
-        # Verify names survived the round-trip
-        all_names = str(parsed_zones) + str(parsed_subs)
-        assert "Alice" in all_names or "Zone 1" in str(parsed_zones)
+        # Verify zone names and sub pairs survived the round-trip
+        assert parsed_zones.get("Zone 1") == "Alice, Bob"
+        assert parsed_zones.get("Zone 2") == "Carol"
+        assert ("Dave", "Frank") in parsed_subs
+        assert ("Eve",  "Gina")  in parsed_subs
 
     def test_cs_template_roundtrip(self):
         from storm import build_cs_template, parse_cs_template

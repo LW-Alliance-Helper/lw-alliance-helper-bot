@@ -84,7 +84,8 @@ def update_squad_powers(discord_id: str, username: str, data: dict, guild_id: in
     ws         = sh.worksheet(cfg.tab_squad_powers if cfg else survey_cfg.get("tab_squad_powers", "Squad Powers"))
     rows       = ws.get_all_values()
 
-    now_str  = datetime.now(timezone.utc).strftime("%-m/%-d/%Y")
+    _now     = datetime.now(timezone.utc)
+    now_str  = f"{_now.month}/{_now.day}/{_now.year}"
     q_keys   = [q.get("key", f"field_{i}") for i, q in enumerate(questions)]
     q_labels = [q.get("label", k) for k, q in zip(q_keys, questions)]
 
@@ -127,7 +128,8 @@ def append_survey_history(discord_id: str, username: str, data: dict, guild_id: 
         except Exception:
             pass
 
-    now_str = datetime.now(timezone.utc).strftime("%-m/%-d/%Y %H:%M UTC")
+    _now    = datetime.now(timezone.utc)
+    now_str = f"{_now.month}/{_now.day}/{_now.year} {_now:%H:%M} UTC"
     row     = [now_str, discord_id, username] + [data.get(k, "") for k in q_keys]
     ws.append_row(row, value_input_option="USER_ENTERED")
     print(f"[SURVEY] Appended Survey History row for {username}")
@@ -249,7 +251,9 @@ async def run_survey(bot, thread: discord.Thread, user: discord.Member):
         _notify_id = _scfg.survey_notify_channel_id if _scfg else 0
         notify_channel = bot.get_channel(_notify_id)
         if notify_channel:
-            date_str = datetime.now(timezone.utc).strftime("%B %-d, %Y at %-I:%M %p UTC")
+            _now     = datetime.now(timezone.utc)
+            _hour12  = _now.hour % 12 or 12
+            date_str = f"{_now:%B} {_now.day}, {_now.year} at {_hour12}:{_now:%M %p} UTC"
             profession_line = data.get("profession", "")
             if data.get("banner"):
                 profession_line += f" — Charge Banner: {data['banner']}"
@@ -281,21 +285,28 @@ async def run_survey(bot, thread: discord.Thread, user: discord.Member):
             await notify_channel.send(embed=embed)
     except Exception as e:
         print(f"[SURVEY] Error sending leadership notification: {e}")
-    class CloseThreadView(discord.ui.View):
-        def __init__(self):
-            super().__init__(timeout=60)
-            self.closed = False
 
-        @discord.ui.button(label="❌ Close Thread", style=discord.ButtonStyle.secondary)
-        async def close_now(self, interaction: discord.Interaction, button: discord.ui.Button):
-            self.closed = True
-            await interaction.response.defer()
-            self.stop()
+    await _finalize_survey_thread(thread)
 
-        async def on_timeout(self):
-            self.closed = True
-            self.stop()
 
+class CloseThreadView(discord.ui.View):
+    def __init__(self):
+        super().__init__(timeout=60)
+        self.closed = False
+
+    @discord.ui.button(label="❌ Close Thread", style=discord.ButtonStyle.secondary)
+    async def close_now(self, interaction: discord.Interaction, button: discord.ui.Button):
+        self.closed = True
+        await interaction.response.defer()
+        self.stop()
+
+    async def on_timeout(self):
+        self.closed = True
+        self.stop()
+
+
+async def _finalize_survey_thread(thread):
+    """Send the success embed with a Close Thread button, then delete the thread."""
     embed = discord.Embed(
         title="✅ Survey Complete!",
         color=discord.Color.green(),

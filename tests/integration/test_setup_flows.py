@@ -36,16 +36,28 @@ def _stop_view(view):
 def _resolve_view(view, overrides: dict = None):
     """
     For views NOT explicitly mocked by a `patch(...)`, fill in the attributes
-    the wizard inspects after view.wait(). Only sets test-supplied overrides;
-    never clobbers attributes that already have a real value (so a patched
-    `MagicMock(selected=False)` survives).
+    the wizard inspects after view.wait().
+
+    Two cases:
+      - Real `discord.ui.View` (inline classes like KeepOrChangeView,
+        SkipTemplateView, ToneDefaultView): always apply every override —
+        the attributes that exist on the instance came from __init__ defaults
+        like `self.skipped = False` or `self.selected = None`, and the test
+        wants to drive them.
+      - MagicMock view: only apply override when the attribute is None or
+        auto-generated. This way `MagicMock(selected=False)` keeps its
+        explicit False even if `selected` is in `view_overrides`.
 
     Always calls view.stop() to unblock view.wait().
     """
-    overrides = overrides or {}
+    import discord
+    overrides    = overrides or {}
+    is_real_view = isinstance(view, discord.ui.View)
     for k, v in overrides.items():
-        try: setattr(view, k, v)
-        except Exception: pass
+        cur = getattr(view, k, None)
+        if is_real_view or cur is None or isinstance(cur, MagicMock):
+            try: setattr(view, k, v)
+            except Exception: pass
     _stop_view(view)
 
 
@@ -425,3 +437,170 @@ class TestRunGrowthSetup:
         cfg = config.get_growth_config(TEST_GUILD_ID)
         assert cfg["enabled"]            == 1
         assert cfg["snapshot_frequency"] == "monthly"
+
+
+# ── Premium tier caps (Phase 1) ───────────────────────────────────────────────
+
+class TestPremiumCaps:
+    """Verify free-tier caps block adds at the limit and don't block premium."""
+
+    @pytest.mark.asyncio
+    async def test_events_cap_blocks_sixth_event_on_free(self, seeded_db):
+        """Free-tier guild with 5 events sees limit-reached embed and no 6th gets added."""
+        import config
+        from setup_cog import run_event_setup
+
+        # Pre-set the event-related guild config so the wizard takes the
+        # "existing config" branch (which jumps straight to the events list
+        # via EventActionView -> "add").
+        config.update_config_field(TEST_GUILD_ID, "event_draft_channel_id",    900001)
+        config.update_config_field(TEST_GUILD_ID, "event_announce_channel_id", 900002)
+        config.update_config_field(TEST_GUILD_ID, "event_draft_time",          "12:00")
+        config.update_config_field(TEST_GUILD_ID, "event_five_min_warning",    1)
+
+        for i in range(5):
+            config.save_guild_event(TEST_GUILD_ID, {
+                "short_key":               f"event_{i}",
+                "name":                    f"Event {i}",
+                "timezone":                "America/New_York",
+                "default_time":            "12:00",
+                "announcement_blurb":      "test",
+                "schedule_type":           "manual",
+                "anchor_date":             "",
+                "interval_days":           0,
+                "draft_channel_id":        900001,
+                "announcement_channel_id": 900002,
+                "draft_time":              "12:00",
+                "five_min_warning":        1,
+                "active":                  1,
+            })
+
+        interaction = make_mock_interaction()
+        bot         = AsyncMock()
+
+        list_actions = iter(["add", "finish"])
+        sent_embeds  = []
+
+        async def fake_send(content=None, embed=None, view=None, **kw):
+            if embed is not None:
+                sent_embeds.append(embed)
+            if view is not None:
+                # Route the existing-config EventActionView -> "add"
+                if hasattr(view, "choice") and getattr(view, "choice", None) is None:
+                    view.choice = "add"
+                # Route the EventListView -> "add" then "finish"
+                if hasattr(view, "action"):
+                    try:
+                        view.action = next(list_actions)
+                    except StopIteration:
+                        view.action = "finish"
+                _stop_view(view)
+            return MagicMock(id=1)
+
+        interaction.channel.send = AsyncMock(side_effect=fake_send)
+
+        await run_event_setup(interaction, bot)
+
+        events = config.get_guild_events(TEST_GUILD_ID, active_only=False)
+        assert len(events) == 5
+
+        titles = [e.title for e in sent_embeds if e and e.title]
+        assert any("Free tier limit" in t for t in titles), (
+            f"Expected limit-reached embed; titles seen: {titles}"
+        )
+
+    @pytest.mark.asyncio
+    async def test_events_unlimited_for_premium_ogv(self, seeded_db):
+        """OGV (always-premium) has no event-count cap."""
+        from config import OGV_GUILD_ID
+        import premium
+        premium.clear_cache()
+        cap = await premium.get_limit("events", OGV_GUILD_ID)
+        assert cap is None
+
+    @pytest.mark.asyncio
+    async def test_themes_truncated_to_three_on_free(self, seeded_db):
+        """Free user submitting 6 themes gets only the first 3 saved."""
+        import config
+        from setup_cog import run_train_setup
+
+        interaction = make_mock_interaction()
+        bot         = AsyncMock()
+
+        replies = iter([
+            "T1, T2, T3, T4, T5, T6",
+            "tn1, tn2, tn3, tn4",
+        ])
+
+        async def fake_wait_for(*a, **kw):
+            return MagicMock(content=next(replies, "default"))
+        bot.wait_for = AsyncMock(side_effect=fake_wait_for)
+
+        yn_views = [
+            MagicMock(selected=True,  wait=AsyncMock()),
+            MagicMock(selected=False, wait=AsyncMock()),
+        ]
+
+        with patch("setup_cog.YesNoView", side_effect=yn_views), \
+             patch_keep_or_change(["Train Schedule"]):
+            make_send_handler(
+                interaction.channel,
+                view_overrides={
+                    "keep_existing": False,
+                    "selected":      "tn1",
+                    "skipped":       True,
+                },
+            )
+            await run_train_setup(interaction, bot)
+
+        cfg = config.get_train_config(TEST_GUILD_ID)
+        assert cfg["themes"] == ["T1", "T2", "T3"], f"Got {cfg['themes']!r}"
+        assert cfg["tones"]  == ["tn1", "tn2", "tn3"], f"Got {cfg['tones']!r}"
+
+    @pytest.mark.asyncio
+    async def test_growth_custom_interval_disabled_for_free(self, seeded_db):
+        """Free user's FrequencyView has the Custom Interval button disabled."""
+        import config
+        from setup_cog import run_growth_setup
+
+        config.save_growth_config(
+            TEST_GUILD_ID, enabled=0,
+            tab_source="Squad Powers", name_col="A",
+            metrics=[{"label": "1st Squad Power", "col": "E"}],
+            tab_growth="Growth Tracking",
+            snapshot_frequency="monthly", snapshot_day=1, snapshot_interval=30,
+            data_start_row=2,
+        )
+
+        interaction = make_mock_interaction()
+        bot         = AsyncMock()
+
+        captured_freq_view = {"view": None}
+
+        async def fake_send(content=None, embed=None, view=None, **kw):
+            if view is not None and hasattr(view, "monthly") and hasattr(view, "custom"):
+                captured_freq_view["view"] = view
+            if view is not None:
+                _resolve_view(view, {
+                    "selected": "monthly",
+                    "choice":   "done",
+                })
+            return MagicMock(id=1)
+
+        interaction.channel.send = AsyncMock(side_effect=fake_send)
+
+        yn = MagicMock(selected=True, wait=AsyncMock())
+        with patch("setup_cog.YesNoView", return_value=yn), \
+             patch_keep_or_change(["Squad Powers", "2", "A", "Growth Tracking", "1"]):
+            await run_growth_setup(interaction, bot)
+
+        freq_view = captured_freq_view["view"]
+        assert freq_view is not None, "FrequencyView was never sent"
+        custom_button = next(
+            (c for c in freq_view.children if "Custom interval" in (getattr(c, "label", "") or "")),
+            None,
+        )
+        assert custom_button is not None, (
+            f"Custom button not found in {[getattr(c, 'label', None) for c in freq_view.children]}"
+        )
+        assert custom_button.disabled is True

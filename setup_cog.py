@@ -17,6 +17,7 @@ from config import (
     get_config, get_or_create_config, save_config, update_config_field,
     GuildConfig,
 )
+import premium
 
 WIZARD_TIMEOUT = 120  # 2 minutes per step
 
@@ -163,14 +164,29 @@ class CreateChannelModal(discord.ui.Modal):
 
 
 class ChannelSelectStep(discord.ui.View):
-    def __init__(self, placeholder: str, channel_types=None, suggested_name: str = "", allow_create: bool = True):
+    def __init__(
+        self,
+        placeholder: str,
+        channel_types=None,
+        suggested_name: str = "",
+        allow_create: bool = True,
+        include_threads: bool = False,
+    ):
         super().__init__(timeout=WIZARD_TIMEOUT)
         self.selected_channel = None
         self.confirmed        = False
         self.suggested_name   = suggested_name
         self.allow_create     = allow_create
 
-        types  = channel_types or [discord.ChannelType.text]
+        types = list(channel_types) if channel_types else [discord.ChannelType.text]
+        if include_threads:
+            for t in (
+                discord.ChannelType.public_thread,
+                discord.ChannelType.private_thread,
+                discord.ChannelType.news_thread,
+            ):
+                if t not in types:
+                    types.append(t)
         select = discord.ui.ChannelSelect(
             placeholder=placeholder,
             min_values=1,
@@ -190,9 +206,15 @@ class ChannelSelectStep(discord.ui.View):
         select.callback = _cb
         self.add_item(select)
 
-        # Show create button for text channels only
-        has_threads = channel_types and any(
-            t in channel_types for t in [discord.ChannelType.public_thread, discord.ChannelType.private_thread]
+        # Show create button for text channels only — hide if any thread
+        # type is in the picker, since we can't sensibly "create" a thread.
+        has_threads = any(
+            t in types
+            for t in (
+                discord.ChannelType.public_thread,
+                discord.ChannelType.private_thread,
+                discord.ChannelType.news_thread,
+            )
         )
         if allow_create and not has_threads:
             create_btn = discord.ui.Button(
@@ -649,6 +671,7 @@ async def _send_view_configuration(interaction: discord.Interaction, cfg) -> Non
     survey   = get_survey_config(guild_id)
     growth   = get_growth_config(guild_id)
     events   = get_guild_events(guild_id, active_only=True)
+    is_premium_flag = await premium.is_premium(guild_id, interaction=interaction)
 
     def _yn(v) -> str:
         return "✅ Configured" if v else "❌ Not configured"
@@ -666,15 +689,17 @@ async def _send_view_configuration(interaction: discord.Interaction, cfg) -> Non
             return "*not set*"
         return chr(65 + idx) if 0 <= idx <= 25 else str(idx)
 
+    tier_badge = "💎 Premium" if is_premium_flag else "Free tier"
     embed = discord.Embed(
-        title="⚙️ Current Configuration",
+        title=f"⚙️ Current Configuration  ·  {tier_badge}",
         description="All configured settings across the bot's setup wizards.",
-        color=discord.Color.blurple(),
+        color=discord.Color.gold() if is_premium_flag else discord.Color.blurple(),
     )
 
     tz_label = TIMEZONE_LABELS.get(cfg.timezone, cfg.timezone)
     sheet_id_display = f"`{cfg.spreadsheet_id[:25]}...`" if cfg.spreadsheet_id else "*not set*"
     core_lines = [
+        f"**Tier:** {tier_badge}",
         f"**Member Role:** {cfg.member_role_name}",
         f"**Leadership Role:** {cfg.leadership_role_name}",
         f"**Leadership Channel:** {_channel(cfg.leadership_channel_id)}",
@@ -789,7 +814,10 @@ async def _send_view_configuration(interaction: discord.Interaction, cfg) -> Non
         ]
     embed.add_field(name="📈 Growth", value="\n".join(g_lines)[:1024], inline=False)
 
-    embed.set_footer(text="Run any /setup_* command to update a section. /help shows all commands.")
+    if is_premium_flag:
+        embed.set_footer(text="💎 Premium is active. Run any /setup_* command to update a section.")
+    else:
+        embed.set_footer(text="Run /upgrade for Premium • /help for all commands • /setup_* to update a section")
     await interaction.followup.send(embed=embed, ephemeral=True)
 
 
@@ -872,11 +900,16 @@ async def run_setup(interaction: discord.Interaction, bot):
     cfg.leadership_role_name = v.selected_role.name
 
     # ── Step 3: Leadership channel ─────────────────────────────────────────────
+    is_premium_flag = await premium.is_premium(guild_id, interaction=interaction)
     await channel.send(
         "**Step 3 of 6 — Leadership Channel**\n"
         "Select the private channel where leadership commands will be used:"
     )
-    v = ChannelSelectStep("Select leadership channel...", suggested_name="leadership")
+    v = ChannelSelectStep(
+        "Select leadership channel...",
+        suggested_name="leadership",
+        include_threads=is_premium_flag,
+    )
     await channel.send("\u200b", view=v)
     await v.wait()
     if not v.confirmed:
@@ -1138,7 +1171,7 @@ async def run_growth_setup(interaction: discord.Interaction, bot):
             await interaction.response.defer()
             self.stop()
 
-    def _metrics_embed() -> discord.Embed:
+    def _metrics_embed(cap: int | None = None) -> discord.Embed:
         embed = discord.Embed(
             title="📊 Step 5 of 7 — Metrics to Track",
             description=(
@@ -1152,9 +1185,15 @@ async def run_growth_setup(interaction: discord.Interaction, bot):
                 embed.add_field(name=m["label"], value=f"Column {m['col']}", inline=False)
         else:
             embed.add_field(name="No metrics yet", value="Click **Add Metric** to begin.", inline=False)
+        if cap is not None:
+            embed.set_footer(text=f"Free tier: {len(metrics)} of {cap} metrics used. Upgrade to Premium for unlimited.")
         return embed
 
     while True:
+        # Free-tier cap on number of growth metrics
+        metrics_cap = await premium.get_limit("growth_metrics", guild_id, interaction=interaction)
+        at_metrics_cap = metrics_cap is not None and len(metrics) >= metrics_cap
+
         class MetricsActionView(discord.ui.View):
             def __init__(self):
                 super().__init__(timeout=WIZARD_TIMEOUT)
@@ -1163,6 +1202,8 @@ async def run_growth_setup(interaction: discord.Interaction, bot):
                     self.edit_btn.disabled = True
                     self.delete_btn.disabled = True
                     self.done_btn.disabled = True
+                if at_metrics_cap:
+                    self.add_btn.disabled = True
 
             @discord.ui.button(label="➕ Add Metric", style=discord.ButtonStyle.success, row=0)
             async def add_btn(self, inter: discord.Interaction, button: discord.ui.Button):
@@ -1193,7 +1234,7 @@ async def run_growth_setup(interaction: discord.Interaction, bot):
                 await inter.response.defer()
 
         action_view = MetricsActionView()
-        await channel.send(embed=_metrics_embed(), view=action_view)
+        await channel.send(embed=_metrics_embed(cap=metrics_cap), view=action_view)
         await action_view.wait()
 
         if action_view.choice is None:
@@ -1296,10 +1337,15 @@ async def run_growth_setup(interaction: discord.Interaction, bot):
         return
 
     # ── Step 7: Snapshot frequency ────────────────────────────────────────────
+    # Custom-interval frequency is a premium-only feature.
+    custom_interval_unlocked = await premium.is_premium(guild_id, interaction=interaction)
+
     class FrequencyView(discord.ui.View):
         def __init__(self):
             super().__init__(timeout=WIZARD_TIMEOUT)
             self.selected = None
+            if not custom_interval_unlocked:
+                self.custom.disabled = True
 
         @discord.ui.button(label="📅 Monthly (1st of each month)", style=discord.ButtonStyle.primary)
         async def monthly(self, inter: discord.Interaction, button: discord.ui.Button):
@@ -1308,7 +1354,7 @@ async def run_growth_setup(interaction: discord.Interaction, bot):
             await inter.response.edit_message(content="✅ Frequency: **Monthly**", view=self)
             self.stop()
 
-        @discord.ui.button(label="🔁 Custom interval (every X days)", style=discord.ButtonStyle.secondary)
+        @discord.ui.button(label="🔁 Custom interval (every X days) 💎", style=discord.ButtonStyle.secondary)
         async def custom(self, inter: discord.Interaction, button: discord.ui.Button):
             self.selected = "interval"
             for item in self.children: item.disabled = True
@@ -1316,9 +1362,14 @@ async def run_growth_setup(interaction: discord.Interaction, bot):
             self.stop()
 
     freq_view = FrequencyView()
-    await channel.send(
+    freq_prompt = (
         "**Step 7 of 7 — Snapshot Frequency**\n"
-        "How often should the bot take a snapshot?",
+        "How often should the bot take a snapshot?"
+    )
+    if not custom_interval_unlocked:
+        freq_prompt += "\n*🔒 Custom interval is a Premium feature.*"
+    await channel.send(
+        freq_prompt,
         view=freq_view,
     )
     await freq_view.wait()
@@ -1462,9 +1513,27 @@ async def run_train_setup(interaction: discord.Interaction, bot):
     default_tone  = current["default_tone"]
     prompt_template = current.get("prompt_template", "")
 
+    # Free-tier slot caps for themes / tones (None = unlimited).
+    # Also used by the reminder-channel step to expose threads on premium.
+    is_premium_flag = await premium.is_premium(guild_id, interaction=interaction)
+    themes_cap = await premium.get_limit("themes", guild_id, interaction=interaction)
+    tones_cap  = await premium.get_limit("tones",  guild_id, interaction=interaction)
+
+    def _trim(values: list[str], cap: int | None) -> tuple[list[str], bool]:
+        """Trim list to cap. Returns (trimmed_list, was_truncated)."""
+        if cap is None or len(values) <= cap:
+            return values, False
+        return values[:cap], True
+
     if blurbs_enabled:
         # ── Step 3: Themes ─────────────────────────────────────────────────────
-        existing_themes = ", ".join(current["themes"])
+        # Apply cap up-front so the "defaults" preview matches what'll actually save.
+        cap_capped_themes, _ = _trim(list(current["themes"]), themes_cap)
+        existing_themes      = ", ".join(cap_capped_themes)
+        cap_note_themes      = (
+            f"\n*Free tier: up to {themes_cap} themes. Upgrade for unlimited.*"
+            if themes_cap is not None else ""
+        )
 
         class KeepOrChangeView(discord.ui.View):
             def __init__(self, label: str):
@@ -1492,7 +1561,8 @@ async def run_train_setup(interaction: discord.Interaction, bot):
         await channel.send(
             f"**Step 3 of 7 — Themes**\n"
             f"These appear as options when selecting a theme for a member's train day.\n\n"
-            f"**Defaults:**\n`{existing_themes}`",
+            f"**Defaults:**\n`{existing_themes}`"
+            + cap_note_themes,
             view=themes_keep_view,
         )
         await themes_keep_view.wait()
@@ -1500,20 +1570,34 @@ async def run_train_setup(interaction: discord.Interaction, bot):
             await channel.send("⏰ Timed out. Run `/setup_train` to start again.")
             return
 
-        if not themes_keep_view.keep_existing:
+        if themes_keep_view.keep_existing:
+            themes = cap_capped_themes
+        else:
             themes_raw = await ask_text("Enter your themes as a comma-separated list:")
             if themes_raw is None:
                 return
-            themes = [t.strip() for t in themes_raw.split(",") if t.strip()] or current["themes"]
+            entered = [t.strip() for t in themes_raw.split(",") if t.strip()] or current["themes"]
+            themes, truncated = _trim(entered, themes_cap)
+            if truncated:
+                await channel.send(
+                    f"ℹ️ Free tier: only the first {themes_cap} themes were saved "
+                    f"(`{', '.join(themes)}`). Upgrade to Premium to save more."
+                )
 
         # ── Step 4: Tones ──────────────────────────────────────────────────────
-        existing_tones = ", ".join(current["tones"])
+        cap_capped_tones, _ = _trim(list(current["tones"]), tones_cap)
+        existing_tones      = ", ".join(cap_capped_tones)
+        cap_note_tones      = (
+            f"\n*Free tier: up to {tones_cap} tones. Upgrade for unlimited.*"
+            if tones_cap is not None else ""
+        )
 
         tones_keep_view = KeepOrChangeView("tones")
         await channel.send(
             f"**Step 4 of 7 — Tones**\n"
             f"These let leadership adjust the writing style of the generated blurb.\n\n"
-            f"**Defaults:**\n`{existing_tones}`",
+            f"**Defaults:**\n`{existing_tones}`"
+            + cap_note_tones,
             view=tones_keep_view,
         )
         await tones_keep_view.wait()
@@ -1521,11 +1605,19 @@ async def run_train_setup(interaction: discord.Interaction, bot):
             await channel.send("⏰ Timed out. Run `/setup_train` to start again.")
             return
 
-        if not tones_keep_view.keep_existing:
+        if tones_keep_view.keep_existing:
+            tones = cap_capped_tones
+        else:
             tones_raw = await ask_text("Enter your tones as a comma-separated list:")
             if tones_raw is None:
                 return
-            tones = [t.strip() for t in tones_raw.split(",") if t.strip()] or current["tones"]
+            entered = [t.strip() for t in tones_raw.split(",") if t.strip()] or current["tones"]
+            tones, truncated = _trim(entered, tones_cap)
+            if truncated:
+                await channel.send(
+                    f"ℹ️ Free tier: only the first {tones_cap} tones were saved "
+                    f"(`{', '.join(tones)}`). Upgrade to Premium to save more."
+                )
 
         # ── Step 5: Default tone ───────────────────────────────────────────────
         class ToneDefaultView(discord.ui.View):
@@ -1642,6 +1734,7 @@ async def run_train_setup(interaction: discord.Interaction, bot):
         reminder_ch_view = ChannelSelectStep(
             "Select the reminder channel...",
             suggested_name="leadership",
+            include_threads=is_premium_flag,
         )
         await channel.send(
             "**Step 7a of 7 — Reminder Channel**\n"
@@ -1725,9 +1818,13 @@ async def run_survey_setup(interaction: discord.Interaction, bot):
         "Configure the squad powers survey for your alliance."
     )
 
+    is_premium_flag = await premium.is_premium(guild_id, interaction=interaction)
+
     # ── Step 1: Survey channel ─────────────────────────────────────────────────
     survey_ch_view = ChannelSelectStep(
-        "Select the survey channel...", suggested_name="squad-survey"
+        "Select the survey channel...",
+        suggested_name="squad-survey",
+        include_threads=is_premium_flag,
     )
     await channel.send(
         "**Step 1 of 6 — Survey Channel**\n"
@@ -1742,7 +1839,9 @@ async def run_survey_setup(interaction: discord.Interaction, bot):
 
     # ── Step 2: Survey notification channel ───────────────────────────────────
     notify_ch_view = ChannelSelectStep(
-        "Select the survey notification channel...", suggested_name="survey-responses"
+        "Select the survey notification channel...",
+        suggested_name="survey-responses",
+        include_threads=is_premium_flag,
     )
     await channel.send(
         "**Step 2 of 6 — Survey Notification Channel**\n"
@@ -1960,6 +2059,14 @@ async def run_survey_setup(interaction: discord.Interaction, bot):
                         existing = questions[idx]
                         q_num    = f"Question {idx + 1}"
                     else:
+                        # Free-tier cap on number of survey questions
+                        q_cap = await premium.get_limit("survey_questions", guild_id, interaction=interaction)
+                        if q_cap is not None and len(questions) >= q_cap:
+                            await channel.send(embed=premium.limit_reached_embed(
+                                feature_label="Survey Questions",
+                                current=len(questions), cap=q_cap, plural_unit="questions",
+                            ))
+                            continue
                         existing = {}
                         q_num    = f"Question {len(questions) + 1}"
 
@@ -2158,6 +2265,8 @@ async def run_storm_setup(interaction: discord.Interaction, bot, event_type: str
 
     await channel.send(f"⚙️ **{label} Setup**")
 
+    is_premium_flag = await premium.is_premium(guild_id, interaction=interaction)
+
     # ── Step 1: Sheet tab ──────────────────────────────────────────────────────
     default_tab = current.get("tab_name") or ("DS Assignments" if event_type == "DS" else "CS Assignments")
     tab_name    = await ask_keep_or_change(
@@ -2217,6 +2326,7 @@ async def run_storm_setup(interaction: discord.Interaction, bot, event_type: str
     log_ch_view = ChannelSelectStep(
         f"Select the {label} log channel...",
         suggested_name="storm-log",
+        include_threads=is_premium_flag,
     )
     await channel.send(
         f"**Step 3 of 4 — Storm Log Channel**\n"
@@ -2504,8 +2614,13 @@ async def run_event_setup(interaction: discord.Interaction, bot):
 
     # ── Steps 1-4: Channel/time settings (skipped if coming from action menu) ──
     if not skip_settings:
+        is_premium_flag  = await premium.is_premium(guild_id, interaction=interaction)
         current_draft_id = guild_cfg.event_draft_channel_id or 0
-        draft_ch_view    = ChannelSelectStep("Select the draft channel...", suggested_name="event-drafts")
+        draft_ch_view    = ChannelSelectStep(
+            "Select the draft channel...",
+            suggested_name="event-drafts",
+            include_threads=is_premium_flag,
+        )
         await channel.send(
             "**Step 1 of 5 — Draft Channel**\n"
             "Which channel should the bot post event announcement drafts for leadership to review?\n"
@@ -2519,7 +2634,11 @@ async def run_event_setup(interaction: discord.Interaction, bot):
         draft_channel_id = draft_ch_view.selected_channel.id
 
         current_ann_id = guild_cfg.event_announce_channel_id or 0
-        ann_ch_view    = ChannelSelectStep("Select the announcement channel...", suggested_name="announcements")
+        ann_ch_view    = ChannelSelectStep(
+            "Select the announcement channel...",
+            suggested_name="announcements",
+            include_threads=is_premium_flag,
+        )
         await channel.send(
             "**Step 2 of 5 — Announcement Channel**\n"
             "Which channel should approved announcements be posted to?\n"
@@ -2674,6 +2793,15 @@ async def run_event_setup(interaction: discord.Interaction, bot):
                 if list_view.action == "edit":
                     from config import get_guild_event
                     existing = get_guild_event(guild_id, list_view.edit_key)
+                elif list_view.action == "add":
+                    # Free-tier cap on number of events
+                    cap = await premium.get_limit("events", guild_id, interaction=interaction)
+                    if cap is not None and len(events) >= cap:
+                        await channel.send(embed=premium.limit_reached_embed(
+                            feature_label="Event Announcements",
+                            current=len(events), cap=cap, plural_unit="events",
+                        ))
+                        continue
 
                 # ── Event builder ──────────────────────────────────────────────
                 # Name
@@ -3075,9 +3203,11 @@ async def run_birthday_setup(interaction: discord.Interaction, bot):
 
     if reminders_enabled:
         # ── Step 8a: Reminder channel ──────────────────────────────────────────
+        is_premium_flag = await premium.is_premium(guild_id, interaction=interaction)
         remind_ch_view = ChannelSelectStep(
             "Select the birthday announcement channel...",
             suggested_name="birthdays",
+            include_threads=is_premium_flag,
         )
         await channel.send(
             "**Step 8a of 8 — Birthday Announcement Channel**\n"

@@ -32,6 +32,24 @@ def fresh_premium(monkeypatch):
     _premium.clear_cache()
     yield _premium
     _premium.clear_cache()
+    # Reload again with clean env so subsequent tests don't see stale module
+    # state if the test set env vars and reloaded mid-test.
+    importlib.reload(_premium)
+
+
+@pytest.fixture(autouse=True)
+def _restore_premium_module_after_each_test(monkeypatch):
+    """
+    Autouse cleanup: regardless of which test runs, ensure the premium
+    module ends in a clean state with no env vars set. Prevents leaking
+    PREMIUM_SKU_ID etc. into integration tests in the same pytest session.
+    """
+    yield
+    for var in ("PREMIUM_SKU_ID", "FORCE_PREMIUM", "PREMIUM_TEST_GUILD_IDS"):
+        monkeypatch.delenv(var, raising=False)
+    import premium as _premium
+    _premium.clear_cache()
+    importlib.reload(_premium)
 
 
 def _make_entitlement(sku_id: int, deleted: bool = False):
@@ -299,6 +317,232 @@ class TestMessagingHelpers:
         importlib.reload(_premium)
         try:
             view = _premium.upgrade_view()
+            assert view is not None
+            assert len(view.children) == 1
+            assert view.children[0].sku_id == 12345
+        finally:
+            _premium.clear_cache()
+
+
+# ── ChannelSelectStep thread-destination gating (Phase 1.5) ───────────────────
+
+class TestChannelSelectStepThreadGating:
+    """Verify the include_threads kwarg controls which channel types appear."""
+
+    def test_default_text_only(self, fresh_premium):
+        import discord
+        from setup_cog import ChannelSelectStep
+
+        view  = ChannelSelectStep("Pick a channel...")
+        # The first child is the ChannelSelect with channel_types attribute.
+        select = view.children[0]
+        assert discord.ChannelType.text in select.channel_types
+        assert discord.ChannelType.public_thread  not in select.channel_types
+        assert discord.ChannelType.private_thread not in select.channel_types
+
+    def test_include_threads_adds_three_thread_types(self, fresh_premium):
+        import discord
+        from setup_cog import ChannelSelectStep
+
+        view   = ChannelSelectStep("Pick a channel...", include_threads=True)
+        select = view.children[0]
+        assert discord.ChannelType.text            in select.channel_types
+        assert discord.ChannelType.public_thread   in select.channel_types
+        assert discord.ChannelType.private_thread  in select.channel_types
+        assert discord.ChannelType.news_thread     in select.channel_types
+
+    def test_create_button_hidden_when_threads_included(self, fresh_premium):
+        """When threads are in the picker, hide the 'Create channel' button —
+        we can't sensibly create a thread from a wizard."""
+        from setup_cog import ChannelSelectStep
+
+        view = ChannelSelectStep(
+            "Pick a channel...",
+            include_threads=True,
+            allow_create=True,
+        )
+        # Children: just the ChannelSelect (no Create button).
+        labels = [getattr(c, "label", None) for c in view.children]
+        assert "➕ Create a new channel" not in labels
+
+    def test_create_button_visible_when_text_only(self, fresh_premium):
+        from setup_cog import ChannelSelectStep
+
+        view = ChannelSelectStep(
+            "Pick a channel...",
+            include_threads=False,
+            allow_create=True,
+        )
+        labels = [getattr(c, "label", None) for c in view.children]
+        assert "➕ Create a new channel" in labels
+
+
+# ── Log day-window resolution (Phase 6) ───────────────────────────────────────
+
+class TestLogWindowLimits:
+    """Verify get_limit returns the correct day window per feature/tier."""
+
+    @pytest.mark.asyncio
+    async def test_events_log_days_free_is_seven(self, fresh_premium):
+        assert await fresh_premium.get_limit("events_log_days", TEST_GUILD_ID) == 7
+
+    @pytest.mark.asyncio
+    async def test_events_log_days_premium_is_thirty(self, fresh_premium):
+        assert await fresh_premium.get_limit("events_log_days", OGV_GUILD_ID) == 30
+
+    @pytest.mark.asyncio
+    async def test_train_log_days_free_is_seven(self, fresh_premium):
+        assert await fresh_premium.get_limit("train_log_days", TEST_GUILD_ID) == 7
+
+    @pytest.mark.asyncio
+    async def test_train_log_days_premium_is_thirty(self, fresh_premium):
+        assert await fresh_premium.get_limit("train_log_days", OGV_GUILD_ID) == 30
+
+    @pytest.mark.asyncio
+    async def test_storm_log_recent_free_is_four(self, fresh_premium):
+        assert await fresh_premium.get_limit("storm_log_recent", TEST_GUILD_ID) == 4
+
+    @pytest.mark.asyncio
+    async def test_storm_log_recent_premium_is_unlimited(self, fresh_premium):
+        assert await fresh_premium.get_limit("storm_log_recent", OGV_GUILD_ID) is None
+
+
+# ── Storm log recent-date helper (Phase 6) ────────────────────────────────────
+
+class TestStormLogRecentDates:
+    """Verify list_recent_log_dates parses, dedupes, sorts, and trims."""
+
+    def test_returns_n_most_recent_dates_sorted_desc(self, fresh_premium, monkeypatch):
+        from datetime import date
+        import storm_log
+
+        rows = [
+            ["Date", "Event", "VoteCount", "RTFNoVote", "SittingOut", "Prior"],
+            ["1/5/2026",  "DS", "10", "", "", ""],
+            ["1/12/2026", "DS", "11", "", "", ""],
+            ["1/19/2026", "DS", "12", "", "", ""],
+            ["1/26/2026", "DS", "13", "", "", ""],
+            ["2/2/2026",  "DS", "14", "", "", ""],   # 5th
+            ["1/12/2026", "CS", "20", "", "", ""],   # CS — should be filtered out
+        ]
+
+        class FakeWS:
+            def get_all_values(self):
+                return rows
+
+        monkeypatch.setattr(storm_log, "_get_log_sheet", lambda guild_id: FakeWS())
+
+        result = storm_log.list_recent_log_dates("DS", n=4, guild_id=999)
+        assert result == [
+            date(2026, 2, 2),
+            date(2026, 1, 26),
+            date(2026, 1, 19),
+            date(2026, 1, 12),
+        ]
+
+    def test_returns_empty_list_when_sheet_unreadable(self, fresh_premium, monkeypatch):
+        import storm_log
+
+        def boom(guild_id):
+            raise RuntimeError("Sheet unavailable")
+        monkeypatch.setattr(storm_log, "_get_log_sheet", boom)
+
+        result = storm_log.list_recent_log_dates("DS", n=4, guild_id=999)
+        assert result == []
+
+    def test_deduplicates_same_date_for_same_event(self, fresh_premium, monkeypatch):
+        from datetime import date
+        import storm_log
+
+        rows = [
+            ["Date", "Event", "VoteCount", "", "", ""],
+            ["1/5/2026", "DS", "10", "", "", ""],
+            ["1/5/2026", "DS", "10", "", "", ""],   # duplicate
+            ["1/12/2026", "DS", "11", "", "", ""],
+        ]
+
+        class FakeWS:
+            def get_all_values(self):
+                return rows
+
+        monkeypatch.setattr(storm_log, "_get_log_sheet", lambda guild_id: FakeWS())
+
+        result = storm_log.list_recent_log_dates("DS", n=10, guild_id=999)
+        assert result == [date(2026, 1, 12), date(2026, 1, 5)]
+
+
+# ── /upgrade command behavior (Phase 7) ───────────────────────────────────────
+
+class TestUpgradeCommand:
+    """Verify /upgrade renders correctly for free vs premium and with/without SKU."""
+
+    @pytest.mark.asyncio
+    async def test_premium_user_sees_already_active_message(self, fresh_premium):
+        from donate import DonateCog
+
+        bot = MagicMock()
+        cog = DonateCog(bot)
+
+        interaction = AsyncMock()
+        interaction.guild_id = OGV_GUILD_ID  # always-premium
+        interaction.entitlements = []
+        interaction.response.send_message = AsyncMock()
+
+        await cog.upgrade.callback(cog, interaction)
+
+        call = interaction.response.send_message.call_args
+        embed = call.kwargs.get("embed") or (call.args[0] if call.args else None)
+        assert embed is not None
+        assert "Premium is active" in embed.title
+
+    @pytest.mark.asyncio
+    async def test_free_user_with_no_sku_sees_unavailable_notice(self, fresh_premium):
+        from donate import DonateCog
+
+        bot = MagicMock()
+        cog = DonateCog(bot)
+
+        interaction = AsyncMock()
+        interaction.guild_id = TEST_GUILD_ID  # free
+        interaction.entitlements = []
+        interaction.response.send_message = AsyncMock()
+
+        await cog.upgrade.callback(cog, interaction)
+
+        call  = interaction.response.send_message.call_args
+        embed = call.kwargs.get("embed") or (call.args[0] if call.args else None)
+        view  = call.kwargs.get("view")
+        assert embed is not None
+        assert "Premium" in embed.title
+        # No SKU configured → no upgrade view, but a notice field is added.
+        assert view is None
+        notices = [f.name for f in embed.fields]
+        assert any("not yet available" in n for n in notices)
+
+    @pytest.mark.asyncio
+    async def test_free_user_with_sku_gets_upgrade_view(self, monkeypatch):
+        monkeypatch.setenv("PREMIUM_SKU_ID", "12345")
+        import premium as _premium
+        importlib.reload(_premium)
+        try:
+            # donate.py imports premium at module load — reload it so the upgrade
+            # view function references the freshly-reloaded premium module.
+            import donate
+            importlib.reload(donate)
+            from donate import DonateCog
+
+            bot = MagicMock()
+            cog = DonateCog(bot)
+
+            interaction = AsyncMock()
+            interaction.guild_id     = TEST_GUILD_ID
+            interaction.entitlements = []
+            interaction.response.send_message = AsyncMock()
+
+            await cog.upgrade.callback(cog, interaction)
+
+            call  = interaction.response.send_message.call_args
+            view  = call.kwargs.get("view")
             assert view is not None
             assert len(view.children) == 1
             assert view.children[0].sku_id == 12345

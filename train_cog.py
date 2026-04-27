@@ -184,9 +184,9 @@ class TrainCog(commands.Cog):
 
     @app_commands.command(
         name="train_log",
-        description="Show the train prompt log (defaults to past 14 days; pass a date to filter)",
+        description="Show the train prompt log (window depends on your tier; pass a date to filter)",
     )
-    @app_commands.describe(date="Optional date, e.g. 'April 14' or '4/14' (defaults to last 14 days)")
+    @app_commands.describe(date="Optional date, e.g. 'April 14' or '4/14'")
     async def train_log(self, interaction: discord.Interaction, date: str = None):
         if not await _guard(interaction):
             return
@@ -234,19 +234,23 @@ class TrainCog(commands.Cog):
                     inline=False,
                 )
         else:
-            cutoff = today - timedelta(days=14)
+            import premium
+            window_days = await premium.get_limit(
+                "train_log_days", interaction.guild_id, interaction=interaction,
+            ) or 30
+            cutoff = today - timedelta(days=window_days)
             recent = []
             for date_str, entry in schedule.items():
                 try:
                     d = _date.fromisoformat(date_str)
                 except ValueError:
                     continue
-                if cutoff <= d <= today + timedelta(days=14):
+                if cutoff <= d <= today + timedelta(days=window_days):
                     recent.append((d, entry))
             recent.sort(key=lambda t: t[0], reverse=True)
 
             if not recent:
-                embed.description = "*No train entries in the past 14 days.*"
+                embed.description = f"*No train entries in the past {window_days} days.*"
             else:
                 lines = []
                 for d, entry in recent[:20]:
@@ -259,7 +263,10 @@ class TrainCog(commands.Cog):
                     bits.append(f"prompt {retrieved}")
                     lines.append("• " + " · ".join(bits))
                 embed.description = "\n".join(lines)[:4000]
-                embed.set_footer(text="Showing the most recent 20 entries within ±14 days. Pass a date to filter.")
+                if window_days < 30:
+                    embed.set_footer(text=f"Free tier: {window_days}-day window. Upgrade to Premium for 30 days.")
+                else:
+                    embed.set_footer(text=f"Showing the most recent 20 entries within ±{window_days} days. Pass a date to filter.")
 
         await interaction.followup.send(embed=embed, ephemeral=True)
 

@@ -12,6 +12,8 @@ import discord
 from discord import app_commands
 from discord.ext import commands
 
+import premium
+
 
 # Default Ko-fi link is set so the command works out-of-the-box for the
 # current bot owner. Other platforms default to empty (omitted from embed).
@@ -72,6 +74,60 @@ class DonateCog(commands.Cog):
 
         embed.set_footer(text="100% optional — the bot is and will remain free to use at the base level.")
         await interaction.response.send_message(embed=embed, ephemeral=True)
+
+    @app_commands.command(
+        name="upgrade",
+        description="Unlock Alliance Helper Premium for this server",
+    )
+    async def upgrade(self, interaction: discord.Interaction):
+        is_premium = await premium.is_premium(
+            interaction.guild_id, interaction=interaction, bot=self.bot,
+        )
+
+        if is_premium:
+            embed = discord.Embed(
+                title="💎 Premium is active",
+                description=(
+                    "This server already has Alliance Helper Premium — you're set! "
+                    "All premium features are unlocked. Thanks for supporting the bot."
+                ),
+                color=discord.Color.gold(),
+            )
+            await interaction.response.send_message(embed=embed, ephemeral=True)
+            return
+
+        embed = discord.Embed(
+            title="💎 Alliance Helper Premium",
+            description=(
+                "Unlock the full power of Alliance Helper for your alliance.\n\n"
+                "**What you get:**\n"
+                "• 📣 Unlimited events (vs 5 free)\n"
+                "• 🚂 Up to 10 saved train prompt templates (vs 1 free)\n"
+                "• ⚔️ Up to 10 saved storm mail templates per team (vs 1 free)\n"
+                "• 📋 Multiple surveys + extra question types (numeric, multi-select, date)\n"
+                "• 📊 Custom snapshot intervals + unlimited tracked metrics\n"
+                "• 🧵 Use threads as destinations for any channel-pickable feature\n"
+                "• 👥 Member roster sync, birthday DMs, train DMs, survey reminders\n"
+                "• 📅 30-day history windows on `/events_log` and `/train_log`\n"
+                "• 📜 Unlimited storm-log lookback\n\n"
+                "**$4.99/month or $49/year**, billed by Discord. Cancel anytime."
+            ),
+            color=discord.Color.purple(),
+        )
+
+        view = premium.upgrade_view()
+        if view is not None:
+            await interaction.response.send_message(embed=embed, view=view, ephemeral=True)
+        else:
+            embed.add_field(
+                name="⚠️ Subscriptions not yet available",
+                value=(
+                    "Premium subscriptions aren't live yet. "
+                    "Check back soon, or use `/donate` to support the bot in the meantime."
+                ),
+                inline=False,
+            )
+            await interaction.response.send_message(embed=embed, ephemeral=True)
 
 
 async def setup(bot: commands.Bot):

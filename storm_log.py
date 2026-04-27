@@ -594,6 +594,42 @@ async def run_log_flow(bot, channel, user, event_type):
 
 # ── Log lookup ─────────────────────────────────────────────────────────────────
 
+def list_recent_log_dates(event_type: str, n: int, guild_id=None) -> list[date]:
+    """
+    Return up to `n` most-recent log dates for `event_type`, sorted newest-first.
+    Used to gate free-tier access (only the N most recent entries are visible).
+    """
+    out: list[date] = []
+    try:
+        ws   = _get_log_sheet(guild_id)
+        rows = ws.get_all_values()
+        if len(rows) <= 1:
+            return out
+        from datetime import datetime
+        seen: set[date] = set()
+        parsed: list[date] = []
+        for row in rows[1:]:
+            if len(row) < 2:
+                continue
+            if row[1].strip().upper() != event_type.upper():
+                continue
+            row_date = row[0].strip()
+            for fmt in ("%m/%d/%Y", "%Y-%m-%d"):
+                try:
+                    d = datetime.strptime(row_date, fmt).date()
+                    if d not in seen:
+                        seen.add(d)
+                        parsed.append(d)
+                    break
+                except ValueError:
+                    continue
+        parsed.sort(reverse=True)
+        return parsed[:n]
+    except Exception as e:
+        print(f"[STORM_LOG] Could not list recent dates: {e}")
+        return out
+
+
 def lookup_log_entry(event_type: str, log_date: date, guild_id=None):
     """
     Find the most recent log row matching event_type and log_date.
@@ -746,11 +782,29 @@ async def _show_storm_log(interaction: discord.Interaction, event: str, date: st
         from datetime import date as date_cls
         parsed_d = date_cls.today()
 
+    event_label = "Desert Storm" if event == "DS" else "Canyon Storm"
+
+    # Free tier sees only the most recent N storm participation log entries.
+    import premium
+    recent_cap = await premium.get_limit(
+        "storm_log_recent", interaction.guild_id, interaction=interaction,
+    )
+    if recent_cap is not None:
+        recent_dates = await asyncio.get_event_loop().run_in_executor(
+            None, list_recent_log_dates, event, recent_cap, interaction.guild_id,
+        )
+        if recent_dates and parsed_d not in recent_dates:
+            embed = premium.limit_reached_embed(
+                feature_label=f"{event_label} log lookback",
+                current=recent_cap, cap=recent_cap,
+                plural_unit="most-recent log entries",
+            )
+            await interaction.followup.send(embed=embed, ephemeral=True)
+            return
+
     entry = await asyncio.get_event_loop().run_in_executor(
         None, lookup_log_entry, event, parsed_d
     )
-
-    event_label = "Desert Storm" if event == "DS" else "Canyon Storm"
 
     if entry is None:
         await interaction.followup.send(

@@ -2,7 +2,8 @@
 storm.py — Desert Storm mail generation
 
 Commands (OGV Leadership only, leadership channel only):
-  /draftds — Generate a Desert Storm mail draft for Team A or Team B
+  /desertstorm_draft — Generate a Desert Storm mail draft for Team A or Team B
+  /canyonstorm_draft — Generate a Canyon Storm mail draft for Team A or Team B
 
 Flow:
   1. Bot asks Team A or Team B
@@ -423,7 +424,7 @@ async def run_ds_edit_step(bot, channel, user, team: str, current_zones: dict,
         except discord.HTTPException:
             pass
         if time_view.selected is None:
-            await channel.send("⏰ Timed out. Use `/draftds` to start again.")
+            await channel.send("⏰ Timed out. Use `/desertstorm_draft` to start again.")
             return
         time_key = time_view.selected
 
@@ -436,7 +437,7 @@ async def run_ds_edit_step(bot, channel, user, team: str, current_zones: dict,
     try:
         reply = await bot.wait_for("message", check=check, timeout=WIZARD_TIMEOUT)
     except asyncio.TimeoutError:
-        await channel.send("⏰ Timed out. Use `/draftds` to start again.")
+        await channel.send("⏰ Timed out. Use `/desertstorm_draft` to start again.")
         try:
             await prompt.delete()
         except discord.HTTPException:
@@ -458,7 +459,7 @@ async def run_ds_edit_step(bot, channel, user, team: str, current_zones: dict,
     if not zones:
         await channel.send(
             "⚠️ Could not parse any zone assignments. "
-            "Make sure the format matches the template and try `/draftds` again."
+            "Make sure the format matches the template and try `/desertstorm_draft` again."
         )
         return
 
@@ -517,10 +518,10 @@ class StormCog(commands.Cog):
         self.bot = bot
 
     @app_commands.command(
-        name="draftds",
+        name="desertstorm_draft",
         description="Generate a Desert Storm mail draft for Team A or Team B",
     )
-    async def draftds(self, interaction: discord.Interaction):
+    async def desertstorm_draft(self, interaction: discord.Interaction):
         if not await _guard(interaction):
             return
 
@@ -544,7 +545,7 @@ class StormCog(commands.Cog):
             pass
 
         if team_view.selected is None:
-            await channel.send("⏰ Timed out. Use `/draftds` to start again.")
+            await channel.send("⏰ Timed out. Use `/desertstorm_draft` to start again.")
             await interaction.followup.send("⏰ Timed out.", ephemeral=True)
             return
 
@@ -568,10 +569,10 @@ class StormCog(commands.Cog):
 
 
     @app_commands.command(
-        name="draftcs",
+        name="canyonstorm_draft",
         description="Generate a Canyon Storm mail draft for Team A or Team B",
     )
-    async def draftcs(self, interaction: discord.Interaction):
+    async def canyonstorm_draft(self, interaction: discord.Interaction):
         if not await _guard(interaction):
             return
 
@@ -595,7 +596,7 @@ class StormCog(commands.Cog):
             pass
 
         if team_view.selected is None:
-            await channel.send("⏰ Timed out. Use `/draftcs` to start again.")
+            await channel.send("⏰ Timed out. Use `/canyonstorm_draft` to start again.")
             await interaction.followup.send("⏰ Timed out.", ephemeral=True)
             return
 
@@ -974,7 +975,7 @@ async def run_cs_edit_step(bot, channel, user, team: str, current_zones: dict, t
         except discord.HTTPException:
             pass
         if time_view.selected is None:
-            await channel.send("⏰ Timed out. Use `/draftcs` to start again.")
+            await channel.send("⏰ Timed out. Use `/canyonstorm_draft` to start again.")
             return
         time_key = time_view.selected
 
@@ -985,7 +986,7 @@ async def run_cs_edit_step(bot, channel, user, team: str, current_zones: dict, t
     try:
         reply = await bot.wait_for("message", check=check, timeout=WIZARD_TIMEOUT)
     except asyncio.TimeoutError:
-        await channel.send("⏰ Timed out. Use `/draftcs` to start again.")
+        await channel.send("⏰ Timed out. Use `/canyonstorm_draft` to start again.")
         try:
             await prompt.delete()
         except discord.HTTPException:
@@ -1007,7 +1008,7 @@ async def run_cs_edit_step(bot, channel, user, team: str, current_zones: dict, t
     if not zones:
         await channel.send(
             "⚠️ Could not parse any assignments. "
-            "Make sure the format matches the template and try `/draftcs` again."
+            "Make sure the format matches the template and try `/canyonstorm_draft` again."
         )
         return
 

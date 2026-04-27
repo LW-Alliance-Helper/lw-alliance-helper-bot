@@ -2,8 +2,10 @@
 storm_log.py — DS and CS event logging
 
 Slash commands:
-  /logds  — Log Desert Storm participation data
-  /logcs  — Log Canyon Storm participation data
+  /desertstorm_participation — Log Desert Storm participation data
+  /canyonstorm_participation — Log Canyon Storm participation data
+  /desertstorm_log [date]    — View a Desert Storm log entry
+  /canyonstorm_log [date]    — View a Canyon Storm log entry
 
 Writes to the "DS-CS Sit-outs" tab in Google Sheets and posts a
 summary to the dedicated log thread configured for this guild.
@@ -471,7 +473,10 @@ async def run_log_flow(bot, channel, user, event_type):
         except discord.HTTPException:
             pass
         if not names:
-            await channel.send("⚠️ Could not load member names. Check `/setmembertab` and try again.")
+            await channel.send(
+                "⚠️ Could not load member names. "
+                "Run `/setup_birthdays` (or another module setup) to confirm the member tab name and try again."
+            )
             return
 
         roster_preview = ", ".join(names)
@@ -672,8 +677,11 @@ class LogCog(commands.Cog):
     def __init__(self, bot):
         self.bot = bot
 
-    @app_commands.command(name="logds", description="Log Desert Storm participation data")
-    async def logds(self, interaction: discord.Interaction):
+    @app_commands.command(
+        name="desertstorm_participation",
+        description="Log Desert Storm participation data",
+    )
+    async def desertstorm_participation(self, interaction: discord.Interaction):
         if not await _guard(interaction):
             return
         if interaction.user.id in active_logs:
@@ -685,8 +693,11 @@ class LogCog(commands.Cog):
         await interaction.response.send_message("📋 Starting DS log...", ephemeral=True)
         await run_log_flow(self.bot, interaction.channel, interaction.user, "DS")
 
-    @app_commands.command(name="logcs", description="Log Canyon Storm participation data")
-    async def logcs(self, interaction: discord.Interaction):
+    @app_commands.command(
+        name="canyonstorm_participation",
+        description="Log Canyon Storm participation data",
+    )
+    async def canyonstorm_participation(self, interaction: discord.Interaction):
         if not await _guard(interaction):
             return
         if interaction.user.id in active_logs:
@@ -698,23 +709,31 @@ class LogCog(commands.Cog):
         await interaction.response.send_message("📋 Starting CS log...", ephemeral=True)
         await run_log_flow(self.bot, interaction.channel, interaction.user, "CS")
 
-
-    @app_commands.command(name="viewlog", description="View a logged event entry for a specific date")
-    @app_commands.describe(
-        event="DS or CS",
-        date="Date to look up, e.g. 'April 14' or '4/14'",
+    @app_commands.command(
+        name="desertstorm_log",
+        description="View a Desert Storm log entry (defaults to today)",
     )
-    @app_commands.choices(event=[
-        app_commands.Choice(name="Desert Storm (DS)", value="DS"),
-        app_commands.Choice(name="Canyon Storm (CS)", value="CS"),
-    ])
-    async def viewlog(self, interaction: discord.Interaction, event: str, date: str):
-        if not await _guard(interaction):
-            return
+    @app_commands.describe(date="Optional date, e.g. 'April 14' or '4/14' (defaults to today)")
+    async def desertstorm_log(self, interaction: discord.Interaction, date: str = None):
+        await _show_storm_log(interaction, "DS", date)
 
-        await interaction.response.defer()
+    @app_commands.command(
+        name="canyonstorm_log",
+        description="View a Canyon Storm log entry (defaults to today)",
+    )
+    @app_commands.describe(date="Optional date, e.g. 'April 14' or '4/14' (defaults to today)")
+    async def canyonstorm_log(self, interaction: discord.Interaction, date: str = None):
+        await _show_storm_log(interaction, "CS", date)
 
-        # Parse the date
+
+async def _show_storm_log(interaction: discord.Interaction, event: str, date: str | None):
+    """Shared handler for /desertstorm_log and /canyonstorm_log."""
+    if not await _guard(interaction):
+        return
+
+    await interaction.response.defer()
+
+    if date:
         from train import parse_date_and_name
         parsed_d, _, _ = parse_date_and_name(f"{date} - placeholder")
         if not parsed_d:
@@ -723,30 +742,34 @@ class LogCog(commands.Cog):
                 ephemeral=True,
             )
             return
+    else:
+        from datetime import date as date_cls
+        parsed_d = date_cls.today()
 
-        entry = await asyncio.get_event_loop().run_in_executor(
-            None, lookup_log_entry, event, parsed_d
+    entry = await asyncio.get_event_loop().run_in_executor(
+        None, lookup_log_entry, event, parsed_d
+    )
+
+    event_label = "Desert Storm" if event == "DS" else "Canyon Storm"
+
+    if entry is None:
+        await interaction.followup.send(
+            f"❌ No **{event_label}** log found for **{parsed_d.strftime('%B %-d, %Y')}**.",
+            ephemeral=True,
         )
+        return
 
-        if entry is None:
-            await interaction.followup.send(
-                f"❌ No **{event}** log found for **{parsed_d.strftime('%B %-d, %Y')}**.",
-                ephemeral=True,
-            )
-            return
+    date_str     = parsed_d.strftime("%A, %B %-d, %Y")
+    action_label = "Vote" if event == "DS" else "Request"
 
-        event_label  = "Desert Storm" if event == "DS" else "Canyon Storm"
-        date_str     = parsed_d.strftime("%A, %B %-d, %Y")
-        action_label = "Vote" if event == "DS" else "Request"
+    lines = [f"📋 **{event_label} Log — {date_str}**"]
+    if event == "DS":
+        lines.append(f"**Votes:** {entry['vote_count'] or 'Not recorded'}")
+        lines.append(f"**RTF No Vote:** {entry['rtf_no_vote'] or 'None'}")
+    lines.append(f"**Sitting Out:** {entry['sitting_out'] or 'None'}")
+    lines.append(f"**Prior Sit-Out No {action_label}:** {entry['prior_no_request'] or 'None'}")
 
-        lines = [f"📋 **{event_label} Log — {date_str}**"]
-        if event == "DS":
-            lines.append(f"**Votes:** {entry['vote_count'] or 'Not recorded'}")
-            lines.append(f"**RTF No Vote:** {entry['rtf_no_vote'] or 'None'}")
-        lines.append(f"**Sitting Out:** {entry['sitting_out'] or 'None'}")
-        lines.append(f"**Prior Sit-Out No {action_label}:** {entry['prior_no_request'] or 'None'}")
-
-        await interaction.followup.send("\n".join(lines))
+    await interaction.followup.send("\n".join(lines))
 
 
 async def setup(bot: commands.Bot):

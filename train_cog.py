@@ -397,13 +397,24 @@ class TrainCog(commands.Cog):
 
                 for member in todays_bdays:
                     name = member.get("name", "a member")
-                    # @mention if Discord ID available
+                    # @mention if Discord ID available (from the birthday sheet)
                     discord_id = member.get("discord_id")
                     if discord_id:
                         mention = f"<@{discord_id}>"
                     else:
                         mention = f"**{name}**"
                     await bday_channel.send(f"🎂 Today is {mention}'s birthday!")
+
+                    # 💎 Premium: also DM the member directly with a personal note.
+                    if discord_id:
+                        import dm
+                        await dm.send_dm_to_id(
+                            self.bot, guild.id, discord_id,
+                            content=(
+                                f"🎂 Happy birthday, **{name}**! Wishing you a great day "
+                                f"from everyone at the alliance."
+                            ),
+                        )
 
         except Exception as e:
             import traceback
@@ -451,11 +462,16 @@ class TrainCog(commands.Cog):
                 self.reminders_fired.add(guild.id)
                 continue
 
+            # 💎 Premium: replace the name with a Discord mention if the
+            # member roster knows them. Free tier sees just the name.
+            import dm
+            display = await dm.mention_or_name(self.bot, guild.id, name)
+
             blurbs_on = train_cfg.get("blurbs_enabled", 1)
             if blurbs_on:
                 view = ReminderView(cog=self, date_str=today_str, name=name)
                 msg  = (
-                    f"🚂 **Reset! Today's train is for {name}.**\n\n"
+                    f"🚂 **Reset! Today's train is for {display}.**\n\n"
                     f"Click below whenever you're ready to get the ChatGPT prompt — "
                     f"no rush, run it when the team is available.\n\n"
                     f"⚠️ *If the button stops working after a bot restart, use `/train` → 📋 Generate Prompt instead.*"
@@ -463,11 +479,21 @@ class TrainCog(commands.Cog):
                 await channel.send(msg, view=view)
             else:
                 await channel.send(
-                    f"🚂 **Reset! Today's train is for {name}.**"
+                    f"🚂 **Reset! Today's train is for {display}.**"
                 )
 
             self.reminders_fired.add(guild.id)
             print(f"[TRAIN] Reminder sent for guild {guild.id} — {name} on {today_str}")
+
+            # 💎 Premium: also DM the member assigned to today's train.
+            import dm
+            await dm.send_dm(
+                self.bot, guild.id, name,
+                content=(
+                    f"🚂 Heads up — **today's train is for you!** "
+                    f"Leadership has been notified, so look out for the announcement."
+                ),
+            )
 
     @check_reminder.before_loop
     async def before_check_reminder(self):

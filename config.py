@@ -258,6 +258,27 @@ def init_db():
         conn.commit()
         _seed_ogv_birthday_config(conn)
 
+        # guild_member_roster_config — per-guild member-roster sync settings.
+        # Premium-only feature: writes a list of all members with the configured
+        # member role to a dedicated sheet tab so other premium features
+        # (birthday DMs, train DMs, auto-mention, etc.) can look up Discord IDs.
+        conn.execute("""
+            CREATE TABLE IF NOT EXISTS guild_member_roster_config (
+                guild_id        INTEGER PRIMARY KEY,
+                enabled         INTEGER DEFAULT 0,
+                tab_name        TEXT    DEFAULT 'Member Roster',
+                discord_id_col  INTEGER DEFAULT 0,
+                name_col        INTEGER DEFAULT 1,
+                display_col     INTEGER DEFAULT 2,
+                joined_col      INTEGER DEFAULT 3,
+                roles_col       INTEGER DEFAULT 4,
+                role_filter_id  INTEGER DEFAULT 0,
+                auto_sync       INTEGER DEFAULT 1,
+                last_synced_at  TEXT    DEFAULT ''
+            )
+        """)
+        conn.commit()
+
         # guild_storm_config — per-guild DS/CS mail templates and time options
         conn.execute("""
             CREATE TABLE IF NOT EXISTS guild_storm_config (
@@ -965,6 +986,128 @@ def save_birthday_config(guild_id: int, tab_name: str, name_col: int,
              reminders_enabled, reminder_channel_id, reminder_time)
         )
         conn.commit()
+
+
+def get_member_roster_config(guild_id: int) -> dict:
+    """Return member-roster config for a guild, with sensible defaults."""
+    with _get_conn() as conn:
+        row = conn.execute(
+            "SELECT * FROM guild_member_roster_config WHERE guild_id = ?",
+            (guild_id,),
+        ).fetchone()
+    if row:
+        return dict(row)
+    return {
+        "guild_id":       guild_id,
+        "enabled":        0,
+        "tab_name":       "Member Roster",
+        "discord_id_col": 0,
+        "name_col":       1,
+        "display_col":    2,
+        "joined_col":     3,
+        "roles_col":      4,
+        "role_filter_id": 0,
+        "auto_sync":      1,
+        "last_synced_at": "",
+    }
+
+
+def save_member_roster_config(
+    guild_id: int,
+    *,
+    enabled:        int = 1,
+    tab_name:       str = "Member Roster",
+    discord_id_col: int = 0,
+    name_col:       int = 1,
+    display_col:    int = 2,
+    joined_col:     int = 3,
+    roles_col:      int = 4,
+    role_filter_id: int = 0,
+    auto_sync:      int = 1,
+    last_synced_at: str = "",
+):
+    """Insert or replace a guild's member-roster config."""
+    with _get_conn() as conn:
+        conn.execute(
+            "INSERT INTO guild_member_roster_config "
+            "(guild_id, enabled, tab_name, discord_id_col, name_col, display_col, "
+            " joined_col, roles_col, role_filter_id, auto_sync, last_synced_at) "
+            "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?) "
+            "ON CONFLICT(guild_id) DO UPDATE SET "
+            " enabled=excluded.enabled, tab_name=excluded.tab_name, "
+            " discord_id_col=excluded.discord_id_col, name_col=excluded.name_col, "
+            " display_col=excluded.display_col, joined_col=excluded.joined_col, "
+            " roles_col=excluded.roles_col, role_filter_id=excluded.role_filter_id, "
+            " auto_sync=excluded.auto_sync, last_synced_at=excluded.last_synced_at",
+            (guild_id, enabled, tab_name, discord_id_col, name_col, display_col,
+             joined_col, roles_col, role_filter_id, auto_sync, last_synced_at),
+        )
+        conn.commit()
+
+
+def update_roster_last_synced(guild_id: int, timestamp_iso: str):
+    """Lightweight helper for the sync command to update only last_synced_at."""
+    with _get_conn() as conn:
+        conn.execute(
+            "UPDATE guild_member_roster_config SET last_synced_at = ? WHERE guild_id = ?",
+            (timestamp_iso, guild_id),
+        )
+        conn.commit()
+
+
+def lookup_discord_id_for_name(guild_id: int, name: str) -> str | None:
+    """
+    Read the configured roster sheet and return the Discord ID for the given
+    member name (case-insensitive match against display_col), or None.
+    Used by DM-driven premium features.
+    """
+    cfg = get_member_roster_config(guild_id)
+    if not cfg.get("enabled"):
+        return None
+    try:
+        ws = get_member_roster_sheet(guild_id, cfg["tab_name"])
+        rows = ws.get_all_values()
+    except Exception as e:
+        print(f"[ROSTER] Could not read roster sheet: {e}")
+        return None
+
+    target = name.strip().lower()
+    did_col   = cfg["discord_id_col"]
+    disp_col  = cfg["display_col"]
+    name_col  = cfg["name_col"]
+    for row in rows[1:]:  # skip header
+        if not row:
+            continue
+        for col in (disp_col, name_col):
+            if col < len(row) and row[col].strip().lower() == target:
+                if did_col < len(row):
+                    did = row[did_col].strip()
+                    return did or None
+                return None
+    return None
+
+
+def get_member_roster_sheet(guild_id: int, tab_name: str):
+    """Open (or create) the roster tab in the guild's spreadsheet."""
+    import os, json
+    import gspread
+    from google.oauth2.service_account import Credentials
+
+    scopes = ["https://www.googleapis.com/auth/spreadsheets"]
+    credentials_json = os.getenv("GOOGLE_CREDENTIALS_JSON")
+    if credentials_json:
+        info  = json.loads(credentials_json)
+        creds = Credentials.from_service_account_info(info, scopes=scopes)
+    else:
+        key_file = os.getenv("GOOGLE_SERVICE_ACCOUNT_FILE", "service_account.json")
+        creds    = Credentials.from_service_account_file(key_file, scopes=scopes)
+
+    gc = gspread.authorize(creds)
+    sh = gc.open_by_key(get_spreadsheet_id(guild_id))
+    try:
+        return sh.worksheet(tab_name)
+    except gspread.WorksheetNotFound:
+        return sh.add_worksheet(title=tab_name, rows=200, cols=10)
 
 
 def _seed_ogv_train_config(conn):

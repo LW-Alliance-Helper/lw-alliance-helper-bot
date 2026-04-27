@@ -332,7 +332,7 @@ async def events_slash(interaction: discord.Interaction, date: str = None):
 
 @bot.tree.command(
     name="events_log",
-    description="Show the last 7 days of approved event posts (who approved, when)",
+    description="Show recent approved event posts (window depends on your tier)",
 )
 async def events_log_slash(interaction: discord.Interaction):
     if not await guard(interaction):
@@ -341,6 +341,7 @@ async def events_log_slash(interaction: discord.Interaction):
     await interaction.response.defer(ephemeral=True)
 
     from config import get_config
+    import premium
     cfg = get_config(interaction.guild_id)
     if not cfg or not cfg.leadership_channel_id:
         await interaction.followup.send(
@@ -356,7 +357,9 @@ async def events_log_slash(interaction: discord.Interaction):
         )
         return
 
-    cutoff = datetime.now(tz=timezone.utc) - timedelta(days=7)
+    days   = await premium.get_limit("events_log_days", interaction.guild_id, interaction=interaction)
+    days   = days or 30  # safety; LIMITS always returns int here
+    cutoff = datetime.now(tz=timezone.utc) - timedelta(days=days)
     matches = []
     try:
         async for msg in leadership.history(after=cutoff, limit=500):
@@ -374,13 +377,13 @@ async def events_log_slash(interaction: discord.Interaction):
     matches.sort(key=lambda m: m.created_at, reverse=True)
 
     embed = discord.Embed(
-        title="📣 Events Log — Past 7 Days",
-        description="*Showing approved event posts from the past 7 days only.*",
+        title=f"📣 Events Log — Past {days} Days",
+        description=f"*Showing approved event posts from the past {days} days.*",
         color=discord.Color.blurple(),
     )
 
     if not matches:
-        embed.add_field(name="No approvals found", value="*No event posts have been approved in the past 7 days.*", inline=False)
+        embed.add_field(name="No approvals found", value=f"*No event posts have been approved in the past {days} days.*", inline=False)
     else:
         lines = []
         for msg in matches[:25]:
@@ -392,7 +395,10 @@ async def events_log_slash(interaction: discord.Interaction):
             lines.append(f"• {header} *— logged {local_dt}*")
         embed.add_field(name=f"Approvals ({len(matches)})", value="\n".join(lines)[:1024], inline=False)
 
-    embed.set_footer(text="Reads from the leadership channel's message history.")
+    if days < 30:
+        embed.set_footer(text="Free tier: 7-day window. Upgrade to Premium for 30 days.")
+    else:
+        embed.set_footer(text="Reads from the leadership channel's message history.")
     await interaction.followup.send(embed=embed, ephemeral=True)
 
 
@@ -403,9 +409,15 @@ async def events_log_slash(interaction: discord.Interaction):
     description="Show all available bot commands",
 )
 async def help_slash(interaction: discord.Interaction):
+    import premium
+    is_premium_flag = await premium.is_premium(
+        interaction.guild_id, interaction=interaction, bot=bot,
+    )
+    tier_badge = "💎 Premium" if is_premium_flag else "Free tier"
+
     embed = discord.Embed(
-        title="🤖 Alliance Helper — Commands",
-        color=discord.Color.blurple(),
+        title=f"🤖 Alliance Helper — Commands  ·  {tier_badge}",
+        color=discord.Color.gold() if is_premium_flag else discord.Color.blurple(),
         description=(
             "All commands require the configured leadership role and must be used in the leadership channel.\n"
             "Run `/setup` first if you haven't configured the bot yet."
@@ -430,7 +442,7 @@ async def help_slash(interaction: discord.Interaction):
             "Drafts are posted to leadership for review before going public.\n"
             "`/setup_events` — Configure events, announcement channels, draft time, and 5-min warning\n"
             "`/events [date]` — Open the event editor for today or a specific date\n"
-            "`/events_log` — Show approved event posts from the past 7 days"
+            "`/events_log` — Show approved event posts (7d free / 30d premium)"
         ),
         inline=False,
     )
@@ -442,7 +454,7 @@ async def help_slash(interaction: discord.Interaction):
             "ChatGPT prompt to write a blurb for that member's announcement.\n"
             "`/setup_train` — Configure the train tab, blurb generation, and reminders\n"
             "`/train` — View the schedule with Add / Update / Generate Prompt / Clear buttons\n"
-            "`/train_log [date]` — Show recent prompt log entries (defaults to last 14 days)\n"
+            "`/train_log [date]` — Show recent prompt log entries (7d free / 30d premium)\n"
             "`/train_addbirthdays` — Manually run the birthday check now"
         ),
         inline=False,
@@ -467,7 +479,7 @@ async def help_slash(interaction: discord.Interaction):
             "`/desertstorm` — Show current rosters and the active mail template\n"
             "`/desertstorm_draft` — Generate a Desert Storm mail draft for Team A or B\n"
             "`/desertstorm_participation` — Log Desert Storm participation data\n"
-            "`/desertstorm_log [date]` — View a Desert Storm log entry (defaults to today)"
+            "`/desertstorm_log [date]` — View a Desert Storm log entry (free: 4 most recent / premium: all)"
         ),
         inline=False,
     )
@@ -480,7 +492,7 @@ async def help_slash(interaction: discord.Interaction):
             "`/canyonstorm` — Show current rosters and the active mail template\n"
             "`/canyonstorm_draft` — Generate a Canyon Storm mail draft for Team A or B\n"
             "`/canyonstorm_participation` — Log Canyon Storm participation data\n"
-            "`/canyonstorm_log [date]` — View a Canyon Storm log entry (defaults to today)"
+            "`/canyonstorm_log [date]` — View a Canyon Storm log entry (free: 4 most recent / premium: all)"
         ),
         inline=False,
     )
@@ -512,12 +524,16 @@ async def help_slash(interaction: discord.Interaction):
         name="🔧 Utilities",
         value=(
             "`/cancel` — Cancel any active wizard or log session\n"
-            "`/donate` — 💖 Support the bot's hosting costs"
+            "`/donate` — 💖 Support the bot's hosting costs\n"
+            "`/upgrade` — 💎 Unlock Premium features"
         ),
         inline=False,
     )
 
-    embed.set_footer(text="Alliance Helper — Run /setup to get started")
+    if is_premium_flag:
+        embed.set_footer(text="💎 Premium is active. Thanks for supporting Alliance Helper!")
+    else:
+        embed.set_footer(text="Alliance Helper — Run /upgrade to unlock Premium features")
     await interaction.response.send_message(embed=embed, ephemeral=True)
 
 

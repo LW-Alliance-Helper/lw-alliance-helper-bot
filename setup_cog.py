@@ -298,6 +298,66 @@ class ModalLaunchView(discord.ui.View):
         self.stop()
 
 
+async def ask_keep_or_change(
+    channel,
+    prompt: str,
+    default: str,
+    modal_title: str,
+    modal_label: str,
+    timeout_cmd: str | None = None,
+) -> str | None:
+    """Show a `Use default / Define your own` view and return the chosen value.
+
+    The default is shown directly in the button label so the prompt body never
+    has to repeat it. Returns None on timeout (and posts a timeout message
+    referencing `timeout_cmd` if provided).
+    """
+
+    class KeepOrChangeDefaultView(discord.ui.View):
+        def __init__(self):
+            super().__init__(timeout=WIZARD_TIMEOUT)
+            self.value     = None
+            self.confirmed = False
+
+        @discord.ui.button(
+            label=f"✅ Use default: {default}"[:80],
+            style=discord.ButtonStyle.success,
+        )
+        async def keep(self, inter: discord.Interaction, button: discord.ui.Button):
+            self.value     = default
+            self.confirmed = True
+            for item in self.children: item.disabled = True
+            await inter.response.edit_message(
+                content=f"✅ Using **{default}**", view=self
+            )
+            self.stop()
+
+        @discord.ui.button(label="✏️ Define my own", style=discord.ButtonStyle.secondary)
+        async def change(self, inter: discord.Interaction, button: discord.ui.Button):
+            modal = TextInputModal(modal_title, modal_label, default=default)
+            await inter.response.send_modal(modal)
+            await modal.wait()
+            self.value     = (modal.value or default).strip() or default
+            self.confirmed = True
+            for item in self.children: item.disabled = True
+            try:
+                await inter.message.edit(
+                    content=f"✅ Using **{self.value}**", view=self
+                )
+            except discord.HTTPException:
+                pass
+            self.stop()
+
+    view = KeepOrChangeDefaultView()
+    await channel.send(prompt, view=view)
+    await view.wait()
+    if not view.confirmed:
+        if timeout_cmd:
+            await channel.send(f"⏰ Timed out. Run `/{timeout_cmd}` to start again.")
+        return None
+    return view.value
+
+
 # ── Define Various Setup Commands ────────────────────────────────────────────────────────────────────────
 
 class SetupCog(commands.Cog):
@@ -954,57 +1014,6 @@ async def run_growth_setup(interaction: discord.Interaction, bot):
             return None
         return reply.content.strip()[:max_chars]
 
-    async def ask_keep_or_change(
-        prompt: str,
-        default: str,
-        modal_title: str,
-        modal_label: str,
-    ) -> str | None:
-        """Show a `Keep default / Change` view and return the chosen value."""
-
-        class KeepOrChangeDefaultView(discord.ui.View):
-            def __init__(self):
-                super().__init__(timeout=WIZARD_TIMEOUT)
-                self.value = None
-                self.confirmed = False
-
-            @discord.ui.button(
-                label=f"✅ Keep default: {default}"[:80],
-                style=discord.ButtonStyle.success,
-            )
-            async def keep(self, inter: discord.Interaction, button: discord.ui.Button):
-                self.value = default
-                self.confirmed = True
-                for item in self.children: item.disabled = True
-                await inter.response.edit_message(
-                    content=f"✅ Using **{default}**", view=self
-                )
-                self.stop()
-
-            @discord.ui.button(label="✏️ Change", style=discord.ButtonStyle.secondary)
-            async def change(self, inter: discord.Interaction, button: discord.ui.Button):
-                modal = TextInputModal(modal_title, modal_label, default=default)
-                await inter.response.send_modal(modal)
-                await modal.wait()
-                self.value = (modal.value or default).strip() or default
-                self.confirmed = True
-                for item in self.children: item.disabled = True
-                try:
-                    await inter.message.edit(
-                        content=f"✅ Using **{self.value}**", view=self
-                    )
-                except discord.HTTPException:
-                    pass
-                self.stop()
-
-        view = KeepOrChangeDefaultView()
-        await channel.send(prompt, view=view)
-        await view.wait()
-        if not view.confirmed:
-            await channel.send("⏰ Timed out. Run `/setup_growth` to start again.")
-            return None
-        return view.value
-
     from config import get_growth_config, save_growth_config
     current = get_growth_config(guild_id)
 
@@ -1051,23 +1060,27 @@ async def run_growth_setup(interaction: discord.Interaction, bot):
 
     # ── Step 2: Source tab ────────────────────────────────────────────────────
     tab_source = await ask_keep_or_change(
+        channel,
         "**Step 2 of 7 — Source Tab**\n"
         "Which tab in your Google Sheet contains your member data?\n"
         "⚠️ *Make sure this tab exists in your sheet.*",
         default=DEFAULT_TAB_SOURCE,
         modal_title="Source Tab",
         modal_label="Tab name",
+        timeout_cmd="setup_growth",
     )
     if tab_source is None:
         return
 
     # ── Step 3: Data start row ────────────────────────────────────────────────
     start_raw = await ask_keep_or_change(
+        channel,
         "**Step 3 of 7 — Data Start Row**\n"
         "Which row does your member data start on? (Row 1 is usually the header)",
         default=str(DEFAULT_DATA_START_ROW),
         modal_title="Data Start Row",
         modal_label="Row number",
+        timeout_cmd="setup_growth",
     )
     if start_raw is None:
         return
@@ -1079,11 +1092,13 @@ async def run_growth_setup(interaction: discord.Interaction, bot):
 
     # ── Step 4: Name column ───────────────────────────────────────────────────
     name_raw = await ask_keep_or_change(
+        channel,
         "**Step 4 of 7 — Name Column**\n"
         "Which column contains the member's name?",
         default=DEFAULT_NAME_COL,
         modal_title="Name Column",
         modal_label="Column letter",
+        timeout_cmd="setup_growth",
     )
     if name_raw is None:
         return
@@ -1268,12 +1283,14 @@ async def run_growth_setup(interaction: discord.Interaction, bot):
 
     # ── Step 6: Growth tracking tab ───────────────────────────────────────────
     tab_growth = await ask_keep_or_change(
+        channel,
         "**Step 6 of 7 — Growth Tracking Tab**\n"
         "Which tab should snapshots be written to?\n"
         "⚠️ *If the tab doesn't exist, the bot will create it automatically.*",
         default=DEFAULT_TAB_GROWTH,
         modal_title="Growth Tracking Tab",
         modal_label="Tab name",
+        timeout_cmd="setup_growth",
     )
     if tab_growth is None:
         return
@@ -1315,11 +1332,13 @@ async def run_growth_setup(interaction: discord.Interaction, bot):
 
     if snapshot_frequency == "monthly":
         day_raw = await ask_keep_or_change(
+            channel,
             "**Step 7a of 7 — Snapshot Day**\n"
             "Which day of the month should the snapshot run? (1–28)",
             default=str(DEFAULT_SNAPSHOT_DAY),
             modal_title="Snapshot Day",
             modal_label="Day of month (1–28)",
+            timeout_cmd="setup_growth",
         )
         if day_raw is None:
             return
@@ -1329,11 +1348,13 @@ async def run_growth_setup(interaction: discord.Interaction, bot):
             snapshot_day = DEFAULT_SNAPSHOT_DAY
     else:
         interval_raw = await ask_keep_or_change(
+            channel,
             "**Step 7a of 7 — Interval (days)**\n"
             "How many days between each snapshot?",
             default=str(DEFAULT_SNAPSHOT_INTERVAL),
             modal_title="Interval",
             modal_label="Days between snapshots",
+            timeout_cmd="setup_growth",
         )
         if interval_raw is None:
             return
@@ -1407,54 +1428,19 @@ async def run_train_setup(interaction: discord.Interaction, bot):
     )
 
     # ── Step 1: Sheet tab ──────────────────────────────────────────────────────
-    current_tab = current["tab_name"]
-
-    class TabConfirmView(discord.ui.View):
-        def __init__(self):
-            super().__init__(timeout=120)
-            self.tab_name  = None
-            self.confirmed = False
-
-        @discord.ui.button(label=f"✅ Keep current tab", style=discord.ButtonStyle.success)
-        async def keep(self, inter: discord.Interaction, button: discord.ui.Button):
-            self.tab_name  = current_tab
-            self.confirmed = True
-            for item in self.children:
-                item.disabled = True
-            await inter.response.edit_message(
-                content=f"✅ Using sheet tab: **{current_tab}**", view=self
-            )
-            self.stop()
-
-        @discord.ui.button(label="✏️ Enter a different tab name", style=discord.ButtonStyle.secondary)
-        async def change(self, inter: discord.Interaction, button: discord.ui.Button):
-            modal = TextInputModal("Sheet Tab Name", "Tab name", default=current_tab)
-            await inter.response.send_modal(modal)
-            await modal.wait()
-            self.tab_name  = modal.value or current_tab
-            self.confirmed = True
-            for item in self.children:
-                item.disabled = True
-            try:
-                await inter.message.edit(
-                    content=f"✅ Using sheet tab: **{self.tab_name}**", view=self
-                )
-            except discord.HTTPException:
-                pass
-            self.stop()
-
-    tab_view = TabConfirmView()
-    await channel.send(
-        f"**Step 1 of 7 — Schedule Sheet Tab**\n"
-        f"The train schedule is stored in the **`{current_tab}`** tab of your Google Sheet.\n"
-        f"⚠️ *Make sure this tab exists in your sheet before continuing.*",
-        view=tab_view,
+    default_tab = current["tab_name"] or "Train Schedule"
+    tab_name    = await ask_keep_or_change(
+        channel,
+        "**Step 1 of 7 — Schedule Sheet Tab**\n"
+        "Which tab in your Google Sheet stores the train schedule?\n"
+        "⚠️ *Make sure this tab exists in your sheet before continuing.*",
+        default=default_tab,
+        modal_title="Sheet Tab Name",
+        modal_label="Tab name",
+        timeout_cmd="setup_train",
     )
-    await tab_view.wait()
-    if not tab_view.confirmed:
-        await channel.send("⏰ Timed out. Run `/setup_train` to start again.")
+    if tab_name is None:
         return
-    tab_name = tab_view.tab_name
 
     # ── Step 2: Generate blurbs? ───────────────────────────────────────────────
     blurb_view = YesNoView()
@@ -1478,26 +1464,26 @@ async def run_train_setup(interaction: discord.Interaction, bot):
 
     if blurbs_enabled:
         # ── Step 3: Themes ─────────────────────────────────────────────────────
-        current_themes = ", ".join(current["themes"])
+        existing_themes = ", ".join(current["themes"])
 
         class KeepOrChangeView(discord.ui.View):
             def __init__(self, label: str):
                 super().__init__(timeout=120)
-                self.keep_current = None
+                self.keep_existing = None
                 self._label = label
 
-            @discord.ui.button(label="✅ Keep current", style=discord.ButtonStyle.success)
+            @discord.ui.button(label="✅ Use defaults", style=discord.ButtonStyle.success)
             async def keep(self, inter: discord.Interaction, button: discord.ui.Button):
-                self.keep_current = True
+                self.keep_existing = True
                 for item in self.children: item.disabled = True
                 await inter.response.edit_message(
-                    content=f"✅ Keeping current {self._label}.", view=self
+                    content=f"✅ Using defaults for {self._label}.", view=self
                 )
                 self.stop()
 
-            @discord.ui.button(label="✏️ Enter new list", style=discord.ButtonStyle.secondary)
+            @discord.ui.button(label="✏️ Define my own", style=discord.ButtonStyle.secondary)
             async def change(self, inter: discord.Interaction, button: discord.ui.Button):
-                self.keep_current = False
+                self.keep_existing = False
                 for item in self.children: item.disabled = True
                 await inter.response.edit_message(view=self)
                 self.stop()
@@ -1506,40 +1492,36 @@ async def run_train_setup(interaction: discord.Interaction, bot):
         await channel.send(
             f"**Step 3 of 7 — Themes**\n"
             f"These appear as options when selecting a theme for a member's train day.\n\n"
-            f"**Current themes:**\n`{current_themes}`\n\n"
-            f"**Example themes:**\n"
-            f"`Welcome to the Alliance, Birthday, Milestone, War / Performance, General Celebration, Contest / Raffle, Custom`",
+            f"**Defaults:**\n`{existing_themes}`",
             view=themes_keep_view,
         )
         await themes_keep_view.wait()
-        if themes_keep_view.keep_current is None:
+        if themes_keep_view.keep_existing is None:
             await channel.send("⏰ Timed out. Run `/setup_train` to start again.")
             return
 
-        if not themes_keep_view.keep_current:
+        if not themes_keep_view.keep_existing:
             themes_raw = await ask_text("Enter your themes as a comma-separated list:")
             if themes_raw is None:
                 return
             themes = [t.strip() for t in themes_raw.split(",") if t.strip()] or current["themes"]
 
         # ── Step 4: Tones ──────────────────────────────────────────────────────
-        current_tones = ", ".join(current["tones"])
+        existing_tones = ", ".join(current["tones"])
 
         tones_keep_view = KeepOrChangeView("tones")
         await channel.send(
             f"**Step 4 of 7 — Tones**\n"
             f"These let leadership adjust the writing style of the generated blurb.\n\n"
-            f"**Current tones:**\n`{current_tones}`\n\n"
-            f"**Example tones:**\n"
-            f"`Default (match the theme), More casual, More intense, Funny, Serious, Cinematic / Dramatic`",
+            f"**Defaults:**\n`{existing_tones}`",
             view=tones_keep_view,
         )
         await tones_keep_view.wait()
-        if tones_keep_view.keep_current is None:
+        if tones_keep_view.keep_existing is None:
             await channel.send("⏰ Timed out. Run `/setup_train` to start again.")
             return
 
-        if not tones_keep_view.keep_current:
+        if not tones_keep_view.keep_existing:
             tones_raw = await ask_text("Enter your tones as a comma-separated list:")
             if tones_raw is None:
                 return
@@ -1676,10 +1658,15 @@ async def run_train_setup(interaction: discord.Interaction, bot):
         from config import get_config
         guild_cfg = get_config(guild_id)
         tz_label  = TIMEZONE_LABELS.get(guild_cfg.timezone if guild_cfg else "America/New_York", "ET")
-        time_raw  = await ask_text(
+        time_raw  = await ask_keep_or_change(
+            channel,
             f"**Step 7b of 7 — Reminder Time**\n"
             f"What time should the reminder fire? *(in your timezone: {tz_label})*\n"
-            f"*(e.g. `10:00pm`, `9:00am`)*"
+            f"*(e.g. `10:00pm`, `9:00am`)*",
+            default="10:00pm",
+            modal_title="Reminder Time",
+            modal_label="Time",
+            timeout_cmd="setup_train",
         )
         if time_raw is None:
             return
@@ -1738,41 +1725,6 @@ async def run_survey_setup(interaction: discord.Interaction, bot):
         "Configure the squad powers survey for your alliance."
     )
 
-    # ── Helper: tab keep/change view ──────────────────────────────────────────
-    def make_tab_view(current_tab: str) -> discord.ui.View:
-        class TabView(discord.ui.View):
-            def __init__(self):
-                super().__init__(timeout=120)
-                self.tab_name  = None
-                self.confirmed = False
-
-            @discord.ui.button(label="✅ Keep current tab", style=discord.ButtonStyle.success)
-            async def keep(self, inter: discord.Interaction, button: discord.ui.Button):
-                self.tab_name  = current_tab
-                self.confirmed = True
-                for item in self.children: item.disabled = True
-                await inter.response.edit_message(
-                    content=f"✅ Using tab: **{current_tab}**", view=self
-                )
-                self.stop()
-
-            @discord.ui.button(label="✏️ Enter a different tab name", style=discord.ButtonStyle.secondary)
-            async def change(self, inter: discord.Interaction, button: discord.ui.Button):
-                modal = TextInputModal("Tab Name", "Tab name", default=current_tab)
-                await inter.response.send_modal(modal)
-                await modal.wait()
-                self.tab_name  = modal.value or current_tab
-                self.confirmed = True
-                for item in self.children: item.disabled = True
-                try:
-                    await inter.message.edit(
-                        content=f"✅ Using tab: **{self.tab_name}**", view=self
-                    )
-                except discord.HTTPException:
-                    pass
-                self.stop()
-        return TabView()
-
     # ── Step 1: Survey channel ─────────────────────────────────────────────────
     survey_ch_view = ChannelSelectStep(
         "Select the survey channel...", suggested_name="squad-survey"
@@ -1804,36 +1756,34 @@ async def run_survey_setup(interaction: discord.Interaction, bot):
     survey_notify_channel_id = notify_ch_view.selected_channel.id
 
     # ── Step 3: Squad Powers tab ───────────────────────────────────────────────
-    current_sp_tab = current.get("tab_squad_powers", "Squad Powers")
-    sp_view = make_tab_view(current_sp_tab)
-    await channel.send(
-        f"**Step 3 of 6 — Member Statistics Tab**\n"
-        f"Which tab stores your members' statistics? We will update this sheet on each submission.\n"
-        f"⚠️ *Make sure this tab exists in your sheet before continuing.*\n"
-        f"*(Current: `{current_sp_tab}`)*",
-        view=sp_view,
+    default_sp_tab   = current.get("tab_squad_powers") or "Squad Powers"
+    tab_squad_powers = await ask_keep_or_change(
+        channel,
+        "**Step 3 of 6 — Member Statistics Tab**\n"
+        "Which tab stores your members' statistics? We will update this sheet on each submission.\n"
+        "⚠️ *Make sure this tab exists in your sheet before continuing.*",
+        default=default_sp_tab,
+        modal_title="Member Statistics Tab",
+        modal_label="Tab name",
+        timeout_cmd="setup_survey",
     )
-    await sp_view.wait()
-    if not sp_view.confirmed:
-        await channel.send("⏰ Timed out. Run `/setup_survey` to start again.")
+    if tab_squad_powers is None:
         return
-    tab_squad_powers = sp_view.tab_name
 
     # ── Step 4: Survey History tab ─────────────────────────────────────────────
-    current_hist_tab = current.get("tab_history", "Survey History")
-    hist_view = make_tab_view(current_hist_tab)
-    await channel.send(
-        f"**Step 4 of 6 — Survey History Tab**\n"
-        f"Which tab stores the full history of all submissions?\n"
-        f"⚠️ *Make sure this tab exists in your sheet before continuing.*\n"
-        f"*(Current: `{current_hist_tab}`)*",
-        view=hist_view,
+    default_hist_tab = current.get("tab_history") or "Survey History"
+    tab_history      = await ask_keep_or_change(
+        channel,
+        "**Step 4 of 6 — Survey History Tab**\n"
+        "Which tab stores the full history of all submissions?\n"
+        "⚠️ *Make sure this tab exists in your sheet before continuing.*",
+        default=default_hist_tab,
+        modal_title="Survey History Tab",
+        modal_label="Tab name",
+        timeout_cmd="setup_survey",
     )
-    await hist_view.wait()
-    if not hist_view.confirmed:
-        await channel.send("⏰ Timed out. Run `/setup_survey` to start again.")
+    if tab_history is None:
         return
-    tab_history = hist_view.tab_name
 
     # ── Step 5: Intro message ──────────────────────────────────────────────────
     await channel.send(
@@ -1862,7 +1812,7 @@ async def run_survey_setup(interaction: discord.Interaction, bot):
         f"{i+1}. **{q['label']}** — {'dropdown: ' + ', '.join(q['options']) if q['type'] == 'dropdown' else 'text'}"
         for i, q in enumerate(OGV_SURVEY_QUESTIONS)
     )
-    current_q_list = "\n".join(
+    existing_q_list = "\n".join(
         f"{i+1}. **{q['label']}** — {'dropdown: ' + ', '.join(q['options']) if q['type'] == 'dropdown' else 'text'}"
         for i, q in enumerate(questions)
     ) if questions else "*(no questions configured yet)*"
@@ -1879,8 +1829,8 @@ async def run_survey_setup(interaction: discord.Interaction, bot):
             await inter.response.edit_message(content="✅ Using default questions.", view=self)
             self.stop()
 
-        @discord.ui.button(label="✏️ Edit current questions", style=discord.ButtonStyle.primary)
-        async def edit_current(self, inter: discord.Interaction, button: discord.ui.Button):
+        @discord.ui.button(label="✏️ Edit existing questions", style=discord.ButtonStyle.primary)
+        async def edit_existing(self, inter: discord.Interaction, button: discord.ui.Button):
             self.choice = "edit"
             for item in self.children: item.disabled = True
             await inter.response.edit_message(content="✏️ Entering edit mode...", view=self)
@@ -1897,8 +1847,8 @@ async def run_survey_setup(interaction: discord.Interaction, bot):
     await channel.send(
         "**Step 6 of 6 — Survey Questions**\n\n"
         f"**Default questions (Last War):**\n{default_q_list}\n\n"
-        f"**Your current questions:**\n{current_q_list}\n\n"
-        "Would you like to use the defaults, edit your current questions, or start from scratch?",
+        f"**Your existing questions:**\n{existing_q_list}\n\n"
+        "Would you like to use the defaults, edit your existing questions, or start from scratch?",
         view=q_start_view,
     )
     await q_start_view.wait()
@@ -1986,7 +1936,7 @@ async def run_survey_setup(interaction: discord.Interaction, bot):
 
                 list_view = QuestionListView(len(questions))
                 await channel.send(
-                    f"**Current Questions:**\n{q_display}",
+                    f"**Survey Questions:**\n{q_display}",
                     view=list_view,
                 )
                 await list_view.wait()
@@ -2014,10 +1964,11 @@ async def run_survey_setup(interaction: discord.Interaction, bot):
                         q_num    = f"Question {len(questions) + 1}"
 
                     # Label
+                    label_extra = f"\n*Existing label:* `{existing.get('label', '')}`" if existing else ""
                     await channel.send(
                         f"**{q_num} — Label**\n"
                         f"What is the label for this question? (e.g. `1st Squad Power`, `Profession`)"
-                        + (f"\n*(Current: `{existing.get('label', '')}`)*" if existing else "")
+                        + label_extra
                     )
                     try:
                         label_reply = await bot.wait_for("message", check=check, timeout=120)
@@ -2051,12 +2002,13 @@ async def run_survey_setup(interaction: discord.Interaction, bot):
                             select.callback = _cb
                             self.add_item(select)
 
-                    type_view = TypeView()
-                    current_type = existing.get("type", "text")
+                    type_view    = TypeView()
+                    existing_type = existing.get("type", "text")
+                    type_extra   = f"\n*Existing type:* `{existing_type}`" if existing else ""
                     await channel.send(
                         f"**{q_num} — Answer Type**\n"
                         f"Does your member answer by typing or selecting from a dropdown list?"
-                        + (f"\n*(Current: `{current_type}`)*" if existing else ""),
+                        + type_extra,
                         view=type_view,
                     )
                     await type_view.wait()
@@ -2066,13 +2018,17 @@ async def run_survey_setup(interaction: discord.Interaction, bot):
                     q_type = type_view.selected
 
                     # Help text
+                    help_extra = (
+                        f"\n*Existing help text:* `{existing.get('placeholder') or 'none'}`"
+                        if existing else ""
+                    )
                     await channel.send(
                         f"**{q_num} — Help Text**\n"
                         f"Do you want to show help text for this question? "
                         f"This appears as a hint to help members answer correctly.\n"
-                        f"*(e.g. `e.g. 43.27` or `What is your first squad's current power?`)*\n"
+                        f"*(e.g. `e.g. 43.27` or `What is your first squad's power?`)*\n"
                         f"Type your help text, or type `none` to skip."
-                        + (f"\n*(Current: `{existing.get('placeholder', 'none')}`)*" if existing else "")
+                        + help_extra
                     )
                     try:
                         help_reply  = await bot.wait_for("message", check=check, timeout=120)
@@ -2085,13 +2041,14 @@ async def run_survey_setup(interaction: discord.Interaction, bot):
                     # Dropdown options (if dropdown type)
                     options = []
                     if q_type == "dropdown":
-                        cur_opts = ", ".join(existing.get("options", [])) if existing else ""
+                        existing_opts = ", ".join(existing.get("options", [])) if existing else ""
+                        opts_extra    = f"\n*Existing options:* `{existing_opts}`" if existing_opts else ""
                         await channel.send(
                             f"**{q_num} — Dropdown Options**\n"
                             f"Enter the options you want your members to be able to select from, "
                             f"as comma-separated values. Maximum of 25 options.\n"
                             f"*(e.g. `Missile, Air, Tank`)*"
-                            + (f"\n*(Current: `{cur_opts}`)*" if cur_opts else "")
+                            + opts_extra
                         )
                         try:
                             opts_reply = await bot.wait_for("message", check=check, timeout=120)
@@ -2202,55 +2159,21 @@ async def run_storm_setup(interaction: discord.Interaction, bot, event_type: str
     await channel.send(f"⚙️ **{label} Setup**")
 
     # ── Step 1: Sheet tab ──────────────────────────────────────────────────────
-    current_tab = current.get("tab_name") or ("DS Assignments" if event_type == "DS" else "CS Assignments")
-
-    class TabConfirmView(discord.ui.View):
-        def __init__(self):
-            super().__init__(timeout=120)
-            self.tab_name  = None
-            self.confirmed = False
-
-        @discord.ui.button(label="✅ Keep current tab", style=discord.ButtonStyle.success)
-        async def keep(self, inter: discord.Interaction, button: discord.ui.Button):
-            self.tab_name  = current_tab
-            self.confirmed = True
-            for item in self.children: item.disabled = True
-            await inter.response.edit_message(
-                content=f"✅ Using sheet tab: **{current_tab}**", view=self
-            )
-            self.stop()
-
-        @discord.ui.button(label="✏️ Enter a different tab name", style=discord.ButtonStyle.secondary)
-        async def change(self, inter: discord.Interaction, button: discord.ui.Button):
-            modal = TextInputModal("Sheet Tab Name", "Tab name", default=current_tab)
-            await inter.response.send_modal(modal)
-            await modal.wait()
-            self.tab_name  = modal.value or current_tab
-            self.confirmed = True
-            for item in self.children: item.disabled = True
-            try:
-                await inter.message.edit(
-                    content=f"✅ Using sheet tab: **{self.tab_name}**", view=self
-                )
-            except discord.HTTPException:
-                pass
-            self.stop()
-
-    tab_view = TabConfirmView()
-    await channel.send(
-        f"**Step 1 of 3 — Sheet Tab**\n"
+    default_tab = current.get("tab_name") or ("DS Assignments" if event_type == "DS" else "CS Assignments")
+    tab_name    = await ask_keep_or_change(
+        channel,
+        f"**Step 1 of 4 — Sheet Tab**\n"
         f"Which tab in your Google Sheet stores the {label} zone assignments?\n"
         f"⚠️ *Make sure this tab exists in your sheet before continuing.*\n"
         f"ℹ️ *The bot will manage the data structure of this tab automatically — "
-        f"you don't need to set up any specific columns or formatting beforehand.*\n"
-        f"*(Current: `{current_tab}`)*",
-        view=tab_view,
+        f"you don't need to set up any specific columns or formatting beforehand.*",
+        default=default_tab,
+        modal_title="Sheet Tab Name",
+        modal_label="Tab name",
+        timeout_cmd=cmd_name,
     )
-    await tab_view.wait()
-    if not tab_view.confirmed:
-        await channel.send(f"⏰ Timed out. Run `/{cmd_name}` to start again.")
+    if tab_name is None:
         return
-    tab_name = tab_view.tab_name
 
     # ── Step 2: Which teams? ───────────────────────────────────────────────────
     class TeamChoiceView(discord.ui.View):
@@ -2281,7 +2204,7 @@ async def run_storm_setup(interaction: discord.Interaction, bot, event_type: str
 
     team_view = TeamChoiceView()
     await channel.send(
-        f"**Step 2 of 3 — Which teams do you run for {label}?**",
+        f"**Step 2 of 4 — Which teams do you run for {label}?**",
         view=team_view,
     )
     await team_view.wait()
@@ -2390,7 +2313,7 @@ async def run_storm_setup(interaction: discord.Interaction, bot, event_type: str
 
         shared_view = SharedTemplateView()
         await channel.send(
-            "**Step 3 of 3 — Mail Template**\n"
+            "**Step 4 of 4 — Mail Template**\n"
             "Do you want one template that applies to both teams, or separate templates per team?",
             view=shared_view,
         )
@@ -2411,7 +2334,7 @@ async def run_storm_setup(interaction: discord.Interaction, bot, event_type: str
 
     else:
         team_label = "Team A" if teams == "A" else "Team B"
-        await channel.send(f"**Step 4 of 4 — Mail Template**")
+        await channel.send("**Step 4 of 4 — Mail Template**")
         template = await get_template(team_label)
         if template is None:
             return
@@ -2610,15 +2533,26 @@ async def run_event_setup(interaction: discord.Interaction, bot):
         announce_channel_id = ann_ch_view.selected_channel.id
 
         tz_label       = TIMEZONE_LABELS.get(timezone, timezone)
-        draft_time_raw = await ask_text(
+        # `draft_time` is stored in 24h format ("12:00"); show it as-is in the
+        # default button label, but accept either format from user input.
+        draft_time_raw = await ask_keep_or_change(
+            channel,
             f"**Step 3 of 5 — Draft Posting Time**\n"
             f"What time should the bot post the draft each event day? *(in {tz_label})*\n"
-            f"*(e.g. `12:00pm` for noon)*"
+            f"*(e.g. `12:00pm` for noon)*",
+            default=draft_time or "12:00",
+            modal_title="Draft Posting Time",
+            modal_label="Time",
+            timeout_cmd="setup_events",
         )
         if not draft_time_raw:
             return
-        draft_time = _parse_12h_time(draft_time_raw)
-        if not draft_time:
+        parsed_draft = _parse_12h_time(draft_time_raw)
+        if parsed_draft:
+            draft_time = parsed_draft
+        elif len(draft_time_raw) == 5 and draft_time_raw[2] == ":" and draft_time_raw.replace(":", "").isdigit():
+            draft_time = draft_time_raw   # already 24h
+        else:
             await channel.send("⚠️ Could not read that time. Try `12:00pm`. Run `/setup_events` to try again.")
             return
 
@@ -2743,10 +2677,11 @@ async def run_event_setup(interaction: discord.Interaction, bot):
 
                 # ── Event builder ──────────────────────────────────────────────
                 # Name
+                existing_name_extra = f"\n*Existing name:* `{existing['name']}`" if existing else ""
                 name_raw = await ask_text(
                     "**Event Name**\n"
                     "What is this event called? (e.g. `Plague Marauder (AE)`, `Zombie Siege`)"
-                    + (f"\n*(Current: `{existing['name']}`)*" if existing else "")
+                    + existing_name_extra
                 )
                 if not name_raw:
                     return False
@@ -2754,19 +2689,33 @@ async def run_event_setup(interaction: discord.Interaction, bot):
                 short_key = existing['short_key'] if existing else _re.sub(r"[^a-z0-9]+", "_", name.lower()).strip("_")
 
                 # Time
-                cur_time  = existing['default_time'] if existing else ""
-                time_raw  = await ask_text(
-                    f"**{name} — Event Time**\n"
-                    f"What time does this event usually start? *(in {tz_label})*\n"
-                    f"*(e.g. `10:15pm`, `9:00am`)*"
-                    + (f"\n*(Current: `{cur_time}`)*" if cur_time else "")
-                )
+                existing_time = existing['default_time'] if existing else ""
+                if existing_time:
+                    time_raw = await ask_keep_or_change(
+                        channel,
+                        f"**{name} — Event Time**\n"
+                        f"What time does this event usually start? *(in {tz_label})*\n"
+                        f"*(e.g. `10:15pm`, `9:00am`)*",
+                        default=existing_time,
+                        modal_title="Event Time",
+                        modal_label="Time",
+                        timeout_cmd="setup_events",
+                    )
+                else:
+                    time_raw = await ask_text(
+                        f"**{name} — Event Time**\n"
+                        f"What time does this event usually start? *(in {tz_label})*\n"
+                        f"*(e.g. `10:15pm`, `9:00am`)*"
+                    )
                 if not time_raw:
                     return False
                 default_time = _parse_12h_time(time_raw)
                 if not default_time:
-                    await channel.send("⚠️ Could not read that time. Try `10:15pm`. Run `/setup_events` to try again.")
-                    return False
+                    if len(time_raw) == 5 and time_raw[2] == ":" and time_raw.replace(":", "").isdigit():
+                        default_time = time_raw   # already 24h (Use default click)
+                    else:
+                        await channel.send("⚠️ Could not read that time. Try `10:15pm`. Run `/setup_events` to try again.")
+                        return False
 
                 # Schedule
                 sched_view = ScheduleTypeView()
@@ -2785,11 +2734,12 @@ async def run_event_setup(interaction: discord.Interaction, bot):
                 interval_days = existing.get('interval_days', 3) if existing else 3
 
                 if schedule_type == "repeating":
-                    anchor_raw = await ask_text(
+                    anchor_extra = f"\n*Existing anchor date:* `{anchor_date}`" if anchor_date else ""
+                    anchor_raw   = await ask_text(
                         f"**{name} — Anchor Date**\n"
                         "Enter a recent or upcoming date when this event occurs.\n"
                         "Type the month and day (e.g. `March 30`, `April 14`)"
-                        + (f"\n*(Current: `{anchor_date}`)*" if anchor_date else "")
+                        + anchor_extra
                     )
                     if not anchor_raw:
                         return False
@@ -2799,10 +2749,14 @@ async def run_event_setup(interaction: discord.Interaction, bot):
                         return False
                     anchor_date = parsed_anchor
 
-                    interval_raw = await ask_text(
+                    interval_raw = await ask_keep_or_change(
+                        channel,
                         f"**{name} — Cycle Interval**\n"
-                        "How many days between each occurrence? (e.g. `3`)"
-                        + (f"\n*(Current: `{interval_days}`)*" if interval_days else "")
+                        "How many days between each occurrence? (e.g. `3`)",
+                        default=str(interval_days or 3),
+                        modal_title="Cycle Interval",
+                        modal_label="Days between occurrences",
+                        timeout_cmd="setup_events",
                     )
                     if not interval_raw:
                         return False
@@ -2857,7 +2811,7 @@ async def run_event_setup(interaction: discord.Interaction, bot):
                     f"**Default:** `{default_blurb}`"
                 )
                 if cur_blurb:
-                    blurb_msg += f"\n**Current:** `{cur_blurb[:100]}{'...' if len(cur_blurb) > 100 else ''}`"
+                    blurb_msg += f"\n**Existing:** `{cur_blurb[:100]}{'...' if len(cur_blurb) > 100 else ''}`"
 
                 await channel.send(blurb_msg, view=blurb_view)
                 await blurb_view.wait()
@@ -2966,7 +2920,7 @@ async def run_birthday_setup(interaction: discord.Interaction, bot):
     # ── Step 1: Enable? ───────────────────────────────────────────────────────
     enabled_view = YesNoView()
     await channel.send(
-        "**Step 1 of 9 — Enable birthday tracking?**\n"
+        "**Step 1 of 8 — Enable birthday tracking?**\n"
         "Should the bot track member birthdays from your Google Sheet?",
         view=enabled_view,
     )
@@ -2981,61 +2935,33 @@ async def run_birthday_setup(interaction: discord.Interaction, bot):
         return
 
     # ── Step 2: Sheet tab ─────────────────────────────────────────────────────
-    current_tab = current.get("tab_name") or "Birthdays"
-
-    class TabConfirmView(discord.ui.View):
-        def __init__(self):
-            super().__init__(timeout=120)
-            self.tab_name  = None
-            self.confirmed = False
-
-        @discord.ui.button(label="✅ Keep current tab", style=discord.ButtonStyle.success)
-        async def keep(self, inter: discord.Interaction, button: discord.ui.Button):
-            self.tab_name  = current_tab
-            self.confirmed = True
-            for item in self.children: item.disabled = True
-            await inter.response.edit_message(
-                content=f"✅ Using sheet tab: **{current_tab}**", view=self
-            )
-            self.stop()
-
-        @discord.ui.button(label="✏️ Enter a different tab name", style=discord.ButtonStyle.secondary)
-        async def change(self, inter: discord.Interaction, button: discord.ui.Button):
-            modal = TextInputModal("Sheet Tab Name", "Tab name", default=current_tab)
-            await inter.response.send_modal(modal)
-            await modal.wait()
-            self.tab_name  = modal.value or current_tab
-            self.confirmed = True
-            for item in self.children: item.disabled = True
-            try:
-                await inter.message.edit(
-                    content=f"✅ Using sheet tab: **{self.tab_name}**", view=self
-                )
-            except discord.HTTPException:
-                pass
-            self.stop()
-
-    tab_view = TabConfirmView()
-    await channel.send(
-        f"**Step 2 of 9 — Sheet Tab**\n"
-        f"Which tab in your Google Sheet contains birthday data?\n"
-        f"⚠️ *Make sure this tab exists in your sheet before continuing.*\n"
-        f"*(Current: `{current_tab}`)*",
-        view=tab_view,
+    default_tab = current.get("tab_name") or "Birthdays"
+    tab_name    = await ask_keep_or_change(
+        channel,
+        "**Step 2 of 8 — Sheet Tab**\n"
+        "Which tab in your Google Sheet contains birthday data?\n"
+        "⚠️ *Make sure this tab exists in your sheet before continuing.*",
+        default=default_tab,
+        modal_title="Sheet Tab Name",
+        modal_label="Tab name",
+        timeout_cmd="setup_birthdays",
     )
-    await tab_view.wait()
-    if not tab_view.confirmed:
-        await channel.send("⏰ Timed out. Run `/setup_birthdays` to start again.")
+    if tab_name is None:
         return
-    tab_name = tab_view.tab_name
+
+    # discord_id_col is no longer asked in the wizard — preserve any existing
+    # value so save_birthday_config doesn't clobber it.
+    discord_id_col = current.get("discord_id_col", -1)
 
     # ── Step 3: Name column ────────────────────────────────────────────────────
-    cur_name_letter = index_to_letter(current.get("name_col", 0))
-    name_col_raw = await ask_text(
-        f"**Step 3 of 9 — Name Column**\n"
-        f"Which column contains the member's name?\n"
-        f"Type the column letter (e.g. `A`, `B`, `C`)\n"
-        f"*(Current: column `{cur_name_letter}`)*"
+    name_col_raw = await ask_keep_or_change(
+        channel,
+        "**Step 3 of 8 — Name Column**\n"
+        "Which column contains the member's name?",
+        default=index_to_letter(current.get("name_col", 0)),
+        modal_title="Name Column",
+        modal_label="Column letter",
+        timeout_cmd="setup_birthdays",
     )
     if name_col_raw is None:
         return
@@ -3045,12 +2971,14 @@ async def run_birthday_setup(interaction: discord.Interaction, bot):
         return
 
     # ── Step 4: Birthday column ────────────────────────────────────────────────
-    cur_bday_letter = index_to_letter(current.get("birthday_col", 1))
-    bday_col_raw = await ask_text(
-        f"**Step 4 of 9 — Birthday Column**\n"
-        f"Which column contains the member's birthday?\n"
-        f"Type the column letter (e.g. `A`, `B`, `C`)\n"
-        f"*(Current: column `{cur_bday_letter}`)*"
+    bday_col_raw = await ask_keep_or_change(
+        channel,
+        "**Step 4 of 8 — Birthday Column**\n"
+        "Which column contains the member's birthday?",
+        default=index_to_letter(current.get("birthday_col", 1)),
+        modal_title="Birthday Column",
+        modal_label="Column letter",
+        timeout_cmd="setup_birthdays",
     )
     if bday_col_raw is None:
         return
@@ -3062,7 +2990,7 @@ async def run_birthday_setup(interaction: discord.Interaction, bot):
     # ── Step 5: Train integration ─────────────────────────────────────────────
     train_view = YesNoView()
     await channel.send(
-        "**Step 5 — Train Schedule Integration**\n"
+        "**Step 5 of 8 — Train Schedule Integration**\n"
         "Should the bot automatically add members to the train schedule on their birthday?",
         view=train_view,
     )
@@ -3098,7 +3026,7 @@ async def run_birthday_setup(interaction: discord.Interaction, bot):
 
         placement_view = PlacementView()
         await channel.send(
-            "**Step 7 of 9 — Birthday Placement**\n"
+            "**Step 6 of 8 — Birthday Placement**\n"
             "If the member's birthday is already taken on the train schedule, what should the bot do?",
             view=placement_view,
         )
@@ -3109,15 +3037,20 @@ async def run_birthday_setup(interaction: discord.Interaction, bot):
         flexible_placement = placement_view.selected
 
         # ── Step 7: Lookahead days ─────────────────────────────────────────────
-        lookahead_raw = await ask_text(
-            "**Step 8 of 9 — Lookahead Days**\n"
+        lookahead_raw = await ask_keep_or_change(
+            channel,
+            "**Step 7 of 8 — Lookahead Days**\n"
             "How many days in advance should birthdays be added to the train schedule?\n"
-            f"*(Current: {current.get('lookahead_days', 14)} days — we recommend 14)*"
+            "*(we recommend 14)*",
+            default=str(current.get("lookahead_days", 14) or 14),
+            modal_title="Lookahead Days",
+            modal_label="Number of days",
+            timeout_cmd="setup_birthdays",
         )
         if lookahead_raw is None:
             return
         try:
-            lookahead_days = int(lookahead_raw.strip())
+            lookahead_days = int(str(lookahead_raw).strip())
             if lookahead_days < 1:
                 raise ValueError
         except ValueError:
@@ -3127,7 +3060,7 @@ async def run_birthday_setup(interaction: discord.Interaction, bot):
     # ── Step 8: Birthday reminders ─────────────────────────────────────────────
     remind_view = YesNoView()
     await channel.send(
-        "**Step 9 of 9 — Birthday Reminders**\n"
+        "**Step 8 of 8 — Birthday Reminders**\n"
         "Should the bot post a message in Discord on a member's birthday?\n"
         f"*(It will post: \"🎂 Today is **[name]**'s birthday!\")*",
         view=remind_view,
@@ -3147,7 +3080,7 @@ async def run_birthday_setup(interaction: discord.Interaction, bot):
             suggested_name="birthdays",
         )
         await channel.send(
-            "**Step 9a of 9 — Birthday Announcement Channel**\n"
+            "**Step 8a of 8 — Birthday Announcement Channel**\n"
             "Which channel should birthday announcements be posted in?",
             view=remind_ch_view,
         )
@@ -3161,10 +3094,15 @@ async def run_birthday_setup(interaction: discord.Interaction, bot):
         from config import get_config
         guild_cfg = get_config(guild_id)
         tz_label  = TIMEZONE_LABELS.get(guild_cfg.timezone if guild_cfg else "America/New_York", "your timezone")
-        time_raw  = await ask_text(
-            f"**Step 9b of 9 — Reminder Time**\n"
+        time_raw  = await ask_keep_or_change(
+            channel,
+            f"**Step 8b of 8 — Reminder Time**\n"
             f"What time should birthday announcements be posted? *(in {tz_label})*\n"
-            f"*(e.g. `8:00am`, `12:00pm`)*"
+            f"*(e.g. `8:00am`, `12:00pm`)*",
+            default="8:00am",
+            modal_title="Reminder Time",
+            modal_label="Time",
+            timeout_cmd="setup_birthdays",
         )
         if time_raw is None:
             return

@@ -9,7 +9,7 @@ questions, then:
   - Archives the thread
 
 Slash commands:
-  /postsurvey  — Post (or repost) the persistent survey button (leadership only)
+  /survey_post — Post (or repost) the persistent survey button (leadership only)
 """
 
 import asyncio
@@ -422,10 +422,10 @@ class SurveyCog(commands.Cog):
         self.bot.add_view(SurveyButtonView())
 
     @app_commands.command(
-        name="postsurvey",
+        name="survey_post",
         description="Post (or repost) the squad powers survey button in the survey channel",
     )
-    async def postsurvey(self, interaction: discord.Interaction):
+    async def survey_post(self, interaction: discord.Interaction):
         if not await _guard(interaction):
             return
 

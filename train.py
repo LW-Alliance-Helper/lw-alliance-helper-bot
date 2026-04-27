@@ -237,22 +237,6 @@ def get_member_tab_name(guild_id: int = None) -> str:
     return tab if tab else "Season 5 - Off-Season"
 
 
-def set_member_tab_name(name: str, guild_id: int = None):
-    """Save the active member tab name to the config database and the sheet."""
-    from config import set_member_tab
-    if guild_id is None:
-        guild_id = None
-    set_member_tab(guild_id, name)
-    # Also write to sheet cell for legacy reference
-    try:
-        ws = _get_train_sheet()
-        ws.update("G1", [["Active Member Tab:"]], value_input_option="USER_ENTERED")
-        ws.update("H1", [[name]], value_input_option="USER_ENTERED")
-        print(f"[BIRTHDAY] Member tab name set to: {name}")
-    except Exception as e:
-        print(f"[BIRTHDAY] Error writing member tab to sheet: {e}")
-
-
 def _get_member_sheet(tab_name: str):
     """Return the active member worksheet."""
     import gspread
@@ -1318,13 +1302,13 @@ class TrainCog(commands.Cog):
     def cog_unload(self):
         self.check_reminder.cancel()
 
-    # ── /checkbirthdays ────────────────────────────────────────────────────────
+    # ── /train_addbirthdays ────────────────────────────────────────────────────
 
     @app_commands.command(
-        name="checkbirthdays",
+        name="train_addbirthdays",
         description="Manually run the birthday check and add upcoming birthdays to the schedule",
     )
-    async def checkbirthdays(self, interaction: discord.Interaction):
+    async def train_addbirthdays(self, interaction: discord.Interaction):
         if not await _guard(interaction):
             return
 
@@ -1373,38 +1357,9 @@ class TrainCog(commands.Cog):
                 ephemeral=True,
             )
 
-    # ── /setmembertab ──────────────────────────────────────────────────────────
-
-    @app_commands.command(
-        name="setmembertab",
-        description="Set the active member sheet tab (used for birthdays and DS/CS rosters)",
-    )
-    @app_commands.describe(tab_name="Exact name of the tab, e.g. 'Season 6 - Off-Season'")
-    async def setmembertab(self, interaction: discord.Interaction, tab_name: str):
-        if not await _guard(interaction):
-            return
-
-        # Verify the tab actually exists before saving
-        try:
-            _get_member_sheet(tab_name)
-        except Exception:
-            await interaction.response.send_message(
-                f"⚠️ Could not find a tab named **{tab_name}** in your Google Sheet. "
-                f"Please check the spelling and try again.",
-                ephemeral=True,
-            )
-            return
-
-        set_member_tab_name(tab_name)
-        await interaction.response.send_message(
-            f"✅ Active member tab updated to **{tab_name}**.\n"
-            f"Birthdays and DS/CS rosters will now pull from this tab.",
-            ephemeral=True,
-        )
-
     # ── /cancel ────────────────────────────────────────────────────────────────
 
-    @app_commands.command(name="cancel", description="Cancel your active wizard or log session")
+    @app_commands.command(name="cancel", description="Cancel your active train wizard or storm log session")
     async def cancel(self, interaction: discord.Interaction):
         if not await _guard(interaction):
             return

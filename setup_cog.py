@@ -465,56 +465,6 @@ class SetupCog(commands.Cog):
         )
         await run_event_setup(interaction, self.bot)
 
-    @app_commands.command(name="setup_events_list", description="View all configured event types for this server")
-    async def setup_events_list(self, interaction: discord.Interaction):
-        if not interaction.user.guild_permissions.administrator:
-            await interaction.response.send_message(
-                "⛔ Only server administrators can view event configuration.", ephemeral=True
-            )
-            return
-        from config import get_guild_events
-        events = get_guild_events(interaction.guild_id, active_only=False)
-        if not events:
-            await interaction.response.send_message(
-                "No events configured yet. Run `/setup_events` to add one.", ephemeral=True
-            )
-            return
-        lines = []
-        for e in events:
-            status = "✅ Active" if e["active"] else "❌ Inactive"
-            lines.append(
-                f"**{e['name']}** (`{e['short_key']}`)\n"
-                f"Time: {e['default_time']} {e['timezone']} | "
-                f"Schedule: {e['schedule_type']} | {status}"
-            )
-        embed = discord.Embed(
-            title="⚙️ Configured Events",
-            description="\n\n".join(lines),
-            color=discord.Color.blurple(),
-        )
-        await interaction.response.send_message(embed=embed, ephemeral=True)
-
-    @app_commands.command(name="setup_events_remove", description="Deactivate an event type")
-    @app_commands.describe(short_key="The short key of the event to remove (e.g. marauder)")
-    async def setup_events_remove(self, interaction: discord.Interaction, short_key: str):
-        if not interaction.user.guild_permissions.administrator:
-            await interaction.response.send_message(
-                "⛔ Only server administrators can remove events.", ephemeral=True
-            )
-            return
-        from config import get_guild_event, delete_guild_event
-        event = get_guild_event(interaction.guild_id, short_key)
-        if not event:
-            await interaction.response.send_message(
-                f"⚠️ No event found with key `{short_key}`.", ephemeral=True
-            )
-            return
-        delete_guild_event(interaction.guild_id, short_key)
-        await interaction.response.send_message(
-            f"✅ **{event['name']}** has been deactivated. Run `/setup_events` to re-add it.",
-            ephemeral=True,
-        )
-
     @app_commands.command(name="setup_survey", description="Configure survey — channels, sheet tabs, intro message, and questions")
     async def setup_survey(self, interaction: discord.Interaction):
         if not interaction.user.guild_permissions.administrator:
@@ -2022,7 +1972,7 @@ async def run_survey_setup(interaction: discord.Interaction, bot):
     embed.add_field(name="Stats Tab",           value=tab_squad_powers,                  inline=True)
     embed.add_field(name="History Tab",         value=tab_history,                       inline=True)
     embed.add_field(name="Questions",           value=q_summary[:1024],                  inline=False)
-    embed.set_footer(text="Run /setup_survey again to update. Run /postsurvey to post the survey button.")
+    embed.set_footer(text="Run /setup_survey again to update. Run /survey_post to post the survey button.")
     await channel.send(embed=embed)
     print(f"[SETUP] Survey config saved for guild {guild_id} — {len(questions)} questions")
 

@@ -335,8 +335,7 @@ async def help_slash(interaction: discord.Interaction):
             "`/schedule_set` — Add or update schedule entries\n"
             "`/schedule_clear` — Clear the entire schedule\n"
             "`/trainprompt [date]` — Get the ChatGPT prompt for a scheduled member\n"
-            "`/setmembertab [tab]` — Set the active member sheet tab\n"
-            "`/checkbirthdays` — Manually run the birthday check now"
+            "`/train_addbirthdays` — Manually run the birthday check now"
         ),
         inline=False,
     )
@@ -356,9 +355,9 @@ async def help_slash(interaction: discord.Interaction):
         value=(
             "Generate and manage Desert Storm team mail drafts and log participation each week.\n"
             "`/setup_desertstorm` — Configure teams, sheet tab, log channel, and mail template\n"
-            "`/draftds` — Generate a Desert Storm mail draft for Team A or B\n"
-            "`/logds` — Log Desert Storm participation data\n"
-            "`/viewlog DS [date]` — View a Desert Storm log entry for a specific date"
+            "`/desertstorm_draft` — Generate a Desert Storm mail draft for Team A or B\n"
+            "`/desertstorm_participation` — Log Desert Storm participation data\n"
+            "`/desertstorm_log [date]` — View a Desert Storm log entry (defaults to today)"
         ),
         inline=False,
     )
@@ -368,9 +367,9 @@ async def help_slash(interaction: discord.Interaction):
         value=(
             "Generate and manage Canyon Storm team mail drafts and log participation each week.\n"
             "`/setup_canyonstorm` — Configure teams, sheet tab, log channel, and mail template\n"
-            "`/draftcs` — Generate a Canyon Storm mail draft for Team A or B\n"
-            "`/logcs` — Log Canyon Storm participation data\n"
-            "`/viewlog CS [date]` — View a Canyon Storm log entry for a specific date"
+            "`/canyonstorm_draft` — Generate a Canyon Storm mail draft for Team A or B\n"
+            "`/canyonstorm_participation` — Log Canyon Storm participation data\n"
+            "`/canyonstorm_log [date]` — View a Canyon Storm log entry (defaults to today)"
         ),
         inline=False,
     )
@@ -381,7 +380,7 @@ async def help_slash(interaction: discord.Interaction):
             "Collect member statistics through a private Discord thread survey. "
             "Responses are saved directly to your Google Sheet.\n"
             "`/setup_survey` — Configure survey questions, channels, and sheet tabs\n"
-            "`/postsurvey` — Post (or repost) the survey button in the survey channel\n"
+            "`/survey_post` — Post (or repost) the survey button in the survey channel\n"
             "Members click Answer to open a private thread and submit their stats"
         ),
         inline=False,
@@ -401,7 +400,7 @@ async def help_slash(interaction: discord.Interaction):
 
     embed.add_field(
         name="🔧 Utilities",
-        value="`/cancel` — Cancel your active wizard or log session",
+        value="`/cancel` — Cancel your active train wizard or storm log session",
         inline=False,
     )
 

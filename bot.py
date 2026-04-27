@@ -95,6 +95,9 @@ async def on_ready():
     if "donate" not in bot.extensions:
         await bot.load_extension("donate")
         print(f"[INFO] Donate cog loaded")
+    if "member_roster" not in bot.extensions:
+        await bot.load_extension("member_roster")
+        print(f"[INFO] Member Roster cog loaded")
 
     # Sync slash commands globally so they work in any server
     synced = await bot.tree.sync()
@@ -516,6 +519,21 @@ async def help_slash(interaction: discord.Interaction):
             "You define which metrics to track and how often — snapshots are saved to your Google Sheet.\n"
             "`/setup_growth` — Configure source tab, metrics to track, and snapshot schedule\n"
             "`/growth` — Show growth status with options to run a snapshot or edit config"
+        ),
+        inline=False,
+    )
+
+    embed.add_field(
+        name="💎 Premium Features",
+        value=(
+            "Unlock with `/upgrade` — Premium subscribers get the following:\n"
+            "`/setup_members` — Configure Member Roster Sync (Discord IDs → Sheet)\n"
+            "`/sync_members` — Manually re-sync the member roster now\n"
+            "`/survey_remind` — DM every roster member to fill out the survey\n"
+            "`/desertstorm_remind` — DM every roster member about this week's DS\n"
+            "`/canyonstorm_remind` — DM every roster member about this week's CS\n"
+            "*Plus: birthday DMs, train assignment DMs, auto-mentions in train "
+            "announcements, thread destinations, and more.*"
         ),
         inline=False,
     )

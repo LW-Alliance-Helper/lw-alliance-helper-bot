@@ -761,6 +761,98 @@ class LogCog(commands.Cog):
     async def canyonstorm_log(self, interaction: discord.Interaction, date: str = None):
         await _show_storm_log(interaction, "CS", date)
 
+    @app_commands.command(
+        name="desertstorm_remind",
+        description="💎 DM every roster member to participate in this week's Desert Storm",
+    )
+    async def desertstorm_remind(self, interaction: discord.Interaction):
+        await _send_storm_reminder(self.bot, interaction, "DS")
+
+    @app_commands.command(
+        name="canyonstorm_remind",
+        description="💎 DM every roster member to participate in this week's Canyon Storm",
+    )
+    async def canyonstorm_remind(self, interaction: discord.Interaction):
+        await _send_storm_reminder(self.bot, interaction, "CS")
+
+
+async def _send_storm_reminder(bot, interaction: discord.Interaction, event_type: str):
+    """DM every roster member with a participation reminder for the given storm."""
+    if not await _guard(interaction):
+        return
+
+    import premium
+    import dm
+    from config import get_member_roster_config, get_member_roster_sheet
+
+    if not await premium.is_premium(
+        interaction.guild_id, interaction=interaction, bot=bot,
+    ):
+        await interaction.response.send_message(
+            embed=premium.premium_locked_embed(
+                feature_label="Storm participation DMs",
+                description=(
+                    "Storm participation reminders are part of Alliance Helper "
+                    "Premium and require Member Roster Sync (`/setup_members`). "
+                    "Run `/upgrade` to unlock."
+                ),
+            ),
+            view=premium.upgrade_view(),
+            ephemeral=True,
+        )
+        return
+
+    roster_cfg = get_member_roster_config(interaction.guild_id)
+    if not roster_cfg.get("enabled"):
+        await interaction.response.send_message(
+            "⚙️ Member Roster Sync isn't configured yet. Run `/setup_members` first.",
+            ephemeral=True,
+        )
+        return
+
+    await interaction.response.defer(ephemeral=True)
+
+    label = "Desert Storm" if event_type == "DS" else "Canyon Storm"
+    try:
+        ws   = get_member_roster_sheet(interaction.guild_id, roster_cfg["tab_name"])
+        rows = await asyncio.get_event_loop().run_in_executor(
+            None, ws.get_all_values,
+        )
+    except Exception as e:
+        await interaction.followup.send(
+            f"⚠️ Could not read the roster sheet: {e}", ephemeral=True,
+        )
+        return
+
+    did_col = roster_cfg["discord_id_col"]
+    sent    = 0
+    skipped = 0
+    for row in rows[1:]:
+        if did_col >= len(row):
+            continue
+        did = row[did_col].strip()
+        if not did:
+            skipped += 1
+            continue
+        ok = await dm.send_dm_to_id(
+            bot, interaction.guild_id, did,
+            content=(
+                f"⚔️ **{label} reminder** — your alliance is preparing for this week's "
+                f"{label}. Please confirm your participation in Discord and check the "
+                f"team channel for your zone assignment. Good luck out there!"
+            ),
+        )
+        if ok:
+            sent += 1
+        else:
+            skipped += 1
+
+    await interaction.followup.send(
+        f"✅ Sent {sent} **{label}** reminder DM{'s' if sent != 1 else ''}. "
+        f"{skipped} skipped.",
+        ephemeral=True,
+    )
+
 
 async def _show_storm_log(interaction: discord.Interaction, event: str, date: str | None):
     """Shared handler for /desertstorm_log and /canyonstorm_log."""

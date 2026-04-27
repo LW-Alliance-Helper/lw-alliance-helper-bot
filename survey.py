@@ -506,6 +506,86 @@ class SurveyCog(commands.Cog):
 
         await interaction.response.send_message(embed=embed, ephemeral=True)
 
+    @app_commands.command(
+        name="survey_remind",
+        description="💎 DM every roster member to fill out the survey",
+    )
+    async def survey_remind(self, interaction: discord.Interaction):
+        if not await _guard(interaction):
+            return
+
+        import premium
+        import dm
+        from config import get_member_roster_config, get_member_roster_sheet
+
+        if not await premium.is_premium(
+            interaction.guild_id, interaction=interaction, bot=self.bot,
+        ):
+            await interaction.response.send_message(
+                embed=premium.premium_locked_embed(
+                    feature_label="Survey reminder DMs",
+                    description=(
+                        "Reminder DMs are part of Alliance Helper Premium and require "
+                        "Member Roster Sync to be configured (`/setup_members`). "
+                        "Run `/upgrade` to unlock."
+                    ),
+                ),
+                view=premium.upgrade_view(),
+                ephemeral=True,
+            )
+            return
+
+        roster_cfg = get_member_roster_config(interaction.guild_id)
+        if not roster_cfg.get("enabled"):
+            await interaction.response.send_message(
+                "⚙️ Member Roster Sync isn't configured yet. Run `/setup_members` first.",
+                ephemeral=True,
+            )
+            return
+
+        await interaction.response.defer(ephemeral=True)
+
+        # Read roster: each row's discord_id_col → DM that user.
+        try:
+            ws   = get_member_roster_sheet(interaction.guild_id, roster_cfg["tab_name"])
+            rows = await asyncio.get_event_loop().run_in_executor(
+                None, ws.get_all_values,
+            )
+        except Exception as e:
+            await interaction.followup.send(
+                f"⚠️ Could not read the roster sheet: {e}", ephemeral=True,
+            )
+            return
+
+        did_col = roster_cfg["discord_id_col"]
+        sent    = 0
+        skipped = 0
+        for row in rows[1:]:  # skip header
+            if did_col >= len(row):
+                continue
+            did = row[did_col].strip()
+            if not did:
+                skipped += 1
+                continue
+            ok = await dm.send_dm_to_id(
+                self.bot, interaction.guild_id, did,
+                content=(
+                    "📋 **Friendly reminder** — your alliance is asking you to fill out "
+                    "the squad-powers survey this week. Open the survey channel in Discord "
+                    "and click the **📋 Answer** button to get started. Thanks!"
+                ),
+            )
+            if ok:
+                sent += 1
+            else:
+                skipped += 1
+
+        await interaction.followup.send(
+            f"✅ Sent {sent} reminder DM{'s' if sent != 1 else ''}. "
+            f"{skipped} skipped (DMs closed, missing ID, or other failures).",
+            ephemeral=True,
+        )
+
 
 async def setup(bot: commands.Bot):
     await bot.add_cog(SurveyCog(bot))

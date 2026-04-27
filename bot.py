@@ -92,6 +92,9 @@ async def on_ready():
     if "setup_cog" not in bot.extensions:
         await bot.load_extension("setup_cog")
         print(f"[INFO] Setup cog loaded")
+    if "donate" not in bot.extensions:
+        await bot.load_extension("donate")
+        print(f"[INFO] Donate cog loaded")
 
     # Sync slash commands globally so they work in any server
     synced = await bot.tree.sync()
@@ -507,7 +510,10 @@ async def help_slash(interaction: discord.Interaction):
 
     embed.add_field(
         name="🔧 Utilities",
-        value="`/cancel` — Cancel any active wizard or log session",
+        value=(
+            "`/cancel` — Cancel any active wizard or log session\n"
+            "`/donate` — 💖 Support the bot's hosting costs"
+        ),
         inline=False,
     )
 

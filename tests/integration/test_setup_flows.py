@@ -549,6 +549,8 @@ class TestPremiumCaps:
                     "keep_existing": False,
                     "selected":      "tn1",
                     "skipped":       True,
+                    # New template manager exits via Done button
+                    "action":        "done",
                 },
             )
             await run_train_setup(interaction, bot)

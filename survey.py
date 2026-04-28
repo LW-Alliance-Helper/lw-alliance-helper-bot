@@ -202,6 +202,91 @@ async def run_survey(bot, thread: discord.Thread, user: discord.Member):
             return None
         return view.selected
 
+    async def ask_numeric(prompt: str, min_val: float | None = None,
+                           max_val: float | None = None) -> str | None:
+        """Premium type: like ask_number but validates min/max bounds."""
+        full = prompt
+        if min_val is not None or max_val is not None:
+            bits = []
+            if min_val is not None: bits.append(f"min: {min_val}")
+            if max_val is not None: bits.append(f"max: {max_val}")
+            full += f"\n*({', '.join(bits)})*"
+        await thread.send(full)
+        try:
+            reply = await bot.wait_for("message", check=check, timeout=SURVEY_TIMEOUT)
+        except asyncio.TimeoutError:
+            await thread.send("⏰ Survey timed out. You can start again by clicking the Answer button.")
+            return None
+        raw = reply.content.strip()
+        try:
+            n = float(raw) if "." in raw else int(raw)
+        except ValueError:
+            await thread.send(f"⚠️ `{raw}` isn't a number. Please try the survey again.")
+            return None
+        if min_val is not None and n < min_val:
+            await thread.send(f"⚠️ Must be at least **{min_val}**. Please try the survey again.")
+            return None
+        if max_val is not None and n > max_val:
+            await thread.send(f"⚠️ Must be at most **{max_val}**. Please try the survey again.")
+            return None
+        return str(n)
+
+    async def ask_multi_select(prompt: str, options: list,
+                                placeholder: str, label: str = "") -> str | None:
+        """Premium type: Discord multi-select (up to len(options) picks).
+        Returns a comma-joined string."""
+        if not options:
+            await thread.send(f"⚠️ Question has no options configured. Please contact leadership.")
+            return None
+
+        view = discord.ui.View(timeout=SURVEY_TIMEOUT)
+        result = {"values": None}
+
+        select = discord.ui.Select(
+            placeholder=placeholder or f"Select {label}…",
+            min_values=1,
+            max_values=min(len(options), 25),
+            options=[discord.SelectOption(label=o, value=o) for o in options[:25]],
+        )
+
+        async def _cb(inter: discord.Interaction):
+            result["values"] = list(select.values)
+            select.disabled  = True
+            await inter.response.edit_message(
+                content=f"**{label}** {', '.join(result['values'])}",
+                view=view,
+            )
+            view.stop()
+        select.callback = _cb
+        view.add_item(select)
+
+        await thread.send(prompt, view=view)
+        await view.wait()
+        if result["values"] is None:
+            await thread.send("⏰ Survey timed out. You can start again by clicking the Answer button.")
+            return None
+        return ", ".join(result["values"])
+
+    async def ask_date(prompt: str, date_format: str = "%m/%d/%Y") -> str | None:
+        """Premium type: parse a date with strptime, return as ISO string."""
+        full = prompt + f"\n*(format: `{date_format}`)*"
+        await thread.send(full)
+        try:
+            reply = await bot.wait_for("message", check=check, timeout=SURVEY_TIMEOUT)
+        except asyncio.TimeoutError:
+            await thread.send("⏰ Survey timed out. You can start again by clicking the Answer button.")
+            return None
+        from datetime import datetime as _dt
+        try:
+            d = _dt.strptime(reply.content.strip(), date_format).date()
+        except ValueError:
+            await thread.send(
+                f"⚠️ `{reply.content.strip()}` doesn't match `{date_format}`. "
+                f"Please try the survey again."
+            )
+            return None
+        return d.isoformat()
+
     data = {}
 
     for i, q in enumerate(questions):
@@ -223,6 +308,24 @@ async def run_survey(bot, thread: discord.Thread, user: discord.Member):
                 options,
                 placeholder or f"Select {label}...",
                 label=f"{label}:",
+            )
+        elif qtype == "numeric":
+            val = await ask_numeric(
+                f"**{label}**" + (f"\n*{placeholder}*" if placeholder else ""),
+                min_val=q.get("min"),
+                max_val=q.get("max"),
+            )
+        elif qtype == "multi_select":
+            val = await ask_multi_select(
+                f"**{label}**",
+                options,
+                placeholder or f"Select {label}...",
+                label=label,
+            )
+        elif qtype == "date":
+            val = await ask_date(
+                f"**{label}**" + (f"\n*{placeholder}*" if placeholder else ""),
+                date_format=q.get("date_format", "%m/%d/%Y"),
             )
         else:
             val = await ask_number(f"**{label}**", max_chars=max_chars)

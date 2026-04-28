@@ -38,18 +38,23 @@ def fresh_premium(monkeypatch):
 
 
 @pytest.fixture(autouse=True)
-def _restore_premium_module_after_each_test(monkeypatch):
+def _isolate_premium_env(monkeypatch):
     """
-    Autouse cleanup: regardless of which test runs, ensure the premium
-    module ends in a clean state with no env vars set. Prevents leaking
-    PREMIUM_SKU_ID etc. into integration tests in the same pytest session.
+    Autouse isolation: clear premium env vars at both SETUP and teardown so
+    these tests are unaffected by the outer-process FORCE_PREMIUM=1 lane (CI
+    runs the suite twice, once with FORCE_PREMIUM unset and once with it
+    set). Each test in this file must drive premium state explicitly.
     """
-    yield
     for var in ("PREMIUM_SKU_ID", "FORCE_PREMIUM", "PREMIUM_TEST_GUILD_IDS"):
         monkeypatch.delenv(var, raising=False)
     import premium as _premium
-    _premium.clear_cache()
     importlib.reload(_premium)
+    _premium.clear_cache()
+    yield
+    for var in ("PREMIUM_SKU_ID", "FORCE_PREMIUM", "PREMIUM_TEST_GUILD_IDS"):
+        monkeypatch.delenv(var, raising=False)
+    importlib.reload(_premium)
+    _premium.clear_cache()
 
 
 def _make_entitlement(sku_id: int, deleted: bool = False):

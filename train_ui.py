@@ -130,6 +130,41 @@ async def run_blurb_wizard_for_entry(bot, channel, user, date_str: str, name: st
             return False
         notes = "" if notes_raw.lower() == "skip" else notes_raw
 
+        # 💎 Premium step 4: pick which saved template to use, when more than one exists.
+        import premium
+        from train import get_train_template_names
+        template_name = None
+        if await premium.is_premium(guild_id):
+            names = get_train_template_names(guild_id)
+            if len(names) > 1:
+                class TemplatePickView(discord.ui.View):
+                    def __init__(self, options: list[str]):
+                        super().__init__(timeout=120)
+                        self.selected = None
+                        sel = discord.ui.Select(
+                            placeholder="Pick a saved template…",
+                            options=[discord.SelectOption(label=n[:100], value=n) for n in options],
+                        )
+                        async def _cb(inter):
+                            self.selected = sel.values[0]
+                            sel.disabled  = True
+                            await inter.response.edit_message(
+                                content=f"✅ Template: **{self.selected}**", view=self,
+                            )
+                            self.stop()
+                        sel.callback = _cb
+                        self.add_item(sel)
+
+                pick_view = TemplatePickView(names)
+                pick_msg  = await channel.send(
+                    "**Step 4 of 4 — Template** *(💎 Premium)*\n"
+                    "You have multiple saved templates. Pick one for this prompt:",
+                    view=pick_view,
+                )
+                if not await wait_for_view(pick_view, pick_msg):
+                    return False
+                template_name = pick_view.selected   # may stay None if user picked nothing → falls back to default
+
         # Persist back to schedule
         schedule = load_schedule(guild_id)
         existing = schedule.get(date_str, {})
@@ -143,7 +178,9 @@ async def run_blurb_wizard_for_entry(bot, channel, user, date_str: str, name: st
         save_schedule(schedule, guild_id)
 
         # Build and post the prompt
-        prompt = build_chatgpt_prompt(name, theme, tone, notes, guild_id=guild_id)
+        prompt = build_chatgpt_prompt(
+            name, theme, tone, notes, guild_id=guild_id, template_name=template_name,
+        )
         await channel.send(
             f"✅ **ChatGPT prompt for {name}** — copy and paste into the thread:\n"
             f"```\n{prompt}\n```"

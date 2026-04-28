@@ -243,11 +243,14 @@ def parse_ds_template(text: str) -> tuple[dict, list, list]:
 # ── Mail builder ───────────────────────────────────────────────────────────────
 
 def build_ds_mail(team: str, zones: dict, subs: list, time_key: str,
-                  guild_id: int = None) -> str:
-    """Build DS mail using the guild's stored template."""
-    from config import get_storm_config
+                  guild_id: int = None, template_name: str | None = None) -> str:
+    """Build DS mail using a guild's stored template (named or default)."""
+    from config import get_storm_config, get_storm_template
     cfg       = get_storm_config(guild_id, "DS") if guild_id else {}
-    template  = cfg.get("mail_template") or ""
+    if guild_id:
+        template = get_storm_template(guild_id, "DS", template_name)
+    else:
+        template = cfg.get("mail_template") or ""
 
     # Build time string from config time options
     if time_key == "1":
@@ -406,6 +409,56 @@ class StormApprovalView(discord.ui.View):
 
 # ── Core wizard flow ───────────────────────────────────────────────────────────
 
+async def _pick_storm_template(bot, channel, guild_id: int | None, event_type: str):
+    """
+    For premium guilds with more than one saved storm mail template, prompt
+    leadership to pick which template to use for this draft.
+
+    Returns:
+      * a template name string the caller should pass to build_*_mail, or
+      * `None` to use the guild's default template, or
+      * `False` if the picker timed out and the caller should bail.
+    """
+    if guild_id is None:
+        return None
+    import premium
+    from config import get_storm_template_names
+    if not await premium.is_premium(guild_id, bot=bot):
+        return None
+    names = get_storm_template_names(guild_id, event_type)
+    if len(names) <= 1:
+        return None
+
+    class StormTemplatePickView(discord.ui.View):
+        def __init__(self, options: list[str]):
+            super().__init__(timeout=120)
+            self.selected: str | None = None
+            sel = discord.ui.Select(
+                placeholder="Pick a saved template…",
+                options=[discord.SelectOption(label=n[:100], value=n) for n in options],
+            )
+            async def _cb(inter):
+                self.selected = sel.values[0]
+                sel.disabled  = True
+                await inter.response.edit_message(
+                    content=f"✅ Template: **{self.selected}**", view=self,
+                )
+                self.stop()
+            sel.callback = _cb
+            self.add_item(sel)
+
+    view = StormTemplatePickView(names)
+    await channel.send(
+        "💎 You have multiple saved templates. Pick one for this draft:",
+        view=view,
+    )
+    await view.wait()
+    if view.selected is None:
+        await channel.send("⏰ Template picker timed out.")
+        return False
+    return view.selected
+
+
 async def run_ds_edit_step(bot, channel, user, team: str, current_zones: dict,
                             current_subs: list, time_key: str = None):
     """Wait for edited template, parse it, optionally ask for time, then preview."""
@@ -469,7 +522,14 @@ async def run_ds_edit_step(bot, channel, user, team: str, current_zones: dict,
             "\n".join(f"• {e}" for e in errors)
         )
 
-    mail          = build_ds_mail(team, zones, subs, time_key)
+    # 💎 Premium: when multiple templates exist, ask which one to use.
+    guild_id      = getattr(getattr(channel, "guild", None), "id", None)
+    template_name = await _pick_storm_template(bot, channel, guild_id, "DS")
+    if template_name is False:
+        return  # picker timed out
+
+    mail          = build_ds_mail(team, zones, subs, time_key,
+                                  guild_id=guild_id, template_name=template_name)
     approval_view = StormApprovalView(
         bot=bot, team=team, mail=mail,
         zones=zones, subs=subs, time_key=time_key,
@@ -915,11 +975,15 @@ def parse_cs_template(text: str) -> tuple[dict, list]:
 
 # ── CS Mail builder ────────────────────────────────────────────────────────────
 
-def build_cs_mail(team: str, z: dict, time_key: str, guild_id: int = None) -> str:
-    """Build CS mail using the guild's stored template."""
-    from config import get_storm_config
+def build_cs_mail(team: str, z: dict, time_key: str, guild_id: int = None,
+                  template_name: str | None = None) -> str:
+    """Build CS mail using a guild's stored template (named or default)."""
+    from config import get_storm_config, get_storm_template
     cfg       = get_storm_config(guild_id, "CS") if guild_id else {}
-    template  = cfg.get("mail_template") or ""
+    if guild_id:
+        template = get_storm_template(guild_id, "CS", template_name)
+    else:
+        template = cfg.get("mail_template") or ""
 
     if time_key == "1":
         local_time  = cfg.get("time_option_1_local", "")
@@ -1097,7 +1161,14 @@ async def run_cs_edit_step(bot, channel, user, team: str, current_zones: dict, t
             "⚠️ Some lines were skipped:\n" + "\n".join(f"• {e}" for e in errors)
         )
 
-    mail          = build_cs_mail(team, zones, time_key)
+    # 💎 Premium: when multiple templates exist, ask which one to use.
+    guild_id      = getattr(getattr(channel, "guild", None), "id", None)
+    template_name = await _pick_storm_template(bot, channel, guild_id, "CS")
+    if template_name is False:
+        return  # picker timed out
+
+    mail          = build_cs_mail(team, zones, time_key,
+                                  guild_id=guild_id, template_name=template_name)
     approval_view = CSApprovalView(bot=bot, team=team, mail=mail, zones=zones, time_key=time_key)
     await channel.send(
         f"📬 **Canyon Storm Team {team} mail preview:**\n\n{mail}\n\nDoes this look right?",

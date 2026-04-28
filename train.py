@@ -312,17 +312,36 @@ def get_tones(guild_id: int = None) -> list:
     return cfg.get("tones") or DEFAULT_TONES
 
 
-def get_prompt_template(guild_id: int = None) -> str:
-    """Return the ChatGPT prompt template for a guild."""
+def get_prompt_template(guild_id: int = None, template_name: str = None) -> str:
+    """
+    Return a named ChatGPT prompt template for a guild. When `template_name`
+    is None, returns the guild's configured default. Falls back to the legacy
+    `prompt_template` column for backwards compatibility.
+    """
     from config import get_train_config
     cfg = get_train_config(guild_id) if guild_id else {}
+    templates = cfg.get("templates") or []
+    target    = template_name or cfg.get("default_template") or "Default"
+    for t in templates:
+        if t.get("name") == target:
+            return t.get("template", "") or ""
+    if templates:
+        return templates[0].get("template", "") or ""
     return cfg.get("prompt_template") or ""
+
+
+def get_train_template_names(guild_id: int = None) -> list[str]:
+    """Return the list of saved template names for a guild (premium feature)."""
+    from config import get_train_config
+    cfg = get_train_config(guild_id) if guild_id else {}
+    return [t.get("name", "") for t in (cfg.get("templates") or []) if t.get("name")]
 
 # ── Prompt builder ─────────────────────────────────────────────────────────────
 
-def build_chatgpt_prompt(name: str, theme: str, tone: str, notes: str, guild_id: int = None) -> str:
+def build_chatgpt_prompt(name: str, theme: str, tone: str, notes: str,
+                          guild_id: int = None, template_name: str = None) -> str:
     """Format a ready-to-paste ChatGPT prompt using the guild's stored template."""
-    template = get_prompt_template(guild_id)
+    template = get_prompt_template(guild_id, template_name=template_name)
     if template:
         return template.format(
             name=name,

@@ -380,6 +380,226 @@ async def ask_keep_or_change(
     return view.value
 
 
+async def _manage_train_templates(
+    *, bot, channel, check, existing: list, default_name: str,
+    cap: int | None, cancel_event,
+):
+    """
+    Multi-template manager for /setup_train.
+
+    Lets the user view, add, edit, delete, and re-pick the default for the
+    guild's saved ChatGPT prompt templates. `cap` is the per-tier maximum
+    (None = unlimited / premium).
+
+    Returns (templates_list, default_template_name) — or (None, None) if
+    the user timed out. Templates are stored as `[{"name", "template"}, ...]`.
+    """
+    import wizard_registry
+
+    templates: list[dict] = list(existing) if existing else []
+    if not templates:
+        templates = [{"name": "Default", "template": ""}]
+
+    # Default name must always reference an existing template.
+    if not any(t.get("name") == default_name for t in templates):
+        default_name = templates[0]["name"]
+
+    while True:
+        cap_label = "unlimited" if cap is None else str(cap)
+        listing   = []
+        for i, t in enumerate(templates):
+            star = " ⭐" if t["name"] == default_name else ""
+            preview = (t.get("template") or "").strip().split("\n")[0][:60]
+            preview_suffix = f" — *{preview}*" if preview else " — *(empty)*"
+            listing.append(f"`{i+1}.` **{t['name']}**{star}{preview_suffix}")
+
+        embed = discord.Embed(
+            title="**Step 6 of 7 — Prompt Templates**",
+            description=(
+                "Saved ChatGPT prompt templates. The default ⭐ is the one used "
+                "by the blurb wizard unless a member's day overrides it.\n\n"
+                + "\n".join(listing)
+                + f"\n\n*Slot usage: **{len(templates)} of {cap_label}**.*"
+            ),
+            color=discord.Color.blurple(),
+        )
+
+        class TemplateListView(discord.ui.View):
+            def __init__(self, count: int, at_cap: bool):
+                super().__init__(timeout=WIZARD_TIMEOUT)
+                self.action: str | None = None
+                self.index: int | None  = None
+                if at_cap:
+                    self.add_btn.disabled = True
+                if count <= 1:
+                    self.delete_btn.disabled = True
+                if count == 0:
+                    self.edit_btn.disabled        = True
+                    self.set_default_btn.disabled = True
+                    self.done_btn.disabled        = True
+
+            @discord.ui.button(label="➕ Add", style=discord.ButtonStyle.success, row=0)
+            async def add_btn(self, inter, button):
+                self.action = "add"
+                for c in self.children: c.disabled = True
+                await inter.response.edit_message(view=self)
+                self.stop()
+
+            @discord.ui.button(label="✏️ Edit", style=discord.ButtonStyle.primary, row=0)
+            async def edit_btn(self, inter, button):
+                self.action = "edit"
+                for c in self.children: c.disabled = True
+                await inter.response.edit_message(view=self)
+                self.stop()
+
+            @discord.ui.button(label="⭐ Set Default", style=discord.ButtonStyle.secondary, row=0)
+            async def set_default_btn(self, inter, button):
+                self.action = "default"
+                for c in self.children: c.disabled = True
+                await inter.response.edit_message(view=self)
+                self.stop()
+
+            @discord.ui.button(label="🗑️ Delete", style=discord.ButtonStyle.danger, row=1)
+            async def delete_btn(self, inter, button):
+                self.action = "delete"
+                for c in self.children: c.disabled = True
+                await inter.response.edit_message(view=self)
+                self.stop()
+
+            @discord.ui.button(label="✅ Done", style=discord.ButtonStyle.success, row=1)
+            async def done_btn(self, inter, button):
+                self.action = "done"
+                for c in self.children: c.disabled = True
+                await inter.response.edit_message(view=self)
+                self.stop()
+
+        list_view = TemplateListView(
+            count=len(templates),
+            at_cap=cap is not None and len(templates) >= cap,
+        )
+        await channel.send(embed=embed, view=list_view)
+        await list_view.wait()
+
+        if list_view.action is None:
+            await channel.send("⏰ Timed out. Run `/setup_train` to start again.")
+            return None, None
+
+        if list_view.action == "done":
+            return templates, default_name
+
+        # ── Pick which template (for edit/default/delete) ─────────────────────
+        picked_idx = None
+        if list_view.action in ("edit", "default", "delete"):
+            class PickView(discord.ui.View):
+                def __init__(self):
+                    super().__init__(timeout=WIZARD_TIMEOUT)
+                    self.idx = None
+                    options = [
+                        discord.SelectOption(label=t["name"][:100], value=str(i))
+                        for i, t in enumerate(templates)
+                    ]
+                    sel = discord.ui.Select(placeholder="Pick a template…", options=options)
+                    async def _cb(inter):
+                        self.idx = int(sel.values[0])
+                        for c in self.children: c.disabled = True
+                        await inter.response.edit_message(view=self)
+                        self.stop()
+                    sel.callback = _cb
+                    self.add_item(sel)
+
+            pick = PickView()
+            await channel.send("Which template?", view=pick)
+            await pick.wait()
+            if pick.idx is None:
+                await channel.send("⏰ Timed out. Run `/setup_train` to start again.")
+                return None, None
+            picked_idx = pick.idx
+
+        if list_view.action == "delete":
+            removed = templates.pop(picked_idx)
+            if not templates:
+                templates = [{"name": "Default", "template": ""}]
+                default_name = "Default"
+                await channel.send(
+                    f"🗑️ Removed **{removed['name']}**. (Restored an empty Default — "
+                    f"you need at least one template.)"
+                )
+            else:
+                if removed["name"] == default_name:
+                    default_name = templates[0]["name"]
+                await channel.send(f"🗑️ Removed **{removed['name']}**.")
+            continue
+
+        if list_view.action == "default":
+            default_name = templates[picked_idx]["name"]
+            await channel.send(f"⭐ Default set to **{default_name}**.")
+            continue
+
+        # ── Add or Edit: collect a name + template body ────────────────────────
+        existing_t = templates[picked_idx] if list_view.action == "edit" else None
+        is_edit    = existing_t is not None
+
+        await channel.send(
+            f"**Template name** *(short label)*"
+            + (f" — *editing* `{existing_t['name']}`" if is_edit else "")
+            + "\nReply with a name (e.g. `Birthday`, `Welcome`, `Default`)."
+            + " Reply `cancel` to abort."
+        )
+        reply = await wizard_registry.wait_or_cancel(
+            bot.wait_for("message", check=check, timeout=300),
+            cancel_event,
+        )
+        if reply is None:
+            await channel.send("⏰ Timed out. Run `/setup_train` to start again.")
+            return None, None
+        new_name = reply.content.strip()
+        if new_name.lower() == "cancel" or not new_name:
+            continue
+        new_name = new_name[:50]
+        # Reject duplicate names (except when editing the same entry).
+        for j, t in enumerate(templates):
+            if t["name"].lower() == new_name.lower() and not (is_edit and j == picked_idx):
+                await channel.send(f"⚠️ A template named **{new_name}** already exists. Try a different name.")
+                new_name = None
+                break
+        if new_name is None:
+            continue
+
+        await channel.send(
+            "**Template body**\n"
+            "Paste the full ChatGPT prompt. Use these placeholders:\n"
+            "• `{name}` — the member's name\n"
+            "• `{theme}` — the selected theme\n"
+            "• `{tone}` — the selected tone\n"
+            "• `{notes}` — any notes stored for this member\n"
+            "*Reply `cancel` to abort, `keep` to keep the current body.*"
+        )
+        reply = await wizard_registry.wait_or_cancel(
+            bot.wait_for("message", check=check, timeout=600),
+            cancel_event,
+        )
+        if reply is None:
+            await channel.send("⏰ Timed out. Run `/setup_train` to start again.")
+            return None, None
+        body_raw = reply.content.strip()
+        if body_raw.lower() == "cancel":
+            continue
+        if body_raw.lower() == "keep" and is_edit:
+            new_body = existing_t["template"]
+        else:
+            new_body = body_raw
+
+        if is_edit:
+            old_name = existing_t["name"]
+            templates[picked_idx] = {"name": new_name, "template": new_body}
+            if default_name == old_name:
+                default_name = new_name
+            await channel.send(f"✅ Updated **{new_name}**.")
+        else:
+            templates.append({"name": new_name, "template": new_body})
+            await channel.send(f"✅ Added **{new_name}** ({len(templates)} of {cap_label}).")
+
+
 # ── Define Various Setup Commands ────────────────────────────────────────────────────────────────────────
 
 class SetupCog(commands.Cog):
@@ -1650,69 +1870,26 @@ async def run_train_setup(interaction: discord.Interaction, bot):
             return
         default_tone = tone_default_view.selected
 
-        # ── Step 6: Prompt template ────────────────────────────────────────────
-        class SkipTemplateView(discord.ui.View):
-            def __init__(self):
-                super().__init__(timeout=300)
-                self.skipped = False
+        # ── Step 6: Prompt templates ───────────────────────────────────────────
+        # Free tier keeps a single "Default" template; premium can save up to
+        # `template_cap` named templates and pick which is the default.
+        template_cap     = await premium.get_limit("train_templates", guild_id, interaction=interaction)
+        existing_templates = list(current.get("templates") or [])
+        if not existing_templates:
+            existing_templates = [{"name": "Default", "template": prompt_template or ""}]
+        default_template_name = current.get("default_template") or existing_templates[0]["name"]
 
-            @discord.ui.button(label="⏭️ Skip — keep existing template", style=discord.ButtonStyle.secondary)
-            async def skip(self, inter: discord.Interaction, button: discord.ui.Button):
-                self.skipped = True
-                for item in self.children: item.disabled = True
-                await inter.response.edit_message(
-                    content="✅ Keeping existing prompt template.", view=self
-                )
-                self.stop()
-
-        skip_view = SkipTemplateView()
-        await channel.send(
-            "**Step 6 of 7 — Prompt Template**\n"
-            "Enter a template that you would write for ChatGPT to generate a blurb about the day's train. "
-            "Use these placeholders:\n"
-            "• `{name}` — the member's name\n"
-            "• `{theme}` — the selected theme\n"
-            "• `{tone}` — the selected tone\n"
-            "• `{notes}` — any notes stored for this member\n\n"
-            "**Example:**\n"
-            "```\n"
-            "You are writing a short motivational blurb for a Last War alliance announcement.\n"
-            "Keep it under 3 sentences and make it feel personal and energetic.\n\n"
-            "Member: {name}\n"
-            "Theme: {theme}\n"
-            "Tone: {tone}\n"
-            "Notes: {notes}\n\n"
-            "Write the blurb:\n"
-            "```\n"
-            "*This form will time out in 5 minutes. You can run `/setup_train` again to add your template if it times out.*",
-            view=skip_view,
+        templates, default_template_name = await _manage_train_templates(
+            bot=bot, channel=channel, check=check,
+            existing=existing_templates, default_name=default_template_name,
+            cap=template_cap, cancel_event=cancel_event,
         )
-
-        # Wait for either a typed message or the skip button
-        done = asyncio.Event()
-        new_template = None
-
-        async def wait_for_message():
-            nonlocal new_template
-            try:
-                reply = await bot.wait_for("message", check=check, timeout=300)
-                new_template = reply.content.strip()
-                done.set()
-                skip_view.stop()
-            except asyncio.TimeoutError:
-                done.set()
-
-        msg_task = asyncio.create_task(wait_for_message())
-        await skip_view.wait()
-        msg_task.cancel()
-
-        if skip_view.skipped:
-            pass  # keep existing template
-        elif new_template:
-            prompt_template = new_template
-        else:
-            await channel.send("⏰ Timed out. Run `/setup_train` to start again.")
-            return
+        if templates is None:
+            return  # timed out / cancelled
+        prompt_template = next(
+            (t["template"] for t in templates if t.get("name") == default_template_name),
+            templates[0]["template"] if templates else "",
+        )
 
     # ── Step 7: Reminders ─────────────────────────────────────────────────────
     reminder_view = YesNoView()
@@ -1771,12 +1948,18 @@ async def run_train_setup(interaction: discord.Interaction, bot):
 
     # ── Save ───────────────────────────────────────────────────────────────────
     from config import save_train_config
-    save_train_config(
-        guild_id, tab_name, themes, tones, prompt_template, default_tone,
+    save_kwargs = dict(
         blurbs_enabled=blurbs_enabled,
         reminders_enabled=reminders_enabled,
         reminder_channel_id=reminder_channel_id,
         reminder_time=reminder_time,
+    )
+    if blurbs_enabled:
+        save_kwargs["templates"]        = templates
+        save_kwargs["default_template"] = default_template_name
+    save_train_config(
+        guild_id, tab_name, themes, tones, prompt_template, default_tone,
+        **save_kwargs,
     )
 
     embed = discord.Embed(title="✅ Train Schedule Configured", color=discord.Color.green())
@@ -1790,9 +1973,17 @@ async def run_train_setup(interaction: discord.Interaction, bot):
         embed.add_field(name="Default Tone", value=default_tone,          inline=True)
         embed.add_field(name="Themes",       value=", ".join(themes),     inline=False)
         embed.add_field(name="Tones",        value=", ".join(tones),      inline=False)
+        template_count = len(templates) if 'templates' in locals() else 0
+        if template_count > 0:
+            template_names = ", ".join(t["name"] for t in templates)
+            embed.add_field(
+                name=f"Templates ({template_count})",
+                value=f"`{template_names}` — default: **{default_template_name}**",
+                inline=False,
+            )
         if prompt_template:
             preview = prompt_template[:200] + ("..." if len(prompt_template) > 200 else "")
-            embed.add_field(name="Template Preview", value=f"```{preview}```", inline=False)
+            embed.add_field(name="Default Template Preview", value=f"```{preview}```", inline=False)
     embed.set_footer(text="Run /setup_train again to update any of these settings.")
     await channel.send(embed=embed)
     wizard_registry.unregister(user.id, cancel_event)
@@ -2086,23 +2277,36 @@ async def run_survey_setup(interaction: discord.Interaction, bot):
 
                     q_key = q_label.lower().replace(" ", "_").replace("(", "").replace(")", "").replace("/", "_")
 
-                    # Type
+                    # Type — premium subscribers see three additional types.
+                    is_premium_for_q = await premium.is_premium(guild_id, interaction=interaction)
+                    type_options = [
+                        discord.SelectOption(label="Text — member types their answer", value="text"),
+                        discord.SelectOption(label="Dropdown — member selects from a list", value="dropdown"),
+                    ]
+                    if is_premium_for_q:
+                        type_options += [
+                            discord.SelectOption(label="💎 Numeric — number with min/max validation", value="numeric"),
+                            discord.SelectOption(label="💎 Multi-select — pick multiple options",     value="multi_select"),
+                            discord.SelectOption(label="💎 Date — formatted date entry",              value="date"),
+                        ]
+                    _type_pretty = {
+                        "text": "Text", "dropdown": "Dropdown",
+                        "numeric": "Numeric", "multi_select": "Multi-Select", "date": "Date",
+                    }
+
                     class TypeView(discord.ui.View):
                         def __init__(self):
                             super().__init__(timeout=120)
                             self.selected = None
                             select = discord.ui.Select(
                                 placeholder="Select answer type...",
-                                options=[
-                                    discord.SelectOption(label="Text — member types their answer", value="text"),
-                                    discord.SelectOption(label="Dropdown — member selects from a list", value="dropdown"),
-                                ],
+                                options=type_options,
                             )
                             async def _cb(inter: discord.Interaction):
                                 self.selected = select.values[0]
                                 select.disabled = True
                                 await inter.response.edit_message(
-                                    content=f"✅ Type: **{'Text' if self.selected == 'text' else 'Dropdown'}**",
+                                    content=f"✅ Type: **{_type_pretty.get(self.selected, self.selected)}**",
                                     view=self,
                                 )
                                 self.stop()
@@ -2112,12 +2316,13 @@ async def run_survey_setup(interaction: discord.Interaction, bot):
                     type_view    = TypeView()
                     existing_type = existing.get("type", "text")
                     type_extra   = f"\n*Existing type:* `{existing_type}`" if existing else ""
-                    await channel.send(
+                    type_prompt  = (
                         f"**{q_num} — Answer Type**\n"
-                        f"Does your member answer by typing or selecting from a dropdown list?"
-                        + type_extra,
-                        view=type_view,
+                        + ("Pick how members answer this question." if is_premium_for_q
+                           else "Does your member answer by typing or selecting from a dropdown list?")
+                        + type_extra
                     )
+                    await channel.send(type_prompt, view=type_view)
                     await type_view.wait()
                     if not type_view.selected:
                         await channel.send("⏰ Timed out. Run `/setup_survey` to start again.")
@@ -2145,15 +2350,15 @@ async def run_survey_setup(interaction: discord.Interaction, bot):
                         await channel.send("⏰ Timed out. Run `/setup_survey` to start again.")
                         return False
 
-                    # Dropdown options (if dropdown type)
-                    options = []
-                    if q_type == "dropdown":
+                    # Type-specific extras
+                    options       = []
+                    extra_meta    = {}    # numeric min/max, date format, etc.
+                    if q_type in ("dropdown", "multi_select"):
                         existing_opts = ", ".join(existing.get("options", [])) if existing else ""
                         opts_extra    = f"\n*Existing options:* `{existing_opts}`" if existing_opts else ""
                         await channel.send(
-                            f"**{q_num} — Dropdown Options**\n"
-                            f"Enter the options you want your members to be able to select from, "
-                            f"as comma-separated values. Maximum of 25 options.\n"
+                            f"**{q_num} — Options**\n"
+                            f"Enter the options as comma-separated values. Maximum of 25.\n"
                             f"*(e.g. `Missile, Air, Tank`)*"
                             + opts_extra
                         )
@@ -2164,6 +2369,47 @@ async def run_survey_setup(interaction: discord.Interaction, bot):
                             await channel.send("⏰ Timed out. Run `/setup_survey` to start again.")
                             return False
 
+                    if q_type == "numeric":
+                        await channel.send(
+                            f"**{q_num} — Numeric Bounds** *(💎 Premium)*\n"
+                            f"Reply with `min,max` (e.g. `0,100`), `min,` for only a minimum, "
+                            f"`,max` for only a maximum, or `none` to skip both bounds."
+                        )
+                        try:
+                            bounds_reply = await bot.wait_for("message", check=check, timeout=120)
+                        except asyncio.TimeoutError:
+                            await channel.send("⏰ Timed out. Run `/setup_survey` to start again.")
+                            return False
+                        raw = bounds_reply.content.strip().lower()
+                        if raw not in ("", "none"):
+                            try:
+                                lo_s, _, hi_s = raw.partition(",")
+                                if lo_s.strip(): extra_meta["min"] = float(lo_s.strip())
+                                if hi_s.strip(): extra_meta["max"] = float(hi_s.strip())
+                            except ValueError:
+                                await channel.send(
+                                    "⚠️ Couldn't parse bounds. Run `/setup_survey` to try again."
+                                )
+                                return False
+
+                    if q_type == "date":
+                        existing_fmt = existing.get("date_format") or "%m/%d/%Y"
+                        await channel.send(
+                            f"**{q_num} — Date Format** *(💎 Premium)*\n"
+                            f"Reply with a strptime-style format (e.g. `%m/%d/%Y`, `%Y-%m-%d`), "
+                            f"or reply `default` for `%m/%d/%Y`."
+                            + (f"\n*Existing format:* `{existing_fmt}`" if existing else "")
+                        )
+                        try:
+                            fmt_reply = await bot.wait_for("message", check=check, timeout=120)
+                        except asyncio.TimeoutError:
+                            await channel.send("⏰ Timed out. Run `/setup_survey` to start again.")
+                            return False
+                        raw_fmt = fmt_reply.content.strip()
+                        extra_meta["date_format"] = (
+                            "%m/%d/%Y" if raw_fmt.lower() in ("", "default") else raw_fmt
+                        )
+
                     new_q = {
                         "key":         q_key,
                         "label":       q_label,
@@ -2171,6 +2417,7 @@ async def run_survey_setup(interaction: discord.Interaction, bot):
                         "options":     options,
                         "placeholder": placeholder,
                         "max_chars":   0,
+                        **extra_meta,
                     }
 
                     if list_view.action == "edit":

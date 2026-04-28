@@ -195,6 +195,8 @@ def init_db():
                 themes               TEXT    DEFAULT '',
                 tones                TEXT    DEFAULT '',
                 prompt_template      TEXT    DEFAULT '',
+                templates_json       TEXT    DEFAULT '[]',
+                default_template     TEXT    DEFAULT 'Default',
                 default_tone         TEXT    DEFAULT '',
                 reminders_enabled    INTEGER DEFAULT 1,
                 reminder_channel_id  INTEGER DEFAULT 0,
@@ -225,6 +227,8 @@ def init_db():
         _seed_ogv_growth_config(conn)
 
         # guild_survey_config — per-guild survey questions and sheet settings
+        # The main table holds the "default" survey (one per guild). Premium
+        # subscribers can add extra named surveys in `guild_extra_surveys`.
         conn.execute("""
             CREATE TABLE IF NOT EXISTS guild_survey_config (
                 guild_id         INTEGER PRIMARY KEY,
@@ -232,6 +236,21 @@ def init_db():
                 tab_history      TEXT    DEFAULT 'Survey History',
                 questions        TEXT    DEFAULT '',
                 intro_message    TEXT    DEFAULT ''
+            )
+        """)
+        # guild_extra_surveys — additional named surveys (Premium feature)
+        conn.execute("""
+            CREATE TABLE IF NOT EXISTS guild_extra_surveys (
+                guild_id              INTEGER NOT NULL,
+                survey_id             TEXT    NOT NULL,
+                survey_name           TEXT    NOT NULL,
+                tab_squad_powers      TEXT    DEFAULT 'Squad Powers',
+                tab_history           TEXT    DEFAULT 'Survey History',
+                questions             TEXT    DEFAULT '',
+                intro_message         TEXT    DEFAULT '',
+                survey_channel_id     INTEGER DEFAULT 0,
+                notify_channel_id     INTEGER DEFAULT 0,
+                PRIMARY KEY (guild_id, survey_id)
             )
         """)
         conn.commit()
@@ -279,13 +298,17 @@ def init_db():
         """)
         conn.commit()
 
-        # guild_storm_config — per-guild DS/CS mail templates and time options
+        # guild_storm_config — per-guild DS/CS mail templates and time options.
+        # `templates_json` and `default_template` support multiple named
+        # templates per (guild, event_type) for premium subscribers.
         conn.execute("""
             CREATE TABLE IF NOT EXISTS guild_storm_config (
                 guild_id             INTEGER NOT NULL,
                 event_type           TEXT    NOT NULL,
                 tab_name             TEXT    DEFAULT 'DS Assignments',
                 mail_template        TEXT    DEFAULT '',
+                templates_json       TEXT    DEFAULT '[]',
+                default_template     TEXT    DEFAULT 'Default',
                 time_option_1_label  TEXT    DEFAULT '',
                 time_option_1_local  TEXT    DEFAULT '',
                 time_option_1_server TEXT    DEFAULT '',
@@ -324,12 +347,25 @@ def init_db():
         except Exception:
             pass
 
+        for col, definition in [
+            ("templates_json",   "TEXT DEFAULT '[]'"),
+            ("default_template", "TEXT DEFAULT 'Default'"),
+        ]:
+            try:
+                conn.execute(f"ALTER TABLE guild_storm_config ADD COLUMN {col} {definition}")
+                conn.commit()
+                print(f"[CONFIG] Added {col} to guild_storm_config")
+            except Exception:
+                pass
+
         # ── guild_train_config migrations ──────────────────────────────────────
         for col, definition in [
             ("blurbs_enabled",      "INTEGER DEFAULT 1"),
             ("reminders_enabled",   "INTEGER DEFAULT 1"),
             ("reminder_channel_id", "INTEGER DEFAULT 0"),
             ("reminder_time",       "TEXT DEFAULT '22:00'"),
+            ("templates_json",      "TEXT DEFAULT '[]'"),
+            ("default_template",    "TEXT DEFAULT 'Default'"),
         ]:
             try:
                 conn.execute(f"ALTER TABLE guild_train_config ADD COLUMN {col} {definition}")
@@ -650,6 +686,40 @@ def _seed_ogv_storm_config(conn):
     print("[CONFIG] Seeded OGV storm config")
 
 
+def _normalize_storm_templates(d: dict, event_type: str) -> dict:
+    """
+    Lift a guild's storm-template list into the canonical shape:
+      d["templates"] = list[{"name", "template"}], with at least one entry.
+      d["default_template"] names which entry is the default for drafting.
+
+    Migration: when templates_json is empty/null but the legacy
+    `mail_template` column has content, treat it as the "Default" entry.
+    """
+    import json
+    raw = d.get("templates_json") or "[]"
+    try:
+        parsed = json.loads(raw)
+    except (json.JSONDecodeError, TypeError):
+        parsed = []
+    if not isinstance(parsed, list):
+        parsed = []
+    if not parsed:
+        legacy = (d.get("mail_template") or "").strip()
+        if legacy:
+            parsed = [{"name": "Default", "template": legacy}]
+    if not parsed:
+        parsed = [{
+            "name": "Default",
+            "template": GENERIC_DS_TEMPLATE if event_type == "DS" else GENERIC_CS_TEMPLATE,
+        }]
+    d["templates"] = parsed
+    known_names = {t.get("name") for t in parsed}
+    if not d.get("default_template") or d["default_template"] not in known_names:
+        d["default_template"] = parsed[0]["name"]
+    d["mail_template"] = parsed[0].get("template", "")  # back-compat
+    return d
+
+
 def get_storm_config(guild_id: int, event_type: str) -> dict:
     """Return storm config for a guild and event type (DS or CS)."""
     with _get_conn() as conn:
@@ -658,12 +728,14 @@ def get_storm_config(guild_id: int, event_type: str) -> dict:
             (guild_id, event_type)
         ).fetchone()
     if row:
-        return dict(row)
-    return {
+        return _normalize_storm_templates(dict(row), event_type)
+    fallback = {
         "guild_id":             guild_id,
         "event_type":           event_type,
         "tab_name":             "DS Assignments",
         "mail_template":        GENERIC_DS_TEMPLATE if event_type == "DS" else GENERIC_CS_TEMPLATE,
+        "templates_json":       "",
+        "default_template":     "Default",
         "time_option_1_label":  "",
         "time_option_1_local":  "",
         "time_option_1_server": "",
@@ -672,24 +744,43 @@ def get_storm_config(guild_id: int, event_type: str) -> dict:
         "time_option_2_server": "",
         "timezone":             "America/New_York",
     }
+    return _normalize_storm_templates(fallback, event_type)
 
 
 def save_storm_config(guild_id: int, event_type: str, tab_name: str,
                       mail_template: str,
                       t1_label: str, t1_local: str, t1_server: str,
                       t2_label: str, t2_local: str, t2_server: str,
-                      timezone: str, log_channel_id: int = 0):
-    """Insert or replace a guild's storm config."""
+                      timezone: str, log_channel_id: int = 0,
+                      templates: list | None = None,
+                      default_template: str = "Default"):
+    """
+    Insert or replace a guild's storm config.
+
+    Backwards-compatible: callers may still pass `mail_template` as a single
+    string. When `templates` is None, the string is wrapped as a single
+    "Default" entry. Premium callers may pass a list of named templates.
+    """
+    import json
+    if templates is None:
+        templates = [{"name": "Default", "template": mail_template or ""}]
+    templates_json = json.dumps(templates)
+    default_text = next(
+        (t["template"] for t in templates if t.get("name") == default_template),
+        templates[0]["template"] if templates else "",
+    )
     with _get_conn() as conn:
         conn.execute(
             "INSERT INTO guild_storm_config "
-            "(guild_id, event_type, tab_name, mail_template, "
+            "(guild_id, event_type, tab_name, mail_template, templates_json, default_template, "
             "time_option_1_label, time_option_1_local, time_option_1_server, "
             "time_option_2_label, time_option_2_local, time_option_2_server, "
             "timezone, log_channel_id) "
-            "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?) "
+            "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?) "
             "ON CONFLICT(guild_id, event_type) DO UPDATE SET "
             "tab_name=excluded.tab_name, mail_template=excluded.mail_template, "
+            "templates_json=excluded.templates_json, "
+            "default_template=excluded.default_template, "
             "time_option_1_label=excluded.time_option_1_label, "
             "time_option_1_local=excluded.time_option_1_local, "
             "time_option_1_server=excluded.time_option_1_server, "
@@ -698,11 +789,28 @@ def save_storm_config(guild_id: int, event_type: str, tab_name: str,
             "time_option_2_server=excluded.time_option_2_server, "
             "timezone=excluded.timezone, "
             "log_channel_id=excluded.log_channel_id",
-            (guild_id, event_type, tab_name, mail_template,
+            (guild_id, event_type, tab_name, default_text, templates_json, default_template,
              t1_label, t1_local, t1_server, t2_label, t2_local, t2_server,
              timezone, log_channel_id)
         )
         conn.commit()
+
+
+def get_storm_template(guild_id: int, event_type: str, template_name: str | None = None) -> str:
+    """Return a named storm mail template's body. Falls back to default."""
+    cfg = get_storm_config(guild_id, event_type)
+    target = template_name or cfg.get("default_template") or "Default"
+    for t in cfg.get("templates", []):
+        if t.get("name") == target:
+            return t.get("template", "")
+    templates = cfg.get("templates") or []
+    return templates[0]["template"] if templates else (cfg.get("mail_template") or "")
+
+
+def get_storm_template_names(guild_id: int, event_type: str) -> list[str]:
+    """List of saved template names for a guild's storm config."""
+    cfg = get_storm_config(guild_id, event_type)
+    return [t.get("name", "") for t in (cfg.get("templates") or []) if t.get("name")]
 
 
 # ── Storm event fixed Server Time constants ────────────────────────────────────
@@ -898,7 +1006,7 @@ def get_survey_config(guild_id: int) -> dict:
 
 def save_survey_config(guild_id: int, tab_squad_powers: str, tab_history: str,
                        questions: list, intro_message: str):
-    """Insert or replace a guild's survey config."""
+    """Insert or replace a guild's default survey config."""
     import json
     with _get_conn() as conn:
         conn.execute(
@@ -910,6 +1018,127 @@ def save_survey_config(guild_id: int, tab_squad_powers: str, tab_history: str,
             (guild_id, tab_squad_powers, tab_history, json.dumps(questions), intro_message)
         )
         conn.commit()
+
+
+# ── Multi-survey helpers (Premium) ─────────────────────────────────────────────
+#
+# The "default" survey lives in guild_survey_config (single row per guild).
+# Additional named surveys live in guild_extra_surveys, keyed by survey_id.
+# Premium subscribers may use up to LIMITS["surveys"] (TBD when wizard lands).
+
+def list_surveys(guild_id: int) -> list[dict]:
+    """
+    Return all surveys configured for a guild as a list of dicts. The first
+    entry is always the default survey from guild_survey_config (id="default",
+    name="Default"); the rest come from guild_extra_surveys.
+    """
+    surveys: list[dict] = []
+    default_cfg = get_survey_config(guild_id)
+    surveys.append({
+        "survey_id":         "default",
+        "survey_name":       "Default",
+        "tab_squad_powers":  default_cfg.get("tab_squad_powers", "Squad Powers"),
+        "tab_history":       default_cfg.get("tab_history", "Survey History"),
+        "questions":         default_cfg.get("questions", []),
+        "intro_message":     default_cfg.get("intro_message", ""),
+        "survey_channel_id": 0,   # default uses guild-level channel
+        "notify_channel_id": 0,
+    })
+    import json
+    with _get_conn() as conn:
+        rows = conn.execute(
+            "SELECT * FROM guild_extra_surveys WHERE guild_id = ? ORDER BY survey_name",
+            (guild_id,),
+        ).fetchall()
+    for row in rows:
+        d = dict(row)
+        try:
+            d["questions"] = json.loads(d["questions"]) if d["questions"] else []
+        except (json.JSONDecodeError, TypeError):
+            d["questions"] = []
+        surveys.append(d)
+    return surveys
+
+
+def get_survey(guild_id: int, survey_id: str = "default") -> dict | None:
+    """
+    Fetch a specific survey by id. `survey_id="default"` returns the main
+    survey from guild_survey_config (always present). Other ids look up
+    guild_extra_surveys; returns None if not found.
+    """
+    if survey_id == "default":
+        cfg = get_survey_config(guild_id)
+        return {
+            "survey_id":         "default",
+            "survey_name":       "Default",
+            "tab_squad_powers":  cfg.get("tab_squad_powers", "Squad Powers"),
+            "tab_history":       cfg.get("tab_history", "Survey History"),
+            "questions":         cfg.get("questions", []),
+            "intro_message":     cfg.get("intro_message", ""),
+            "survey_channel_id": 0,
+            "notify_channel_id": 0,
+        }
+    import json
+    with _get_conn() as conn:
+        row = conn.execute(
+            "SELECT * FROM guild_extra_surveys WHERE guild_id = ? AND survey_id = ?",
+            (guild_id, survey_id),
+        ).fetchone()
+    if not row:
+        return None
+    d = dict(row)
+    try:
+        d["questions"] = json.loads(d["questions"]) if d["questions"] else []
+    except (json.JSONDecodeError, TypeError):
+        d["questions"] = []
+    return d
+
+
+def save_extra_survey(
+    guild_id: int, survey_id: str, *,
+    survey_name: str,
+    tab_squad_powers: str = "Squad Powers",
+    tab_history: str       = "Survey History",
+    questions: list        = None,
+    intro_message: str     = "",
+    survey_channel_id: int = 0,
+    notify_channel_id: int = 0,
+):
+    """Insert or replace a non-default named survey for a guild."""
+    import json
+    if questions is None:
+        questions = []
+    with _get_conn() as conn:
+        conn.execute(
+            "INSERT INTO guild_extra_surveys "
+            "(guild_id, survey_id, survey_name, tab_squad_powers, tab_history, "
+            " questions, intro_message, survey_channel_id, notify_channel_id) "
+            "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?) "
+            "ON CONFLICT(guild_id, survey_id) DO UPDATE SET "
+            " survey_name=excluded.survey_name, "
+            " tab_squad_powers=excluded.tab_squad_powers, "
+            " tab_history=excluded.tab_history, "
+            " questions=excluded.questions, "
+            " intro_message=excluded.intro_message, "
+            " survey_channel_id=excluded.survey_channel_id, "
+            " notify_channel_id=excluded.notify_channel_id",
+            (guild_id, survey_id, survey_name, tab_squad_powers, tab_history,
+             json.dumps(questions), intro_message, survey_channel_id, notify_channel_id),
+        )
+        conn.commit()
+
+
+def delete_extra_survey(guild_id: int, survey_id: str) -> bool:
+    """Remove a non-default named survey. Returns True if a row was removed."""
+    if survey_id == "default":
+        return False  # the default survey lives in guild_survey_config
+    with _get_conn() as conn:
+        cur = conn.execute(
+            "DELETE FROM guild_extra_surveys WHERE guild_id = ? AND survey_id = ?",
+            (guild_id, survey_id),
+        )
+        conn.commit()
+    return cur.rowcount > 0
 
 
 def _seed_ogv_birthday_config(conn):
@@ -1140,6 +1369,41 @@ def _seed_ogv_train_config(conn):
         print(f"[CONFIG] Seeded OGV train config")
 
 
+def _normalize_train_templates(d: dict) -> dict:
+    """
+    Lift a guild's train templates into the new shape:
+      d["templates"] is a list[dict{name, template}], with at least one entry.
+      d["default_template"] names which one is the default.
+
+    Migration: when templates_json is empty/null but the legacy `prompt_template`
+    column has content, treat the legacy template as the "Default" entry.
+    """
+    import json
+    raw = d.get("templates_json") or "[]"
+    try:
+        parsed = json.loads(raw)
+    except (json.JSONDecodeError, TypeError):
+        parsed = []
+    if not isinstance(parsed, list):
+        parsed = []
+    # Legacy lift: if list is empty but legacy column has content, hoist it.
+    if not parsed:
+        legacy = (d.get("prompt_template") or "").strip()
+        if legacy:
+            parsed = [{"name": "Default", "template": legacy}]
+    # Always guarantee at least one entry so downstream code can rely on it.
+    if not parsed:
+        parsed = [{"name": "Default", "template": OGV_DEFAULT_PROMPT}]
+    d["templates"] = parsed
+    # Pin default_template to a name that actually exists in the list.
+    known_names = {t.get("name") for t in parsed}
+    if not d.get("default_template") or d["default_template"] not in known_names:
+        d["default_template"] = parsed[0]["name"]
+    # Back-compat field for any caller still reading .prompt_template:
+    d["prompt_template"] = parsed[0].get("template", "")
+    return d
+
+
 def get_train_config(guild_id: int) -> dict:
     """Return the train config for a guild, falling back to OGV defaults."""
     import json
@@ -1156,42 +1420,67 @@ def get_train_config(guild_id: int) -> dict:
         except (json.JSONDecodeError, TypeError):
             d["themes"] = OGV_DEFAULT_THEMES
             d["tones"]  = OGV_DEFAULT_TONES
-        return d
-    return {
+        return _normalize_train_templates(d)
+    fallback = {
         "guild_id":            guild_id,
         "tab_name":            "Train Schedule",
         "blurbs_enabled":      1,
         "themes":              OGV_DEFAULT_THEMES,
         "tones":               OGV_DEFAULT_TONES,
         "prompt_template":     OGV_DEFAULT_PROMPT,
+        "templates_json":      "",
+        "default_template":    "Default",
         "default_tone":        "Default (match the theme)",
         "reminders_enabled":   1,
         "reminder_channel_id": 0,
         "reminder_time":       "22:00",
     }
+    return _normalize_train_templates(fallback)
 
 
 def save_train_config(guild_id: int, tab_name: str, themes: list,
                       tones: list, prompt_template: str, default_tone: str,
                       blurbs_enabled: int = 1, reminders_enabled: int = 1,
-                      reminder_channel_id: int = 0, reminder_time: str = "22:00"):
-    """Insert or replace a guild's train config."""
+                      reminder_channel_id: int = 0, reminder_time: str = "22:00",
+                      templates: list | None = None, default_template: str = "Default"):
+    """
+    Insert or replace a guild's train config.
+
+    For backwards compatibility, callers may still pass `prompt_template` (a
+    single string). When `templates` is None, that string is automatically
+    wrapped as a single-entry list named "Default". Premium callers can pass
+    `templates=[{name, template}, ...]` directly.
+    """
     import json
+    if templates is None:
+        templates = [{"name": "Default", "template": prompt_template or ""}]
+    templates_json = json.dumps(templates)
+    # Keep prompt_template column populated with the default template's text
+    # so older read paths still work during the migration window.
+    default_text = next(
+        (t["template"] for t in templates if t.get("name") == default_template),
+        templates[0]["template"] if templates else "",
+    )
     with _get_conn() as conn:
         conn.execute(
             "INSERT INTO guild_train_config "
-            "(guild_id, tab_name, blurbs_enabled, themes, tones, prompt_template, default_tone, "
-            "reminders_enabled, reminder_channel_id, reminder_time) "
-            "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?) "
+            "(guild_id, tab_name, blurbs_enabled, themes, tones, prompt_template, "
+            " templates_json, default_template, default_tone, "
+            " reminders_enabled, reminder_channel_id, reminder_time) "
+            "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?) "
             "ON CONFLICT(guild_id) DO UPDATE SET "
             "tab_name=excluded.tab_name, blurbs_enabled=excluded.blurbs_enabled, "
             "themes=excluded.themes, tones=excluded.tones, "
-            "prompt_template=excluded.prompt_template, default_tone=excluded.default_tone, "
+            "prompt_template=excluded.prompt_template, "
+            "templates_json=excluded.templates_json, "
+            "default_template=excluded.default_template, "
+            "default_tone=excluded.default_tone, "
             "reminders_enabled=excluded.reminders_enabled, "
             "reminder_channel_id=excluded.reminder_channel_id, "
             "reminder_time=excluded.reminder_time",
             (guild_id, tab_name, blurbs_enabled, json.dumps(themes), json.dumps(tones),
-             prompt_template, default_tone, reminders_enabled, reminder_channel_id, reminder_time)
+             default_text, templates_json, default_template, default_tone,
+             reminders_enabled, reminder_channel_id, reminder_time)
         )
         conn.commit()
 

@@ -1228,23 +1228,46 @@ If load fails: `⚠️ Could not load: <error>` in the template field.
 Generate a Desert Storm or Canyon Storm mail draft. **Tier:** Both.
 **Permissions:** Leadership.
 
-#### Step 1 — Pick team
-Posted to the channel:
+The whole flow is **Pick Team → Pick Time → Mail Template (Use as-is / Edit)
+→ Preview** — four steps. Editing pastes the assignment block back to the
+bot; the parsed assignments are saved as next week's default but the mail
+itself is **not** posted yet (separate confirmation message). The preview's
+primary button posts the final mail to the configured Post Channel.
+
+#### Step 1 of 4 — Pick Team
+
 > 🤖 🔥 **Desert Storm Draft** — started by @Catie
 >
+> **Step 1 of 4 — Pick Team**
 > Which team are you drafting for?
 >
 > 🔘 `[Team A]` (primary)  🔘 `[Team B]` (success)
 
-After click, the prompt message is auto-deleted.
+After click, the prompt message is auto-deleted. Ephemeral ack:
+`✅ Team A selected.`
+
 ⏰ `⏰ Timed out. Use /desertstorm_draft to start again.`
 
-#### Step 2 — Editable template
+#### Step 2 of 4 — Pick Time
 
-> 🤖 🔥 **Desert Storm Team A Draft**
+`TimeSelectView(event_type="DS"|"CS", guild_id=…)` builds buttons from the
+guild's configured `time_option_*_label`, `time_option_*_local`, and
+`time_option_*_server` values. DS and CS share the same view class — the
+labels are dynamic per-guild.
+
+> 🤖 **Step 2 of 4 — Pick Time**
+> ⏰ What time is Desert Storm this week?
 >
-> Copy the block below, make your changes, and paste it back. Anything that
-> hasn't changed can stay as-is.
+> 🔘 `[4PM EST: 16:00 (18:00)]` (secondary)
+> 🔘 `[9PM EST: 21:00 (23:00)]` (secondary)
+
+#### Step 3 of 4 — Mail Template (Use as-is / Edit)
+
+The bot loads the team's saved assignments, renders them as the template
+preview, and asks how to handle them:
+
+> 🤖 **Step 3 of 4 — Mail Template (Team A)**
+> Here is the saved template for **Team A**:
 > ```
 > ZONE ASSIGNMENTS
 > Nuclear Silo: <names>
@@ -1253,54 +1276,68 @@ After click, the prompt message is auto-deleted.
 > SUB PAIRS (Starter - Sub)
 > <starter> - <sub>
 > ```
-
-Ephemeral confirmation: `✅ Team A template posted.`
-
-#### Step 3 — Pick time
-> 🤖 ⏰ What time is Desert Storm this week?
+> Use it as-is, or edit it before posting?
 >
-> 🔘 `[4PM EST: 16:00 (18:00)]` (secondary, label dynamic from setup)
-> 🔘 `[9PM EST: 21:00 (23:00)]` (secondary)
+> 🔘 `[✅ Use as-is]` (success)  🔘 `[✏️ Edit]` (primary)
 
-#### Step 4 — Paste edits
-> 🤖 📋 @Catie — paste your edited assignments below.
-> *(10 minutes to respond — type `cancel` to stop)*
+- **Use as-is** — skip straight to Step 4 with the loaded assignments unchanged.
+- **Edit** — bot prompts:
+  > 🤖 ✏️ @Catie — copy the block above, make your edits, and paste it back below.
+  > *(10 minutes to respond — type `cancel` to stop)*
 
-User pastes the edited block. Both prompt and reply auto-delete.
-- `cancel` typed → `❌ Draft cancelled.`
-- Unparseable → `⚠️ Could not parse any zone assignments. Make sure the format matches the template and try /desertstorm_draft again.`
-- Some lines skipped → `⚠️ Some lines were skipped:` followed by `• Could not parse zone line: …`
+  User pastes the edited block. The prompt auto-deletes.
+  - `cancel` typed → `❌ Draft cancelled.`
+  - Unparseable → `⚠️ Could not parse any zone assignments. Make sure the format matches the template and try /desertstorm_draft again.`
+  - Some lines skipped → `⚠️ Some lines were skipped:` followed by `• Could not parse zone line: …`
 
-#### 💎 Premium template picker (only if >1 template saved)
+  When parsing succeeds, the bot **saves** the new assignments to the
+  sheet (so they become next week's default) and explicitly notes:
+  > 🤖 💾 **Team A template saved (not posted).** Review the preview below before sending it out.
+
+#### 💎 Premium template picker (only when >1 named template saved)
+
 > 🤖 💎 You have multiple saved templates. Pick one for this draft:
 >
 > 🔘 *single select* — `Pick a saved template…`
 
-#### Step 5 — Mail preview & approval
-> 🤖 📬 **Desert Storm Team A mail preview:**
+#### Step 4 of 4 — Preview & Post
+
+> 🤖 **Step 4 of 4 — Preview**
+> 📬 **Desert Storm Team A mail preview:**
 >
-> <full rendered mail using template>
+> <full rendered mail using the chosen template>
 >
 > Does this look right?
 >
-> 🔘 `[✅ Looks Good — Save & Copy]` (success)
-> 🔘 `[✏️ Edit & Redo]` (primary)
-> 🔘 `[❌ Cancel]` (danger)
+> 🔘 `[✅ Looks Good — Post & Copy]` (success)  🔘 `[❌ Cancel]` (danger)
 
-- **Looks Good** — saves assignments to the sheet, then posts:
-  > 🤖 ✅ **Desert Storm Team A mail — ready to copy:**
+The approval view has **two buttons**, not three — the prior "Edit & Redo"
+button is gone since editing now happens up-front in Step 3.
+
+- **Post & Copy** — posts the rendered mail to the configured Post Channel
+  from `/setup_desertstorm` Step 4, and prints a copyable code block back
+  in the leadership channel:
+  > 🤖 ✅ **Desert Storm Team A mail — ready to copy (also posted to <#…>):**
   > ```
   > <full mail>
   > ```
-- **Edit & Redo** — re-posts the editable template and loops back to Step 3.
-- **Cancel** — disables buttons and ephemerally `❌ Draft cancelled.`
+  When no Post Channel is configured (legacy guild), the channel-post step
+  is skipped and only the copyable block appears.
+- **Cancel** — disables buttons and ephemerally: `❌ Draft cancelled.`
 
-**CS:** Identical with `🔥` replaced by `⚡`, "Desert Storm" replaced by "Canyon
-Storm", template parser uses STAGE 1 / STAGE 2 / STAGE 3 sections instead of
-ZONE ASSIGNMENTS / SUB PAIRS, and the **CSTimeSelectView** has hardcoded time
-buttons (`10AM EST / 12:00 Server` and `9PM EST / 23:00 Server`) — a small
-inconsistency vs. DS, which uses the configured TimeSelectView. The CS approval
-view has the same three buttons.
+**CS:** Identical flow. Differences are limited to:
+- 🔥 replaced by ⚡; "Desert Storm" labels become "Canyon Storm"
+- Template parser handles `STAGE 1 / STAGE 2 / STAGE 3` sections instead of
+  `ZONE ASSIGNMENTS / SUB PAIRS`
+- Time buttons are built from CS time-option config (default Server Times
+  are 12:00 and 23:00 instead of DS's 18:00 and 23:00)
+
+Both events share the parametrised `TimeSelectView` (the legacy
+`CSTimeSelectView` with hardcoded 10AM / 9PM EST buttons is gone), and
+both approval flows use the same two-button shape (Post & Copy /
+Cancel). `StormApprovalView` and `CSApprovalView` are still distinct
+classes — kept separate for historical reasons — but functionally
+identical.
 
 ---
 

@@ -36,6 +36,10 @@ Alliance Helper is **free to use at the base level** for every alliance — ever
 | Survey questions | **5 per survey** | Unlimited |
 | Survey question types | Text, Dropdown | + Numeric (with min/max), Multi-select, Date |
 | Surveys per server | **1** | Multiple named surveys |
+| Participation log questions | **3 per event type** | Unlimited |
+| Participation log question types | Text, Yes/No, Numeric, Roster names | + Single-select, Multi-select, Date |
+| Survey reminder destination | Channel post | Channel post **and** DM-via-roster |
+| Scheduled survey reminders | ✅ Daily / Weekly via channel post | ✅ Daily / Weekly via channel post **or** DM-via-roster |
 | Train themes / tones | **3 each** | Unlimited |
 | Tracked growth metrics | **5** | Unlimited |
 | Growth snapshot frequency | Monthly | Monthly **or** custom interval (every N days) |
@@ -52,7 +56,7 @@ Alliance Helper is **free to use at the base level** for every alliance — ever
 | **Birthday DMs** | DM each member a personal happy-birthday note when their day fires |
 | **Train assignment DMs** | DM the assigned member when their train day starts |
 | **Auto-mention in train reminders** | Replace plain names with `<@id>` Discord mentions in the daily reminder |
-| **`/survey_remind`** | DM every roster member a "fill out the survey" reminder |
+| **DM-via-roster for `/survey_remind`** | Send the reminder as a DM to every roster member (free tier posts to a channel instead) |
 | **`/desertstorm_remind`** / **`/canyonstorm_remind`** | DM every roster member a participation reminder before each storm |
 
 **How to subscribe**
@@ -198,9 +202,13 @@ Run `/setup_desertstorm` to configure Desert Storm. The wizard walks through:
 
 1. **Sheet tab** — the bot manages the data structure here automatically, no formatting needed
 2. **Teams** — whether you run Team A & B, Team A only, or Team B only
-3. **Log channel** — where participation logs are posted after each event
+3. **Log channel** — where participation log summaries are posted after each event
 4. **Post channel** — where the finished mail is posted when leadership clicks **Post & Copy** at the end of `/desertstorm_draft`
 5. **Mail template** — if you run both teams, choose one template for both or separate templates per team. A default template is provided — use it as-is or paste your own
+6. **Participation tracking** *(optional)* — if you want to log who showed up / sat out / etc each event, opt in here and define the questions yourself. Sub-steps:
+   - Tab to write rows to (default `DS Participation Log`)
+   - Roster source: which sheet tab + which column has the member name + (optional) alias column for short forms / in-game tags + which row the data starts on
+   - Questions builder: free tier supports 3 questions across `Text`, `Yes/No`, `Numeric`, and `Roster names` types. 💎 Premium unlocks unlimited questions plus `Single-select`, `Multi-select`, and `Date` types.
 
 **Available placeholders in your template:**
 - `{alliance_name}` — your alliance name
@@ -212,7 +220,7 @@ Run `/setup_desertstorm` to configure Desert Storm. The wizard walks through:
 - Use `/desertstorm` to view current rosters and the configured mail template
 - Use `/desertstorm_draft` to generate a mail draft. The flow is **Pick Team → Pick Time → Mail Template (Use as-is or Edit) → Preview**. Editing pastes the assignment block back to the bot; the parsed assignments are saved as next week's default but the mail itself is **not** posted yet
 - At the preview step, click **✅ Looks Good — Post & Copy** to post the mail to your configured post channel and get a copyable code block back in leadership
-- After the event, use `/desertstorm_participation` to record participation data
+- After the event, use `/desertstorm_participation` to walk through your configured participation questions. The flow always asks for the date first, then steps through each question you defined in setup. The summary auto-posts to your log channel.
 - Use `/desertstorm_log [date]` to look up past log entries
 
 ---
@@ -221,14 +229,14 @@ Run `/setup_desertstorm` to configure Desert Storm. The wizard walks through:
 
 **What to create in your sheet:** A tab for Canyon Storm assignments (e.g. `CS Assignments`).
 
-Run `/setup_canyonstorm` — the setup is identical to Desert Storm above (5 steps including a Post Channel).
+Run `/setup_canyonstorm` — the setup is identical to Desert Storm above (6 steps including Post Channel and optional participation tracking).
 
 Canyon Storm runs at 12:00 and 23:00 Server Time (displayed in your timezone).
 
 **Day-to-day use:**
 - `/canyonstorm` — view current rosters and the configured mail template
 - `/canyonstorm_draft` — generate a Canyon Storm mail draft (Team → Time → Template → Preview, then Post & Copy)
-- `/canyonstorm_participation` — log participation after the event
+- `/canyonstorm_participation` — walk through the configured participation questions for this week
 - `/canyonstorm_log [date]` — look up past log entries
 
 ---
@@ -259,7 +267,7 @@ The question builder supports two question types on the free tier:
 - Members click **📋 Answer**, complete the survey in a private thread (named after the survey), and their data is saved automatically
 - Leadership sees a notification embed in the notification channel for each submission
 - Use `/survey` to see the configured survey — automatically switches to a list view when Premium has multiple
-- 💎 Use `/survey_remind` to DM every roster member a reminder. Premium guilds pick which survey to remind for; the per-survey reminder body is customisable.
+- Use `/survey_remind` to **send a reminder now** or **manage scheduled reminders**. The wizard walks you through picking which survey, picking the destination (channel post for free, DM-via-roster for 💎 Premium), and writing the message. Scheduled reminders fire automatically on a daily or weekly cadence in your guild's timezone.
 
 ---
 

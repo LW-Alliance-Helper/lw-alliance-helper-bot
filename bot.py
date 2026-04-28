@@ -477,11 +477,13 @@ async def help_slash(interaction: discord.Interaction):
         name="⚔️ Desert Storm",
         value=(
             "Generate weekly Desert Storm team mail drafts and log participation each event. "
-            "Drafts are previewed in your leadership channel and (optionally) posted to a public storm channel for the team.\n"
-            "`/setup_desertstorm` — Configure teams, sheet tab, log channel, post channel, and mail templates\n"
+            "Setup Step 6 lets you turn on participation tracking and define exactly what you want to log — "
+            "vote count, sit-outs, custom questions — using free types (text, yes/no, numeric, roster names) "
+            "or 💎 Premium types (single-select, multi-select, date).\n"
+            "`/setup_desertstorm` — Configure teams, log channel, post channel, mail template, participation\n"
             "`/desertstorm` — Show current rosters and the active mail template\n"
             "`/desertstorm_draft` — Walk through team → time → template, then preview & post the mail\n"
-            "`/desertstorm_participation` — Log who voted, sat out, etc. for this week's storm\n"
+            "`/desertstorm_participation` — Run the configurable participation log for this week\n"
             "`/desertstorm_log [date]` — View a Desert Storm log entry (free: 4 most recent / premium: all)\n"
             "`/desertstorm_remind` — 💎 DM every roster member to participate in this week's DS"
         ),
@@ -492,11 +494,12 @@ async def help_slash(interaction: discord.Interaction):
         name="🏜️ Canyon Storm",
         value=(
             "Generate weekly Canyon Storm team mail drafts and log participation each event. "
-            "Same flow as Desert Storm — preview in leadership, optionally post to a public channel for the team.\n"
-            "`/setup_canyonstorm` — Configure teams, sheet tab, log channel, post channel, and mail templates\n"
+            "Same flow as Desert Storm — preview in leadership, post to a public channel, plus configurable "
+            "participation tracking on Setup Step 6.\n"
+            "`/setup_canyonstorm` — Configure teams, log channel, post channel, mail template, participation\n"
             "`/canyonstorm` — Show current rosters and the active mail template\n"
             "`/canyonstorm_draft` — Walk through team → time → template, then preview & post the mail\n"
-            "`/canyonstorm_participation` — Log who participated and who sat out for this week's storm\n"
+            "`/canyonstorm_participation` — Run the configurable participation log for this week\n"
             "`/canyonstorm_log [date]` — View a Canyon Storm log entry (free: 4 most recent / premium: all)\n"
             "`/canyonstorm_remind` — 💎 DM every roster member to participate in this week's CS"
         ),
@@ -513,7 +516,8 @@ async def help_slash(interaction: discord.Interaction):
             "`/remove_survey` — 💎 Remove an extra named survey\n"
             "`/survey` — Show configured survey(s) — switches to a list view when multiple are configured\n"
             "`/survey_post` — Post (or repost) the answer button (Premium picks which survey)\n"
-            "`/survey_remind` — 💎 DM every roster member a reminder to fill out the survey"
+            "`/survey_remind` — Send now or set up scheduled reminders. Free tier posts to a channel; "
+            "💎 Premium adds DM-via-roster delivery."
         ),
         inline=False,
     )
@@ -537,12 +541,12 @@ async def help_slash(interaction: discord.Interaction):
             "`/sync_members` — Manually re-sync the member roster now\n"
             "`/setup_survey_extra` — Add another named survey (Premium can configure multiple)\n"
             "`/remove_survey` — Remove an extra named survey\n"
-            "`/survey_remind` — DM every roster member a reminder to fill out the survey\n"
+            "`/survey_remind` — Send DM reminders via Member Roster, or schedule recurring DM reminders per survey\n"
             "`/desertstorm_remind` — DM every roster member about this week's DS\n"
             "`/canyonstorm_remind` — DM every roster member about this week's CS\n"
             "*Plus: personal birthday DMs, train-assignment DMs, auto-mention members in train reminders, "
-            "use threads as destinations, multi-template train and storm support, advanced survey question "
-            "types (numeric/multi-select/date), and more.*"
+            "use threads as destinations, multi-template train and storm support, advanced survey/participation "
+            "question types (single-select, multi-select, date), and more.*"
         ),
         inline=False,
     )

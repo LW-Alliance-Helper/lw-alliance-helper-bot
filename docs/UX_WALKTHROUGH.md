@@ -26,9 +26,53 @@ the public `📋 Answer` survey button are gated by three guards in this order:
 If any of these fails, the command responds ephemerally with a respective
 guard message (e.g. `⛔ This command can only be used in the leadership channel.`).
 
-`/setup`, `/setup_*`, `/setup_reset`, `/sync_members`, `/setup_members`, and
-`/view_configuration` instead require the **server administrator** permission
-(not the leadership role).
+`/setup`, `/setup_reset`, and `/view_configuration` require the **server
+administrator** permission (server owner not required). Per-feature
+`/setup_*`, `/sync_members`, and `/setup_members` accept either the
+**leadership role** or **server administrator** so non-owner leadership can
+configure features without elevation.
+
+---
+
+## What changed since the last review
+
+Use this as a jump list when re-reviewing — these flows are materially
+different from the prior pass.
+
+- **DS / CS draft flow** rewritten to **Pick Team → Pick Time → Mail Template
+  (Use as-is / Edit) → Preview**. The preview's primary button is now
+  **✅ Looks Good — Post & Copy**, which posts to a configured public storm
+  channel and prints a copyable code block in leadership.
+- **DS / CS setup** gained **Step 4 — Mail Post Channel** (between log
+  channel and template) and **Step 6 — Participation Tracking**. Step 6
+  is opt-in: leadership defines what they want to log (free types: text,
+  yes/no, numeric, roster names; 💎 Premium types: single-select,
+  multi-select, date), and the `/[event]_participation` flow walks through
+  those questions with a fixed always-first date prompt.
+- **`/[event]_participation`** is no longer the OGV-specific Vote Count /
+  RTF / Sitting Out walkthrough. The questions and roster source are
+  fully configurable per alliance — see Section 5.4.
+- **Multi-survey support**: `/setup_survey_extra` adds a named survey,
+  `/remove_survey` deletes one, and `/survey` switches to a list view when
+  more than one is configured. `/survey_post` and `/survey_remind` ask
+  which survey when premium has multiple.
+- **`/survey_remind`** is now a wizard hub: leadership picks **Send now**
+  or **Manage scheduled reminders**. Free tier delivers via channel post;
+  💎 Premium adds DM-via-Member-Roster. Scheduled reminders fire daily or
+  weekly in the guild's timezone.
+- **Survey numeric / date questions** re-prompt up to 5× on bad input
+  instead of cancelling the whole survey.
+- **Time-parse retry** wraps `/setup_events` Step 3, the per-event time
+  prompt, `/setup_train` reminder time, and `/setup_birthdays` reminder
+  time — 3 attempts with the same prompt before the wizard bails.
+- **Survey thread name** uses the configured survey title (slugified)
+  instead of the OGV-specific `survey-squad-powers-<user>` shape.
+- **`/help`** has dedicated subsections for Survey, Desert Storm, Canyon
+  Storm, Premium Features, and Utilities (previously Survey/DS/CS only).
+- **Permission gate** on the per-feature `/setup_*` commands accepts
+  leadership-or-admin (was admin-only).
+- **Glacieradon** and **Blimp** removed from the default event library
+  (OGV-specific names — alliances add them as custom events if wanted).
 
 ---
 
@@ -64,10 +108,12 @@ guard message (e.g. `⛔ This command can only be used in the leadership channel
   - [`/desertstorm_remind` & `/canyonstorm_remind` 💎](#desertstorm_remind--canyonstorm_remind)
 - [6. Survey](#6-survey)
   - [`/setup_survey`](#setup_survey)
+  - [`/setup_survey_extra` 💎](#setup_survey_extra-)
+  - [`/remove_survey` 💎](#remove_survey-)
   - [`/survey`](#survey)
   - [`/survey_post`](#survey_post)
   - [Survey thread flow (member-facing)](#survey-thread-flow-member-facing)
-  - [`/survey_remind` 💎](#survey_remind)
+  - [`/survey_remind`](#survey_remind)
 - [7. Growth Tracking](#7-growth-tracking)
   - [`/setup_growth`](#setup_growth)
   - [`/growth`](#growth)
@@ -1023,78 +1069,87 @@ called out only where they differ.
 
 ### `/setup_desertstorm` & `/setup_canyonstorm`
 
-Configure DS/CS sheet tab, teams, log channel, and mail templates.
-**Tier:** Both. **Permissions:** Admin only.
+Configure DS/CS sheet tab, teams, log channel, post channel, mail templates,
+and (optional) participation tracking. **Tier:** Both. **Permissions:**
+leadership-or-admin.
 
 > 🤖 ⚙️ **Desert Storm Setup**
 
-#### Step 1 of 4 — Sheet Tab
-Keep-or-change, default `DS Assignments` (or `CS Assignments`):
-> 🤖 **Step 1 of 4 — Sheet Tab**
-> Which tab in your Google Sheet stores the Desert Storm zone assignments?
-> ⚠️ *Make sure this tab exists in your sheet before continuing.*
-> ℹ️ *The bot will manage the data structure of this tab automatically — you
-> don't need to set up any specific columns or formatting beforehand.*
+#### Step 1 of 6 — Sheet Tab
+Keep-or-change, default `DS Assignments` (or `CS Assignments`).
 
-#### Step 2 of 4 — Which teams?
-> 🤖 **Step 2 of 4 — Which teams do you run for Desert Storm?**
+#### Step 2 of 6 — Which teams?
+Buttons: `[Team A & Team B]` / `[Team A only]` / `[Team B only]`.
+
+#### Step 3 of 6 — Storm Log Channel
+Channel select (default suggestion `storm-log`, threads on premium). Used by
+`/[event]_log` lookups and mirrored as the destination for participation log
+summaries when Step 6 is enabled.
+
+#### Step 4 of 6 — Mail Post Channel
+Channel select (default suggestion `desert-storm` / `canyon-storm`). When
+leadership clicks **Post & Copy** at the end of `/[event]_draft`, the
+finished mail is posted to this channel — see Section 5.3.
+
+#### Step 5 of 6 — Mail Template
+Identical to the previous "Mail Template" step:
+
+If both teams chosen, first ask one-template-vs-separate; then for each
+template show the default with a `[✅ Use default template]` / `[✏️ Edit
+template]` choice. Edit pastes a long message; the bot stores it.
+
+Available placeholders: `{alliance_name}`, `{zones}`, `{subs}`, `{time}`.
+
+#### Step 6 of 6 — Participation Tracking *(optional)*
+
+> 🤖 **Step 6 of 6 — Participation Tracking**
+> Do you want to track Desert Storm participation? Leadership runs
+> `/desertstorm_participation` after each event to log who showed up,
+> who sat out, etc.
 >
-> 🔘 `[Team A & Team B]` (primary)
-> 🔘 `[Team A only]` (secondary)
-> 🔘 `[Team B only]` (secondary)
-
-On select: `✅ Teams: **Team A & Team B**` (or A only / B only).
-
-#### Step 3 of 4 — Storm Log Channel
-Channel select (default suggestion `storm-log`, threads on premium).
-
-#### Step 4 of 4 — Mail Template
-
-If both teams chosen, first ask:
-> 🤖 **Step 4 of 4 — Mail Template**
-> Do you want one template that applies to both teams, or separate templates per team?
+> You'll define the questions yourself, so the tracker matches how
+> your alliance runs the event.
 >
-> 🔘 `[One template for both teams]` (primary)
-> 🔘 `[Separate templates per team]` (secondary)
+> 🔘 `[Yes]` (success) / `[No]` (secondary)
 
-For each template (single OR per-team):
+If **No**: skip the rest of Step 6 and save with `participation_enabled = 0`.
 
-> 🤖 **Desert Storm Mail Template — Team A & B**
-> When you draft the mail each week, you will be able to select the time slot
-> when you are running that team's Desert Storm.
->
-> Here is the default template:
-> ```
-> <GENERIC_DS_TEMPLATE — uses {alliance_name}, {zones}, {subs}, {time}>
-> ```
-> Would you like to use this or edit it?
->
-> 🔘 `[✅ Use default template]` (success) — `✅ Using default template for Team A & B.`
-> 🔘 `[✏️ Edit template]` (secondary)
+If **Yes**, walk five sub-steps:
 
-If **Edit**:
-> 🤖 Paste your custom template for **Team A & B**. You can copy the default
-> above and modify it, or write your own.
->
-> **Available placeholders:**
-> - `{alliance_name}` — your alliance name
-> - `{zones}` — zone assignments block
-> - `{subs}` — substitute members
-> - `{time}` — event time (auto-filled when drafting)
->
-> *This form will time out in 5 minutes. You can run /setup_desertstorm again if it times out.*
-
-User pastes a long message; the bot stores it.
+- **6.1 Sheet tab** — keep-or-change, default `DS Participation Log` /
+  `CS Participation Log`. Each row written gets the date plus one cell per
+  configured question.
+- **6.2 Roster source: tab** — keep-or-change. The smart default is the
+  survey's stats tab if `/setup_survey` was already run, then the birthday
+  tab, then a typed value. The roster is read here when a question's type
+  is `Roster names`.
+- **6.3 Roster source: name column** — keep-or-change, column letter
+  (e.g. `A`, `B`, `E`).
+- **6.4 Optional alias column?** — Yes/No. If yes: column letter. Used by
+  the legacy NameEntryView modal so leadership can type short forms /
+  in-game tags and have them resolved to the full sheet name.
+- **6.5 First data row** — keep-or-change, integer. Usually `2` (after a
+  header).
+- **6.6 Questions builder** — Add / Edit / Remove loop with up to **3**
+  questions free, unlimited 💎 Premium. Per-question prompts: label, then
+  type:
+  - **Free:** `Text`, `Yes/No`, `Numeric` (with optional `min,max`),
+    `Roster names`.
+  - **💎 Premium:** `Single-select` (custom options list), `Multi-select`
+    (custom options list), `Date` (custom strptime format).
+  - When the cap is hit on free, the cap-reached embed surfaces with the
+    `/upgrade` view.
 
 #### Final summary
 
 > 🤖 **Embed: ✅ Desert Storm Configured** (green)
-> - Sheet Tab / Teams / Timezone / Log Channel
+> - Sheet Tab / Teams / Timezone / Log Channel / Post Channel
+> - Participation Tracking: ✅ Enabled · 3 question(s) · Tab: `DS Participation Log` (or ❌ Disabled)
 > - Template A Preview (code block, first 150 chars)
 > - Template B Preview (only if separate)
 
-**CS:** Identical, with the labels swapped to "Canyon Storm" and the default
-tab name `CS Assignments`.
+**CS:** Identical, with labels swapped to "Canyon Storm" and the default
+tab name `CS Assignments` / `CS Participation Log`.
 
 ---
 
@@ -1213,88 +1268,97 @@ If the user has an active log session: `⚠️ You already have an active log se
 
 Initial ephemeral ack: `📋 Starting DS log...` (or `CS log...`).
 
+#### Not yet enabled
+If `participation_enabled = 0` for this guild + event_type:
+
+> 🤖 ⚙️ Participation tracking isn't enabled for Desert Storm yet. Run
+> `/setup_desertstorm` and walk through Step 6 to define what you want to track.
+
+(Same shape for CS.) The flow exits cleanly without writing anything.
+
+If `participation_enabled = 1` but the questions list is empty:
+
+> 🤖 ⚙️ Participation tracking is enabled but no questions are configured.
+> Run `/setup_desertstorm` to add questions.
+
+#### Header
 > 🤖 📋 **Desert Storm Log** — started by @Catie
-> *Use `/cancel` at any time to stop.*
+> *N step(s) total. Use `/cancel` at any time to stop.*
 
-DS uses 5 steps; CS skips the DS-only steps.
+Where `N = len(configured_questions) + 1` — the +1 accounts for the always-
+required date prompt.
 
-#### Step 1 — Event date
+#### Step 1 — Event date *(always asked, never configurable)*
 > 🤖 **Step 1 — Event date**
 > Type the date (e.g. `April 14`, `4/14`) or type `today`:
 
-Reply auto-deletes. Bad date: `⚠️ Could not parse that date. Use the log command to start again.`
+Reply auto-deletes. Bad date: `⚠️ Could not parse \`<text>\` as a date. Run /desertstorm_participation to start again.`
 
-#### Step 2 (DS only) — Vote count
-> 🤖 **Step 2 — Vote count**
-> How many members voted in the participation poll? (type a number)
+#### Steps 2…N — Custom questions
 
-Bad input: `⚠️ That doesn't look like a number. Use the log command to start again.`
+Each configured question renders with `**Step <i> of N — <label>**` as the
+header. The UI varies by question type:
 
-#### Loading roster
-> 🤖 ⏳ Gathering member list...
+- **`text`** — wait_for message; reply auto-deletes. Type `skip` to leave blank.
+- **`yes_no`** — Yes/No button view. Stored as `"Yes"` or `"No"`.
+- **`numeric`** — wait_for message with optional `*(min, max)*` hint. Bad
+  input or out-of-bounds re-prompts up to **5 times** before cancelling
+  the whole log. *(Same retry shape as the survey flow.)*
+- **`roster_names`** — lazily loads the roster from the configured tab on
+  first use. Renders the legacy `NameEntryView` modal:
+  > 🤖 **Step 3 of 5 — Sitting Out**
+  > Press **Enter Names** to type who applies. Press **Skip** if none.
+  > *Roster: Pink, Mer, Lito, … (truncated to "N members loaded" past 25)*
+  >
+  > 🔘 `[✏️ Enter Names]` (primary)  🔘 `[Skip (none)]` (secondary)
 
-If it fails: `⚠️ Could not load member names. Run /setup_birthdays (or another module setup) to confirm the member tab name and try again.`
+  Clicking **Enter Names** opens a paragraph-style modal labeled
+  `Names (comma-separated or one per line)`. Unrecognized names get a
+  follow-up `Save as Visitor` / `Re-enter Names` chooser. Same modal as
+  the legacy flow — only the source of the roster has changed.
+- **`single_select`** — single-pick dropdown built from `q.options`.
+- **`multi_select`** — multi-pick dropdown built from `q.options`.
+- **`date`** — wait_for message with the `*(format: <fmt>)*` hint. Same
+  5-attempt re-prompt as `numeric`.
 
-#### Step 3 — Sitting out (DS) / Step 2 — Sitting out (CS)
-> 🤖 **Step 3 — Sitting out this week**
-> Press **Enter Names** to type who is sitting out today. Press **Skip** if none.
-> *Roster: Pink, Mer, Lito, Catie, Sunshine, …*
->
-> 🔘 `[✏️ Enter Names]` (primary)  🔘 `[Skip (none)]` (secondary)
+If `roster_names` is configured but the roster sheet is empty / unreachable:
 
-Clicking **Enter Names** opens 📋 modal `Sitting Out` with a paragraph text input
-labeled `Names (comma-separated or one per line)` (placeholder
-`e.g. Jon, Lionel, Ice — or leave blank and submit for none`, max 1000 chars).
+> 🤖 ⚠️ The configured roster tab is empty or unreachable. Run
+> `/setup_desertstorm` to update the roster source, then try again.
 
-If unrecognized names are submitted:
-> 🤖 ⚠️ **Not recognized:** Buster, NewKid
-> These names aren't in the roster. Are they visitors or did you make a typo?
->
-> 🔘 `[Save as Visitor]` (secondary)  🔘 `[Re-enter Names]` (primary)
-
-Final state of the message:
-> 🤖 **Entered (3):** Pink, Mer, Lito
-> **Visitors:** Buster, NewKid
-
-Or if Skip clicked: `*Skipped — none.*`
-
-#### Step 4 (DS only) — RTF No Vote
-Same controls. Modal title: `RTF No Vote`.
-
-> 🤖 **Step 4 — Requested to Fight but did not vote**
-> Press **Enter Names** to type who submitted RTF but did not vote. Press **Skip** if none.
-
-#### Step 5 (DS) / Step 3 (CS) — Prior sit-outs
-First a loading message:
-> 🤖 ⏳ Checking previous log...
-
-If no prior names found: `**Step 5 — Prior sit-outs**\n*(No prior sit-outs found in last log — skipping)*` (auto-deletes after 5 s).
-
-Otherwise:
-> 🤖 **Step 5 — Prior sit-outs who did not vote this week**
-> *(CS variant: "did not request to fight this week")*
-> These members sat out last time. Select any who did not participate this week. Press **Skip** if none.
->
-> 🔘 *multi-select* — `Select prior sit-outs who didn't participate`
-> 🔘 row 1: `[✅ Done]` (success)  `[Skip (none)]` (secondary)
+The flow exits and the row is *not* written.
 
 #### Save + summary
-> 🤖 💾 Saving log...
+> 🤖 💾 Saving log…
 > 🤖 ✅ **Log saved!**
 >
 > 📋 **Desert Storm Log — Saturday, April 5, 2026**
-> **Votes:** 38     *(DS only)*
-> **RTF No Vote:** Mer, Lito     *(DS only)*
-> **Sitting Out:** Pink, Buster
-> **Prior Sit-Out No Vote:** Sunshine     *(or "No Request" for CS)*
+> **<Question 1 label>:** <value or `None`>
+> **<Question 2 label>:** <value or `None`>
+> …
 
-A copy of the summary is also posted to the configured storm-log thread,
-unless the command was already invoked from that thread.
+A copy of the summary is also posted to the configured `log_channel_id`
+unless the command was already invoked from that channel.
 
 If sheet save fails: `⚠️ Error saving to sheet: <error>`
 
-⏰ Timeouts at any step: `⏰ Timed out. Use the log command to start again.`
+The participation tab's header row is created automatically the first time
+a row is written: columns are `Date | Event | <one column per configured
+question>`.
+
+⏰ Timeouts at any step: `⏰ Timed out. Run /desertstorm_participation to start again.`
 On `/cancel`: `❌ Log cancelled.`
+
+---
+
+#### Legacy data preservation
+
+`/[event]_log` reads from the new `participation_tab_name` first, then
+falls back to the legacy `tab_sitouts` (OGV's "DS-CS Sit-outs"). Pre-rework
+rows still render via the generic `Date | Event | <field labels>` shape —
+the renderer reads column headers from row 1 and lays them out in the
+embed, so even alliances that never re-ran setup keep seeing their
+existing logs.
 
 ---
 
@@ -1450,7 +1514,12 @@ On save: `✅ Added: **1st Squad Power** — 1 question(s) so far.` or
 
 ### `/survey`
 
-Show the configured questions. **Tier:** Both. **Permissions:** Leadership.
+Show configured survey(s). **Tier:** Both. **Permissions:** Leadership.
+
+#### Single-survey path *(default)*
+
+When the guild has only the default survey configured, the embed renders
+the question list and tab settings (unchanged from the prior pass):
 
 > 🤖 **Embed: 📋 Survey Configuration** (blurple)
 > **1. 1st Squad Power** *(text)*
@@ -1466,6 +1535,35 @@ Show the configured questions. **Tier:** Both. **Permissions:** Leadership.
 
 If empty: `*No survey questions configured. Run /setup_survey to add some.*`
 
+#### List-view path *(Premium with multiple surveys)*
+
+When the guild has more than one survey configured, the embed switches to
+a list of every survey:
+
+> 🤖 **Embed: 📋 Configured Surveys** (blurple)
+> **Default** *(default)* — **5** question(s) · Stats tab: `Squad Powers` · Channel: _(uses default channel)_
+> **Off-Season Powers** — **6** question(s) · Stats tab: `Off-Season` · Channel: <#…>
+>
+> Footer: *Run /setup_survey to edit the default. /setup_survey_extra to add or edit extras.*
+
+---
+
+### `/setup_survey_extra` 💎
+
+Add or edit an extra named survey. Premium-only.
+
+The wizard first shows a manage view with a select dropdown of existing
+extras (if any) and a `[➕ New survey]` button. Picking "New survey"
+prompts for a display name (auto-slugified to a `survey_id`); editing an
+existing entry routes through the same `run_survey_setup` flow used by
+the default survey.
+
+### `/remove_survey` 💎
+
+Premium-only. Lists existing extras in a select dropdown; on pick, shows
+a confirm view (`[🗑️ Remove]` / `[❌ Cancel]`). The default survey can't
+be removed via this command.
+
 ---
 
 ### `/survey_post`
@@ -1473,19 +1571,28 @@ If empty: `*No survey questions configured. Run /setup_survey to add some.*`
 Post (or repost) the persistent survey button. **Tier:** Both.
 **Permissions:** Leadership.
 
-Posts to the configured survey channel:
-> 🤖 **Let us know your Squad Powers!**
->
-> Please fill out this survey each week, if possible, to help us keep track
-> of squad powers, better balance our Desert Storm teams, track alliance
-> growth, and prepare for season events!
->
-> *Role required: @OGV*
->
-> 🔘 `[📋 Answer]` (success) — persistent (`custom_id="survey_answer_button"`)
+When Premium has multiple surveys, an ephemeral selector appears first:
 
-Ephemeral ack: `✅ Survey button posted.`
-Errors: `⚠️ Could not find the survey channel.` / `⚙️ Bot not configured. Run /setup first.`
+> 🤖 📋 You have multiple surveys configured — which one do you want to post?
+> 🔘 *single-select dropdown of all configured surveys*
+
+Then the bot posts the chosen survey's intro message + answer button to its
+configured channel:
+
+> 🤖 **<intro_message — defaults to the generic squad-powers blurb if empty>**
+>
+> 🔘 `[📋 Answer]` (success)
+
+The button's `custom_id`:
+- **Default survey:** `survey_answer_button` (legacy, registered via
+  `bot.add_view(SurveyButtonView())`)
+- **Extra surveys:** `survey_answer_button:<survey_id>`, registered via
+  `discord.ui.DynamicItem` so each extra survey's button persists
+  independently across bot restarts.
+
+Ephemeral ack: `✅ Survey button posted for **<name>** in <#channel>.`
+Errors: `⚠️ Could not find the survey channel for **<name>**.` /
+`⚙️ Bot not configured. Run /setup first.`
 
 ---
 
@@ -1575,20 +1682,81 @@ bot prints to stderr but the user sees nothing more.
 
 ### `/survey_remind`
 
-💎 DM every roster member to fill out the survey.
-**Tier:** Premium only. **Permissions:** Leadership + Member Roster Sync.
+A wizard hub for one-off and recurring survey reminders. **Tier:** Both —
+free tier delivers reminders via channel post; 💎 Premium adds DM-via-roster
+delivery (which depends on Member Roster Sync). **Permissions:** Leadership.
 
-Locked embed for non-premium:
-> 🤖 **Embed: 🔒 Survey reminder DMs is a Premium feature** (purple)
-> *Reminder DMs are part of Alliance Helper Premium and require Member Roster
-> Sync to be configured (`/setup_members`). Run `/upgrade` to unlock.*
+The command opens a top-level picker:
 
-DM body sent to each member:
-> 🤖 (DM) 📋 **Friendly reminder** — your alliance is asking you to fill out
-> the squad-powers survey this week. Open the survey channel in Discord and
-> click the **📋 Answer** button to get started. Thanks!
+> 🤖 📋 **Survey Reminders**
+> What would you like to do?
+> *Tier: 💎 Premium* (or *Tier: Free*)
+>
+> 🔘 `[📤 Send reminder now]` (success)
+> 🔘 `[⚙️ Manage scheduled reminders]` (primary)
+> 🔘 `[❌ Cancel]` (secondary)
 
-Final ack: `✅ Sent **23** reminder DMs. **2** skipped (DMs closed, missing ID, or other failures).`
+#### Send-now path
+
+If the guild has more than one survey configured (Premium), a survey
+selector appears first. Otherwise the default survey is used.
+
+Then the destination picker:
+
+> 🤖 📋 Reminder for **<survey name>** — where should it go?
+> *(Free tier sees a Premium-locked note for the DM option.)*
+>
+> 🔘 `[📢 Post to a channel]` (primary)
+> 🔘 `[📨 DM via Member Roster]` (secondary; disabled & labeled `(💎 Premium)` for free)
+
+- **Channel post**: a Discord `ChannelSelect` appears next. The bot posts
+  the survey's saved `reminder_message` (or a generic default) to that
+  channel and acks `✅ Posted reminder for **<name>** in <#channel>.`
+- **DM-via-roster**: the bot iterates Member Roster Sync rows, DMs each
+  Discord ID, and acks `✅ Sent **N** reminder DMs for **<name>**. **M** skipped (DMs closed, missing ID, or other failures).`
+  If MRS isn't configured: `⚙️ DM reminders need Member Roster Sync. Run /setup_members first.`
+
+#### Manage-scheduled path
+
+Survey selector → display current schedule (Off / Daily HH:MM / Weekly
+DOW HH:MM) and current destination + message. Then:
+
+- **Step 1 — Frequency** — buttons `[Off]` / `[Daily]` / `[Weekly]`. Choosing
+  Off saves `reminder_enabled = 0` and exits with `✅ Scheduled reminders
+  disabled for **<name>**.`
+- **Step 2 — Day of the week** *(weekly only)* — single-select dropdown
+  with `Monday`–`Sunday`.
+- **Step 3 — Time of day** — modal for HH:MM (12h or 24h). Re-prompts up
+  to 3 times on unparseable input before bailing.
+- **Step 4 — Destination** — same channel/DM picker as Send-now (DM
+  Premium-only). Channel sub-step uses a `ChannelSelect`.
+- **Step 5 — Message** — modal for the body. Empty input keeps the bot's
+  generic default. `Use default` button is also offered.
+
+Final summary:
+
+> 🤖 ✅ **<Survey name> reminders scheduled.**
+> **When:** Daily at 08:00 *(in your guild's timezone)* (or `Weekly on Friday at 21:00`)
+> **Where:** <#channel> (or `DMs to every roster member`)
+> **Message:** *custom* (or *default*)
+>
+> Run `/survey_remind` again any time to update or disable.
+
+#### Scheduler tick
+
+`SurveyCog.check_scheduled_reminders` runs once a minute. For every guild
++ survey row where `reminder_enabled = 1` and `reminder_frequency != 'off'`:
+
+1. Resolve the guild's timezone; compute `now`.
+2. Match `reminder_time` (minute granularity). For weekly schedules,
+   match `reminder_day_of_week` against `now.weekday()`.
+3. Idempotency: if `reminder_last_fired == today`, skip.
+4. Fire — channel post or DM via roster. DM-via-roster silently no-ops
+   when a guild has lapsed Premium since the schedule was created.
+5. Stamp `reminder_last_fired = today`.
+
+Logs each fire as `[SURVEY] Scheduled <channel|DM> reminder fired for
+guild=… survey=…`.
 
 ---
 

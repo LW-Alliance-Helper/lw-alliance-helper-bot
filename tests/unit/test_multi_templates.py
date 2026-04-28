@@ -309,3 +309,97 @@ class TestMultiSurvey:
         b = config.get_survey(OGV_GUILD_ID,  "shared_id")
         assert a["survey_name"] == "Guild A version"
         assert b["survey_name"] == "Guild B version"
+
+
+# ── Scheduled survey reminders ────────────────────────────────────────────────
+
+class TestScheduledSurveyReminders:
+    """Coverage for the #27 scheduled-reminder config helpers."""
+
+    def test_save_and_load_default_survey_reminder(self, seeded_db):
+        import config
+        # Default survey row needs to exist first
+        config.save_survey_config(
+            TEST_GUILD_ID, "Squad Powers", "Survey History", [], "",
+        )
+        ok = config.save_survey_reminder(
+            TEST_GUILD_ID, "default",
+            enabled=1, frequency="weekly", day_of_week=2,
+            time_str="20:00", channel_id=12345, use_dm=0,
+            message="Custom reminder body",
+        )
+        assert ok is True
+
+        s = config.get_survey(TEST_GUILD_ID, "default")
+        assert s["reminder_enabled"]     == 1
+        assert s["reminder_frequency"]   == "weekly"
+        assert s["reminder_day_of_week"] == 2
+        assert s["reminder_time"]        == "20:00"
+        assert s["reminder_channel_id"]  == 12345
+        assert s["reminder_message"]     == "Custom reminder body"
+
+    def test_save_and_load_extra_survey_reminder(self, seeded_db):
+        import config
+        config.save_extra_survey(TEST_GUILD_ID, "alpha", survey_name="Alpha")
+        ok = config.save_survey_reminder(
+            TEST_GUILD_ID, "alpha",
+            enabled=1, frequency="daily", time_str="09:00",
+            channel_id=0, use_dm=1, message="",
+        )
+        assert ok is True
+
+        s = config.get_survey(TEST_GUILD_ID, "alpha")
+        assert s["reminder_enabled"]   == 1
+        assert s["reminder_frequency"] == "daily"
+        assert s["reminder_use_dm"]    == 1
+
+    def test_list_scheduled_reminders_filters_disabled_and_off(self, seeded_db):
+        """Disabled or frequency='off' surveys do not show up in the scheduler tick list."""
+        import config
+        config.save_survey_config(
+            TEST_GUILD_ID, "Squad Powers", "Survey History", [], "",
+        )
+        # Default: enabled + weekly
+        config.save_survey_reminder(
+            TEST_GUILD_ID, "default", enabled=1, frequency="weekly",
+            day_of_week=0, time_str="08:00", channel_id=42,
+        )
+        # Extra "off" — should NOT show up
+        config.save_extra_survey(TEST_GUILD_ID, "alpha", survey_name="Alpha")
+        config.save_survey_reminder(
+            TEST_GUILD_ID, "alpha", enabled=1, frequency="off",
+        )
+        # Extra disabled — should NOT show up
+        config.save_extra_survey(TEST_GUILD_ID, "beta", survey_name="Beta")
+        config.save_survey_reminder(
+            TEST_GUILD_ID, "beta", enabled=0, frequency="daily",
+        )
+        # Extra enabled + daily — SHOULD show up
+        config.save_extra_survey(TEST_GUILD_ID, "gamma", survey_name="Gamma")
+        config.save_survey_reminder(
+            TEST_GUILD_ID, "gamma", enabled=1, frequency="daily",
+            time_str="11:00", channel_id=99,
+        )
+
+        scheduled = config.list_scheduled_survey_reminders()
+        ids = {(r["guild_id"], r["survey_id"]) for r in scheduled}
+        assert (TEST_GUILD_ID, "default") in ids
+        assert (TEST_GUILD_ID, "gamma")   in ids
+        assert (TEST_GUILD_ID, "alpha")   not in ids
+        assert (TEST_GUILD_ID, "beta")    not in ids
+
+    def test_update_last_fired_idempotency(self, seeded_db):
+        """update_survey_reminder_last_fired stamps the survey row so the
+        scheduler tick can dedupe across restarts/ticks within the same day."""
+        import config
+        config.save_survey_config(
+            TEST_GUILD_ID, "Squad Powers", "Survey History", [], "",
+        )
+        config.save_survey_reminder(
+            TEST_GUILD_ID, "default", enabled=1, frequency="daily",
+            time_str="12:00", channel_id=42,
+        )
+        config.update_survey_reminder_last_fired(TEST_GUILD_ID, "default", "2026-04-28")
+
+        s = config.get_survey(TEST_GUILD_ID, "default")
+        assert s["reminder_last_fired"] == "2026-04-28"

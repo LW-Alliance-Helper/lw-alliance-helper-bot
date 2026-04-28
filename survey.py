@@ -23,11 +23,11 @@ import asyncio
 import json
 import os
 import re
-from datetime import datetime, timezone
+from datetime import datetime, timezone, date as date_cls
 
 import discord
 from discord import app_commands
-from discord.ext import commands
+from discord.ext import commands, tasks
 from config import get_config
 
 # ── Config ─────────────────────────────────────────────────────────────────────
@@ -759,6 +759,118 @@ class SurveyCog(commands.Cog):
             # when a deploy needs an upgrade.
             print("[SURVEY] discord.py too old for DynamicItem — extra-survey "
                   "buttons will not be persistent on this version.")
+        # Start the per-minute scheduler tick that fires scheduled reminders
+        # (#27). Stamps `reminder_last_fired` on each survey row so we don't
+        # double-fire on a restart in the same minute.
+        self.check_scheduled_reminders.start()
+
+    def cog_unload(self):
+        try:
+            self.check_scheduled_reminders.cancel()
+        except Exception:
+            pass
+
+    @tasks.loop(minutes=1)
+    async def check_scheduled_reminders(self):
+        """
+        Walk every guild's scheduled survey reminders. Fire the ones whose
+        frequency, day-of-week, and time match `now` in the guild's timezone.
+        DM-via-roster reminders silently no-op for non-Premium guilds.
+        """
+        from zoneinfo import ZoneInfo
+        from config import (
+            list_scheduled_survey_reminders,
+            update_survey_reminder_last_fired,
+            get_config as _get_config,
+        )
+        import premium as _prem
+
+        try:
+            scheduled = list_scheduled_survey_reminders()
+        except Exception as e:
+            print(f"[SURVEY] Error listing scheduled reminders: {e}")
+            return
+
+        for entry in scheduled:
+            try:
+                guild_id   = int(entry["guild_id"])
+                survey_id  = entry.get("survey_id") or "default"
+                frequency  = (entry.get("reminder_frequency") or "off").lower()
+                if frequency == "off":
+                    continue
+
+                cfg = _get_config(guild_id)
+                if not cfg or not cfg.setup_complete:
+                    continue
+
+                tz_str    = cfg.timezone or "America/New_York"
+                guild_tz  = ZoneInfo(tz_str)
+                guild_now = datetime.now(tz=guild_tz)
+
+                # Time-of-day match (HH:MM, minute granularity)
+                time_str = entry.get("reminder_time") or "12:00"
+                try:
+                    r_h, r_m = int(time_str.split(":")[0]), int(time_str.split(":")[1])
+                except Exception:
+                    continue
+                if guild_now.hour != r_h or guild_now.minute != r_m:
+                    continue
+
+                # Day-of-week match for weekly schedules. Python: Monday=0
+                if frequency == "weekly":
+                    target_day = int(entry.get("reminder_day_of_week") or 1)
+                    if guild_now.weekday() != target_day:
+                        continue
+
+                # Idempotency — don't fire twice for the same date
+                today_iso  = guild_now.date().isoformat()
+                last_fired = entry.get("reminder_last_fired") or ""
+                if last_fired == today_iso:
+                    continue
+
+                # Resolve the survey config (so we can format the reminder body)
+                from config import get_survey
+                survey = get_survey(guild_id, survey_id) or {
+                    "survey_name":      entry.get("survey_name") or "Default",
+                    "reminder_message": entry.get("reminder_message") or "",
+                }
+                # Refresh body with the latest custom message + sensible default
+                body = (survey.get("reminder_message")
+                        or entry.get("reminder_message")
+                        or _default_reminder_body(survey))
+
+                use_dm     = bool(entry.get("reminder_use_dm"))
+                channel_id = int(entry.get("reminder_channel_id") or 0)
+
+                if use_dm:
+                    # DM path is Premium-only because it depends on Member
+                    # Roster Sync. Silently skip when the guild lapses.
+                    if not await _prem.is_premium(guild_id, bot=self.bot):
+                        print(f"[SURVEY] Skipping DM reminder for guild {guild_id}: Premium lapsed.")
+                        continue
+                    sent, skipped = await _send_reminder_via_dm(self.bot, guild_id, body)
+                    print(f"[SURVEY] Scheduled DM reminder fired for guild={guild_id} "
+                          f"survey={survey_id} sent={sent} skipped={skipped}")
+                elif channel_id:
+                    ok = await _send_reminder_to_channel(self.bot, guild_id, channel_id, body)
+                    if not ok:
+                        print(f"[SURVEY] Channel reminder failed for guild={guild_id} "
+                              f"survey={survey_id} channel={channel_id}")
+                        continue
+                    print(f"[SURVEY] Scheduled channel reminder fired for guild={guild_id} "
+                          f"survey={survey_id} channel={channel_id}")
+                else:
+                    # No destination configured — schedule is incomplete; skip.
+                    continue
+
+                update_survey_reminder_last_fired(guild_id, survey_id, today_iso)
+
+            except Exception as e:
+                print(f"[SURVEY] Error firing scheduled reminder: {e}")
+
+    @check_scheduled_reminders.before_loop
+    async def _before_check_scheduled(self):
+        await self.bot.wait_until_ready()
 
     @app_commands.command(
         name="survey_post",
@@ -886,97 +998,584 @@ class SurveyCog(commands.Cog):
 
     @app_commands.command(
         name="survey_remind",
-        description="💎 DM every roster member to fill out the survey",
+        description="Send a survey reminder now or manage scheduled reminders",
     )
     async def survey_remind(self, interaction: discord.Interaction):
         if not await _guard(interaction):
             return
+        await _run_remind_hub(interaction, self.bot)
 
-        import premium
-        import dm
-        from config import get_member_roster_config, get_member_roster_sheet
 
-        if not await premium.is_premium(
-            interaction.guild_id, interaction=interaction, bot=self.bot,
-        ):
-            await interaction.response.send_message(
-                embed=premium.premium_locked_embed(
-                    feature_label="Survey reminder DMs",
-                    description=(
-                        "Reminder DMs are part of LW Alliance Helper Premium and require "
-                        "Member Roster Sync to be configured (`/setup_members`). "
-                        "Run `/upgrade` to unlock."
-                    ),
-                ),
-                view=premium.upgrade_view(),
-                ephemeral=True,
-            )
-            return
+# ── Reminder helpers ──────────────────────────────────────────────────────────
 
-        roster_cfg = get_member_roster_config(interaction.guild_id)
-        if not roster_cfg.get("enabled"):
-            await interaction.response.send_message(
-                "⚙️ Member Roster Sync isn't configured yet. Run `/setup_members` first.",
-                ephemeral=True,
-            )
-            return
+def _default_reminder_body(survey: dict) -> str:
+    """Fallback reminder message when the survey doesn't have one saved."""
+    name = survey.get("survey_name") or "the survey"
+    return (
+        f"📋 **Friendly reminder** — your alliance is asking you to fill out "
+        f"**{name}** this week. Open the survey channel in Discord and click "
+        f"the **📋 Answer** button to get started. Thanks!"
+    )
 
-        await interaction.response.defer(ephemeral=True)
 
-        # Premium guilds with multiple surveys: pick which one to remind for.
-        survey = await _pick_survey(
-            interaction,
-            prompt="📋 You have multiple surveys — which one are you reminding members about?",
+async def _send_reminder_to_channel(bot, guild_id: int, channel_id: int, body: str) -> bool:
+    """Post a reminder body to a guild channel. Returns True on success."""
+    channel = bot.get_channel(channel_id)
+    if channel is None:
+        return False
+    try:
+        await channel.send(body)
+        return True
+    except Exception as e:
+        print(f"[REMINDER] Channel post failed (guild={guild_id}, channel={channel_id}): {e}")
+        return False
+
+
+async def _send_reminder_via_dm(bot, guild_id: int, body: str) -> tuple[int, int]:
+    """
+    DM every member listed in the guild's Member Roster sheet. Returns
+    (sent, skipped). Premium-gating happens at the call site — this helper
+    just does the work.
+    """
+    import dm
+    from config import get_member_roster_config, get_member_roster_sheet
+
+    roster_cfg = get_member_roster_config(guild_id)
+    if not roster_cfg.get("enabled"):
+        return (0, 0)
+
+    try:
+        ws   = get_member_roster_sheet(guild_id, roster_cfg["tab_name"])
+        rows = await asyncio.get_event_loop().run_in_executor(None, ws.get_all_values)
+    except Exception as e:
+        print(f"[REMINDER] Could not read roster for guild {guild_id}: {e}")
+        return (0, 0)
+
+    did_col = roster_cfg["discord_id_col"]
+    sent    = 0
+    skipped = 0
+    for row in rows[1:]:  # skip header
+        if did_col >= len(row):
+            continue
+        did = row[did_col].strip()
+        if not did:
+            skipped += 1
+            continue
+        ok = await dm.send_dm_to_id(bot, guild_id, did, content=body)
+        if ok:
+            sent += 1
+        else:
+            skipped += 1
+    return (sent, skipped)
+
+
+# ── Wizard hub ────────────────────────────────────────────────────────────────
+
+class _ReminderHubView(discord.ui.View):
+    """Top-level picker shown by /survey_remind."""
+
+    def __init__(self):
+        super().__init__(timeout=120)
+        self.choice: str | None = None  # "send" | "schedule" | None
+
+    @discord.ui.button(label="📤 Send reminder now", style=discord.ButtonStyle.success)
+    async def send_now(self, inter: discord.Interaction, button: discord.ui.Button):
+        self.choice = "send"
+        for item in self.children:
+            item.disabled = True
+        await inter.response.edit_message(view=self)
+        self.stop()
+
+    @discord.ui.button(label="⚙️ Manage scheduled reminders", style=discord.ButtonStyle.primary)
+    async def manage(self, inter: discord.Interaction, button: discord.ui.Button):
+        self.choice = "schedule"
+        for item in self.children:
+            item.disabled = True
+        await inter.response.edit_message(view=self)
+        self.stop()
+
+    @discord.ui.button(label="❌ Cancel", style=discord.ButtonStyle.secondary)
+    async def cancel(self, inter: discord.Interaction, button: discord.ui.Button):
+        self.choice = None
+        for item in self.children:
+            item.disabled = True
+        await inter.response.edit_message(content="Cancelled.", view=self)
+        self.stop()
+
+
+async def _run_remind_hub(interaction: discord.Interaction, bot):
+    import premium as _prem
+
+    is_premium_flag = await _prem.is_premium(
+        interaction.guild_id, interaction=interaction, bot=bot,
+    )
+
+    view = _ReminderHubView()
+    await interaction.response.send_message(
+        "📋 **Survey Reminders**\n"
+        "What would you like to do?\n"
+        f"*Tier: {'💎 Premium' if is_premium_flag else 'Free'}*",
+        view=view,
+        ephemeral=True,
+    )
+    await view.wait()
+    if view.choice == "send":
+        await _run_send_now(interaction, bot, is_premium_flag)
+    elif view.choice == "schedule":
+        await _run_schedule_wizard(interaction, bot, is_premium_flag)
+
+
+# ── Send-now path ─────────────────────────────────────────────────────────────
+
+class _DestinationPickView(discord.ui.View):
+    """Channel vs DM picker. DM option only enabled for Premium guilds."""
+
+    def __init__(self, allow_dm: bool):
+        super().__init__(timeout=120)
+        self.choice: str | None = None  # "channel" | "dm" | None
+
+        ch_btn = discord.ui.Button(
+            label="📢 Post to a channel",
+            style=discord.ButtonStyle.primary,
         )
-        if survey is None:
-            await interaction.followup.send("⏰ Picker timed out. Run `/survey_remind` again.", ephemeral=True)
-            return
+        async def _ch(inter: discord.Interaction):
+            self.choice = "channel"
+            for item in self.children:
+                item.disabled = True
+            await inter.response.edit_message(view=self)
+            self.stop()
+        ch_btn.callback = _ch
+        self.add_item(ch_btn)
 
-        survey_name = survey.get("survey_name") or "the survey"
-        # Per-survey reminder body. Extras may store a custom `reminder_message`
-        # (added by the multi-survey wizard); fall back to the generic body.
-        reminder_body = survey.get("reminder_message") or (
-            f"📋 **Friendly reminder** — your alliance is asking you to fill out "
-            f"**{survey_name}** this week. Open the survey channel in Discord "
-            f"and click the **📋 Answer** button to get started. Thanks!"
+        dm_btn = discord.ui.Button(
+            label="📨 DM via Member Roster" + ("" if allow_dm else " (💎 Premium)"),
+            style=discord.ButtonStyle.secondary,
+            disabled=not allow_dm,
         )
+        async def _dm(inter: discord.Interaction):
+            self.choice = "dm"
+            for item in self.children:
+                item.disabled = True
+            await inter.response.edit_message(view=self)
+            self.stop()
+        dm_btn.callback = _dm
+        self.add_item(dm_btn)
 
-        # Read roster: each row's discord_id_col → DM that user.
-        try:
-            ws   = get_member_roster_sheet(interaction.guild_id, roster_cfg["tab_name"])
-            rows = await asyncio.get_event_loop().run_in_executor(
-                None, ws.get_all_values,
-            )
-        except Exception as e:
-            await interaction.followup.send(
-                f"⚠️ Could not read the roster sheet: {e}", ephemeral=True,
-            )
-            return
 
-        did_col = roster_cfg["discord_id_col"]
-        sent    = 0
-        skipped = 0
-        for row in rows[1:]:  # skip header
-            if did_col >= len(row):
-                continue
-            did = row[did_col].strip()
-            if not did:
-                skipped += 1
-                continue
-            ok = await dm.send_dm_to_id(
-                self.bot, interaction.guild_id, did,
-                content=reminder_body,
-            )
-            if ok:
-                sent += 1
-            else:
-                skipped += 1
+class _ChannelPickView(discord.ui.View):
+    """Single-channel picker for the send-now flow."""
 
+    def __init__(self):
+        super().__init__(timeout=120)
+        self.channel: discord.abc.GuildChannel | None = None
+
+        sel = discord.ui.ChannelSelect(
+            channel_types=[discord.ChannelType.text, discord.ChannelType.news],
+            placeholder="Pick a channel…",
+        )
+        async def _cb(inter: discord.Interaction):
+            self.channel = sel.values[0].resolve() or sel.values[0]
+            sel.disabled = True
+            await inter.response.edit_message(
+                content=f"✅ Channel: {self.channel.mention if hasattr(self.channel, 'mention') else self.channel}",
+                view=self,
+            )
+            self.stop()
+        sel.callback = _cb
+        self.add_item(sel)
+
+
+async def _run_send_now(interaction: discord.Interaction, bot, is_premium_flag: bool):
+    # Premium with multiple surveys gets a survey selector; otherwise it's
+    # the only configured survey.
+    survey = await _pick_survey(
+        interaction,
+        prompt="📋 You have multiple surveys — which one are you reminding members about?",
+    )
+    if survey is None:
         await interaction.followup.send(
-            f"✅ Sent {sent} reminder DM{'s' if sent != 1 else ''} for **{survey_name}**. "
-            f"{skipped} skipped (DMs closed, missing ID, or other failures).",
+            "⏰ Picker timed out. Run `/survey_remind` again.", ephemeral=True,
+        )
+        return
+
+    body = survey.get("reminder_message") or _default_reminder_body(survey)
+
+    dest_view = _DestinationPickView(allow_dm=is_premium_flag)
+    await interaction.followup.send(
+        f"📋 Reminder for **{survey.get('survey_name', 'Default')}** — where should it go?\n"
+        f"{'' if is_premium_flag else 'ℹ️ *DM-via-roster is Premium-only — `/upgrade` to unlock.*'}",
+        view=dest_view,
+        ephemeral=True,
+    )
+    await dest_view.wait()
+    if dest_view.choice is None:
+        await interaction.followup.send("⏰ Timed out. Run `/survey_remind` again.", ephemeral=True)
+        return
+
+    if dest_view.choice == "channel":
+        ch_view = _ChannelPickView()
+        await interaction.followup.send("📢 Pick the channel to post to:", view=ch_view, ephemeral=True)
+        await ch_view.wait()
+        if ch_view.channel is None:
+            await interaction.followup.send("⏰ Timed out. Run `/survey_remind` again.", ephemeral=True)
+            return
+        ok = await _send_reminder_to_channel(bot, interaction.guild_id, ch_view.channel.id, body)
+        if ok:
+            await interaction.followup.send(
+                f"✅ Posted reminder for **{survey.get('survey_name', 'Default')}** in "
+                f"{ch_view.channel.mention if hasattr(ch_view.channel, 'mention') else '#?'}.",
+                ephemeral=True,
+            )
+        else:
+            await interaction.followup.send(
+                "⚠️ Could not post to that channel — make sure the bot has permission.",
+                ephemeral=True,
+            )
+        return
+
+    # dest_view.choice == "dm" (Premium only)
+    from config import get_member_roster_config
+    roster_cfg = get_member_roster_config(interaction.guild_id)
+    if not roster_cfg.get("enabled"):
+        await interaction.followup.send(
+            "⚙️ DM reminders need Member Roster Sync. Run `/setup_members` first.",
             ephemeral=True,
         )
+        return
+    sent, skipped = await _send_reminder_via_dm(bot, interaction.guild_id, body)
+    await interaction.followup.send(
+        f"✅ Sent {sent} reminder DM{'s' if sent != 1 else ''} for "
+        f"**{survey.get('survey_name', 'Default')}**. "
+        f"{skipped} skipped (DMs closed, missing ID, or other failures).",
+        ephemeral=True,
+    )
+
+
+# ── Schedule-management path ──────────────────────────────────────────────────
+
+DAYS_OF_WEEK = ["Monday", "Tuesday", "Wednesday", "Thursday", "Friday", "Saturday", "Sunday"]
+
+
+class _FrequencyPickView(discord.ui.View):
+    def __init__(self):
+        super().__init__(timeout=120)
+        self.choice: str | None = None
+
+    @discord.ui.button(label="Off (disable)", style=discord.ButtonStyle.danger)
+    async def off(self, inter: discord.Interaction, button: discord.ui.Button):
+        self.choice = "off"
+        for item in self.children: item.disabled = True
+        await inter.response.edit_message(view=self)
+        self.stop()
+
+    @discord.ui.button(label="Daily", style=discord.ButtonStyle.primary)
+    async def daily(self, inter: discord.Interaction, button: discord.ui.Button):
+        self.choice = "daily"
+        for item in self.children: item.disabled = True
+        await inter.response.edit_message(view=self)
+        self.stop()
+
+    @discord.ui.button(label="Weekly", style=discord.ButtonStyle.success)
+    async def weekly(self, inter: discord.Interaction, button: discord.ui.Button):
+        self.choice = "weekly"
+        for item in self.children: item.disabled = True
+        await inter.response.edit_message(view=self)
+        self.stop()
+
+
+class _DayPickView(discord.ui.View):
+    def __init__(self):
+        super().__init__(timeout=120)
+        self.day: int | None = None
+        sel = discord.ui.Select(
+            placeholder="Day of the week…",
+            options=[discord.SelectOption(label=name, value=str(i)) for i, name in enumerate(DAYS_OF_WEEK)],
+        )
+        async def _cb(inter: discord.Interaction):
+            self.day = int(sel.values[0])
+            sel.disabled = True
+            await inter.response.edit_message(content=f"✅ Day: **{DAYS_OF_WEEK[self.day]}**", view=self)
+            self.stop()
+        sel.callback = _cb
+        self.add_item(sel)
+
+
+async def _run_schedule_wizard(interaction: discord.Interaction, bot, is_premium_flag: bool):
+    """Walk leadership through configuring a survey's scheduled reminder."""
+    from config import save_survey_reminder, _parse_12h_time as _parse_time_helper  # type: ignore
+    # Pick which survey
+    survey = await _pick_survey(
+        interaction,
+        prompt="⚙️ Which survey are you scheduling reminders for?",
+    )
+    if survey is None:
+        await interaction.followup.send(
+            "⏰ Picker timed out. Run `/survey_remind` again.", ephemeral=True,
+        )
+        return
+
+    survey_id   = survey.get("survey_id") or "default"
+    survey_name = survey.get("survey_name") or "Default"
+
+    # Show current settings as context
+    cur_freq    = survey.get("reminder_frequency") or "off"
+    cur_day     = int(survey.get("reminder_day_of_week") or 1)
+    cur_time    = survey.get("reminder_time") or "12:00"
+    cur_ch      = int(survey.get("reminder_channel_id") or 0)
+    cur_use_dm  = bool(survey.get("reminder_use_dm"))
+    cur_msg     = survey.get("reminder_message") or ""
+
+    cur_dest = (
+        "DM via Member Roster" if cur_use_dm
+        else (f"<#{cur_ch}>" if cur_ch else "*(not set)*")
+    )
+    cur_when = (
+        "Off" if cur_freq == "off"
+        else f"Daily at {cur_time}" if cur_freq == "daily"
+        else f"Weekly on {DAYS_OF_WEEK[cur_day]} at {cur_time}"
+    )
+
+    await interaction.followup.send(
+        f"⚙️ **Scheduling reminders for `{survey_name}`**\n"
+        f"**Current schedule:** {cur_when}\n"
+        f"**Current destination:** {cur_dest}\n"
+        f"**Current message:** {('*set*' if cur_msg else '*default*')}",
+        ephemeral=True,
+    )
+
+    # ── Step 1: Frequency ─────────────────────────────────────────────────────
+    freq_view = _FrequencyPickView()
+    await interaction.followup.send(
+        "**Step 1 — Frequency**\nHow often should this reminder fire?",
+        view=freq_view,
+        ephemeral=True,
+    )
+    await freq_view.wait()
+    if freq_view.choice is None:
+        await interaction.followup.send("⏰ Timed out. Run `/survey_remind` again.", ephemeral=True)
+        return
+
+    new_freq = freq_view.choice
+    if new_freq == "off":
+        save_survey_reminder(
+            interaction.guild_id, survey_id,
+            enabled=0, frequency="off",
+            day_of_week=cur_day, time_str=cur_time,
+            channel_id=cur_ch, use_dm=int(cur_use_dm),
+            message=cur_msg,
+        )
+        await interaction.followup.send(
+            f"✅ Scheduled reminders disabled for **{survey_name}**. "
+            f"Run `/survey_remind` again to re-enable.",
+            ephemeral=True,
+        )
+        return
+
+    # ── Step 2: Day-of-week (weekly only) ─────────────────────────────────────
+    new_day = cur_day
+    if new_freq == "weekly":
+        day_view = _DayPickView()
+        await interaction.followup.send(
+            "**Step 2 — Day of the week**\nWhich day should the reminder fire each week?",
+            view=day_view,
+            ephemeral=True,
+        )
+        await day_view.wait()
+        if day_view.day is None:
+            await interaction.followup.send("⏰ Timed out. Run `/survey_remind` again.", ephemeral=True)
+            return
+        new_day = day_view.day
+
+    # ── Step 3: Time of day ───────────────────────────────────────────────────
+    new_time, ok = await _ask_time(interaction, default=cur_time, step_label="Step 3 — Time of day")
+    if not ok:
+        return
+
+    # ── Step 4: Destination ───────────────────────────────────────────────────
+    dest_view = _DestinationPickView(allow_dm=is_premium_flag)
+    await interaction.followup.send(
+        f"**Step 4 — Where to send the reminder**\n"
+        f"{'' if is_premium_flag else 'ℹ️ *DM-via-roster is Premium-only.*'}",
+        view=dest_view,
+        ephemeral=True,
+    )
+    await dest_view.wait()
+    if dest_view.choice is None:
+        await interaction.followup.send("⏰ Timed out. Run `/survey_remind` again.", ephemeral=True)
+        return
+
+    new_use_dm   = 0
+    new_channel  = 0
+    if dest_view.choice == "dm":
+        new_use_dm = 1
+    else:
+        ch_view = _ChannelPickView()
+        await interaction.followup.send("📢 Pick the channel to post the reminder to:", view=ch_view, ephemeral=True)
+        await ch_view.wait()
+        if ch_view.channel is None:
+            await interaction.followup.send("⏰ Timed out. Run `/survey_remind` again.", ephemeral=True)
+            return
+        new_channel = ch_view.channel.id
+
+    # ── Step 5: Message body ──────────────────────────────────────────────────
+    new_msg, ok = await _ask_reminder_message(interaction, bot, default=cur_msg)
+    if not ok:
+        return
+
+    # ── Save ──────────────────────────────────────────────────────────────────
+    save_survey_reminder(
+        interaction.guild_id, survey_id,
+        enabled=1,
+        frequency=new_freq,
+        day_of_week=new_day,
+        time_str=new_time,
+        channel_id=new_channel,
+        use_dm=new_use_dm,
+        message=new_msg,
+    )
+
+    when = (
+        f"Daily at {new_time}" if new_freq == "daily"
+        else f"Weekly on {DAYS_OF_WEEK[new_day]} at {new_time}"
+    )
+    where = "DMs to every roster member" if new_use_dm else f"<#{new_channel}>"
+    await interaction.followup.send(
+        f"✅ **{survey_name} reminders scheduled.**\n"
+        f"**When:** {when} *(in your guild's timezone)*\n"
+        f"**Where:** {where}\n"
+        f"**Message:** {('*custom*' if new_msg else '*default*')}\n\n"
+        f"Run `/survey_remind` again any time to update or disable.",
+        ephemeral=True,
+    )
+
+
+async def _ask_time(interaction: discord.Interaction, *, default: str,
+                    step_label: str) -> tuple[str, bool]:
+    """
+    Ask leadership for a HH:MM time via a one-field modal. Re-prompts up to
+    3 times on unparseable input. Returns (time_str_24h, ok).
+    """
+    from setup_cog import _parse_12h_time
+
+    class _TimeModal(discord.ui.Modal, title="Reminder time"):
+        time_in = discord.ui.TextInput(
+            label="Time (e.g. 9:00am, 22:30, 12:00pm)",
+            default=default,
+            max_length=8,
+            required=True,
+        )
+        def __init__(self):
+            super().__init__()
+            self.value: str | None = None
+        async def on_submit(self, inter: discord.Interaction):
+            self.value = str(self.time_in.value).strip()
+            await inter.response.defer(ephemeral=True)
+            self.stop()
+
+    class _TimeView(discord.ui.View):
+        def __init__(self):
+            super().__init__(timeout=180)
+            self.modal: _TimeModal | None = None
+        @discord.ui.button(label=f"⏰ Set time (current: {default})", style=discord.ButtonStyle.primary)
+        async def open_modal(self, inter: discord.Interaction, button: discord.ui.Button):
+            self.modal = _TimeModal()
+            await inter.response.send_modal(self.modal)
+            await self.modal.wait()
+            self.stop()
+
+    attempts_left = 3
+    while True:
+        view = _TimeView()
+        await interaction.followup.send(
+            f"**{step_label}**\nWhat time should the reminder fire? *(your guild's timezone)*",
+            view=view,
+            ephemeral=True,
+        )
+        await view.wait()
+        if view.modal is None or view.modal.value is None:
+            await interaction.followup.send("⏰ Timed out. Run `/survey_remind` again.", ephemeral=True)
+            return ("", False)
+        raw = view.modal.value
+        parsed = _parse_12h_time(raw)
+        if parsed:
+            return (parsed, True)
+        if (len(raw) == 5 and raw[2] == ":" and raw.replace(":", "").isdigit()):
+            return (raw, True)
+        attempts_left -= 1
+        if attempts_left <= 0:
+            await interaction.followup.send(
+                "⚠️ Could not read that time after a few tries. "
+                "Run `/survey_remind` to start over.",
+                ephemeral=True,
+            )
+            return ("", False)
+        await interaction.followup.send(
+            f"⚠️ Could not read **`{raw}`** as a time. "
+            f"Try `9:00am`, `22:30`, or `12:00pm`. Let's try once more.",
+            ephemeral=True,
+        )
+
+
+async def _ask_reminder_message(interaction: discord.Interaction, bot,
+                                 *, default: str) -> tuple[str, bool]:
+    """
+    Prompt for the reminder message body. Empty input keeps the existing
+    custom message, or falls back to the generic default at fire time.
+    Returns (body, ok).
+    """
+
+    class _MsgModal(discord.ui.Modal, title="Reminder message"):
+        body_in = discord.ui.TextInput(
+            label="Reminder message body",
+            style=discord.TextStyle.paragraph,
+            default=default[:4000] if default else "",
+            placeholder=(
+                "📋 Reminder — please fill out the survey this week!\n"
+                "(Leave blank to use the bot's default message.)"
+            ),
+            required=False,
+            max_length=2000,
+        )
+        def __init__(self):
+            super().__init__()
+            self.value: str | None = None
+            self.confirmed = False
+        async def on_submit(self, inter: discord.Interaction):
+            self.value     = str(self.body_in.value)
+            self.confirmed = True
+            await inter.response.defer(ephemeral=True)
+            self.stop()
+
+    class _MsgView(discord.ui.View):
+        def __init__(self):
+            super().__init__(timeout=300)
+            self.modal: _MsgModal | None = None
+        @discord.ui.button(label="✏️ Edit message", style=discord.ButtonStyle.primary)
+        async def open_modal(self, inter: discord.Interaction, button: discord.ui.Button):
+            self.modal = _MsgModal()
+            await inter.response.send_modal(self.modal)
+            await self.modal.wait()
+            self.stop()
+        @discord.ui.button(label="Use default", style=discord.ButtonStyle.secondary)
+        async def use_default(self, inter: discord.Interaction, button: discord.ui.Button):
+            self.modal = _MsgModal()
+            self.modal.value = ""
+            self.modal.confirmed = True
+            await inter.response.edit_message(content="✅ Will use the default reminder message.", view=self)
+            self.stop()
+
+    view = _MsgView()
+    await interaction.followup.send(
+        "**Step 5 — Reminder message**\n"
+        "What should the reminder say? Leave blank to use the bot's default.",
+        view=view,
+        ephemeral=True,
+    )
+    await view.wait()
+    if view.modal is None or not view.modal.confirmed:
+        await interaction.followup.send("⏰ Timed out. Run `/survey_remind` again.", ephemeral=True)
+        return ("", False)
+    return ((view.modal.value or "").strip(), True)
 
 
 async def setup(bot: commands.Bot):

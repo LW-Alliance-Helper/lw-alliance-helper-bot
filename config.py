@@ -362,13 +362,40 @@ def init_db():
 
         # ── guild_extra_surveys migrations (per-survey reminder fields) ────────
         for col, definition in [
-            ("reminder_message", "TEXT DEFAULT ''"),
-            ("reminder_enabled", "INTEGER DEFAULT 0"),
+            ("reminder_message",      "TEXT DEFAULT ''"),
+            ("reminder_enabled",      "INTEGER DEFAULT 0"),
+            ("reminder_frequency",    "TEXT DEFAULT 'off'"),       # off | daily | weekly
+            ("reminder_day_of_week",  "INTEGER DEFAULT 1"),        # 0=Mon..6=Sun (weekly only)
+            ("reminder_time",         "TEXT DEFAULT '12:00'"),     # HH:MM 24h, in guild tz
+            ("reminder_channel_id",   "INTEGER DEFAULT 0"),        # 0 = DM-via-roster (Premium)
+            ("reminder_use_dm",       "INTEGER DEFAULT 0"),        # 1 = DM-via-roster (Premium)
+            ("reminder_last_fired",   "TEXT DEFAULT ''"),          # ISO date of last fire
         ]:
             try:
                 conn.execute(f"ALTER TABLE guild_extra_surveys ADD COLUMN {col} {definition}")
                 conn.commit()
                 print(f"[CONFIG] Added {col} to guild_extra_surveys")
+            except Exception:
+                pass
+
+        # ── guild_survey_config migrations (default survey reminder fields) ────
+        # Mirrors guild_extra_surveys so the default survey can have its own
+        # scheduled reminder config too. Free guilds use channel posts;
+        # Premium can opt into DM-via-roster.
+        for col, definition in [
+            ("reminder_message",      "TEXT DEFAULT ''"),
+            ("reminder_enabled",      "INTEGER DEFAULT 0"),
+            ("reminder_frequency",    "TEXT DEFAULT 'off'"),
+            ("reminder_day_of_week",  "INTEGER DEFAULT 1"),
+            ("reminder_time",         "TEXT DEFAULT '12:00'"),
+            ("reminder_channel_id",   "INTEGER DEFAULT 0"),
+            ("reminder_use_dm",       "INTEGER DEFAULT 0"),
+            ("reminder_last_fired",   "TEXT DEFAULT ''"),
+        ]:
+            try:
+                conn.execute(f"ALTER TABLE guild_survey_config ADD COLUMN {col} {definition}")
+                conn.commit()
+                print(f"[CONFIG] Added {col} to guild_survey_config")
             except Exception:
                 pass
 
@@ -1088,14 +1115,22 @@ def get_survey(guild_id: int, survey_id: str = "default") -> dict | None:
     if survey_id == "default":
         cfg = get_survey_config(guild_id)
         return {
-            "survey_id":         "default",
-            "survey_name":       "Default",
-            "tab_squad_powers":  cfg.get("tab_squad_powers", "Squad Powers"),
-            "tab_history":       cfg.get("tab_history", "Survey History"),
-            "questions":         cfg.get("questions", []),
-            "intro_message":     cfg.get("intro_message", ""),
-            "survey_channel_id": 0,
-            "notify_channel_id": 0,
+            "survey_id":            "default",
+            "survey_name":          "Default",
+            "tab_squad_powers":     cfg.get("tab_squad_powers", "Squad Powers"),
+            "tab_history":          cfg.get("tab_history", "Survey History"),
+            "questions":            cfg.get("questions", []),
+            "intro_message":        cfg.get("intro_message", ""),
+            "survey_channel_id":    0,
+            "notify_channel_id":    0,
+            "reminder_message":     cfg.get("reminder_message", ""),
+            "reminder_enabled":     cfg.get("reminder_enabled", 0),
+            "reminder_frequency":   cfg.get("reminder_frequency", "off"),
+            "reminder_day_of_week": cfg.get("reminder_day_of_week", 1),
+            "reminder_time":        cfg.get("reminder_time", "12:00"),
+            "reminder_channel_id":  cfg.get("reminder_channel_id", 0),
+            "reminder_use_dm":      cfg.get("reminder_use_dm", 0),
+            "reminder_last_fired":  cfg.get("reminder_last_fired", ""),
         }
     import json
     with _get_conn() as conn:
@@ -1151,6 +1186,91 @@ def save_extra_survey(
              reminder_message, reminder_enabled),
         )
         conn.commit()
+
+
+def save_survey_reminder(
+    guild_id: int, survey_id: str, *,
+    enabled: int            = 0,
+    frequency: str          = "off",
+    day_of_week: int        = 1,
+    time_str: str           = "12:00",
+    channel_id: int         = 0,
+    use_dm: int             = 0,
+    message: str            = "",
+):
+    """
+    Store the scheduled-reminder config for one survey. `survey_id="default"`
+    targets `guild_survey_config`; any other id targets `guild_extra_surveys`.
+    Both tables share the same reminder column names so the SQL can be
+    parametrised.
+    """
+    table = "guild_survey_config" if survey_id == "default" else "guild_extra_surveys"
+    where = "guild_id = ?" if survey_id == "default" else "guild_id = ? AND survey_id = ?"
+    params: tuple = (
+        enabled, frequency, day_of_week, time_str,
+        channel_id, use_dm, message,
+        guild_id,
+    )
+    if survey_id != "default":
+        params = params + (survey_id,)
+    with _get_conn() as conn:
+        cur = conn.execute(
+            f"UPDATE {table} SET "
+            f"  reminder_enabled = ?, "
+            f"  reminder_frequency = ?, "
+            f"  reminder_day_of_week = ?, "
+            f"  reminder_time = ?, "
+            f"  reminder_channel_id = ?, "
+            f"  reminder_use_dm = ?, "
+            f"  reminder_message = ? "
+            f"WHERE {where}",
+            params,
+        )
+        conn.commit()
+        return cur.rowcount > 0
+
+
+def update_survey_reminder_last_fired(guild_id: int, survey_id: str, when_iso: str):
+    """Stamp the last-fired timestamp so the scheduler doesn't double-fire."""
+    table = "guild_survey_config" if survey_id == "default" else "guild_extra_surveys"
+    where = "guild_id = ?" if survey_id == "default" else "guild_id = ? AND survey_id = ?"
+    params = (when_iso, guild_id) + (() if survey_id == "default" else (survey_id,))
+    with _get_conn() as conn:
+        conn.execute(
+            f"UPDATE {table} SET reminder_last_fired = ? WHERE {where}",
+            params,
+        )
+        conn.commit()
+
+
+def list_scheduled_survey_reminders() -> list[dict]:
+    """
+    Return every survey across all guilds that has scheduled reminders
+    enabled. Used by the scheduler tick to know what to fire.
+    """
+    out: list[dict] = []
+    with _get_conn() as conn:
+        # Default surveys: one row per guild.
+        for r in conn.execute(
+            "SELECT g.guild_id, "
+            "       s.reminder_enabled, s.reminder_frequency, s.reminder_day_of_week, "
+            "       s.reminder_time, s.reminder_channel_id, s.reminder_use_dm, "
+            "       s.reminder_message, s.reminder_last_fired "
+            "FROM guild_survey_config s "
+            "JOIN guild_configs g ON g.guild_id = s.guild_id "
+            "WHERE s.reminder_enabled = 1 AND s.reminder_frequency != 'off'"
+        ).fetchall():
+            d = dict(r)
+            d["survey_id"]   = "default"
+            d["survey_name"] = "Default"
+            out.append(d)
+        # Extra surveys: many per guild.
+        for r in conn.execute(
+            "SELECT * FROM guild_extra_surveys "
+            "WHERE reminder_enabled = 1 AND reminder_frequency != 'off'"
+        ).fetchall():
+            out.append(dict(r))
+    return out
 
 
 def delete_extra_survey(guild_id: int, survey_id: str) -> bool:

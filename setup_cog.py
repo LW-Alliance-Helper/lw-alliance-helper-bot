@@ -790,131 +790,6 @@ class SetupCog(commands.Cog):
         )
         await run_survey_setup(interaction, self.bot)
 
-    @app_commands.command(
-        name="setup_survey_extra",
-        description="💎 Add or edit an extra named survey (Premium)",
-    )
-    async def setup_survey_extra(self, interaction: discord.Interaction):
-        if not _has_leadership_or_admin(interaction):
-            await interaction.response.send_message(
-                "⛔ You need the leadership role (or admin) to run `/setup_survey_extra`.",
-                ephemeral=True,
-            )
-            return
-
-        if not await premium.is_premium(
-            interaction.guild_id, interaction=interaction, bot=self.bot,
-        ):
-            await interaction.response.send_message(
-                embed=premium.premium_locked_embed(
-                    feature_label="Multiple surveys",
-                    description=(
-                        "Configuring more than one survey is part of LW Alliance "
-                        "Helper Premium. Run `/upgrade` to unlock it."
-                    ),
-                ),
-                view=premium.upgrade_view(),
-                ephemeral=True,
-            )
-            return
-
-        await interaction.response.send_message(
-            "💎 Starting extra-survey setup — check the channel for prompts!",
-            ephemeral=True,
-        )
-        await run_extra_survey_picker(interaction, self.bot)
-
-    @app_commands.command(
-        name="remove_survey",
-        description="💎 Remove an extra named survey (Premium)",
-    )
-    async def remove_survey(self, interaction: discord.Interaction):
-        if not _has_leadership_or_admin(interaction):
-            await interaction.response.send_message(
-                "⛔ You need the leadership role (or admin) to run `/remove_survey`.",
-                ephemeral=True,
-            )
-            return
-
-        if not await premium.is_premium(
-            interaction.guild_id, interaction=interaction, bot=self.bot,
-        ):
-            await interaction.response.send_message(
-                embed=premium.premium_locked_embed(
-                    feature_label="Multiple surveys",
-                    description="Multi-survey is Premium. Run `/upgrade` to unlock it.",
-                ),
-                view=premium.upgrade_view(),
-                ephemeral=True,
-            )
-            return
-
-        from config import list_surveys, delete_extra_survey
-        extras = [s for s in list_surveys(interaction.guild_id)
-                  if (s.get("survey_id") or "default") != "default"]
-        if not extras:
-            await interaction.response.send_message(
-                "*You have no extra surveys to remove.* "
-                "Use `/setup_survey_extra` to add one.",
-                ephemeral=True,
-            )
-            return
-
-        class RemovePickView(discord.ui.View):
-            def __init__(self):
-                super().__init__(timeout=120)
-                self.picked: dict | None = None
-                sel = discord.ui.Select(
-                    placeholder="Pick a survey to remove…",
-                    options=[
-                        discord.SelectOption(
-                            label=(s.get("survey_name") or s.get("survey_id"))[:100],
-                            value=s.get("survey_id"),
-                        ) for s in extras[:25]
-                    ],
-                )
-                async def _cb(inter: discord.Interaction):
-                    sid = sel.values[0]
-                    self.picked = next((s for s in extras if s.get("survey_id") == sid), None)
-                    sel.disabled = True
-                    name = self.picked.get("survey_name", sid) if self.picked else sid
-                    await inter.response.edit_message(
-                        content=f"⚠️ Confirm: remove **{name}**?",
-                        view=ConfirmRemoveView(self.picked),
-                    )
-                    self.stop()
-                sel.callback = _cb
-                self.add_item(sel)
-
-        class ConfirmRemoveView(discord.ui.View):
-            def __init__(self, target: dict | None):
-                super().__init__(timeout=120)
-                self.target = target
-
-            @discord.ui.button(label="🗑️ Remove", style=discord.ButtonStyle.danger)
-            async def confirm(self, inter: discord.Interaction, button: discord.ui.Button):
-                if not self.target:
-                    await inter.response.edit_message(content="❌ Nothing to remove.", view=None)
-                    self.stop()
-                    return
-                ok = delete_extra_survey(interaction.guild_id, self.target["survey_id"])
-                msg = (
-                    f"🗑️ Removed **{self.target.get('survey_name')}**."
-                    if ok else "⚠️ Could not remove that survey."
-                )
-                await inter.response.edit_message(content=msg, view=None)
-                self.stop()
-
-            @discord.ui.button(label="❌ Cancel", style=discord.ButtonStyle.secondary)
-            async def cancel(self, inter: discord.Interaction, button: discord.ui.Button):
-                await inter.response.edit_message(content="❌ Cancelled. No surveys removed.", view=None)
-                self.stop()
-
-        await interaction.response.send_message(
-            "Pick which extra survey to remove:",
-            view=RemovePickView(),
-            ephemeral=True,
-        )
 
 # ── /Define Various Setup Commands ───────────────────────────────────────────────────────
 
@@ -2176,101 +2051,44 @@ async def run_train_setup(interaction: discord.Interaction, bot):
     wizard_registry.unregister(user.id, cancel_event)
     print(f"[SETUP] Train config saved for guild {guild_id}")
 
-async def run_extra_survey_picker(interaction: discord.Interaction, bot):
+async def run_create_new_extra_survey(interaction: discord.Interaction, bot):
     """
-    Premium-only entry point for managing extra named surveys. Prompts the
-    user to either pick an existing extra to edit, or create a new one,
-    then dispatches to `run_survey_setup` with the right `target_survey_id`.
+    Premium-only: ask leadership for a display name for a new extra survey,
+    derive a unique slug for `survey_id`, then dispatch to
+    `run_survey_setup` to walk through the standard wizard. Called by the
+    `[➕ Add Survey]` button on `/survey` for premium guilds.
     """
     import re as _re
     from config import list_surveys
 
-    guild_id = interaction.guild_id
-    channel  = interaction.channel
-    user     = interaction.user
+    channel = interaction.channel
+    user    = interaction.user
 
-    extras = [s for s in list_surveys(guild_id)
-              if (s.get("survey_id") or "default") != "default"]
-
-    class ExtraPickView(discord.ui.View):
-        def __init__(self):
-            super().__init__(timeout=180)
-            self.choice = None     # "new" | "edit"
-            self.edit_target: dict | None = None
-
-            if extras:
-                sel = discord.ui.Select(
-                    placeholder="Pick an existing survey to edit…",
-                    options=[
-                        discord.SelectOption(
-                            label=(s.get("survey_name") or s.get("survey_id"))[:100],
-                            value=s.get("survey_id"),
-                        ) for s in extras[:25]
-                    ],
-                )
-                async def _cb(inter: discord.Interaction):
-                    sid = sel.values[0]
-                    self.edit_target = next((s for s in extras if s.get("survey_id") == sid), None)
-                    self.choice = "edit"
-                    for item in self.children: item.disabled = True
-                    name = self.edit_target.get("survey_name") if self.edit_target else sid
-                    await inter.response.edit_message(content=f"✏️ Editing **{name}**…", view=self)
-                    self.stop()
-                sel.callback = _cb
-                self.add_item(sel)
-
-        @discord.ui.button(label="➕ New survey", style=discord.ButtonStyle.success)
-        async def new_btn(self, inter: discord.Interaction, button: discord.ui.Button):
-            self.choice = "new"
-            for item in self.children: item.disabled = True
-            await inter.response.edit_message(content="➕ Adding a new survey…", view=self)
-            self.stop()
-
-    pick = ExtraPickView()
-    await channel.send(
-        "💎 **Extra Survey Manager**\n"
-        f"You have **{len(extras)}** extra survey(s). "
-        "Pick one to edit, or click **New survey** to add another.",
-        view=pick,
-    )
-    await pick.wait()
-    if pick.choice is None:
-        await channel.send("⏰ Timed out. Run `/setup_survey_extra` to start again.")
-        return
-
-    if pick.choice == "edit":
-        target = pick.edit_target or {}
-        await run_survey_setup(
-            interaction, bot,
-            target_survey_id=target.get("survey_id"),
-            target_survey_name=target.get("survey_name"),
-        )
-        return
-
-    # ── New survey: ask for a display name and derive an id slug. ──────────────
     def check(m):
         return m.author == user and m.channel == channel
 
     await channel.send(
-        "**Survey Name**\n"
-        "Type a short display name for this new survey (e.g. `Off-Season Powers` "
+        "💎 **Add a Survey**\n"
+        "Type a short display name for the new survey (e.g. `Off-Season Powers` "
         "or `Recruit Intake`). This is what leadership and members will see."
     )
     try:
         name_reply = await bot.wait_for("message", check=check, timeout=180)
     except asyncio.TimeoutError:
-        await channel.send("⏰ Timed out. Run `/setup_survey_extra` to start again.")
+        await channel.send("⏰ Timed out. Click **➕ Add Survey** on `/survey` again to retry.")
         return
 
     survey_name = (name_reply.content or "").strip()[:60]
     if not survey_name:
-        await channel.send("⚠️ Empty name — aborting. Run `/setup_survey_extra` to try again.")
+        await channel.send("⚠️ Empty name — aborting. Click **➕ Add Survey** on `/survey` to try again.")
         return
 
-    base_slug   = _re.sub(r"[^a-z0-9]+", "-", survey_name.lower()).strip("-") or "survey"
+    extras = [s for s in list_surveys(interaction.guild_id)
+              if (s.get("survey_id") or "default") != "default"]
+    base_slug    = _re.sub(r"[^a-z0-9]+", "-", survey_name.lower()).strip("-") or "survey"
     existing_ids = {s.get("survey_id") for s in extras}
-    survey_id   = base_slug
-    suffix      = 2
+    survey_id    = base_slug
+    suffix       = 2
     while survey_id in existing_ids:
         survey_id = f"{base_slug}-{suffix}"
         suffix   += 1
@@ -2283,6 +2101,124 @@ async def run_extra_survey_picker(interaction: discord.Interaction, bot):
         interaction, bot,
         target_survey_id=survey_id,
         target_survey_name=survey_name,
+    )
+
+
+async def run_remove_extra_survey(interaction: discord.Interaction, bot):
+    """
+    Premium-only: show a picker of extra surveys and confirm-delete the
+    chosen one. Called by the `[🗑️ Remove Survey]` button on `/survey`
+    for premium guilds.
+    """
+    from config import list_surveys, delete_extra_survey
+
+    extras = [s for s in list_surveys(interaction.guild_id)
+              if (s.get("survey_id") or "default") != "default"]
+    if not extras:
+        await interaction.followup.send(
+            "*You have no extra surveys to remove.* "
+            "Click **➕ Add Survey** on `/survey` to add one.",
+            ephemeral=True,
+        )
+        return
+
+    class _ConfirmRemoveView(discord.ui.View):
+        def __init__(self, target: dict):
+            super().__init__(timeout=120)
+            self.target = target
+
+        @discord.ui.button(label="🗑️ Remove", style=discord.ButtonStyle.danger)
+        async def confirm(self, inter: discord.Interaction, button: discord.ui.Button):
+            ok = delete_extra_survey(interaction.guild_id, self.target["survey_id"])
+            msg = (
+                f"🗑️ Removed **{self.target.get('survey_name')}**."
+                if ok else "⚠️ Could not remove that survey."
+            )
+            await inter.response.edit_message(content=msg, view=None)
+            self.stop()
+
+        @discord.ui.button(label="❌ Cancel", style=discord.ButtonStyle.secondary)
+        async def cancel(self, inter: discord.Interaction, button: discord.ui.Button):
+            await inter.response.edit_message(content="❌ Cancelled. No surveys removed.", view=None)
+            self.stop()
+
+    class _RemovePickView(discord.ui.View):
+        def __init__(self):
+            super().__init__(timeout=120)
+            sel = discord.ui.Select(
+                placeholder="Pick a survey to remove…",
+                options=[
+                    discord.SelectOption(
+                        label=(s.get("survey_name") or s.get("survey_id"))[:100],
+                        value=s.get("survey_id"),
+                    ) for s in extras[:25]
+                ],
+            )
+            async def _cb(inter: discord.Interaction):
+                sid = sel.values[0]
+                picked = next((s for s in extras if s.get("survey_id") == sid), None)
+                sel.disabled = True
+                name = picked.get("survey_name", sid) if picked else sid
+                await inter.response.edit_message(
+                    content=f"⚠️ Confirm: remove **{name}**?",
+                    view=_ConfirmRemoveView(picked),
+                )
+                self.stop()
+            sel.callback = _cb
+            self.add_item(sel)
+
+    await interaction.followup.send(
+        "Pick which extra survey to remove:",
+        view=_RemovePickView(),
+        ephemeral=True,
+    )
+
+
+async def run_pick_survey_to_edit(interaction: discord.Interaction, bot):
+    """
+    Show a picker covering the default survey + all extras, then dispatch
+    into `run_survey_setup` with the chosen target. Called by the
+    `[✏️ Edit Survey]` button on `/survey` for premium guilds.
+    """
+    from config import list_surveys
+
+    surveys = list_surveys(interaction.guild_id)
+
+    class _EditPickView(discord.ui.View):
+        def __init__(self):
+            super().__init__(timeout=180)
+            sel = discord.ui.Select(
+                placeholder="Pick a survey to edit…",
+                options=[
+                    discord.SelectOption(
+                        label=(s.get("survey_name") or s.get("survey_id"))[:100],
+                        value=s.get("survey_id") or "default",
+                    ) for s in surveys[:25]
+                ],
+            )
+            async def _cb(inter: discord.Interaction):
+                sid = sel.values[0]
+                target = next((s for s in surveys
+                               if (s.get("survey_id") or "default") == sid), None)
+                sel.disabled = True
+                name = (target.get("survey_name") if target else sid) or sid
+                await inter.response.edit_message(content=f"✏️ Editing **{name}**…", view=self)
+                self.stop()
+                # Dispatch into the wizard. `target_survey_id=None` means
+                # the default survey (run_survey_setup edits guild_survey_config).
+                target_id = None if sid == "default" else sid
+                await run_survey_setup(
+                    interaction, bot,
+                    target_survey_id=target_id,
+                    target_survey_name=(target.get("survey_name") if target else None),
+                )
+            sel.callback = _cb
+            self.add_item(sel)
+
+    await interaction.followup.send(
+        "Which survey would you like to edit?",
+        view=_EditPickView(),
+        ephemeral=True,
     )
 
 
@@ -2778,7 +2714,7 @@ async def run_survey_setup(interaction: discord.Interaction, bot,
             reminder_message=current.get("reminder_message", "") or "",
             reminder_enabled=int(current.get("reminder_enabled") or 0),
         )
-        next_step_cmd = "/setup_survey_extra"
+        next_step_cmd = "/survey"  # premium UI surfaces edit/remove from there
 
     q_summary = "\n".join(
         f"• **{q['label']}** — {q['type']}"

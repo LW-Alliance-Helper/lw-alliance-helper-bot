@@ -741,6 +741,86 @@ async def _pick_survey(interaction: discord.Interaction, *, prompt: str) -> dict
     )
 
 
+# ── Multi-survey manage view (Premium /survey UX) ─────────────────────────────
+
+class _SurveyManageView(discord.ui.View):
+    """
+    The button row shown beneath `/survey`'s list view for premium guilds.
+    Replaces the old `/setup_survey_extra` and `/remove_survey` slash
+    commands — Add / Edit / Remove all live here so leadership has one
+    surface for survey management.
+    """
+
+    def __init__(self, has_extras: bool):
+        super().__init__(timeout=180)
+        # Disable Remove when there are no extras, since the default
+        # survey can't be removed via this flow.
+        for item in self.children:
+            if getattr(item, "label", "") == "🗑️ Remove Survey":
+                item.disabled = not has_extras
+
+    @discord.ui.button(label="➕ Add Survey", style=discord.ButtonStyle.success)
+    async def add_btn(self, inter: discord.Interaction, button: discord.ui.Button):
+        from setup_cog import run_create_new_extra_survey
+        for item in self.children: item.disabled = True
+        await inter.response.edit_message(view=self)
+        await run_create_new_extra_survey(inter, inter.client)
+        self.stop()
+
+    @discord.ui.button(label="✏️ Edit Survey", style=discord.ButtonStyle.primary)
+    async def edit_btn(self, inter: discord.Interaction, button: discord.ui.Button):
+        from setup_cog import run_pick_survey_to_edit
+        for item in self.children: item.disabled = True
+        await inter.response.edit_message(view=self)
+        await run_pick_survey_to_edit(inter, inter.client)
+        self.stop()
+
+    @discord.ui.button(label="🗑️ Remove Survey", style=discord.ButtonStyle.danger)
+    async def remove_btn(self, inter: discord.Interaction, button: discord.ui.Button):
+        from setup_cog import run_remove_extra_survey
+        for item in self.children: item.disabled = True
+        await inter.response.edit_message(view=self)
+        await run_remove_extra_survey(inter, inter.client)
+        self.stop()
+
+
+async def _send_survey_manage_view(interaction: discord.Interaction, bot):
+    """
+    Render the premium /survey list view with Add / Edit / Remove buttons.
+    Called from the /survey command after the premium check passes.
+    Assumes the caller has already deferred ephemerally.
+    """
+    from config import list_surveys
+
+    surveys    = list_surveys(interaction.guild_id)
+    has_extras = any((s.get("survey_id") or "default") != "default" for s in surveys)
+
+    embed = discord.Embed(
+        title="📋 Configured Surveys",
+        color=discord.Color.blurple(),
+        description=(
+            "💎 **Premium** — manage every survey from here.\n"
+            "Use the buttons below to **Add**, **Edit**, or **Remove** a survey."
+        ),
+    )
+    for s in surveys[:25]:
+        sid    = s.get("survey_id") or "default"
+        name   = s.get("survey_name") or sid
+        n_q    = len(s.get("questions") or [])
+        tab    = s.get("tab_squad_powers") or "*not set*"
+        ch_id  = int(s.get("survey_channel_id") or 0)
+        ch_str = f"<#{ch_id}>" if ch_id else "_(uses default channel)_"
+        embed.add_field(
+            name=f"{name}" + (" *(default)*" if sid == "default" else ""),
+            value=f"**{n_q}** question(s) · Stats tab: `{tab}` · Channel: {ch_str}",
+            inline=False,
+        )
+    embed.set_footer(text="Use /survey_post to publish the answer button. /survey_remind to send or schedule reminders.")
+
+    view = _SurveyManageView(has_extras=has_extras)
+    await interaction.followup.send(embed=embed, view=view, ephemeral=True)
+
+
 # ── Cog ────────────────────────────────────────────────────────────────────────
 
 class SurveyCog(commands.Cog):
@@ -925,43 +1005,28 @@ class SurveyCog(commands.Cog):
 
     @app_commands.command(
         name="survey",
-        description="Show configured survey(s) — list view when multiple are configured",
+        description="Show configured survey(s); Premium gets Add / Edit / Remove buttons here",
     )
     async def survey(self, interaction: discord.Interaction):
         if not await _guard(interaction):
             return
 
         from config import list_surveys, get_survey_config
+        import premium as _prem
 
-        surveys = list_surveys(interaction.guild_id)
-        # When a Premium guild has more than one survey, show the list view
-        # so leadership can see every configured survey at a glance. Free
-        # guilds (or Premium with only the default) still get the detail
-        # view of the single survey to match the prior behavior.
-        if len(surveys) > 1:
-            embed = discord.Embed(
-                title="📋 Configured Surveys",
-                color=discord.Color.blurple(),
-            )
-            for s in surveys[:25]:
-                sid    = s.get("survey_id") or "default"
-                name   = s.get("survey_name") or sid
-                n_q    = len(s.get("questions") or [])
-                tab    = s.get("tab_squad_powers") or "*not set*"
-                ch_id  = int(s.get("survey_channel_id") or 0)
-                ch_str = f"<#{ch_id}>" if ch_id else "_(uses default channel)_"
-                embed.add_field(
-                    name=f"{name}" + (" *(default)*" if sid == "default" else ""),
-                    value=f"**{n_q}** question(s) · Stats tab: `{tab}` · Channel: {ch_str}",
-                    inline=False,
-                )
-            embed.set_footer(
-                text="Run /setup_survey to edit the default. /setup_survey_extra to add or edit extras."
-            )
-            await interaction.response.send_message(embed=embed, ephemeral=True)
+        is_premium_flag = await _prem.is_premium(
+            interaction.guild_id, interaction=interaction, bot=self.bot,
+        )
+
+        # Premium tier: always show the list view + Add / Edit / Remove
+        # buttons, regardless of how many surveys are configured. This is
+        # the consolidated multi-survey UX — one command, three buttons.
+        if is_premium_flag:
+            await interaction.response.defer(ephemeral=True)
+            await _send_survey_manage_view(interaction, self.bot)
             return
 
-        # Single-survey path (default config view).
+        # Free tier: single-survey detail view (matches prior behavior).
         scfg      = get_survey_config(interaction.guild_id)
         questions = scfg.get("questions") or []
 

@@ -52,10 +52,13 @@ different from the prior pass.
 - **`/[event]_participation`** is no longer the OGV-specific Vote Count /
   RTF / Sitting Out walkthrough. The questions and roster source are
   fully configurable per alliance — see Section 5.4.
-- **Multi-survey support**: `/setup_survey_extra` adds a named survey,
-  `/remove_survey` deletes one, and `/survey` switches to a list view when
-  more than one is configured. `/survey_post` and `/survey_remind` ask
-  which survey when premium has multiple.
+- **Multi-survey support (consolidated)**: `/survey` is the single
+  surface for premium guilds. It always renders a list of every
+  configured survey (default + extras) and exposes **Add / Edit /
+  Remove** buttons for managing them. The previous `/setup_survey_extra`
+  and `/remove_survey` slash commands have been removed.
+  `/survey_post` and `/survey_remind` still ask which survey when
+  premium has multiple configured.
 - **`/survey_remind`** is now a wizard hub: leadership picks **Send now**
   or **Manage scheduled reminders**. Free tier delivers via channel post;
   💎 Premium adds DM-via-Member-Roster. Scheduled reminders fire daily or
@@ -108,8 +111,6 @@ different from the prior pass.
   - [`/desertstorm_remind` & `/canyonstorm_remind` 💎](#desertstorm_remind--canyonstorm_remind)
 - [6. Survey](#6-survey)
   - [`/setup_survey`](#setup_survey)
-  - [`/setup_survey_extra` 💎](#setup_survey_extra-)
-  - [`/remove_survey` 💎](#remove_survey-)
   - [`/survey`](#survey)
   - [`/survey_post`](#survey_post)
   - [Survey thread flow (member-facing)](#survey-thread-flow-member-facing)
@@ -1516,10 +1517,10 @@ On save: `✅ Added: **1st Squad Power** — 1 question(s) so far.` or
 
 Show configured survey(s). **Tier:** Both. **Permissions:** Leadership.
 
-#### Single-survey path *(default)*
+#### Free tier *(single-survey detail view)*
 
-When the guild has only the default survey configured, the embed renders
-the question list and tab settings (unchanged from the prior pass):
+The embed renders the question list and tab settings — unchanged from the
+prior pass:
 
 > 🤖 **Embed: 📋 Survey Configuration** (blurple)
 > **1. 1st Squad Power** *(text)*
@@ -1535,34 +1536,37 @@ the question list and tab settings (unchanged from the prior pass):
 
 If empty: `*No survey questions configured. Run /setup_survey to add some.*`
 
-#### List-view path *(Premium with multiple surveys)*
+#### 💎 Premium tier *(consolidated manage view)*
 
-When the guild has more than one survey configured, the embed switches to
-a list of every survey:
+The bot defers ephemerally and replies with a list of every configured
+survey plus three management buttons. This is the **only** surface for
+multi-survey management — the prior `/setup_survey_extra` and
+`/remove_survey` slash commands are gone.
 
 > 🤖 **Embed: 📋 Configured Surveys** (blurple)
+> *💎 Premium — manage every survey from here. Use the buttons below to
+> Add, Edit, or Remove a survey.*
+>
 > **Default** *(default)* — **5** question(s) · Stats tab: `Squad Powers` · Channel: _(uses default channel)_
 > **Off-Season Powers** — **6** question(s) · Stats tab: `Off-Season` · Channel: <#…>
 >
-> Footer: *Run /setup_survey to edit the default. /setup_survey_extra to add or edit extras.*
+> Footer: *Use /survey_post to publish the answer button. /survey_remind to send or schedule reminders.*
+>
+> 🔘 `[➕ Add Survey]` (success)  🔘 `[✏️ Edit Survey]` (primary)  🔘 `[🗑️ Remove Survey]` (danger)
 
----
+The Remove button is disabled when no extras exist (default can't be
+removed). Each button:
 
-### `/setup_survey_extra` 💎
-
-Add or edit an extra named survey. Premium-only.
-
-The wizard first shows a manage view with a select dropdown of existing
-extras (if any) and a `[➕ New survey]` button. Picking "New survey"
-prompts for a display name (auto-slugified to a `survey_id`); editing an
-existing entry routes through the same `run_survey_setup` flow used by
-the default survey.
-
-### `/remove_survey` 💎
-
-Premium-only. Lists existing extras in a select dropdown; on pick, shows
-a confirm view (`[🗑️ Remove]` / `[❌ Cancel]`). The default survey can't
-be removed via this command.
+- **Add Survey** — prompts for a display name in the channel, auto-slugifies
+  to a `survey_id`, and routes through `run_survey_setup` so the new survey
+  gets the standard wizard.
+- **Edit Survey** — shows a single-select picker of every survey (default
+  + extras), then dispatches into `run_survey_setup` with the chosen
+  target. `target_survey_id=None` for the default; the extra's id for
+  any other pick.
+- **Remove Survey** — shows a single-select picker of extras only, then a
+  `[🗑️ Remove]` / `[❌ Cancel]` confirm view. Uses
+  `delete_extra_survey` under the hood.
 
 ---
 

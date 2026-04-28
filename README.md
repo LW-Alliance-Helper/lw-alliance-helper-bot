@@ -260,7 +260,7 @@ The question builder supports two question types on the free tier:
 
 **💎 Premium adds three more question types:** Numeric (with min/max validation and re-prompt-on-bad-input), Multi-select (pick multiple options), and Date (formatted entry with `strptime` validation).
 
-**💎 Multi-survey (Premium):** alliances can configure more than one survey with `/setup_survey_extra` — each named survey has its own questions, channel, intro, notification target, and reminder message. `/remove_survey` removes an extra survey. `/survey` switches to a list view when multiple surveys are configured so you can see them all at a glance.
+**💎 Multi-survey (Premium):** alliances can configure more than one survey, each with its own questions, channel, intro, notification target, and reminder body. **Manage everything from `/survey`** — when Premium is active, the command renders a list of every configured survey along with **Add / Edit / Remove** buttons. Adding asks for a display name and routes through the same setup wizard; editing covers both the default survey and any extras; remove deletes an extra (the default can't be removed).
 
 **Day-to-day use:**
 - Run `/survey_post` to post the answer button. Premium guilds with multiple surveys are prompted to pick which survey to post.
@@ -301,8 +301,7 @@ For the full list of every slash command and what it does, run `/help` in your l
 |---|---|
 | Post or repost the survey button | `/survey_post` |
 | View configured survey(s) (list view when multiple) | `/survey` |
-| 💎 Add or edit an extra survey (Premium) | `/setup_survey_extra` |
-| 💎 Remove an extra survey (Premium) | `/remove_survey` |
+| 💎 Manage multiple surveys (Premium) | `/survey` → Add / Edit / Remove buttons |
 | Manage the train schedule (add, update, generate prompt, clear) | `/train` |
 | Add upcoming birthdays to the train schedule | `/train_addbirthdays` |
 | See upcoming birthdays | `/birthdays` |

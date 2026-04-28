@@ -100,16 +100,23 @@ def _get_spreadsheet(guild_id: int = None):
     return gc.open_by_key(sheet_id)
 
 
-def load_ds_assignments(team: str) -> tuple[dict, list]:
+def load_ds_assignments(team: str, guild_id: int = None) -> tuple[dict, list]:
     """
     Load saved DS assignments for the given team ("A" or "B").
     Falls back to defaults if nothing is saved yet.
+
+    `guild_id` resolves the per-guild spreadsheet + tab name. When
+    omitted, falls back to the env-var SPREADSHEET_ID and the default
+    tab name "DS Assignments" — preserves the legacy single-guild
+    behavior for callers that haven't been migrated yet.
     """
     zone_key = f"DS_{team}_ZONES"
     sub_key  = f"DS_{team}_SUBS"
 
     try:
-        sh   = _get_spreadsheet()
+        from config import get_config
+        cfg  = get_config(guild_id) if guild_id else None
+        sh   = _get_spreadsheet(guild_id)
         ws   = sh.worksheet(cfg.tab_ds_assignments if cfg else "DS Assignments")
         rows = ws.get_all_values()
 
@@ -152,10 +159,14 @@ def load_ds_assignments(team: str) -> tuple[dict, list]:
         return dict(default_zones), list(default_subs)
 
 
-def save_ds_assignments(team: str, zones: dict, subs: list):
+def save_ds_assignments(team: str, zones: dict, subs: list,
+                        guild_id: int = None):
     """
     Save DS assignments for one team without affecting the other team's data.
     Reads the full sheet, replaces this team's sections, and rewrites.
+
+    `guild_id` resolves the per-guild spreadsheet + tab name; when
+    omitted, falls back to env-var SPREADSHEET_ID and tab "DS Assignments".
     """
     zone_key = f"DS_{team}_ZONES"
     sub_key  = f"DS_{team}_SUBS"
@@ -164,11 +175,13 @@ def save_ds_assignments(team: str, zones: dict, subs: list):
     other_sub_key  = f"DS_{other}_SUBS"
 
     try:
-        sh = _get_spreadsheet()
-        ws = sh.worksheet(cfg.tab_ds_assignments if cfg else "DS Assignments")
+        from config import get_config
+        cfg = get_config(guild_id) if guild_id else None
+        sh  = _get_spreadsheet(guild_id)
+        ws  = sh.worksheet(cfg.tab_ds_assignments if cfg else "DS Assignments")
 
         # Load the other team's current data so we don't lose it
-        other_zones, other_subs = load_ds_assignments(other)
+        other_zones, other_subs = load_ds_assignments(other, guild_id=guild_id)
 
         # Rebuild the full sheet with both teams
         rows = []
@@ -589,7 +602,7 @@ async def run_ds_draft_flow(bot, channel, user, team: str,
         # Save the edited assignments now so they become next week's default,
         # but make it explicit we have NOT posted the mail yet.
         await asyncio.get_event_loop().run_in_executor(
-            None, save_ds_assignments, team, zones, subs,
+            None, save_ds_assignments, team, zones, subs, guild_id,
         )
         await channel.send(
             f"💾 **Team {team} template saved (not posted).** "
@@ -695,7 +708,7 @@ class StormCog(commands.Cog):
 
         # Load the team's saved assignments so they become the starting template.
         zones, subs = await asyncio.get_event_loop().run_in_executor(
-            None, load_ds_assignments, team,
+            None, load_ds_assignments, team, interaction.guild_id,
         )
 
         await interaction.followup.send(f"✅ Team {team} selected.", ephemeral=True)
@@ -740,7 +753,7 @@ class StormCog(commands.Cog):
 
         # Load the team's saved assignments so they become the starting template.
         zones = await asyncio.get_event_loop().run_in_executor(
-            None, load_cs_assignments, team,
+            None, load_cs_assignments, team, interaction.guild_id,
         )
 
         await interaction.followup.send(f"✅ Team {team} selected.", ephemeral=True)
@@ -811,12 +824,12 @@ async def _show_storm_overview(interaction: discord.Interaction, event_type: str
     try:
         if event_type == "DS":
             zones, subs = await asyncio.get_event_loop().run_in_executor(
-                None, load_ds_assignments, "A"
+                None, load_ds_assignments, "A", interaction.guild_id,
             )
             template = build_ds_template(zones, subs)
         else:
             zones = await asyncio.get_event_loop().run_in_executor(
-                None, load_cs_assignments, "A"
+                None, load_cs_assignments, "A", interaction.guild_id,
             )
             template = build_cs_template(zones)
         # Discord field value cap is 1024 chars
@@ -931,15 +944,17 @@ def load_cs_assignments(team: str, guild_id: int = None) -> dict:
 def save_cs_assignments(team: str, zones: dict, guild_id: int = None):
     """Save CS assignments for one team without affecting DS or the other CS team."""
     try:
-        sh = _get_spreadsheet(guild_id)
-        ws = sh.worksheet(cfg.tab_ds_assignments if cfg else "DS Assignments")
+        from config import get_config
+        cfg = get_config(guild_id) if guild_id else None
+        sh  = _get_spreadsheet(guild_id)
+        ws  = sh.worksheet(cfg.tab_ds_assignments if cfg else "DS Assignments")
         existing = ws.get_all_values()
 
         # Rebuild full sheet: preserve all DS and CS rows, replace this team's CS section
         other_cs = "B" if team == "A" else "A"
-        other_cs_zones = load_cs_assignments(other_cs)
-        ds_a_zones, ds_a_subs = load_ds_assignments("A")
-        ds_b_zones, ds_b_subs = load_ds_assignments("B")
+        other_cs_zones = load_cs_assignments(other_cs, guild_id=guild_id)
+        ds_a_zones, ds_a_subs = load_ds_assignments("A", guild_id=guild_id)
+        ds_b_zones, ds_b_subs = load_ds_assignments("B", guild_id=guild_id)
 
         rows = []
         for t, t_zones, t_subs in [("A", ds_a_zones, ds_a_subs), ("B", ds_b_zones, ds_b_subs)]:
@@ -1221,7 +1236,7 @@ async def run_cs_draft_flow(bot, channel, user, team: str, current_zones: dict):
         zones = edited_zones
 
         await asyncio.get_event_loop().run_in_executor(
-            None, save_cs_assignments, team, zones,
+            None, save_cs_assignments, team, zones, guild_id,
         )
         await channel.send(
             f"💾 **Team {team} template saved (not posted).** "

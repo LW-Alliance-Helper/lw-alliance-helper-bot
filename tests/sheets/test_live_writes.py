@@ -12,12 +12,11 @@ Existing tests/sheets/test_sheet_writes.py covers survey writes
   * append_participation_row — the new (#20) configurable participation
     log writer creates a header row on first use, then appends rows
     whose columns line up with the configured questions.
-
-NOT covered (yet): save_ds_assignments and save_cs_assignments. Both
-reference an undefined module-level `cfg` variable, which today raises
-NameError swallowed by the surrounding `except Exception`. Adding live
-tests against broken code is misleading — flagged for a separate fix
-before any test here can pass.
+  * save_ds_assignments / save_cs_assignments — DS/CS draft "Post &
+    Copy" path writes the parsed zone assignments back to the sheet
+    so they become next week's default. Now that the missing
+    `guild_id` plumbing has been fixed (see commit history), these
+    actually persist.
 
 Why no /survey_remind sheet tests: scheduled reminders dispatch via
 Discord channels and DMs, not Sheets. The DM path reads the Member
@@ -63,6 +62,19 @@ def _make_real_spreadsheet():
 def participation_tab(test_spreadsheet):
     """Fresh participation-log tab per test, deleted after."""
     name = f"_test_part_{random.randint(100000, 999999)}"
+    ws   = test_spreadsheet.add_worksheet(title=name, rows=200, cols=30)
+    yield ws, name
+    try:
+        test_spreadsheet.del_worksheet(ws)
+    except Exception:
+        pass
+
+
+@pytest.fixture
+def assignments_tab(test_spreadsheet):
+    """Fresh DS/CS assignments tab per test, deleted after. Used by the
+    storm save_*_assignments tests."""
+    name = f"_test_assign_{random.randint(100000, 999999)}"
     ws   = test_spreadsheet.add_worksheet(title=name, rows=200, cols=30)
     yield ws, name
     try:
@@ -187,5 +199,87 @@ class TestParticipationRowWrite:
         assert len(data_rows) == 2, f"expected 2 rows; got {len(data_rows)}"
         assert data_rows[0][2] == "Win"
         assert data_rows[1][2] == "Loss"
+
+
+# ── save_ds_assignments / save_cs_assignments ────────────────────────────────
+
+class TestStormAssignmentsWrite:
+    """The DS/CS draft 'Post & Copy' path persists the parsed zone
+    assignments back to the sheet so they become next week's default
+    (visible in the next /[event]_draft as the loaded template).
+
+    Both functions now take guild_id properly — pre-fix, they
+    referenced an undefined module-level `cfg` and silently failed
+    via `except Exception`.
+    """
+
+    def test_save_ds_assignments_persists_zones_and_subs(
+        self, seeded_db, assignments_tab,
+    ):
+        from unittest.mock import patch
+        import config as _config
+        import storm
+
+        ws, tab_name = assignments_tab
+
+        # Point the guild's DS-assignments tab at our test tab so the
+        # writer lands on the worksheet we just created.
+        gcfg = _config.get_config(TEST_GUILD_ID)
+        gcfg.tab_ds_assignments = tab_name
+        _config.save_config(gcfg)
+
+        sh = _make_real_spreadsheet()
+        zones = {
+            "Nuclear Silo":   "Alice, Bob",
+            "Oil Refinery I": "Carol",
+        }
+        subs = [("Carol", "Dave")]
+
+        with patch.object(storm, "_get_spreadsheet", return_value=sh):
+            storm.save_ds_assignments("A", zones, subs, guild_id=TEST_GUILD_ID)
+
+        time.sleep(1.0)
+        rows = ws.get_all_values()
+        flat = [c for r in rows for c in r]
+
+        # Section headers
+        assert "DS_A_ZONES" in flat
+        assert "DS_A_SUBS"  in flat
+        # Zone data
+        assert any("Nuclear Silo"   == c for c in flat)
+        assert any("Alice, Bob"     == c for c in flat)
+        # Sub data
+        assert any("Carol" == c for c in flat)
+        assert any("Dave"  == c for c in flat)
+
+    def test_save_cs_assignments_persists_zones(
+        self, seeded_db, assignments_tab,
+    ):
+        from unittest.mock import patch
+        import config as _config
+        import storm
+
+        ws, tab_name = assignments_tab
+
+        gcfg = _config.get_config(TEST_GUILD_ID)
+        gcfg.tab_ds_assignments = tab_name  # CS shares the DS-assignments tab
+        _config.save_config(gcfg)
+
+        sh    = _make_real_spreadsheet()
+        zones = {
+            "s1_power_tower": "Alice, Bob",
+            "s2_ds1":         "Carol, Dave",
+        }
+
+        with patch.object(storm, "_get_spreadsheet", return_value=sh):
+            storm.save_cs_assignments("A", zones, guild_id=TEST_GUILD_ID)
+
+        time.sleep(1.0)
+        rows = ws.get_all_values()
+        flat = [c for r in rows for c in r]
+
+        assert "CS_A_ZONES"             in flat
+        assert any("s1_power_tower" == c for c in flat)
+        assert any("Alice, Bob"     == c for c in flat)
 
 

@@ -276,7 +276,10 @@ class TestSyncMembersGate:
 
         call    = interaction.response.send_message.call_args
         content = call.args[0] if call.args else call.kwargs.get("content")
-        assert "administrators" in (content or "").lower()
+        # The gate now allows leadership-or-admin (rather than admin-only),
+        # so the rejection text mentions both. Either is acceptable.
+        lowered = (content or "").lower()
+        assert "leadership" in lowered or "administrators" in lowered
 
     @pytest.mark.asyncio
     async def test_premium_admin_with_unconfigured_roster_gets_setup_hint(self, seeded_db):

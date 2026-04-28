@@ -194,12 +194,13 @@ Birthday messages say: *🎂 Today is **[name]**'s birthday!*
 
 **What to create in your sheet:** A tab for Desert Storm assignments (e.g. `DS Assignments`).
 
-Run `/setup_desertstorm` to configure Desert Storm:
+Run `/setup_desertstorm` to configure Desert Storm. The wizard walks through:
 
 1. **Sheet tab** — the bot manages the data structure here automatically, no formatting needed
 2. **Teams** — whether you run Team A & B, Team A only, or Team B only
 3. **Log channel** — where participation logs are posted after each event
-4. **Mail template** — if you run both teams, choose one template for both or separate templates per team. A default template is provided — use it as-is or paste your own
+4. **Post channel** — where the finished mail is posted when leadership clicks **Post & Copy** at the end of `/desertstorm_draft`
+5. **Mail template** — if you run both teams, choose one template for both or separate templates per team. A default template is provided — use it as-is or paste your own
 
 **Available placeholders in your template:**
 - `{alliance_name}` — your alliance name
@@ -209,8 +210,8 @@ Run `/setup_desertstorm` to configure Desert Storm:
 
 **Day-to-day use:**
 - Use `/desertstorm` to view current rosters and the configured mail template
-- Use `/desertstorm_draft` to generate a mail draft. You'll select the team and time slot (Desert Storm runs at 18:00 and 23:00 Server Time, displayed in your timezone)
-- Review the pre-filled draft, edit as needed, then approve to save and get a copyable mail block
+- Use `/desertstorm_draft` to generate a mail draft. The flow is **Pick Team → Pick Time → Mail Template (Use as-is or Edit) → Preview**. Editing pastes the assignment block back to the bot; the parsed assignments are saved as next week's default but the mail itself is **not** posted yet
+- At the preview step, click **✅ Looks Good — Post & Copy** to post the mail to your configured post channel and get a copyable code block back in leadership
 - After the event, use `/desertstorm_participation` to record participation data
 - Use `/desertstorm_log [date]` to look up past log entries
 
@@ -220,13 +221,13 @@ Run `/setup_desertstorm` to configure Desert Storm:
 
 **What to create in your sheet:** A tab for Canyon Storm assignments (e.g. `CS Assignments`).
 
-Run `/setup_canyonstorm` — the setup is identical to Desert Storm above.
+Run `/setup_canyonstorm` — the setup is identical to Desert Storm above (5 steps including a Post Channel).
 
 Canyon Storm runs at 12:00 and 23:00 Server Time (displayed in your timezone).
 
 **Day-to-day use:**
 - `/canyonstorm` — view current rosters and the configured mail template
-- `/canyonstorm_draft` — generate a Canyon Storm mail draft
+- `/canyonstorm_draft` — generate a Canyon Storm mail draft (Team → Time → Template → Preview, then Post & Copy)
 - `/canyonstorm_participation` — log participation after the event
 - `/canyonstorm_log [date]` — look up past log entries
 
@@ -236,7 +237,7 @@ Canyon Storm runs at 12:00 and 23:00 Server Time (displayed in your timezone).
 
 **What to create in your sheet:** Two tabs — one for current member stats (e.g. `Squad Powers`) and one for submission history (e.g. `Survey History`).
 
-Run `/setup_survey` to configure the survey:
+Run `/setup_survey` to configure the **default** survey:
 
 1. **Survey channel** — where the survey button is posted for members to access
 2. **Notification channel** — where leadership is notified when a member submits
@@ -245,15 +246,20 @@ Run `/setup_survey` to configure the survey:
 5. **Intro message** — the message members see before starting the survey
 6. **Questions** — choose from the default Last War question set, edit individual questions, or build your own from scratch
 
-The question builder supports two question types:
+The question builder supports two question types on the free tier:
 - **Text** — the member types a value, with an optional help text hint
 - **Dropdown** — the member picks from a list of options you define (up to 25)
 
+**💎 Premium adds three more question types:** Numeric (with min/max validation and re-prompt-on-bad-input), Multi-select (pick multiple options), and Date (formatted entry with `strptime` validation).
+
+**💎 Multi-survey (Premium):** alliances can configure more than one survey with `/setup_survey_extra` — each named survey has its own questions, channel, intro, notification target, and reminder message. `/remove_survey` removes an extra survey. `/surveys` lists everything configured.
+
 **Day-to-day use:**
-- Run `/survey_post` to post the survey button in your survey channel
-- Members click **Answer**, complete the survey in a private thread, and their data is saved automatically
+- Run `/survey_post` to post the answer button. Premium guilds with multiple surveys are prompted to pick which survey to post.
+- Members click **📋 Answer**, complete the survey in a private thread (named after the survey), and their data is saved automatically
 - Leadership sees a notification embed in the notification channel for each submission
-- Use `/survey` to see the configured questions any time
+- Use `/survey` to see the default survey's questions, or `/surveys` to list every survey
+- 💎 Use `/survey_remind` to DM every roster member a reminder. Premium guilds pick which survey to remind for; the per-survey reminder body is customisable.
 
 ---
 
@@ -286,6 +292,9 @@ For the full list of every slash command and what it does, run `/help` in your l
 | Situation | Command |
 |---|---|
 | Post or repost the survey button | `/survey_post` |
+| List every configured survey | `/surveys` |
+| 💎 Add or edit an extra survey (Premium) | `/setup_survey_extra` |
+| 💎 Remove an extra survey (Premium) | `/remove_survey` |
 | Manage the train schedule (add, update, generate prompt, clear) | `/train` |
 | Add upcoming birthdays to the train schedule | `/train_addbirthdays` |
 | See upcoming birthdays | `/birthdays` |
@@ -315,7 +324,7 @@ For the full list of every slash command and what it does, run `/help` in your l
 Slash commands can take up to an hour to appear after the bot first joins your server. If they still aren't showing after that, try removing and re-inviting the bot.
 
 **"You don't have permission to use this command"**
-Make sure you're using the command in the leadership channel and that you have the leadership role configured during `/setup`. Both are required.
+Most feature commands need to be run in the leadership channel by someone with the leadership role configured during `/setup`. The various `/setup_*` commands also accept anyone with **Administrator** server permissions, so a server owner can configure a feature even without holding the leadership role.
 
 **"This bot hasn't been set up yet"**
 Run `/setup` first. The bot won't respond to feature commands until core setup is complete.

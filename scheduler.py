@@ -62,16 +62,11 @@ EVENT_LIBRARY = {
         "blurb":    "Zombies at {time} ({server} server). Be sure you have squads on your wall!",
         "optional": False,
     },
-    "glacieradon": {
-        "name":     "Glacieradon",
-        "blurb":    "We will be doing Glacieradon at {time} ({server} server)! Remember to start with only 5 hits and watch chat for more instructions.",
-        "optional": True,
-    },
-    "blimp": {
-        "name":     "Blimp",
-        "blurb":    "The Blimp will be at {time} ({server} server)! This doesn't pull for offline participation, so try to be there!",
-        "optional": True,
-    },
+    # Other in-game events (Glacieradon, Blimp, etc.) are intentionally NOT
+    # listed here — alliance leaders add them as custom events through
+    # /setup_events with the in-game name they prefer. Once we can confirm
+    # the official in-game names for additional events, they may be added
+    # back to this default library.
 }
 
 OPTIONAL_EVENTS = {k: v for k, v in EVENT_LIBRARY.items() if v["optional"]}
@@ -248,18 +243,43 @@ def build_announcement(event_list: list[dict], notes: str = "", role_mention: st
     return "\n".join(lines)
 
 
-def build_warning_message(event_list: list[dict]) -> str:
-    """Build the 5-minute warning based on the first event."""
+def build_warning_message(event_list: list[dict], guild_id: int = None) -> str:
+    """
+    Build the 5-minute warning based on the first event.
+
+    Resolution order for the message body:
+      1. The event's stored `warning_blurb` (if guild defined a custom 5-min
+         warning text in /setup_events).
+      2. The event's stored `announcement_blurb` (if defined) — adapted to
+         "in 5 minutes" by substituting the {time} placeholder.
+      3. Hardcoded special case for `marauder` (legacy compat).
+      4. Generic fallback: "<Name> in 5 minutes!" using the configured name.
+    """
     if not event_list:
         return "Event starting in 5 minutes! Make sure you're online!"
     first = event_list[0]
     key   = first["key"]
+
+    info        = _resolve_event_info(key, guild_id)
+    custom_warn = (first.get("warning_blurb") or "").strip()
+    if custom_warn:
+        return custom_warn.format(time="5 minutes", server_time="5 minutes", server="5 minutes")
+
+    custom_blurb = (first.get("blurb") or info.get("blurb") or "").strip()
+    if custom_blurb and key not in ("marauder",):
+        # Re-use the configured announcement blurb, swapping the time
+        # placeholder for "5 minutes" so the message reads "<event> in 5 minutes...".
+        try:
+            return custom_blurb.format(time="5 minutes", server_time="5 minutes", server="5 minutes")
+        except (KeyError, IndexError):
+            pass
+
     if key == "marauder":
         return (
             "Marauder (AE) in 5 minutes! Make sure you hop online and get your points! "
             "Zombies right after, check your wall to make sure you have squads on it!"
         )
-    name = EVENT_LIBRARY.get(key, {}).get("name", key)
+    name = info.get("name") or key
     return f"{name} in 5 minutes! Make sure you're online!"
 
 
@@ -327,7 +347,7 @@ class EventEditorView(discord.ui.View):
         content = (
             f"📣 **Event Editor** — adjust today's event schedule, then build the announcement.\n\n"
             f"**Current events:**\n{self.format_event_list_text()}\n\n"
-            f"**Notes:** {self.notes if self.notes else '*None*'}"
+            f"**Announcement text:** {self.notes if self.notes else '*None*'}"
         )
         await interaction.message.edit(content=content, view=self)
 
@@ -407,7 +427,7 @@ class EventEditorView(discord.ui.View):
                 content=(
                     f"📣 **Event Editor** — adjust today's event schedule, then build the announcement.\n\n"
                     f"**Current events:**\n{self.format_event_list_text()}\n\n"
-                    f"**Notes:** {self.notes if self.notes else '*None*'}"
+                    f"**Announcement text:** {self.notes if self.notes else '*None*'}"
                 ),
                 view=self,
             )
@@ -478,7 +498,7 @@ class EventEditorView(discord.ui.View):
                 content=(
                     f"📣 **Event Editor** — adjust today's event schedule, then build the announcement.\n\n"
                     f"**Current events:**\n{self.format_event_list_text()}\n\n"
-                    f"**Notes:** {self.notes if self.notes else '*None*'}"
+                    f"**Announcement text:** {self.notes if self.notes else '*None*'}"
                 ),
                 view=self,
             )
@@ -491,15 +511,14 @@ class EventEditorView(discord.ui.View):
 
     @discord.ui.button(label="🗑️ Remove Event", style=discord.ButtonStyle.danger, row=0)
     async def remove_event(self, interaction: discord.Interaction, button: discord.ui.Button):
-        # All guild-configured events are removable; legacy EVENT_LIBRARY keeps
-        # marauder/siege as required (optional=False).
-        removable = [
-            (i, e) for i, e in enumerate(self.event_list)
-            if _resolve_event_info(e["key"], self.guild_id).get("optional", True)
-        ]
+        # Any event in the current draft can be removed — even ones on a
+        # repeating schedule. Removal only affects this one announcement,
+        # not the schedule itself, which gives leadership flexibility to
+        # skip an event for a specific day or push it to a different time.
+        removable = list(enumerate(self.event_list))
         if not removable:
             await interaction.response.send_message(
-                "No removable events in the list.",
+                "No events to remove.",
                 ephemeral=True,
             )
             return
@@ -526,7 +545,7 @@ class EventEditorView(discord.ui.View):
                 content=(
                     f"📣 **Event Editor** — adjust today's event schedule, then build the announcement.\n\n"
                     f"**Current events:**\n{self.format_event_list_text()}\n\n"
-                    f"**Notes:** {self.notes if self.notes else '*None*'}"
+                    f"**Announcement text:** {self.notes if self.notes else '*None*'}"
                 ),
                 view=self,
             )
@@ -536,14 +555,16 @@ class EventEditorView(discord.ui.View):
         view.add_item(select)
         await interaction.response.send_message("Choose an event to remove:", view=view, ephemeral=True)
 
-    @discord.ui.button(label="📝 Add Notes", style=discord.ButtonStyle.secondary, row=1)
+    @discord.ui.button(label="📝 Add Announcement Text", style=discord.ButtonStyle.secondary, row=1)
     async def add_notes(self, interaction: discord.Interaction, button: discord.ui.Button):
         channel = interaction.channel
         await interaction.response.defer()
 
-        current_note = f"\n\nCurrent notes:\n> {self.notes}" if self.notes else ""
+        current_note = f"\n\nCurrent announcement text:\n> {self.notes}" if self.notes else ""
         prompt = await channel.send(
-            f"📝 {interaction.user.mention} — type your additional notes below, or type `clear` to remove existing notes.{current_note}"
+            f"📝 {interaction.user.mention} — type the additional announcement text "
+            f"that should be appended to today's announcement, or type `clear` to remove "
+            f"existing text.{current_note}"
         )
 
         def check(m):
@@ -559,10 +580,10 @@ class EventEditorView(discord.ui.View):
 
             if reply.content.strip().lower() == "clear":
                 self.notes = ""
-                await channel.send("✅ Notes cleared.", delete_after=5)
+                await channel.send("✅ Announcement text cleared.", delete_after=5)
             else:
                 self.notes = reply.content.strip()
-                await channel.send("✅ Notes saved.", delete_after=5)
+                await channel.send("✅ Announcement text saved.", delete_after=5)
 
         except asyncio.TimeoutError:
             await channel.send("⏰ Timed out.", delete_after=8)
@@ -571,7 +592,7 @@ class EventEditorView(discord.ui.View):
             content=(
                 f"📣 **Event Editor** — adjust today's event schedule, then build the announcement.\n\n"
                 f"**Current events:**\n{self.format_event_list_text()}\n\n"
-                f"**Notes:** {self.notes if self.notes else '*None*'}"
+                f"**Announcement text:** {self.notes if self.notes else '*None*'}"
             ),
             view=self,
         )
@@ -942,7 +963,7 @@ async def fire_warning(bot, event_key: str, event_list: list[dict], cfg=None):
     if channel is None:
         return
 
-    message = build_warning_message(event_list)
+    message = build_warning_message(event_list, guild_id=getattr(cfg, "guild_id", None))
     await channel.send(message)
 
     leadership = bot.get_channel(cfg.leadership_channel_id)

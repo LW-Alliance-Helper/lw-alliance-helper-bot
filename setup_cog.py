@@ -602,6 +602,22 @@ async def _manage_train_templates(
 
 # ── Define Various Setup Commands ────────────────────────────────────────────────────────────────────────
 
+def _has_leadership_or_admin(interaction: discord.Interaction) -> bool:
+    """
+    True if the invoking user is a server administrator OR has the
+    configured leadership role. Used by per-feature /setup_* wizards so
+    that day-to-day leadership members can configure features without
+    needing full server-admin permissions.
+    """
+    if interaction.user.guild_permissions.administrator:
+        return True
+    cfg = get_config(interaction.guild_id)
+    if cfg and cfg.leadership_role_name:
+        if cfg.leadership_role_name in [r.name for r in interaction.user.roles]:
+            return True
+    return False
+
+
 class SetupCog(commands.Cog):
     def __init__(self, bot):
         self.bot = bot
@@ -677,12 +693,18 @@ class SetupCog(commands.Cog):
                 "✅ Configuration reset. Run `/setup` to configure the bot again.",
                 ephemeral=True,
             )
+        else:
+            await interaction.followup.send(
+                "✅ Reset cancelled. Your configuration is still active and has not been reset.",
+                ephemeral=True,
+            )
 
     @app_commands.command(name="setup_train", description="Configure the train schedule — tab, themes, tones, and prompt template")
     async def setup_train(self, interaction: discord.Interaction):
-        if not interaction.user.guild_permissions.administrator:
+        if not _has_leadership_or_admin(interaction):
             await interaction.response.send_message(
-                "⛔ Only server administrators can run `/setup_train`.", ephemeral=True
+                "⛔ You need the leadership role (or admin) to run `/setup_train`.",
+                ephemeral=True,
             )
             return
         await interaction.response.send_message(
@@ -692,9 +714,10 @@ class SetupCog(commands.Cog):
 
     @app_commands.command(name="setup_growth", description="Configure growth tracking — source tab, metrics, and snapshot frequency")
     async def setup_growth(self, interaction: discord.Interaction):
-        if not interaction.user.guild_permissions.administrator:
+        if not _has_leadership_or_admin(interaction):
             await interaction.response.send_message(
-                "⛔ Only server administrators can run `/setup_growth`.", ephemeral=True
+                "⛔ You need the leadership role (or admin) to run `/setup_growth`.",
+                ephemeral=True,
             )
             return
         await interaction.response.send_message(
@@ -704,9 +727,10 @@ class SetupCog(commands.Cog):
 
     @app_commands.command(name="setup_birthdays", description="Configure birthday tracking — sheet tab, columns, and lookahead days")
     async def setup_birthdays(self, interaction: discord.Interaction):
-        if not interaction.user.guild_permissions.administrator:
+        if not _has_leadership_or_admin(interaction):
             await interaction.response.send_message(
-                "⛔ Only server administrators can run `/setup_birthdays`.", ephemeral=True
+                "⛔ You need the leadership role (or admin) to run `/setup_birthdays`.",
+                ephemeral=True,
             )
             return
         await interaction.response.send_message(
@@ -716,9 +740,10 @@ class SetupCog(commands.Cog):
 
     @app_commands.command(name="setup_desertstorm", description="Configure Desert Storm mail template and time options")
     async def setup_desertstorm(self, interaction: discord.Interaction):
-        if not interaction.user.guild_permissions.administrator:
+        if not _has_leadership_or_admin(interaction):
             await interaction.response.send_message(
-                "⛔ Only server administrators can run `/setup_desertstorm`.", ephemeral=True
+                "⛔ You need the leadership role (or admin) to run `/setup_desertstorm`.",
+                ephemeral=True,
             )
             return
         await interaction.response.send_message(
@@ -728,9 +753,10 @@ class SetupCog(commands.Cog):
 
     @app_commands.command(name="setup_canyonstorm", description="Configure Canyon Storm mail template and time options")
     async def setup_canyonstorm(self, interaction: discord.Interaction):
-        if not interaction.user.guild_permissions.administrator:
+        if not _has_leadership_or_admin(interaction):
             await interaction.response.send_message(
-                "⛔ Only server administrators can run `/setup_canyonstorm`.", ephemeral=True
+                "⛔ You need the leadership role (or admin) to run `/setup_canyonstorm`.",
+                ephemeral=True,
             )
             return
         await interaction.response.send_message(
@@ -740,9 +766,10 @@ class SetupCog(commands.Cog):
 
     @app_commands.command(name="setup_events", description="Add or edit an event type for announcements (Marauder, Siege, etc.)")
     async def setup_events(self, interaction: discord.Interaction):
-        if not interaction.user.guild_permissions.administrator:
+        if not _has_leadership_or_admin(interaction):
             await interaction.response.send_message(
-                "⛔ Only server administrators can run `/setup_events`.", ephemeral=True
+                "⛔ You need the leadership role (or admin) to run `/setup_events`.",
+                ephemeral=True,
             )
             return
         await interaction.response.send_message(
@@ -750,17 +777,144 @@ class SetupCog(commands.Cog):
         )
         await run_event_setup(interaction, self.bot)
 
-    @app_commands.command(name="setup_survey", description="Configure survey — channels, sheet tabs, intro message, and questions")
+    @app_commands.command(name="setup_survey", description="Configure the default survey — channels, tabs, intro, and questions")
     async def setup_survey(self, interaction: discord.Interaction):
-        if not interaction.user.guild_permissions.administrator:
+        if not _has_leadership_or_admin(interaction):
             await interaction.response.send_message(
-                "⛔ Only server administrators can run `/setup_survey`.", ephemeral=True
+                "⛔ You need the leadership role (or admin) to run `/setup_survey`.",
+                ephemeral=True,
             )
             return
         await interaction.response.send_message(
             "⚙️ Starting survey setup — check the channel for prompts!", ephemeral=True
         )
         await run_survey_setup(interaction, self.bot)
+
+    @app_commands.command(
+        name="setup_survey_extra",
+        description="💎 Add or edit an extra named survey (Premium)",
+    )
+    async def setup_survey_extra(self, interaction: discord.Interaction):
+        if not _has_leadership_or_admin(interaction):
+            await interaction.response.send_message(
+                "⛔ You need the leadership role (or admin) to run `/setup_survey_extra`.",
+                ephemeral=True,
+            )
+            return
+
+        if not await premium.is_premium(
+            interaction.guild_id, interaction=interaction, bot=self.bot,
+        ):
+            await interaction.response.send_message(
+                embed=premium.premium_locked_embed(
+                    feature_label="Multiple surveys",
+                    description=(
+                        "Configuring more than one survey is part of LW Alliance "
+                        "Helper Premium. Run `/upgrade` to unlock it."
+                    ),
+                ),
+                view=premium.upgrade_view(),
+                ephemeral=True,
+            )
+            return
+
+        await interaction.response.send_message(
+            "💎 Starting extra-survey setup — check the channel for prompts!",
+            ephemeral=True,
+        )
+        await run_extra_survey_picker(interaction, self.bot)
+
+    @app_commands.command(
+        name="remove_survey",
+        description="💎 Remove an extra named survey (Premium)",
+    )
+    async def remove_survey(self, interaction: discord.Interaction):
+        if not _has_leadership_or_admin(interaction):
+            await interaction.response.send_message(
+                "⛔ You need the leadership role (or admin) to run `/remove_survey`.",
+                ephemeral=True,
+            )
+            return
+
+        if not await premium.is_premium(
+            interaction.guild_id, interaction=interaction, bot=self.bot,
+        ):
+            await interaction.response.send_message(
+                embed=premium.premium_locked_embed(
+                    feature_label="Multiple surveys",
+                    description="Multi-survey is Premium. Run `/upgrade` to unlock it.",
+                ),
+                view=premium.upgrade_view(),
+                ephemeral=True,
+            )
+            return
+
+        from config import list_surveys, delete_extra_survey
+        extras = [s for s in list_surveys(interaction.guild_id)
+                  if (s.get("survey_id") or "default") != "default"]
+        if not extras:
+            await interaction.response.send_message(
+                "*You have no extra surveys to remove.* "
+                "Use `/setup_survey_extra` to add one.",
+                ephemeral=True,
+            )
+            return
+
+        class RemovePickView(discord.ui.View):
+            def __init__(self):
+                super().__init__(timeout=120)
+                self.picked: dict | None = None
+                sel = discord.ui.Select(
+                    placeholder="Pick a survey to remove…",
+                    options=[
+                        discord.SelectOption(
+                            label=(s.get("survey_name") or s.get("survey_id"))[:100],
+                            value=s.get("survey_id"),
+                        ) for s in extras[:25]
+                    ],
+                )
+                async def _cb(inter: discord.Interaction):
+                    sid = sel.values[0]
+                    self.picked = next((s for s in extras if s.get("survey_id") == sid), None)
+                    sel.disabled = True
+                    name = self.picked.get("survey_name", sid) if self.picked else sid
+                    await inter.response.edit_message(
+                        content=f"⚠️ Confirm: remove **{name}**?",
+                        view=ConfirmRemoveView(self.picked),
+                    )
+                    self.stop()
+                sel.callback = _cb
+                self.add_item(sel)
+
+        class ConfirmRemoveView(discord.ui.View):
+            def __init__(self, target: dict | None):
+                super().__init__(timeout=120)
+                self.target = target
+
+            @discord.ui.button(label="🗑️ Remove", style=discord.ButtonStyle.danger)
+            async def confirm(self, inter: discord.Interaction, button: discord.ui.Button):
+                if not self.target:
+                    await inter.response.edit_message(content="❌ Nothing to remove.", view=None)
+                    self.stop()
+                    return
+                ok = delete_extra_survey(interaction.guild_id, self.target["survey_id"])
+                msg = (
+                    f"🗑️ Removed **{self.target.get('survey_name')}**."
+                    if ok else "⚠️ Could not remove that survey."
+                )
+                await inter.response.edit_message(content=msg, view=None)
+                self.stop()
+
+            @discord.ui.button(label="❌ Cancel", style=discord.ButtonStyle.secondary)
+            async def cancel(self, inter: discord.Interaction, button: discord.ui.Button):
+                await inter.response.edit_message(content="❌ Cancelled. No surveys removed.", view=None)
+                self.stop()
+
+        await interaction.response.send_message(
+            "Pick which extra survey to remove:",
+            view=RemovePickView(),
+            ephemeral=True,
+        )
 
 # ── /Define Various Setup Commands ───────────────────────────────────────────────────────
 
@@ -2002,8 +2156,128 @@ async def run_train_setup(interaction: discord.Interaction, bot):
     wizard_registry.unregister(user.id, cancel_event)
     print(f"[SETUP] Train config saved for guild {guild_id}")
 
-async def run_survey_setup(interaction: discord.Interaction, bot):
-    """Walk an admin through configuring the squad powers survey."""
+async def run_extra_survey_picker(interaction: discord.Interaction, bot):
+    """
+    Premium-only entry point for managing extra named surveys. Prompts the
+    user to either pick an existing extra to edit, or create a new one,
+    then dispatches to `run_survey_setup` with the right `target_survey_id`.
+    """
+    import re as _re
+    from config import list_surveys
+
+    guild_id = interaction.guild_id
+    channel  = interaction.channel
+    user     = interaction.user
+
+    extras = [s for s in list_surveys(guild_id)
+              if (s.get("survey_id") or "default") != "default"]
+
+    class ExtraPickView(discord.ui.View):
+        def __init__(self):
+            super().__init__(timeout=180)
+            self.choice = None     # "new" | "edit"
+            self.edit_target: dict | None = None
+
+            if extras:
+                sel = discord.ui.Select(
+                    placeholder="Pick an existing survey to edit…",
+                    options=[
+                        discord.SelectOption(
+                            label=(s.get("survey_name") or s.get("survey_id"))[:100],
+                            value=s.get("survey_id"),
+                        ) for s in extras[:25]
+                    ],
+                )
+                async def _cb(inter: discord.Interaction):
+                    sid = sel.values[0]
+                    self.edit_target = next((s for s in extras if s.get("survey_id") == sid), None)
+                    self.choice = "edit"
+                    for item in self.children: item.disabled = True
+                    name = self.edit_target.get("survey_name") if self.edit_target else sid
+                    await inter.response.edit_message(content=f"✏️ Editing **{name}**…", view=self)
+                    self.stop()
+                sel.callback = _cb
+                self.add_item(sel)
+
+        @discord.ui.button(label="➕ New survey", style=discord.ButtonStyle.success)
+        async def new_btn(self, inter: discord.Interaction, button: discord.ui.Button):
+            self.choice = "new"
+            for item in self.children: item.disabled = True
+            await inter.response.edit_message(content="➕ Adding a new survey…", view=self)
+            self.stop()
+
+    pick = ExtraPickView()
+    await channel.send(
+        "💎 **Extra Survey Manager**\n"
+        f"You have **{len(extras)}** extra survey(s). "
+        "Pick one to edit, or click **New survey** to add another.",
+        view=pick,
+    )
+    await pick.wait()
+    if pick.choice is None:
+        await channel.send("⏰ Timed out. Run `/setup_survey_extra` to start again.")
+        return
+
+    if pick.choice == "edit":
+        target = pick.edit_target or {}
+        await run_survey_setup(
+            interaction, bot,
+            target_survey_id=target.get("survey_id"),
+            target_survey_name=target.get("survey_name"),
+        )
+        return
+
+    # ── New survey: ask for a display name and derive an id slug. ──────────────
+    def check(m):
+        return m.author == user and m.channel == channel
+
+    await channel.send(
+        "**Survey Name**\n"
+        "Type a short display name for this new survey (e.g. `Off-Season Powers` "
+        "or `Recruit Intake`). This is what leadership and members will see."
+    )
+    try:
+        name_reply = await bot.wait_for("message", check=check, timeout=180)
+    except asyncio.TimeoutError:
+        await channel.send("⏰ Timed out. Run `/setup_survey_extra` to start again.")
+        return
+
+    survey_name = (name_reply.content or "").strip()[:60]
+    if not survey_name:
+        await channel.send("⚠️ Empty name — aborting. Run `/setup_survey_extra` to try again.")
+        return
+
+    base_slug   = _re.sub(r"[^a-z0-9]+", "-", survey_name.lower()).strip("-") or "survey"
+    existing_ids = {s.get("survey_id") for s in extras}
+    survey_id   = base_slug
+    suffix      = 2
+    while survey_id in existing_ids:
+        survey_id = f"{base_slug}-{suffix}"
+        suffix   += 1
+
+    await channel.send(
+        f"✅ Creating new survey **{survey_name}** (id: `{survey_id}`).\n"
+        f"Walking you through the same setup steps as `/setup_survey`…"
+    )
+    await run_survey_setup(
+        interaction, bot,
+        target_survey_id=survey_id,
+        target_survey_name=survey_name,
+    )
+
+
+async def run_survey_setup(interaction: discord.Interaction, bot,
+                           target_survey_id: str | None = None,
+                           target_survey_name: str | None = None):
+    """
+    Walk an admin through configuring a survey.
+
+    `target_survey_id` controls *which* survey is being edited:
+      • `None` (default) — edits the guild's main survey
+        (`guild_survey_config` row).
+      • Any other id  — edits or creates an entry in `guild_extra_surveys`,
+        which premium guilds use for additional named surveys.
+    """
     import wizard_registry
     guild_id = interaction.guild_id
     channel  = interaction.channel
@@ -2013,13 +2287,25 @@ async def run_survey_setup(interaction: discord.Interaction, bot):
     def check(m):
         return m.author == user and m.channel == channel
 
-    from config import get_survey_config, save_survey_config, OGV_SURVEY_QUESTIONS
-    current   = get_survey_config(guild_id)
+    from config import (
+        get_survey_config, save_survey_config, OGV_SURVEY_QUESTIONS,
+        get_survey, save_extra_survey,
+    )
+
+    if target_survey_id is None:
+        current = get_survey_config(guild_id)
+        wizard_label = "Survey Setup"
+    else:
+        current = get_survey(guild_id, target_survey_id) or {}
+        # Carry the existing name through so we can preserve it on save.
+        if not target_survey_name:
+            target_survey_name = current.get("survey_name") or target_survey_id
+        wizard_label = f"Survey Setup — {target_survey_name}"
     questions = list(current.get("questions") or [])
 
     await channel.send(
-        "⚙️ **Survey Setup**\n"
-        "Configure the squad powers survey for your alliance."
+        f"⚙️ **{wizard_label}**\n"
+        "Configure the survey for your alliance."
     )
 
     is_premium_flag = await premium.is_premium(guild_id, interaction=interaction)
@@ -2449,28 +2735,53 @@ async def run_survey_setup(interaction: discord.Interaction, bot):
         return
 
     # ── Save — including channel IDs ───────────────────────────────────────────
-    save_survey_config(guild_id, tab_squad_powers, tab_history, questions, intro_message)
-
-    # Also persist survey channels to guild_configs
-    from config import update_config_field
-    update_config_field(guild_id, "survey_channel_id",        survey_channel_id)
-    update_config_field(guild_id, "survey_notify_channel_id", survey_notify_channel_id)
+    if target_survey_id is None:
+        # Default survey: legacy single-row storage, plus the channel IDs go
+        # to guild_configs so older code that reads them stays happy.
+        save_survey_config(guild_id, tab_squad_powers, tab_history, questions, intro_message)
+        from config import update_config_field
+        update_config_field(guild_id, "survey_channel_id",        survey_channel_id)
+        update_config_field(guild_id, "survey_notify_channel_id", survey_notify_channel_id)
+        next_step_cmd = "/setup_survey"
+    else:
+        # Extra survey: save into guild_extra_surveys; preserve any custom
+        # reminder body the leadership previously set.
+        save_extra_survey(
+            guild_id, target_survey_id,
+            survey_name=target_survey_name or target_survey_id,
+            tab_squad_powers=tab_squad_powers,
+            tab_history=tab_history,
+            questions=questions,
+            intro_message=intro_message,
+            survey_channel_id=survey_channel_id,
+            notify_channel_id=survey_notify_channel_id,
+            reminder_message=current.get("reminder_message", "") or "",
+            reminder_enabled=int(current.get("reminder_enabled") or 0),
+        )
+        next_step_cmd = "/setup_survey_extra"
 
     q_summary = "\n".join(
         f"• **{q['label']}** — {q['type']}"
         + (f" ({', '.join(q['options'])})" if q['type'] == 'dropdown' else "")
         for q in questions
     )
-    embed = discord.Embed(title="✅ Survey Configured", color=discord.Color.green())
+    title = (
+        f"✅ Survey Configured — {target_survey_name}"
+        if target_survey_id else "✅ Survey Configured"
+    )
+    embed = discord.Embed(title=title, color=discord.Color.green())
     embed.add_field(name="Survey Channel",      value=f"<#{survey_channel_id}>",        inline=True)
     embed.add_field(name="Notification Channel",value=f"<#{survey_notify_channel_id}>", inline=True)
     embed.add_field(name="Stats Tab",           value=tab_squad_powers,                  inline=True)
     embed.add_field(name="History Tab",         value=tab_history,                       inline=True)
     embed.add_field(name="Questions",           value=q_summary[:1024],                  inline=False)
-    embed.set_footer(text="Run /setup_survey again to update. Run /survey_post to post the survey button.")
+    embed.set_footer(
+        text=f"Run {next_step_cmd} again to update. Run /survey_post to post the survey button."
+    )
     await channel.send(embed=embed)
     wizard_registry.unregister(user.id, cancel_event)
-    print(f"[SETUP] Survey config saved for guild {guild_id} — {len(questions)} questions")
+    print(f"[SETUP] Survey config saved for guild {guild_id} "
+          f"(survey_id={target_survey_id or 'default'}) — {len(questions)} questions")
 
 async def run_storm_setup(interaction: discord.Interaction, bot, event_type: str):
     """Shared setup wizard for Desert Storm and Canyon Storm."""
@@ -2531,7 +2842,7 @@ async def run_storm_setup(interaction: discord.Interaction, bot, event_type: str
     default_tab = current.get("tab_name") or ("DS Assignments" if event_type == "DS" else "CS Assignments")
     tab_name    = await ask_keep_or_change(
         channel,
-        f"**Step 1 of 4 — Sheet Tab**\n"
+        f"**Step 1 of 5 — Sheet Tab**\n"
         f"Which tab in your Google Sheet stores the {label} zone assignments?\n"
         f"⚠️ *Make sure this tab exists in your sheet before continuing.*\n"
         f"ℹ️ *The bot will manage the data structure of this tab automatically — "
@@ -2573,7 +2884,7 @@ async def run_storm_setup(interaction: discord.Interaction, bot, event_type: str
 
     team_view = TeamChoiceView()
     await channel.send(
-        f"**Step 2 of 4 — Which teams do you run for {label}?**",
+        f"**Step 2 of 5 — Which teams do you run for {label}?**",
         view=team_view,
     )
     await team_view.wait()
@@ -2589,7 +2900,7 @@ async def run_storm_setup(interaction: discord.Interaction, bot, event_type: str
         include_threads=is_premium_flag,
     )
     await channel.send(
-        f"**Step 3 of 4 — Storm Log Channel**\n"
+        f"**Step 3 of 5 — Storm Log Channel**\n"
         f"Select the channel where {label} participation logs will be posted:",
         view=log_ch_view,
     )
@@ -2599,7 +2910,26 @@ async def run_storm_setup(interaction: discord.Interaction, bot, event_type: str
         return
     log_channel_id = log_ch_view.selected_channel.id
 
-    # ── Step 4: Mail template(s) ───────────────────────────────────────────────
+    # ── Step 4: Post channel (where /[event]_draft posts the final mail) ─────
+    post_ch_view = ChannelSelectStep(
+        f"Select the {label} mail post channel...",
+        suggested_name=f"{'desert' if event_type == 'DS' else 'canyon'}-storm",
+        include_threads=is_premium_flag,
+    )
+    await channel.send(
+        f"**Step 4 of 5 — Mail Post Channel**\n"
+        f"When leadership clicks **Post & Copy** at the end of `/"
+        f"{'desertstorm' if event_type == 'DS' else 'canyonstorm'}_draft`, "
+        f"the finished mail will be posted to this channel:",
+        view=post_ch_view,
+    )
+    await post_ch_view.wait()
+    if not post_ch_view.confirmed:
+        await channel.send(f"⏰ Timed out. Run `/{cmd_name}` to start again.")
+        return
+    post_channel_id = post_ch_view.selected_channel.id
+
+    # ── Step 5: Mail template(s) ───────────────────────────────────────────────
 
     async def get_template(team_label: str) -> str | None:
         """Get template for one team — show default with use/edit choice."""
@@ -2683,7 +3013,7 @@ async def run_storm_setup(interaction: discord.Interaction, bot, event_type: str
 
         shared_view = SharedTemplateView()
         await channel.send(
-            "**Step 4 of 4 — Mail Template**\n"
+            "**Step 5 of 5 — Mail Template**\n"
             "Do you want one template that applies to both teams, or separate templates per team?",
             view=shared_view,
         )
@@ -2704,7 +3034,7 @@ async def run_storm_setup(interaction: discord.Interaction, bot, event_type: str
 
     else:
         team_label = "Team A" if teams == "A" else "Team B"
-        await channel.send("**Step 4 of 4 — Mail Template**")
+        await channel.send("**Step 5 of 5 — Mail Template**")
         template = await get_template(team_label)
         if template is None:
             return
@@ -2715,12 +3045,15 @@ async def run_storm_setup(interaction: discord.Interaction, bot, event_type: str
     from config import save_storm_config, update_config_field
     if template_a:
         save_storm_config(guild_id, f"{event_type}_A", tab_name, template_a,
-                          "", "", "", "", "", "", timezone, log_channel_id)
+                          "", "", "", "", "", "", timezone, log_channel_id,
+                          post_channel_id=post_channel_id)
     if template_b:
         save_storm_config(guild_id, f"{event_type}_B", tab_name, template_b,
-                          "", "", "", "", "", "", timezone, log_channel_id)
+                          "", "", "", "", "", "", timezone, log_channel_id,
+                          post_channel_id=post_channel_id)
     save_storm_config(guild_id, event_type, tab_name, template_a or template_b,
-                      "", "", "", "", "", "", timezone, log_channel_id)
+                      "", "", "", "", "", "", timezone, log_channel_id,
+                      post_channel_id=post_channel_id)
 
     # Persist the log channel to guild_configs so storm_log.py can read it
     if event_type == "DS":
@@ -2733,6 +3066,7 @@ async def run_storm_setup(interaction: discord.Interaction, bot, event_type: str
     embed.add_field(name="Teams",        value={"both": "A & B", "A": "A only", "B": "B only"}[teams], inline=True)
     embed.add_field(name="Timezone",     value=tz_label, inline=True)
     embed.add_field(name="Log Channel",  value=f"<#{log_channel_id}>", inline=True)
+    embed.add_field(name="Post Channel", value=f"<#{post_channel_id}>", inline=True)
     if template_a:
         embed.add_field(name="Template A Preview",
                         value=f"```{template_a[:150]}{'...' if len(template_a) > 150 else ''}```",
@@ -2914,26 +3248,40 @@ async def run_event_setup(interaction: discord.Interaction, bot):
         tz_label       = TIMEZONE_LABELS.get(timezone, timezone)
         # `draft_time` is stored in 24h format ("12:00"); show it as-is in the
         # default button label, but accept either format from user input.
-        draft_time_raw = await ask_keep_or_change(
-            channel,
-            f"**Step 3 of 5 — Draft Posting Time**\n"
-            f"What time should the bot post the draft each event day? *(in {tz_label})*\n"
-            f"*(e.g. `12:00pm` for noon)*",
-            default=draft_time or "12:00",
-            modal_title="Draft Posting Time",
-            modal_label="Time",
-            timeout_cmd="setup_events",
-        )
-        if not draft_time_raw:
-            return
-        parsed_draft = _parse_12h_time(draft_time_raw)
-        if parsed_draft:
-            draft_time = parsed_draft
-        elif len(draft_time_raw) == 5 and draft_time_raw[2] == ":" and draft_time_raw.replace(":", "").isdigit():
-            draft_time = draft_time_raw   # already 24h
-        else:
-            await channel.send("⚠️ Could not read that time. Try `12:00pm`. Run `/setup_events` to try again.")
-            return
+        # Re-prompt up to 3 times on unparseable input before bailing out.
+        attempts_left = 3
+        while True:
+            draft_time_raw = await ask_keep_or_change(
+                channel,
+                f"**Step 3 of 5 — Draft Posting Time**\n"
+                f"What time should the bot post the draft each event day? *(in {tz_label})*\n"
+                f"*(e.g. `12:00pm` for noon)*",
+                default=draft_time or "12:00",
+                modal_title="Draft Posting Time",
+                modal_label="Time",
+                timeout_cmd="setup_events",
+            )
+            if not draft_time_raw:
+                return
+            parsed_draft = _parse_12h_time(draft_time_raw)
+            if parsed_draft:
+                draft_time = parsed_draft
+                break
+            if (len(draft_time_raw) == 5 and draft_time_raw[2] == ":"
+                    and draft_time_raw.replace(":", "").isdigit()):
+                draft_time = draft_time_raw   # already 24h
+                break
+            attempts_left -= 1
+            if attempts_left <= 0:
+                await channel.send(
+                    "⚠️ Could not read that time after a few tries. "
+                    "Run `/setup_events` to start over."
+                )
+                return
+            await channel.send(
+                f"⚠️ Could not read **`{draft_time_raw}`** as a time. "
+                f"Try `12:00pm`, `9:00am`, or `15:30`. Let's try once more."
+            )
 
         warn_view = YesNoView()
         await channel.send(
@@ -3076,34 +3424,49 @@ async def run_event_setup(interaction: discord.Interaction, bot):
                 name      = name_raw.strip() or (existing['name'] if existing else "")
                 short_key = existing['short_key'] if existing else _re.sub(r"[^a-z0-9]+", "_", name.lower()).strip("_")
 
-                # Time
+                # Time — re-prompt up to 3 times on unparseable input.
                 existing_time = existing['default_time'] if existing else ""
-                if existing_time:
-                    time_raw = await ask_keep_or_change(
-                        channel,
-                        f"**{name} — Event Time**\n"
-                        f"What time does this event usually start? *(in {tz_label})*\n"
-                        f"*(e.g. `10:15pm`, `9:00am`)*",
-                        default=existing_time,
-                        modal_title="Event Time",
-                        modal_label="Time",
-                        timeout_cmd="setup_events",
-                    )
-                else:
-                    time_raw = await ask_text(
-                        f"**{name} — Event Time**\n"
-                        f"What time does this event usually start? *(in {tz_label})*\n"
-                        f"*(e.g. `10:15pm`, `9:00am`)*"
-                    )
-                if not time_raw:
-                    return False
-                default_time = _parse_12h_time(time_raw)
-                if not default_time:
-                    if len(time_raw) == 5 and time_raw[2] == ":" and time_raw.replace(":", "").isdigit():
-                        default_time = time_raw   # already 24h (Use default click)
+                attempts_left = 3
+                default_time  = None
+                while True:
+                    if existing_time:
+                        time_raw = await ask_keep_or_change(
+                            channel,
+                            f"**{name} — Event Time**\n"
+                            f"What time does this event usually start? *(in {tz_label})*\n"
+                            f"*(e.g. `10:15pm`, `9:00am`)*",
+                            default=existing_time,
+                            modal_title="Event Time",
+                            modal_label="Time",
+                            timeout_cmd="setup_events",
+                        )
                     else:
-                        await channel.send("⚠️ Could not read that time. Try `10:15pm`. Run `/setup_events` to try again.")
+                        time_raw = await ask_text(
+                            f"**{name} — Event Time**\n"
+                            f"What time does this event usually start? *(in {tz_label})*\n"
+                            f"*(e.g. `10:15pm`, `9:00am`)*"
+                        )
+                    if not time_raw:
                         return False
+                    parsed = _parse_12h_time(time_raw)
+                    if parsed:
+                        default_time = parsed
+                        break
+                    if (len(time_raw) == 5 and time_raw[2] == ":"
+                            and time_raw.replace(":", "").isdigit()):
+                        default_time = time_raw   # already 24h
+                        break
+                    attempts_left -= 1
+                    if attempts_left <= 0:
+                        await channel.send(
+                            "⚠️ Could not read that time after a few tries. "
+                            "Run `/setup_events` to start over."
+                        )
+                        return False
+                    await channel.send(
+                        f"⚠️ Could not read **`{time_raw}`** as a time. "
+                        f"Try `10:15pm`, `9:00am`, or `21:00`. Let's try once more."
+                    )
 
                 # Schedule
                 sched_view = ScheduleTypeView()

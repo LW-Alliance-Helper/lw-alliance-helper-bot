@@ -70,7 +70,9 @@ async def run_blurb_wizard_for_entry(bot, channel, user, date_str: str, name: st
                 pass
             return reply.content.strip()
         except asyncio.TimeoutError:
-            await channel.send("⏰ Wizard timed out.")
+            await channel.send(
+                "⏰ Wizard timed out. Run `/train` and click **📋 Generate Prompt** to try again."
+            )
             return None
 
     async def wait_for_view(view, msg) -> bool:
@@ -102,7 +104,9 @@ async def run_blurb_wizard_for_entry(bot, channel, user, date_str: str, name: st
         if not await wait_for_view(theme_view, theme_msg):
             return False
         if theme_view.selected is None:
-            await channel.send("⏰ Wizard timed out.")
+            await channel.send(
+                "⏰ Wizard timed out. Run `/train` and click **📋 Generate Prompt** to try again."
+            )
             return False
         theme = theme_view.selected
         if theme == "Custom":
@@ -117,7 +121,9 @@ async def run_blurb_wizard_for_entry(bot, channel, user, date_str: str, name: st
         if not await wait_for_view(tone_view, tone_msg):
             return False
         if tone_view.selected is None:
-            await channel.send("⏰ Wizard timed out.")
+            await channel.send(
+                "⏰ Wizard timed out. Run `/train` and click **📋 Generate Prompt** to try again."
+            )
             return False
         tone = tone_view.selected
 
@@ -497,3 +503,8 @@ class TrainActionView(discord.ui.View):
         if view.confirmed:
             save_schedule({}, self.guild_id)
             await inter.followup.send("🗑️ Train schedule cleared.", ephemeral=True)
+        else:
+            await inter.followup.send(
+                "✅ Clear cancelled. Your train schedule is unchanged.",
+                ephemeral=True,
+            )

@@ -215,7 +215,7 @@ def is_premium_feature(name: str) -> bool:
 
 # ── User-facing messaging ─────────────────────────────────────────────────────
 
-PREMIUM_BRAND = "💎 Alliance Helper Premium"
+PREMIUM_BRAND = "💎 LW Alliance Helper Premium"
 
 
 def limit_reached_embed(

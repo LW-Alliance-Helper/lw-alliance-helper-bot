@@ -1,17 +1,21 @@
 """
 storm.py — Desert Storm mail generation
 
-Commands (OGV Leadership only, leadership channel only):
+Commands (Leadership only, leadership channel only):
   /desertstorm_draft — Generate a Desert Storm mail draft for Team A or Team B
   /canyonstorm_draft — Generate a Canyon Storm mail draft for Team A or Team B
 
 Flow:
-  1. Bot asks Team A or Team B
-  2. Bot posts last saved assignments for that team as an editable template
-  3. Leadership copies, edits, and pastes back
-  4. Bot asks for the time (4PM or 9PM)
-  5. Bot builds the full mail and posts a preview for approval
-  6. On approval, saves the new assignments as next week's default for that team
+  1. Pick Team (A or B)
+  2. Pick Time (option 1 or option 2 from the saved storm config)
+  3. Mail template — bot shows the team's saved template and offers buttons:
+       • Use as-is — skip straight to preview
+       • Edit     — leadership pastes the edited block; the parsed
+                    assignments are saved to the sheet, but the mail itself
+                    is **not** posted yet ("Template saved (not posted)")
+  4. Preview — final review with "Post & Copy" (posts to the configured
+     post-channel and prints a copyable code block in the leadership
+     channel) and "Cancel".
 
 Assignments are persisted in the DS Assignments tab of the Google Sheet.
 Sheet structure:
@@ -320,6 +324,55 @@ class TeamSelectView(discord.ui.View):
         self.stop()
 
 
+class TemplateUseEditView(discord.ui.View):
+    """Shown after time selection — leadership picks Use as-is or Edit."""
+
+    def __init__(self):
+        super().__init__(timeout=WIZARD_TIMEOUT)
+        self.choice = None  # "use" | "edit" | None (timeout)
+
+    @discord.ui.button(label="✅ Use as-is", style=discord.ButtonStyle.success)
+    async def use(self, interaction: discord.Interaction, button: discord.ui.Button):
+        self.choice = "use"
+        for item in self.children:
+            item.disabled = True
+        await interaction.response.edit_message(view=self)
+        self.stop()
+
+    @discord.ui.button(label="✏️ Edit", style=discord.ButtonStyle.primary)
+    async def edit(self, interaction: discord.Interaction, button: discord.ui.Button):
+        self.choice = "edit"
+        for item in self.children:
+            item.disabled = True
+        await interaction.response.edit_message(view=self)
+        self.stop()
+
+
+async def _post_and_copy(channel, post_channel_id: int, event_label: str,
+                          team: str, mail: str):
+    """
+    Post the finalized mail to the configured post-channel (if set) and
+    always send a copyable code block back into the leadership channel.
+    """
+    posted_to = None
+    if post_channel_id:
+        try:
+            target = channel.guild.get_channel(post_channel_id) if channel.guild else None
+            if target is None and getattr(channel, "_state", None):
+                target = channel._state.get_channel(post_channel_id)
+            if target is not None:
+                await target.send(mail)
+                posted_to = target.mention
+        except Exception as e:
+            print(f"[STORM] Failed to post mail to channel {post_channel_id}: {e}")
+
+    suffix = f" (also posted to {posted_to})" if posted_to else ""
+    await channel.send(
+        f"✅ **{event_label} Team {team} mail — ready to copy{suffix}:**\n"
+        f"```\n{mail}\n```"
+    )
+
+
 class TimeSelectView(discord.ui.View):
     """Dynamic time select — buttons built from guild storm config."""
     def __init__(self, event_type: str = "DS", guild_id: int = None):
@@ -355,48 +408,30 @@ class TimeSelectView(discord.ui.View):
 
 
 class StormApprovalView(discord.ui.View):
-    def __init__(self, bot, team: str, mail: str, zones: dict, subs: list, time_key: str):
+    def __init__(self, bot, team: str, mail: str, zones: dict, subs: list,
+                 time_key: str, post_channel_id: int = 0):
         super().__init__(timeout=3600)
-        self.bot      = bot
-        self.team     = team
-        self.mail     = mail
-        self.zones    = zones
-        self.subs     = subs
-        self.time_key = time_key
+        self.bot             = bot
+        self.team            = team
+        self.mail            = mail
+        self.zones           = zones
+        self.subs            = subs
+        self.time_key        = time_key
+        self.post_channel_id = post_channel_id
 
     async def _disable(self, interaction: discord.Interaction):
         for item in self.children:
             item.disabled = True
         await interaction.message.edit(view=self)
 
-    @discord.ui.button(label="✅ Looks Good — Save & Copy", style=discord.ButtonStyle.success)
+    @discord.ui.button(label="✅ Looks Good — Post & Copy", style=discord.ButtonStyle.success)
     async def approve(self, interaction: discord.Interaction, button: discord.ui.Button):
         await interaction.response.defer()
         await self._disable(interaction)
-        await asyncio.get_event_loop().run_in_executor(None, save_ds_assignments, self.team, self.zones, self.subs)
-        channel = interaction.channel
-        if channel:
-            await channel.send(
-                f"✅ **Desert Storm Team {self.team} mail — ready to copy:**\n"
-                f"```\n{self.mail}\n```"
-            )
-        self.stop()
-
-    @discord.ui.button(label="✏️ Edit & Redo", style=discord.ButtonStyle.primary)
-    async def edit(self, interaction: discord.Interaction, button: discord.ui.Button):
-        await interaction.response.defer()
-        await self._disable(interaction)
-        channel = interaction.channel
-        if channel:
-            template = build_ds_template(self.zones, self.subs)
-            await channel.send(
-                f"✏️ {interaction.user.mention} — copy and edit the block below, then paste it back:\n"
-                f"```\n{template}\n```"
-            )
-            await run_ds_edit_step(
-                self.bot, channel, interaction.user,
-                self.team, self.zones, self.subs, self.time_key
-            )
+        await _post_and_copy(
+            interaction.channel, self.post_channel_id,
+            "Desert Storm", self.team, self.mail,
+        )
         self.stop()
 
     @discord.ui.button(label="❌ Cancel", style=discord.ButtonStyle.danger)
@@ -454,88 +489,134 @@ async def _pick_storm_template(bot, channel, guild_id: int | None, event_type: s
     )
     await view.wait()
     if view.selected is None:
-        await channel.send("⏰ Template picker timed out.")
+        await channel.send(
+            "⏰ Template picker timed out. "
+            "Run `/desertstorm_draft` or `/canyonstorm_draft` to start over."
+        )
         return False
     return view.selected
 
 
-async def run_ds_edit_step(bot, channel, user, team: str, current_zones: dict,
-                            current_subs: list, time_key: str = None):
-    """Wait for edited template, parse it, optionally ask for time, then preview."""
+async def run_ds_draft_flow(bot, channel, user, team: str,
+                             current_zones: dict, current_subs: list):
+    """
+    Step 2-4 of /desertstorm_draft:
 
-    def check(m):
-        return m.author == user and m.channel == channel
+      Step 2 — Pick Time
+      Step 3 — Show template, choose Use as-is / Edit
+               (Edit asks the user to paste the edited block; the parsed
+               assignments are saved to the sheet but the mail is **not**
+               posted yet.)
+      Step 4 — Preview the rendered mail with Post & Copy / Cancel
 
-    # Ask for time if not already set
-    if time_key is None:
-        guild_id = getattr(getattr(channel, "guild", None), "id", None)
-        time_msg  = await channel.send("⏰ What time is Desert Storm this week?")
-        time_view = TimeSelectView(event_type="DS", guild_id=guild_id)
-        await time_msg.edit(view=time_view)
-        await time_view.wait()
-        try:
-            await time_msg.delete()
-        except discord.HTTPException:
-            pass
-        if time_view.selected is None:
-            await channel.send("⏰ Timed out. Use `/desertstorm_draft` to start again.")
-            return
-        time_key = time_view.selected
+    `current_zones` / `current_subs` are the team's last saved assignments
+    loaded from the sheet — used as the starting template.
+    """
+    guild_id = getattr(getattr(channel, "guild", None), "id", None)
 
-    # Wait for the pasted template
-    prompt = await channel.send(
-        f"📋 {user.mention} — paste your edited assignments below.\n"
-        f"*(10 minutes to respond — type `cancel` to stop)*"
-    )
-
+    # ── Step 2: Pick Time ─────────────────────────────────────────────────────
+    time_msg  = await channel.send("**Step 2 of 4 — Pick Time**\n⏰ What time is Desert Storm this week?")
+    time_view = TimeSelectView(event_type="DS", guild_id=guild_id)
+    await time_msg.edit(view=time_view)
+    await time_view.wait()
     try:
-        reply = await bot.wait_for("message", check=check, timeout=WIZARD_TIMEOUT)
-    except asyncio.TimeoutError:
+        await time_msg.delete()
+    except discord.HTTPException:
+        pass
+    if time_view.selected is None:
         await channel.send("⏰ Timed out. Use `/desertstorm_draft` to start again.")
+        return
+    time_key = time_view.selected
+
+    # ── Step 3: Mail Template — Use as-is or Edit ─────────────────────────────
+    template = build_ds_template(current_zones, current_subs)
+    use_view = TemplateUseEditView()
+    await channel.send(
+        f"**Step 3 of 4 — Mail Template (Team {team})**\n"
+        f"Here is the saved template for **Team {team}**:\n"
+        f"```\n{template}\n```\n"
+        f"Use it as-is, or edit it before posting?",
+        view=use_view,
+    )
+    await use_view.wait()
+    if use_view.choice is None:
+        await channel.send("⏰ Timed out. Use `/desertstorm_draft` to start again.")
+        return
+
+    zones, subs = current_zones, current_subs
+
+    if use_view.choice == "edit":
+        def check(m):
+            return m.author == user and m.channel == channel
+
+        prompt = await channel.send(
+            f"✏️ {user.mention} — copy the block above, make your edits, and paste it back below.\n"
+            f"*(10 minutes to respond — type `cancel` to stop)*"
+        )
+        try:
+            reply = await bot.wait_for("message", check=check, timeout=WIZARD_TIMEOUT)
+        except asyncio.TimeoutError:
+            await channel.send("⏰ Timed out. Use `/desertstorm_draft` to start again.")
+            try:
+                await prompt.delete()
+            except discord.HTTPException:
+                pass
+            return
+
         try:
             await prompt.delete()
         except discord.HTTPException:
             pass
-        return
 
-    try:
-        await prompt.delete()
-        await reply.delete()
-    except discord.HTTPException:
-        pass
+        if reply.content.strip().lower() == "cancel":
+            await channel.send("❌ Draft cancelled.")
+            return
 
-    if reply.content.strip().lower() == "cancel":
-        await channel.send("❌ Draft cancelled.")
-        return
+        edited_zones, edited_subs, errors = parse_ds_template(reply.content)
+        if not edited_zones:
+            await channel.send(
+                "⚠️ Could not parse any zone assignments. "
+                "Make sure the format matches the template and try `/desertstorm_draft` again."
+            )
+            return
+        if errors:
+            await channel.send(
+                "⚠️ Some lines were skipped:\n" + "\n".join(f"• {e}" for e in errors)
+            )
 
-    zones, subs, errors = parse_ds_template(reply.content)
+        zones, subs = edited_zones, edited_subs
 
-    if not zones:
-        await channel.send(
-            "⚠️ Could not parse any zone assignments. "
-            "Make sure the format matches the template and try `/desertstorm_draft` again."
+        # Save the edited assignments now so they become next week's default,
+        # but make it explicit we have NOT posted the mail yet.
+        await asyncio.get_event_loop().run_in_executor(
+            None, save_ds_assignments, team, zones, subs,
         )
-        return
-
-    if errors:
         await channel.send(
-            "⚠️ Some lines were skipped:\n" +
-            "\n".join(f"• {e}" for e in errors)
+            f"💾 **Team {team} template saved (not posted).** "
+            f"Review the preview below before sending it out."
         )
 
-    # 💎 Premium: when multiple templates exist, ask which one to use.
-    guild_id      = getattr(getattr(channel, "guild", None), "id", None)
+    # ── Step 4: Preview + Post & Copy ─────────────────────────────────────────
     template_name = await _pick_storm_template(bot, channel, guild_id, "DS")
     if template_name is False:
         return  # picker timed out
 
-    mail          = build_ds_mail(team, zones, subs, time_key,
-                                  guild_id=guild_id, template_name=template_name)
+    mail = build_ds_mail(
+        team, zones, subs, time_key,
+        guild_id=guild_id, template_name=template_name,
+    )
+
+    from config import get_storm_config
+    storm_cfg       = get_storm_config(guild_id, "DS") if guild_id else {}
+    post_channel_id = int(storm_cfg.get("post_channel_id") or 0)
+
     approval_view = StormApprovalView(
         bot=bot, team=team, mail=mail,
         zones=zones, subs=subs, time_key=time_key,
+        post_channel_id=post_channel_id,
     )
     await channel.send(
+        f"**Step 4 of 4 — Preview**\n"
         f"📬 **Desert Storm Team {team} mail preview:**\n\n{mail}\n\nDoes this look right?",
         view=approval_view,
     )
@@ -595,7 +676,7 @@ class StormCog(commands.Cog):
         # Step 1: Pick team
         team_msg  = await channel.send(
             f"🔥 **Desert Storm Draft** — started by {interaction.user.mention}\n\n"
-            f"Which team are you drafting for?"
+            f"**Step 1 of 4 — Pick Team**\nWhich team are you drafting for?"
         )
         team_view = TeamSelectView()
         await team_msg.edit(view=team_view)
@@ -612,21 +693,15 @@ class StormCog(commands.Cog):
 
         team = team_view.selected
 
-        # Step 2: Load and post the template for that team (run in executor to avoid blocking)
-        zones, subs = await asyncio.get_event_loop().run_in_executor(None, load_ds_assignments, team)
-        template    = build_ds_template(zones, subs)
-
-        await channel.send(
-            f"🔥 **Desert Storm Team {team} Draft**\n\n"
-            f"Copy the block below, make your changes, and paste it back. "
-            f"Anything that hasn't changed can stay as-is.\n"
-            f"```\n{template}\n```"
+        # Load the team's saved assignments so they become the starting template.
+        zones, subs = await asyncio.get_event_loop().run_in_executor(
+            None, load_ds_assignments, team,
         )
 
-        await interaction.followup.send(f"✅ Team {team} template posted.", ephemeral=True)
+        await interaction.followup.send(f"✅ Team {team} selected.", ephemeral=True)
 
-        # Step 3: Wait for edits, pick time, preview, approve
-        await run_ds_edit_step(self.bot, channel, interaction.user, team, zones, subs)
+        # Steps 2-4: Time → Template (Use as-is / Edit) → Preview (Post & Copy)
+        await run_ds_draft_flow(self.bot, channel, interaction.user, team, zones, subs)
 
 
     @app_commands.command(
@@ -646,7 +721,7 @@ class StormCog(commands.Cog):
         # Step 1: Pick team
         team_msg  = await channel.send(
             f"⚡ **Canyon Storm Draft** — started by {interaction.user.mention}\n\n"
-            f"Which team are you drafting for?"
+            f"**Step 1 of 4 — Pick Team**\nWhich team are you drafting for?"
         )
         team_view = TeamSelectView()
         await team_msg.edit(view=team_view)
@@ -663,20 +738,15 @@ class StormCog(commands.Cog):
 
         team = team_view.selected
 
-        # Step 2: Load and post the template
-        zones    = await asyncio.get_event_loop().run_in_executor(None, load_cs_assignments, team)
-        template = build_cs_template(zones)
-
-        await channel.send(
-            f"⚡ **Canyon Storm Team {team} Draft**\n\n"
-            f"Copy the block below, make your changes, and paste it back. "
-            f"Anything that hasn't changed can stay as-is.\n"
-            f"```\n{template}\n```"
+        # Load the team's saved assignments so they become the starting template.
+        zones = await asyncio.get_event_loop().run_in_executor(
+            None, load_cs_assignments, team,
         )
-        await interaction.followup.send(f"✅ Team {team} template posted.", ephemeral=True)
 
-        # Step 3: Wait for edits, pick time, preview, approve
-        await run_cs_edit_step(self.bot, channel, interaction.user, team, zones)
+        await interaction.followup.send(f"✅ Team {team} selected.", ephemeral=True)
+
+        # Steps 2-4: Time → Template (Use as-is / Edit) → Preview (Post & Copy)
+        await run_cs_draft_flow(self.bot, channel, interaction.user, team, zones)
 
 
     @app_commands.command(
@@ -1036,44 +1106,29 @@ def build_cs_mail(team: str, z: dict, time_key: str, guild_id: int = None,
 # ── CS Approval view ───────────────────────────────────────────────────────────
 
 class CSApprovalView(discord.ui.View):
-    def __init__(self, bot, team: str, mail: str, zones: dict, time_key: str):
+    def __init__(self, bot, team: str, mail: str, zones: dict, time_key: str,
+                 post_channel_id: int = 0):
         super().__init__(timeout=3600)
-        self.bot      = bot
-        self.team     = team
-        self.mail     = mail
-        self.zones    = zones
-        self.time_key = time_key
+        self.bot             = bot
+        self.team            = team
+        self.mail            = mail
+        self.zones           = zones
+        self.time_key        = time_key
+        self.post_channel_id = post_channel_id
 
     async def _disable(self, interaction: discord.Interaction):
         for item in self.children:
             item.disabled = True
         await interaction.message.edit(view=self)
 
-    @discord.ui.button(label="✅ Looks Good — Save & Copy", style=discord.ButtonStyle.success)
+    @discord.ui.button(label="✅ Looks Good — Post & Copy", style=discord.ButtonStyle.success)
     async def approve(self, interaction: discord.Interaction, button: discord.ui.Button):
         await interaction.response.defer()
         await self._disable(interaction)
-        await asyncio.get_event_loop().run_in_executor(None, save_cs_assignments, self.team, self.zones)
-        channel = interaction.channel
-        if channel:
-            await channel.send(
-                f"✅ **Canyon Storm Team {self.team} mail — ready to copy:**\n"
-                f"```\n{self.mail}\n```"
-            )
-        self.stop()
-
-    @discord.ui.button(label="✏️ Edit & Redo", style=discord.ButtonStyle.primary)
-    async def edit(self, interaction: discord.Interaction, button: discord.ui.Button):
-        await interaction.response.defer()
-        await self._disable(interaction)
-        channel = interaction.channel
-        if channel:
-            template = build_cs_template(self.zones)
-            await channel.send(
-                f"✏️ {interaction.user.mention} — copy and edit the block below, then paste it back:\n"
-                f"```\n{template}\n```"
-            )
-            await run_cs_edit_step(self.bot, channel, interaction.user, self.team, self.zones, self.time_key)
+        await _post_and_copy(
+            interaction.channel, self.post_channel_id,
+            "Canyon Storm", self.team, self.mail,
+        )
         self.stop()
 
     @discord.ui.button(label="❌ Cancel", style=discord.ButtonStyle.danger)
@@ -1086,73 +1141,113 @@ class CSApprovalView(discord.ui.View):
 
 # ── CS Core wizard flow ────────────────────────────────────────────────────────
 
-async def run_cs_edit_step(bot, channel, user, team: str, current_zones: dict, time_key: str = None):
-    def check(m):
-        return m.author == user and m.channel == channel
+async def run_cs_draft_flow(bot, channel, user, team: str, current_zones: dict):
+    """
+    Step 2-4 of /canyonstorm_draft: Time → Template (Use as-is / Edit) →
+    Preview (Post & Copy). See `run_ds_draft_flow` for the shape.
+    """
+    guild_id = getattr(getattr(channel, "guild", None), "id", None)
 
-    if time_key is None:
-        guild_id  = getattr(getattr(channel, "guild", None), "id", None)
-        time_msg  = await channel.send("⏰ What time is Canyon Storm this week?")
-        time_view = TimeSelectView(event_type="CS", guild_id=guild_id)
-        await time_msg.edit(view=time_view)
-        await time_view.wait()
-        try:
-            await time_msg.delete()
-        except discord.HTTPException:
-            pass
-        if time_view.selected is None:
-            await channel.send("⏰ Timed out. Use `/canyonstorm_draft` to start again.")
-            return
-        time_key = time_view.selected
-
-    prompt = await channel.send(
-        f"📋 {user.mention} — paste your edited assignments below.\n"
-        f"*(10 minutes to respond — type `cancel` to stop)*"
-    )
+    # ── Step 2: Pick Time ─────────────────────────────────────────────────────
+    time_msg  = await channel.send("**Step 2 of 4 — Pick Time**\n⏰ What time is Canyon Storm this week?")
+    time_view = TimeSelectView(event_type="CS", guild_id=guild_id)
+    await time_msg.edit(view=time_view)
+    await time_view.wait()
     try:
-        reply = await bot.wait_for("message", check=check, timeout=WIZARD_TIMEOUT)
-    except asyncio.TimeoutError:
+        await time_msg.delete()
+    except discord.HTTPException:
+        pass
+    if time_view.selected is None:
         await channel.send("⏰ Timed out. Use `/canyonstorm_draft` to start again.")
+        return
+    time_key = time_view.selected
+
+    # ── Step 3: Mail Template — Use as-is or Edit ─────────────────────────────
+    template = build_cs_template(current_zones)
+    use_view = TemplateUseEditView()
+    await channel.send(
+        f"**Step 3 of 4 — Mail Template (Team {team})**\n"
+        f"Here is the saved template for **Team {team}**:\n"
+        f"```\n{template}\n```\n"
+        f"Use it as-is, or edit it before posting?",
+        view=use_view,
+    )
+    await use_view.wait()
+    if use_view.choice is None:
+        await channel.send("⏰ Timed out. Use `/canyonstorm_draft` to start again.")
+        return
+
+    zones = current_zones
+
+    if use_view.choice == "edit":
+        def check(m):
+            return m.author == user and m.channel == channel
+
+        prompt = await channel.send(
+            f"✏️ {user.mention} — copy the block above, make your edits, and paste it back below.\n"
+            f"*(10 minutes to respond — type `cancel` to stop)*"
+        )
+        try:
+            reply = await bot.wait_for("message", check=check, timeout=WIZARD_TIMEOUT)
+        except asyncio.TimeoutError:
+            await channel.send("⏰ Timed out. Use `/canyonstorm_draft` to start again.")
+            try:
+                await prompt.delete()
+            except discord.HTTPException:
+                pass
+            return
+
         try:
             await prompt.delete()
         except discord.HTTPException:
             pass
-        return
 
-    try:
-        await prompt.delete()
-        await reply.delete()
-    except discord.HTTPException:
-        pass
+        if reply.content.strip().lower() == "cancel":
+            await channel.send("❌ Draft cancelled.")
+            return
 
-    if reply.content.strip().lower() == "cancel":
-        await channel.send("❌ Draft cancelled.")
-        return
+        edited_zones, errors = parse_cs_template(reply.content)
+        if not edited_zones:
+            await channel.send(
+                "⚠️ Could not parse any assignments. "
+                "Make sure the format matches the template and try `/canyonstorm_draft` again."
+            )
+            return
+        if errors:
+            await channel.send(
+                "⚠️ Some lines were skipped:\n" + "\n".join(f"• {e}" for e in errors)
+            )
 
-    zones, errors = parse_cs_template(reply.content)
+        zones = edited_zones
 
-    if not zones:
-        await channel.send(
-            "⚠️ Could not parse any assignments. "
-            "Make sure the format matches the template and try `/canyonstorm_draft` again."
+        await asyncio.get_event_loop().run_in_executor(
+            None, save_cs_assignments, team, zones,
         )
-        return
-
-    if errors:
         await channel.send(
-            "⚠️ Some lines were skipped:\n" + "\n".join(f"• {e}" for e in errors)
+            f"💾 **Team {team} template saved (not posted).** "
+            f"Review the preview below before sending it out."
         )
 
-    # 💎 Premium: when multiple templates exist, ask which one to use.
-    guild_id      = getattr(getattr(channel, "guild", None), "id", None)
+    # ── Step 4: Preview + Post & Copy ─────────────────────────────────────────
     template_name = await _pick_storm_template(bot, channel, guild_id, "CS")
     if template_name is False:
-        return  # picker timed out
+        return
 
-    mail          = build_cs_mail(team, zones, time_key,
-                                  guild_id=guild_id, template_name=template_name)
-    approval_view = CSApprovalView(bot=bot, team=team, mail=mail, zones=zones, time_key=time_key)
+    mail = build_cs_mail(
+        team, zones, time_key,
+        guild_id=guild_id, template_name=template_name,
+    )
+
+    from config import get_storm_config
+    storm_cfg       = get_storm_config(guild_id, "CS") if guild_id else {}
+    post_channel_id = int(storm_cfg.get("post_channel_id") or 0)
+
+    approval_view = CSApprovalView(
+        bot=bot, team=team, mail=mail, zones=zones,
+        time_key=time_key, post_channel_id=post_channel_id,
+    )
     await channel.send(
+        f"**Step 4 of 4 — Preview**\n"
         f"📬 **Canyon Storm Team {team} mail preview:**\n\n{mail}\n\nDoes this look right?",
         view=approval_view,
     )

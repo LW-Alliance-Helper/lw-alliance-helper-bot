@@ -363,6 +363,17 @@ class ShortSelectView(discord.ui.View):
 
 
 # ── Shared log flow ────────────────────────────────────────────────────────────
+#
+# TODO(ux-rework): the /[event]_participation flow needs a redesign before
+# Premium launch. Specifically:
+#   • Walk-through of "type a number" prompts is fragile (no retry on bad
+#     input, no per-question cancel) and should adopt the same retry-loop
+#     pattern survey.py uses for `ask_numeric` / `ask_date`.
+#   • The flow asks for several values in sequence with no recap or "did
+#     you mean to skip this?" affordance — a confirmation step would help.
+#   • Persistent reaction tally on the log message is not yet wired up to
+#     Member Roster so we can match votes ↔ Discord IDs reliably.
+# Tracked separately from the UX-cleanup PR; do not block on this.
 
 async def run_log_flow(bot, channel, user, event_type):
     is_ds        = event_type.upper() == "DS"
@@ -887,12 +898,18 @@ async def _show_storm_log(interaction: discord.Interaction, event: str, date: st
             None, list_recent_log_dates, event, recent_cap, interaction.guild_id,
         )
         if recent_dates and parsed_d not in recent_dates:
-            embed = premium.limit_reached_embed(
-                feature_label=f"{event_label} log lookback",
-                current=recent_cap, cap=recent_cap,
-                plural_unit="most-recent log entries",
+            embed = discord.Embed(
+                title=f"📊 {event_label} log lookback — Free tier limit",
+                description=(
+                    f"You can only see the **{recent_cap} most recent** log "
+                    f"entries with the free tier. Upgrade to "
+                    f"{premium.PREMIUM_BRAND} to unlock unlimited lookback."
+                ),
+                color=discord.Color.orange(),
             )
-            await interaction.followup.send(embed=embed, ephemeral=True)
+            await interaction.followup.send(
+                embed=embed, view=premium.upgrade_view(), ephemeral=True,
+            )
             return
 
     entry = await asyncio.get_event_loop().run_in_executor(

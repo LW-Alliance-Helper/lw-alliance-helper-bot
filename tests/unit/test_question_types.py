@@ -65,7 +65,7 @@ class TestNumeric:
         bot.wait_for    = AsyncMock(return_value=_make_message("42"))
 
         captured = {}
-        def fake_update(did, name, data, guild_id=None):
+        def fake_update(did, name, data, guild_id=None, survey=None):
             captured.update(data)
 
         with patch("survey.update_squad_powers", side_effect=fake_update), \
@@ -249,7 +249,7 @@ class TestMultiSelect:
 
         captured = {}
 
-        def grab(did, name, data, guild_id=None):
+        def grab(did, name, data, guild_id=None, survey=None):
             captured.update(data)
 
         with patch("survey.update_squad_powers", side_effect=grab), \

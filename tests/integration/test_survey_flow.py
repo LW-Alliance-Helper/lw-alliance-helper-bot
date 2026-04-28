@@ -74,10 +74,10 @@ class TestSurveyFlow:
         saved_powers  = {}
         saved_history = {}
 
-        def fake_update(discord_id, username, data, guild_id=None):
+        def fake_update(discord_id, username, data, guild_id=None, survey=None):
             saved_powers.update(data)
 
-        def fake_history(discord_id, username, data, guild_id=None):
+        def fake_history(discord_id, username, data, guild_id=None, survey=None):
             saved_history.update(data)
 
         with patch("survey.DropdownView", return_value=mock_dropdown), \
@@ -203,7 +203,7 @@ class TestSurveyFlow:
         bot.wait_for = AsyncMock(side_effect=fake_wait_for)
 
         captured = {}
-        def fake_update(discord_id, username, data, guild_id=None):
+        def fake_update(discord_id, username, data, guild_id=None, survey=None):
             captured.update(data)
 
         with patch("survey.update_squad_powers",   side_effect=fake_update), \

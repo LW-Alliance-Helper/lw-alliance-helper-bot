@@ -110,7 +110,7 @@ class TrainCog(commands.Cog):
 
     @app_commands.command(
         name="birthdays",
-        description="Show the next 14 days of upcoming birthdays from your member sheet",
+        description="Show upcoming birthdays from your member sheet (uses your configured lookahead window)",
     )
     async def birthdays(self, interaction: discord.Interaction):
         if not await _guard(interaction):
@@ -119,9 +119,13 @@ class TrainCog(commands.Cog):
         await interaction.response.defer(ephemeral=True)
 
         from config import get_birthday_config
-        guild_id = interaction.guild_id if hasattr(interaction, "guild_id") else None
-        bcfg     = get_birthday_config(guild_id) if guild_id else {}
-        tab_name = bcfg.get("tab_name") or get_member_tab_name(guild_id)
+        guild_id     = interaction.guild_id if hasattr(interaction, "guild_id") else None
+        bcfg         = get_birthday_config(guild_id) if guild_id else {}
+        tab_name     = bcfg.get("tab_name") or get_member_tab_name(guild_id)
+        # Use the configured lookahead window from /setup_birthdays. Defaults
+        # to 14 days when not set so a fresh install still shows something
+        # useful out of the box.
+        window_days  = int(bcfg.get("lookahead_days") or 14)
 
         try:
             members = await asyncio.get_event_loop().run_in_executor(
@@ -153,13 +157,13 @@ class TrainCog(commands.Cog):
             except ValueError:
                 continue
             days_away = (next_occurrence - today).days
-            if 0 <= days_away <= 14:
+            if 0 <= days_away <= window_days:
                 upcoming.append((days_away, next_occurrence, m["name"]))
 
         upcoming.sort(key=lambda t: (t[0], t[2].lower()))
 
         embed = discord.Embed(
-            title="🎂 Upcoming Birthdays — Next 14 Days",
+            title=f"🎂 Upcoming Birthdays — Next {window_days} Days",
             color=discord.Color.magenta(),
         )
 

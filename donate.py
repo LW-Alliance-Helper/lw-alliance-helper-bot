@@ -77,7 +77,7 @@ class DonateCog(commands.Cog):
 
     @app_commands.command(
         name="upgrade",
-        description="Unlock Alliance Helper Premium for this server",
+        description="Unlock LW Alliance Helper Premium for this server",
     )
     async def upgrade(self, interaction: discord.Interaction):
         is_premium = await premium.is_premium(
@@ -88,7 +88,7 @@ class DonateCog(commands.Cog):
             embed = discord.Embed(
                 title="💎 Premium is active",
                 description=(
-                    "This server already has Alliance Helper Premium — you're set! "
+                    "This server already has LW Alliance Helper Premium — you're set! "
                     "All premium features are unlocked. Thanks for supporting the bot."
                 ),
                 color=discord.Color.gold(),
@@ -97,7 +97,7 @@ class DonateCog(commands.Cog):
             return
 
         embed = discord.Embed(
-            title="💎 Alliance Helper Premium",
+            title="💎 LW Alliance Helper Premium",
             description=(
                 "Unlock the full power of Alliance Helper for your alliance.\n\n"
                 "**What you get:**\n"

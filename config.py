@@ -317,6 +317,7 @@ def init_db():
                 time_option_2_server TEXT    DEFAULT '',
                 timezone             TEXT    DEFAULT 'America/New_York',
                 log_channel_id       INTEGER DEFAULT 0,
+                post_channel_id      INTEGER DEFAULT 0,
                 PRIMARY KEY (guild_id, event_type)
             )
         """)
@@ -350,11 +351,24 @@ def init_db():
         for col, definition in [
             ("templates_json",   "TEXT DEFAULT '[]'"),
             ("default_template", "TEXT DEFAULT 'Default'"),
+            ("post_channel_id",  "INTEGER DEFAULT 0"),
         ]:
             try:
                 conn.execute(f"ALTER TABLE guild_storm_config ADD COLUMN {col} {definition}")
                 conn.commit()
                 print(f"[CONFIG] Added {col} to guild_storm_config")
+            except Exception:
+                pass
+
+        # ── guild_extra_surveys migrations (per-survey reminder fields) ────────
+        for col, definition in [
+            ("reminder_message", "TEXT DEFAULT ''"),
+            ("reminder_enabled", "INTEGER DEFAULT 0"),
+        ]:
+            try:
+                conn.execute(f"ALTER TABLE guild_extra_surveys ADD COLUMN {col} {definition}")
+                conn.commit()
+                print(f"[CONFIG] Added {col} to guild_extra_surveys")
             except Exception:
                 pass
 
@@ -743,6 +757,7 @@ def get_storm_config(guild_id: int, event_type: str) -> dict:
         "time_option_2_local":  "",
         "time_option_2_server": "",
         "timezone":             "America/New_York",
+        "post_channel_id":      0,
     }
     return _normalize_storm_templates(fallback, event_type)
 
@@ -753,13 +768,16 @@ def save_storm_config(guild_id: int, event_type: str, tab_name: str,
                       t2_label: str, t2_local: str, t2_server: str,
                       timezone: str, log_channel_id: int = 0,
                       templates: list | None = None,
-                      default_template: str = "Default"):
+                      default_template: str = "Default",
+                      post_channel_id: int = 0):
     """
     Insert or replace a guild's storm config.
 
     Backwards-compatible: callers may still pass `mail_template` as a single
     string. When `templates` is None, the string is wrapped as a single
     "Default" entry. Premium callers may pass a list of named templates.
+    `post_channel_id` is the channel where /[event]_draft will post the
+    final mail when leadership clicks "Post & Copy".
     """
     import json
     if templates is None:
@@ -775,8 +793,8 @@ def save_storm_config(guild_id: int, event_type: str, tab_name: str,
             "(guild_id, event_type, tab_name, mail_template, templates_json, default_template, "
             "time_option_1_label, time_option_1_local, time_option_1_server, "
             "time_option_2_label, time_option_2_local, time_option_2_server, "
-            "timezone, log_channel_id) "
-            "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?) "
+            "timezone, log_channel_id, post_channel_id) "
+            "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?) "
             "ON CONFLICT(guild_id, event_type) DO UPDATE SET "
             "tab_name=excluded.tab_name, mail_template=excluded.mail_template, "
             "templates_json=excluded.templates_json, "
@@ -788,10 +806,11 @@ def save_storm_config(guild_id: int, event_type: str, tab_name: str,
             "time_option_2_local=excluded.time_option_2_local, "
             "time_option_2_server=excluded.time_option_2_server, "
             "timezone=excluded.timezone, "
-            "log_channel_id=excluded.log_channel_id",
+            "log_channel_id=excluded.log_channel_id, "
+            "post_channel_id=excluded.post_channel_id",
             (guild_id, event_type, tab_name, default_text, templates_json, default_template,
              t1_label, t1_local, t1_server, t2_label, t2_local, t2_server,
-             timezone, log_channel_id)
+             timezone, log_channel_id, post_channel_id)
         )
         conn.commit()
 
@@ -1103,6 +1122,8 @@ def save_extra_survey(
     intro_message: str     = "",
     survey_channel_id: int = 0,
     notify_channel_id: int = 0,
+    reminder_message: str  = "",
+    reminder_enabled: int  = 0,
 ):
     """Insert or replace a non-default named survey for a guild."""
     import json
@@ -1112,8 +1133,9 @@ def save_extra_survey(
         conn.execute(
             "INSERT INTO guild_extra_surveys "
             "(guild_id, survey_id, survey_name, tab_squad_powers, tab_history, "
-            " questions, intro_message, survey_channel_id, notify_channel_id) "
-            "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?) "
+            " questions, intro_message, survey_channel_id, notify_channel_id, "
+            " reminder_message, reminder_enabled) "
+            "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?) "
             "ON CONFLICT(guild_id, survey_id) DO UPDATE SET "
             " survey_name=excluded.survey_name, "
             " tab_squad_powers=excluded.tab_squad_powers, "
@@ -1121,9 +1143,12 @@ def save_extra_survey(
             " questions=excluded.questions, "
             " intro_message=excluded.intro_message, "
             " survey_channel_id=excluded.survey_channel_id, "
-            " notify_channel_id=excluded.notify_channel_id",
+            " notify_channel_id=excluded.notify_channel_id, "
+            " reminder_message=excluded.reminder_message, "
+            " reminder_enabled=excluded.reminder_enabled",
             (guild_id, survey_id, survey_name, tab_squad_powers, tab_history,
-             json.dumps(questions), intro_message, survey_channel_id, notify_channel_id),
+             json.dumps(questions), intro_message, survey_channel_id, notify_channel_id,
+             reminder_message, reminder_enabled),
         )
         conn.commit()
 

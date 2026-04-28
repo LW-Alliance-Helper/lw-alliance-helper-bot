@@ -137,9 +137,10 @@ class MemberRosterCog(commands.Cog):
         description="💎 Manually rebuild the member roster sheet now",
     )
     async def sync_members(self, interaction: discord.Interaction):
-        if not interaction.user.guild_permissions.administrator:
+        from setup_cog import _has_leadership_or_admin
+        if not _has_leadership_or_admin(interaction):
             await interaction.response.send_message(
-                "⛔ Only server administrators can sync the member roster.",
+                "⛔ You need the leadership role (or admin) to sync the member roster.",
                 ephemeral=True,
             )
             return
@@ -194,9 +195,10 @@ class MemberRosterCog(commands.Cog):
         description="💎 Configure Member Roster Sync (Premium)",
     )
     async def setup_members(self, interaction: discord.Interaction):
-        if not interaction.user.guild_permissions.administrator:
+        from setup_cog import _has_leadership_or_admin
+        if not _has_leadership_or_admin(interaction):
             await interaction.response.send_message(
-                "⛔ Only server administrators can configure the member roster.",
+                "⛔ You need the leadership role (or admin) to configure the member roster.",
                 ephemeral=True,
             )
             return
@@ -208,7 +210,7 @@ class MemberRosterCog(commands.Cog):
                 embed=premium.premium_locked_embed(
                     feature_label="Member Roster Sync",
                     description=(
-                        "Member Roster Sync is part of Alliance Helper Premium. "
+                        "Member Roster Sync is part of LW Alliance Helper Premium. "
                         "Run `/upgrade` to unlock it."
                     ),
                 ),

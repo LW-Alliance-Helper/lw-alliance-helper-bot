@@ -10,9 +10,8 @@ questions, then:
 
 Slash commands:
   /survey_post   — Post (or repost) the persistent survey button (leadership)
-  /survey        — Show the configured survey questions
+  /survey        — Show configured survey(s) — list view when multiple are configured
   /survey_remind — DM roster members to fill the survey (Premium)
-  /surveys       — List all configured surveys (Premium can have multiple)
 
 Multi-survey support (Premium): a guild may have a "default" survey plus
 any number of extras, each with its own questions, channel, intro message,
@@ -814,14 +813,44 @@ class SurveyCog(commands.Cog):
 
     @app_commands.command(
         name="survey",
-        description="Show the configured survey questions",
+        description="Show configured survey(s) — list view when multiple are configured",
     )
     async def survey(self, interaction: discord.Interaction):
         if not await _guard(interaction):
             return
 
-        from config import get_survey_config
-        scfg = get_survey_config(interaction.guild_id)
+        from config import list_surveys, get_survey_config
+
+        surveys = list_surveys(interaction.guild_id)
+        # When a Premium guild has more than one survey, show the list view
+        # so leadership can see every configured survey at a glance. Free
+        # guilds (or Premium with only the default) still get the detail
+        # view of the single survey to match the prior behavior.
+        if len(surveys) > 1:
+            embed = discord.Embed(
+                title="📋 Configured Surveys",
+                color=discord.Color.blurple(),
+            )
+            for s in surveys[:25]:
+                sid    = s.get("survey_id") or "default"
+                name   = s.get("survey_name") or sid
+                n_q    = len(s.get("questions") or [])
+                tab    = s.get("tab_squad_powers") or "*not set*"
+                ch_id  = int(s.get("survey_channel_id") or 0)
+                ch_str = f"<#{ch_id}>" if ch_id else "_(uses default channel)_"
+                embed.add_field(
+                    name=f"{name}" + (" *(default)*" if sid == "default" else ""),
+                    value=f"**{n_q}** question(s) · Stats tab: `{tab}` · Channel: {ch_str}",
+                    inline=False,
+                )
+            embed.set_footer(
+                text="Run /setup_survey to edit the default. /setup_survey_extra to add or edit extras."
+            )
+            await interaction.response.send_message(embed=embed, ephemeral=True)
+            return
+
+        # Single-survey path (default config view).
+        scfg      = get_survey_config(interaction.guild_id)
         questions = scfg.get("questions") or []
 
         embed = discord.Embed(
@@ -853,42 +882,6 @@ class SurveyCog(commands.Cog):
         )
         embed.set_footer(text="Run /setup_survey to update. Run /survey_post to post the button.")
 
-        await interaction.response.send_message(embed=embed, ephemeral=True)
-
-    @app_commands.command(
-        name="surveys",
-        description="List all configured surveys (Premium can have multiple)",
-    )
-    async def surveys(self, interaction: discord.Interaction):
-        if not await _guard(interaction):
-            return
-
-        from config import list_surveys
-        surveys = list_surveys(interaction.guild_id)
-        if not surveys:
-            await interaction.response.send_message(
-                "*No surveys configured. Run `/setup_survey` to add one.*",
-                ephemeral=True,
-            )
-            return
-
-        embed = discord.Embed(
-            title="📋 Configured Surveys",
-            color=discord.Color.blurple(),
-        )
-        for s in surveys[:25]:
-            sid     = s.get("survey_id") or "default"
-            name    = s.get("survey_name") or sid
-            n_q     = len(s.get("questions") or [])
-            tab     = s.get("tab_squad_powers") or "*not set*"
-            ch_id   = int(s.get("survey_channel_id") or 0)
-            ch_str  = f"<#{ch_id}>" if ch_id else "_(uses default channel)_"
-            embed.add_field(
-                name=f"{name}" + (" *(default)*" if sid == "default" else ""),
-                value=f"**{n_q}** question(s) · Stats tab: `{tab}` · Channel: {ch_str}",
-                inline=False,
-            )
-        embed.set_footer(text="Run /setup_survey to add or edit. /survey_post to post the answer button.")
         await interaction.response.send_message(embed=embed, ephemeral=True)
 
     @app_commands.command(

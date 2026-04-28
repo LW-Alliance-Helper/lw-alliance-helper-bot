@@ -378,6 +378,7 @@ class ShortSelectView(discord.ui.View):
 async def run_log_flow(bot, channel, user, event_type):
     is_ds        = event_type.upper() == "DS"
     event_label  = "Desert Storm" if is_ds else "Canyon Storm"
+    log_cmd      = "/desertstorm_participation" if is_ds else "/canyonstorm_participation"
     cancel_event = asyncio.Event()
     active_logs[user.id] = cancel_event
 
@@ -406,7 +407,7 @@ async def run_log_flow(bot, channel, user, event_type):
                 pass
             return reply.content.strip()
         except asyncio.TimeoutError:
-            await channel.send("⏰ Timed out. Use the log command to start again.")
+            await channel.send(f"⏰ Timed out. Run `{log_cmd}` to start again.")
             return None
 
     async def wait_for_view(view, prompt_msg):
@@ -429,7 +430,7 @@ async def run_log_flow(bot, channel, user, event_type):
                 await prompt_msg.delete()
             except discord.HTTPException:
                 pass
-            await channel.send("⏰ Timed out. Use the log command to start again.")
+            await channel.send(f"⏰ Timed out. Run `{log_cmd}` to start again.")
             return False
         return True
 

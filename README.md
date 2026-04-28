@@ -252,13 +252,13 @@ The question builder supports two question types on the free tier:
 
 **💎 Premium adds three more question types:** Numeric (with min/max validation and re-prompt-on-bad-input), Multi-select (pick multiple options), and Date (formatted entry with `strptime` validation).
 
-**💎 Multi-survey (Premium):** alliances can configure more than one survey with `/setup_survey_extra` — each named survey has its own questions, channel, intro, notification target, and reminder message. `/remove_survey` removes an extra survey. `/surveys` lists everything configured.
+**💎 Multi-survey (Premium):** alliances can configure more than one survey with `/setup_survey_extra` — each named survey has its own questions, channel, intro, notification target, and reminder message. `/remove_survey` removes an extra survey. `/survey` switches to a list view when multiple surveys are configured so you can see them all at a glance.
 
 **Day-to-day use:**
 - Run `/survey_post` to post the answer button. Premium guilds with multiple surveys are prompted to pick which survey to post.
 - Members click **📋 Answer**, complete the survey in a private thread (named after the survey), and their data is saved automatically
 - Leadership sees a notification embed in the notification channel for each submission
-- Use `/survey` to see the default survey's questions, or `/surveys` to list every survey
+- Use `/survey` to see the configured survey — automatically switches to a list view when Premium has multiple
 - 💎 Use `/survey_remind` to DM every roster member a reminder. Premium guilds pick which survey to remind for; the per-survey reminder body is customisable.
 
 ---
@@ -292,7 +292,7 @@ For the full list of every slash command and what it does, run `/help` in your l
 | Situation | Command |
 |---|---|
 | Post or repost the survey button | `/survey_post` |
-| List every configured survey | `/surveys` |
+| View configured survey(s) (list view when multiple) | `/survey` |
 | 💎 Add or edit an extra survey (Premium) | `/setup_survey_extra` |
 | 💎 Remove an extra survey (Premium) | `/remove_survey` |
 | Manage the train schedule (add, update, generate prompt, clear) | `/train` |

@@ -511,8 +511,7 @@ async def help_slash(interaction: discord.Interaction):
             "`/setup_survey` — Configure the default survey (questions, channels, sheet tabs, intro)\n"
             "`/setup_survey_extra` — 💎 Add or edit an extra named survey (multi-survey)\n"
             "`/remove_survey` — 💎 Remove an extra named survey\n"
-            "`/survey` — Show the configured default survey's questions\n"
-            "`/surveys` — List every configured survey for this server\n"
+            "`/survey` — Show configured survey(s) — switches to a list view when multiple are configured\n"
             "`/survey_post` — Post (or repost) the answer button (Premium picks which survey)\n"
             "`/survey_remind` — 💎 DM every roster member a reminder to fill out the survey"
         ),

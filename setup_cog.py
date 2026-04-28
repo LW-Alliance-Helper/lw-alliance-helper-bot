@@ -2092,26 +2092,46 @@ async def run_train_setup(interaction: discord.Interaction, bot):
         reminder_channel_id = reminder_ch_view.selected_channel.id
 
         # ── Step 7b: Reminder time ─────────────────────────────────────────────
+        # Re-prompt up to 3 times on unparseable input rather than silently
+        # falling back to a default — gives leadership a chance to correct
+        # a typo without restarting the whole wizard.
         from config import get_config
         guild_cfg = get_config(guild_id)
         tz_label  = TIMEZONE_LABELS.get(guild_cfg.timezone if guild_cfg else "America/New_York", "ET")
-        time_raw  = await ask_keep_or_change(
-            channel,
-            f"**Step 7b of 7 — Reminder Time**\n"
-            f"What time should the reminder fire? *(in your timezone: {tz_label})*\n"
-            f"*(e.g. `10:00pm`, `9:00am`)*",
-            default="10:00pm",
-            modal_title="Reminder Time",
-            modal_label="Time",
-            timeout_cmd="setup_train",
-        )
-        if time_raw is None:
-            return
-        parsed = _parse_12h_time(time_raw)
-        if not parsed:
-            await channel.send("⚠️ Could not read that time. Using `10:00pm` as default.")
-            parsed = "22:00"
-        reminder_time = parsed
+        attempts_left = 3
+        reminder_time = "22:00"
+        while True:
+            time_raw = await ask_keep_or_change(
+                channel,
+                f"**Step 7b of 7 — Reminder Time**\n"
+                f"What time should the reminder fire? *(in your timezone: {tz_label})*\n"
+                f"*(e.g. `10:00pm`, `9:00am`)*",
+                default="10:00pm",
+                modal_title="Reminder Time",
+                modal_label="Time",
+                timeout_cmd="setup_train",
+            )
+            if time_raw is None:
+                return
+            parsed = _parse_12h_time(time_raw)
+            if parsed:
+                reminder_time = parsed
+                break
+            if (len(time_raw) == 5 and time_raw[2] == ":"
+                    and time_raw.replace(":", "").isdigit()):
+                reminder_time = time_raw  # already 24h
+                break
+            attempts_left -= 1
+            if attempts_left <= 0:
+                await channel.send(
+                    "⚠️ Could not read that time after a few tries. "
+                    "Run `/setup_train` to start over."
+                )
+                return
+            await channel.send(
+                f"⚠️ Could not read **`{time_raw}`** as a time. "
+                f"Try `10:00pm`, `9:00am`, or `22:00`. Let's try once more."
+            )
 
     # ── Save ───────────────────────────────────────────────────────────────────
     from config import save_train_config
@@ -3856,26 +3876,45 @@ async def run_birthday_setup(interaction: discord.Interaction, bot):
         reminder_channel_id = remind_ch_view.selected_channel.id
 
         # ── Step 8b: Reminder time ─────────────────────────────────────────────
+        # Re-prompt up to 3 times on unparseable input rather than silently
+        # falling back to a default.
         from config import get_config
         guild_cfg = get_config(guild_id)
         tz_label  = TIMEZONE_LABELS.get(guild_cfg.timezone if guild_cfg else "America/New_York", "your timezone")
-        time_raw  = await ask_keep_or_change(
-            channel,
-            f"**Step 8b of 8 — Reminder Time**\n"
-            f"What time should birthday announcements be posted? *(in {tz_label})*\n"
-            f"*(e.g. `8:00am`, `12:00pm`)*",
-            default="8:00am",
-            modal_title="Reminder Time",
-            modal_label="Time",
-            timeout_cmd="setup_birthdays",
-        )
-        if time_raw is None:
-            return
-        parsed = _parse_12h_time(time_raw)
-        if not parsed:
-            await channel.send("⚠️ Could not read that time. Using `8:00am` as default.")
-            parsed = "08:00"
-        reminder_time = parsed
+        attempts_left = 3
+        reminder_time = "08:00"
+        while True:
+            time_raw = await ask_keep_or_change(
+                channel,
+                f"**Step 8b of 8 — Reminder Time**\n"
+                f"What time should birthday announcements be posted? *(in {tz_label})*\n"
+                f"*(e.g. `8:00am`, `12:00pm`)*",
+                default="8:00am",
+                modal_title="Reminder Time",
+                modal_label="Time",
+                timeout_cmd="setup_birthdays",
+            )
+            if time_raw is None:
+                return
+            parsed = _parse_12h_time(time_raw)
+            if parsed:
+                reminder_time = parsed
+                break
+            if (len(time_raw) == 5 and time_raw[2] == ":"
+                    and time_raw.replace(":", "").isdigit()):
+                reminder_time = time_raw  # already 24h
+                break
+            attempts_left -= 1
+            if attempts_left <= 0:
+                await channel.send(
+                    "⚠️ Could not read that time after a few tries. "
+                    "Run `/setup_birthdays` to start over."
+                )
+                return
+            await channel.send(
+                f"⚠️ Could not read **`{time_raw}`** as a time. "
+                f"Try `8:00am`, `12:00pm`, or `08:00`. Let's try once more."
+            )
 
     # ── Save ───────────────────────────────────────────────────────────────────
     from config import save_birthday_config

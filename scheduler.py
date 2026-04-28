@@ -929,7 +929,7 @@ async def post_editor(bot, event_list: list[dict], event_key: str, run_date: dat
 
     await channel.send(
         f"📣 **Event Editor** — adjust today's event schedule, then build the announcement.\n\n"
-        f"**Current events:**\n" + "\n".join(lines) + "\n\n**Notes:** *None*",
+        f"**Current events:**\n" + "\n".join(lines) + "\n\n**Announcement text:** *None*",
         view=view,
     )
     print(f"[SCHEDULER] Event editor posted for {event_key}")

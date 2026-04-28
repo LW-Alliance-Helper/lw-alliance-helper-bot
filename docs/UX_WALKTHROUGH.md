@@ -380,27 +380,66 @@ Show all available bot commands grouped by feature area. **Tier:** Both.
 > - `/birthdays` — Show upcoming birthdays in the next 14 days
 >
 > **⚔️ Desert Storm**
-> - `/setup_desertstorm`, `/desertstorm`, `/desertstorm_draft`,
->   `/desertstorm_participation`, `/desertstorm_log [date]`
+> Generate weekly Desert Storm team mail drafts and log participation each event.
+> Setup Step 6 lets you turn on participation tracking and define exactly what you
+> want to log — vote count, sit-outs, custom questions — using free types (text,
+> yes/no, numeric, roster names) or 💎 Premium types (single-select, multi-select,
+> date).
+> - `/setup_desertstorm` — Configure teams, log channel, post channel, mail template, participation
+> - `/desertstorm` — Show current rosters and the active mail template
+> - `/desertstorm_draft` — Walk through team → time → template, then preview & post the mail
+> - `/desertstorm_participation` — Run the configurable participation log for this week
+> - `/desertstorm_log [date]` — View a Desert Storm log entry (free: 4 most recent / premium: all)
+> - `/desertstorm_remind` — 💎 DM every roster member to participate in this week's DS
 >
 > **🏜️ Canyon Storm**
-> - `/setup_canyonstorm`, `/canyonstorm`, `/canyonstorm_draft`,
->   `/canyonstorm_participation`, `/canyonstorm_log [date]`
+> Generate weekly Canyon Storm team mail drafts and log participation each event.
+> Same flow as Desert Storm — preview in leadership, post to a public channel,
+> plus configurable participation tracking on Setup Step 6.
+> - `/setup_canyonstorm` — Configure teams, log channel, post channel, mail template, participation
+> - `/canyonstorm` — Show current rosters and the active mail template
+> - `/canyonstorm_draft` — Walk through team → time → template, then preview & post the mail
+> - `/canyonstorm_participation` — Run the configurable participation log for this week
+> - `/canyonstorm_log [date]` — View a Canyon Storm log entry (free: 4 most recent / premium: all)
+> - `/canyonstorm_remind` — 💎 DM every roster member to participate in this week's CS
 >
-> **📋 Survey** — `/setup_survey`, `/survey`, `/survey_post`
-> **📈 Growth Tracking** — `/setup_growth`, `/growth`
+> **📋 Survey**
+> Collect member statistics through a private Discord thread survey. Each member
+> clicks the survey button, gets walked through your configured questions in
+> their own thread, and their answers land in your Google Sheet automatically.
+> Leadership sees a notification embed in the configured notify channel for
+> every submission.
+> - `/setup_survey` — Configure the default survey (questions, channels, sheet tabs, intro)
+> - `/survey` — View configured survey(s). 💎 Premium gets **Add / Edit / Remove** buttons here for managing multiple surveys.
+> - `/survey_post` — Post (or repost) the answer button (Premium picks which survey)
+> - `/survey_remind` — Send now or set up scheduled reminders. Free tier posts to a channel; 💎 Premium adds DM-via-roster delivery.
+>
+> **📈 Growth Tracking**
+> Take periodic snapshots of your members' stats to track alliance growth over
+> time. You define which metrics to track and how often — snapshots are saved
+> to your Google Sheet.
+> - `/setup_growth` — Configure source tab, metrics to track, and snapshot schedule
+> - `/growth` — Show growth status with options to run a snapshot or edit config
 >
 > **💎 Premium Features**
-> Unlock with `/upgrade` — Premium subscribers get the following:
-> - `/setup_members`, `/sync_members`, `/survey_remind`,
->   `/desertstorm_remind`, `/canyonstorm_remind`
-> - *Plus: birthday DMs, train assignment DMs, auto-mentions in train
->   announcements, thread destinations, and more.*
+> Unlock with `/upgrade`. Premium adds member-aware features that build on top
+> of the free tier:
+> - `/setup_members` — Configure the Member Roster Sync (writes Discord IDs to your sheet so other features can find members by name)
+> - `/sync_members` — Manually re-sync the member roster now
+> - Multiple named surveys — manage from `/survey` directly via Add / Edit / Remove buttons
+> - `/survey_remind` — Send DM reminders via Member Roster, or schedule recurring DM reminders per survey
+> - `/desertstorm_remind` — DM every roster member about this week's DS
+> - `/canyonstorm_remind` — DM every roster member about this week's CS
+> - *Plus: personal birthday DMs, train-assignment DMs, auto-mention members in train reminders, use threads as destinations, multi-template train and storm support, advanced survey/participation question types (single-select, multi-select, date), and more.*
 >
-> **🔧 Utilities** — `/cancel`, `/donate`, `/upgrade`
+> **🔧 Utilities**
+> - `/cancel` — Cancel any active wizard or log session and reset wizard state
+> - `/help` — Show this command list (always available)
+> - `/donate` — 💖 Show optional tip-jar links to support the bot's hosting
+> - `/upgrade` — 💎 Subscribe to Premium for this server (Discord App Subscription)
 >
 > Footer (free): *Alliance Helper — Run /upgrade to unlock Premium features*
-> Footer (premium): *💎 Premium is active. Thanks for supporting Alliance Helper!*
+> Footer (premium): *💎 Premium is active. Thanks for supporting LW Alliance Helper!*
 
 ---
 

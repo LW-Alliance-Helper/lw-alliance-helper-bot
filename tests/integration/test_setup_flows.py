@@ -334,8 +334,14 @@ class TestRunStormSetup:
         log_ch   = MagicMock(id=555555)
         log_view = MagicMock(confirmed=True, selected_channel=log_ch, wait=AsyncMock())
 
+        async def _skip_participation(*args, **kwargs):
+            return {"enabled": 0, "tab_name": "", "questions": [],
+                    "roster_tab": "", "roster_name_col": 0,
+                    "roster_alias_col": -1, "roster_start_row": 2}
+
         # TeamChoiceView (inline) → selected="A", TemplateChoiceView → use_default=True
         with patch("setup_cog.ChannelSelectStep", return_value=log_view), \
+             patch("setup_cog._run_storm_participation_step", side_effect=_skip_participation), \
              patch_keep_or_change(["DS Assignments"]):
             make_send_handler(
                 interaction.channel,
@@ -358,7 +364,13 @@ class TestRunStormSetup:
         log_ch   = MagicMock(id=666666)
         log_view = MagicMock(confirmed=True, selected_channel=log_ch, wait=AsyncMock())
 
+        async def _skip_participation(*args, **kwargs):
+            return {"enabled": 0, "tab_name": "", "questions": [],
+                    "roster_tab": "", "roster_name_col": 0,
+                    "roster_alias_col": -1, "roster_start_row": 2}
+
         with patch("setup_cog.ChannelSelectStep", return_value=log_view), \
+             patch("setup_cog._run_storm_participation_step", side_effect=_skip_participation), \
              patch_keep_or_change(["CS Assignments"]):
             make_send_handler(
                 interaction.channel,

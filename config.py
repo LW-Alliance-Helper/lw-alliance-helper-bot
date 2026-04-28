@@ -352,6 +352,20 @@ def init_db():
             ("templates_json",   "TEXT DEFAULT '[]'"),
             ("default_template", "TEXT DEFAULT 'Default'"),
             ("post_channel_id",  "INTEGER DEFAULT 0"),
+            # ── Participation log (#20 rework) ───────────────────────────────────
+            # Each (guild_id, event_type) row carries its own participation
+            # config: enabled, the sheet tab to write rows to, the
+            # JSON-encoded list of custom questions, and the roster source
+            # for `roster_names`-typed questions (tab + name_col + optional
+            # alias_col + start_row). The log-summary channel reuses the
+            # existing `log_channel_id` column so we don't duplicate state.
+            ("participation_enabled",         "INTEGER DEFAULT 0"),
+            ("participation_tab_name",        "TEXT    DEFAULT ''"),
+            ("participation_questions",       "TEXT    DEFAULT '[]'"),
+            ("participation_roster_tab",      "TEXT    DEFAULT ''"),
+            ("participation_roster_name_col", "INTEGER DEFAULT 0"),
+            ("participation_roster_alias_col","INTEGER DEFAULT -1"),
+            ("participation_roster_start_row","INTEGER DEFAULT 2"),
         ]:
             try:
                 conn.execute(f"ALTER TABLE guild_storm_config ADD COLUMN {col} {definition}")
@@ -857,6 +871,79 @@ def get_storm_template_names(guild_id: int, event_type: str) -> list[str]:
     """List of saved template names for a guild's storm config."""
     cfg = get_storm_config(guild_id, event_type)
     return [t.get("name", "") for t in (cfg.get("templates") or []) if t.get("name")]
+
+
+# ── Participation log config (#20) ────────────────────────────────────────────
+
+def get_participation_config(guild_id: int, event_type: str) -> dict:
+    """
+    Return the participation-log config for a guild + event type. The
+    log-summary channel is read from the existing `log_channel_id`
+    column on guild_storm_config (shared with the legacy participation
+    flow); the `participation_*` columns hold the new-flow-specific
+    bits — questions, sheet tab, roster source.
+    """
+    import json
+    cfg = get_storm_config(guild_id, event_type)
+    raw_qs = cfg.get("participation_questions") or "[]"
+    try:
+        questions = json.loads(raw_qs) if raw_qs else []
+    except (json.JSONDecodeError, TypeError):
+        questions = []
+    return {
+        "enabled":          bool(cfg.get("participation_enabled")),
+        "log_channel_id":   int(cfg.get("log_channel_id") or 0),
+        "tab_name":         cfg.get("participation_tab_name") or "",
+        "questions":        questions,
+        "roster_tab":       cfg.get("participation_roster_tab") or "",
+        "roster_name_col":  int(cfg.get("participation_roster_name_col") or 0),
+        "roster_alias_col": int(cfg.get("participation_roster_alias_col")
+                                if cfg.get("participation_roster_alias_col") is not None else -1),
+        "roster_start_row": int(cfg.get("participation_roster_start_row") or 2),
+    }
+
+
+def save_participation_config(
+    guild_id: int, event_type: str, *,
+    enabled: int           = 0,
+    tab_name: str          = "",
+    questions: list        = None,
+    roster_tab: str        = "",
+    roster_name_col: int   = 0,
+    roster_alias_col: int  = -1,
+    roster_start_row: int  = 2,
+):
+    """
+    Persist the participation-log config to the (guild_id, event_type) row.
+    The row must already exist (created by /setup_desertstorm or
+    /setup_canyonstorm via save_storm_config); this UPDATE does not insert.
+    The log-summary channel lives on `log_channel_id` and is set by the
+    main storm-setup save call, so it isn't a parameter here.
+    """
+    import json
+    if questions is None:
+        questions = []
+    questions_json = json.dumps(questions)
+    with _get_conn() as conn:
+        cur = conn.execute(
+            "UPDATE guild_storm_config SET "
+            "  participation_enabled = ?, "
+            "  participation_tab_name = ?, "
+            "  participation_questions = ?, "
+            "  participation_roster_tab = ?, "
+            "  participation_roster_name_col = ?, "
+            "  participation_roster_alias_col = ?, "
+            "  participation_roster_start_row = ? "
+            "WHERE guild_id = ? AND event_type = ?",
+            (
+                1 if enabled else 0, tab_name,
+                questions_json, roster_tab, roster_name_col,
+                roster_alias_col, roster_start_row,
+                guild_id, event_type,
+            ),
+        )
+        conn.commit()
+        return cur.rowcount > 0
 
 
 # ── Storm event fixed Server Time constants ────────────────────────────────────

@@ -60,11 +60,26 @@ def _get_spreadsheet(guild_id: int = None):
     return gc.open_by_key(sheet_id)
 
 
-def _get_log_sheet(guild_id: int = None):
-    from config import get_config
+def _get_log_sheet(guild_id: int = None, event_type: str | None = None):
+    """
+    Resolve the worksheet that holds participation rows. Prefers the
+    per-event-type `participation_tab_name` from the new config; falls
+    back to the legacy `tab_sitouts` shared tab so existing OGV data
+    keeps loading via /[event]_log.
+    """
+    from config import get_config, get_participation_config
+    sh = _get_spreadsheet(guild_id)
+    if event_type and guild_id:
+        pcfg = get_participation_config(guild_id, event_type)
+        tab = pcfg.get("tab_name") or ""
+        if tab:
+            try:
+                return sh.worksheet(tab)
+            except Exception:
+                pass  # tab missing — fall back below
     cfg = get_config(guild_id)
     tab = cfg.tab_sitouts if cfg else "DS-CS Sit-outs"
-    return _get_spreadsheet(guild_id).worksheet(tab)
+    return sh.worksheet(tab)
 
 
 def _ensure_headers(ws):
@@ -362,25 +377,127 @@ class ShortSelectView(discord.ui.View):
         self.stop()
 
 
-# ── Shared log flow ────────────────────────────────────────────────────────────
-#
-# TODO(ux-rework): the /[event]_participation flow needs a redesign before
-# Premium launch. Specifically:
-#   • Walk-through of "type a number" prompts is fragile (no retry on bad
-#     input, no per-question cancel) and should adopt the same retry-loop
-#     pattern survey.py uses for `ask_numeric` / `ask_date`.
-#   • The flow asks for several values in sequence with no recap or "did
-#     you mean to skip this?" affordance — a confirmation step would help.
-#   • Persistent reaction tally on the log message is not yet wired up to
-#     Member Roster so we can match votes ↔ Discord IDs reliably.
-# Tracked separately from the UX-cleanup PR; do not block on this.
+# ── Roster + sheet helpers (new configurable participation flow) ──────────────
+
+def load_roster_from_config(guild_id: int, event_type: str) -> tuple[list[str], dict[str, str]]:
+    """
+    Read the configured roster source for the given (guild, event_type) and
+    return (names, alias_map). Replaces the OGV-specific col-E hardcode in
+    `load_member_names()` — every alliance configures their own roster
+    tab + name column + optional alias column via /setup_desertstorm or
+    /setup_canyonstorm.
+    """
+    from config import get_participation_config
+    pcfg = get_participation_config(guild_id, event_type)
+    tab       = pcfg.get("roster_tab") or ""
+    name_col  = int(pcfg.get("roster_name_col") or 0)
+    alias_col = int(pcfg.get("roster_alias_col") if pcfg.get("roster_alias_col") is not None else -1)
+    start_row = int(pcfg.get("roster_start_row") or 2)
+
+    names: list[str] = []
+    alias_map: dict[str, str] = {}
+    if not tab:
+        return names, alias_map
+
+    try:
+        ws   = _get_spreadsheet(guild_id).worksheet(tab)
+        rows = ws.get_all_values()
+    except Exception as e:
+        print(f"[LOG] Could not read roster tab `{tab}` for guild {guild_id}: {e}")
+        return names, alias_map
+
+    for row in rows[start_row - 1:]:  # start_row is 1-indexed
+        if name_col >= len(row):
+            continue
+        name = row[name_col].strip()
+        if not name:
+            continue
+        names.append(name)
+        if alias_col >= 0 and alias_col < len(row):
+            alias = row[alias_col].strip()
+            if alias:
+                alias_map[alias.lower()] = name
+
+    print(f"[LOG] Loaded {len(names)} roster names ({len(alias_map)} aliases) "
+          f"from `{tab}` (guild {guild_id}, {event_type})")
+    return names, alias_map
+
+
+def append_participation_row(guild_id: int, event_type: str,
+                              log_date, answers: dict[str, str]) -> None:
+    """
+    Append a row to the configured participation tab. Header columns are:
+    Date | Event | <one column per configured question, in order>.
+    """
+    from config import get_participation_config
+    pcfg = get_participation_config(guild_id, event_type)
+    tab  = pcfg.get("tab_name") or (
+        "DS Participation Log" if event_type.upper() == "DS" else "CS Participation Log"
+    )
+    questions = pcfg.get("questions") or []
+
+    sh = _get_spreadsheet(guild_id)
+    try:
+        ws = sh.worksheet(tab)
+    except Exception:
+        # Create the tab if it doesn't exist
+        ws = sh.add_worksheet(title=tab, rows=200, cols=max(8, len(questions) + 4))
+
+    headers = ["Date", "Event"] + [q.get("label", q.get("key", "?")) for q in questions]
+    existing_header = ws.row_values(1)
+    if not any(existing_header):
+        ws.update("A1", [headers], value_input_option="USER_ENTERED")
+
+    row = [
+        f"{log_date.month}/{log_date.day}/{log_date.year}",
+        event_type.upper(),
+    ]
+    for q in questions:
+        val = answers.get(q.get("key", ""), "")
+        if isinstance(val, list):
+            val = ", ".join(str(v) for v in val)
+        row.append(str(val) if val is not None else "")
+    ws.append_row(row, value_input_option="USER_ENTERED")
+    print(f"[LOG] Participation row appended for guild={guild_id} "
+          f"event={event_type} date={log_date.isoformat()}")
+
+
+# ── Shared log flow (new configurable version) ───────────────────────────────
 
 async def run_log_flow(bot, channel, user, event_type):
+    """
+    Walk leadership through the participation log flow. The questions
+    asked are read from the per-guild participation config saved by
+    /setup_desertstorm or /setup_canyonstorm. The date is always asked
+    first (mandatory, never configurable).
+    """
     is_ds        = event_type.upper() == "DS"
     event_label  = "Desert Storm" if is_ds else "Canyon Storm"
     log_cmd      = "/desertstorm_participation" if is_ds else "/canyonstorm_participation"
+    setup_cmd    = "/setup_desertstorm"          if is_ds else "/setup_canyonstorm"
+    guild_id     = channel.guild.id if hasattr(channel, "guild") and channel.guild else None
     cancel_event = asyncio.Event()
     active_logs[user.id] = cancel_event
+
+    from config import get_participation_config
+    pcfg = get_participation_config(guild_id, event_type) if guild_id else {}
+
+    if not pcfg.get("enabled"):
+        await channel.send(
+            f"⚙️ Participation tracking isn't enabled for {event_label} yet. "
+            f"Run `{setup_cmd}` and walk through Step 6 to define what you want to track."
+        )
+        active_logs.pop(user.id, None)
+        return
+
+    questions = pcfg.get("questions") or []
+    if not questions:
+        await channel.send(
+            f"⚙️ Participation tracking is enabled but no questions are configured. "
+            f"Run `{setup_cmd}` to add questions."
+        )
+        active_logs.pop(user.id, None)
+        return
 
     def check(m):
         return m.author == user and m.channel == channel
@@ -411,7 +528,7 @@ async def run_log_flow(bot, channel, user, event_type):
             return None
 
     async def wait_for_view(view, prompt_msg):
-        """Wait for any view (NameEntryView or ShortSelectView). Returns False if cancelled/timed out."""
+        """Wait for any view (NameEntryView, YesNoLogView, etc). Returns False if cancelled/timed out."""
         view_task   = asyncio.ensure_future(view.wait())
         cancel_task = asyncio.ensure_future(cancel_event.wait())
         done, pending = await asyncio.wait([view_task, cancel_task], return_when=asyncio.FIRST_COMPLETED)
@@ -425,7 +542,7 @@ async def run_log_flow(bot, channel, user, event_type):
             except discord.HTTPException:
                 pass
             return False
-        if not view.confirmed:
+        if not getattr(view, "confirmed", True):
             try:
                 await prompt_msg.delete()
             except discord.HTTPException:
@@ -435,12 +552,13 @@ async def run_log_flow(bot, channel, user, event_type):
         return True
 
     try:
+        total_steps = len(questions) + 1  # +1 for the always-required date
         await channel.send(
             f"📋 **{event_label} Log** — started by {user.mention}\n"
-            "*Use `/cancel` at any time to stop.*"
+            f"*{total_steps} step(s) total. Use `/cancel` at any time to stop.*"
         )
 
-        # ── Step 1: Date ──────────────────────────────────────────────────────
+        # ── Step 1: Date (always asked, never configurable) ──────────────────
         raw_date = await wait_for_msg(
             "**Step 1 — Event date**\n"
             "Type the date (e.g. `April 14`, `4/14`) or type `today`:"
@@ -456,153 +574,241 @@ async def run_log_flow(bot, channel, user, event_type):
             from train import parse_date_and_name
             parsed_d, _, _ = parse_date_and_name(f"{raw_date} - placeholder")
             if not parsed_d:
-                await channel.send("⚠️ Could not parse that date. Use the log command to start again.")
+                await channel.send(
+                    f"⚠️ Could not parse `{raw_date}` as a date. "
+                    f"Run `{log_cmd}` to start again."
+                )
                 return
             log_date = parsed_d
 
-        # ── Step 2 (DS only): Vote count ──────────────────────────────────────
-        vote_count = None
-        if is_ds:
-            raw_votes = await wait_for_msg(
-                "**Step 2 — Vote count**\n"
-                "How many members voted in the participation poll? (type a number)"
-            )
-            if raw_votes is None:
-                if cancel_event.is_set():
-                    await channel.send("❌ Log cancelled.")
+        # ── Roster (lazy — only loaded if any question needs it) ─────────────
+        roster_loaded = False
+        names: list[str] = []
+        alias_map: dict[str, str] = {}
+
+        async def _ensure_roster():
+            nonlocal roster_loaded, names, alias_map
+            if roster_loaded:
                 return
+            loading_msg = await channel.send("⏳ Loading roster from your configured tab…")
+            names, alias_map = await asyncio.get_event_loop().run_in_executor(
+                None, load_roster_from_config, guild_id, event_type,
+            )
             try:
-                vote_count = int(raw_votes)
-            except ValueError:
-                await channel.send("⚠️ That doesn't look like a number. Use the log command to start again.")
-                return
+                await loading_msg.delete()
+            except discord.HTTPException:
+                pass
+            roster_loaded = True
 
-        # ── Load member names ─────────────────────────────────────────────────
-        loading_msg = await channel.send("⏳ Gathering member list...")
-        names, alias_map = await asyncio.get_event_loop().run_in_executor(None, load_member_names)
-        try:
-            await loading_msg.delete()
-        except discord.HTTPException:
-            pass
-        if not names:
-            await channel.send(
-                "⚠️ Could not load member names from your sheet. "
-                "Make sure the configured member tab exists and the bot's "
-                "service account has access to your Google Sheet, then try again."
-            )
-            return
+        # ── Walk through configured questions ────────────────────────────────
+        answers: dict[str, str] = {}
+        for idx, q in enumerate(questions, start=2):
+            qkey   = q.get("key", f"q{idx}")
+            qlabel = q.get("label", qkey)
+            qtype  = q.get("type", "text")
 
-        roster_preview = ", ".join(names)
+            header = f"**Step {idx} of {total_steps} — {qlabel}**"
 
-        # ── Step 3: Sitting out this week ─────────────────────────────────────
-        step_num = 3 if is_ds else 2
-        sit_view = NameEntryView(names, "Sitting Out", alias_map)
-        sit_msg  = await channel.send(
-            f"**Step {step_num} — Sitting out this week**\n"
-            "Press **Enter Names** to type who is sitting out today. "
-            "Press **Skip** if none.\n"
-            f"*Roster: {roster_preview}*",
-            view=sit_view,
-        )
-        if not await wait_for_view(sit_view, sit_msg):
-            if cancel_event.is_set():
-                await channel.send("❌ Log cancelled.")
-            return
-        sitting_out = sorted(sit_view.selected)
-        if sit_view.unrecognized:
-            sitting_out += sorted(sit_view.unrecognized)
+            if qtype == "yes_no":
+                yn = _YesNoLogView()
+                msg = await channel.send(f"{header}\nPick one.", view=yn)
+                if not await wait_for_view(yn, msg):
+                    if cancel_event.is_set():
+                        await channel.send("❌ Log cancelled.")
+                    return
+                answers[qkey] = "Yes" if yn.value else "No"
 
-        # ── Step 4 (DS only): RTF but no vote ─────────────────────────────────
-        rtf_no_vote = []
-        if is_ds:
-            rtf_view = NameEntryView(names, "RTF No Vote", alias_map)
-            rtf_msg  = await channel.send(
-                "**Step 4 — Requested to Fight but did not vote**\n"
-                "Press **Enter Names** to type who submitted RTF but did not vote. "
-                "Press **Skip** if none.\n"
-                f"*Roster: {roster_preview}*",
-                view=rtf_view,
-            )
-            if not await wait_for_view(rtf_view, rtf_msg):
-                if cancel_event.is_set():
-                    await channel.send("❌ Log cancelled.")
-                return
-            rtf_no_vote = sorted(rtf_view.selected)
-            if rtf_view.unrecognized:
-                rtf_no_vote += sorted(rtf_view.unrecognized)
+            elif qtype == "numeric":
+                lo = q.get("min")
+                hi = q.get("max")
+                bound_hint = ""
+                if lo is not None or hi is not None:
+                    bits = []
+                    if lo is not None: bits.append(f"min `{lo}`")
+                    if hi is not None: bits.append(f"max `{hi}`")
+                    bound_hint = f" *({', '.join(bits)})*"
+                attempts = 5
+                value: str | None = None
+                while attempts > 0:
+                    raw = await wait_for_msg(f"{header}{bound_hint}\nType a number.")
+                    if raw is None:
+                        if cancel_event.is_set():
+                            await channel.send("❌ Log cancelled.")
+                        return
+                    try:
+                        n = float(raw) if "." in raw else int(raw)
+                    except ValueError:
+                        attempts -= 1
+                        await channel.send(
+                            f"⚠️ `{raw}` isn't a number. Please re-enter your answer."
+                        )
+                        continue
+                    if lo is not None and n < lo:
+                        attempts -= 1
+                        await channel.send(f"⚠️ Must be at least **{lo}**. Please re-enter.")
+                        continue
+                    if hi is not None and n > hi:
+                        attempts -= 1
+                        await channel.send(f"⚠️ Must be at most **{hi}**. Please re-enter.")
+                        continue
+                    value = str(n)
+                    break
+                if value is None:
+                    await channel.send(
+                        "⚠️ Too many invalid attempts. Cancelling the log — "
+                        f"run `{log_cmd}` when you're ready to try again."
+                    )
+                    return
+                answers[qkey] = value
 
-        # ── Step 5: Prior sit-outs who didn't request ─────────────────────────
-        step_num      = 5 if is_ds else 3
-        loading_msg   = await channel.send("⏳ Checking previous log...")
-        _gid2 = channel.guild.id if hasattr(channel, "guild") and channel.guild else None
-        prior_names   = await asyncio.get_event_loop().run_in_executor(
-            None, get_prior_sitouts, event_type, _gid2
-        )
-        try:
-            await loading_msg.delete()
-        except discord.HTTPException:
-            pass
+            elif qtype == "roster_names":
+                await _ensure_roster()
+                if not names:
+                    await channel.send(
+                        "⚠️ The configured roster tab is empty or unreachable. "
+                        f"Run `{log_cmd.replace('_participation', '').replace('/', '/setup')}` "
+                        f"to update the roster source, then try again."
+                    )
+                    return
+                preview = ", ".join(names) if len(names) <= 25 else f"{len(names)} members loaded"
+                view = NameEntryView(names, qlabel, alias_map)
+                prompt = await channel.send(
+                    f"{header}\nPress **Enter Names** to type who applies. "
+                    f"Press **Skip** if none.\n*Roster: {preview}*",
+                    view=view,
+                )
+                if not await wait_for_view(view, prompt):
+                    if cancel_event.is_set():
+                        await channel.send("❌ Log cancelled.")
+                    return
+                picked = sorted(view.selected)
+                if view.unrecognized:
+                    picked += sorted(view.unrecognized)
+                answers[qkey] = ", ".join(picked)
 
-        prior_no_request = []
-        if prior_names:
-            action_word = "vote" if is_ds else "request to fight"
-            prior_view  = ShortSelectView(prior_names, "Select prior sit-outs who didn't participate")
-            prior_msg   = await channel.send(
-                f"**Step {step_num} — Prior sit-outs who did not {action_word} this week**\n"
-                "These members sat out last time. Select any who did not participate this week. "
-                "Press **Skip** if none.",
-                view=prior_view,
-            )
-            if not await wait_for_view(prior_view, prior_msg):
-                if cancel_event.is_set():
-                    await channel.send("❌ Log cancelled.")
-                return
-            prior_no_request = sorted(prior_view.selected)
-        else:
-            await channel.send(
-                f"**Step {step_num} — Prior sit-outs**\n"
-                "*(No prior sit-outs found in last log — skipping)*",
-                delete_after=5,
-            )
-        # ── Save to sheet ─────────────────────────────────────────────────────
-        await channel.send("💾 Saving log...")
+            elif qtype == "single_select":
+                opts = q.get("options") or []
+                if not opts:
+                    answers[qkey] = ""
+                    continue
+                view = ShortSelectView(opts, qlabel)
+                prompt = await channel.send(f"{header}\nPick one.", view=view)
+                if not await wait_for_view(view, prompt):
+                    if cancel_event.is_set():
+                        await channel.send("❌ Log cancelled.")
+                    return
+                answers[qkey] = next(iter(view.selected), "")
+
+            elif qtype == "multi_select":
+                opts = q.get("options") or []
+                if not opts:
+                    answers[qkey] = ""
+                    continue
+                view = ShortSelectView(opts, qlabel)
+                prompt = await channel.send(f"{header}\nPick any that apply.", view=view)
+                if not await wait_for_view(view, prompt):
+                    if cancel_event.is_set():
+                        await channel.send("❌ Log cancelled.")
+                    return
+                answers[qkey] = ", ".join(sorted(view.selected))
+
+            elif qtype == "date":
+                fmt = q.get("date_format") or "%m/%d/%Y"
+                attempts = 5
+                value = None
+                while attempts > 0:
+                    raw = await wait_for_msg(f"{header} *(format `{fmt}`)*")
+                    if raw is None:
+                        if cancel_event.is_set():
+                            await channel.send("❌ Log cancelled.")
+                        return
+                    try:
+                        from datetime import datetime as _dt
+                        d = _dt.strptime(raw, fmt).date()
+                        value = d.isoformat()
+                        break
+                    except ValueError:
+                        attempts -= 1
+                        await channel.send(
+                            f"⚠️ `{raw}` doesn't match `{fmt}`. Please re-enter."
+                        )
+                if value is None:
+                    await channel.send(
+                        "⚠️ Too many invalid attempts. Cancelling the log."
+                    )
+                    return
+                answers[qkey] = value
+
+            else:  # "text" or unknown — fall back to free text
+                raw = await wait_for_msg(
+                    f"{header}\nType your answer (or `skip` for none)."
+                )
+                if raw is None:
+                    if cancel_event.is_set():
+                        await channel.send("❌ Log cancelled.")
+                    return
+                answers[qkey] = "" if raw.lower() == "skip" else raw
+
+        # ── Save row ─────────────────────────────────────────────────────────
+        await channel.send("💾 Saving log…")
         try:
             await asyncio.get_event_loop().run_in_executor(
-                None, append_log_row,
-                event_type.upper(), log_date, vote_count,
-                rtf_no_vote, sitting_out, prior_no_request,
+                None, append_participation_row,
+                guild_id, event_type, log_date, answers,
             )
         except Exception as e:
             await channel.send(f"⚠️ Error saving to sheet: {e}")
             return
 
-        # ── Summary ───────────────────────────────────────────────────────────
-        date_str     = f"{log_date:%A, %B} {log_date.day}, {log_date.year}"
-        action_label = "Vote" if is_ds else "Request"
+        # ── Summary ──────────────────────────────────────────────────────────
+        date_str = f"{log_date:%A, %B} {log_date.day}, {log_date.year}"
         lines = [f"📋 **{event_label} Log — {date_str}**"]
-        if is_ds:
-            lines.append(f"**Votes:** {vote_count}")
-            lines.append(f"**RTF No Vote:** {', '.join(rtf_no_vote) if rtf_no_vote else 'None'}")
-        lines.append(f"**Sitting Out:** {', '.join(sitting_out) if sitting_out else 'None'}")
-        lines.append(f"**Prior Sit-Out No {action_label}:** {', '.join(prior_no_request) if prior_no_request else 'None'}")
+        for q in questions:
+            qkey   = q.get("key", "")
+            qlabel = q.get("label", qkey)
+            v      = answers.get(qkey, "")
+            lines.append(f"**{qlabel}:** {v if v not in ('', None) else 'None'}")
         summary = "\n".join(lines)
 
         await channel.send(f"✅ **Log saved!**\n\n{summary}")
 
-        # Only post to the log thread if we're not already in it
+        # Mirror the summary into the configured log channel (if different).
         try:
-            from config import get_config as _slcfg
-            cfg_sl   = _slcfg(channel.guild.id) if hasattr(channel, 'guild') else None
-            thread_id = cfg_sl.storm_log_thread_id if cfg_sl else 0
-            if channel.id != thread_id:
-                thread = bot.get_channel(thread_id)
-                if thread:
-                    await thread.send(summary)
+            log_channel_id = int(pcfg.get("log_channel_id") or 0)
+            if log_channel_id and channel.id != log_channel_id:
+                target = bot.get_channel(log_channel_id)
+                if target:
+                    await target.send(summary)
         except Exception as e:
-            print(f"[LOG] Error posting to log thread: {e}")
+            print(f"[LOG] Error mirroring summary to log channel: {e}")
 
     finally:
         active_logs.pop(user.id, None)
+
+
+class _YesNoLogView(discord.ui.View):
+    """Simple Yes/No picker for participation `yes_no` questions."""
+
+    def __init__(self):
+        super().__init__(timeout=WIZARD_TIMEOUT)
+        self.confirmed = False
+        self.value: bool | None = None
+
+    @discord.ui.button(label="Yes", style=discord.ButtonStyle.success)
+    async def yes(self, inter: discord.Interaction, button: discord.ui.Button):
+        self.value     = True
+        self.confirmed = True
+        for c in self.children: c.disabled = True
+        await inter.response.edit_message(view=self)
+        self.stop()
+
+    @discord.ui.button(label="No", style=discord.ButtonStyle.danger)
+    async def no(self, inter: discord.Interaction, button: discord.ui.Button):
+        self.value     = False
+        self.confirmed = True
+        for c in self.children: c.disabled = True
+        await inter.response.edit_message(view=self)
+        self.stop()
 
 
 # ── Log lookup ─────────────────────────────────────────────────────────────────
@@ -614,7 +820,7 @@ def list_recent_log_dates(event_type: str, n: int, guild_id=None) -> list[date]:
     """
     out: list[date] = []
     try:
-        ws   = _get_log_sheet(guild_id)
+        ws   = _get_log_sheet(guild_id, event_type=event_type)
         rows = ws.get_all_values()
         if len(rows) <= 1:
             return out
@@ -646,40 +852,50 @@ def list_recent_log_dates(event_type: str, n: int, guild_id=None) -> list[date]:
 def lookup_log_entry(event_type: str, log_date: date, guild_id=None):
     """
     Find the most recent log row matching event_type and log_date.
-    Returns a dict of the row data, or None if not found.
+    Returns a dict shaped like `{"date": ..., "event": ..., "fields":
+    [(label, value), ...]}` so /[event]_log can format it generically
+    against whatever questions the alliance configured. Falls back to
+    the legacy column shape (Vote Count / RTF / Sitting Out / Prior)
+    when a guild is still on the old "DS-CS Sit-outs" tab.
     """
     try:
-        ws   = _get_log_sheet(guild_id)
+        ws   = _get_log_sheet(guild_id, event_type=event_type)
         rows = ws.get_all_values()
         if len(rows) <= 1:
             return None
-        target_date = f"{log_date.month}/{log_date.day}/{log_date.year}"
+        header_row = rows[0]
+        # Resolve column labels: skip Date and Event, use the remaining
+        # header cells as the field labels. Empty header cells fall back
+        # to a generic name so we don't crash on malformed sheets.
+        field_labels = [(h.strip() or f"Column {i+1}") for i, h in enumerate(header_row[2:])]
+
+        from datetime import datetime
         for row in reversed(rows[1:]):
             if len(row) < 2:
                 continue
             if row[1].strip().upper() != event_type.upper():
                 continue
-            # Normalize date for comparison
             row_date = row[0].strip()
-            try:
-                # Parse various date formats that might be in the sheet
-                from datetime import datetime
-                for fmt in ("%-m/%-d/%Y", "%m/%d/%Y", "%Y-%m-%d"):
-                    try:
-                        parsed = datetime.strptime(row_date, fmt).date()
-                        if parsed == log_date:
-                            return {
-                                "date":             row[0] if len(row) > 0 else "",
-                                "event":            row[1] if len(row) > 1 else "",
-                                "vote_count":       row[2] if len(row) > 2 else "",
-                                "rtf_no_vote":      row[3] if len(row) > 3 else "",
-                                "sitting_out":      row[4] if len(row) > 4 else "",
-                                "prior_no_request": row[5] if len(row) > 5 else "",
-                            }
-                    except ValueError:
-                        continue
-            except Exception:
-                continue
+            for fmt in ("%-m/%-d/%Y", "%m/%d/%Y", "%Y-%m-%d"):
+                try:
+                    parsed = datetime.strptime(row_date, fmt).date()
+                except ValueError:
+                    continue
+                if parsed != log_date:
+                    break
+                fields: list[tuple[str, str]] = []
+                for i, label in enumerate(field_labels):
+                    fields.append((label, row[i + 2] if len(row) > i + 2 else ""))
+                return {
+                    "date":   row[0] if len(row) > 0 else "",
+                    "event":  row[1] if len(row) > 1 else "",
+                    "fields": fields,
+                    # Legacy aliases for callers that haven't migrated yet:
+                    "vote_count":       row[2] if len(row) > 2 else "",
+                    "rtf_no_vote":      row[3] if len(row) > 3 else "",
+                    "sitting_out":      row[4] if len(row) > 4 else "",
+                    "prior_no_request": row[5] if len(row) > 5 else "",
+                }
         return None
     except Exception as e:
         print(f"[LOG] Error looking up log entry: {e}")
@@ -914,7 +1130,7 @@ async def _show_storm_log(interaction: discord.Interaction, event: str, date: st
             return
 
     entry = await asyncio.get_event_loop().run_in_executor(
-        None, lookup_log_entry, event, parsed_d
+        None, lookup_log_entry, event, parsed_d, interaction.guild_id,
     )
 
     if entry is None:
@@ -924,15 +1140,22 @@ async def _show_storm_log(interaction: discord.Interaction, event: str, date: st
         )
         return
 
-    date_str     = f"{parsed_d:%A, %B} {parsed_d.day}, {parsed_d.year}"
-    action_label = "Vote" if event == "DS" else "Request"
-
-    lines = [f"📋 **{event_label} Log — {date_str}**"]
-    if event == "DS":
-        lines.append(f"**Votes:** {entry['vote_count'] or 'Not recorded'}")
-        lines.append(f"**RTF No Vote:** {entry['rtf_no_vote'] or 'None'}")
-    lines.append(f"**Sitting Out:** {entry['sitting_out'] or 'None'}")
-    lines.append(f"**Prior Sit-Out No {action_label}:** {entry['prior_no_request'] or 'None'}")
+    date_str = f"{parsed_d:%A, %B} {parsed_d.day}, {parsed_d.year}"
+    lines    = [f"📋 **{event_label} Log — {date_str}**"]
+    # Prefer the generic `fields` list (set by the new participation flow);
+    # fall back to the legacy DS/CS column shape so OGV's pre-rework data
+    # still renders nicely.
+    fields = entry.get("fields") or []
+    if fields:
+        for label_, value in fields:
+            lines.append(f"**{label_}:** {value or 'None'}")
+    else:
+        action_label = "Vote" if event == "DS" else "Request"
+        if event == "DS":
+            lines.append(f"**Votes:** {entry.get('vote_count') or 'Not recorded'}")
+            lines.append(f"**RTF No Vote:** {entry.get('rtf_no_vote') or 'None'}")
+        lines.append(f"**Sitting Out:** {entry.get('sitting_out') or 'None'}")
+        lines.append(f"**Prior Sit-Out No {action_label}:** {entry.get('prior_no_request') or 'None'}")
 
     await interaction.followup.send("\n".join(lines))
 

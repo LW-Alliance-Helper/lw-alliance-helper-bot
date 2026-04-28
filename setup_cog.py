@@ -2862,7 +2862,7 @@ async def run_storm_setup(interaction: discord.Interaction, bot, event_type: str
     default_tab = current.get("tab_name") or ("DS Assignments" if event_type == "DS" else "CS Assignments")
     tab_name    = await ask_keep_or_change(
         channel,
-        f"**Step 1 of 5 — Sheet Tab**\n"
+        f"**Step 1 of 6 — Sheet Tab**\n"
         f"Which tab in your Google Sheet stores the {label} zone assignments?\n"
         f"⚠️ *Make sure this tab exists in your sheet before continuing.*\n"
         f"ℹ️ *The bot will manage the data structure of this tab automatically — "
@@ -2904,7 +2904,7 @@ async def run_storm_setup(interaction: discord.Interaction, bot, event_type: str
 
     team_view = TeamChoiceView()
     await channel.send(
-        f"**Step 2 of 5 — Which teams do you run for {label}?**",
+        f"**Step 2 of 6 — Which teams do you run for {label}?**",
         view=team_view,
     )
     await team_view.wait()
@@ -2914,14 +2914,16 @@ async def run_storm_setup(interaction: discord.Interaction, bot, event_type: str
     teams = team_view.selected
 
     # ── Step 3: Storm log channel ─────────────────────────────────────────────
+    # Reused by /[event]_log lookups and by the participation flow when
+    # leadership posts the participation summary.
     log_ch_view = ChannelSelectStep(
         f"Select the {label} log channel...",
         suggested_name="storm-log",
         include_threads=is_premium_flag,
     )
     await channel.send(
-        f"**Step 3 of 5 — Storm Log Channel**\n"
-        f"Select the channel where {label} participation logs will be posted:",
+        f"**Step 3 of 6 — Storm Log Channel**\n"
+        f"Select the channel where {label} participation/log summaries will be posted:",
         view=log_ch_view,
     )
     await log_ch_view.wait()
@@ -2937,7 +2939,7 @@ async def run_storm_setup(interaction: discord.Interaction, bot, event_type: str
         include_threads=is_premium_flag,
     )
     await channel.send(
-        f"**Step 4 of 5 — Mail Post Channel**\n"
+        f"**Step 4 of 6 — Mail Post Channel**\n"
         f"When leadership clicks **Post & Copy** at the end of `/"
         f"{'desertstorm' if event_type == 'DS' else 'canyonstorm'}_draft`, "
         f"the finished mail will be posted to this channel:",
@@ -3033,7 +3035,7 @@ async def run_storm_setup(interaction: discord.Interaction, bot, event_type: str
 
         shared_view = SharedTemplateView()
         await channel.send(
-            "**Step 5 of 5 — Mail Template**\n"
+            "**Step 5 of 6 — Mail Template**\n"
             "Do you want one template that applies to both teams, or separate templates per team?",
             view=shared_view,
         )
@@ -3054,15 +3056,24 @@ async def run_storm_setup(interaction: discord.Interaction, bot, event_type: str
 
     else:
         team_label = "Team A" if teams == "A" else "Team B"
-        await channel.send("**Step 5 of 5 — Mail Template**")
+        await channel.send("**Step 5 of 6 — Mail Template**")
         template = await get_template(team_label)
         if template is None:
             return
         template_a = template if teams == "A" else ""
         template_b = template if teams == "B" else ""
 
+    # ── Step 6: Participation log tracking (optional) ─────────────────────────
+    participation_cfg = await _run_storm_participation_step(
+        channel, bot, user, cancel_event,
+        guild_id=guild_id, event_type=event_type, label=label, cmd_name=cmd_name,
+        is_premium_flag=is_premium_flag, current=current,
+    )
+    if participation_cfg is None:
+        return  # cancelled / timed out
+
     # ── Save ───────────────────────────────────────────────────────────────────
-    from config import save_storm_config, update_config_field
+    from config import save_storm_config, save_participation_config, update_config_field
     if template_a:
         save_storm_config(guild_id, f"{event_type}_A", tab_name, template_a,
                           "", "", "", "", "", "", timezone, log_channel_id,
@@ -3074,6 +3085,18 @@ async def run_storm_setup(interaction: discord.Interaction, bot, event_type: str
     save_storm_config(guild_id, event_type, tab_name, template_a or template_b,
                       "", "", "", "", "", "", timezone, log_channel_id,
                       post_channel_id=post_channel_id)
+
+    # Persist the participation config to the (guild, event_type) row.
+    save_participation_config(
+        guild_id, event_type,
+        enabled          = participation_cfg["enabled"],
+        tab_name         = participation_cfg["tab_name"],
+        questions        = participation_cfg["questions"],
+        roster_tab       = participation_cfg["roster_tab"],
+        roster_name_col  = participation_cfg["roster_name_col"],
+        roster_alias_col = participation_cfg["roster_alias_col"],
+        roster_start_row = participation_cfg["roster_start_row"],
+    )
 
     # Persist the log channel to guild_configs so storm_log.py can read it
     if event_type == "DS":
@@ -3087,6 +3110,16 @@ async def run_storm_setup(interaction: discord.Interaction, bot, event_type: str
     embed.add_field(name="Timezone",     value=tz_label, inline=True)
     embed.add_field(name="Log Channel",  value=f"<#{log_channel_id}>", inline=True)
     embed.add_field(name="Post Channel", value=f"<#{post_channel_id}>", inline=True)
+    if participation_cfg["enabled"]:
+        n_q = len(participation_cfg["questions"])
+        embed.add_field(
+            name="Participation Tracking",
+            value=(f"✅ Enabled · {n_q} question(s) · Tab: "
+                   f"`{participation_cfg['tab_name']}`"),
+            inline=False,
+        )
+    else:
+        embed.add_field(name="Participation Tracking", value="❌ Disabled", inline=False)
     if template_a:
         embed.add_field(name="Template A Preview",
                         value=f"```{template_a[:150]}{'...' if len(template_a) > 150 else ''}```",
@@ -3099,6 +3132,454 @@ async def run_storm_setup(interaction: discord.Interaction, bot, event_type: str
     await channel.send(embed=embed)
     wizard_registry.unregister(user.id, cancel_event)
     print(f"[SETUP] {label} config saved for guild {guild_id}")
+
+
+# ── Step 6 helper: participation tracking sub-flow (#20 rework) ───────────────
+
+# Free-tier question types are universally available; Premium types are gated
+# in the wizard. `roster_names` is unique to participation logs — it draws
+# from the roster source the user configures here.
+_PARTICIPATION_FREE_TYPES = ["text", "yes_no", "numeric", "roster_names"]
+_PARTICIPATION_PREMIUM_TYPES = ["single_select", "multi_select", "date"]
+_PARTICIPATION_TYPE_LABELS = {
+    "text":          "Text — short typed answer",
+    "yes_no":        "Yes / No",
+    "numeric":       "Numeric — number with optional min/max",
+    "roster_names":  "Roster names — pick or type member names",
+    "single_select": "💎 Single-select dropdown",
+    "multi_select":  "💎 Multi-select dropdown",
+    "date":          "💎 Date (formatted entry)",
+}
+
+
+async def _run_storm_participation_step(
+    channel, bot, user, cancel_event, *,
+    guild_id: int, event_type: str, label: str, cmd_name: str,
+    is_premium_flag: bool, current: dict,
+) -> dict | None:
+    """
+    Step 6 of /setup_desertstorm and /setup_canyonstorm. Walks leadership
+    through enabling/configuring participation log tracking. Returns a
+    dict shaped like the one save_participation_config expects, or None
+    if the user cancelled or timed out.
+    """
+    import wizard_registry
+    from config import (
+        get_participation_config, get_survey_config, get_birthday_config,
+    )
+    import premium
+
+    cur_part = get_participation_config(guild_id, event_type)
+
+    # ── 6.1 Enable? ────────────────────────────────────────────────────────────
+    enable_view = YesNoView()
+    await channel.send(
+        f"**Step 6 of 6 — Participation Tracking**\n"
+        f"Do you want to track {label} participation? Leadership runs "
+        f"`/{cmd_name.replace('setup_', '')}_participation` after each event "
+        f"to log who showed up, who sat out, etc.\n"
+        f"You'll define the questions yourself, so the tracker matches how "
+        f"your alliance runs the event.",
+        view=enable_view,
+    )
+    await enable_view.wait()
+    if enable_view.selected is None:
+        await channel.send(f"⏰ Timed out. Run `/{cmd_name}` to start again.")
+        return None
+
+    if not enable_view.selected:
+        # Disabled — keep the existing values around but mark off.
+        return {
+            "enabled":          0,
+            "tab_name":         cur_part.get("tab_name") or "",
+            "questions":        cur_part.get("questions") or [],
+            "roster_tab":       cur_part.get("roster_tab") or "",
+            "roster_name_col":  cur_part.get("roster_name_col") or 0,
+            "roster_alias_col": cur_part.get("roster_alias_col") if cur_part.get("roster_alias_col") is not None else -1,
+            "roster_start_row": cur_part.get("roster_start_row") or 2,
+        }
+
+    # ── 6.2 Sheet tab ──────────────────────────────────────────────────────────
+    default_tab = cur_part.get("tab_name") or (
+        "DS Participation Log" if event_type == "DS" else "CS Participation Log"
+    )
+    tab_name = await ask_keep_or_change(
+        channel,
+        f"**Step 6.1 — Participation Sheet Tab**\n"
+        f"Which tab should the bot write {label} participation rows to?\n"
+        f"⚠️ *Make sure the tab exists in your sheet — the bot will manage "
+        f"the column structure based on the questions you define.*",
+        default=default_tab,
+        modal_title="Participation Tab",
+        modal_label="Tab name",
+        timeout_cmd=cmd_name,
+    )
+    if tab_name is None:
+        return None
+
+    # ── 6.3 Roster source ──────────────────────────────────────────────────────
+    # Smart default: prefer a previously-saved roster source for this event
+    # type, else fall back to the survey stats tab if configured, else
+    # birthday tab, else empty.
+    survey_cfg     = get_survey_config(guild_id) or {}
+    birthday_cfg   = get_birthday_config(guild_id) or {}
+    suggested_tab  = (
+        cur_part.get("roster_tab")
+        or survey_cfg.get("tab_squad_powers")
+        or birthday_cfg.get("tab_name")
+        or ""
+    )
+    roster_tab = await ask_keep_or_change(
+        channel,
+        f"**Step 6.2 — Roster Source: Sheet Tab**\n"
+        f"Which tab in your sheet has the list of members? The bot reads "
+        f"member names from here when you use a `Roster names` question.\n"
+        f"*Tip: this is often the same tab you use for `/setup_survey` or "
+        f"`/setup_birthdays`.*",
+        default=suggested_tab or "Squad Powers",
+        modal_title="Roster Tab",
+        modal_label="Tab name",
+        timeout_cmd=cmd_name,
+    )
+    if roster_tab is None:
+        return None
+
+    name_col_default = str(cur_part.get("roster_name_col", 0))
+    raw_name_col = await ask_keep_or_change(
+        channel,
+        f"**Step 6.3 — Roster Source: Name Column**\n"
+        f"Which column letter has the member name? (e.g. `A`, `B`, `E`)",
+        default=_col_index_to_letter(int(name_col_default) if name_col_default.isdigit() else 0),
+        modal_title="Name column",
+        modal_label="Column letter",
+        timeout_cmd=cmd_name,
+    )
+    if raw_name_col is None:
+        return None
+    roster_name_col = _col_letter_to_index(raw_name_col)
+    if roster_name_col < 0:
+        await channel.send(f"⚠️ `{raw_name_col}` isn't a valid column letter. Run `/{cmd_name}` to start again.")
+        return None
+
+    alias_view = YesNoView()
+    await channel.send(
+        "**Step 6.4 — Roster Source: Alias Column?**\n"
+        "Some alliances keep a second column with short nicknames or in-game tags "
+        "so leadership can type a short form when entering names. Do you have one?",
+        view=alias_view,
+    )
+    await alias_view.wait()
+    if alias_view.selected is None:
+        await channel.send(f"⏰ Timed out. Run `/{cmd_name}` to start again.")
+        return None
+
+    roster_alias_col = -1
+    if alias_view.selected:
+        alias_default = cur_part.get("roster_alias_col")
+        alias_default_str = (
+            _col_index_to_letter(alias_default)
+            if alias_default is not None and alias_default >= 0
+            else _col_index_to_letter(roster_name_col + 1)
+        )
+        raw_alias = await ask_keep_or_change(
+            channel,
+            "**Alias Column**\nWhich column letter has the alias / nickname?",
+            default=alias_default_str,
+            modal_title="Alias column",
+            modal_label="Column letter",
+            timeout_cmd=cmd_name,
+        )
+        if raw_alias is None:
+            return None
+        roster_alias_col = _col_letter_to_index(raw_alias)
+        if roster_alias_col < 0:
+            await channel.send(f"⚠️ `{raw_alias}` isn't a valid column letter. Run `/{cmd_name}` to start again.")
+            return None
+
+    start_row_default = str(cur_part.get("roster_start_row", 2))
+    raw_start = await ask_keep_or_change(
+        channel,
+        "**Step 6.5 — Roster Source: First Data Row**\n"
+        "Which row does the actual member data start on? Usually `2` (after a header row).",
+        default=start_row_default,
+        modal_title="Data start row",
+        modal_label="Row number",
+        timeout_cmd=cmd_name,
+    )
+    if raw_start is None:
+        return None
+    try:
+        roster_start_row = max(1, int(raw_start.strip()))
+    except ValueError:
+        await channel.send(f"⚠️ `{raw_start}` isn't a number. Run `/{cmd_name}` to start again.")
+        return None
+
+    # ── 6.6 Questions builder ──────────────────────────────────────────────────
+    questions = list(cur_part.get("questions") or [])
+    cap = None if is_premium_flag else 3
+
+    def _summarize() -> str:
+        if not questions:
+            return "*(no questions yet — every participation log will only ask for the date)*"
+        lines = []
+        for i, q in enumerate(questions, start=1):
+            t = _PARTICIPATION_TYPE_LABELS.get(q.get("type"), q.get("type", "?"))
+            lines.append(f"**{i}. {q.get('label', '?')}** — _{t}_")
+        return "\n".join(lines)
+
+    while True:
+        class _BuilderView(discord.ui.View):
+            def __init__(self, count: int):
+                super().__init__(timeout=300)
+                self.action: str | None = None
+                self.edit_idx: int | None = None
+                self.del_idx: int | None = None
+
+                if count > 0:
+                    edit_sel = discord.ui.Select(
+                        placeholder="✏️ Edit a question…",
+                        options=[discord.SelectOption(label=f"Edit: {q.get('label', '?')[:90]}", value=str(i))
+                                 for i, q in enumerate(questions[:25])],
+                        row=0,
+                    )
+                    async def _ec(inter: discord.Interaction):
+                        self.action   = "edit"
+                        self.edit_idx = int(edit_sel.values[0])
+                        for c in self.children: c.disabled = True
+                        await inter.response.edit_message(view=self)
+                        self.stop()
+                    edit_sel.callback = _ec
+                    self.add_item(edit_sel)
+
+                    del_sel = discord.ui.Select(
+                        placeholder="🗑️ Remove a question…",
+                        options=[discord.SelectOption(label=f"Remove: {q.get('label', '?')[:90]}", value=str(i))
+                                 for i, q in enumerate(questions[:25])],
+                        row=1,
+                    )
+                    async def _dc(inter: discord.Interaction):
+                        self.action  = "delete"
+                        self.del_idx = int(del_sel.values[0])
+                        for c in self.children: c.disabled = True
+                        await inter.response.edit_message(view=self)
+                        self.stop()
+                    del_sel.callback = _dc
+                    self.add_item(del_sel)
+
+            @discord.ui.button(label="➕ Add question", style=discord.ButtonStyle.primary, row=2)
+            async def add_q(self, inter: discord.Interaction, button: discord.ui.Button):
+                self.action = "add"
+                for c in self.children: c.disabled = True
+                await inter.response.edit_message(view=self)
+                self.stop()
+
+            @discord.ui.button(label="✅ Done", style=discord.ButtonStyle.success, row=2)
+            async def done(self, inter: discord.Interaction, button: discord.ui.Button):
+                self.action = "done"
+                for c in self.children: c.disabled = True
+                await inter.response.edit_message(view=self)
+                self.stop()
+
+        cap_note = (
+            f"\n*Free tier limit: {cap} questions.*"
+            if cap is not None else
+            "\n💎 *Premium: unlimited questions and three extra question types.*"
+        )
+        view = _BuilderView(len(questions))
+        await channel.send(
+            f"**Step 6.6 — Participation Questions**\n"
+            f"Each question becomes a column on your sheet and a step in the "
+            f"`/{cmd_name.replace('setup_', '')}_participation` flow.\n"
+            f"Examples: *Vote count*, *Sitting out*, *Did anyone show up late?*\n"
+            f"{cap_note}\n\n{_summarize()}",
+            view=view,
+        )
+        await view.wait()
+        if view.action is None:
+            await channel.send(f"⏰ Timed out. Run `/{cmd_name}` to start again.")
+            return None
+        if view.action == "done":
+            break
+        if view.action == "delete":
+            removed = questions.pop(view.del_idx)
+            await channel.send(f"🗑️ Removed: **{removed.get('label')}**")
+            continue
+        if view.action in ("add", "edit"):
+            if view.action == "add" and cap is not None and len(questions) >= cap:
+                await channel.send(embed=premium.limit_reached_embed(
+                    feature_label="Participation Questions",
+                    current=len(questions), cap=cap, plural_unit="questions",
+                ))
+                continue
+            existing = questions[view.edit_idx] if view.action == "edit" else None
+            new_q = await _build_participation_question(
+                channel, bot, user, cancel_event,
+                cmd_name=cmd_name,
+                is_premium_flag=is_premium_flag,
+                existing=existing,
+            )
+            if new_q is None:
+                return None
+            if view.action == "edit":
+                questions[view.edit_idx] = new_q
+                await channel.send(f"✅ Updated: **{new_q['label']}**")
+            else:
+                questions.append(new_q)
+                await channel.send(f"✅ Added: **{new_q['label']}** ({len(questions)} so far)")
+
+    return {
+        "enabled":          1,
+        "tab_name":         tab_name,
+        "questions":        questions,
+        "roster_tab":       roster_tab,
+        "roster_name_col":  roster_name_col,
+        "roster_alias_col": roster_alias_col,
+        "roster_start_row": roster_start_row,
+    }
+
+
+def _col_letter_to_index(letter: str) -> int:
+    """A→0, B→1, ..., AA→26. Returns -1 on invalid input."""
+    s = (letter or "").strip().upper()
+    if not s or not all(c.isalpha() for c in s):
+        return -1
+    n = 0
+    for c in s:
+        n = n * 26 + (ord(c) - ord("A") + 1)
+    return n - 1
+
+
+def _col_index_to_letter(idx: int) -> str:
+    """0→A, 1→B, ..., 26→AA."""
+    if idx < 0:
+        return "A"
+    out = ""
+    n = idx + 1
+    while n > 0:
+        n, rem = divmod(n - 1, 26)
+        out = chr(ord("A") + rem) + out
+    return out
+
+
+async def _build_participation_question(
+    channel, bot, user, cancel_event, *,
+    cmd_name: str, is_premium_flag: bool, existing: dict | None,
+) -> dict | None:
+    """Add or edit a single participation question. Mirrors the survey
+    question builder's shape but with participation-specific types."""
+
+    def check(m):
+        return m.author == user and m.channel == channel
+
+    # Label
+    label_extra = f"\n*Existing label:* `{existing.get('label', '')}`" if existing else ""
+    await channel.send(
+        f"**Question — Label**\n"
+        f"What's the label for this question? (e.g. `Sitting Out`, `Vote Count`)" + label_extra
+    )
+    try:
+        reply = await bot.wait_for("message", check=check, timeout=180)
+    except asyncio.TimeoutError:
+        await channel.send(f"⏰ Timed out. Run `/{cmd_name}` to start again.")
+        return None
+    q_label = reply.content.strip() or (existing.get("label", "") if existing else "")
+    if not q_label:
+        await channel.send("⚠️ Empty label. Skipping this question.")
+        return None
+    q_key = (
+        q_label.lower()
+        .replace(" ", "_").replace("-", "_").replace("/", "_")
+        .replace("(", "").replace(")", "")
+    )
+
+    # Type
+    type_options: list[discord.SelectOption] = []
+    for t in _PARTICIPATION_FREE_TYPES:
+        type_options.append(discord.SelectOption(label=_PARTICIPATION_TYPE_LABELS[t], value=t))
+    if is_premium_flag:
+        for t in _PARTICIPATION_PREMIUM_TYPES:
+            type_options.append(discord.SelectOption(label=_PARTICIPATION_TYPE_LABELS[t], value=t))
+
+    class _TypeView(discord.ui.View):
+        def __init__(self):
+            super().__init__(timeout=120)
+            self.selected: str | None = None
+            sel = discord.ui.Select(placeholder="Pick the answer type…", options=type_options)
+            async def _cb(inter):
+                self.selected = sel.values[0]
+                sel.disabled = True
+                await inter.response.edit_message(
+                    content=f"✅ Type: **{_PARTICIPATION_TYPE_LABELS.get(self.selected, self.selected)}**",
+                    view=self,
+                )
+                self.stop()
+            sel.callback = _cb
+            self.add_item(sel)
+
+    type_view = _TypeView()
+    type_extra = f"\n*Existing type:* `{existing.get('type')}`" if existing else ""
+    await channel.send(f"**Question — Answer Type**{type_extra}", view=type_view)
+    await type_view.wait()
+    if type_view.selected is None:
+        await channel.send(f"⏰ Timed out. Run `/{cmd_name}` to start again.")
+        return None
+    q_type = type_view.selected
+
+    q: dict = {"key": q_key, "label": q_label, "type": q_type}
+
+    # Type-specific extras
+    if q_type == "numeric":
+        await channel.send(
+            "**Optional — bounds**\nReply with `min,max` (e.g. `0,500`) or "
+            "type `none` for no bounds."
+        )
+        try:
+            reply = await bot.wait_for("message", check=check, timeout=120)
+        except asyncio.TimeoutError:
+            await channel.send(f"⏰ Timed out. Run `/{cmd_name}` to start again.")
+            return None
+        bounds_raw = reply.content.strip().lower()
+        if bounds_raw not in ("", "none"):
+            try:
+                lo, hi = (s.strip() for s in bounds_raw.split(","))
+                if lo:
+                    q["min"] = float(lo) if "." in lo else int(lo)
+                if hi:
+                    q["max"] = float(hi) if "." in hi else int(hi)
+            except Exception:
+                await channel.send("⚠️ Couldn't parse those bounds — saving without min/max.")
+
+    elif q_type in ("single_select", "multi_select"):
+        await channel.send(
+            "**Options** *(💎 Premium)*\nList the choices separated by commas.\n"
+            "Example: `Win, Loss, Draw`"
+        )
+        try:
+            reply = await bot.wait_for("message", check=check, timeout=180)
+        except asyncio.TimeoutError:
+            await channel.send(f"⏰ Timed out. Run `/{cmd_name}` to start again.")
+            return None
+        opts = [o.strip() for o in reply.content.split(",") if o.strip()]
+        if not opts:
+            await channel.send("⚠️ No options provided. Skipping this question.")
+            return None
+        q["options"] = opts[:25]
+
+    elif q_type == "date":
+        await channel.send(
+            "**Date format** *(💎 Premium)*\nEnter a `strptime`-style format "
+            "(e.g. `%m/%d/%Y`) or reply `default` for `%m/%d/%Y`."
+        )
+        try:
+            reply = await bot.wait_for("message", check=check, timeout=120)
+        except asyncio.TimeoutError:
+            await channel.send(f"⏰ Timed out. Run `/{cmd_name}` to start again.")
+            return None
+        fmt = reply.content.strip()
+        q["date_format"] = "%m/%d/%Y" if fmt.lower() in ("", "default") else fmt
+
+    return q
+
 
 async def run_event_setup(interaction: discord.Interaction, bot):
     """Walk an admin through configuring event types."""

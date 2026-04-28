@@ -143,3 +143,107 @@ class TestGenericDsTemplate:
         assert "{subs}"          in GENERIC_CS_TEMPLATE
         assert "{time}"          in GENERIC_CS_TEMPLATE
         assert "{subs_list}"     not in GENERIC_CS_TEMPLATE  # must not use old name
+
+
+# ── Participation log config (#20 rework) ────────────────────────────────────
+
+class TestParticipationConfig:
+    """Unit tests for the new save/load participation helpers."""
+
+    def test_get_participation_config_defaults_when_unset(self, seeded_db):
+        from config import save_storm_config, get_participation_config
+        save_storm_config(
+            TEST_GUILD_ID, "DS", "DS Assignments", "Body",
+            "", "", "", "", "", "", "America/New_York", 0,
+        )
+        pcfg = get_participation_config(TEST_GUILD_ID, "DS")
+        assert pcfg["enabled"]    is False
+        assert pcfg["tab_name"]   == ""
+        assert pcfg["questions"]  == []
+        assert pcfg["roster_tab"] == ""
+
+    def test_save_and_load_participation_config(self, seeded_db):
+        from config import save_storm_config, save_participation_config, get_participation_config
+        save_storm_config(
+            TEST_GUILD_ID, "DS", "DS Assignments", "Body",
+            "", "", "", "", "", "", "America/New_York", 0,
+        )
+        questions = [
+            {"key": "vote_count", "label": "Vote Count", "type": "numeric", "min": 0, "max": 200},
+            {"key": "sitting_out", "label": "Sitting Out", "type": "roster_names"},
+        ]
+        ok = save_participation_config(
+            TEST_GUILD_ID, "DS",
+            enabled=1, tab_name="DS Participation Log",
+            questions=questions,
+            roster_tab="Squad Powers", roster_name_col=0,
+            roster_alias_col=1, roster_start_row=2,
+        )
+        assert ok is True
+
+        pcfg = get_participation_config(TEST_GUILD_ID, "DS")
+        assert pcfg["enabled"]         is True
+        assert pcfg["tab_name"]        == "DS Participation Log"
+        assert len(pcfg["questions"])  == 2
+        assert pcfg["questions"][0]["type"] == "numeric"
+        assert pcfg["questions"][0]["min"]  == 0
+        assert pcfg["roster_tab"]       == "Squad Powers"
+        assert pcfg["roster_alias_col"] == 1
+        assert pcfg["roster_start_row"] == 2
+
+    def test_participation_config_is_independent_per_event_type(self, seeded_db):
+        from config import save_storm_config, save_participation_config, get_participation_config
+        save_storm_config(TEST_GUILD_ID, "DS", "DS Assignments", "B",
+                          "", "", "", "", "", "", "America/New_York", 0)
+        save_storm_config(TEST_GUILD_ID, "CS", "CS Assignments", "B",
+                          "", "", "", "", "", "", "America/New_York", 0)
+
+        save_participation_config(
+            TEST_GUILD_ID, "DS",
+            enabled=1, tab_name="DS Tab",
+            questions=[{"key": "ds_q", "label": "DS Q", "type": "text"}],
+        )
+        save_participation_config(
+            TEST_GUILD_ID, "CS",
+            enabled=1, tab_name="CS Tab",
+            questions=[{"key": "cs_q", "label": "CS Q", "type": "yes_no"}],
+        )
+
+        ds = get_participation_config(TEST_GUILD_ID, "DS")
+        cs = get_participation_config(TEST_GUILD_ID, "CS")
+        assert ds["tab_name"] == "DS Tab"
+        assert cs["tab_name"] == "CS Tab"
+        assert ds["questions"][0]["key"] == "ds_q"
+        assert cs["questions"][0]["key"] == "cs_q"
+
+
+class TestColumnLetterHelpers:
+    """The wizard converts spreadsheet column letters to 0-indexed ints."""
+
+    def test_letter_to_index(self):
+        from setup_cog import _col_letter_to_index
+        assert _col_letter_to_index("A")  == 0
+        assert _col_letter_to_index("E")  == 4
+        assert _col_letter_to_index("Z")  == 25
+        assert _col_letter_to_index("AA") == 26
+        assert _col_letter_to_index("AB") == 27
+        assert _col_letter_to_index("a")  == 0  # case insensitive
+
+    def test_letter_to_index_invalid(self):
+        from setup_cog import _col_letter_to_index
+        assert _col_letter_to_index("")    == -1
+        assert _col_letter_to_index("1")   == -1
+        assert _col_letter_to_index("A1")  == -1
+
+    def test_index_to_letter(self):
+        from setup_cog import _col_index_to_letter
+        assert _col_index_to_letter(0)  == "A"
+        assert _col_index_to_letter(4)  == "E"
+        assert _col_index_to_letter(25) == "Z"
+        assert _col_index_to_letter(26) == "AA"
+
+    def test_round_trip(self):
+        from setup_cog import _col_letter_to_index, _col_index_to_letter
+        for letter in ["A", "C", "E", "Z", "AA", "AZ", "BA"]:
+            idx = _col_letter_to_index(letter)
+            assert _col_index_to_letter(idx) == letter

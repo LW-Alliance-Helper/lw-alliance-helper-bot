@@ -435,7 +435,7 @@ class TestStormLogRecentDates:
             def get_all_values(self):
                 return rows
 
-        monkeypatch.setattr(storm_log, "_get_log_sheet", lambda guild_id: FakeWS())
+        monkeypatch.setattr(storm_log, "_get_log_sheet", lambda guild_id, event_type=None: FakeWS())
 
         result = storm_log.list_recent_log_dates("DS", n=4, guild_id=999)
         assert result == [
@@ -448,7 +448,7 @@ class TestStormLogRecentDates:
     def test_returns_empty_list_when_sheet_unreadable(self, fresh_premium, monkeypatch):
         import storm_log
 
-        def boom(guild_id):
+        def boom(guild_id, event_type=None):
             raise RuntimeError("Sheet unavailable")
         monkeypatch.setattr(storm_log, "_get_log_sheet", boom)
 
@@ -470,7 +470,7 @@ class TestStormLogRecentDates:
             def get_all_values(self):
                 return rows
 
-        monkeypatch.setattr(storm_log, "_get_log_sheet", lambda guild_id: FakeWS())
+        monkeypatch.setattr(storm_log, "_get_log_sheet", lambda guild_id, event_type=None: FakeWS())
 
         result = storm_log.list_recent_log_dates("DS", n=10, guild_id=999)
         assert result == [date(2026, 1, 12), date(2026, 1, 5)]

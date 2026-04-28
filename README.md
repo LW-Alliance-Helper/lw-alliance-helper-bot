@@ -24,7 +24,7 @@ A Discord bot built for Last War alliance leadership. Alliance Helper takes care
 
 ## Free vs Premium
 
-Alliance Helper is **free to use at the base level** for every alliance — every feature listed above works on the free tier with sensible limits that fit a typical alliance. **Premium** ($4.99/month or $49/year, billed via Discord App Subscriptions) lifts the limits and unlocks a handful of features built around member identity (DMs, mentions, roster sync).
+Alliance Helper is **free to use at the base level** for every alliance — every feature listed above works on the free tier with sensible limits that fit a typical alliance. **Premium** ($4.99/month, billed via Discord App Subscriptions) lifts the limits and unlocks a handful of features built around member identity (DMs, mentions, roster sync).
 
 **Free tier limits**
 

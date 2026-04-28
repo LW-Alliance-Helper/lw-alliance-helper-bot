@@ -2073,7 +2073,7 @@ Otherwise:
 > - 📅 30-day history windows on `/events_log` and `/train_log`
 > - 📜 Unlimited storm-log lookback
 >
-> **$4.99/month or $49/year**, billed by Discord. Cancel anytime.
+> **$4.99/month**, billed by Discord. Cancel anytime.
 >
 > 🔘 *(Discord-native premium SKU button if `PREMIUM_SKU_ID` env var is set)*
 

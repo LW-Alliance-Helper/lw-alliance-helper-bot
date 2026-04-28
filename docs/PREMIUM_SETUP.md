@@ -25,9 +25,9 @@ they just run `/upgrade`.
      surveys, member roster sync with DM features, custom growth
      intervals, thread destinations, extended log windows, and more.
    - **SKU type:** **Subscription** (not durable)
-   - **Pricing:**
-     - **Monthly:** $4.99 USD
-     - **Annual:** $49 USD (offered as an alternate plan on the same SKU)
+   - **Pricing:** $4.99 USD / month
+     *(Discord App Subscriptions only support monthly billing today —
+     no annual plan.)*
    - **Eligible audience:** Server-level (not user-level) — this is
      critical: subscriptions apply to the whole guild, not the
      individual.

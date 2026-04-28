@@ -236,17 +236,15 @@ def test_spreadsheet(sheets_client):
 @pytest.fixture
 def test_worksheet(test_spreadsheet):
     """
-    Create a fresh worksheet for a single test, delete it after.
-    Name includes test ID to avoid collisions.
+    Create a fresh worksheet for a single test. The tab persists past
+    the test — see `tests/sheets/conftest.py::cleanup_test_tabs` for
+    the policy: scrub at the START of every session, leave intact at
+    the END so a human can inspect what was written.
     """
     import random
     tab_name = f"_test_{random.randint(10000, 99999)}"
     ws = test_spreadsheet.add_worksheet(title=tab_name, rows=100, cols=30)
-    yield ws
-    try:
-        test_spreadsheet.del_worksheet(ws)
-    except Exception:
-        pass  # Best effort cleanup
+    yield ws  # Best effort cleanup
 
 
 # ── Async event loop ───────────────────────────────────────────────────────────

@@ -43,8 +43,19 @@ def sh(test_spreadsheet):
 @pytest.fixture(scope="session", autouse=True)
 def cleanup_test_tabs(test_spreadsheet):
     """
-    Before the session: delete any leftover test tabs from previous runs.
-    After the session: delete all test tabs created during this run.
+    Cleanup policy: **scrub at the start of every test session, leave
+    everything in place at the end.**
+
+    The reasoning: this spreadsheet exists only to back the test suite,
+    so there's no benefit to deleting tabs after a run — keeping them
+    means you can open the sheet and manually verify the rows the
+    suite just wrote (header shape, value formatting, multi-row append
+    behavior, etc.). The next session deletes anything left over before
+    it starts, so tabs never accumulate forever.
+
+    Every test fixture that creates tabs (squad_powers_tab, history_tab,
+    growth_tab, participation_tab, assignments_tab, fresh_tab, etc.)
+    relies on this — they no longer delete their own tab on teardown.
     """
     def delete_test_tabs(spreadsheet):
         for ws in spreadsheet.worksheets():
@@ -56,52 +67,38 @@ def cleanup_test_tabs(test_spreadsheet):
 
     delete_test_tabs(test_spreadsheet)
     yield
-    delete_test_tabs(test_spreadsheet)
+    # Intentionally NOT cleaning up at end-of-session — leave the
+    # data so a human can inspect what the suite wrote.
 
 
 @pytest.fixture
 def fresh_tab(test_spreadsheet):
-    """Create a uniquely named test tab, yield it, delete after test."""
+    """Create a uniquely named test tab. Tab persists past the test —
+    cleanup happens at the start of the next session."""
     name = f"_test_{random.randint(100000, 999999)}"
     ws   = test_spreadsheet.add_worksheet(title=name, rows=200, cols=30)
     yield ws
-    try:
-        test_spreadsheet.del_worksheet(ws)
-    except Exception:
-        pass
 
 
 @pytest.fixture
 def squad_powers_tab(test_spreadsheet):
-    """Create a Squad Powers test tab, yield it, delete after test."""
+    """Create a Squad Powers test tab. Tab persists for inspection."""
     name = f"_test_sq_{random.randint(100000, 999999)}"
     ws   = test_spreadsheet.add_worksheet(title=name, rows=200, cols=30)
     yield ws, name
-    try:
-        test_spreadsheet.del_worksheet(ws)
-    except Exception:
-        pass
 
 
 @pytest.fixture
 def history_tab(test_spreadsheet):
-    """Create a Survey History test tab, yield it, delete after test."""
+    """Create a Survey History test tab. Tab persists for inspection."""
     name = f"_test_hist_{random.randint(100000, 999999)}"
     ws   = test_spreadsheet.add_worksheet(title=name, rows=200, cols=30)
     yield ws, name
-    try:
-        test_spreadsheet.del_worksheet(ws)
-    except Exception:
-        pass
 
 
 @pytest.fixture
 def growth_tab(test_spreadsheet):
-    """Create a Growth Tracking test tab, yield it, delete after test."""
+    """Create a Growth Tracking test tab. Tab persists for inspection."""
     name = f"_test_growth_{random.randint(100000, 999999)}"
     ws   = test_spreadsheet.add_worksheet(title=name, rows=200, cols=50)
     yield ws, name
-    try:
-        test_spreadsheet.del_worksheet(ws)
-    except Exception:
-        pass

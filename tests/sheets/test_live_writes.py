@@ -60,27 +60,20 @@ def _make_real_spreadsheet():
 
 @pytest.fixture
 def participation_tab(test_spreadsheet):
-    """Fresh participation-log tab per test, deleted after."""
+    """Fresh participation-log tab per test. Tab persists for inspection
+    — the session-scoped cleanup in tests/sheets/conftest.py wipes it
+    at the START of the next session."""
     name = f"_test_part_{random.randint(100000, 999999)}"
     ws   = test_spreadsheet.add_worksheet(title=name, rows=200, cols=30)
     yield ws, name
-    try:
-        test_spreadsheet.del_worksheet(ws)
-    except Exception:
-        pass
 
 
 @pytest.fixture
 def assignments_tab(test_spreadsheet):
-    """Fresh DS/CS assignments tab per test, deleted after. Used by the
-    storm save_*_assignments tests."""
+    """Fresh DS/CS assignments tab per test. Tab persists for inspection."""
     name = f"_test_assign_{random.randint(100000, 999999)}"
     ws   = test_spreadsheet.add_worksheet(title=name, rows=200, cols=30)
     yield ws, name
-    try:
-        test_spreadsheet.del_worksheet(ws)
-    except Exception:
-        pass
 
 
 # ── append_participation_row ─────────────────────────────────────────────────

@@ -73,14 +73,21 @@ jobs:
         run: |
           python -m pip install --upgrade pip
           pip install -r requirements.txt
-          pip install pytest pytest-asyncio pytest-mock pytest-timeout
+          pip install pytest pytest-asyncio pytest-mock pytest-timeout pytest-rerunfailures
 
       - name: Run sheet integration tests
         env:
           GOOGLE_CREDENTIALS_JSON: ${{ secrets.GOOGLE_CREDENTIALS_JSON }}
           TEST_SHEET_ID: ${{ secrets.TEST_SHEET_ID }}
         run: |
-          pytest tests/sheets/ -v --tb=short -m "sheets"
+          # pytest-rerunfailures retries each sheet test up to 2× with a
+          # 65-second pause when it hits a Google Sheets API 429 (Quota
+          # exceeded — the per-user limit is 60 writes/minute). Sleeping
+          # past the rolling-window edge resets the quota.
+          pytest tests/sheets/ -v --tb=short -m "sheets" \
+            --reruns 2 --reruns-delay 65 \
+            --only-rerun "Quota exceeded" \
+            --only-rerun "APIError"
 
   # ── Deploy gate ─────────────────────────────────────────────────────────────
   # Railway watches the main branch and deploys automatically.

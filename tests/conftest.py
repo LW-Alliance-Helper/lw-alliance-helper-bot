@@ -170,24 +170,56 @@ def mock_bot():
 def sheets_client():
     """
     Real gspread client using service account credentials.
-    Only used by tests/sheets/ — skipped if credentials not available.
-    """
-    creds_json = os.environ.get("GOOGLE_CREDENTIALS_JSON")
-    if not creds_json:
-        pytest.skip("GOOGLE_CREDENTIALS_JSON not set — skipping sheet tests")
 
+    Resolves the credentials in the same order the bot does:
+      1. GOOGLE_CREDENTIALS_JSON env var (raw JSON string)
+      2. GOOGLE_SERVICE_ACCOUNT_FILE env var (path to a JSON file)
+      3. ./service_account.json relative to the project root
+
+    Skipped when none of those resolve to readable credentials.
+    """
     import gspread
     from google.oauth2.service_account import Credentials
 
+    scopes = [
+        "https://spreadsheets.google.com/feeds",
+        "https://www.googleapis.com/auth/drive",
+    ]
+
+    creds = None
+
+    # 1. Raw-JSON env var (preferred for CI)
+    creds_json = os.environ.get("GOOGLE_CREDENTIALS_JSON")
+    if creds_json:
+        try:
+            info  = json.loads(creds_json)
+            creds = Credentials.from_service_account_info(info, scopes=scopes)
+        except Exception as e:
+            pytest.skip(f"GOOGLE_CREDENTIALS_JSON couldn't be parsed: {e}")
+
+    # 2 & 3. File path env var, or default ./service_account.json
+    if creds is None:
+        # Project root is two directories up from tests/conftest.py
+        project_root = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+        key_file = os.environ.get(
+            "GOOGLE_SERVICE_ACCOUNT_FILE",
+            os.path.join(project_root, "service_account.json"),
+        )
+        if os.path.isfile(key_file):
+            try:
+                creds = Credentials.from_service_account_file(key_file, scopes=scopes)
+            except Exception as e:
+                pytest.skip(f"Could not load creds from {key_file}: {e}")
+
+    if creds is None:
+        pytest.skip(
+            "No Google service-account credentials available. Set "
+            "GOOGLE_CREDENTIALS_JSON or GOOGLE_SERVICE_ACCOUNT_FILE, or "
+            "drop a service_account.json file at the project root."
+        )
+
     try:
-        info   = json.loads(creds_json)
-        scopes = [
-            "https://spreadsheets.google.com/feeds",
-            "https://www.googleapis.com/auth/drive",
-        ]
-        creds  = Credentials.from_service_account_info(info, scopes=scopes)
-        client = gspread.authorize(creds)
-        return client
+        return gspread.authorize(creds)
     except Exception as e:
         pytest.skip(f"Could not create sheets client: {e}")
 

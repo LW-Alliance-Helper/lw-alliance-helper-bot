@@ -441,6 +441,7 @@ class TestRunGrowthSetup:
 
 # ── Premium tier caps (Phase 1) ───────────────────────────────────────────────
 
+@pytest.mark.free_tier_only
 class TestPremiumCaps:
     """Verify free-tier caps block adds at the limit and don't block premium."""
 

@@ -22,6 +22,49 @@ A Discord bot built for Last War alliance leadership. Alliance Helper takes care
 
 ---
 
+## Free vs Premium
+
+Alliance Helper is **free to use at the base level** for every alliance — every feature listed above works on the free tier with sensible limits that fit a typical alliance. **Premium** ($4.99/month or $49/year, billed via Discord App Subscriptions) lifts the limits and unlocks a handful of features built around member identity (DMs, mentions, roster sync).
+
+**Free tier limits**
+
+| Feature | Free | Premium |
+|---|---|---|
+| Configured events | **5 total** | Unlimited |
+| Train prompt templates | **1** *(named "Default")* | Up to **10** named templates |
+| Storm mail templates per team | **1** *(named "Default")* | Up to **10** named templates |
+| Survey questions | **5 per survey** | Unlimited |
+| Survey question types | Text, Dropdown | + Numeric (with min/max), Multi-select, Date |
+| Surveys per server | **1** | Multiple named surveys |
+| Train themes / tones | **3 each** | Unlimited |
+| Tracked growth metrics | **5** | Unlimited |
+| Growth snapshot frequency | Monthly | Monthly **or** custom interval (every N days) |
+| `/events_log` window | **7 days** | **30 days** |
+| `/train_log` window | **7 days** | **30 days** |
+| Storm participation log lookback | **4 most-recent entries** | Unlimited |
+| Channel destinations | Text channels | Text channels **and** threads |
+
+**Premium-only features** *(no free-tier equivalent)*
+
+| Feature | What it does |
+|---|---|
+| **Member Roster Sync** | Writes every member's Discord ID + name to a sheet tab so other premium features can DM them. `/setup_members`, `/sync_members` |
+| **Birthday DMs** | DM each member a personal happy-birthday note when their day fires |
+| **Train assignment DMs** | DM the assigned member when their train day starts |
+| **Auto-mention in train reminders** | Replace plain names with `<@id>` Discord mentions in the daily reminder |
+| **`/survey_remind`** | DM every roster member a "fill out the survey" reminder |
+| **`/desertstorm_remind`** / **`/canyonstorm_remind`** | DM every roster member a participation reminder before each storm |
+
+**How to subscribe**
+
+Run **`/upgrade`** in your leadership channel to open Discord's subscription dialog. Discord handles all billing — the bot is updated automatically the moment a subscription becomes active, no waiting period. Cancellations through Discord deactivate premium features at the end of the billing cycle (your saved data, including extra templates, is **kept** so you can resume any time).
+
+If you'd like to support the bot without subscribing, **`/donate`** shows tip-jar links — 100% optional.
+
+> **Existing alliances:** none of your existing setup or saved data is affected when Premium goes live. See [`docs/MIGRATION.md`](docs/MIGRATION.md) for the full picture. Bot operators setting up the SKU should follow [`docs/PREMIUM_SETUP.md`](docs/PREMIUM_SETUP.md).
+
+---
+
 ## Before You Start
 
 You'll need:
@@ -258,6 +301,11 @@ For the full list of every slash command and what it does, run `/help` in your l
 | View all configured settings | `/view_configuration` |
 | Cancel an active setup wizard | `/cancel` |
 | See all commands | `/help` |
+| 💎 Sync member roster (Premium) | `/sync_members` |
+| 💎 DM survey reminder to all members (Premium) | `/survey_remind` |
+| 💎 DM storm reminder (Premium) | `/desertstorm_remind` / `/canyonstorm_remind` |
+| Unlock Premium for your server | `/upgrade` |
+| Show donation links (optional) | `/donate` |
 
 ---
 

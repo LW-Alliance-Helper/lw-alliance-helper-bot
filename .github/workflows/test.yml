@@ -43,6 +43,16 @@ jobs:
         run: |
           pytest tests/integration/ -v --tb=short -m "not sheets" --timeout=30
 
+      # Re-run the suite as if every guild were Premium. Catches premium-only
+      # code paths that the default (free-tier) suite doesn't exercise — e.g.
+      # the multi-template manager, the FORCE_PREMIUM short-circuit, the
+      # `<@id>` mention-or-name path, and the new survey question types.
+      - name: Run suite with FORCE_PREMIUM=1
+        env:
+          FORCE_PREMIUM: "1"
+        run: |
+          pytest tests/unit/ tests/integration/ --tb=short -m "not sheets" --timeout=30
+
   # ── Sheet Integration Tests (main branch only) ──────────────────────────────
   sheet-tests:
     name: Sheet Integration Tests

@@ -21,6 +21,22 @@ from tests.conftest import TEST_GUILD_ID
 from config import OGV_GUILD_ID
 
 
+# ── Premium-env isolation (so the FORCE_PREMIUM=1 CI lane doesn't leak in) ────
+@pytest.fixture(autouse=True)
+def _isolate_premium_env(monkeypatch):
+    import importlib
+    for var in ("PREMIUM_SKU_ID", "FORCE_PREMIUM", "PREMIUM_TEST_GUILD_IDS"):
+        monkeypatch.delenv(var, raising=False)
+    import premium as _premium
+    importlib.reload(_premium)
+    _premium.clear_cache()
+    yield
+    for var in ("PREMIUM_SKU_ID", "FORCE_PREMIUM", "PREMIUM_TEST_GUILD_IDS"):
+        monkeypatch.delenv(var, raising=False)
+    importlib.reload(_premium)
+    _premium.clear_cache()
+
+
 # ── send_dm_to_id ─────────────────────────────────────────────────────────────
 
 class TestSendDmToId:

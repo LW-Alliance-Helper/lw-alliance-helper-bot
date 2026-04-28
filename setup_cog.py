@@ -3143,8 +3143,8 @@ async def _run_storm_participation_step(
         channel,
         f"**Step 6.1 — Participation Sheet Tab**\n"
         f"Which tab should the bot write {label} participation rows to?\n"
-        f"⚠️ *Make sure the tab exists in your sheet — the bot will manage "
-        f"the column structure based on the questions you define.*",
+        f"ℹ️ *The bot will create this tab automatically if it doesn't exist "
+        f"and will manage the column structure based on the questions you define.*",
         default=default_tab,
         modal_title="Participation Tab",
         modal_label="Tab name",
@@ -3200,8 +3200,9 @@ async def _run_storm_participation_step(
     alias_view = YesNoView()
     await channel.send(
         "**Step 6.4 — Roster Source: Alias Column?**\n"
-        "Some alliances keep a second column with short nicknames or in-game tags "
-        "so leadership can type a short form when entering names. Do you have one?",
+        "If you have other names or nicknames that you call your members in these "
+        "mails, this helps resolve to their full name in your sheet automatically. "
+        "Do you have an alias column?",
         view=alias_view,
     )
     await alias_view.wait()
@@ -3236,7 +3237,8 @@ async def _run_storm_participation_step(
     raw_start = await ask_keep_or_change(
         channel,
         "**Step 6.5 — Roster Source: First Data Row**\n"
-        "Which row does the actual member data start on? Usually `2` (after a header row).",
+        "In your existing roster tab above, which row does the member data start on? "
+        "Usually `2` if your sheet has a header row in row 1.",
         default=start_row_default,
         modal_title="Data start row",
         modal_label="Row number",

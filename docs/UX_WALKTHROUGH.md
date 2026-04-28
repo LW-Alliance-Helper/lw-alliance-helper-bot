@@ -1157,19 +1157,24 @@ If **No**: skip the rest of Step 6 and save with `participation_enabled = 0`.
 If **Yes**, walk five sub-steps:
 
 - **6.1 Sheet tab** — keep-or-change, default `DS Participation Log` /
-  `CS Participation Log`. Each row written gets the date plus one cell per
-  configured question.
-- **6.2 Roster source: tab** — keep-or-change. The smart default is the
-  survey's stats tab if `/setup_survey` was already run, then the birthday
-  tab, then a typed value. The roster is read here when a question's type
-  is `Roster names`.
+  `CS Participation Log`. The bot **creates this tab automatically if it
+  doesn't exist** and manages the column structure (header row + one cell
+  per configured question on each saved row), so leadership doesn't have
+  to set anything up in the sheet beforehand.
+- **6.2 Roster source: tab** — keep-or-change. This is an **existing**
+  user-owned tab (the bot only reads it; it doesn't manage its
+  structure). The smart default is the survey's stats tab if
+  `/setup_survey` was already run, then the birthday tab, then a typed
+  value. Used when a question's type is `Roster names`.
 - **6.3 Roster source: name column** — keep-or-change, column letter
   (e.g. `A`, `B`, `E`).
-- **6.4 Optional alias column?** — Yes/No. If yes: column letter. Used by
-  the legacy NameEntryView modal so leadership can type short forms /
-  in-game tags and have them resolved to the full sheet name.
-- **6.5 First data row** — keep-or-change, integer. Usually `2` (after a
-  header).
+- **6.4 Optional alias column?** — Yes/No. If yes: column letter. Used
+  when leadership has other names / nicknames they call members in
+  drafts and chats, so the bot can resolve typed short forms to the
+  member's full sheet name automatically.
+- **6.5 First data row** — keep-or-change, integer. Refers to the
+  **roster source** tab from 6.2 (the user's existing sheet, not the
+  log tab in 6.1). Usually `2` if that sheet has a header row in row 1.
 - **6.6 Questions builder** — Add / Edit / Remove loop with up to **3**
   questions free, unlimited 💎 Premium. Per-question prompts: label, then
   type:

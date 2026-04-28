@@ -357,12 +357,6 @@ async def run_survey(bot, thread: discord.Thread, user: discord.Member):
             _now     = datetime.now(timezone.utc)
             _hour12  = _now.hour % 12 or 12
             date_str = f"{_now:%B} {_now.day}, {_now.year} at {_hour12}:{_now:%M %p} UTC"
-            profession_line = data.get("profession", "")
-            if data.get("banner"):
-                profession_line += f" — Charge Banner: {data['banner']}"
-            elif data.get("aid_removal"):
-                profession_line += f" — Medical Aid/Ruin Removal: {data['aid_removal']}"
-
             embed = discord.Embed(
                 title="📋 New Survey Response",
                 color=discord.Color.blurple(),
@@ -370,19 +364,22 @@ async def run_survey(bot, thread: discord.Thread, user: discord.Member):
             embed.add_field(name="Member", value=user.mention, inline=True)
             embed.add_field(name="Submitted", value=date_str, inline=True)
             embed.add_field(name="\u200b", value="\u200b", inline=True)
+            # Iterate the actual configured questions in order so guilds with
+            # custom surveys see their own labels (not a hardcoded LW set).
+            response_lines = []
+            for q in questions:
+                key   = q.get("key", "")
+                label = q.get("label", key) or key
+                if not key:
+                    continue
+                value = data.get(key, "")
+                if value == "" or value is None:
+                    value = "—"
+                response_lines.append(f"**{label}:** {value}")
+
             embed.add_field(
                 name="Responses",
-                value=(
-                    f"**1st Squad Power:** {data.get('squad1_power', '—')}\n"
-                    f"**1st Squad Type:** {data.get('squad1_type', '—')}\n"
-                    f"**2nd Squad Power:** {data.get('squad2_power', '—')}\n"
-                    f"**3rd Squad Power:** {data.get('squad3_power', '—')}\n"
-                    f"**Drone Level:** {data.get('drone_level', '—')}\n"
-                    f"**Gorilla Level:** {data.get('gorilla_level', '—')}\n"
-                    f"**THP:** {data.get('thp', '—')}M\n"
-                    f"**Total Kills:** {data.get('total_kills', '—')}M\n"
-                    f"**Profession:** {profession_line}"
-                ),
+                value="\n".join(response_lines)[:1024] if response_lines else "*(no responses)*",
                 inline=False,
             )
             await notify_channel.send(embed=embed)

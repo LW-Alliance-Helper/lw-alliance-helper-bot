@@ -77,6 +77,56 @@ EVENT_LIBRARY = {
 OPTIONAL_EVENTS = {k: v for k, v in EVENT_LIBRARY.items() if v["optional"]}
 
 
+def _resolve_event_info(key: str, guild_id: int = None) -> dict:
+    """
+    Resolve an event key to its display info. When a guild has configured
+    events via /setup_events, those take precedence; otherwise fall back to
+    the hardcoded EVENT_LIBRARY for backwards compatibility.
+
+    Returns {"name", "blurb", "optional"}. Guild-configured events are
+    always treated as optional (i.e. removable from the editor) — only the
+    legacy EVENT_LIBRARY enforces the marauder/siege "always included" rule.
+    """
+    if guild_id is not None:
+        try:
+            from config import get_guild_event
+            ev = get_guild_event(guild_id, key)
+        except Exception:
+            ev = None
+        if ev:
+            return {
+                "name":     ev.get("name", key),
+                "blurb":    ev.get("announcement_blurb", "")
+                            or EVENT_LIBRARY.get(key, {}).get("blurb", ""),
+                "optional": True,
+            }
+    return EVENT_LIBRARY.get(key, {"name": key, "blurb": "", "optional": True})
+
+
+def _available_events_for_guild(guild_id: int = None) -> dict:
+    """
+    Pool of optional/addable events for the editor. With a configured
+    guild, returns every guild-defined event keyed by short_key. Without
+    one, returns the legacy OPTIONAL_EVENTS dict.
+    """
+    if guild_id is not None:
+        try:
+            from config import get_guild_events
+            events = get_guild_events(guild_id, active_only=True)
+        except Exception:
+            events = []
+        if events:
+            return {
+                e["short_key"]: {
+                    "name":     e.get("name", e["short_key"]),
+                    "blurb":    e.get("announcement_blurb", ""),
+                    "optional": True,
+                }
+                for e in events
+            }
+    return dict(OPTIONAL_EVENTS)
+
+
 # ── Schedule helpers ───────────────────────────────────────────────────────────
 
 def next_event_dates(from_date: date = None, count: int = 6) -> list[date]:
@@ -265,8 +315,8 @@ class EventEditorView(discord.ui.View):
     def format_event_list_text(self) -> str:
         lines = []
         for i, event in enumerate(self.event_list, 1):
-            lib  = EVENT_LIBRARY.get(event["key"], {})
-            name = lib.get("name", event["key"])
+            info = _resolve_event_info(event["key"], self.guild_id)
+            name = info["name"]
             t    = format_et(event["dt"])
             sv   = to_server_time_str(event["dt"])
             lines.append(f"{i}. **{name}** — {t} ET ({sv} server)")
@@ -293,7 +343,8 @@ class EventEditorView(discord.ui.View):
     async def add_event(self, interaction: discord.Interaction, button: discord.ui.Button):
         # Only show events not already in the list
         current_keys = {e["key"] for e in self.event_list}
-        available    = {k: v for k, v in OPTIONAL_EVENTS.items() if k not in current_keys}
+        pool         = _available_events_for_guild(self.guild_id)
+        available    = {k: v for k, v in pool.items() if k not in current_keys}
 
         if not available:
             await interaction.response.send_message(
@@ -314,11 +365,13 @@ class EventEditorView(discord.ui.View):
             await select_interaction.response.defer()
             select_msg_ref[0].stop()
 
+            chosen_info = _resolve_event_info(chosen_key, self.guild_id)
+            chosen_name = chosen_info["name"]
+
             # Ask for the time
             channel = interaction.channel
             time_prompt = await channel.send(
-                f"⏰ What time is **{EVENT_LIBRARY[chosen_key]['name']}**? "
-                f"*(e.g. 10:30pm or 22:30)*"
+                f"⏰ What time is **{chosen_name}**? *(e.g. 10:30pm or 22:30)*"
             )
 
             def check(m):
@@ -340,7 +393,7 @@ class EventEditorView(discord.ui.View):
                     # Keep list sorted by time
                     self.event_list.sort(key=lambda e: e["dt"])
                     await channel.send(
-                        f"✅ **{EVENT_LIBRARY[chosen_key]['name']}** added at {format_et(dt)} ET.",
+                        f"✅ **{chosen_name}** added at {format_et(dt)} ET.",
                         delete_after=5,
                     )
                 else:
@@ -375,7 +428,7 @@ class EventEditorView(discord.ui.View):
             placeholder="Choose an event to edit...",
             options=[
                 discord.SelectOption(
-                    label=f"{EVENT_LIBRARY.get(e['key'], {}).get('name', e['key'])} — {format_et(e['dt'])} ET",
+                    label=f"{_resolve_event_info(e['key'], self.guild_id)['name']} — {format_et(e['dt'])} ET",
                     value=str(i),
                 )
                 for i, e in enumerate(self.event_list)
@@ -388,7 +441,7 @@ class EventEditorView(discord.ui.View):
             select_msg_ref[0].stop()
 
             event    = self.event_list[idx]
-            lib_name = EVENT_LIBRARY.get(event["key"], {}).get("name", event["key"])
+            lib_name = _resolve_event_info(event["key"], self.guild_id)["name"]
             channel  = interaction.channel
 
             time_prompt = await channel.send(
@@ -438,14 +491,15 @@ class EventEditorView(discord.ui.View):
 
     @discord.ui.button(label="🗑️ Remove Event", style=discord.ButtonStyle.danger, row=0)
     async def remove_event(self, interaction: discord.Interaction, button: discord.ui.Button):
-        # Can't remove default events (marauder/siege)
+        # All guild-configured events are removable; legacy EVENT_LIBRARY keeps
+        # marauder/siege as required (optional=False).
         removable = [
             (i, e) for i, e in enumerate(self.event_list)
-            if EVENT_LIBRARY.get(e["key"], {}).get("optional", True)
+            if _resolve_event_info(e["key"], self.guild_id).get("optional", True)
         ]
         if not removable:
             await interaction.response.send_message(
-                "No optional events to remove. Marauder and Siege are always included.",
+                "No removable events in the list.",
                 ephemeral=True,
             )
             return
@@ -454,7 +508,7 @@ class EventEditorView(discord.ui.View):
             placeholder="Choose an event to remove...",
             options=[
                 discord.SelectOption(
-                    label=EVENT_LIBRARY.get(e["key"], {}).get("name", e["key"]),
+                    label=_resolve_event_info(e["key"], self.guild_id)["name"],
                     value=str(i),
                 )
                 for i, e in removable
@@ -463,7 +517,7 @@ class EventEditorView(discord.ui.View):
 
         async def on_select(select_interaction: discord.Interaction):
             idx      = int(select_interaction.data["values"][0])
-            lib_name = EVENT_LIBRARY.get(self.event_list[idx]["key"], {}).get("name", "Event")
+            lib_name = _resolve_event_info(self.event_list[idx]["key"], self.guild_id)["name"]
             self.event_list.pop(idx)
             await select_interaction.response.edit_message(
                 content=f"✅ **{lib_name}** removed.", view=None

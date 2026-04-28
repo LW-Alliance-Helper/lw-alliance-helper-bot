@@ -474,8 +474,9 @@ async def run_log_flow(bot, channel, user, event_type):
             pass
         if not names:
             await channel.send(
-                "⚠️ Could not load member names. "
-                "Run `/setup_birthdays` (or another module setup) to confirm the member tab name and try again."
+                "⚠️ Could not load member names from your sheet. "
+                "Make sure the configured member tab exists and the bot's "
+                "service account has access to your Google Sheet, then try again."
             )
             return
 

@@ -1206,8 +1206,12 @@ async def run_setup(interaction: discord.Interaction, bot):
     # ── Confirm and save ───────────────────────────────────────────────────────
     tz_label = TIMEZONE_LABELS.get(cfg.timezone, cfg.timezone)
     embed = discord.Embed(
-        title="⚙️ Setup Summary",
-        description="Please confirm these settings before saving:",
+        title="✅ Final Review — Confirm to Save",
+        description=(
+            "All steps complete. Review your selections below and click "
+            "**Confirm** to save your configuration, or **Cancel** to start over.\n"
+            "*(This is the final review, not an additional step.)*"
+        ),
         color=discord.Color.blurple(),
     )
     embed.add_field(name="Member Role",        value=cfg.member_role_name,              inline=False)
@@ -1727,6 +1731,11 @@ async def run_train_setup(interaction: discord.Interaction, bot):
         await channel.send("⏰ Timed out. Run `/setup_train` to start again.")
         return
     blurbs_enabled = 1 if blurb_view.selected else 0
+    if not blurbs_enabled:
+        await channel.send(
+            "ℹ️ *Skipping Steps 3–6 (themes, tones, default tone, prompt template) — "
+            "blurb generation is off.*"
+        )
 
     themes        = current["themes"]
     tones         = current["tones"]
@@ -1905,6 +1914,10 @@ async def run_train_setup(interaction: discord.Interaction, bot):
     reminders_enabled  = 1 if reminder_view.selected else 0
     reminder_channel_id = 0
     reminder_time       = "22:00"
+    if not reminders_enabled:
+        await channel.send(
+            "ℹ️ *Skipping Steps 7a–7b (reminder channel and time) — train reminders are off.*"
+        )
 
     if reminders_enabled:
         # ── Step 7a: Reminder channel ──────────────────────────────────────────
@@ -3378,6 +3391,11 @@ async def run_birthday_setup(interaction: discord.Interaction, bot):
     flexible_placement = 0
     lookahead_days     = 14
 
+    if not train_integration:
+        await channel.send(
+            "ℹ️ *Skipping Steps 6–7 (placement and lookahead) — train integration is off.*"
+        )
+
     if train_integration:
         # ── Step 6: Flexible placement ─────────────────────────────────────────
         class PlacementView(discord.ui.View):
@@ -3414,8 +3432,11 @@ async def run_birthday_setup(interaction: discord.Interaction, bot):
         # ── Step 7: Lookahead days ─────────────────────────────────────────────
         lookahead_raw = await ask_keep_or_change(
             channel,
-            "**Step 7 of 8 — Lookahead Days**\n"
-            "How many days in advance should birthdays be added to the train schedule?\n"
+            "**Step 7 of 8 — Train Schedule Lookahead**\n"
+            "Since you enabled train integration, how many days ahead of a "
+            "member's birthday should the bot pre-populate them on the train "
+            "schedule? This only applies to train-integration auto-placement; "
+            "the birthday announcement itself always fires on the day.\n"
             "*(we recommend 14)*",
             default=str(current.get("lookahead_days", 14) or 14),
             modal_title="Lookahead Days",
@@ -3447,6 +3468,10 @@ async def run_birthday_setup(interaction: discord.Interaction, bot):
     reminders_enabled    = 1 if remind_view.selected else 0
     reminder_channel_id  = 0
     reminder_time        = "08:00"
+    if not reminders_enabled:
+        await channel.send(
+            "ℹ️ *Skipping Steps 8a–8b (reminder channel and time) — birthday reminders are off.*"
+        )
 
     if reminders_enabled:
         # ── Step 8a: Reminder channel ──────────────────────────────────────────

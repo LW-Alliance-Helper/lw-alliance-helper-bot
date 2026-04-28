@@ -468,8 +468,9 @@ async def run_ds_edit_step(bot, channel, user, team: str, current_zones: dict,
 
     # Ask for time if not already set
     if time_key is None:
+        guild_id = getattr(getattr(channel, "guild", None), "id", None)
         time_msg  = await channel.send("⏰ What time is Desert Storm this week?")
-        time_view = TimeSelectView()
+        time_view = TimeSelectView(event_type="DS", guild_id=guild_id)
         await time_msg.edit(view=time_view)
         await time_view.wait()
         try:
@@ -1083,26 +1084,6 @@ class CSApprovalView(discord.ui.View):
         self.stop()
 
 
-# ── CS Time selection ──────────────────────────────────────────────────────────
-
-class CSTimeSelectView(discord.ui.View):
-    def __init__(self):
-        super().__init__(timeout=WIZARD_TIMEOUT)
-        self.selected = None
-
-    @discord.ui.button(label="10AM EST / 12:00 Server", style=discord.ButtonStyle.secondary)
-    async def pick_10am(self, interaction: discord.Interaction, button: discord.ui.Button):
-        self.selected = "10am"
-        await interaction.response.defer()
-        self.stop()
-
-    @discord.ui.button(label="9PM EST / 23:00 Server", style=discord.ButtonStyle.secondary)
-    async def pick_9pm(self, interaction: discord.Interaction, button: discord.ui.Button):
-        self.selected = "9pm"
-        await interaction.response.defer()
-        self.stop()
-
-
 # ── CS Core wizard flow ────────────────────────────────────────────────────────
 
 async def run_cs_edit_step(bot, channel, user, team: str, current_zones: dict, time_key: str = None):
@@ -1110,8 +1091,9 @@ async def run_cs_edit_step(bot, channel, user, team: str, current_zones: dict, t
         return m.author == user and m.channel == channel
 
     if time_key is None:
+        guild_id  = getattr(getattr(channel, "guild", None), "id", None)
         time_msg  = await channel.send("⏰ What time is Canyon Storm this week?")
-        time_view = CSTimeSelectView()
+        time_view = TimeSelectView(event_type="CS", guild_id=guild_id)
         await time_msg.edit(view=time_view)
         await time_view.wait()
         try:

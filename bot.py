@@ -569,4 +569,9 @@ async def help_slash(interaction: discord.Interaction):
 # Alias so date_cls doesn't conflict with the `date` parameter name in events_slash
 date_cls = date
 
-bot.run(DISCORD_TOKEN)
+
+# Guard the runtime entry so `import bot` doesn't try to start the bot
+# (which is what tests need to do — they import this module to walk the
+# tree-registered commands without booting the real Discord client).
+if __name__ == "__main__":
+    bot.run(DISCORD_TOKEN)

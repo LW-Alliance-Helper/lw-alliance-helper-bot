@@ -76,6 +76,29 @@ def assignments_tab(test_spreadsheet):
     yield ws, name
 
 
+@pytest.fixture
+def train_tab(test_spreadsheet):
+    """Fresh Train Schedule tab per test. The bot manages its own header
+    in row 1 (Date / Name / Theme / Tone / Notes / Prompt Retrieved),
+    so we pre-seed that here to match what /setup_train would have
+    created on a real install."""
+    name = f"_test_train_{random.randint(100000, 999999)}"
+    ws   = test_spreadsheet.add_worksheet(title=name, rows=200, cols=10)
+    ws.update("A1", [[
+        "Date", "Name", "Theme", "Tone", "Notes", "Prompt Retrieved",
+    ]], value_input_option="USER_ENTERED")
+    yield ws, name
+
+
+@pytest.fixture
+def roster_tab(test_spreadsheet):
+    """Fresh Member Roster tab per test. write_roster does its own
+    ws.clear() + writes header + rows, so we don't pre-seed anything."""
+    name = f"_test_roster_{random.randint(100000, 999999)}"
+    ws   = test_spreadsheet.add_worksheet(title=name, rows=200, cols=10)
+    yield ws, name
+
+
 # ── append_participation_row ─────────────────────────────────────────────────
 
 class TestParticipationRowWrite:
@@ -274,5 +297,249 @@ class TestStormAssignmentsWrite:
         assert "CS_A_ZONES"             in flat
         assert any("s1_power_tower" == c for c in flat)
         assert any("Alice, Bob"     == c for c in flat)
+
+
+# ── train.save_schedule ──────────────────────────────────────────────────────
+
+class TestTrainScheduleWrite:
+    """The bot writes the full train schedule back to the configured
+    `tab_train_schedule` whenever leadership uses `/train` to add /
+    update / clear entries. save_schedule is the round-trip writer."""
+
+    def test_save_schedule_writes_all_entries(
+        self, seeded_db, train_tab,
+    ):
+        from unittest.mock import patch
+        import config as _config
+        import train
+
+        ws, tab_name = train_tab
+
+        # Point the guild's train-schedule tab at our test tab.
+        gcfg = _config.get_config(TEST_GUILD_ID)
+        gcfg.tab_train_schedule = tab_name
+        _config.save_config(gcfg)
+
+        sh = _make_real_spreadsheet()
+        schedule = {
+            "2026-04-14": {
+                "name": "Alice", "theme": "Birthday",
+                "tone": "Casual", "notes": "Turning 30",
+                "prompt_retrieved": True,
+            },
+            "2026-04-15": {
+                "name": "Bob", "theme": "Milestone",
+                "tone": "Default", "notes": "",
+                "prompt_retrieved": False,
+            },
+        }
+
+        with patch.object(train, "_get_spreadsheet", return_value=sh):
+            train.save_schedule(schedule, guild_id=TEST_GUILD_ID)
+
+        time.sleep(1.0)
+        rows = ws.get_all_values()
+
+        # Header row should be intact (we pre-seeded it; save_schedule
+        # batch-clears A2:F1000 then writes from A2 down — header stays).
+        assert rows[0][:6] == ["Date", "Name", "Theme", "Tone", "Notes", "Prompt Retrieved"]
+
+        # Two data rows in date order.
+        data = [r for r in rows[1:] if any(r)]
+        assert len(data) == 2
+        assert data[0][:6] == ["2026-04-14", "Alice", "Birthday", "Casual", "Turning 30", "TRUE"]
+        assert data[1][:6] == ["2026-04-15", "Bob", "Milestone", "Default", "", "FALSE"]
+
+    def test_save_schedule_replaces_previous_rows(
+        self, seeded_db, train_tab,
+    ):
+        """Round-trip the writer twice with different schedules — the
+        second write should fully replace the first (batch_clear of
+        A2:F1000) so no leftovers remain."""
+        from unittest.mock import patch
+        import config as _config
+        import train
+
+        ws, tab_name = train_tab
+
+        gcfg = _config.get_config(TEST_GUILD_ID)
+        gcfg.tab_train_schedule = tab_name
+        _config.save_config(gcfg)
+
+        sh = _make_real_spreadsheet()
+
+        first = {
+            "2026-04-14": {"name": "Alice", "theme": "X",  "tone": "Y", "notes": "first"},
+            "2026-04-15": {"name": "Bob",   "theme": "",   "tone": "",  "notes": ""},
+        }
+        second = {
+            "2026-05-01": {"name": "Carol", "theme": "Z",  "tone": "W", "notes": "second"},
+        }
+
+        with patch.object(train, "_get_spreadsheet", return_value=sh):
+            train.save_schedule(first,  guild_id=TEST_GUILD_ID)
+            time.sleep(0.6)
+            train.save_schedule(second, guild_id=TEST_GUILD_ID)
+
+        time.sleep(1.0)
+        rows = ws.get_all_values()
+        data = [r for r in rows[1:] if any(r)]
+
+        # Only Carol should remain — Alice + Bob got cleared.
+        assert len(data) == 1
+        assert data[0][1] == "Carol"
+        assert data[0][4] == "second"
+
+
+# ── member_roster.write_roster ───────────────────────────────────────────────
+
+class TestMemberRosterWrite:
+    """write_roster builds rows from a discord.Guild's members list and
+    rewrites the configured roster tab from scratch (clear + update).
+    This is the function that powers Member Roster Sync (Premium)."""
+
+    def test_write_roster_writes_header_and_member_rows(
+        self, seeded_db, roster_tab,
+    ):
+        from unittest.mock import MagicMock, patch
+        from datetime import datetime, timezone
+        import config as _config
+        import member_roster
+
+        ws, tab_name = roster_tab
+
+        # Configure roster sync to write to our test tab. Default column
+        # layout: 0=Discord ID, 1=Name, 2=Display Name, 3=Joined, 4=Roles.
+        _config.save_member_roster_config(
+            TEST_GUILD_ID,
+            enabled=1, tab_name=tab_name,
+            discord_id_col=0, name_col=1, display_col=2,
+            joined_col=3, roles_col=4,
+            role_filter_id=0, auto_sync=1,
+        )
+
+        # Build a fake guild with three members — one bot (filtered out),
+        # one regular member, one with a role we can verify renders.
+        def _member(uid, name, display, joined, role_names, is_bot=False):
+            m = MagicMock()
+            m.id, m.name, m.display_name = uid, name, display
+            m.bot                        = is_bot
+            m.joined_at                  = joined
+            m.roles                      = [MagicMock(name=r, id=99) for r in role_names]
+            # MagicMock's .name kwarg doesn't stick — set explicitly:
+            for role, role_name in zip(m.roles, role_names):
+                role.name = role_name
+            return m
+
+        guild = MagicMock()
+        guild.id = TEST_GUILD_ID
+        guild.members = [
+            _member(111, "alice",  "Alice",  datetime(2025, 1, 5,  tzinfo=timezone.utc), ["@everyone", "Member"]),
+            _member(222, "bob",    "Bob",    datetime(2025, 3, 12, tzinfo=timezone.utc), ["@everyone", "Member", "Leadership"]),
+            _member(333, "rogue",  "Rogue",  datetime(2025, 6, 1,  tzinfo=timezone.utc), ["@everyone"], is_bot=True),
+        ]
+
+        sh = _make_real_spreadsheet()
+        with patch.object(member_roster, "get_member_roster_sheet", return_value=ws):
+            written = member_roster.write_roster(guild, _config.get_member_roster_config(TEST_GUILD_ID))
+
+        # write_roster returns the count excluding header. Two non-bots.
+        assert written == 2
+
+        time.sleep(1.0)
+        rows = ws.get_all_values()
+
+        # Header
+        assert rows[0][:5] == ["Discord ID", "Name", "Display Name", "Joined", "Roles"]
+
+        # Two member rows, sorted by display_name lower → Alice, Bob
+        data = [r for r in rows[1:] if any(r)]
+        assert len(data) == 2
+        assert data[0][0] == "111"          # Alice's id
+        assert data[0][1] == "alice"
+        assert data[0][2] == "Alice"
+        assert data[0][3] == "2025-01-05"
+        assert "Member" in data[0][4]
+        assert "Leadership" not in data[0][4]
+
+        assert data[1][0] == "222"          # Bob's id
+        assert data[1][2] == "Bob"
+        assert "Leadership" in data[1][4]   # Bob has the role
+        # Bot 333 should be excluded
+        assert all("333" not in r[0] for r in data)
+
+
+# ── train_birthdays integration: birthday auto-add → train schedule ──────────
+
+class TestBirthdayToTrainScheduleIntegration:
+    """When birthdays + train integration are both configured, the
+    daily task adds upcoming birthdays directly into the train schedule
+    sheet. This exercises that full pipeline end-to-end against a real
+    Train Schedule tab — confirming the new row lands with the right
+    name, theme="Birthday", and date."""
+
+    def test_birthday_added_to_train_schedule_lands_in_sheet(
+        self, seeded_db, train_tab,
+    ):
+        from unittest.mock import patch
+        from datetime import date, timedelta
+        import config as _config
+        import train
+        import train_birthdays
+
+        ws, tab_name = train_tab
+
+        # Wire the train-schedule tab to our test tab.
+        gcfg = _config.get_config(TEST_GUILD_ID)
+        gcfg.tab_train_schedule = tab_name
+        _config.save_config(gcfg)
+
+        # Birthdays config — train_integration=1 so the helper will
+        # actually add to the schedule. lookahead_days=14 by default.
+        _config.save_birthday_config(
+            guild_id           = TEST_GUILD_ID,
+            tab_name           = "_unused_birthdays",
+            name_col           = 0,
+            birthday_col       = 1,
+            data_start_row     = 2,
+            enabled            = 1,
+            train_integration  = 1,
+            flexible_placement = 1,
+        )
+
+        # A birthday three days from today, so it falls inside the
+        # 14-day lookahead window.
+        target_date = date.today() + timedelta(days=3)
+        members = [{
+            "name":  "BdayPerson",
+            "month": target_date.month,
+            "day":   target_date.day,
+        }]
+
+        sh = _make_real_spreadsheet()
+        with patch.object(train, "_get_spreadsheet", return_value=sh), \
+             patch.object(train_birthdays, "load_birthdays", return_value=members):
+
+            # Existing schedule starts empty. The helper computes the
+            # adds, the cog persists them via save_schedule.
+            current   = train.load_schedule(TEST_GUILD_ID)
+            updated, alerts = train_birthdays.check_and_add_birthdays(
+                current, guild_id=TEST_GUILD_ID,
+            )
+            assert not alerts, f"Did not expect placement alerts; got {alerts}"
+            train.save_schedule(updated, guild_id=TEST_GUILD_ID)
+
+        time.sleep(1.0)
+        rows = ws.get_all_values()
+        data = [r for r in rows[1:] if any(r)]
+
+        # The birthday should have produced exactly one row in the
+        # configured train tab.
+        assert len(data) == 1, (
+            f"Expected one birthday row in the train schedule; got {len(data)}: {data}"
+        )
+        assert data[0][0] == target_date.isoformat()
+        assert data[0][1] == "BdayPerson"
+        assert data[0][2] == "Birthday"
 
 

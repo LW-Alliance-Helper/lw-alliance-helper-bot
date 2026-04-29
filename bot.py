@@ -184,7 +184,6 @@ async def on_ready():
         print(f"[INFO] Event scheduler started")
         growth_task.start()
         print(f"[INFO] Growth tracker started")
-        bot.loop.create_task(_run_stats_publish_on_startup())
         stats_publish_task.start()
         print(f"[INFO] Stats publisher started")
 
@@ -342,20 +341,6 @@ async def stats_publish_task():
 @stats_publish_task.before_loop
 async def before_stats_publish_task():
     await bot.wait_until_ready()
-
-
-async def _run_stats_publish_on_startup():
-    """Refresh the count once on every redeploy so the badge tracks
-    redeploy-time guild count, not just the last 24-hour tick.
-    """
-    await bot.wait_until_ready()
-    # Tiny delay so the gateway has had a moment to populate bot.guilds.
-    await asyncio.sleep(5)
-    try:
-        await publish_alliance_count(len(bot.guilds))
-    except Exception as e:
-        print(f"[STATS] Startup publish failed: {e}")
-        sentry_sdk.capture_exception(e)
 
 
 @bot.event

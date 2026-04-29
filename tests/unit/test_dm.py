@@ -22,16 +22,21 @@ from config import OGV_GUILD_ID
 
 
 # ── Premium-env isolation (so the FORCE_PREMIUM=1 CI lane doesn't leak in) ────
+# OGV is pinned into PREMIUM_BYPASS_GUILD_IDS so the tests below that use
+# OGV_GUILD_ID resolve as premium without each test having to set the env
+# var itself. TEST_GUILD_ID stays out of the set, so free-tier tests still
+# work as expected.
 @pytest.fixture(autouse=True)
 def _isolate_premium_env(monkeypatch):
     import importlib
-    for var in ("PREMIUM_SKU_ID", "FORCE_PREMIUM", "PREMIUM_TEST_GUILD_IDS"):
+    for var in ("PREMIUM_SKU_ID", "FORCE_PREMIUM"):
         monkeypatch.delenv(var, raising=False)
+    monkeypatch.setenv("PREMIUM_BYPASS_GUILD_IDS", str(OGV_GUILD_ID))
     import premium as _premium
     importlib.reload(_premium)
     _premium.clear_cache()
     yield
-    for var in ("PREMIUM_SKU_ID", "FORCE_PREMIUM", "PREMIUM_TEST_GUILD_IDS"):
+    for var in ("PREMIUM_SKU_ID", "FORCE_PREMIUM", "PREMIUM_BYPASS_GUILD_IDS"):
         monkeypatch.delenv(var, raising=False)
     importlib.reload(_premium)
     _premium.clear_cache()

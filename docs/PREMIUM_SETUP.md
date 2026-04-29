@@ -48,8 +48,8 @@ PREMIUM_SKU_ID=<your-sku-id>
 ```
 
 The bot reads `PREMIUM_SKU_ID` at startup. Until it's set, every guild
-falls back to free-tier behavior (with the exception of OGV, which is
-hardcoded as always-premium for testing).
+falls back to free-tier behavior unless its ID appears in
+`PREMIUM_BYPASS_GUILD_IDS`.
 
 Other supported environment variables:
 
@@ -57,10 +57,13 @@ Other supported environment variables:
 |---|---|---|
 | `PREMIUM_SKU_ID` | Subscription SKU ID | **Required** for real billing |
 | `FORCE_PREMIUM` | `1` / `true` flags every guild as premium | Local dev / staging only |
-| `PREMIUM_TEST_GUILD_IDS` | Comma-separated guild IDs to flag as premium | Beta testers |
+| `PREMIUM_BYPASS_GUILD_IDS` | Comma-separated guild IDs that always resolve as premium without a subscription | The bot owner's home server, internal test servers, beta testers |
 
-`FORCE_PREMIUM` and `PREMIUM_TEST_GUILD_IDS` are intended for testing.
-**Do not set either in production.**
+`PREMIUM_BYPASS_GUILD_IDS` is the canonical way to grant a specific
+guild permanent premium status without a Discord subscription — used in
+production for the bot owner's home alliance. `FORCE_PREMIUM` is a
+nuke option intended for local testing only; do not set it in
+production.
 
 ## 3. Verify in Discord
 

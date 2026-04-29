@@ -23,14 +23,18 @@ from config import OGV_GUILD_ID
 # ── Premium-env isolation (so the FORCE_PREMIUM=1 CI lane doesn't leak in) ────
 @pytest.fixture(autouse=True)
 def _isolate_premium_env(monkeypatch):
+    """Pin OGV into PREMIUM_BYPASS_GUILD_IDS so the OGV-as-premium tests
+    in this file don't each need to set the env var. TEST_GUILD_ID stays
+    out of the set so free-tier paths still work."""
     import importlib
-    for var in ("PREMIUM_SKU_ID", "FORCE_PREMIUM", "PREMIUM_TEST_GUILD_IDS"):
+    for var in ("PREMIUM_SKU_ID", "FORCE_PREMIUM"):
         monkeypatch.delenv(var, raising=False)
+    monkeypatch.setenv("PREMIUM_BYPASS_GUILD_IDS", str(OGV_GUILD_ID))
     import premium as _premium
     importlib.reload(_premium)
     _premium.clear_cache()
     yield
-    for var in ("PREMIUM_SKU_ID", "FORCE_PREMIUM", "PREMIUM_TEST_GUILD_IDS"):
+    for var in ("PREMIUM_SKU_ID", "FORCE_PREMIUM", "PREMIUM_BYPASS_GUILD_IDS"):
         monkeypatch.delenv(var, raising=False)
     importlib.reload(_premium)
     _premium.clear_cache()
@@ -266,7 +270,7 @@ class TestSyncMembersGate:
         cog = MemberRosterCog(bot)
 
         interaction = AsyncMock()
-        interaction.guild_id     = OGV_GUILD_ID   # always-premium
+        interaction.guild_id     = OGV_GUILD_ID   # premium via PREMIUM_BYPASS_GUILD_IDS
         interaction.entitlements = []
         interaction.user         = MagicMock()
         interaction.user.guild_permissions.administrator = False

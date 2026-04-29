@@ -523,13 +523,18 @@ class TestPremiumCaps:
         )
 
     @pytest.mark.asyncio
-    async def test_events_unlimited_for_premium_ogv(self, seeded_db):
-        """OGV (always-premium) has no event-count cap."""
+    async def test_events_unlimited_for_premium_ogv(self, seeded_db, monkeypatch):
+        """OGV (premium via PREMIUM_BYPASS_GUILD_IDS) has no event-count cap."""
         from config import OGV_GUILD_ID
+        import importlib
+        monkeypatch.setenv("PREMIUM_BYPASS_GUILD_IDS", str(OGV_GUILD_ID))
         import premium
-        premium.clear_cache()
-        cap = await premium.get_limit("events", OGV_GUILD_ID)
-        assert cap is None
+        importlib.reload(premium)
+        try:
+            cap = await premium.get_limit("events", OGV_GUILD_ID)
+            assert cap is None
+        finally:
+            premium.clear_cache()
 
     @pytest.mark.asyncio
     async def test_themes_truncated_to_three_on_free(self, seeded_db):

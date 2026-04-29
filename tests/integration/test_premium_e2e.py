@@ -4,13 +4,13 @@ Cross-cutting end-to-end premium tests (Sprint D — Phase 8d).
 These tests span multiple modules to validate the complete free → cap-hit
 → upsell flow and the complete premium → feature-unlocked flow. They
 intentionally don't mock at the module boundary; they go through the
-real `is_premium` path with `PREMIUM_TEST_GUILD_IDS` env-var overrides.
+real `is_premium` path with `PREMIUM_BYPASS_GUILD_IDS` env-var overrides.
 
 Two scenarios per feature:
   A. Free-tier guild hits the cap → sees the limit-reached embed; no data
      is added beyond the cap.
-  B. Premium guild (via PREMIUM_TEST_GUILD_IDS) goes past the free cap
-     successfully.
+  B. Premium guild (via PREMIUM_BYPASS_GUILD_IDS env var) goes past the
+     free cap successfully.
 
 The Discord side is mocked at the slash-command interaction level only;
 DB state is exercised end-to-end via the existing seeded_db fixture.
@@ -117,31 +117,43 @@ class TestFreeTierHitsCaps:
 # ── Scenario B — Premium goes past free caps ──────────────────────────────────
 
 class TestPremiumUnlocksAllCaps:
-    """A premium guild (via PREMIUM_TEST_GUILD_IDS or the OGV always-premium
-    short-circuit) gets `None` from every cap-style get_limit call (= unlimited)
-    or the configured premium ceiling. Validates the wiring end-to-end."""
+    """A premium guild (via PREMIUM_BYPASS_GUILD_IDS) gets `None` from every
+    cap-style get_limit call (= unlimited) or the configured premium ceiling.
+    Validates the wiring end-to-end."""
 
     @pytest.mark.asyncio
-    async def test_ogv_unlimited_events(self, seeded_db):
+    async def test_ogv_unlimited_events(self, seeded_db, monkeypatch):
+        monkeypatch.setenv("PREMIUM_BYPASS_GUILD_IDS", str(OGV_GUILD_ID))
         import premium
-        premium.clear_cache()
-        assert await premium.get_limit("events", OGV_GUILD_ID) is None
+        importlib.reload(premium)
+        try:
+            assert await premium.get_limit("events", OGV_GUILD_ID) is None
+        finally:
+            premium.clear_cache()
 
     @pytest.mark.asyncio
-    async def test_ogv_train_templates_capped_at_ten(self, seeded_db):
+    async def test_ogv_train_templates_capped_at_ten(self, seeded_db, monkeypatch):
+        monkeypatch.setenv("PREMIUM_BYPASS_GUILD_IDS", str(OGV_GUILD_ID))
         import premium
-        premium.clear_cache()
-        assert await premium.get_limit("train_templates", OGV_GUILD_ID) == 10
+        importlib.reload(premium)
+        try:
+            assert await premium.get_limit("train_templates", OGV_GUILD_ID) == 10
+        finally:
+            premium.clear_cache()
 
     @pytest.mark.asyncio
-    async def test_ogv_storm_templates_capped_at_ten(self, seeded_db):
+    async def test_ogv_storm_templates_capped_at_ten(self, seeded_db, monkeypatch):
+        monkeypatch.setenv("PREMIUM_BYPASS_GUILD_IDS", str(OGV_GUILD_ID))
         import premium
-        premium.clear_cache()
-        assert await premium.get_limit("storm_templates", OGV_GUILD_ID) == 10
+        importlib.reload(premium)
+        try:
+            assert await premium.get_limit("storm_templates", OGV_GUILD_ID) == 10
+        finally:
+            premium.clear_cache()
 
     @pytest.mark.asyncio
     async def test_test_guild_id_env_var_unlocks_premium(self, monkeypatch, seeded_db):
-        monkeypatch.setenv("PREMIUM_TEST_GUILD_IDS", str(TEST_GUILD_ID))
+        monkeypatch.setenv("PREMIUM_BYPASS_GUILD_IDS", str(TEST_GUILD_ID))
         import premium as _premium
         importlib.reload(_premium)
         try:
@@ -179,7 +191,13 @@ class TestRosterDmMentionChain:
         import dm
         from unittest.mock import AsyncMock, MagicMock
 
-        # Configure roster for OGV (always premium)
+        # OGV needs to be premium for member_sync, so set the bypass env var.
+        monkeypatch.setenv("PREMIUM_BYPASS_GUILD_IDS", str(OGV_GUILD_ID))
+        import premium as _premium
+        importlib.reload(_premium)
+        _premium.clear_cache()
+
+        # Configure roster for OGV
         config.save_member_roster_config(
             OGV_GUILD_ID, enabled=1, tab_name="Roster",
         )

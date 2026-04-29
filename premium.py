@@ -6,11 +6,15 @@ Subscriptions (SKU configured in the Discord Developer Portal). Entitlements
 are read from `interaction.entitlements` when an interaction is available
 (zero-cost) and from `bot.entitlements()` otherwise (cached for 5 minutes).
 
-For development and the bot owner's home alliance, several short-circuits
-are available:
-  - `ALWAYS_PREMIUM_GUILD_IDS` (hardcoded — includes OGV)
-  - `FORCE_PREMIUM=1`           (env var — flags every guild as premium)
-  - `PREMIUM_TEST_GUILD_IDS`    (env var — comma-separated guild ids)
+For development and bypass scenarios (e.g. the bot owner's home alliance),
+two env-var overrides are available:
+  - `FORCE_PREMIUM=1`             — flags every guild as premium (dev nuke)
+  - `PREMIUM_BYPASS_GUILD_IDS`    — comma-separated guild ids that always
+                                    resolve to premium (no subscription
+                                    needed). Use this for the owner's home
+                                    server, internal test servers, or any
+                                    guild that should permanently sit on
+                                    the premium tier without paying.
 
 Public API:
   - `is_premium(guild_id, interaction=None, bot=None)` → bool
@@ -25,18 +29,12 @@ from typing import Optional
 
 import discord
 
-from config import OGV_GUILD_ID
-
 
 # ── Configuration ─────────────────────────────────────────────────────────────
 
-# Guilds that are always premium, regardless of subscription status.
-# OGV is the bot owner's home alliance — they get full access.
-ALWAYS_PREMIUM_GUILD_IDS: set[int] = {OGV_GUILD_ID}
-
 # Discord SKU ID for the premium subscription (set in Discord Developer Portal).
 # Until this is set, no real subscriptions can be detected — only the
-# always-premium and dev-override guilds are treated as premium.
+# env-var bypass guilds and FORCE_PREMIUM are treated as premium.
 PREMIUM_SKU_ID: Optional[int] = (
     int(os.environ["PREMIUM_SKU_ID"])
     if os.environ.get("PREMIUM_SKU_ID", "").strip().isdigit()
@@ -105,8 +103,12 @@ def _force_premium_enabled() -> bool:
     return os.environ.get("FORCE_PREMIUM", "").strip().lower() in {"1", "true", "yes"}
 
 
-def _test_guild_ids() -> set[int]:
-    raw = os.environ.get("PREMIUM_TEST_GUILD_IDS", "").strip()
+def _bypass_guild_ids() -> set[int]:
+    """Guild IDs that should always be treated as premium, regardless of
+    Discord subscription state. Read from the `PREMIUM_BYPASS_GUILD_IDS`
+    env var (comma-separated). Returns an empty set if unset.
+    """
+    raw = os.environ.get("PREMIUM_BYPASS_GUILD_IDS", "").strip()
     if not raw:
         return set()
     out: set[int] = set()
@@ -128,20 +130,17 @@ async def is_premium(
 
     Resolution order (first hit wins):
       1. `FORCE_PREMIUM` env var → True for everyone.
-      2. `ALWAYS_PREMIUM_GUILD_IDS` hardcoded list → True.
-      3. `PREMIUM_TEST_GUILD_IDS` env var → True.
-      4. `interaction.entitlements` if an interaction is supplied → True if a
+      2. `PREMIUM_BYPASS_GUILD_IDS` env var → True if guild_id is in the set.
+      3. `interaction.entitlements` if an interaction is supplied → True if a
          non-deleted entitlement matches PREMIUM_SKU_ID.
-      5. Cached prior lookup (5-minute TTL).
-      6. `bot.entitlements()` API call → True if a non-ended entitlement
+      4. Cached prior lookup (5-minute TTL).
+      5. `bot.entitlements()` API call → True if a non-ended entitlement
          matches PREMIUM_SKU_ID. Result cached.
-      7. Otherwise False.
+      6. Otherwise False.
     """
     if _force_premium_enabled():
         return True
-    if guild_id in ALWAYS_PREMIUM_GUILD_IDS:
-        return True
-    if guild_id in _test_guild_ids():
+    if guild_id in _bypass_guild_ids():
         return True
 
     # Cheap path: the interaction already carries entitlements.

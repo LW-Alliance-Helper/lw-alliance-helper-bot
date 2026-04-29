@@ -25,7 +25,7 @@ def fresh_premium(monkeypatch):
     (`PREMIUM_SKU_ID`) and the cache start clean.
     """
     # Clear env so module-level reads default to None
-    for var in ("PREMIUM_SKU_ID", "FORCE_PREMIUM", "PREMIUM_TEST_GUILD_IDS"):
+    for var in ("PREMIUM_SKU_ID", "FORCE_PREMIUM", "PREMIUM_BYPASS_GUILD_IDS"):
         monkeypatch.delenv(var, raising=False)
     import premium as _premium
     importlib.reload(_premium)
@@ -37,6 +37,26 @@ def fresh_premium(monkeypatch):
     importlib.reload(_premium)
 
 
+@pytest.fixture
+def fresh_premium_with_ogv_bypass(monkeypatch):
+    """
+    Like `fresh_premium`, but with OGV's guild_id pre-loaded into the
+    `PREMIUM_BYPASS_GUILD_IDS` env var. Use for tests that want OGV to
+    resolve as premium without going through the entitlement / SKU
+    pathway — mirrors how OGV stays premium in production.
+    """
+    for var in ("PREMIUM_SKU_ID", "FORCE_PREMIUM"):
+        monkeypatch.delenv(var, raising=False)
+    monkeypatch.setenv("PREMIUM_BYPASS_GUILD_IDS", str(OGV_GUILD_ID))
+    import premium as _premium
+    importlib.reload(_premium)
+    _premium.clear_cache()
+    yield _premium
+    _premium.clear_cache()
+    monkeypatch.delenv("PREMIUM_BYPASS_GUILD_IDS", raising=False)
+    importlib.reload(_premium)
+
+
 @pytest.fixture(autouse=True)
 def _isolate_premium_env(monkeypatch):
     """
@@ -45,13 +65,13 @@ def _isolate_premium_env(monkeypatch):
     runs the suite twice, once with FORCE_PREMIUM unset and once with it
     set). Each test in this file must drive premium state explicitly.
     """
-    for var in ("PREMIUM_SKU_ID", "FORCE_PREMIUM", "PREMIUM_TEST_GUILD_IDS"):
+    for var in ("PREMIUM_SKU_ID", "FORCE_PREMIUM", "PREMIUM_BYPASS_GUILD_IDS"):
         monkeypatch.delenv(var, raising=False)
     import premium as _premium
     importlib.reload(_premium)
     _premium.clear_cache()
     yield
-    for var in ("PREMIUM_SKU_ID", "FORCE_PREMIUM", "PREMIUM_TEST_GUILD_IDS"):
+    for var in ("PREMIUM_SKU_ID", "FORCE_PREMIUM", "PREMIUM_BYPASS_GUILD_IDS"):
         monkeypatch.delenv(var, raising=False)
     importlib.reload(_premium)
     _premium.clear_cache()
@@ -69,12 +89,25 @@ def _make_entitlement(sku_id: int, deleted: bool = False):
 class TestAlwaysPremiumShortCircuits:
 
     @pytest.mark.asyncio
-    async def test_ogv_is_always_premium(self, fresh_premium):
-        assert await fresh_premium.is_premium(OGV_GUILD_ID) is True
+    async def test_no_env_var_no_premium(self, fresh_premium):
+        """With no env vars set, no guild is premium by default — including
+        OGV. (Premium status comes from the PREMIUM_BYPASS_GUILD_IDS env
+        var on Railway in production.)"""
+        assert await fresh_premium.is_premium(OGV_GUILD_ID) is False
+        assert await fresh_premium.is_premium(TEST_GUILD_ID) is False
 
     @pytest.mark.asyncio
-    async def test_random_guild_is_not_premium_by_default(self, fresh_premium):
-        assert await fresh_premium.is_premium(TEST_GUILD_ID) is False
+    async def test_ogv_premium_via_bypass_env_var(self, monkeypatch):
+        """Setting OGV's guild_id in PREMIUM_BYPASS_GUILD_IDS flips it
+        to premium — this is how OGV stays premium in production."""
+        monkeypatch.setenv("PREMIUM_BYPASS_GUILD_IDS", str(OGV_GUILD_ID))
+        import premium as _premium
+        importlib.reload(_premium)
+        try:
+            assert await _premium.is_premium(OGV_GUILD_ID) is True
+            assert await _premium.is_premium(TEST_GUILD_ID) is False
+        finally:
+            _premium.clear_cache()
 
     @pytest.mark.asyncio
     async def test_force_premium_env_var(self, monkeypatch):
@@ -88,8 +121,8 @@ class TestAlwaysPremiumShortCircuits:
             _premium.clear_cache()
 
     @pytest.mark.asyncio
-    async def test_test_guild_ids_env_var(self, monkeypatch):
-        monkeypatch.setenv("PREMIUM_TEST_GUILD_IDS", "111,222,333")
+    async def test_bypass_guild_ids_env_var(self, monkeypatch):
+        monkeypatch.setenv("PREMIUM_BYPASS_GUILD_IDS", "111,222,333")
         import premium as _premium
         importlib.reload(_premium)
         try:
@@ -101,8 +134,8 @@ class TestAlwaysPremiumShortCircuits:
             _premium.clear_cache()
 
     @pytest.mark.asyncio
-    async def test_test_guild_ids_ignores_blank_and_garbage(self, monkeypatch):
-        monkeypatch.setenv("PREMIUM_TEST_GUILD_IDS", "111, ,not-a-number,222")
+    async def test_bypass_guild_ids_ignores_blank_and_garbage(self, monkeypatch):
+        monkeypatch.setenv("PREMIUM_BYPASS_GUILD_IDS", "111, ,not-a-number,222")
         import premium as _premium
         importlib.reload(_premium)
         try:
@@ -262,8 +295,9 @@ class TestGetLimit:
         assert await fresh_premium.get_limit("train_templates",   TEST_GUILD_ID) == 1
 
     @pytest.mark.asyncio
-    async def test_premium_returns_premium_cap(self, fresh_premium):
-        # OGV is always premium → should hit the premium row.
+    async def test_premium_returns_premium_cap(self, fresh_premium_with_ogv_bypass):
+        # OGV in the bypass list → resolves premium → premium-row limits.
+        fresh_premium = fresh_premium_with_ogv_bypass
         assert await fresh_premium.get_limit("events",            OGV_GUILD_ID) is None
         assert await fresh_premium.get_limit("train_templates",   OGV_GUILD_ID) == 10
         assert await fresh_premium.get_limit("storm_templates",   OGV_GUILD_ID) == 10
@@ -392,24 +426,24 @@ class TestLogWindowLimits:
         assert await fresh_premium.get_limit("events_log_days", TEST_GUILD_ID) == 7
 
     @pytest.mark.asyncio
-    async def test_events_log_days_premium_is_thirty(self, fresh_premium):
-        assert await fresh_premium.get_limit("events_log_days", OGV_GUILD_ID) == 30
+    async def test_events_log_days_premium_is_thirty(self, fresh_premium_with_ogv_bypass):
+        assert await fresh_premium_with_ogv_bypass.get_limit("events_log_days", OGV_GUILD_ID) == 30
 
     @pytest.mark.asyncio
     async def test_train_log_days_free_is_seven(self, fresh_premium):
         assert await fresh_premium.get_limit("train_log_days", TEST_GUILD_ID) == 7
 
     @pytest.mark.asyncio
-    async def test_train_log_days_premium_is_thirty(self, fresh_premium):
-        assert await fresh_premium.get_limit("train_log_days", OGV_GUILD_ID) == 30
+    async def test_train_log_days_premium_is_thirty(self, fresh_premium_with_ogv_bypass):
+        assert await fresh_premium_with_ogv_bypass.get_limit("train_log_days", OGV_GUILD_ID) == 30
 
     @pytest.mark.asyncio
     async def test_storm_log_recent_free_is_four(self, fresh_premium):
         assert await fresh_premium.get_limit("storm_log_recent", TEST_GUILD_ID) == 4
 
     @pytest.mark.asyncio
-    async def test_storm_log_recent_premium_is_unlimited(self, fresh_premium):
-        assert await fresh_premium.get_limit("storm_log_recent", OGV_GUILD_ID) is None
+    async def test_storm_log_recent_premium_is_unlimited(self, fresh_premium_with_ogv_bypass):
+        assert await fresh_premium_with_ogv_bypass.get_limit("storm_log_recent", OGV_GUILD_ID) is None
 
 
 # ── Storm log recent-date helper (Phase 6) ────────────────────────────────────
@@ -482,14 +516,14 @@ class TestUpgradeCommand:
     """Verify /upgrade renders correctly for free vs premium and with/without SKU."""
 
     @pytest.mark.asyncio
-    async def test_premium_user_sees_already_active_message(self, fresh_premium):
+    async def test_premium_user_sees_already_active_message(self, fresh_premium_with_ogv_bypass):
         from donate import DonateCog
 
         bot = MagicMock()
         cog = DonateCog(bot)
 
         interaction = AsyncMock()
-        interaction.guild_id = OGV_GUILD_ID  # always-premium
+        interaction.guild_id = OGV_GUILD_ID  # premium via PREMIUM_BYPASS_GUILD_IDS
         interaction.entitlements = []
         interaction.response.send_message = AsyncMock()
 

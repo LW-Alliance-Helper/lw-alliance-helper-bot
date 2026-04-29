@@ -11,6 +11,7 @@ from scheduler import (
     next_event_dates, is_friday,
 )
 from growth import run_growth_snapshot
+from stats_publisher import publish_alliance_count
 from zoneinfo import ZoneInfo
 from config import init_db, get_config, get_or_create_config
 
@@ -161,6 +162,9 @@ async def on_ready():
         bot.loop.create_task(_run_growth_on_startup())
         growth_task.start()
         print(f"[INFO] Growth tracker started")
+        bot.loop.create_task(_run_stats_publish_on_startup())
+        stats_publish_task.start()
+        print(f"[INFO] Stats publisher started")
 
 
 @bot.event
@@ -271,6 +275,41 @@ async def growth_task():
 @growth_task.before_loop
 async def before_growth_task():
     await bot.wait_until_ready()
+
+
+# ── Alliance count publisher ─────────────────────────────────────────────────
+#
+# Once a day, push the live `len(bot.guilds)` to the website's
+# assets/stats.json so the home-page badge stays current. The publisher
+# itself decides whether to make a commit (skip if unchanged), and
+# silently no-ops if STATS_GITHUB_TOKEN isn't set.
+
+@tasks.loop(hours=24)
+async def stats_publish_task():
+    try:
+        await publish_alliance_count(len(bot.guilds))
+    except Exception as e:
+        # publish_alliance_count is supposed to swallow its own errors,
+        # but belt + suspenders — never let this loop die.
+        print(f"[STATS] Publisher loop caught unexpected error: {e}")
+
+
+@stats_publish_task.before_loop
+async def before_stats_publish_task():
+    await bot.wait_until_ready()
+
+
+async def _run_stats_publish_on_startup():
+    """Refresh the count once on every redeploy so the badge tracks
+    redeploy-time guild count, not just the last 24-hour tick.
+    """
+    await bot.wait_until_ready()
+    # Tiny delay so the gateway has had a moment to populate bot.guilds.
+    await asyncio.sleep(5)
+    try:
+        await publish_alliance_count(len(bot.guilds))
+    except Exception as e:
+        print(f"[STATS] Startup publish failed: {e}")
 
 
 @bot.event

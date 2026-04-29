@@ -18,12 +18,12 @@ import discord
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__)))))
 
 from tests.conftest import TEST_GUILD_ID
-from config import OGV_GUILD_ID
+from tests.constants import PREMIUM_TEST_GUILD_ID
 
 
 # ── Premium-env isolation (so the FORCE_PREMIUM=1 CI lane doesn't leak in) ────
 # OGV is pinned into PREMIUM_BYPASS_GUILD_IDS so the tests below that use
-# OGV_GUILD_ID resolve as premium without each test having to set the env
+# PREMIUM_TEST_GUILD_ID resolve as premium without each test having to set the env
 # var itself. TEST_GUILD_ID stays out of the set, so free-tier tests still
 # work as expected.
 @pytest.fixture(autouse=True)
@@ -31,7 +31,7 @@ def _isolate_premium_env(monkeypatch):
     import importlib
     for var in ("PREMIUM_SKU_ID", "FORCE_PREMIUM"):
         monkeypatch.delenv(var, raising=False)
-    monkeypatch.setenv("PREMIUM_BYPASS_GUILD_IDS", str(OGV_GUILD_ID))
+    monkeypatch.setenv("PREMIUM_BYPASS_GUILD_IDS", str(PREMIUM_TEST_GUILD_ID))
     import premium as _premium
     importlib.reload(_premium)
     _premium.clear_cache()
@@ -62,7 +62,7 @@ class TestSendDmToId:
         bot       = MagicMock()
         bot.fetch_user = AsyncMock(return_value=user)
 
-        ok = await dm.send_dm_to_id(bot, OGV_GUILD_ID, 12345, content="hi there")
+        ok = await dm.send_dm_to_id(bot, PREMIUM_TEST_GUILD_ID, 12345, content="hi there")
 
         assert ok is True
         user.send.assert_awaited_once_with(content="hi there", embed=None)
@@ -77,7 +77,7 @@ class TestSendDmToId:
         bot       = MagicMock()
         bot.fetch_user = AsyncMock(return_value=user)
 
-        ok = await dm.send_dm_to_id(bot, OGV_GUILD_ID, 99, content="hi")
+        ok = await dm.send_dm_to_id(bot, PREMIUM_TEST_GUILD_ID, 99, content="hi")
         assert ok is False
 
     @pytest.mark.asyncio
@@ -87,7 +87,7 @@ class TestSendDmToId:
         bot = MagicMock()
         bot.fetch_user = AsyncMock(side_effect=discord.NotFound(MagicMock(), "no such user"))
 
-        ok = await dm.send_dm_to_id(bot, OGV_GUILD_ID, 1, content="x")
+        ok = await dm.send_dm_to_id(bot, PREMIUM_TEST_GUILD_ID, 1, content="x")
         assert ok is False
 
     @pytest.mark.asyncio
@@ -95,7 +95,7 @@ class TestSendDmToId:
         import dm
 
         bot = MagicMock()
-        ok  = await dm.send_dm_to_id(bot, OGV_GUILD_ID, "not-a-number", content="x")
+        ok  = await dm.send_dm_to_id(bot, PREMIUM_TEST_GUILD_ID, "not-a-number", content="x")
         assert ok is False
 
 
@@ -116,7 +116,7 @@ class TestSendDmByName:
 
         bot = MagicMock()
         with patch("dm.lookup_discord_id_for_name", return_value=None):
-            ok = await dm.send_dm(bot, OGV_GUILD_ID, "Unknown", content="hi")
+            ok = await dm.send_dm(bot, PREMIUM_TEST_GUILD_ID, "Unknown", content="hi")
         assert ok is False
 
     @pytest.mark.asyncio
@@ -129,7 +129,7 @@ class TestSendDmByName:
         bot.fetch_user = AsyncMock(return_value=user)
 
         with patch("dm.lookup_discord_id_for_name", return_value="555"):
-            ok = await dm.send_dm(bot, OGV_GUILD_ID, "Alice", content="hi roster")
+            ok = await dm.send_dm(bot, PREMIUM_TEST_GUILD_ID, "Alice", content="hi roster")
 
         assert ok is True
         user.send.assert_awaited_once_with(content="hi roster", embed=None)
@@ -151,7 +151,7 @@ class TestMentionOrName:
         import dm
         bot = MagicMock()
         with patch("dm.lookup_discord_id_for_name", return_value="777"):
-            out = await dm.mention_or_name(bot, OGV_GUILD_ID, "Alice")
+            out = await dm.mention_or_name(bot, PREMIUM_TEST_GUILD_ID, "Alice")
         assert out == "<@777>"
 
     @pytest.mark.asyncio
@@ -159,5 +159,5 @@ class TestMentionOrName:
         import dm
         bot = MagicMock()
         with patch("dm.lookup_discord_id_for_name", return_value=None):
-            out = await dm.mention_or_name(bot, OGV_GUILD_ID, "Stranger")
+            out = await dm.mention_or_name(bot, PREMIUM_TEST_GUILD_ID, "Stranger")
         assert out == "Stranger"

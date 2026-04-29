@@ -29,12 +29,6 @@ from defaults import (
 
 DB_PATH       = os.getenv("CONFIG_DB_PATH",    "/app/data/guild_configs.db")
 
-# OGV's guild ID is retained as a constant so the existing test fixtures
-# can keep referring to it as "the canonical test guild." The bot itself
-# no longer treats OGV specially — every alliance, including OGV, runs
-# through `/setup` like everyone else.
-OGV_GUILD_ID = 1266229297723605052
-
 
 # ── GuildConfig dataclass ──────────────────────────────────────────────────────
 

@@ -25,7 +25,7 @@ import pytest
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__)))))
 
 from tests.conftest import TEST_GUILD_ID
-from config import OGV_GUILD_ID
+from tests.constants import PREMIUM_TEST_GUILD_ID
 
 
 # ── Scenario A — Free-tier hits the cap ───────────────────────────────────────
@@ -122,32 +122,32 @@ class TestPremiumUnlocksAllCaps:
     Validates the wiring end-to-end."""
 
     @pytest.mark.asyncio
-    async def test_ogv_unlimited_events(self, seeded_db, monkeypatch):
-        monkeypatch.setenv("PREMIUM_BYPASS_GUILD_IDS", str(OGV_GUILD_ID))
+    async def test_premium_unlimited_events(self, seeded_db, monkeypatch):
+        monkeypatch.setenv("PREMIUM_BYPASS_GUILD_IDS", str(PREMIUM_TEST_GUILD_ID))
         import premium
         importlib.reload(premium)
         try:
-            assert await premium.get_limit("events", OGV_GUILD_ID) is None
+            assert await premium.get_limit("events", PREMIUM_TEST_GUILD_ID) is None
         finally:
             premium.clear_cache()
 
     @pytest.mark.asyncio
-    async def test_ogv_train_templates_capped_at_ten(self, seeded_db, monkeypatch):
-        monkeypatch.setenv("PREMIUM_BYPASS_GUILD_IDS", str(OGV_GUILD_ID))
+    async def test_premium_train_templates_capped_at_ten(self, seeded_db, monkeypatch):
+        monkeypatch.setenv("PREMIUM_BYPASS_GUILD_IDS", str(PREMIUM_TEST_GUILD_ID))
         import premium
         importlib.reload(premium)
         try:
-            assert await premium.get_limit("train_templates", OGV_GUILD_ID) == 10
+            assert await premium.get_limit("train_templates", PREMIUM_TEST_GUILD_ID) == 10
         finally:
             premium.clear_cache()
 
     @pytest.mark.asyncio
-    async def test_ogv_storm_templates_capped_at_ten(self, seeded_db, monkeypatch):
-        monkeypatch.setenv("PREMIUM_BYPASS_GUILD_IDS", str(OGV_GUILD_ID))
+    async def test_premium_storm_templates_capped_at_ten(self, seeded_db, monkeypatch):
+        monkeypatch.setenv("PREMIUM_BYPASS_GUILD_IDS", str(PREMIUM_TEST_GUILD_ID))
         import premium
         importlib.reload(premium)
         try:
-            assert await premium.get_limit("storm_templates", OGV_GUILD_ID) == 10
+            assert await premium.get_limit("storm_templates", PREMIUM_TEST_GUILD_ID) == 10
         finally:
             premium.clear_cache()
 
@@ -191,15 +191,15 @@ class TestRosterDmMentionChain:
         import dm
         from unittest.mock import AsyncMock, MagicMock
 
-        # OGV needs to be premium for member_sync, so set the bypass env var.
-        monkeypatch.setenv("PREMIUM_BYPASS_GUILD_IDS", str(OGV_GUILD_ID))
+        # The premium guild needs to be premium for member_sync — set the bypass env var.
+        monkeypatch.setenv("PREMIUM_BYPASS_GUILD_IDS", str(PREMIUM_TEST_GUILD_ID))
         import premium as _premium
         importlib.reload(_premium)
         _premium.clear_cache()
 
-        # Configure roster for OGV
+        # Configure roster for the premium guild
         config.save_member_roster_config(
-            OGV_GUILD_ID, enabled=1, tab_name="Roster",
+            PREMIUM_TEST_GUILD_ID, enabled=1, tab_name="Roster",
         )
 
         # Mock the underlying sheet to return a known roster row
@@ -212,14 +212,14 @@ class TestRosterDmMentionChain:
 
         # mention_or_name finds the ID and returns a Discord mention.
         bot = MagicMock()
-        out = await dm.mention_or_name(bot, OGV_GUILD_ID, "Alice")
+        out = await dm.mention_or_name(bot, PREMIUM_TEST_GUILD_ID, "Alice")
         assert out == "<@888777>"
 
         # send_dm fetches the user and sends.
         user      = AsyncMock()
         user.send = AsyncMock()
         bot.fetch_user = AsyncMock(return_value=user)
-        ok = await dm.send_dm(bot, OGV_GUILD_ID, "Alice", content="hi")
+        ok = await dm.send_dm(bot, PREMIUM_TEST_GUILD_ID, "Alice", content="hi")
         assert ok is True
         user.send.assert_awaited_once()
 

@@ -19,7 +19,7 @@ import pytest_asyncio
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
 # ── Test constants (also importable from tests.constants) ─────────────────────
-from tests.constants import TEST_GUILD_ID, TEST_SHEET_ID, OGV_GUILD_ID
+from tests.constants import TEST_GUILD_ID, TEST_SHEET_ID, PREMIUM_TEST_GUILD_ID
 
 
 # ── FORCE_PREMIUM lane gating ─────────────────────────────────────────────────

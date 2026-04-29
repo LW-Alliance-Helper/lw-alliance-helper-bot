@@ -17,7 +17,7 @@ import pytest
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__)))))
 
 from tests.conftest import TEST_GUILD_ID
-from config import OGV_GUILD_ID
+from tests.constants import PREMIUM_TEST_GUILD_ID
 
 
 # ── Premium-env isolation (so the FORCE_PREMIUM=1 CI lane doesn't leak in) ────
@@ -29,7 +29,7 @@ def _isolate_premium_env(monkeypatch):
     import importlib
     for var in ("PREMIUM_SKU_ID", "FORCE_PREMIUM"):
         monkeypatch.delenv(var, raising=False)
-    monkeypatch.setenv("PREMIUM_BYPASS_GUILD_IDS", str(OGV_GUILD_ID))
+    monkeypatch.setenv("PREMIUM_BYPASS_GUILD_IDS", str(PREMIUM_TEST_GUILD_ID))
     import premium as _premium
     importlib.reload(_premium)
     _premium.clear_cache()
@@ -270,7 +270,7 @@ class TestSyncMembersGate:
         cog = MemberRosterCog(bot)
 
         interaction = AsyncMock()
-        interaction.guild_id     = OGV_GUILD_ID   # premium via PREMIUM_BYPASS_GUILD_IDS
+        interaction.guild_id     = PREMIUM_TEST_GUILD_ID   # premium via PREMIUM_BYPASS_GUILD_IDS
         interaction.entitlements = []
         interaction.user         = MagicMock()
         interaction.user.guild_permissions.administrator = False
@@ -296,7 +296,7 @@ class TestSyncMembersGate:
         cog = MemberRosterCog(bot)
 
         interaction = AsyncMock()
-        interaction.guild_id     = OGV_GUILD_ID
+        interaction.guild_id     = PREMIUM_TEST_GUILD_ID
         interaction.entitlements = []
         interaction.user         = MagicMock()
         interaction.user.guild_permissions.administrator = True

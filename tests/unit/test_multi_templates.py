@@ -17,7 +17,7 @@ import pytest
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__)))))
 
 from tests.conftest import TEST_GUILD_ID
-from config import OGV_GUILD_ID
+from tests.constants import PREMIUM_TEST_GUILD_ID
 
 
 # ── Train templates ───────────────────────────────────────────────────────────
@@ -303,10 +303,10 @@ class TestMultiSurvey:
     def test_extra_surveys_isolated_per_guild(self, seeded_db):
         import config
         config.save_extra_survey(TEST_GUILD_ID, "shared_id", survey_name="Guild A version")
-        config.save_extra_survey(OGV_GUILD_ID,  "shared_id", survey_name="Guild B version")
+        config.save_extra_survey(PREMIUM_TEST_GUILD_ID,  "shared_id", survey_name="Guild B version")
 
         a = config.get_survey(TEST_GUILD_ID, "shared_id")
-        b = config.get_survey(OGV_GUILD_ID,  "shared_id")
+        b = config.get_survey(PREMIUM_TEST_GUILD_ID,  "shared_id")
         assert a["survey_name"] == "Guild A version"
         assert b["survey_name"] == "Guild B version"
 

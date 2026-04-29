@@ -27,7 +27,7 @@ import pytest
 
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__)))))
 
-from tests.conftest import TEST_GUILD_ID, OGV_GUILD_ID, make_mock_interaction
+from tests.conftest import TEST_GUILD_ID, PREMIUM_TEST_GUILD_ID, make_mock_interaction
 from tests.integration.test_setup_flows import (
     make_send_handler, patch_keep_or_change,
 )

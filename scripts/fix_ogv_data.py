@@ -9,7 +9,7 @@ Each fix is **idempotent** — re-running it has no effect once the
 data is already in the desired shape, so it's safe if the env var
 gets left on for an extra restart by accident.
 
-Two fixes:
+Three fixes:
 
 1. ``guild_storm_config`` (CS row): the mail template was seeded with
    the old ``{subs_list}`` placeholder name. The codebase migrated to
@@ -22,6 +22,14 @@ Two fixes:
    the seed function picked up the leadership-channel ID). We set it
    to OGV's leadership channel so the daily train reminder actually
    posts somewhere.
+
+3. ``guild_configs``: ``event_draft_channel_id`` and
+   ``event_announce_channel_id`` are 0 for OGV because the columns
+   were added via ``ALTER TABLE`` AFTER OGV's row was inserted, and
+   the ``INSERT IF NOT EXISTS`` seed never backfilled them. They're
+   actively read by ``/setup_events`` as the leadership-wide draft
+   and announcement defaults. Set them to match the values already
+   stored in OGV's ``guild_events`` rows.
 
 Discoverable via ``railway logs`` after the redeploy fires. The script
 prints exactly what it changed (or "no change needed") for each fix.
@@ -42,6 +50,7 @@ from pathlib import Path
 # refactor that will rename / move OGV constants.
 OGV_GUILD_ID = 1266229297723605052
 OGV_LEADERSHIP_CHANNEL_ID = 1488693874938482799
+OGV_ANNOUNCEMENTS_CHANNEL_ID = 1414725199257010336
 
 DB_PATH = os.getenv("CONFIG_DB_PATH", "/app/data/guild_configs.db")
 
@@ -102,6 +111,57 @@ def fix_train_reminder_channel(conn: sqlite3.Connection) -> None:
     print(f"  ✅ Train reminder_channel_id: 0 → {OGV_LEADERSHIP_CHANNEL_ID}")
 
 
+def fix_event_channel_defaults(conn: sqlite3.Connection) -> None:
+    """Set OGV's `event_draft_channel_id` and `event_announce_channel_id`
+    in `guild_configs` to the values already in their `guild_events`
+    rows. These columns were added via ALTER TABLE after OGV's row
+    was inserted, so the seed never populated them.
+    """
+    row = conn.execute(
+        "SELECT event_draft_channel_id, event_announce_channel_id "
+        "FROM guild_configs WHERE guild_id = ?",
+        (OGV_GUILD_ID,),
+    ).fetchone()
+
+    if row is None:
+        print("  ⚪ No guild_configs row for OGV — nothing to fix")
+        return
+
+    current_draft, current_announce = row
+    actions: list[str] = []
+
+    if current_draft != OGV_LEADERSHIP_CHANNEL_ID:
+        if current_draft == 0:
+            conn.execute(
+                "UPDATE guild_configs SET event_draft_channel_id = ? WHERE guild_id = ?",
+                (OGV_LEADERSHIP_CHANNEL_ID, OGV_GUILD_ID),
+            )
+            actions.append(f"event_draft_channel_id: 0 → {OGV_LEADERSHIP_CHANNEL_ID}")
+        else:
+            actions.append(f"event_draft_channel_id = {current_draft} (not 0) — leaving alone")
+
+    if current_announce != OGV_ANNOUNCEMENTS_CHANNEL_ID:
+        if current_announce == 0:
+            conn.execute(
+                "UPDATE guild_configs SET event_announce_channel_id = ? WHERE guild_id = ?",
+                (OGV_ANNOUNCEMENTS_CHANNEL_ID, OGV_GUILD_ID),
+            )
+            actions.append(f"event_announce_channel_id: 0 → {OGV_ANNOUNCEMENTS_CHANNEL_ID}")
+        else:
+            actions.append(f"event_announce_channel_id = {current_announce} (not 0) — leaving alone")
+
+    if not actions:
+        print("  ⚪ Both event channel defaults already set — no change needed")
+        return
+
+    conn.commit()
+    for action in actions:
+        if "→" in action:
+            print(f"  ✅ {action}")
+        else:
+            print(f"  ⚪ {action}")
+
+
 def run_fixes(db_path: str | None = None) -> int:
     """Run every OGV data fix. Returns 0 on success, 1 if the DB is missing.
 
@@ -129,6 +189,10 @@ def run_fixes(db_path: str | None = None) -> int:
     print()
     print("Fix 2: Train reminder_channel_id (set to leadership if 0)")
     fix_train_reminder_channel(conn)
+
+    print()
+    print("Fix 3: guild_configs event channel defaults (set if 0)")
+    fix_event_channel_defaults(conn)
 
     conn.close()
 

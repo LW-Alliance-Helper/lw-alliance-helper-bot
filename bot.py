@@ -169,7 +169,7 @@ async def guard(interaction: discord.Interaction) -> bool:
 
 @bot.event
 async def on_ready():
-    # Initialise the config database and seed OGV defaults
+    # Initialise the config database (creates tables and applies pending migrations)
     init_db()
     print(f"[INFO] Logged in as {bot.user} (ID: {bot.user.id})")
 

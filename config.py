@@ -5,8 +5,9 @@ All server-specific values live here. Guild configs are stored in a SQLite
 database (guild_configs.db) so each server that installs the bot can have
 its own settings.
 
-For a new server, run /setup in Discord to configure the bot.
-The OGV guild config is seeded automatically as the default.
+For a new server, run /setup in Discord to configure the bot. Every guild
+goes through the same flow — there is no special-cased seeding for any
+particular alliance.
 """
 
 import json
@@ -28,46 +29,11 @@ from defaults import (
 
 DB_PATH       = os.getenv("CONFIG_DB_PATH",    "/app/data/guild_configs.db")
 
-# ── OGV default values (seeded on first run) ───────────────────────────────────
-
+# OGV's guild ID is retained as a constant so the existing test fixtures
+# can keep referring to it as "the canonical test guild." The bot itself
+# no longer treats OGV specially — every alliance, including OGV, runs
+# through `/setup` like everyone else.
 OGV_GUILD_ID = 1266229297723605052
-
-OGV_DEFAULTS = {
-    "guild_id":                  1266229297723605052,
-    "leadership_channel_id":     1488693874938482799,
-    "announcement_channel_id":   1414725199257010336,
-    "leadership_category_id":    1266243885743603783,
-    "member_role_id":            1266235041600503880,
-    "member_role_name":          "OGV",
-    "leadership_role_name":      "OGV Leadership",
-    "survey_channel_id":         1399401720026759198,
-    "survey_notify_channel_id":  1405930574253920408,
-    "storm_log_thread_id":       1483977424231469229,
-    "ds_log_channel_id":         1483977424231469229,
-    "cs_log_channel_id":         1483977424231469229,
-    "event_draft_channel_id":    1488693874938482799,
-    "event_announce_channel_id": 1414725199257010336,
-    "event_draft_time":          "12:00",
-    "event_five_min_warning":    1,
-    "spreadsheet_id":            "",   # populated from SPREADSHEET_ID env var on first run
-    "timezone":                  "America/New_York",
-    # Sheet tab names
-    "tab_squad_powers":          "Squad Powers",
-    "tab_growth_tracking":       "Growth Tracking",
-    "tab_train_schedule":        "Train Schedule",
-    "tab_ds_assignments":        "DS Assignments",
-    "tab_sitouts":               "DS-CS Sit-outs",
-    "tab_survey_history":        "Survey History",
-    "tab_member_default":        "Season 5 - Off-Season",
-    # Event timing
-    "anchor_date":               "2026-03-30",
-    "cycle_days":                3,
-    "marauder_time_normal":      "22:15",
-    "siege_time_normal":         "22:45",
-    "marauder_time_saturday":    "17:00",
-    "siege_time_saturday":       "17:30",
-    "shield_warning_time":       "21:55",
-}
 
 
 # ── GuildConfig dataclass ──────────────────────────────────────────────────────
@@ -79,8 +45,8 @@ class GuildConfig:
     announcement_channel_id:  int        = 0
     leadership_category_id:   int        = 0
     member_role_id:           int        = 0
-    member_role_name:         str        = "OGV"
-    leadership_role_name:     str        = "OGV Leadership"
+    member_role_name:         str        = "Member"
+    leadership_role_name:     str        = "Leadership"
     survey_channel_id:        int        = 0
     survey_notify_channel_id: int        = 0
     storm_log_thread_id:      int        = 0
@@ -130,7 +96,10 @@ def _get_conn() -> sqlite3.Connection:
 
 
 def init_db():
-    """Create the guild_configs table if it doesn't exist and seed OGV defaults."""
+    """Create the per-guild config tables if they don't exist and apply
+    any pending schema migrations. No alliance is special-cased — every
+    guild is created empty and populated through `/setup`.
+    """
     # Ensure the data directory exists (Railway volume mount point)
     os.makedirs(os.path.dirname(DB_PATH), exist_ok=True)
 
@@ -142,8 +111,8 @@ def init_db():
                 announcement_channel_id  INTEGER DEFAULT 0,
                 leadership_category_id   INTEGER DEFAULT 0,
                 member_role_id           INTEGER DEFAULT 0,
-                member_role_name         TEXT    DEFAULT 'OGV',
-                leadership_role_name     TEXT    DEFAULT 'OGV Leadership',
+                member_role_name         TEXT    DEFAULT 'Member',
+                leadership_role_name     TEXT    DEFAULT 'Leadership',
                 survey_channel_id        INTEGER DEFAULT 0,
                 survey_notify_channel_id INTEGER DEFAULT 0,
                 storm_log_thread_id      INTEGER DEFAULT 0,
@@ -215,9 +184,6 @@ def init_db():
         """)
         conn.commit()
 
-        # Seed OGV train config
-        _seed_ogv_train_config(conn)
-
         # guild_growth_config — per-guild growth tracking settings
         conn.execute("""
             CREATE TABLE IF NOT EXISTS guild_growth_config (
@@ -234,7 +200,6 @@ def init_db():
             )
         """)
         conn.commit()
-        _seed_ogv_growth_config(conn)
 
         # guild_survey_config — per-guild survey questions and sheet settings
         # The main table holds the "default" survey (one per guild). Premium
@@ -264,7 +229,6 @@ def init_db():
             )
         """)
         conn.commit()
-        _seed_ogv_survey_config(conn)
 
         # guild_birthday_config — per-guild birthday settings
         conn.execute("""
@@ -285,7 +249,6 @@ def init_db():
             )
         """)
         conn.commit()
-        _seed_ogv_birthday_config(conn)
 
         # guild_member_roster_config — per-guild member-roster sync settings.
         # Premium-only feature: writes a list of all members with the configured
@@ -332,7 +295,6 @@ def init_db():
             )
         """)
         conn.commit()
-        _seed_ogv_storm_config(conn)
 
         # Add spreadsheet_id column if upgrading from an older schema that didn't have it
         try:
@@ -481,41 +443,6 @@ def init_db():
         except Exception:
             pass  # Column already exists — expected on fresh or already-upgraded installs
 
-        # Seed OGV defaults if not already present
-        existing = conn.execute(
-            "SELECT guild_id FROM guild_configs WHERE guild_id = ?",
-            (OGV_GUILD_ID,)
-        ).fetchone()
-        if not existing:
-            cols         = ", ".join(OGV_DEFAULTS.keys())
-            placeholders = ", ".join(["?"] * len(OGV_DEFAULTS))
-            values       = list(OGV_DEFAULTS.values())
-            conn.execute(
-                f"INSERT INTO guild_configs ({cols}, setup_complete) VALUES ({placeholders}, 1)",
-                values,
-            )
-            conn.commit()
-            print(f"[CONFIG] Seeded OGV default config for guild {OGV_GUILD_ID}")
-
-        # Ensure OGV's spreadsheet_id is populated from env var if not already stored.
-        # This treats OGV the same as any other server — everything lives in the database.
-        row = conn.execute(
-            "SELECT spreadsheet_id FROM guild_configs WHERE guild_id = ?",
-            (OGV_GUILD_ID,)
-        ).fetchone()
-        if row and not row[0]:
-            env_sheet_id = os.getenv("SPREADSHEET_ID", "")
-            if env_sheet_id:
-                conn.execute(
-                    "UPDATE guild_configs SET spreadsheet_id = ? WHERE guild_id = ?",
-                    (env_sheet_id, OGV_GUILD_ID),
-                )
-                conn.commit()
-                print(f"[CONFIG] Persisted SPREADSHEET_ID env var to database for OGV")
-
-    # Seed OGV events after table is ready
-    seed_ogv_events()
-
 
 def get_config(guild_id: int) -> Optional[GuildConfig]:
     """Retrieve config for a guild. Returns None if not found."""
@@ -643,63 +570,6 @@ def delete_guild_event(guild_id: int, short_key: str):
             (guild_id, short_key)
         )
         conn.commit()
-
-
-# OGV-flavoured storm templates — only referenced by the OGV-specific
-# seeding function below; will be removed alongside that function in
-# the next migration step.
-OGV_DS_TEMPLATE = """\
-🔥 **{alliance_name} — Desert Storm**
-Stay coordinated and flexible — let's take this.
-
-🏆 **Zone Assignments**
-
-{zones}
-
-🔄 **Sub Pairs**
-{subs}
-
-⏳ **Timing**
-{time}"""
-
-OGV_CS_TEMPLATE = """\
-⚡ **{alliance_name} — Canyon Storm**
-Hit your zones fast and finish strong.
-
-🏆 **Zone Assignments**
-
-{zones}
-
-🔄 **Subs**
-{subs}
-
-⏳ **Timing**
-{time}"""
-
-
-def _seed_ogv_storm_config(conn):
-    """Seed OGV's DS and CS storm config if not already present."""
-    for event_type, template, t1_label, t1_local, t1_server, t2_label, t2_local, t2_server in [
-        ("DS", OGV_DS_TEMPLATE, "4PM",  "4:00pm ET",  "18:00 Server Time", "9PM",  "9:00pm ET",  "01:00 Server Time"),
-        ("CS", OGV_CS_TEMPLATE, "10AM", "10:00am ET", "12:00 Server Time", "9PM",  "9:00pm ET",  "23:00 Server Time"),
-    ]:
-        existing = conn.execute(
-            "SELECT guild_id FROM guild_storm_config WHERE guild_id = ? AND event_type = ?",
-            (OGV_GUILD_ID, event_type)
-        ).fetchone()
-        if not existing:
-            conn.execute(
-                "INSERT INTO guild_storm_config "
-                "(guild_id, event_type, tab_name, mail_template, "
-                "time_option_1_label, time_option_1_local, time_option_1_server, "
-                "time_option_2_label, time_option_2_local, time_option_2_server, timezone) "
-                "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
-                (OGV_GUILD_ID, event_type, "DS Assignments", template,
-                 t1_label, t1_local, t1_server,
-                 t2_label, t2_local, t2_server, "America/New_York")
-            )
-    conn.commit()
-    print("[CONFIG] Seeded OGV storm config")
 
 
 def _normalize_storm_templates(d: dict, event_type: str) -> dict:
@@ -959,31 +829,6 @@ def get_storm_time_labels(event_type: str, guild_id: int) -> list:
 # DEFAULT_SURVEY_INTRO are imported at the top of this module.
 
 
-def _seed_ogv_growth_config(conn):
-    """Seed OGV's growth config if not already present."""
-    import json
-    existing = conn.execute(
-        "SELECT guild_id FROM guild_growth_config WHERE guild_id = ?",
-        (OGV_GUILD_ID,)
-    ).fetchone()
-    if not existing:
-        ogv_metrics = [
-            {"col": "E", "label": "1st Squad Power"},
-            {"col": "G", "label": "2nd Squad Power"},
-            {"col": "H", "label": "3rd Squad Power"},
-        ]
-        conn.execute(
-            "INSERT INTO guild_growth_config "
-            "(guild_id, enabled, tab_source, name_col, metrics, tab_growth, "
-            "snapshot_frequency, snapshot_day, snapshot_interval, data_start_row) "
-            "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
-            (OGV_GUILD_ID, 1, "Squad Powers", "D", json.dumps(ogv_metrics),
-             "Growth Tracking", "monthly", 1, 30, 10)
-        )
-        conn.commit()
-        print("[CONFIG] Seeded OGV growth config")
-
-
 def get_growth_config(guild_id: int) -> dict:
     """Return growth config for a guild."""
     import json
@@ -1037,24 +882,6 @@ def save_growth_config(guild_id: int, enabled: int, tab_source: str,
              tab_growth, snapshot_frequency, snapshot_day, snapshot_interval, data_start_row)
         )
         conn.commit()
-
-
-def _seed_ogv_survey_config(conn):
-    """Seed OGV's survey config if not already present."""
-    import json
-    existing = conn.execute(
-        "SELECT guild_id FROM guild_survey_config WHERE guild_id = ?",
-        (OGV_GUILD_ID,)
-    ).fetchone()
-    if not existing:
-        conn.execute(
-            "INSERT INTO guild_survey_config (guild_id, tab_squad_powers, tab_history, questions, intro_message) "
-            "VALUES (?, ?, ?, ?, ?)",
-            (OGV_GUILD_ID, "Squad Powers", "Survey History",
-             json.dumps(DEFAULT_SURVEY_QUESTIONS), DEFAULT_SURVEY_INTRO)
-        )
-        conn.commit()
-        print("[CONFIG] Seeded OGV survey config")
 
 
 def get_survey_config(guild_id: int) -> dict:
@@ -1317,25 +1144,6 @@ def delete_extra_survey(guild_id: int, survey_id: str) -> bool:
     return cur.rowcount > 0
 
 
-def _seed_ogv_birthday_config(conn):
-    """Seed OGV's birthday config if not already present."""
-    existing = conn.execute(
-        "SELECT guild_id FROM guild_birthday_config WHERE guild_id = ?",
-        (OGV_GUILD_ID,)
-    ).fetchone()
-    if not existing:
-        conn.execute(
-            "INSERT INTO guild_birthday_config "
-            "(guild_id, tab_name, name_col, birthday_col, discord_id_col, data_start_row, "
-            "enabled, train_integration, flexible_placement, lookahead_days, "
-            "reminders_enabled, reminder_channel_id, reminder_time) "
-            "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
-            (OGV_GUILD_ID, "Season 5 - Off-Season", 4, 8, -1, 10, 1, 1, 1, 14, 0, 0, "22:00")
-        )
-        conn.commit()
-        print("[CONFIG] Seeded OGV birthday config")
-
-
 def get_birthday_config(guild_id: int) -> dict:
     """Return birthday config for a guild."""
     with _get_conn() as conn:
@@ -1515,36 +1323,6 @@ def get_member_roster_sheet(guild_id: int, tab_name: str):
         return sh.add_worksheet(title=tab_name, rows=200, cols=10)
 
 
-def _seed_ogv_train_config(conn):
-    """Seed OGV's train config if not already present."""
-    existing = conn.execute(
-        "SELECT guild_id FROM guild_train_config WHERE guild_id = ?",
-        (OGV_GUILD_ID,)
-    ).fetchone()
-    if not existing:
-        import json
-        conn.execute(
-            "INSERT INTO guild_train_config "
-            "(guild_id, tab_name, blurbs_enabled, themes, tones, prompt_template, default_tone, "
-            "reminders_enabled, reminder_channel_id, reminder_time) "
-            "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
-            (
-                OGV_GUILD_ID,
-                "Train Schedule",
-                1,
-                json.dumps(DEFAULT_THEMES),
-                json.dumps(DEFAULT_TONES),
-                DEFAULT_PROMPT,
-                "Default (match the theme)",
-                1,
-                1488693874938482799,  # OGV leadership channel
-                "22:00",
-            )
-        )
-        conn.commit()
-        print(f"[CONFIG] Seeded OGV train config")
-
-
 def _normalize_train_templates(d: dict) -> dict:
     """
     Lift a guild's train templates into the new shape:
@@ -1661,42 +1439,3 @@ def save_train_config(guild_id: int, tab_name: str, themes: list,
         conn.commit()
 
 
-def seed_ogv_events():
-    """Seed OGV's two default events if they don't already exist."""
-    ogv_events = [
-        {
-            "short_key":               "marauder",
-            "name":                    "Plague Marauder (AE)",
-            "timezone":                "America/New_York",
-            "default_time":            "22:15",
-            "announcement_blurb":      "Plague Marauder (AE) at {time} ({server_time} Server Time). Make sure to have offline participation checked!",
-            "schedule_type":           "repeating",
-            "anchor_date":             "2026-03-30",
-            "interval_days":           3,
-            "draft_channel_id":        1488693874938482799,
-            "announcement_channel_id": 1414725199257010336,
-            "draft_time":              "12:00",
-            "five_min_warning":        1,
-            "active":                  1,
-        },
-        {
-            "short_key":               "siege",
-            "name":                    "Zombie Siege",
-            "timezone":                "America/New_York",
-            "default_time":            "22:45",
-            "announcement_blurb":      "Zombie Siege at {time} ({server_time} Server Time).",
-            "schedule_type":           "repeating",
-            "anchor_date":             "2026-03-30",
-            "interval_days":           3,
-            "draft_channel_id":        1488693874938482799,
-            "announcement_channel_id": 1414725199257010336,
-            "draft_time":              "12:00",
-            "five_min_warning":        1,
-            "active":                  1,
-        },
-    ]
-    for event in ogv_events:
-        existing = get_guild_event(OGV_GUILD_ID, event["short_key"])
-        if not existing:
-            save_guild_event(OGV_GUILD_ID, event)
-    print("[CONFIG] OGV events seeded")

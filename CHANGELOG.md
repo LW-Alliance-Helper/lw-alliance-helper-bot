@@ -7,6 +7,85 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Changed — OGV strip (internal refactor, no user-facing behavior change for OGV)
+
+OGV (the bot owner's home alliance) was originally hardcoded into the bot
+as the canonical "test alliance" — its config was auto-seeded into the
+SQLite database on every startup, its templates and survey questions
+shipped as the default values for every new guild, and it was permanently
+flagged as Premium via a hardcoded `{OGV_GUILD_ID}` set in `premium.py`.
+Pre-launch this was fine; post-launch it meant every alliance that
+installed the bot got OGV-flavoured defaults, and one alliance had a
+subtly different code path from everyone else.
+
+This release removes all of that. OGV now goes through the same `/setup`
+flow as every other alliance and is treated identically by the bot. The
+migration was executed in seven steps:
+
+1. **`defaults.py`** — extracted framework-level default values
+   (themes, tones, prompt template, survey question set, neutral storm
+   templates) out of `config.py` into a dedicated module. The default
+   survey intro was rewritten to drop "us" / "our" so it reads
+   neutrally for any alliance.
+2. **Seeding code stripped** — deleted the six `_seed_ogv_*` functions,
+   `seed_ogv_events()`, the OGV `INSERT` block in `init_db()`, and the
+   `SPREADSHEET_ID` env-var-into-OGV-row logic. Schema defaults for the
+   role-name columns went from `'OGV'` / `'OGV Leadership'` to generic
+   `'Member'` / `'Leadership'` placeholders. OGV's existing rows in the
+   production DB were preserved intact.
+3. **Premium gate moved to env var** — replaced `ALWAYS_PREMIUM_GUILD_IDS
+   = {OGV_GUILD_ID}` with a `PREMIUM_BYPASS_GUILD_IDS` env-var-driven
+   set. OGV's permanent Premium status now comes from the env var on
+   the host (Railway), not from hardcoded code.
+4. **`/events` rewritten to use per-guild events** — fixed a long-
+   standing bug where `/events` silently fell back to OGV's hardcoded
+   event times for any non-OGV guild because the legacy
+   `next_event_dates()` / `get_event_datetimes()` wrappers used
+   `get_config(None)` which always returned None. The command now reads
+   from `guild_events` and supports guilds with multiple cycle types.
+5. **Test fixtures decoupled** — replaced every `OGV_GUILD_ID` reference
+   in the test suite with a synthetic `PREMIUM_TEST_GUILD_ID` constant
+   in `tests/constants.py`. The `OGV_GUILD_ID` constant in `config.py`
+   was deleted entirely.
+6. **Comment + docs cleanup** — generalised ~10 stale narrative
+   references in code comments and docstrings; updated
+   `docs/PREMIUM_SETUP.md` to document the new env var.
+7. **Final verification** — full test suite (318 tests) passes;
+   production smoke test confirmed clean startup, no `[CONFIG] Seeded
+   OGV …` log lines, and OGV-specific commands continue to work
+   identically through the env-var-driven Premium grant.
+
+The one-shot migration scripts (`scripts/verify_ogv_data.py`,
+`scripts/fix_ogv_data.py`) used during the strip have also been removed
+from the repo — git history preserves them as a template if a similar
+migration is ever needed.
+
+After this work, OGV's real guild ID appears only in:
+- The `PREMIUM_BYPASS_GUILD_IDS` env var on the host (production config)
+- `docs/OGV_STRIP_INVENTORY.md` (historical record of the migration)
+
+### Fixed
+
+- **`/canyonstorm` rendering for OGV** — the CS mail template stored in
+  OGV's row used the old `{subs_list}` placeholder name. The codebase
+  had migrated to `{subs}` long ago, so OGV's CS mails were rendering
+  with literal `{subs_list}` text. One-shot data fix replaced the
+  placeholder.
+- **Train reminders for OGV** — `reminder_channel_id` was 0, so the
+  daily train reminder was effectively going nowhere. Set to OGV's
+  leadership channel.
+- **Event channel defaults for OGV** — `guild_configs.event_draft_channel_id`
+  and `event_announce_channel_id` were 0 because the columns were added
+  via `ALTER TABLE` after OGV's row was inserted. Set to match the
+  per-event values in `guild_events`.
+- **`/events` for non-OGV guilds** — see step 4 above. Previously
+  silently broken for any alliance that wasn't OGV; now works
+  correctly across the board.
+- **Duplicate startup logs** — both the growth snapshot task and the
+  stats publisher had redundant startup-time invocations alongside their
+  scheduled `tasks.loop`. Removed the duplicates; each now runs exactly
+  once on boot via the loop's `.start()` immediate-fire behavior.
+
 ## [1.0.0] — 2026-04-28
 
 Initial public release.

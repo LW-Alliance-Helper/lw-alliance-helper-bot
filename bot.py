@@ -20,6 +20,16 @@ load_dotenv()
 
 DISCORD_TOKEN = os.getenv("DISCORD_TOKEN")
 
+# ── One-shot OGV data verification ───────────────────────────────────────────
+# Set VERIFY_OGV_DATA=1 in the environment to dump OGV's row data from
+# every guild_* table to stdout once on startup, then continue normal
+# bot operation. Used as a pre-flight check before stripping the OGV
+# seeding code — capture the output via `railway logs`, then unset the
+# env var to stop running on every restart.
+if os.getenv("VERIFY_OGV_DATA") == "1":
+    from scripts.verify_ogv_data import run_verification
+    run_verification()
+
 # Semantic versioning per https://semver.org. Bump on each release; the
 # CHANGELOG.md file is the human-readable record of what each version
 # changed.

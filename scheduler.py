@@ -12,7 +12,7 @@ Announcement flow:
   - Leadership can add/edit/remove events and times, add optional notes
   - Build Announcement → crafts the message from the event list
   - Approval flow → Send As-Is or Edit & Send (shows current text for easy copying)
-  - On approval → posts to Announcements with @OGV tag, stamps leadership channel
+  - On approval → posts to the announcements channel with the configured member-role mention, stamps leadership channel
   - 5-minute warning auto-fires based on first event's time
   - Friday 9:55pm ET → shield reminder through same approval flow
 """
@@ -129,10 +129,9 @@ def next_event_dates(from_date: date, count: int, anchor: date, cycle: int) -> l
     cycle, on or after `from_date`. Anchor + cycle define when the event
     fires; the result starts from the first cycle date >= from_date.
 
-    All four args are required — historically the function was called with
-    no args and fell back to hardcoded OGV values. Per-guild callers now
-    look up their anchor + cycle from the `guild_events` table and pass
-    them in explicitly.
+    All four args are required — earlier versions had a no-arg form that
+    fell back to hardcoded values. Callers now look up their anchor +
+    cycle from the `guild_events` table and pass them in explicitly.
     """
     days_since = (from_date - anchor).days
     remainder  = days_since % cycle

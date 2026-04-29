@@ -1,9 +1,9 @@
 """
 survey.py — Squad Powers Survey
 
-A persistent button in the survey channel lets any OGV member submit their
-squad powers. Clicking it opens a private thread, walks them through the
-questions, then:
+A persistent button in the survey channel lets any alliance member submit
+their squad powers. Clicking it opens a private thread, walks them through
+the questions, then:
   - Updates their row in the Squad Powers sheet
   - Appends a timestamped row to the Survey History sheet
   - Archives the thread

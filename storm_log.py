@@ -64,8 +64,8 @@ def _get_log_sheet(guild_id: int = None, event_type: str | None = None):
     """
     Resolve the worksheet that holds participation rows. Prefers the
     per-event-type `participation_tab_name` from the new config; falls
-    back to the legacy `tab_sitouts` shared tab so existing OGV data
-    keeps loading via /[event]_log.
+    back to the legacy `tab_sitouts` shared tab so any data written
+    under the pre-rework schema keeps loading via /[event]_log.
     """
     from config import get_config, get_participation_config
     sh = _get_spreadsheet(guild_id)
@@ -382,8 +382,8 @@ class ShortSelectView(discord.ui.View):
 def load_roster_from_config(guild_id: int, event_type: str) -> tuple[list[str], dict[str, str]]:
     """
     Read the configured roster source for the given (guild, event_type) and
-    return (names, alias_map). Replaces the OGV-specific col-E hardcode in
-    `load_member_names()` — every alliance configures their own roster
+    return (names, alias_map). Replaces an earlier hardcoded col-E lookup
+    in `load_member_names()` — every alliance configures their own roster
     tab + name column + optional alias column via /setup_desertstorm or
     /setup_canyonstorm.
     """
@@ -1143,8 +1143,8 @@ async def _show_storm_log(interaction: discord.Interaction, event: str, date: st
     date_str = f"{parsed_d:%A, %B} {parsed_d.day}, {parsed_d.year}"
     lines    = [f"📋 **{event_label} Log — {date_str}**"]
     # Prefer the generic `fields` list (set by the new participation flow);
-    # fall back to the legacy DS/CS column shape so OGV's pre-rework data
-    # still renders nicely.
+    # fall back to the legacy DS/CS column shape so pre-rework data still
+    # renders nicely.
     fields = entry.get("fields") or []
     if fields:
         for label_, value in fields:

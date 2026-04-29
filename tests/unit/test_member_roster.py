@@ -23,9 +23,9 @@ from tests.constants import PREMIUM_TEST_GUILD_ID
 # ── Premium-env isolation (so the FORCE_PREMIUM=1 CI lane doesn't leak in) ────
 @pytest.fixture(autouse=True)
 def _isolate_premium_env(monkeypatch):
-    """Pin OGV into PREMIUM_BYPASS_GUILD_IDS so the OGV-as-premium tests
-    in this file don't each need to set the env var. TEST_GUILD_ID stays
-    out of the set so free-tier paths still work."""
+    """Pin PREMIUM_TEST_GUILD_ID into PREMIUM_BYPASS_GUILD_IDS so the
+    premium-keyed tests in this file don't each need to set the env var.
+    TEST_GUILD_ID stays out of the set so free-tier paths still work."""
     import importlib
     for var in ("PREMIUM_SKU_ID", "FORCE_PREMIUM"):
         monkeypatch.delenv(var, raising=False)
@@ -287,7 +287,7 @@ class TestSyncMembersGate:
 
     @pytest.mark.asyncio
     async def test_premium_admin_with_unconfigured_roster_gets_setup_hint(self, seeded_db):
-        """OGV is premium but roster_config.enabled=0 → asks them to /setup_members."""
+        """Guild is premium but roster_config.enabled=0 → asks them to /setup_members."""
         from member_roster import MemberRosterCog
         import premium
         premium.clear_cache()

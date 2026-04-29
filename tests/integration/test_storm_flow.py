@@ -29,7 +29,7 @@ class TestDsMailGeneration:
     """Full Desert Storm mail generation flow."""
 
     def setup_method(self, method):
-        """Set up OGV DS template before each test."""
+        """Per-test setup hook (placeholder — DS template is set per test)."""
         pass
 
     def test_full_ds_mail_a_contains_all_zones(self, seeded_db):

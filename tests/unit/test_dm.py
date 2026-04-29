@@ -22,10 +22,9 @@ from tests.constants import PREMIUM_TEST_GUILD_ID
 
 
 # ── Premium-env isolation (so the FORCE_PREMIUM=1 CI lane doesn't leak in) ────
-# OGV is pinned into PREMIUM_BYPASS_GUILD_IDS so the tests below that use
-# PREMIUM_TEST_GUILD_ID resolve as premium without each test having to set the env
-# var itself. TEST_GUILD_ID stays out of the set, so free-tier tests still
-# work as expected.
+# PREMIUM_TEST_GUILD_ID is pinned into PREMIUM_BYPASS_GUILD_IDS so tests
+# using it resolve as premium without each test setting the env var itself.
+# TEST_GUILD_ID stays out of the set so free-tier tests still work.
 @pytest.fixture(autouse=True)
 def _isolate_premium_env(monkeypatch):
     import importlib

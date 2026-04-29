@@ -18,12 +18,59 @@ load_dotenv()
 
 DISCORD_TOKEN = os.getenv("DISCORD_TOKEN")
 
+# Semantic versioning per https://semver.org. Bump on each release; the
+# CHANGELOG.md file is the human-readable record of what each version
+# changed.
+__version__ = "1.0.0"
+
 ET = ZoneInfo("America/New_York")
 
 intents = discord.Intents.default()
 intents.message_content = True
 
 bot = commands.Bot(command_prefix="!", intents=intents)
+
+
+# ── Welcome DM (sent to the inviter on every new guild add) ──────────────────
+
+WELCOME_DM = (
+    "👋 Thanks for adding **LW Alliance Helper** to **{guild_name}**!\n\n"
+    "To get started, run **/setup** in your server's leadership channel. "
+    "The wizard walks you through:\n"
+    "• Member and leadership roles\n"
+    "• The leadership channel\n"
+    "• Your alliance's timezone\n"
+    "• Sharing your Google Sheet with the bot\n\n"
+    "After setup, run **/help** to see every available feature.\n\n"
+    "📖 Setup guide: <https://lw-alliance-helper.github.io/setup.html>\n"
+    "📋 All commands: <https://lw-alliance-helper.github.io/commands.html>\n"
+    "💎 Pricing & Premium: <https://lw-alliance-helper.github.io/pricing.html>\n\n"
+    "🐛 Need help or found a bug? Open an issue at:\n"
+    "<https://github.com/LW-Alliance-Helper/lw-alliance-helper.github.io/issues>"
+)
+
+
+async def _update_presence():
+    """Set the bot's status to reflect the current guild count.
+
+    Format: `Helping N LW Alliance(s)`. Called from on_ready,
+    on_guild_join, and on_guild_remove so the count stays current.
+    """
+    count = len(bot.guilds)
+    name  = f"Helping {count} LW Alliance{'s' if count != 1 else ''}"
+    try:
+        # CustomActivity renders the name as-is (no "Playing" / "Watching"
+        # prefix). Falls back to a Watching activity if Discord rejects
+        # CustomActivity for bots on this gateway version.
+        try:
+            activity = discord.CustomActivity(name=name)
+            await bot.change_presence(activity=activity)
+        except Exception:
+            await bot.change_presence(activity=discord.Activity(
+                type=discord.ActivityType.watching, name=name,
+            ))
+    except Exception as e:
+        print(f"[PRESENCE] Could not update status: {e}")
 
 
 # ── Guards ─────────────────────────────────────────────────────────────────────
@@ -103,6 +150,9 @@ async def on_ready():
     synced = await bot.tree.sync()
     print(f"[INFO] Synced {len(synced)} slash commands globally")
 
+    # Set the bot's presence to reflect the live guild count.
+    await _update_presence()
+
     # Only start background tasks once — they persist across reconnects
     if not hasattr(bot, "_tasks_started"):
         bot._tasks_started = True
@@ -111,6 +161,49 @@ async def on_ready():
         bot.loop.create_task(_run_growth_on_startup())
         growth_task.start()
         print(f"[INFO] Growth tracker started")
+
+
+@bot.event
+async def on_guild_join(guild: discord.Guild):
+    """When the bot is added to a new server, DM the inviter (or the owner
+    if the inviter can't be determined) with a welcome / setup message,
+    and refresh the presence count.
+    """
+    print(f"[GUILD] Joined {guild.name} (ID: {guild.id}) — {guild.member_count} members")
+
+    # Try to identify the inviter via the audit log (requires View Audit Log
+    # permission, which the bot's default role normally gets).
+    inviter: discord.User | discord.Member | None = None
+    try:
+        async for entry in guild.audit_logs(action=discord.AuditLogAction.bot_add, limit=5):
+            target = getattr(entry, "target", None)
+            if target is not None and target.id == bot.user.id:
+                inviter = entry.user
+                break
+    except (discord.Forbidden, discord.HTTPException) as e:
+        print(f"[GUILD] Couldn't read audit log on join for {guild.name}: {e}")
+
+    # Fall back to the guild owner if the inviter isn't available.
+    target_user = inviter or guild.owner
+    if target_user is None:
+        print(f"[GUILD] No DM target found for {guild.name}; skipping welcome.")
+    else:
+        try:
+            await target_user.send(WELCOME_DM.format(guild_name=guild.name))
+            print(f"[GUILD] Welcome DM sent to {target_user} for {guild.name}")
+        except discord.Forbidden:
+            print(f"[GUILD] Can't DM {target_user} (DMs closed) for {guild.name}")
+        except Exception as e:
+            print(f"[GUILD] Welcome DM failed for {guild.name}: {e}")
+
+    await _update_presence()
+
+
+@bot.event
+async def on_guild_remove(guild: discord.Guild):
+    """Refresh the presence count when the bot is removed from a server."""
+    print(f"[GUILD] Removed from {guild.name} (ID: {guild.id})")
+    await _update_presence()
 
 
 async def _run_growth_on_startup():

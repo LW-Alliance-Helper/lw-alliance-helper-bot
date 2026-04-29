@@ -320,7 +320,6 @@ class TestTrainScheduleWrite:
         gcfg.tab_train_schedule = tab_name
         _config.save_config(gcfg)
 
-        sh = _make_real_spreadsheet()
         schedule = {
             "2026-04-14": {
                 "name": "Alice", "theme": "Birthday",
@@ -334,7 +333,10 @@ class TestTrainScheduleWrite:
             },
         }
 
-        with patch.object(train, "_get_spreadsheet", return_value=sh):
+        # train.py auth/opens the sheet via a single _get_train_sheet
+        # helper (no separate _get_spreadsheet like the other modules).
+        # Patching it directly gives save_schedule our test worksheet.
+        with patch.object(train, "_get_train_sheet", return_value=ws):
             train.save_schedule(schedule, guild_id=TEST_GUILD_ID)
 
         time.sleep(1.0)
@@ -366,8 +368,6 @@ class TestTrainScheduleWrite:
         gcfg.tab_train_schedule = tab_name
         _config.save_config(gcfg)
 
-        sh = _make_real_spreadsheet()
-
         first = {
             "2026-04-14": {"name": "Alice", "theme": "X",  "tone": "Y", "notes": "first"},
             "2026-04-15": {"name": "Bob",   "theme": "",   "tone": "",  "notes": ""},
@@ -376,7 +376,7 @@ class TestTrainScheduleWrite:
             "2026-05-01": {"name": "Carol", "theme": "Z",  "tone": "W", "notes": "second"},
         }
 
-        with patch.object(train, "_get_spreadsheet", return_value=sh):
+        with patch.object(train, "_get_train_sheet", return_value=ws):
             train.save_schedule(first,  guild_id=TEST_GUILD_ID)
             time.sleep(0.6)
             train.save_schedule(second, guild_id=TEST_GUILD_ID)
@@ -516,8 +516,9 @@ class TestBirthdayToTrainScheduleIntegration:
             "day":   target_date.day,
         }]
 
-        sh = _make_real_spreadsheet()
-        with patch.object(train, "_get_spreadsheet", return_value=sh), \
+        # Both load_schedule and save_schedule go through
+        # train._get_train_sheet — patching it once covers the round-trip.
+        with patch.object(train, "_get_train_sheet", return_value=ws), \
              patch.object(train_birthdays, "load_birthdays", return_value=members):
 
             # Existing schedule starts empty. The helper computes the

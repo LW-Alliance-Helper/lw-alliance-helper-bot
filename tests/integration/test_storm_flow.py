@@ -34,9 +34,10 @@ class TestDsMailGeneration:
 
     def test_full_ds_mail_a_contains_all_zones(self, seeded_db):
         from storm import build_ds_mail
-        from config import save_storm_config, GENERIC_DS_TEMPLATE
+        from config import save_storm_config
+        from defaults import DEFAULT_DS_TEMPLATE
 
-        save_storm_config(TEST_GUILD_ID, "DS", "DS Assignments", GENERIC_DS_TEMPLATE,
+        save_storm_config(TEST_GUILD_ID, "DS", "DS Assignments", DEFAULT_DS_TEMPLATE,
                           "", "", "", "", "", "", "America/New_York", 0)
 
         result = build_ds_mail("A", SAMPLE_DS_ZONES, SAMPLE_DS_SUBS,
@@ -51,9 +52,10 @@ class TestDsMailGeneration:
 
     def test_ds_mail_contains_time(self, seeded_db):
         from storm import build_ds_mail
-        from config import save_storm_config, GENERIC_DS_TEMPLATE
+        from config import save_storm_config
+        from defaults import DEFAULT_DS_TEMPLATE
 
-        save_storm_config(TEST_GUILD_ID, "DS", "DS Assignments", GENERIC_DS_TEMPLATE,
+        save_storm_config(TEST_GUILD_ID, "DS", "DS Assignments", DEFAULT_DS_TEMPLATE,
                           "", "", "", "", "", "", "America/New_York", 0)
 
         result = build_ds_mail("A", SAMPLE_DS_ZONES, [], "18:00 Server Time",
@@ -91,8 +93,8 @@ class TestDsMailGeneration:
 
     def test_ds_mail_rejects_subs_list_placeholder(self, seeded_db):
         """Ensure old {subs_list} placeholder is not used."""
-        from config import GENERIC_DS_TEMPLATE
-        assert "{subs_list}" not in GENERIC_DS_TEMPLATE
+        from defaults import DEFAULT_DS_TEMPLATE
+        assert "{subs_list}" not in DEFAULT_DS_TEMPLATE
 
 
 class TestCsMailGeneration:
@@ -100,9 +102,10 @@ class TestCsMailGeneration:
 
     def test_full_cs_mail_contains_all_zones(self, seeded_db):
         from storm import build_cs_mail
-        from config import save_storm_config, GENERIC_CS_TEMPLATE
+        from config import save_storm_config
+        from defaults import DEFAULT_CS_TEMPLATE
 
-        save_storm_config(TEST_GUILD_ID, "CS", "CS Assignments", GENERIC_CS_TEMPLATE,
+        save_storm_config(TEST_GUILD_ID, "CS", "CS Assignments", DEFAULT_CS_TEMPLATE,
                           "", "", "", "", "", "", "America/New_York", 0)
 
         result = build_cs_mail("A", SAMPLE_CS_ZONES, "12:00 Server Time",
@@ -113,9 +116,10 @@ class TestCsMailGeneration:
 
     def test_cs_mail_contains_time(self, seeded_db):
         from storm import build_cs_mail
-        from config import save_storm_config, GENERIC_CS_TEMPLATE
+        from config import save_storm_config
+        from defaults import DEFAULT_CS_TEMPLATE
 
-        save_storm_config(TEST_GUILD_ID, "CS", "CS Assignments", GENERIC_CS_TEMPLATE,
+        save_storm_config(TEST_GUILD_ID, "CS", "CS Assignments", DEFAULT_CS_TEMPLATE,
                           "", "", "", "", "", "", "America/New_York", 0)
 
         result = build_cs_mail("A", {"Z1": ["Alice"]}, "12:00 Server Time",

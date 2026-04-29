@@ -13,28 +13,28 @@ from tests.conftest import TEST_GUILD_ID
 class TestSurveyQuestionConfig:
     """Test that survey questions save and load correctly."""
 
-    def test_ogv_default_questions_have_required_keys(self, temp_db):
-        from config import OGV_SURVEY_QUESTIONS
+    def test_default_questions_have_required_keys(self, temp_db):
+        from defaults import DEFAULT_SURVEY_QUESTIONS
         required_keys = {"key", "label", "type", "options", "placeholder"}
-        for q in OGV_SURVEY_QUESTIONS:
+        for q in DEFAULT_SURVEY_QUESTIONS:
             for k in required_keys:
                 assert k in q, f"Question missing key '{k}': {q}"
 
     def test_dropdown_questions_have_options(self, temp_db):
-        from config import OGV_SURVEY_QUESTIONS
-        for q in OGV_SURVEY_QUESTIONS:
+        from defaults import DEFAULT_SURVEY_QUESTIONS
+        for q in DEFAULT_SURVEY_QUESTIONS:
             if q["type"] == "dropdown":
                 assert len(q["options"]) > 0, f"Dropdown has no options: {q['label']}"
 
     def test_text_questions_have_empty_options(self, temp_db):
-        from config import OGV_SURVEY_QUESTIONS
-        for q in OGV_SURVEY_QUESTIONS:
+        from defaults import DEFAULT_SURVEY_QUESTIONS
+        for q in DEFAULT_SURVEY_QUESTIONS:
             if q["type"] == "text":
                 assert q["options"] == [], f"Text question has options: {q['label']}"
 
     def test_all_questions_have_unique_keys(self, temp_db):
-        from config import OGV_SURVEY_QUESTIONS
-        keys = [q["key"] for q in OGV_SURVEY_QUESTIONS]
+        from defaults import DEFAULT_SURVEY_QUESTIONS
+        keys = [q["key"] for q in DEFAULT_SURVEY_QUESTIONS]
         assert len(keys) == len(set(keys)), "Duplicate question keys found"
 
     def test_custom_questions_saved_and_loaded(self, seeded_db):
@@ -66,10 +66,11 @@ class TestUpdateSquadPowers:
 
     def test_new_member_appended(self, seeded_db):
         from survey import update_squad_powers
-        from config import save_survey_config, OGV_SURVEY_QUESTIONS
+        from config import save_survey_config
+        from defaults import DEFAULT_SURVEY_QUESTIONS
 
         save_survey_config(TEST_GUILD_ID, "Squad Powers", "History",
-                           OGV_SURVEY_QUESTIONS, "")
+                           DEFAULT_SURVEY_QUESTIONS, "")
 
         mock_ws = self._make_mock_ws([])
         mock_sh = MagicMock()
@@ -87,10 +88,11 @@ class TestUpdateSquadPowers:
 
     def test_existing_member_updated_not_duplicated(self, seeded_db):
         from survey import update_squad_powers
-        from config import save_survey_config, OGV_SURVEY_QUESTIONS
+        from config import save_survey_config
+        from defaults import DEFAULT_SURVEY_QUESTIONS
 
         save_survey_config(TEST_GUILD_ID, "Squad Powers", "History",
-                           OGV_SURVEY_QUESTIONS, "")
+                           DEFAULT_SURVEY_QUESTIONS, "")
 
         # Existing row: Username, Discord ID, ...
         existing = [
@@ -142,10 +144,11 @@ class TestAppendSurveyHistory:
 
     def test_history_row_appended(self, seeded_db):
         from survey import append_survey_history
-        from config import save_survey_config, OGV_SURVEY_QUESTIONS
+        from config import save_survey_config
+        from defaults import DEFAULT_SURVEY_QUESTIONS
 
         save_survey_config(TEST_GUILD_ID, "Stats", "History",
-                           OGV_SURVEY_QUESTIONS, "")
+                           DEFAULT_SURVEY_QUESTIONS, "")
 
         mock_ws = MagicMock()
         mock_ws.row_values  = MagicMock(return_value=[])

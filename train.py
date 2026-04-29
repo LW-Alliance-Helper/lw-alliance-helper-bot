@@ -213,7 +213,7 @@ def parse_date_and_name(line: str) -> tuple[date, str, str | None] | tuple[None,
         "birtday": "Birthday",   # common typo
         "birtbday": "Birthday",  # another common typo
         "bday": "Birthday",
-        "welcome": "Welcome to OGV",
+        "welcome": "Welcome",
         "milestone": "Milestone",
         "war": "War / Performance",
         "performance": "War / Performance",

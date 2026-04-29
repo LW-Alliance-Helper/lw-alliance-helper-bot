@@ -125,24 +125,24 @@ class TestParseCsTemplate:
         assert parsed_zones or parsed_subs or True  # parse returns something
 
 
-class TestGenericDsTemplate:
-    """Test GENERIC_DS_TEMPLATE has correct placeholders."""
+class TestDefaultStormTemplates:
+    """Test DEFAULT_DS_TEMPLATE / DEFAULT_CS_TEMPLATE have correct placeholders."""
 
-    def test_generic_ds_contains_required_placeholders(self):
-        from config import GENERIC_DS_TEMPLATE
-        assert "{alliance_name}" in GENERIC_DS_TEMPLATE
-        assert "{zones}"         in GENERIC_DS_TEMPLATE
-        assert "{subs}"          in GENERIC_DS_TEMPLATE
-        assert "{time}"          in GENERIC_DS_TEMPLATE
-        assert "{subs_list}"     not in GENERIC_DS_TEMPLATE  # must not use old name
+    def test_default_ds_contains_required_placeholders(self):
+        from defaults import DEFAULT_DS_TEMPLATE
+        assert "{alliance_name}" in DEFAULT_DS_TEMPLATE
+        assert "{zones}"         in DEFAULT_DS_TEMPLATE
+        assert "{subs}"          in DEFAULT_DS_TEMPLATE
+        assert "{time}"          in DEFAULT_DS_TEMPLATE
+        assert "{subs_list}"     not in DEFAULT_DS_TEMPLATE  # must not use old name
 
-    def test_generic_cs_contains_required_placeholders(self):
-        from config import GENERIC_CS_TEMPLATE
-        assert "{alliance_name}" in GENERIC_CS_TEMPLATE
-        assert "{zones}"         in GENERIC_CS_TEMPLATE
-        assert "{subs}"          in GENERIC_CS_TEMPLATE
-        assert "{time}"          in GENERIC_CS_TEMPLATE
-        assert "{subs_list}"     not in GENERIC_CS_TEMPLATE  # must not use old name
+    def test_default_cs_contains_required_placeholders(self):
+        from defaults import DEFAULT_CS_TEMPLATE
+        assert "{alliance_name}" in DEFAULT_CS_TEMPLATE
+        assert "{zones}"         in DEFAULT_CS_TEMPLATE
+        assert "{subs}"          in DEFAULT_CS_TEMPLATE
+        assert "{time}"          in DEFAULT_CS_TEMPLATE
+        assert "{subs_list}"     not in DEFAULT_CS_TEMPLATE  # must not use old name
 
 
 # ── Participation log config (#20 rework) ────────────────────────────────────

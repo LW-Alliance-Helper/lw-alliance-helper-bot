@@ -2244,9 +2244,10 @@ async def run_survey_setup(interaction: discord.Interaction, bot,
         return m.author == user and m.channel == channel
 
     from config import (
-        get_survey_config, save_survey_config, OGV_SURVEY_QUESTIONS,
+        get_survey_config, save_survey_config,
         get_survey, save_extra_survey,
     )
+    from defaults import DEFAULT_SURVEY_QUESTIONS
 
     if target_survey_id is None:
         current = get_survey_config(guild_id)
@@ -2355,7 +2356,7 @@ async def run_survey_setup(interaction: discord.Interaction, bot,
     # Show default questions and ask keep/edit/scratch
     default_q_list = "\n".join(
         f"{i+1}. **{q['label']}** — {'dropdown: ' + ', '.join(q['options']) if q['type'] == 'dropdown' else 'text'}"
-        for i, q in enumerate(OGV_SURVEY_QUESTIONS)
+        for i, q in enumerate(DEFAULT_SURVEY_QUESTIONS)
     )
     existing_q_list = "\n".join(
         f"{i+1}. **{q['label']}** — {'dropdown: ' + ', '.join(q['options']) if q['type'] == 'dropdown' else 'text'}"
@@ -2402,7 +2403,7 @@ async def run_survey_setup(interaction: discord.Interaction, bot,
         return
 
     if q_start_view.choice == "default":
-        questions = list(OGV_SURVEY_QUESTIONS)
+        questions = list(DEFAULT_SURVEY_QUESTIONS)
 
     elif q_start_view.choice in ("edit", "scratch"):
         if q_start_view.choice == "scratch":
@@ -2766,7 +2767,8 @@ async def run_storm_setup(interaction: discord.Interaction, bot, event_type: str
             return None
         return reply.content.strip()[:max_chars]
 
-    from config import get_storm_config, get_config, GENERIC_DS_TEMPLATE, GENERIC_CS_TEMPLATE
+    from config import get_storm_config, get_config
+    from defaults import DEFAULT_DS_TEMPLATE, DEFAULT_CS_TEMPLATE
     current   = get_storm_config(guild_id, event_type)
     guild_cfg = get_config(guild_id)
     timezone  = guild_cfg.timezone if guild_cfg and guild_cfg.timezone else "America/New_York"
@@ -2774,7 +2776,7 @@ async def run_storm_setup(interaction: discord.Interaction, bot, event_type: str
 
     # Default template and placeholders per event type
     if event_type == "DS":
-        default_template  = GENERIC_DS_TEMPLATE
+        default_template  = DEFAULT_DS_TEMPLATE
         placeholder_info  = (
             "• `{alliance_name}` — your alliance name\n"
             "• `{zones}` — zone assignments block\n"
@@ -2782,7 +2784,7 @@ async def run_storm_setup(interaction: discord.Interaction, bot, event_type: str
             "• `{time}` — event time (auto-filled when drafting)"
         )
     else:
-        default_template  = GENERIC_CS_TEMPLATE
+        default_template  = DEFAULT_CS_TEMPLATE
         placeholder_info  = (
             "• `{alliance_name}` — your alliance name\n"
             "• `{zones}` — zone assignments block\n"

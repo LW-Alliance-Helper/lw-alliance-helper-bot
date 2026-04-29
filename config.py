@@ -16,6 +16,16 @@ from dataclasses import dataclass, field, asdict
 from datetime import date
 from typing import Optional
 
+from defaults import (
+    DEFAULT_THEMES,
+    DEFAULT_TONES,
+    DEFAULT_PROMPT,
+    DEFAULT_SURVEY_QUESTIONS,
+    DEFAULT_SURVEY_INTRO,
+    DEFAULT_DS_TEMPLATE,
+    DEFAULT_CS_TEMPLATE,
+)
+
 DB_PATH       = os.getenv("CONFIG_DB_PATH",    "/app/data/guild_configs.db")
 
 # ── OGV default values (seeded on first run) ───────────────────────────────────
@@ -635,36 +645,9 @@ def delete_guild_event(guild_id: int, short_key: str):
         conn.commit()
 
 
-OGV_DEFAULT_THEMES = [
-    "Welcome to the Alliance",
-    "Birthday",
-    "Milestone",
-    "War / Performance",
-    "General Celebration",
-    "Contest / Raffle",
-    "Custom",
-]
-
-OGV_DEFAULT_TONES = [
-    "Default (match the theme)",
-    "More casual",
-    "More intense",
-    "Funny",
-    "Serious",
-    "Cinematic / Dramatic",
-]
-
-OGV_DEFAULT_PROMPT = (
-    "You are writing a short motivational alliance announcement blurb for a mobile strategy game called Last War.\n"
-    "Keep it under 3 sentences. It should feel energetic and personal.\n\n"
-    "Member name: {name}\n"
-    "Theme: {theme}\n"
-    "Tone: {tone}\n"
-    "Notes: {notes}\n\n"
-    "Write the blurb now:"
-)
-
-
+# OGV-flavoured storm templates — only referenced by the OGV-specific
+# seeding function below; will be removed alongside that function in
+# the next migration step.
 OGV_DS_TEMPLATE = """\
 🔥 **{alliance_name} — Desert Storm**
 Stay coordinated and flexible — let's take this.
@@ -692,28 +675,6 @@ Hit your zones fast and finish strong.
 
 ⏳ **Timing**
 {time}"""
-
-GENERIC_DS_TEMPLATE = """\
-**{alliance_name} — Desert Storm**
-
-**Zone Assignments**
-{zones}
-
-**Subs**
-{subs}
-
-**Time:** {time}"""
-
-GENERIC_CS_TEMPLATE = """\
-**{alliance_name} — Canyon Storm**
-
-**Zone Assignments**
-{zones}
-
-**Subs**
-{subs}
-
-**Time:** {time}"""
 
 
 def _seed_ogv_storm_config(conn):
@@ -765,7 +726,7 @@ def _normalize_storm_templates(d: dict, event_type: str) -> dict:
     if not parsed:
         parsed = [{
             "name": "Default",
-            "template": GENERIC_DS_TEMPLATE if event_type == "DS" else GENERIC_CS_TEMPLATE,
+            "template": DEFAULT_DS_TEMPLATE if event_type == "DS" else DEFAULT_CS_TEMPLATE,
         }]
     d["templates"] = parsed
     known_names = {t.get("name") for t in parsed}
@@ -788,7 +749,7 @@ def get_storm_config(guild_id: int, event_type: str) -> dict:
         "guild_id":             guild_id,
         "event_type":           event_type,
         "tab_name":             "DS Assignments",
-        "mail_template":        GENERIC_DS_TEMPLATE if event_type == "DS" else GENERIC_CS_TEMPLATE,
+        "mail_template":        DEFAULT_DS_TEMPLATE if event_type == "DS" else DEFAULT_CS_TEMPLATE,
         "templates_json":       "",
         "default_template":     "Default",
         "time_option_1_label":  "",
@@ -994,25 +955,8 @@ def get_storm_time_labels(event_type: str, guild_id: int) -> list:
     return labels
 
 
-OGV_SURVEY_QUESTIONS = [
-    {"key": "squad1_power",  "label": "1st Squad Power",           "type": "text",     "options": [],                                                      "placeholder": "e.g. 43.27", "max_chars": 5},
-    {"key": "squad1_type",   "label": "1st Squad Type",            "type": "dropdown", "options": ["Missile", "Air", "Tank"],                              "placeholder": "Select squad type...", "max_chars": 0},
-    {"key": "squad2_power",  "label": "2nd Squad Power",           "type": "text",     "options": [],                                                      "placeholder": "e.g. 43.27", "max_chars": 5},
-    {"key": "squad3_power",  "label": "3rd Squad Power",           "type": "text",     "options": [],                                                      "placeholder": "e.g. 43.27", "max_chars": 5},
-    {"key": "drone_level",   "label": "Drone Level",               "type": "text",     "options": [],                                                      "placeholder": "e.g. 243",   "max_chars": 5},
-    {"key": "gorilla_level", "label": "Gorilla Level",             "type": "text",     "options": [],                                                      "placeholder": "e.g. 70",    "max_chars": 5},
-    {"key": "thp",           "label": "Total Hero Power (THP)",    "type": "text",     "options": [],                                                      "placeholder": "e.g. 301",   "max_chars": 3},
-    {"key": "total_kills",   "label": "Total Kills",               "type": "text",     "options": [],                                                      "placeholder": "e.g. 55.40", "max_chars": 5},
-    {"key": "profession",    "label": "Profession",                "type": "dropdown", "options": ["War Leader", "Engineer"],                              "placeholder": "Select profession...", "max_chars": 0},
-    {"key": "banner",        "label": "Charge Banner",             "type": "dropdown", "options": ["Yes", "No"],                                           "placeholder": "Select...",  "max_chars": 0},
-    {"key": "aid_removal",   "label": "Medical Aid / Ruin Removal","type": "dropdown", "options": ["Yes", "Only Medical Aid", "Only Ruin Removal", "No"], "placeholder": "Select...",  "max_chars": 0},
-]
-
-OGV_SURVEY_INTRO = (
-    "Please fill out this survey each week, if possible, to help us keep track of "
-    "squad powers, better balance our Desert Storm teams, track alliance growth, "
-    "and prepare for season events!"
-)
+# Survey defaults moved to defaults.py — DEFAULT_SURVEY_QUESTIONS and
+# DEFAULT_SURVEY_INTRO are imported at the top of this module.
 
 
 def _seed_ogv_growth_config(conn):
@@ -1107,7 +1051,7 @@ def _seed_ogv_survey_config(conn):
             "INSERT INTO guild_survey_config (guild_id, tab_squad_powers, tab_history, questions, intro_message) "
             "VALUES (?, ?, ?, ?, ?)",
             (OGV_GUILD_ID, "Squad Powers", "Survey History",
-             json.dumps(OGV_SURVEY_QUESTIONS), OGV_SURVEY_INTRO)
+             json.dumps(DEFAULT_SURVEY_QUESTIONS), DEFAULT_SURVEY_INTRO)
         )
         conn.commit()
         print("[CONFIG] Seeded OGV survey config")
@@ -1588,9 +1532,9 @@ def _seed_ogv_train_config(conn):
                 OGV_GUILD_ID,
                 "Train Schedule",
                 1,
-                json.dumps(OGV_DEFAULT_THEMES),
-                json.dumps(OGV_DEFAULT_TONES),
-                OGV_DEFAULT_PROMPT,
+                json.dumps(DEFAULT_THEMES),
+                json.dumps(DEFAULT_TONES),
+                DEFAULT_PROMPT,
                 "Default (match the theme)",
                 1,
                 1488693874938482799,  # OGV leadership channel
@@ -1625,7 +1569,7 @@ def _normalize_train_templates(d: dict) -> dict:
             parsed = [{"name": "Default", "template": legacy}]
     # Always guarantee at least one entry so downstream code can rely on it.
     if not parsed:
-        parsed = [{"name": "Default", "template": OGV_DEFAULT_PROMPT}]
+        parsed = [{"name": "Default", "template": DEFAULT_PROMPT}]
     d["templates"] = parsed
     # Pin default_template to a name that actually exists in the list.
     known_names = {t.get("name") for t in parsed}
@@ -1637,7 +1581,7 @@ def _normalize_train_templates(d: dict) -> dict:
 
 
 def get_train_config(guild_id: int) -> dict:
-    """Return the train config for a guild, falling back to OGV defaults."""
+    """Return the train config for a guild, falling back to framework defaults."""
     import json
     with _get_conn() as conn:
         row = conn.execute(
@@ -1647,19 +1591,19 @@ def get_train_config(guild_id: int) -> dict:
     if row:
         d = dict(row)
         try:
-            d["themes"] = json.loads(d["themes"]) if d["themes"] else OGV_DEFAULT_THEMES
-            d["tones"]  = json.loads(d["tones"])  if d["tones"]  else OGV_DEFAULT_TONES
+            d["themes"] = json.loads(d["themes"]) if d["themes"] else DEFAULT_THEMES
+            d["tones"]  = json.loads(d["tones"])  if d["tones"]  else DEFAULT_TONES
         except (json.JSONDecodeError, TypeError):
-            d["themes"] = OGV_DEFAULT_THEMES
-            d["tones"]  = OGV_DEFAULT_TONES
+            d["themes"] = DEFAULT_THEMES
+            d["tones"]  = DEFAULT_TONES
         return _normalize_train_templates(d)
     fallback = {
         "guild_id":            guild_id,
         "tab_name":            "Train Schedule",
         "blurbs_enabled":      1,
-        "themes":              OGV_DEFAULT_THEMES,
-        "tones":               OGV_DEFAULT_TONES,
-        "prompt_template":     OGV_DEFAULT_PROMPT,
+        "themes":              DEFAULT_THEMES,
+        "tones":               DEFAULT_TONES,
+        "prompt_template":     DEFAULT_PROMPT,
         "templates_json":      "",
         "default_template":    "Default",
         "default_tone":        "Default (match the theme)",

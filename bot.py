@@ -10,7 +10,6 @@ from dotenv import load_dotenv
 from scheduler import (
     run_scheduler, post_editor, next_event_dates, is_friday,
 )
-from growth import run_growth_snapshot
 from stats_publisher import publish_alliance_count
 from zoneinfo import ZoneInfo
 from config import init_db, get_config, get_or_create_config
@@ -207,7 +206,6 @@ async def on_ready():
         bot._tasks_started = True
         bot.loop.create_task(run_scheduler(bot))
         print(f"[INFO] Event scheduler started")
-        bot.loop.create_task(_run_growth_on_startup())
         growth_task.start()
         print(f"[INFO] Growth tracker started")
         bot.loop.create_task(_run_stats_publish_on_startup())
@@ -288,19 +286,6 @@ async def on_app_command_error(
         # If even the error-reply fails (interaction expired, etc.) just
         # let it go — Sentry already has the original.
         pass
-
-
-async def _run_growth_on_startup():
-    """Run the growth snapshot once on startup for the initial baseline."""
-    await bot.wait_until_ready()
-    try:
-        print(f"[GROWTH] Running initial snapshot on startup")
-        await asyncio.get_event_loop().run_in_executor(None, run_growth_snapshot)
-    except Exception as e:
-        import traceback
-        print(f"[GROWTH] Error during startup snapshot: {e}")
-        print(f"[GROWTH] Traceback:\n{traceback.format_exc()}")
-        sentry_sdk.capture_exception(e)
 
 
 @tasks.loop(hours=1)

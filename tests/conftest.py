@@ -25,9 +25,9 @@ from tests.constants import TEST_GUILD_ID, TEST_SHEET_ID, OGV_GUILD_ID
 # ── FORCE_PREMIUM lane gating ─────────────────────────────────────────────────
 #
 # A subset of our tests asserts free-tier behavior (caps, locked features,
-# upsell embeds). When CI runs the `FORCE_PREMIUM=1` lane, the
-# always-premium short-circuit makes every guild premium, so those tests
-# can't possibly pass and should be skipped instead of failed.
+# upsell embeds). When CI runs the `FORCE_PREMIUM=1` lane, every guild
+# resolves as premium, so those tests can't possibly pass and should be
+# skipped instead of failed.
 #
 # Mark such tests with `@pytest.mark.free_tier_only`.
 

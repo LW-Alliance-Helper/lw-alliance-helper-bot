@@ -102,12 +102,17 @@ class TestSurveyCommandRendering:
             except Exception: pass
 
     @pytest.mark.asyncio
-    async def test_premium_shows_manage_view_with_buttons(self, seeded_db):
+    async def test_premium_shows_manage_view_with_buttons(self, seeded_db, monkeypatch):
         """Premium tier gets the consolidated list + Add/Edit/Remove buttons."""
-        # OGV is always Premium via premium.ALWAYS_PREMIUM_GUILD_IDS, but
-        # the seed code that used to populate OGV's guild_configs row in
-        # init_db has been removed. Create the row explicitly so the
-        # leadership guard inside /survey can succeed on the test DB.
+        # OGV is premium via PREMIUM_BYPASS_GUILD_IDS env var. The
+        # leadership guard inside /survey also needs OGV's guild_configs
+        # row to exist with setup_complete = 1, which we create explicitly.
+        import importlib
+        monkeypatch.setenv("PREMIUM_BYPASS_GUILD_IDS", str(OGV_GUILD_ID))
+        import premium as _premium
+        importlib.reload(_premium)
+        _premium.clear_cache()
+
         import config as _config
         cfg = _config.get_or_create_config(OGV_GUILD_ID)
         cfg.leadership_role_name  = "Leadership"
@@ -121,7 +126,6 @@ class TestSurveyCommandRendering:
         bot.add_dynamic_items = MagicMock()
         cog = SurveyCog(bot)
         try:
-            # OGV is always Premium per ALWAYS_PREMIUM_GUILD_IDS.
             interaction = _make_followup_interaction(guild_id=OGV_GUILD_ID)
             interaction.entitlements = []
 

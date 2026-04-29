@@ -1,5 +1,6 @@
 import asyncio
 import discord
+import sentry_sdk
 from discord import app_commands
 from discord.ext import commands, tasks
 import re
@@ -23,6 +24,29 @@ DISCORD_TOKEN = os.getenv("DISCORD_TOKEN")
 # CHANGELOG.md file is the human-readable record of what each version
 # changed.
 __version__ = "1.0.0"
+
+# ── Sentry error reporting ───────────────────────────────────────────────────
+#
+# Initialised only if SENTRY_DSN is set in the environment so local dev runs
+# without a DSN don't ship telemetry. Configuration choices:
+#   * traces_sample_rate=0.0 — errors only, no performance traces.
+#   * send_default_pii=False — no Discord user IDs / IPs in events.
+#   * environment — read from $ENV (defaults to "production"); local dev
+#     should set ENV=development to keep dev errors out of prod alerts.
+# See docs/PREMIUM_SETUP.md / privacy.html "Data Sharing" for what data
+# this sends.
+_sentry_dsn = os.getenv("SENTRY_DSN")
+if _sentry_dsn:
+    sentry_sdk.init(
+        dsn=_sentry_dsn,
+        release=f"lw-alliance-helper@{__version__}",
+        environment=os.getenv("ENV", "production"),
+        traces_sample_rate=0.0,
+        send_default_pii=False,
+    )
+    print(f"[INFO] Sentry initialised (env={os.getenv('ENV', 'production')}, release={__version__})")
+else:
+    print(f"[INFO] SENTRY_DSN not set — error reporting disabled")
 
 ET = ZoneInfo("America/New_York")
 
@@ -72,6 +96,7 @@ async def _update_presence():
             ))
     except Exception as e:
         print(f"[PRESENCE] Could not update status: {e}")
+        sentry_sdk.capture_exception(e)
 
 
 # ── Guards ─────────────────────────────────────────────────────────────────────
@@ -165,6 +190,9 @@ async def on_ready():
         bot.loop.create_task(_run_stats_publish_on_startup())
         stats_publish_task.start()
         print(f"[INFO] Stats publisher started")
+        # Remove this line + the helper above once you've verified
+        # Sentry is receiving events from production.
+        bot.loop.create_task(_run_sentry_verification_on_startup())
 
 
 @bot.event
@@ -199,6 +227,7 @@ async def on_guild_join(guild: discord.Guild):
             print(f"[GUILD] Can't DM {target_user} (DMs closed) for {guild.name}")
         except Exception as e:
             print(f"[GUILD] Welcome DM failed for {guild.name}: {e}")
+            sentry_sdk.capture_exception(e)
 
     await _update_presence()
 
@@ -208,6 +237,60 @@ async def on_guild_remove(guild: discord.Guild):
     """Refresh the presence count when the bot is removed from a server."""
     print(f"[GUILD] Removed from {guild.name} (ID: {guild.id})")
     await _update_presence()
+
+
+# ── Global slash-command error handler ──────────────────────────────────────
+#
+# discord.py only fires this for exceptions that aren't caught inside a
+# command handler. Most commands have their own try/except around sheet
+# I/O and similar; this catches the rest. We unwrap the inner exception
+# from CommandInvokeError before reporting so Sentry groups errors by
+# the actual cause, not by the wrapper.
+
+@bot.tree.error
+async def on_app_command_error(
+    interaction: discord.Interaction,
+    error: app_commands.AppCommandError,
+):
+    actual = getattr(error, "original", error)
+    print(f"[SLASH] Unhandled error in /{interaction.command.name if interaction.command else '?'}: {actual!r}")
+    sentry_sdk.capture_exception(actual)
+
+    # Best-effort user message — different paths depending on whether the
+    # interaction has already been responded to.
+    msg = "⚠️ Something went wrong running that command. The error has been reported and will be looked at."
+    try:
+        if interaction.response.is_done():
+            await interaction.followup.send(msg, ephemeral=True)
+        else:
+            await interaction.response.send_message(msg, ephemeral=True)
+    except Exception:
+        # If even the error-reply fails (interaction expired, etc.) just
+        # let it go — Sentry already has the original.
+        pass
+
+
+# ── One-shot Sentry verification on startup ──────────────────────────────────
+#
+# Fires a real, captured exception on every boot so a fresh deploy
+# produces an event in Sentry within seconds — confirms the DSN, env
+# var, and release tag are all wired up.
+#
+# REMOVE THIS FUNCTION AND ITS CALL SITE in on_ready once you've
+# verified at least one event has landed in Sentry.
+
+async def _run_sentry_verification_on_startup():
+    await bot.wait_until_ready()
+    if not _sentry_dsn:
+        return
+    try:
+        raise RuntimeError(
+            f"LW Alliance Helper Sentry verification — release {__version__}. "
+            f"Safe to ignore; remove _run_sentry_verification_on_startup once seen."
+        )
+    except RuntimeError as e:
+        sentry_sdk.capture_exception(e)
+        print(f"[SENTRY] Verification exception captured — check sentry.io for the event.")
 
 
 async def _run_growth_on_startup():
@@ -220,6 +303,7 @@ async def _run_growth_on_startup():
         import traceback
         print(f"[GROWTH] Error during startup snapshot: {e}")
         print(f"[GROWTH] Traceback:\n{traceback.format_exc()}")
+        sentry_sdk.capture_exception(e)
 
 
 @tasks.loop(hours=1)
@@ -237,6 +321,7 @@ async def growth_task():
         guild_ids = [r[0] for r in rows]
     except Exception as e:
         print(f"[GROWTH] Could not read guild list: {e}")
+        sentry_sdk.capture_exception(e)
         return
 
     for gid in guild_ids:
@@ -270,6 +355,7 @@ async def growth_task():
                 )
             except Exception as e:
                 print(f"[GROWTH] Error during scheduled snapshot for guild {gid}: {e}")
+                sentry_sdk.capture_exception(e)
 
 
 @growth_task.before_loop
@@ -292,6 +378,7 @@ async def stats_publish_task():
         # publish_alliance_count is supposed to swallow its own errors,
         # but belt + suspenders — never let this loop die.
         print(f"[STATS] Publisher loop caught unexpected error: {e}")
+        sentry_sdk.capture_exception(e)
 
 
 @stats_publish_task.before_loop
@@ -310,6 +397,7 @@ async def _run_stats_publish_on_startup():
         await publish_alliance_count(len(bot.guilds))
     except Exception as e:
         print(f"[STATS] Startup publish failed: {e}")
+        sentry_sdk.capture_exception(e)
 
 
 @bot.event

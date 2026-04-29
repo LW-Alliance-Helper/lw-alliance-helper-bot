@@ -821,7 +821,7 @@ async def run_scheduler(bot: discord.ext.commands.Bot):
                     # Draft trigger
                     triggers.append((
                         draft_dt,
-                        f"noon-draft-{cfg.guild_id}-{event_date}",
+                        f"event-draft-{cfg.guild_id}-{event_date}",
                         lambda el=event_list, k=event_key, rd=event_date,
                                dc=draft_channel_id, ac=announcement_chan_id,
                                fw=five_min_warn, c=cfg: post_editor(

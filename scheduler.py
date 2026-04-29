@@ -124,21 +124,16 @@ def _available_events_for_guild(guild_id: int = None) -> dict:
 
 # ── Schedule helpers ───────────────────────────────────────────────────────────
 
-def next_event_dates(from_date: date = None, count: int = 6) -> list[date]:
-    """Public wrapper using OGV defaults — kept for backward compatibility."""
-    from config import get_config
-    cfg = get_config(None)
-    anchor = cfg.anchor_date_parsed() if cfg else date(2026, 3, 30)
-    cycle  = cfg.cycle_days if cfg else 3
-    return _next_event_dates(from_date, count, anchor, cycle)
+def next_event_dates(from_date: date, count: int, anchor: date, cycle: int) -> list[date]:
+    """Compute the next `count` occurrences of a repeating event on a fixed
+    cycle, on or after `from_date`. Anchor + cycle define when the event
+    fires; the result starts from the first cycle date >= from_date.
 
-
-def _next_event_dates(from_date: date = None, count: int = 6,
-                      anchor: date = None, cycle: int = 3) -> list[date]:
-    if from_date is None:
-        from_date = date.today()
-    if anchor is None:
-        anchor = date(2026, 3, 30)
+    All four args are required — historically the function was called with
+    no args and fell back to hardcoded OGV values. Per-guild callers now
+    look up their anchor + cycle from the `guild_events` table and pass
+    them in explicitly.
+    """
     days_since = (from_date - anchor).days
     remainder  = days_since % cycle
     offset     = 0 if remainder == 0 else cycle - remainder
@@ -152,32 +147,6 @@ def _next_event_dates(from_date: date = None, count: int = 6,
 
 def is_friday(d: date) -> bool:
     return d.weekday() == 4
-
-
-def get_event_datetimes(event_date: date) -> tuple[datetime, datetime]:
-    """Public wrapper using OGV defaults."""
-    from config import get_config
-    cfg = get_config(None)
-    norm_m = cfg.parse_time(cfg.marauder_time_normal) if cfg else (22, 15)
-    norm_s = cfg.parse_time(cfg.siege_time_normal)    if cfg else (22, 45)
-    sat_m  = cfg.parse_time(cfg.marauder_time_saturday) if cfg else (17, 0)
-    sat_s  = cfg.parse_time(cfg.siege_time_saturday)    if cfg else (17, 30)
-    return _get_event_datetimes(event_date, norm_m, norm_s, sat_m, sat_s)
-
-
-def _get_event_datetimes(event_date: date,
-                         norm_m, norm_s, sat_m, sat_s) -> tuple[datetime, datetime]:
-    if is_friday(event_date):
-        run_date = event_date + timedelta(days=1)
-        m_h, m_m = sat_m
-        s_h, s_m = sat_s
-    else:
-        run_date = event_date
-        m_h, m_m = norm_m
-        s_h, s_m = norm_s
-    marauder_dt = datetime(run_date.year, run_date.month, run_date.day, m_h, m_m, tzinfo=ET)
-    siege_dt    = datetime(run_date.year, run_date.month, run_date.day, s_h, s_m, tzinfo=ET)
-    return marauder_dt, siege_dt
 
 
 def to_server_time_str(et_dt: datetime) -> str:
@@ -200,13 +169,9 @@ def make_et_datetime(run_date: date, hour: int, minute: int) -> datetime:
 
 # ── Event list helpers ─────────────────────────────────────────────────────────
 # An "event list" is a list of dicts:
-# [{ "key": "marauder", "dt": datetime }, ...]
-
-def default_event_list(marauder_dt: datetime, siege_dt: datetime) -> list[dict]:
-    return [
-        {"key": "marauder", "dt": marauder_dt},
-        {"key": "siege",    "dt": siege_dt},
-    ]
+# [{ "key": "marauder", "name": "...", "dt": datetime, "blurb": "..." }, ...]
+# Built per-guild from rows in `guild_events`. See bot.py /events command
+# and the scheduler main loop for the construction sites.
 
 
 def build_announcement(event_list: list[dict], notes: str = "", role_mention: str = "@everyone") -> str:
@@ -805,7 +770,7 @@ async def run_scheduler(bot: discord.ext.commands.Bot):
                 except ValueError:
                     continue
 
-                event_dates = _next_event_dates(from_date=today, count=4, anchor=anchor, cycle=interval)
+                event_dates = next_event_dates(from_date=today, count=4, anchor=anchor, cycle=interval)
 
                 for event_date in event_dates:
                     # Build event list for this date from all events in the group

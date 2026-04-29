@@ -8,8 +8,7 @@ import os
 from datetime import datetime, date, timedelta, timezone
 from dotenv import load_dotenv
 from scheduler import (
-    run_scheduler, post_editor, get_event_datetimes, default_event_list,
-    next_event_dates, is_friday,
+    run_scheduler, post_editor, next_event_dates, is_friday,
 )
 from growth import run_growth_snapshot
 from stats_publisher import publish_alliance_count
@@ -529,8 +528,63 @@ async def events_slash(interaction: discord.Interaction, date: str = None):
     else:
         target_date = date_cls.today()
 
-    upcoming   = next_event_dates(from_date=target_date, count=1)
-    event_date = upcoming[0]
+    # Per-guild event lookup. Reads `guild_events` rows for the calling
+    # guild, groups them by (anchor_date, interval_days), finds the next
+    # event date for each repeating group on or after `target_date`, and
+    # builds an event_list from every event that fires on the soonest of
+    # those dates.
+    from collections import defaultdict
+    from zoneinfo import ZoneInfo as _ZI
+    from config import get_guild_events, get_config
+
+    cfg    = get_config(interaction.guild_id)
+    events = get_guild_events(interaction.guild_id, active_only=True)
+
+    if not events:
+        await interaction.followup.send(
+            "ℹ️ No events configured. Run `/setup_events` to add some.",
+            ephemeral=True,
+        )
+        return
+
+    # Group repeating events by (anchor, interval); manual events skip the
+    # editor — they have no recurrence to project forward from.
+    groups: dict[tuple[str, int], list[dict]] = defaultdict(list)
+    for ev in events:
+        if ev["schedule_type"] == "repeating" and ev["anchor_date"]:
+            groups[(ev["anchor_date"], ev["interval_days"])].append(ev)
+
+    if not groups:
+        await interaction.followup.send(
+            "ℹ️ No repeating events configured. The event editor only "
+            "applies to events with a recurring schedule. Run `/setup_events` "
+            "to add one, or add events directly to your manual schedule.",
+            ephemeral=True,
+        )
+        return
+
+    # Find the next occurrence date per group, then pick the soonest.
+    next_per_group: list[tuple[date_cls, tuple[str, int]]] = []
+    for key, _ in groups.items():
+        anchor_str, interval = key
+        try:
+            anchor = date_cls.fromisoformat(anchor_str)
+        except ValueError:
+            continue
+        upcoming = next_event_dates(from_date=target_date, count=1, anchor=anchor, cycle=interval)
+        if upcoming:
+            next_per_group.append((upcoming[0], key))
+
+    if not next_per_group:
+        await interaction.followup.send(
+            "ℹ️ Couldn't compute the next event date — your repeating events "
+            "have invalid anchor dates. Run `/setup_events` to fix.",
+            ephemeral=True,
+        )
+        return
+
+    next_per_group.sort(key=lambda x: x[0])
+    event_date = next_per_group[0][0]
     days_diff  = (event_date - target_date).days
 
     if days_diff > 0:
@@ -540,13 +594,61 @@ async def events_slash(interaction: discord.Interaction, date: str = None):
             ephemeral=True,
         )
 
-    marauder_dt, siege_dt = get_event_datetimes(event_date)
-    event_list = default_event_list(marauder_dt, siege_dt)
-    event_key  = f"event-{event_date.isoformat()}-manual"
-    run_date   = marauder_dt.date()
+    # Build event_list from every event that fires on `event_date`. A guild
+    # may have multiple cycle groups; each one's next-occurrence-after
+    # event_date might or might not be event_date itself. We test each
+    # group; only those whose next date IS event_date contribute events.
+    event_list: list[dict] = []
+    draft_channel_id     = 0
+    announce_channel_id  = 0
+    five_min_warn        = False
 
-    await post_editor(bot, event_list, event_key, run_date)
-    print(f"[EVENTS] Manual event editor opened for {event_date} by {interaction.user}")
+    for (anchor_str, interval), group_events in groups.items():
+        try:
+            anchor = date_cls.fromisoformat(anchor_str)
+        except ValueError:
+            continue
+        upcoming = next_event_dates(from_date=event_date, count=1, anchor=anchor, cycle=interval)
+        if not upcoming or upcoming[0] != event_date:
+            continue
+        for ev in group_events:
+            try:
+                ev_tz       = _ZI(ev["timezone"])
+                t_h, t_m    = (int(p) for p in ev["default_time"].split(":")[:2])
+                ev_dt       = datetime(event_date.year, event_date.month, event_date.day, t_h, t_m, tzinfo=ev_tz)
+                event_list.append({
+                    "key":   ev["short_key"],
+                    "name":  ev["name"],
+                    "dt":    ev_dt,
+                    "blurb": ev["announcement_blurb"],
+                })
+                draft_channel_id    = ev["draft_channel_id"] or draft_channel_id
+                announce_channel_id = ev["announcement_channel_id"] or announce_channel_id
+                if ev["five_min_warning"]:
+                    five_min_warn = True
+            except Exception as e:
+                print(f"[EVENTS] Error processing event {ev.get('short_key', '?')}: {e}")
+
+    if not event_list:
+        await interaction.followup.send(
+            "⚠️ No events to show on the next event date — likely a bad timezone "
+            "or default_time on one of your configured events. Run `/setup_events` "
+            "to review.",
+            ephemeral=True,
+        )
+        return
+
+    event_list.sort(key=lambda x: x["dt"])
+    event_key = f"event-{interaction.guild_id}-{event_date.isoformat()}-manual"
+
+    await post_editor(
+        bot, event_list, event_key, event_date,
+        cfg=cfg,
+        draft_channel_id=draft_channel_id,
+        announcement_channel_id=announce_channel_id,
+        five_min_warning=five_min_warn,
+    )
+    print(f"[EVENTS] Manual event editor opened for guild {interaction.guild_id} date {event_date} by {interaction.user}")
 
 
 # ── /events_log command ───────────────────────────────────────────────────────

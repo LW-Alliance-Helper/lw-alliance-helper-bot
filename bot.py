@@ -190,9 +190,6 @@ async def on_ready():
         bot.loop.create_task(_run_stats_publish_on_startup())
         stats_publish_task.start()
         print(f"[INFO] Stats publisher started")
-        # Remove this line + the helper above once you've verified
-        # Sentry is receiving events from production.
-        bot.loop.create_task(_run_sentry_verification_on_startup())
 
 
 @bot.event
@@ -268,29 +265,6 @@ async def on_app_command_error(
         # If even the error-reply fails (interaction expired, etc.) just
         # let it go — Sentry already has the original.
         pass
-
-
-# ── One-shot Sentry verification on startup ──────────────────────────────────
-#
-# Fires a real, captured exception on every boot so a fresh deploy
-# produces an event in Sentry within seconds — confirms the DSN, env
-# var, and release tag are all wired up.
-#
-# REMOVE THIS FUNCTION AND ITS CALL SITE in on_ready once you've
-# verified at least one event has landed in Sentry.
-
-async def _run_sentry_verification_on_startup():
-    await bot.wait_until_ready()
-    if not _sentry_dsn:
-        return
-    try:
-        raise RuntimeError(
-            f"LW Alliance Helper Sentry verification — release {__version__}. "
-            f"Safe to ignore; remove _run_sentry_verification_on_startup once seen."
-        )
-    except RuntimeError as e:
-        sentry_sdk.capture_exception(e)
-        print(f"[SENTRY] Verification exception captured — check sentry.io for the event.")
 
 
 async def _run_growth_on_startup():

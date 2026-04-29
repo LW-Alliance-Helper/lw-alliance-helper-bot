@@ -30,6 +30,20 @@ if os.getenv("VERIFY_OGV_DATA") == "1":
     from scripts.verify_ogv_data import run_verification
     run_verification()
 
+# ── One-shot OGV data fixes ──────────────────────────────────────────────────
+# Set FIX_OGV_DATA=1 to apply small data corrections to OGV's existing
+# rows before the seed code is stripped:
+#   1. Replace `{subs_list}` with `{subs}` in OGV's CS storm template
+#      (old placeholder the codebase migrated away from).
+#   2. Set OGV's train reminder_channel_id to the leadership channel
+#      if it's currently 0.
+# Both fixes are idempotent — safe to leave the env var on for an
+# extra restart. Unset after the first run to stop logging the
+# "no change needed" lines on every boot.
+if os.getenv("FIX_OGV_DATA") == "1":
+    from scripts.fix_ogv_data import run_fixes
+    run_fixes()
+
 # Semantic versioning per https://semver.org. Bump on each release; the
 # CHANGELOG.md file is the human-readable record of what each version
 # changed.

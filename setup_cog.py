@@ -422,8 +422,17 @@ class ChannelSelectStep(discord.ui.View):
           * survey-* threads under the configured survey channel — those
             are auto-generated per-user threads, not destinations.
         """
-        cfg          = get_config(guild.id)
-        survey_chan  = cfg.survey_channel_id if cfg else 0
+        # The survey-channel filter requires the guild's saved config. It's
+        # a convenience filter; if the config DB isn't reachable (e.g. unit
+        # tests that don't set up a temp DB) skip it rather than crash —
+        # the filter is to declutter the dropdown, not load-bearing.
+        survey_chan: int = 0
+        try:
+            cfg = get_config(guild.id)
+            if cfg:
+                survey_chan = cfg.survey_channel_id or 0
+        except Exception:
+            pass
         bot_member   = guild.me
         results: list[discord.Thread] = []
         for t in guild.threads:

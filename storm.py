@@ -983,36 +983,51 @@ def save_cs_assignments(team: str, zones: dict, guild_id: int = None):
 
 # ── CS Template builder & parser ───────────────────────────────────────────────
 
+# Canonical CS zone layout: each entry is (stage, key, label) in display order.
+# Single source of truth for build_cs_template, parse_cs_template, and
+# build_cs_mail. Excludes 's3_pop_pair1' which is handled separately as the
+# {subs} placeholder rather than a zone.
+CS_ZONE_STRUCTURE: list[tuple[int, str, str]] = [
+    (1, "s1_power_tower", "Power Tower"),
+    (1, "s1_dc1",         "Data Center 1"),
+    (1, "s1_dc2",         "Data Center 2"),
+    (1, "s1_sw1",         "Sample Warehouse 1"),
+    (1, "s1_sw2",         "Sample Warehouse 2"),
+    (1, "s1_sw3",         "Sample Warehouse 3"),
+    (1, "s1_sw4",         "Sample Warehouse 4"),
+    (1, "s1_floaters",    "Floaters"),
+    (2, "s2_ds1",         "Defense System 1"),
+    (2, "s2_ds2",         "Defense System 2"),
+    (2, "s2_sf1",         "Serum Factory 1"),
+    (2, "s2_sf2",         "Serum Factory 2"),
+    (2, "s2_floaters",    "Floaters"),
+    (3, "s3_virus_lab",   "Virus Lab"),
+    (3, "s3_power_tower", "Power Tower"),
+    (3, "s3_dc1",         "Data Center 1"),
+    (3, "s3_dc2",         "Data Center 2"),
+    (3, "s3_ds1",         "Defense System 1"),
+    (3, "s3_ds2",         "Defense System 2"),
+    (3, "s3_sf1",         "Serum Factory 1"),
+    (3, "s3_sf2",         "Serum Factory 2"),
+]
+
+# Key used as the {subs} placeholder rather than rendered as a zone.
+CS_SUBS_KEY = "s3_pop_pair1"
+CS_SUBS_LABEL = "Pop Pairs (last 30 sec)"
+
+
 def build_cs_template(z: dict) -> str:
-    lines = [
-        "STAGE 1",
-        f"Power Tower: {z.get('s1_power_tower', '')}",
-        f"Data Center 1: {z.get('s1_dc1', '')}",
-        f"Data Center 2: {z.get('s1_dc2', '')}",
-        f"Sample Warehouse 1: {z.get('s1_sw1', '')}",
-        f"Sample Warehouse 2: {z.get('s1_sw2', '')}",
-        f"Sample Warehouse 3: {z.get('s1_sw3', '')}",
-        f"Sample Warehouse 4: {z.get('s1_sw4', '')}",
-        f"Floaters: {z.get('s1_floaters', '')}",
-        "",
-        "STAGE 2",
-        f"Defense System 1: {z.get('s2_ds1', '')}",
-        f"Defense System 2: {z.get('s2_ds2', '')}",
-        f"Serum Factory 1: {z.get('s2_sf1', '')}",
-        f"Serum Factory 2: {z.get('s2_sf2', '')}",
-        f"Floaters: {z.get('s2_floaters', '')}",
-        "",
-        "STAGE 3",
-        f"Virus Lab: {z.get('s3_virus_lab', '')}",
-        f"Power Tower: {z.get('s3_power_tower', '')}",
-        f"Data Center 1: {z.get('s3_dc1', '')}",
-        f"Data Center 2: {z.get('s3_dc2', '')}",
-        f"Defense System 1: {z.get('s3_ds1', '')}",
-        f"Defense System 2: {z.get('s3_ds2', '')}",
-        f"Serum Factory 1: {z.get('s3_sf1', '')}",
-        f"Serum Factory 2: {z.get('s3_sf2', '')}",
-        f"Pop Pairs (last 30 sec): {z.get('s3_pop_pair1', '')}",
-    ]
+    lines: list[str] = []
+    last_stage: int | None = None
+    for stage, key, label in CS_ZONE_STRUCTURE:
+        if stage != last_stage:
+            if last_stage is not None:
+                lines.append("")
+            lines.append(f"STAGE {stage}")
+            last_stage = stage
+        lines.append(f"{label}: {z.get(key, '')}")
+    # Subs go at the end of Stage 3 (matches the in-game flow).
+    lines.append(f"{CS_SUBS_LABEL}: {z.get(CS_SUBS_KEY, '')}")
     return "\n".join(lines)
 
 
@@ -1020,22 +1035,14 @@ def parse_cs_template(text: str) -> tuple[dict, list]:
     zones  = {}
     errors = []
     stage  = None
-    key_map = {
-        "power tower":        {1: "s1_power_tower", 3: "s3_power_tower"},
-        "data center 1":      {1: "s1_dc1",         3: "s3_dc1"},
-        "data center 2":      {1: "s1_dc2",         3: "s3_dc2"},
-        "sample warehouse 1": {1: "s1_sw1"},
-        "sample warehouse 2": {1: "s1_sw2"},
-        "sample warehouse 3": {1: "s1_sw3"},
-        "sample warehouse 4": {1: "s1_sw4"},
-        "floaters":           {1: "s1_floaters",    2: "s2_floaters"},
-        "defense system 1":   {2: "s2_ds1",         3: "s3_ds1"},
-        "defense system 2":   {2: "s2_ds2",         3: "s3_ds2"},
-        "serum factory 1":    {2: "s2_sf1",         3: "s3_sf1"},
-        "serum factory 2":    {2: "s2_sf2",         3: "s3_sf2"},
-        "virus lab":          {3: "s3_virus_lab"},
-        "pop pairs (last 30 sec)": {3: "s3_pop_pair1"},
-    }
+
+    # Build the (label_lower, stage) → key lookup from the canonical structure
+    # plus the subs key so the parser stays in sync with the builder.
+    key_map: dict[str, dict[int, str]] = {}
+    for st, key, label in CS_ZONE_STRUCTURE:
+        key_map.setdefault(label.lower(), {})[st] = key
+    key_map.setdefault(CS_SUBS_LABEL.lower(), {})[3] = CS_SUBS_KEY
+
     for line in text.strip().splitlines():
         line = line.strip()
         if not line:
@@ -1079,23 +1086,53 @@ def build_cs_mail(team: str, z: dict, time_key: str, guild_id: int = None,
         server_time = cfg.get("time_option_2_server", "")
     time_str = f"{local_time} ({server_time})" if local_time else time_key
 
-    # Build zones block from the zone dict
-    zone_lines = []
-    for key, members in z.items():
-        if members and members != "(open)":
-            label = key.replace("_", " ").replace("s1 ", "").replace("s2 ", "").replace("s3 ", "").title()
-            zone_lines.append(f"**{label}**")
-            if isinstance(members, list):
-                zone_lines.append("\n".join(str(m) for m in members))
-            else:
-                zone_lines.append(str(members))
+    # Build zones block in canonical order with full labels and stage headers.
+    # Walk CS_ZONE_STRUCTURE first so familiar slots render with their proper
+    # names ("Data Center 1", not "Dc1"). Anything left in `z` that isn't part
+    # of the canonical structure (legacy data, custom test fixtures) is then
+    # emitted at the end with the raw key as a fallback label, so nothing ever
+    # silently disappears.
+    zone_lines: list[str] = []
+    last_stage: int | None = None
+    rendered: set[str] = set()
+
+    def _emit_members(members):
+        if isinstance(members, list):
+            zone_lines.append("\n".join(str(m) for m in members))
+        else:
+            zone_lines.append(str(members))
+        zone_lines.append("")
+
+    for stage, key, label in CS_ZONE_STRUCTURE:
+        members = z.get(key)
+        if not members or members == "(open)":
+            rendered.add(key)
+            continue
+        if stage != last_stage:
+            # `_emit_members` already trailed a blank, so the next stage header
+            # only needs one extra blank — no double-blank between stages.
+            zone_lines.append(f"**Stage {stage}**")
+            last_stage = stage
+        zone_lines.append(f"**{label}**")
+        _emit_members(members)
+        rendered.add(key)
+
+    # Fallback for non-canonical keys (e.g. legacy fixtures). Skip the subs key.
+    rendered.add(CS_SUBS_KEY)
+    extra = [(k, v) for k, v in z.items() if k not in rendered and v and v != "(open)"]
+    if extra:
+        if zone_lines:
             zone_lines.append("")
+        for key, members in extra:
+            zone_lines.append(f"**{key}**")
+            _emit_members(members)
+
     zones_block = "\n".join(zone_lines).strip()
 
-    if isinstance(z.get("s3_pop_pair1"), list):
-        subs_block = "\n".join(str(s) for s in z["s3_pop_pair1"])
+    if isinstance(z.get(CS_SUBS_KEY), list):
+        subs_block = "\n".join(str(s) for s in z[CS_SUBS_KEY])
     else:
-        subs_block = z.get("s3_pop_pair1", "(none)") or "(none)"
+        subs_block = z.get(CS_SUBS_KEY, "(none)") or "(none)"
 
     if template:
         return template.format(

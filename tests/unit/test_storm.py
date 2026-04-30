@@ -93,6 +93,131 @@ class TestBuildCsMail:
         assert cs.startswith("CS:")
 
 
+class TestCsZoneLabelRendering:
+    """Regression tests for the bug where CS draft rendered abbreviations
+    (Dc1, Sw1, Ds1, Sf1) instead of full zone names. Caused by
+    `key.replace('s1 ', '').title()` which collapsed `s1_dc1` → `Dc1` rather
+    than expanding it to `Data Center 1`."""
+
+    def test_canonical_keys_render_full_names_not_abbreviations(self, seeded_db):
+        from storm import build_cs_mail
+        from config import save_storm_config
+        save_storm_config(TEST_GUILD_ID, "CS", "CS Assignments",
+                          "CS: {zones}\n{subs}\n{time}",
+                          "", "", "", "", "", "", "America/New_York", 0)
+        zones = {
+            "s1_dc1":         ["Alice"],
+            "s1_sw1":         ["Bob"],
+            "s2_ds1":         ["Carol"],
+            "s2_sf1":         ["Dave"],
+            "s3_virus_lab":   ["Eve"],
+            "s3_pop_pair1":   "Frank & Grace",
+        }
+        result = build_cs_mail("A", zones, "12:00", guild_id=TEST_GUILD_ID)
+
+        # The bug: these abbreviated forms must NOT appear.
+        assert "**Dc1**"      not in result, f"Bug regression: 'Dc1' in mail:\n{result}"
+        assert "**Sw1**"      not in result, f"Bug regression: 'Sw1' in mail:\n{result}"
+        assert "**Ds1**"      not in result, f"Bug regression: 'Ds1' in mail:\n{result}"
+        assert "**Sf1**"      not in result, f"Bug regression: 'Sf1' in mail:\n{result}"
+        assert "**Virus Lab**" in result or "Virus Lab" in result
+
+        # The fix: the full names must appear.
+        assert "Data Center 1"      in result
+        assert "Sample Warehouse 1" in result
+        assert "Defense System 1"   in result
+        assert "Serum Factory 1"    in result
+        assert "Virus Lab"          in result
+
+    def test_subs_key_not_duplicated_as_zone(self, seeded_db):
+        """Pop-pair-1 used to render BOTH as a `Pop Pair1` zone AND as the
+        subs block. It should only be the subs block."""
+        from storm import build_cs_mail
+        from config import save_storm_config
+        save_storm_config(TEST_GUILD_ID, "CS", "CS Assignments",
+                          "CS: {zones}\n---SUBS---\n{subs}\n{time}",
+                          "", "", "", "", "", "", "America/New_York", 0)
+        zones = {
+            "s1_dc1":       ["Alice"],
+            "s3_pop_pair1": "Bob & Carol",
+        }
+        result = build_cs_mail("A", zones, "12:00", guild_id=TEST_GUILD_ID)
+        # Pop-pair members should appear exactly once (in subs block, after the
+        # `---SUBS---` marker). The {zones} block must NOT contain them.
+        zones_part = result.split("---SUBS---")[0]
+        assert "Bob & Carol" not in zones_part, \
+            f"Subs key was duplicated as a zone:\n{result}"
+        assert "Bob & Carol" in result.split("---SUBS---")[1]
+
+    def test_open_zones_are_skipped(self, seeded_db):
+        """Zones whose value is '(open)' or empty should not render."""
+        from storm import build_cs_mail
+        from config import save_storm_config
+        save_storm_config(TEST_GUILD_ID, "CS", "CS Assignments",
+                          "{zones}",
+                          "", "", "", "", "", "", "America/New_York", 0)
+        zones = {
+            "s1_dc1":   ["Alice"],
+            "s1_dc2":   "(open)",
+            "s1_sw1":   "",
+            "s2_ds1":   ["Bob"],
+        }
+        result = build_cs_mail("A", zones, "12:00", guild_id=TEST_GUILD_ID)
+        # Only the populated zones render.
+        assert "Data Center 1"      in result
+        assert "Defense System 1"   in result
+        assert "Data Center 2"      not in result
+        assert "Sample Warehouse 1" not in result
+
+    def test_stages_emit_in_canonical_order(self, seeded_db):
+        from storm import build_cs_mail
+        from config import save_storm_config
+        save_storm_config(TEST_GUILD_ID, "CS", "CS Assignments",
+                          "{zones}",
+                          "", "", "", "", "", "", "America/New_York", 0)
+        zones = {
+            "s3_virus_lab": ["Eve"],
+            "s1_dc1":       ["Alice"],
+            "s2_ds1":       ["Carol"],
+        }
+        result = build_cs_mail("A", zones, "12:00", guild_id=TEST_GUILD_ID)
+        # Stage 1 must appear before Stage 2 must appear before Stage 3
+        # regardless of dict insertion order.
+        s1_idx = result.find("**Stage 1**")
+        s2_idx = result.find("**Stage 2**")
+        s3_idx = result.find("**Stage 3**")
+        assert 0 <= s1_idx < s2_idx < s3_idx, \
+            f"Stages out of order. s1={s1_idx} s2={s2_idx} s3={s3_idx}\n{result}"
+
+
+class TestCsZoneStructureConsistency:
+    """The CS_ZONE_STRUCTURE constant is the single source of truth for both
+    the template builder and the mail builder. Verify it stays consistent."""
+
+    def test_structure_has_no_duplicate_keys(self):
+        from storm import CS_ZONE_STRUCTURE
+        keys = [k for _, k, _ in CS_ZONE_STRUCTURE]
+        assert len(keys) == len(set(keys)), \
+            f"Duplicate keys in CS_ZONE_STRUCTURE: {keys}"
+
+    def test_structure_subs_key_excluded(self):
+        """The subs key should never appear as a zone."""
+        from storm import CS_ZONE_STRUCTURE, CS_SUBS_KEY
+        keys = [k for _, k, _ in CS_ZONE_STRUCTURE]
+        assert CS_SUBS_KEY not in keys
+
+    def test_default_cs_assignments_only_use_canonical_keys(self):
+        """The DEFAULT_CS_A / DEFAULT_CS_B fixtures should match the canonical
+        structure exactly (one entry per slot, plus the subs key)."""
+        from storm import CS_ZONE_STRUCTURE, CS_SUBS_KEY, DEFAULT_CS_A, DEFAULT_CS_B
+        canonical = {k for _, k, _ in CS_ZONE_STRUCTURE} | {CS_SUBS_KEY}
+        for label, defaults in (("A", DEFAULT_CS_A), ("B", DEFAULT_CS_B)):
+            extras = set(defaults.keys()) - canonical
+            missing = canonical - set(defaults.keys())
+            assert not extras,  f"DEFAULT_CS_{label} has non-canonical keys: {extras}"
+            assert not missing, f"DEFAULT_CS_{label} is missing canonical keys: {missing}"
+
+
 class TestParseDsTemplate:
     """Test round-trip parse of DS mail template."""
 

@@ -50,6 +50,17 @@ ET = ZoneInfo("America/New_York")
 
 intents = discord.Intents.default()
 intents.message_content = True
+# `Intents.default()` deliberately omits the privileged `members` intent,
+# so this line opts back in. Without it `guild.members` only contains the
+# handful of users Discord surfaces via interactions/typing/voice — which
+# is why /sync_members was writing 0 rows even when the portal toggle was
+# already on. The portal toggle is the prerequisite for this request to
+# succeed; the gateway will refuse the connection at startup if the
+# portal toggle is off.
+#
+# Also required for on_member_join / on_member_remove / on_member_update
+# to fire — i.e. for Member Roster Sync's auto-resync to actually work.
+intents.members = True
 
 bot = commands.Bot(command_prefix="!", intents=intents)
 

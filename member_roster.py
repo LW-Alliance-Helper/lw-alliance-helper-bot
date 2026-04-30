@@ -89,7 +89,16 @@ def write_roster(guild: discord.Guild, cfg: dict) -> int:
     """
     Replace the contents of the configured tab with a fresh roster.
     Returns the number of member rows written (excluding header).
+
+    The caller is responsible for ensuring the guild's member cache is
+    populated (via `await guild.chunk()`) before invoking this function;
+    otherwise `guild.members` may only contain a handful of members that
+    Discord has surfaced via interactions, and the resulting roster will
+    be incomplete. `_warn_if_cache_looks_thin` logs a warning when the
+    Discord-side member_count is much larger than the cached size, which
+    catches missing-intent and missing-chunk cases at runtime.
     """
+    _warn_if_cache_looks_thin(guild)
     rows = _build_roster_rows(guild, cfg)
     ws = get_member_roster_sheet(guild.id, cfg["tab_name"])
     ws.clear()
@@ -97,6 +106,46 @@ def write_roster(guild: discord.Guild, cfg: dict) -> int:
         ws.update("A1", rows, value_input_option="USER_ENTERED")
     update_roster_last_synced(guild.id, datetime.now(timezone.utc).isoformat())
     return max(0, len(rows) - 1)
+
+
+def _warn_if_cache_looks_thin(guild: discord.Guild) -> None:
+    """If the cached member list is wildly smaller than Discord's reported
+    guild size, the Server Members Intent probably isn't enabled (or the
+    caller forgot to chunk). Log loudly so the symptom — "/sync_members
+    wrote 0 rows" — has a breadcrumb pointing at the cause."""
+    try:
+        cached_count = len(guild.members)
+        raw_total    = getattr(guild, "member_count", None)
+        total_count  = int(raw_total) if isinstance(raw_total, int) else 0
+    except Exception:
+        return
+    if total_count > 1 and cached_count < max(2, total_count // 2):
+        print(
+            f"[ROSTER] Guild {guild.id}: only {cached_count}/{total_count} members "
+            f"in cache. Enable the SERVER MEMBERS INTENT in the Discord Developer "
+            f"Portal (Bot → Privileged Gateway Intents) — without it `guild.members` "
+            f"can't see the full roster."
+        )
+
+
+async def _ensure_member_cache(guild: discord.Guild) -> None:
+    """Force-load `guild.members` if it isn't already chunked.
+
+    Safe to call on every sync — it short-circuits when the cache is
+    already complete, and swallows the `ClientException` that fires when
+    the members intent isn't actually granted (so the sync still attempts
+    to run with whatever members are available, with the warning above
+    explaining the partial result).
+    """
+    try:
+        if not getattr(guild, "chunked", True):
+            await guild.chunk()
+    except discord.ClientException as e:
+        # Raised when intents.members is False — i.e. the privileged intent
+        # isn't enabled. Don't crash; let _warn_if_cache_looks_thin surface it.
+        print(f"[ROSTER] guild.chunk() rejected for guild {guild.id}: {e}")
+    except Exception as e:
+        print(f"[ROSTER] guild.chunk() failed for guild {guild.id}: {e}")
 
 
 # ── Cog ──────────────────────────────────────────────────────────────────────
@@ -125,6 +174,7 @@ class MemberRosterCog(commands.Cog):
         cfg = get_member_roster_config(guild.id)
         if not cfg.get("enabled") or not cfg.get("auto_sync"):
             return
+        await _ensure_member_cache(guild)
         try:
             await asyncio.get_event_loop().run_in_executor(
                 None, write_roster, guild, cfg,
@@ -173,6 +223,7 @@ class MemberRosterCog(commands.Cog):
 
         await interaction.response.defer(ephemeral=True)
         guild = interaction.guild
+        await _ensure_member_cache(guild)
         try:
             count = await asyncio.get_event_loop().run_in_executor(
                 None, write_roster, guild, cfg,
@@ -306,6 +357,7 @@ async def run_member_roster_setup(interaction: discord.Interaction, bot):
     # ── Initial sync ──────────────────────────────────────────────────────────
     cfg   = get_member_roster_config(guild_id)
     guild = interaction.guild
+    await _ensure_member_cache(guild)
     try:
         count = await asyncio.get_event_loop().run_in_executor(
             None, write_roster, guild, cfg,

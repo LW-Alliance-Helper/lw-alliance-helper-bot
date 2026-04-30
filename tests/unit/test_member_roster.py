@@ -233,6 +233,121 @@ class TestWriteRoster:
         assert cfg_after["last_synced_at"]   # non-empty ISO timestamp
 
 
+# ── Cache-population safety net ──────────────────────────────────────────────
+
+class TestEnsureMemberCache:
+    """Regression tests for the bug where /sync_members wrote 0 rows because
+    `Intents.default()` doesn't request the privileged members intent and
+    `guild.members` was therefore the cached subset. The fix sets
+    `intents.members = True` in bot.py and chunks the guild before each
+    sync so the cache is fresh."""
+
+    @pytest.mark.asyncio
+    async def test_chunks_guild_when_not_yet_chunked(self):
+        from member_roster import _ensure_member_cache
+
+        guild = MagicMock()
+        guild.chunked = False
+        guild.chunk   = AsyncMock()
+
+        await _ensure_member_cache(guild)
+        guild.chunk.assert_awaited_once()
+
+    @pytest.mark.asyncio
+    async def test_skips_chunk_when_already_chunked(self):
+        from member_roster import _ensure_member_cache
+
+        guild = MagicMock()
+        guild.chunked = True
+        guild.chunk   = AsyncMock()
+
+        await _ensure_member_cache(guild)
+        guild.chunk.assert_not_awaited()
+
+    @pytest.mark.asyncio
+    async def test_swallows_client_exception_when_intent_disabled(self):
+        """If `intents.members` is False the gateway rejects chunk(). We
+        log and continue — write_roster will still try to write whatever's
+        in the cache, with the warn emitted from _warn_if_cache_looks_thin."""
+        import discord
+        from member_roster import _ensure_member_cache
+
+        guild = MagicMock()
+        guild.chunked = False
+        guild.chunk   = AsyncMock(
+            side_effect=discord.ClientException("Intents.members must be enabled"),
+        )
+        # Should not raise.
+        await _ensure_member_cache(guild)
+
+
+class TestWarnIfCacheLooksThin:
+    """The warn function fires when the cache is wildly smaller than the
+    Discord-reported guild size — a runtime breadcrumb pointing at the
+    missing-intent / missing-chunk root cause."""
+
+    def test_warns_when_cache_is_dramatically_smaller(self, capsys):
+        from member_roster import _warn_if_cache_looks_thin
+
+        guild              = MagicMock()
+        guild.id           = TEST_GUILD_ID
+        guild.members      = [MagicMock()]      # cached: 1
+        guild.member_count = 200                 # actual: 200
+
+        _warn_if_cache_looks_thin(guild)
+        captured = capsys.readouterr()
+        assert "[ROSTER]" in captured.out
+        assert "1/200"    in captured.out
+        assert "SERVER MEMBERS INTENT" in captured.out
+
+    def test_silent_when_cache_is_complete(self, capsys):
+        from member_roster import _warn_if_cache_looks_thin
+
+        guild              = MagicMock()
+        guild.id           = TEST_GUILD_ID
+        guild.members      = [MagicMock() for _ in range(100)]
+        guild.member_count = 100
+
+        _warn_if_cache_looks_thin(guild)
+        assert "[ROSTER]" not in capsys.readouterr().out
+
+    def test_silent_for_tiny_guilds(self, capsys):
+        """One-member guilds (testing servers) shouldn't trip the warning."""
+        from member_roster import _warn_if_cache_looks_thin
+
+        guild              = MagicMock()
+        guild.id           = TEST_GUILD_ID
+        guild.members      = []
+        guild.member_count = 1
+
+        _warn_if_cache_looks_thin(guild)
+        assert "[ROSTER]" not in capsys.readouterr().out
+
+    def test_silent_when_member_count_unknown(self, capsys):
+        """Some Mock setups leave member_count as a MagicMock; treat as 0
+        and skip the warning rather than crashing."""
+        from member_roster import _warn_if_cache_looks_thin
+
+        guild         = MagicMock()
+        guild.id      = TEST_GUILD_ID
+        guild.members = []
+        # member_count is a MagicMock by default
+        _warn_if_cache_looks_thin(guild)
+        assert "[ROSTER]" not in capsys.readouterr().out
+
+
+class TestBotIntents:
+    """Verify the bot is constructed with the privileged members intent —
+    the original cause of the 0-members sync bug."""
+
+    def test_members_intent_is_requested(self):
+        # Reset Discord client cache between tests by importing fresh.
+        import importlib
+        import bot as bot_module
+        importlib.reload(bot_module)
+        assert bot_module.intents.members is True
+
+
 # ── /sync_members premium gate ────────────────────────────────────────────────
 
 class TestSyncMembersGate:

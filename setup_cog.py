@@ -618,6 +618,81 @@ def _has_leadership_or_admin(interaction: discord.Interaction) -> bool:
     return False
 
 
+# Permissions required for the bot to drive a wizard end-to-end in a
+# given channel: read the channel, send messages, embed (for setup
+# summaries), and read history (so wait_for("message") works for the
+# typed-reply steps).
+_WIZARD_REQUIRED_PERMS = (
+    "view_channel",
+    "send_messages",
+    "embed_links",
+    "read_message_history",
+)
+
+
+def _missing_wizard_perms(interaction: discord.Interaction) -> list[str]:
+    """Return the list of human-readable permission names the bot is
+    missing in `interaction.channel`. Empty list = the bot can drive a
+    wizard here. Used as a pre-flight check at the top of /setup_*
+    commands so the user gets a clear "I need these permissions in
+    this channel" error instead of the generic "Something went wrong"
+    that the global error handler would otherwise show after the
+    wizard's first channel.send fails with 403.
+    """
+    me = interaction.guild.me if interaction.guild else None
+    if me is None:
+        return []   # DM context — wizards aren't supported in DMs anyway
+    channel = interaction.channel
+    if channel is None:
+        return []
+    perms   = channel.permissions_for(me)
+    missing = []
+    for name in _WIZARD_REQUIRED_PERMS:
+        if not getattr(perms, name, False):
+            # Convert "send_messages" → "Send Messages" for the user-facing
+            # message — Discord's UI uses Title Case.
+            missing.append(name.replace("_", " ").title())
+    return missing
+
+
+async def _check_wizard_can_run(interaction: discord.Interaction, command_name: str) -> bool:
+    """If the bot can run a wizard in the current channel, return True.
+    Otherwise send a clear ephemeral message explaining what perms are
+    missing (and how to fix), and return False. Call at the top of
+    every /setup_* command.
+    """
+    missing = _missing_wizard_perms(interaction)
+    if not missing:
+        return True
+
+    perm_lines = "\n".join(f"• **{p}**" for p in missing)
+    channel_mention = (
+        interaction.channel.mention if interaction.channel and hasattr(interaction.channel, "mention")
+        else "this channel"
+    )
+    msg = (
+        f"⚠️ **I can't run `/{command_name}` in {channel_mention}** — I'm missing the "
+        f"following Discord permissions in this channel:\n\n"
+        f"{perm_lines}\n\n"
+        f"To fix this, either:\n"
+        f"• Edit this channel's permissions and grant my role those permissions, or\n"
+        f"• Run `/{command_name}` from a channel where I already have them (your leadership "
+        f"channel is a good choice).\n\n"
+        f"Once that's done, the wizard will work."
+    )
+    try:
+        if interaction.response.is_done():
+            await interaction.followup.send(msg, ephemeral=True)
+        else:
+            await interaction.response.send_message(msg, ephemeral=True)
+    except Exception:
+        # If even this fails (e.g., the bot can't send ephemeral
+        # responses for some reason), let the global error handler
+        # take over — but log it so we know.
+        print(f"[SETUP] Could not deliver permission-check message for /{command_name}")
+    return False
+
+
 class SetupCog(commands.Cog):
     def __init__(self, bot):
         self.bot = bot
@@ -629,6 +704,9 @@ class SetupCog(commands.Cog):
             await interaction.response.send_message(
                 "⛔ Only server administrators can run `/setup`.", ephemeral=True
             )
+            return
+
+        if not await _check_wizard_can_run(interaction, "setup"):
             return
 
         await interaction.response.send_message(
@@ -707,6 +785,8 @@ class SetupCog(commands.Cog):
                 ephemeral=True,
             )
             return
+        if not await _check_wizard_can_run(interaction, "setup_train"):
+            return
         await interaction.response.send_message(
             "⚙️ Starting train setup — check the channel for prompts!", ephemeral=True
         )
@@ -719,6 +799,8 @@ class SetupCog(commands.Cog):
                 "⛔ You need the leadership role (or admin) to run `/setup_growth`.",
                 ephemeral=True,
             )
+            return
+        if not await _check_wizard_can_run(interaction, "setup_growth"):
             return
         await interaction.response.send_message(
             "⚙️ Starting growth tracking setup — check the channel for prompts!", ephemeral=True
@@ -733,6 +815,8 @@ class SetupCog(commands.Cog):
                 ephemeral=True,
             )
             return
+        if not await _check_wizard_can_run(interaction, "setup_birthdays"):
+            return
         await interaction.response.send_message(
             "⚙️ Starting birthday setup — check the channel for prompts!", ephemeral=True
         )
@@ -745,6 +829,8 @@ class SetupCog(commands.Cog):
                 "⛔ You need the leadership role (or admin) to run `/setup_desertstorm`.",
                 ephemeral=True,
             )
+            return
+        if not await _check_wizard_can_run(interaction, "setup_desertstorm"):
             return
         await interaction.response.send_message(
             "⚙️ Starting Desert Storm setup — check the channel for prompts!", ephemeral=True
@@ -759,6 +845,8 @@ class SetupCog(commands.Cog):
                 ephemeral=True,
             )
             return
+        if not await _check_wizard_can_run(interaction, "setup_canyonstorm"):
+            return
         await interaction.response.send_message(
             "⚙️ Starting Canyon Storm setup — check the channel for prompts!", ephemeral=True
         )
@@ -772,6 +860,8 @@ class SetupCog(commands.Cog):
                 ephemeral=True,
             )
             return
+        if not await _check_wizard_can_run(interaction, "setup_events"):
+            return
         await interaction.response.send_message(
             "⚙️ Starting event setup — check the channel for prompts!", ephemeral=True
         )
@@ -784,6 +874,8 @@ class SetupCog(commands.Cog):
                 "⛔ You need the leadership role (or admin) to run `/setup_survey`.",
                 ephemeral=True,
             )
+            return
+        if not await _check_wizard_can_run(interaction, "setup_survey"):
             return
         await interaction.response.send_message(
             "⚙️ Starting survey setup — check the channel for prompts!", ephemeral=True

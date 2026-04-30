@@ -240,18 +240,93 @@ async def on_guild_remove(guild: discord.Guild):
 # from CommandInvokeError before reporting so Sentry groups errors by
 # the actual cause, not by the wrapper.
 
+ISSUE_TRACKER_URL = "https://github.com/LW-Alliance-Helper/lw-alliance-helper.github.io/issues"
+
+
+def _format_command_error(error: BaseException, event_id: str | None) -> str:
+    """Build a user-facing error message for an unhandled slash-command
+    exception. Categorises common Discord errors so the message tells the
+    user either how to fix it themselves, or what to put in a support
+    ticket. The Sentry event id (when available) is included as a
+    `Reference:` line so ticket reports correlate to dashboard events.
+    """
+    ref_line = f"\n\n**Reference:** `{event_id}`" if event_id else ""
+
+    if isinstance(error, discord.Forbidden):
+        # 50001 = Missing Access. The bot isn't in the channel's perms
+        # overrides, or its role doesn't have access to the channel/category.
+        if error.code == 50001:
+            return (
+                "⚠️ **I don't have access to this channel.**\n\n"
+                "To fix this, either:\n"
+                "• Edit this channel's permissions and grant my role **Send Messages**, **Embed Links**, "
+                "and **View Channel**, or\n"
+                "• Run this command from a channel where I can already post (your leadership channel is "
+                "a good choice).\n\n"
+                f"If this keeps happening, open an issue at <{ISSUE_TRACKER_URL}> and include the "
+                f"reference below.{ref_line}"
+            )
+        # 50013 = Missing Permissions. Bot has access but lacks a specific perm.
+        if error.code == 50013:
+            return (
+                "⚠️ **I'm missing a Discord permission needed to do that.**\n\n"
+                "Make sure my role has these permissions in this channel:\n"
+                "• Send Messages\n"
+                "• Embed Links\n"
+                "• View Channel\n"
+                "• Read Message History\n\n"
+                f"If this keeps happening, open an issue at <{ISSUE_TRACKER_URL}> and include the "
+                f"reference below.{ref_line}"
+            )
+        # Other Forbidden — surface the code so support can correlate.
+        return (
+            "⚠️ **Discord blocked this action.** This usually means a permission or role-hierarchy "
+            f"issue. Discord error code: `{error.code}`.\n\n"
+            f"Open an issue at <{ISSUE_TRACKER_URL}> with the reference below.{ref_line}"
+        )
+
+    if isinstance(error, discord.NotFound):
+        return (
+            "⚠️ **Discord couldn't find something I needed** — usually a channel, role, or message "
+            "that's been deleted since the bot was set up.\n\n"
+            "Try running `/view_configuration` to check that all your configured channels and roles "
+            "still exist.\n\n"
+            f"If they look correct and this keeps happening, open an issue at <{ISSUE_TRACKER_URL}> "
+            f"with the reference below.{ref_line}"
+        )
+
+    if isinstance(error, discord.HTTPException):
+        return (
+            "⚠️ **Discord's API returned an error.** This is usually transient — try the command "
+            f"again in a moment.\n\nDiscord status: `{error.status}`, code: `{error.code}`.\n\n"
+            f"If it keeps failing, open an issue at <{ISSUE_TRACKER_URL}> with the reference "
+            f"below.{ref_line}"
+        )
+
+    # Generic catch-all — bot bug, not a user-actionable error.
+    return (
+        "⚠️ **Something went wrong running that command.** This looks like a bug on my side, not a "
+        "configuration issue you can fix.\n\n"
+        f"Please open an issue at <{ISSUE_TRACKER_URL}> with the reference below — it'll let me find "
+        f"the exact error in my logs.{ref_line}"
+    )
+
+
 @bot.tree.error
 async def on_app_command_error(
     interaction: discord.Interaction,
     error: app_commands.AppCommandError,
 ):
     actual = getattr(error, "original", error)
-    print(f"[SLASH] Unhandled error in /{interaction.command.name if interaction.command else '?'}: {actual!r}")
-    sentry_sdk.capture_exception(actual)
+    cmd_name = interaction.command.name if interaction.command else "?"
+    print(f"[SLASH] Unhandled error in /{cmd_name}: {actual!r}")
 
-    # Best-effort user message — different paths depending on whether the
-    # interaction has already been responded to.
-    msg = "⚠️ Something went wrong running that command. The error has been reported and will be looked at."
+    # Capture to Sentry and grab the event id so the user-facing message
+    # can include a reference for ticket reports. capture_exception()
+    # returns None if Sentry isn't initialised; the formatter handles that.
+    event_id = sentry_sdk.capture_exception(actual)
+
+    msg = _format_command_error(actual, event_id)
     try:
         if interaction.response.is_done():
             await interaction.followup.send(msg, ephemeral=True)

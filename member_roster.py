@@ -195,7 +195,7 @@ class MemberRosterCog(commands.Cog):
         description="💎 Configure Member Roster Sync (Premium)",
     )
     async def setup_members(self, interaction: discord.Interaction):
-        from setup_cog import _has_leadership_or_admin
+        from setup_cog import _has_leadership_or_admin, _check_wizard_can_run
         if not _has_leadership_or_admin(interaction):
             await interaction.response.send_message(
                 "⛔ You need the leadership role (or admin) to configure the member roster.",
@@ -203,6 +203,8 @@ class MemberRosterCog(commands.Cog):
             )
             return
 
+        # Premium gate before the channel-perms pre-check: a free user
+        # trying this command should see the upsell, not a perms error.
         if not await premium.is_premium(
             interaction.guild_id, interaction=interaction, bot=self.bot,
         ):
@@ -217,6 +219,9 @@ class MemberRosterCog(commands.Cog):
                 view=premium.upgrade_view(),
                 ephemeral=True,
             )
+            return
+
+        if not await _check_wizard_can_run(interaction, "setup_members"):
             return
 
         await interaction.response.send_message(

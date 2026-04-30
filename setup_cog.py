@@ -2149,7 +2149,7 @@ async def run_train_setup(interaction: discord.Interaction, bot):
     # ── Step 1: Sheet tab ──────────────────────────────────────────────────────
     tab_name = await ask_keep_or_change(
         channel,
-        "**Step 1 of 7 — Schedule Sheet Tab**\n"
+        "**Step 1 of 8 — Schedule Sheet Tab**\n"
         "Which tab in your Google Sheet stores the train schedule?\n"
         "⚠️ *Make sure this tab exists in your sheet before continuing.*",
         default="Train Schedule",
@@ -2165,7 +2165,7 @@ async def run_train_setup(interaction: discord.Interaction, bot):
     # ── Step 2: Generate blurbs? ───────────────────────────────────────────────
     blurb_view = YesNoView()
     await channel.send(
-        "**Step 2 of 7 — ChatGPT Blurb Generation**\n"
+        "**Step 2 of 8 — ChatGPT Blurb Generation**\n"
         "Would you like the bot to help generate a ChatGPT prompt each day when you assign a train?\n"
         "This lets you quickly produce a personalised announcement blurb for the member.\n"
         "*(You can always set this up later by running `/setup_train` again)*",
@@ -2235,7 +2235,7 @@ async def run_train_setup(interaction: discord.Interaction, bot):
 
         themes_keep_view = KeepOrChangeView("themes")
         await channel.send(
-            f"**Step 3 of 7 — Themes**\n"
+            f"**Step 3 of 8 — Themes**\n"
             f"These appear as options when selecting a theme for a member's train day.\n\n"
             f"**Defaults:**\n`{existing_themes}`"
             + cap_note_themes,
@@ -2272,7 +2272,7 @@ async def run_train_setup(interaction: discord.Interaction, bot):
 
         tones_keep_view = KeepOrChangeView("tones")
         await channel.send(
-            f"**Step 4 of 7 — Tones**\n"
+            f"**Step 4 of 8 — Tones**\n"
             f"These let leadership adjust the writing style of the generated blurb.\n\n"
             f"**Defaults:**\n`{existing_tones}`"
             + cap_note_tones,
@@ -2320,7 +2320,7 @@ async def run_train_setup(interaction: discord.Interaction, bot):
 
         tone_default_view = ToneDefaultView(tones)
         await channel.send(
-            f"**Step 5 of 7 — Default Tone**\n"
+            f"**Step 5 of 8 — Default Tone**\n"
             f"Which tone should be pre-selected by default?",
             view=tone_default_view,
         )
@@ -2356,7 +2356,7 @@ async def run_train_setup(interaction: discord.Interaction, bot):
     # ── Step 7: Reminders ─────────────────────────────────────────────────────
     reminder_view = YesNoView()
     await channel.send(
-        "**Step 7 of 7 — Train Reminders**\n"
+        "**Step 7 of 8 — Train Reminders**\n"
         "Should the bot post a reminder to leadership when someone is assigned the train each day?",
         view=reminder_view,
     )
@@ -2383,7 +2383,7 @@ async def run_train_setup(interaction: discord.Interaction, bot):
             guild=interaction.guild,
         )
         await channel.send(
-            "**Step 7a of 7 — Reminder Channel**\n"
+            "**Step 7a of 8 — Reminder Channel**\n"
             "Which channel should the train reminder be posted to?",
             view=reminder_ch_view,
         )
@@ -2407,7 +2407,7 @@ async def run_train_setup(interaction: discord.Interaction, bot):
         while True:
             time_raw = await ask_keep_or_change(
                 channel,
-                f"**Step 7b of 7 — Reminder Time**\n"
+                f"**Step 7b of 8 — Reminder Time**\n"
                 f"What time should the reminder fire? *(in your timezone: {tz_label})*\n"
                 f"*(e.g. `10:00pm`, `9:00am`)*",
                 default="10:00pm",
@@ -2439,6 +2439,36 @@ async def run_train_setup(interaction: discord.Interaction, bot):
                 f"Try `10:00pm`, `9:00am`, or `22:00`. Let's try once more."
             )
 
+    # ── Step 8: Train DM body (💎 Premium) ────────────────────────────────────
+    # Customisable body of the DM that fires alongside the channel
+    # reminder when the assigned member is on Premium. Free guilds can
+    # configure now — it just won't fire until they upgrade + sync the
+    # member roster.
+    train_dm_message = ""
+    if reminders_enabled:
+        from train_cog import DEFAULT_TRAIN_DM
+        saved_train_dm = (current.get("dm_message") or "").strip()
+        train_dm_input = await ask_keep_or_change(
+            channel,
+            "**Step 8 of 8 — Train DM Body (💎 Premium)**\n"
+            "When the train reminder fires, the bot also DMs the assigned member directly. "
+            "Free guilds can configure it now — it just won't fire until you have Premium "
+            "+ Member Roster Sync.\n\n"
+            "Use `{name}` as a placeholder for the member's name (optional).",
+            default=DEFAULT_TRAIN_DM,
+            current=saved_train_dm,
+            modal_title="Train DM Body",
+            modal_label="DM body (max 1000 chars)",
+            timeout_cmd="setup_train",
+            cancel_event=cancel_event,
+        )
+        if train_dm_input is None:
+            return
+        # Match the "Use default" UX everywhere else: keep the DB column
+        # empty when the user picked the default, so future tweaks to the
+        # hardcoded text reach existing alliances automatically.
+        train_dm_message = "" if train_dm_input == DEFAULT_TRAIN_DM else train_dm_input
+
     # ── Save ───────────────────────────────────────────────────────────────────
     from config import save_train_config
     save_kwargs = dict(
@@ -2446,6 +2476,7 @@ async def run_train_setup(interaction: discord.Interaction, bot):
         reminders_enabled=reminders_enabled,
         reminder_channel_id=reminder_channel_id,
         reminder_time=reminder_time,
+        dm_message=train_dm_message,
     )
     if blurbs_enabled:
         save_kwargs["templates"]        = templates
@@ -3469,19 +3500,51 @@ async def run_storm_setup(interaction: discord.Interaction, bot, event_type: str
     if participation_cfg is None:
         return  # cancelled / timed out
 
+    # ── Step 7: Reminder DM body (💎 Premium) ─────────────────────────────────
+    # The body of the DM that fires when leadership runs
+    # /[event]_remind. Stored per (guild_id, event_type) so DS and CS
+    # can have different copy. Free guilds can configure this now too —
+    # it just won't fire until they upgrade.
+    from storm_log import DEFAULT_STORM_REMINDER_DM
+    default_remind_dm = DEFAULT_STORM_REMINDER_DM.format(label=label)
+    saved_remind_dm   = (current.get("dm_reminder_message") or "").strip()
+    remind_dm = await ask_keep_or_change(
+        channel,
+        f"**Step 7 of 7 — {label} Reminder DM (💎 Premium)**\n"
+        f"When leadership runs `/{cmd_name.replace('setup_', '')}_remind`, the bot DMs every "
+        f"roster member this message. Free guilds can configure it now — it just won't "
+        f"fire until you have Premium + Member Roster Sync.\n\n"
+        f"Use `{{name}}` as a placeholder for the member's roster name (optional).",
+        default=default_remind_dm,
+        current=saved_remind_dm,
+        modal_title=f"{label} Reminder DM",
+        modal_label="DM body (max 1000 chars)",
+        timeout_cmd=cmd_name,
+        cancel_event=cancel_event,
+    )
+    if remind_dm is None:
+        return
+    # Treat "use default" as empty in the DB — that way the hardcoded
+    # default automatically picks up future tweaks without alliances
+    # needing to re-run setup.
+    dm_reminder_message = "" if remind_dm == default_remind_dm else remind_dm
+
     # ── Save ───────────────────────────────────────────────────────────────────
     from config import save_storm_config, save_participation_config, update_config_field
     if template_a:
         save_storm_config(guild_id, f"{event_type}_A", tab_name, template_a,
                           "", "", "", "", "", "", timezone, log_channel_id,
-                          post_channel_id=post_channel_id)
+                          post_channel_id=post_channel_id,
+                          dm_reminder_message=dm_reminder_message)
     if template_b:
         save_storm_config(guild_id, f"{event_type}_B", tab_name, template_b,
                           "", "", "", "", "", "", timezone, log_channel_id,
-                          post_channel_id=post_channel_id)
+                          post_channel_id=post_channel_id,
+                          dm_reminder_message=dm_reminder_message)
     save_storm_config(guild_id, event_type, tab_name, template_a or template_b,
                       "", "", "", "", "", "", timezone, log_channel_id,
-                      post_channel_id=post_channel_id)
+                      post_channel_id=post_channel_id,
+                      dm_reminder_message=dm_reminder_message)
 
     # Persist the participation config to the (guild, event_type) row.
     save_participation_config(
@@ -3571,7 +3634,7 @@ async def _run_storm_participation_step(
     # ── 6.1 Enable? ────────────────────────────────────────────────────────────
     enable_view = YesNoView()
     await channel.send(
-        f"**Step 6 of 6 — Participation Tracking**\n"
+        f"**Step 6 of 7 — Participation Tracking**\n"
         f"Do you want to track {label} participation? Leadership runs "
         f"`/{cmd_name.replace('setup_', '')}_participation` after each event "
         f"to log who showed up, who sat out, etc.\n"
@@ -4623,7 +4686,7 @@ async def run_birthday_setup(interaction: discord.Interaction, bot):
     # ── Step 1: Enable? ───────────────────────────────────────────────────────
     enabled_view = YesNoView()
     await channel.send(
-        "**Step 1 of 8 — Enable birthday tracking?**\n"
+        "**Step 1 of 9 — Enable birthday tracking?**\n"
         "Should the bot track member birthdays from your Google Sheet?",
         view=enabled_view,
     )
@@ -4642,7 +4705,7 @@ async def run_birthday_setup(interaction: discord.Interaction, bot):
     # ── Step 2: Sheet tab ─────────────────────────────────────────────────────
     tab_name = await ask_keep_or_change(
         channel,
-        "**Step 2 of 8 — Sheet Tab**\n"
+        "**Step 2 of 9 — Sheet Tab**\n"
         "Which tab in your Google Sheet contains birthday data?\n"
         "⚠️ *Make sure this tab exists in your sheet before continuing.*",
         default="Birthdays",
@@ -4663,7 +4726,7 @@ async def run_birthday_setup(interaction: discord.Interaction, bot):
     saved_name_col = current.get("name_col")
     name_col_raw = await ask_keep_or_change(
         channel,
-        "**Step 3 of 8 — Name Column**\n"
+        "**Step 3 of 9 — Name Column**\n"
         "Which column contains the member's name?",
         default="A",
         current=(
@@ -4687,7 +4750,7 @@ async def run_birthday_setup(interaction: discord.Interaction, bot):
     saved_bday_col = current.get("birthday_col")
     bday_col_raw = await ask_keep_or_change(
         channel,
-        "**Step 4 of 8 — Birthday Column**\n"
+        "**Step 4 of 9 — Birthday Column**\n"
         "Which column contains the member's birthday?",
         default="B",
         current=(
@@ -4710,7 +4773,7 @@ async def run_birthday_setup(interaction: discord.Interaction, bot):
     # ── Step 5: Train integration ─────────────────────────────────────────────
     train_view = YesNoView()
     await channel.send(
-        "**Step 5 of 8 — Train Schedule Integration**\n"
+        "**Step 5 of 9 — Train Schedule Integration**\n"
         "Should the bot automatically add members to the train schedule on their birthday?",
         view=train_view,
     )
@@ -4753,7 +4816,7 @@ async def run_birthday_setup(interaction: discord.Interaction, bot):
 
         placement_view = PlacementView()
         await channel.send(
-            "**Step 6 of 8 — Birthday Placement**\n"
+            "**Step 6 of 9 — Birthday Placement**\n"
             "If the member's birthday is already taken on the train schedule, what should the bot do?",
             view=placement_view,
         )
@@ -4768,7 +4831,7 @@ async def run_birthday_setup(interaction: discord.Interaction, bot):
         # ── Step 7: Lookahead days ─────────────────────────────────────────────
         lookahead_raw = await ask_keep_or_change(
             channel,
-            "**Step 7 of 8 — Train Schedule Lookahead**\n"
+            "**Step 7 of 9 — Train Schedule Lookahead**\n"
             "Since you enabled train integration, how many days ahead of a "
             "member's birthday should the bot pre-populate them on the train "
             "schedule? This only applies to train-integration auto-placement; "
@@ -4794,7 +4857,7 @@ async def run_birthday_setup(interaction: discord.Interaction, bot):
     # ── Step 8: Birthday reminders ─────────────────────────────────────────────
     remind_view = YesNoView()
     await channel.send(
-        "**Step 8 of 8 — Birthday Reminders**\n"
+        "**Step 8 of 9 — Birthday Reminders**\n"
         "Should the bot post a message in Discord on a member's birthday?\n"
         f"*(It will post: \"🎂 Today is **[name]**'s birthday!\")*",
         view=remind_view,
@@ -4823,7 +4886,7 @@ async def run_birthday_setup(interaction: discord.Interaction, bot):
             guild=interaction.guild,
         )
         await channel.send(
-            "**Step 8a of 8 — Birthday Announcement Channel**\n"
+            "**Step 8a of 9 — Birthday Announcement Channel**\n"
             "Which channel should birthday announcements be posted in?",
             view=remind_ch_view,
         )
@@ -4846,7 +4909,7 @@ async def run_birthday_setup(interaction: discord.Interaction, bot):
         while True:
             time_raw = await ask_keep_or_change(
                 channel,
-                f"**Step 8b of 8 — Reminder Time**\n"
+                f"**Step 8b of 9 — Reminder Time**\n"
                 f"What time should birthday announcements be posted? *(in {tz_label})*\n"
                 f"*(e.g. `8:00am`, `12:00pm`)*",
                 default="8:00am",
@@ -4878,6 +4941,33 @@ async def run_birthday_setup(interaction: discord.Interaction, bot):
                 f"Try `8:00am`, `12:00pm`, or `08:00`. Let's try once more."
             )
 
+    # ── Step 9: Birthday DM body (💎 Premium) ─────────────────────────────────
+    # Customisable body of the per-member birthday DM that fires alongside
+    # the channel announcement on Premium guilds. Free guilds can configure
+    # now — it just won't fire until they have Premium + Member Roster Sync
+    # AND a Discord ID column wired up in the birthday sheet.
+    birthday_dm_message = ""
+    if reminders_enabled:
+        from train_cog import DEFAULT_BIRTHDAY_DM
+        saved_birthday_dm = (current.get("dm_message") or "").strip()
+        bday_dm_input = await ask_keep_or_change(
+            channel,
+            "**Step 9 of 9 — Birthday DM Body (💎 Premium)**\n"
+            "When a birthday fires, the bot also DMs the member directly with a personal "
+            "note. Free guilds can configure this now — it just won't fire until you have "
+            "Premium + Member Roster Sync + a Discord ID column in your birthday sheet.\n\n"
+            "Use `{name}` as a placeholder for the member's name.",
+            default=DEFAULT_BIRTHDAY_DM,
+            current=saved_birthday_dm,
+            modal_title="Birthday DM Body",
+            modal_label="DM body (max 1000 chars)",
+            timeout_cmd="setup_birthdays",
+            cancel_event=cancel_event,
+        )
+        if bday_dm_input is None:
+            return
+        birthday_dm_message = "" if bday_dm_input == DEFAULT_BIRTHDAY_DM else bday_dm_input
+
     # ── Save ───────────────────────────────────────────────────────────────────
     from config import save_birthday_config
     save_birthday_config(
@@ -4894,6 +4984,7 @@ async def run_birthday_setup(interaction: discord.Interaction, bot):
         reminders_enabled   = reminders_enabled,
         reminder_channel_id = reminder_channel_id,
         reminder_time       = reminder_time,
+        dm_message          = birthday_dm_message,
     )
 
     embed = discord.Embed(title="✅ Birthday Tracking Configured", color=discord.Color.green())

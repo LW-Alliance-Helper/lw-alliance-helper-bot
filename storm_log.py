@@ -1012,7 +1012,9 @@ async def _send_storm_reminder(bot, interaction: discord.Interaction, event_type
 
     import premium
     import dm
-    from config import get_member_roster_config, get_member_roster_sheet
+    from config import (
+        get_member_roster_config, get_member_roster_sheet, get_storm_config,
+    )
 
     if not await premium.is_premium(
         interaction.guild_id, interaction=interaction, bot=bot,
@@ -1053,9 +1055,18 @@ async def _send_storm_reminder(bot, interaction: discord.Interaction, event_type
         )
         return
 
-    did_col = roster_cfg["discord_id_col"]
-    sent    = 0
-    skipped = 0
+    # Resolve the DM body — prefer the alliance's configured template,
+    # fall back to the bot's default. `{name}` is the only supported
+    # placeholder; the per-event-type config separates DS from CS so we
+    # don't need a {label} placeholder.
+    storm_cfg    = get_storm_config(interaction.guild_id, event_type) or {}
+    dm_body_tmpl = (storm_cfg.get("dm_reminder_message") or "").strip() \
+                   or DEFAULT_STORM_REMINDER_DM.format(label=label)
+
+    name_col = roster_cfg.get("name_col", 1)
+    did_col  = roster_cfg["discord_id_col"]
+    sent     = 0
+    skipped  = 0
     for row in rows[1:]:
         if did_col >= len(row):
             continue
@@ -1063,13 +1074,10 @@ async def _send_storm_reminder(bot, interaction: discord.Interaction, event_type
         if not did:
             skipped += 1
             continue
+        member_name = row[name_col].strip() if name_col < len(row) else ""
         ok = await dm.send_dm_to_id(
             bot, interaction.guild_id, did,
-            content=(
-                f"⚔️ **{label} reminder** — your alliance is preparing for this week's "
-                f"{label}. Please confirm your participation in Discord and check the "
-                f"team channel for your zone assignment. Good luck out there!"
-            ),
+            content=_render_dm_body(dm_body_tmpl, name=member_name),
         )
         if ok:
             sent += 1
@@ -1081,6 +1089,35 @@ async def _send_storm_reminder(bot, interaction: discord.Interaction, event_type
         f"{skipped} skipped.",
         ephemeral=True,
     )
+
+
+# ── Default DM body + safe template rendering ────────────────────────────────
+
+# Hardcoded fallback when a guild hasn't configured its own DM body via
+# /setup_desertstorm or /setup_canyonstorm. `{label}` is substituted at
+# call time from the event_type so DS and CS share one default. The only
+# user-supplied placeholder is `{name}` (member's roster name).
+DEFAULT_STORM_REMINDER_DM = (
+    "⚔️ **{label} reminder** — your alliance is preparing for this week's "
+    "{label}. Please confirm your participation in Discord and check the "
+    "team channel for your zone assignment. Good luck out there!"
+)
+
+
+def _render_dm_body(template: str, *, name: str = "") -> str:
+    """Substitute `{name}` into a user-configured DM body. Tolerates
+    missing or unknown placeholders so a typo in the configured template
+    doesn't crash the entire reminder loop — the typo just renders as
+    literal text in the DM."""
+    class _SafeDict(dict):
+        def __missing__(self, key):
+            return "{" + key + "}"
+    try:
+        return template.format_map(_SafeDict(name=name or ""))
+    except Exception:
+        # Catches odd format spec issues (`{name:weird-spec}`); fall back
+        # to substring replacement so the alliance still sees something.
+        return template.replace("{name}", name or "")
 
 
 async def _show_storm_log(interaction: discord.Interaction, event: str, date: str | None):

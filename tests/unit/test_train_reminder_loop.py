@@ -79,12 +79,13 @@ def _make_cfg(timezone: str = "America/New_York"):
 
 def _train_cfg(*, reminders_enabled: int = 1, reminder_time: str = "22:00",
                reminder_channel_id: int = REMINDER_CHAN_ID,
-               blurbs_enabled: int = 1):
+               blurbs_enabled: int = 1, dm_message: str = ""):
     return {
         "reminders_enabled":   reminders_enabled,
         "reminder_time":       reminder_time,
         "reminder_channel_id": reminder_channel_id,
         "blurbs_enabled":      blurbs_enabled,
+        "dm_message":          dm_message,
     }
 
 
@@ -298,6 +299,29 @@ class TestTrainReminderPremiumDM:
         assert args[1] == GUILD_ID
         assert args[2] == "alice"
         assert "today's train is for you" in kwargs["content"]
+
+    @pytest.mark.asyncio
+    async def test_dm_uses_configured_template_when_set(self):
+        """When `guild_train_config.dm_message` is non-empty, the
+        Premium DM uses that text (with `{name}` substituted) instead
+        of the hardcoded default."""
+        cog = _make_cog()
+        chan = AsyncMock(); chan.send = AsyncMock()
+        today_iso = date_cls.today().isoformat()
+
+        custom = "Hey {name}, train day! Don't forget to fill it out."
+        send_dm_spy = await _run_loop(
+            cog,
+            now_in_guild_tz=datetime(2026, 5, 15, 22, 0, tzinfo=ET),
+            schedule={today_iso: {"name": "alice"}},
+            train_cfg=_train_cfg(dm_message=custom),
+            channels={REMINDER_CHAN_ID: chan},
+        )
+
+        body = send_dm_spy.await_args.kwargs["content"]
+        assert body == "Hey alice, train day! Don't forget to fill it out."
+        # Default copy must NOT bleed through.
+        assert "Heads up" not in body
 
 
 # ── Daily reset ──────────────────────────────────────────────────────────────

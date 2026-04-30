@@ -159,7 +159,10 @@ def init_db():
             )
         """)
 
-        # guild_train_config — per-guild train schedule settings
+        # guild_train_config — per-guild train schedule settings.
+        # `dm_message` is the body of the Premium DM-to-assignee that fires
+        # alongside the channel reminder; empty string means "use the
+        # hardcoded default in train_cog.py". Supports `{name}` placeholder.
         conn.execute("""
             CREATE TABLE IF NOT EXISTS guild_train_config (
                 guild_id             INTEGER PRIMARY KEY,
@@ -173,7 +176,8 @@ def init_db():
                 default_tone         TEXT    DEFAULT '',
                 reminders_enabled    INTEGER DEFAULT 1,
                 reminder_channel_id  INTEGER DEFAULT 0,
-                reminder_time        TEXT    DEFAULT '22:00'
+                reminder_time        TEXT    DEFAULT '22:00',
+                dm_message           TEXT    DEFAULT ''
             )
         """)
         conn.commit()
@@ -224,7 +228,10 @@ def init_db():
         """)
         conn.commit()
 
-        # guild_birthday_config — per-guild birthday settings
+        # guild_birthday_config — per-guild birthday settings.
+        # `dm_message` is the body of the Premium birthday DM that fires
+        # alongside the channel reminder; empty string means "use the
+        # hardcoded default in train_cog.py". Supports `{name}` placeholder.
         conn.execute("""
             CREATE TABLE IF NOT EXISTS guild_birthday_config (
                 guild_id             INTEGER PRIMARY KEY,
@@ -239,7 +246,8 @@ def init_db():
                 lookahead_days       INTEGER DEFAULT 14,
                 reminders_enabled    INTEGER DEFAULT 0,
                 reminder_channel_id  INTEGER DEFAULT 0,
-                reminder_time        TEXT    DEFAULT '08:00'
+                reminder_time        TEXT    DEFAULT '08:00',
+                dm_message           TEXT    DEFAULT ''
             )
         """)
         conn.commit()
@@ -268,6 +276,10 @@ def init_db():
         # guild_storm_config — per-guild DS/CS mail templates and time options.
         # `templates_json` and `default_template` support multiple named
         # templates per (guild, event_type) for premium subscribers.
+        # `dm_reminder_message` is the body of the Premium DM that fires when
+        # leadership runs `/desertstorm_remind` or `/canyonstorm_remind`;
+        # empty string means "use the hardcoded default in storm_log.py".
+        # Supports `{name}` placeholder.
         conn.execute("""
             CREATE TABLE IF NOT EXISTS guild_storm_config (
                 guild_id             INTEGER NOT NULL,
@@ -285,6 +297,7 @@ def init_db():
                 timezone             TEXT    DEFAULT 'America/New_York',
                 log_channel_id       INTEGER DEFAULT 0,
                 post_channel_id      INTEGER DEFAULT 0,
+                dm_reminder_message  TEXT    DEFAULT '',
                 PRIMARY KEY (guild_id, event_type)
             )
         """)
@@ -332,6 +345,9 @@ def init_db():
             ("participation_roster_name_col", "INTEGER DEFAULT 0"),
             ("participation_roster_alias_col","INTEGER DEFAULT -1"),
             ("participation_roster_start_row","INTEGER DEFAULT 2"),
+            # Premium /desertstorm_remind / /canyonstorm_remind DM body
+            # (empty → hardcoded default in storm_log.py).
+            ("dm_reminder_message",           "TEXT    DEFAULT ''"),
         ]:
             try:
                 conn.execute(f"ALTER TABLE guild_storm_config ADD COLUMN {col} {definition}")
@@ -387,6 +403,8 @@ def init_db():
             ("reminder_time",       "TEXT DEFAULT '22:00'"),
             ("templates_json",      "TEXT DEFAULT '[]'"),
             ("default_template",    "TEXT DEFAULT 'Default'"),
+            # Premium DM-to-assignee body (empty → hardcoded default in train_cog.py)
+            ("dm_message",          "TEXT DEFAULT ''"),
         ]:
             try:
                 conn.execute(f"ALTER TABLE guild_train_config ADD COLUMN {col} {definition}")
@@ -403,6 +421,8 @@ def init_db():
             ("reminders_enabled",   "INTEGER DEFAULT 0"),
             ("reminder_channel_id", "INTEGER DEFAULT 0"),
             ("reminder_time",       "TEXT DEFAULT '08:00'"),
+            # Premium birthday DM body (empty → hardcoded default in train_cog.py)
+            ("dm_message",          "TEXT DEFAULT ''"),
         ]:
             try:
                 conn.execute(f"ALTER TABLE guild_birthday_config ADD COLUMN {col} {definition}")
@@ -624,6 +644,7 @@ def get_storm_config(guild_id: int, event_type: str) -> dict:
         "time_option_2_server": "",
         "timezone":             "America/New_York",
         "post_channel_id":      0,
+        "dm_reminder_message":  "",
     }
     return _normalize_storm_templates(fallback, event_type)
 
@@ -635,7 +656,8 @@ def save_storm_config(guild_id: int, event_type: str, tab_name: str,
                       timezone: str, log_channel_id: int = 0,
                       templates: list | None = None,
                       default_template: str = "Default",
-                      post_channel_id: int = 0):
+                      post_channel_id: int = 0,
+                      dm_reminder_message: str = ""):
     """
     Insert or replace a guild's storm config.
 
@@ -644,6 +666,11 @@ def save_storm_config(guild_id: int, event_type: str, tab_name: str,
     "Default" entry. Premium callers may pass a list of named templates.
     `post_channel_id` is the channel where /[event]_draft will post the
     final mail when leadership clicks "Post & Copy".
+
+    `dm_reminder_message` is the body of the Premium DM that fires when
+    leadership runs `/desertstorm_remind` or `/canyonstorm_remind`. Empty
+    string means "use the hardcoded default in storm_log.py". Supports the
+    `{name}` placeholder.
     """
     import json
     if templates is None:
@@ -659,8 +686,8 @@ def save_storm_config(guild_id: int, event_type: str, tab_name: str,
             "(guild_id, event_type, tab_name, mail_template, templates_json, default_template, "
             "time_option_1_label, time_option_1_local, time_option_1_server, "
             "time_option_2_label, time_option_2_local, time_option_2_server, "
-            "timezone, log_channel_id, post_channel_id) "
-            "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?) "
+            "timezone, log_channel_id, post_channel_id, dm_reminder_message) "
+            "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?) "
             "ON CONFLICT(guild_id, event_type) DO UPDATE SET "
             "tab_name=excluded.tab_name, mail_template=excluded.mail_template, "
             "templates_json=excluded.templates_json, "
@@ -673,10 +700,11 @@ def save_storm_config(guild_id: int, event_type: str, tab_name: str,
             "time_option_2_server=excluded.time_option_2_server, "
             "timezone=excluded.timezone, "
             "log_channel_id=excluded.log_channel_id, "
-            "post_channel_id=excluded.post_channel_id",
+            "post_channel_id=excluded.post_channel_id, "
+            "dm_reminder_message=excluded.dm_reminder_message",
             (guild_id, event_type, tab_name, default_text, templates_json, default_template,
              t1_label, t1_local, t1_server, t2_label, t2_local, t2_server,
-             timezone, log_channel_id, post_channel_id)
+             timezone, log_channel_id, post_channel_id, dm_reminder_message)
         )
         conn.commit()
 
@@ -1161,6 +1189,7 @@ def get_birthday_config(guild_id: int) -> dict:
         "reminders_enabled":   0,
         "reminder_channel_id": 0,
         "reminder_time":       "08:00",
+        "dm_message":          "",
     }
 
 
@@ -1169,15 +1198,16 @@ def save_birthday_config(guild_id: int, tab_name: str, name_col: int,
                          data_start_row: int = 2, enabled: int = 1,
                          train_integration: int = 0, flexible_placement: int = 1,
                          lookahead_days: int = 14, reminders_enabled: int = 0,
-                         reminder_channel_id: int = 0, reminder_time: str = "08:00"):
+                         reminder_channel_id: int = 0, reminder_time: str = "08:00",
+                         dm_message: str = ""):
     """Insert or replace a guild's birthday config."""
     with _get_conn() as conn:
         conn.execute(
             "INSERT INTO guild_birthday_config "
             "(guild_id, tab_name, name_col, birthday_col, discord_id_col, data_start_row, "
             "enabled, train_integration, flexible_placement, lookahead_days, "
-            "reminders_enabled, reminder_channel_id, reminder_time) "
-            "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?) "
+            "reminders_enabled, reminder_channel_id, reminder_time, dm_message) "
+            "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?) "
             "ON CONFLICT(guild_id) DO UPDATE SET "
             "tab_name=excluded.tab_name, name_col=excluded.name_col, "
             "birthday_col=excluded.birthday_col, discord_id_col=excluded.discord_id_col, "
@@ -1187,10 +1217,11 @@ def save_birthday_config(guild_id: int, tab_name: str, name_col: int,
             "lookahead_days=excluded.lookahead_days, "
             "reminders_enabled=excluded.reminders_enabled, "
             "reminder_channel_id=excluded.reminder_channel_id, "
-            "reminder_time=excluded.reminder_time",
+            "reminder_time=excluded.reminder_time, "
+            "dm_message=excluded.dm_message",
             (guild_id, tab_name, name_col, birthday_col, discord_id_col, data_start_row,
              enabled, train_integration, flexible_placement, lookahead_days,
-             reminders_enabled, reminder_channel_id, reminder_time)
+             reminders_enabled, reminder_channel_id, reminder_time, dm_message)
         )
         conn.commit()
 
@@ -1382,6 +1413,7 @@ def get_train_config(guild_id: int) -> dict:
         "reminders_enabled":   1,
         "reminder_channel_id": 0,
         "reminder_time":       "22:00",
+        "dm_message":          "",
     }
     return _normalize_train_templates(fallback)
 
@@ -1390,7 +1422,8 @@ def save_train_config(guild_id: int, tab_name: str, themes: list,
                       tones: list, prompt_template: str, default_tone: str,
                       blurbs_enabled: int = 1, reminders_enabled: int = 1,
                       reminder_channel_id: int = 0, reminder_time: str = "22:00",
-                      templates: list | None = None, default_template: str = "Default"):
+                      templates: list | None = None, default_template: str = "Default",
+                      dm_message: str = ""):
     """
     Insert or replace a guild's train config.
 
@@ -1398,6 +1431,10 @@ def save_train_config(guild_id: int, tab_name: str, themes: list,
     single string). When `templates` is None, that string is automatically
     wrapped as a single-entry list named "Default". Premium callers can pass
     `templates=[{name, template}, ...]` directly.
+
+    `dm_message` is the body of the Premium DM-to-assignee that fires
+    alongside the channel reminder. Empty string means "use the hardcoded
+    default". Supports the `{name}` placeholder.
     """
     import json
     if templates is None:
@@ -1414,8 +1451,8 @@ def save_train_config(guild_id: int, tab_name: str, themes: list,
             "INSERT INTO guild_train_config "
             "(guild_id, tab_name, blurbs_enabled, themes, tones, prompt_template, "
             " templates_json, default_template, default_tone, "
-            " reminders_enabled, reminder_channel_id, reminder_time) "
-            "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?) "
+            " reminders_enabled, reminder_channel_id, reminder_time, dm_message) "
+            "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?) "
             "ON CONFLICT(guild_id) DO UPDATE SET "
             "tab_name=excluded.tab_name, blurbs_enabled=excluded.blurbs_enabled, "
             "themes=excluded.themes, tones=excluded.tones, "
@@ -1425,10 +1462,11 @@ def save_train_config(guild_id: int, tab_name: str, themes: list,
             "default_tone=excluded.default_tone, "
             "reminders_enabled=excluded.reminders_enabled, "
             "reminder_channel_id=excluded.reminder_channel_id, "
-            "reminder_time=excluded.reminder_time",
+            "reminder_time=excluded.reminder_time, "
+            "dm_message=excluded.dm_message",
             (guild_id, tab_name, blurbs_enabled, json.dumps(themes), json.dumps(tones),
              default_text, templates_json, default_template, default_tone,
-             reminders_enabled, reminder_channel_id, reminder_time)
+             reminders_enabled, reminder_channel_id, reminder_time, dm_message)
         )
         conn.commit()
 

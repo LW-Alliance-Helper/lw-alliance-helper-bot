@@ -105,6 +105,7 @@ The bot tracks the daily alliance train assignment and (when configured) generat
 - [ ] If a blurb template is configured, test the **Generate Prompt** button. Note whether the resulting prompt is usable as-is.
 - [ ] Try the **Clear** button and cancel out of the confirmation. Note whether the cancel-result message is clear.
 - [ ] Run `/train_log` to see past entries. Note whether the rendered output is easy to scan.
+- [ ] Run `/setup_train`. The final step is **Step 8 of 8 — Train DM Body (💎 Premium)** with `{name}` as a placeholder. Note whether the prompt makes clear that this fires alongside the channel reminder when the assigned member is on Premium + Member Roster Sync.
 
 ---
 
@@ -114,6 +115,7 @@ If birthdays are configured, the bot can announce them and (optionally) add them
 
 - [ ] Run `/birthdays`. Review the lookahead window and list format.
 - [ ] If birthday → train integration is enabled, run `/train_addbirthdays` and verify the train schedule shows the resulting additions.
+- [ ] Run `/setup_birthdays` (only if reminders are enabled). The final step is **Step 9 of 9 — Birthday DM Body (💎 Premium)** with `{name}` as a placeholder. Try **Use default** and **Define my own** to see how each lands.
 
 ---
 
@@ -185,7 +187,7 @@ Once setup is confirmed, the relevant tasks are:
 
 - [ ] Run `/setup_members` to walk the roster-sync wizard. The final embed reports how many members were written on the initial sync.
 - [ ] Run `/sync_members` and verify the reported member count **matches the actual size of the test server** (excluding bots). If the count is `0` or wildly low, please flag it — it usually means the bot is missing a server-level permission.
-- [ ] Run `/desertstorm_remind` and `/canyonstorm_remind` to fire DM reminders. Review the DM body for tone and clarity.
+- [ ] Run `/desertstorm_remind` and `/canyonstorm_remind` to fire DM reminders. Review the DM body for tone and clarity. **The body is alliance-customisable** — if you re-run `/setup_desertstorm` and change the **Step 7 of 7 — Reminder DM** body, the next `/desertstorm_remind` should pick up the new text. Try `{name}` as a placeholder to confirm member-name substitution works.
 - [ ] In `/survey_remind`, set up a **scheduled** reminder (DM-via-roster delivery) for a time within the next several minutes. Wait for it to fire. Review the DM body.
 - [ ] **Channel/thread destinations.** When a Premium guild's wizard asks for a channel (e.g. an announcement channel), there should be a **📢 Channel** / **🧵 Thread** chooser before the actual picker. Try both paths — pick a thread, run the wizard to completion, and verify the bot posts to the chosen thread.
 

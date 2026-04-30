@@ -241,6 +241,7 @@ class TestStormReminderEventTypeLabel:
         send_spy = AsyncMock(return_value=True)
         with patch("config.get_member_roster_config", return_value=_enabled_roster_cfg()), \
              patch("config.get_member_roster_sheet", return_value=_make_sheet(sheet_rows)), \
+             patch("config.get_storm_config", return_value={"dm_reminder_message": ""}), \
              patch("dm.send_dm_to_id", send_spy):
             await _send_storm_reminder(MagicMock(), interaction, "DS")
 
@@ -260,12 +261,95 @@ class TestStormReminderEventTypeLabel:
         send_spy = AsyncMock(return_value=True)
         with patch("config.get_member_roster_config", return_value=_enabled_roster_cfg()), \
              patch("config.get_member_roster_sheet", return_value=_make_sheet(sheet_rows)), \
+             patch("config.get_storm_config", return_value={"dm_reminder_message": ""}), \
              patch("dm.send_dm_to_id", send_spy):
             await _send_storm_reminder(MagicMock(), interaction, "CS")
 
         body = send_spy.await_args.kwargs["content"]
         assert "Canyon Storm" in body
         assert "Desert Storm" not in body
+
+
+# ── Custom DM-reminder template ──────────────────────────────────────────────
+
+class TestStormReminderCustomTemplate:
+    """When an alliance configures `dm_reminder_message` via
+    /setup_desertstorm or /setup_canyonstorm, the reminder uses that
+    text instead of the bot's hardcoded default — and `{name}` gets
+    substituted with the member's roster name."""
+
+    @pytest.mark.asyncio
+    async def test_custom_template_replaces_default(self, _bypass_guard):
+        from storm_log import _send_storm_reminder
+        interaction = _make_interaction()
+
+        sheet_rows = [
+            ["Discord ID", "Name", "Display Name", "Joined", "Roles"],
+            ["111", "alice", "Alice", "", ""],
+        ]
+        custom = "Hey {name}, suit up — DS in 30 minutes!"
+        send_spy = AsyncMock(return_value=True)
+        with patch("config.get_member_roster_config", return_value=_enabled_roster_cfg()), \
+             patch("config.get_member_roster_sheet", return_value=_make_sheet(sheet_rows)), \
+             patch("config.get_storm_config", return_value={"dm_reminder_message": custom}), \
+             patch("dm.send_dm_to_id", send_spy):
+            await _send_storm_reminder(MagicMock(), interaction, "DS")
+
+        body = send_spy.await_args.kwargs["content"]
+        assert body == "Hey alice, suit up — DS in 30 minutes!"
+        # Default copy must NOT leak through.
+        assert "Please confirm your participation" not in body
+
+    @pytest.mark.asyncio
+    async def test_each_member_gets_their_own_name_substituted(self, _bypass_guard):
+        """Multi-row roster — every DM should reflect the row's own name."""
+        from storm_log import _send_storm_reminder
+        interaction = _make_interaction()
+
+        sheet_rows = [
+            ["Discord ID", "Name", "Display Name", "Joined", "Roles"],
+            ["111", "alice", "Alice", "", ""],
+            ["222", "bob",   "Bob",   "", ""],
+            ["333", "carol", "Carol", "", ""],
+        ]
+        send_spy = AsyncMock(return_value=True)
+        custom = "Reminder for {name}"
+        with patch("config.get_member_roster_config", return_value=_enabled_roster_cfg()), \
+             patch("config.get_member_roster_sheet", return_value=_make_sheet(sheet_rows)), \
+             patch("config.get_storm_config", return_value={"dm_reminder_message": custom}), \
+             patch("dm.send_dm_to_id", send_spy):
+            await _send_storm_reminder(MagicMock(), interaction, "DS")
+
+        bodies = [c.kwargs["content"] for c in send_spy.await_args_list]
+        assert bodies == [
+            "Reminder for alice",
+            "Reminder for bob",
+            "Reminder for carol",
+        ]
+
+    @pytest.mark.asyncio
+    async def test_typo_in_template_does_not_crash_reminder(self, _bypass_guard):
+        """User puts `{nme}` in their template by accident. The DM
+        sends with literal `{nme}` text instead of crashing the loop."""
+        from storm_log import _send_storm_reminder
+        interaction = _make_interaction()
+
+        sheet_rows = [
+            ["Discord ID", "Name", "Display Name", "Joined", "Roles"],
+            ["111", "alice", "Alice", "", ""],
+        ]
+        broken = "Hey {nme}, ready?"
+        send_spy = AsyncMock(return_value=True)
+        with patch("config.get_member_roster_config", return_value=_enabled_roster_cfg()), \
+             patch("config.get_member_roster_sheet", return_value=_make_sheet(sheet_rows)), \
+             patch("config.get_storm_config", return_value={"dm_reminder_message": broken}), \
+             patch("dm.send_dm_to_id", send_spy):
+            await _send_storm_reminder(MagicMock(), interaction, "DS")
+
+        body = send_spy.await_args.kwargs["content"]
+        assert body == "Hey {nme}, ready?"
+        # The DM still went out (no crash, count == 1).
+        assert send_spy.await_count == 1
 
 
 # ── Sheet read failure ───────────────────────────────────────────────────────

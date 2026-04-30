@@ -137,6 +137,42 @@ After this work, OGV's real guild ID appears only in:
   `✅ Keep current: <saved>` / `↩️ Use default: <hardcoded>` /
   `✏️ Define my own`. Two-button layout retained when they match.
 
+### Added — alliance-customisable DM bodies
+
+Three Premium DM features (birthday DMs, train DMs, storm participation
+reminders) had hardcoded English bodies that no alliance could change.
+Every other text the bot sends — survey questions, event blurbs, storm
+mail templates, announcement templates — is alliance-configurable.
+This was a gap, and a particularly painful one for non-English alliances:
+member-facing DMs go to private channels where translation bots in the
+guild can't help. Closing the gap unlocks the highest-value localization
+win without committing to full bot i18n.
+
+- **`guild_birthday_config.dm_message`** — body of the per-member
+  birthday DM. Configured via a new Step 9 in `/setup_birthdays`
+  (Premium-labelled but visible on free tier so alliances can pre-
+  configure before upgrading). Supports `{name}` placeholder.
+- **`guild_train_config.dm_message`** — body of the train DM that fires
+  alongside the channel reminder. New Step 8 in `/setup_train`. Same
+  `{name}` placeholder.
+- **`guild_storm_config.dm_reminder_message`** — body of the DM that
+  fires on `/desertstorm_remind` / `/canyonstorm_remind`. New Step 7
+  in `/setup_desertstorm` / `/setup_canyonstorm`. Per-event-type, so
+  DS and CS can have different copy. Supports `{name}` placeholder.
+
+Empty stored value = "use the bot's hardcoded default", which means
+future tweaks to the default text reach existing alliances automatically
+unless they've explicitly customised. Typo-tolerant: an unknown
+placeholder like `{nme}` renders literally instead of crashing the
+reminder loop. Three new wizard step prompts ask "Use default" or
+"Keep current" via the existing `ask_keep_or_change` helper.
+
+25 new tests in `tests/unit/test_dm_templates.py` (the shared
+`_render_dm_body` helper — `{name}` substitution, unknown-placeholder
+tolerance, format-spec edge cases) plus added paths in
+`test_storm_remind.py` and `test_train_reminder_loop.py` covering
+the configured-template flow end-to-end. 501 passed (was 476).
+
 ### Added — post-strip launch readiness
 
 - **Next-snapshot date in `/setup_growth` and `/growth`.** After

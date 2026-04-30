@@ -34,6 +34,33 @@ from train import (
 )
 
 
+# ── Default DM bodies (fallbacks when an alliance hasn't customised) ──────────
+
+DEFAULT_BIRTHDAY_DM = (
+    "🎂 Happy birthday, **{name}**! Wishing you a great day "
+    "from everyone at the alliance."
+)
+
+DEFAULT_TRAIN_DM = (
+    "🚂 Heads up — **today's train is for you!** "
+    "Leadership has been notified, so look out for the announcement."
+)
+
+
+def _render_dm_body(template: str, *, name: str = "") -> str:
+    """Substitute `{name}` into a user-configured DM body. Tolerates
+    missing or unknown placeholders so a typo in the configured template
+    doesn't crash the entire reminder loop — the typo just renders as
+    literal text in the DM."""
+    class _SafeDict(dict):
+        def __missing__(self, key):
+            return "{" + key + "}"
+    try:
+        return template.format_map(_SafeDict(name=name or ""))
+    except Exception:
+        return template.replace("{name}", name or "")
+
+
 # Alias used inside slash commands so the `date` parameter name doesn't shadow it
 date_cls = date
 
@@ -399,6 +426,12 @@ class TrainCog(commands.Cog):
                 today        = _d2.today()
                 todays_bdays = [m for m in members if m["month"] == today.month and m["day"] == today.day]
 
+                # Resolve the alliance's configured DM template once per
+                # guild — falling back to the bot's hardcoded default if
+                # /setup_birthdays hasn't been run since dm_message landed.
+                bday_dm_tmpl = (bcfg.get("dm_message") or "").strip() \
+                               or DEFAULT_BIRTHDAY_DM
+
                 for member in todays_bdays:
                     name = member.get("name", "a member")
                     # @mention if Discord ID available (from the birthday sheet)
@@ -414,10 +447,7 @@ class TrainCog(commands.Cog):
                         import dm
                         await dm.send_dm_to_id(
                             self.bot, guild.id, discord_id,
-                            content=(
-                                f"🎂 Happy birthday, **{name}**! Wishing you a great day "
-                                f"from everyone at the alliance."
-                            ),
+                            content=_render_dm_body(bday_dm_tmpl, name=name),
                         )
 
         except Exception as e:
@@ -490,13 +520,14 @@ class TrainCog(commands.Cog):
             print(f"[TRAIN] Reminder sent for guild {guild.id} — {name} on {today_str}")
 
             # 💎 Premium: also DM the member assigned to today's train.
+            # Body is alliance-configurable via /setup_train; falls back
+            # to the bot's hardcoded default if not customised.
+            train_dm_tmpl = (train_cfg.get("dm_message") or "").strip() \
+                            or DEFAULT_TRAIN_DM
             import dm
             await dm.send_dm(
                 self.bot, guild.id, name,
-                content=(
-                    f"🚂 Heads up — **today's train is for you!** "
-                    f"Leadership has been notified, so look out for the announcement."
-                ),
+                content=_render_dm_body(train_dm_tmpl, name=name),
             )
 
     @check_reminder.before_loop

@@ -173,11 +173,25 @@ def make_et_datetime(run_date: date, hour: int, minute: int) -> datetime:
 # and the scheduler main loop for the construction sites.
 
 
-def build_announcement(event_list: list[dict], notes: str = "", role_mention: str = "@everyone") -> str:
+def build_announcement(event_list: list[dict], notes: str = "",
+                       role_mention: str = "@everyone",
+                       guild_id: int | None = None) -> str:
     """
     Craft the full announcement message from the event list.
-    Uses blurb from the event dict if present (database-driven),
-    falls back to EVENT_LIBRARY for backward compatibility.
+
+    Resolution order for each event's blurb:
+      1. The event dict's own "blurb" (set by the daily-draft scheduler when
+         it builds event_list straight from get_guild_events).
+      2. If `guild_id` is supplied — re-look up the configured blurb via
+         `_resolve_event_info`. This catches the case where event_list
+         was assembled by an older code path that forgot to populate
+         "blurb" (the EventEditorView's Add Event handler used to do this,
+         which made manually-added events render with the lowercase
+         short_key fallback even though the user had configured a custom
+         blurb in /setup_events).
+      3. Hardcoded EVENT_LIBRARY (legacy guilds).
+      4. Generic f-string `"<key> at {time} ({server_time} Server Time)."`.
+
     Placeholders: {time} = local time, {server_time} = UTC/Server Time
     """
     bullet_lines = []
@@ -187,8 +201,9 @@ def build_announcement(event_list: list[dict], notes: str = "", role_mention: st
         et_str = format_et(dt)
         sv_str = to_server_time_str(dt)
 
-        # Use stored blurb if available, otherwise fall back to EVENT_LIBRARY
         blurb = event.get("blurb") or ""
+        if not blurb and guild_id is not None:
+            blurb = (_resolve_event_info(key, guild_id).get("blurb") or "")
         if not blurb:
             lib   = EVENT_LIBRARY.get(key, {})
             blurb = lib.get("blurb", f"{key} at {{time}} ({{server_time}} Server Time).")
@@ -373,7 +388,17 @@ class EventEditorView(discord.ui.View):
                 if parsed:
                     h, m = parsed
                     dt = make_et_datetime(self.run_date, h, m)
-                    self.event_list.append({"key": chosen_key, "dt": dt})
+                    # Include name + blurb from the resolved event info so
+                    # build_announcement can render the configured custom
+                    # message. Without these, the announcement falls through
+                    # to a lowercase-short_key f-string fallback ("glacieradon
+                    # at 10:30am" instead of the user's saved blurb).
+                    self.event_list.append({
+                        "key":   chosen_key,
+                        "name":  chosen_info.get("name", chosen_name),
+                        "dt":    dt,
+                        "blurb": chosen_info.get("blurb", ""),
+                    })
                     # Keep list sorted by time
                     self.event_list.sort(key=lambda e: e["dt"])
                     await channel.send(
@@ -584,7 +609,11 @@ class EventEditorView(discord.ui.View):
             from config import get_config
             cfg = get_config(self.guild_id)
             role_mention = cfg.role_mention if cfg else "@everyone"
-            announcement = build_announcement(self.event_list, self.notes, role_mention=role_mention)
+            announcement = build_announcement(
+                self.event_list, self.notes,
+                role_mention=role_mention,
+                guild_id=self.guild_id,
+            )
         except Exception as e:
             print(f"[SCHEDULER] Error building announcement: {e}")
             await interaction.followup.send(f"⚠️ Error building announcement: {e}", ephemeral=True)

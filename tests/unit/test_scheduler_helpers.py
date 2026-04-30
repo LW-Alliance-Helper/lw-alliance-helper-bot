@@ -116,3 +116,144 @@ class TestIsFriday:
     def test_not_friday(self):
         assert is_friday(date(2026, 4,  2)) is False  # Thursday
         assert is_friday(date(2026, 4,  4)) is False  # Saturday
+
+
+# ── build_announcement: blurb resolution ─────────────────────────────────────
+
+class TestBuildAnnouncementBlurb:
+    """Regression tests for the bug where a custom announcement blurb
+    configured via /setup_events showed up as the lowercase short_key
+    fallback in the daily draft (e.g. "glacieradon at 10:30am" instead of
+    "We will be doing Glacieradon...").
+
+    Root cause: the EventEditorView's "Add Event" handler appended only
+    {key, dt} to event_list — without `blurb` — so build_announcement's
+    `event.get("blurb") or ""` short-circuited to empty, and since the
+    user's `glacieradon` short_key isn't in the legacy EVENT_LIBRARY,
+    the final fallback was the f-string `f"{key} at {time} (...)"` —
+    rendering the lowercase key.
+    """
+
+    def _make_event(self, **kwargs):
+        from datetime import datetime
+        from zoneinfo import ZoneInfo
+        ET = ZoneInfo("America/New_York")
+        defaults = {
+            "key": "glacieradon",
+            "dt":  datetime(2026, 5, 1, 10, 30, tzinfo=ET),
+        }
+        defaults.update(kwargs)
+        return defaults
+
+    def test_uses_event_dict_blurb_when_present(self):
+        from scheduler import build_announcement
+        event = self._make_event(blurb="Custom blurb at {time} ({server_time}).")
+        msg = build_announcement([event])
+        assert "Custom blurb at" in msg
+        assert "Server Time" not in msg or "Custom blurb" in msg
+
+    def test_falls_back_to_resolve_event_info_when_blurb_missing(self, seeded_db):
+        """The bug: event_list dict has no 'blurb' key. With guild_id
+        passed, build_announcement should re-look-up the configured
+        blurb from guild_events."""
+        from scheduler import build_announcement
+        from config import save_guild_event
+        from tests.constants import TEST_GUILD_ID
+
+        save_guild_event(TEST_GUILD_ID, {
+            "short_key": "glacieradon",
+            "name":      "Glacieradon",
+            "timezone":  "America/New_York",
+            "default_time": "10:30",
+            "announcement_blurb":
+                "We will be doing Glacieradon at {time} ({server_time} Server Time)! "
+                "Remember to start with only 10 hits.",
+            "schedule_type": "manual",
+            "anchor_date":   "",
+            "interval_days": 3,
+            "draft_channel_id": 100,
+            "announcement_channel_id": 200,
+            "draft_time": "09:00",
+            "five_min_warning": 1,
+            "active": 1,
+        })
+
+        # Simulating the buggy add-event path: event_list dict lacks 'blurb'.
+        event = self._make_event()  # only key + dt
+        msg   = build_announcement([event], guild_id=TEST_GUILD_ID)
+
+        # The custom blurb must show up.
+        assert "We will be doing Glacieradon" in msg
+        assert "10 hits" in msg
+        # The lowercase short_key fallback must NOT be present.
+        assert "glacieradon at" not in msg, \
+            f"Bug regression: short_key fallback used despite saved blurb.\n{msg}"
+
+    def test_no_guild_id_falls_back_to_short_key_string(self):
+        """Backward-compat: callers that don't pass guild_id keep the
+        old behavior — fall through to EVENT_LIBRARY then the f-string."""
+        from scheduler import build_announcement
+        event = self._make_event()  # no blurb, key not in EVENT_LIBRARY
+        msg   = build_announcement([event])  # no guild_id
+        assert "glacieradon at" in msg
+
+    def test_legacy_event_library_keys_still_resolve(self):
+        """marauder/siege/etc. live in EVENT_LIBRARY for legacy guilds with
+        no per-guild events table. Verify those still render."""
+        from scheduler import build_announcement, EVENT_LIBRARY
+        if "marauder" not in EVENT_LIBRARY:
+            pytest.skip("marauder not in EVENT_LIBRARY")
+        event = self._make_event(key="marauder")
+        msg   = build_announcement([event])
+        # The hardcoded marauder blurb should render — no fallback f-string.
+        assert "marauder at 10:30am" not in msg.lower() or "Marauder" in msg
+
+
+# ── EventEditorView.add_event: regression ─────────────────────────────────────
+
+class TestEventEditorAddEventBlurb:
+    """The user-driven 'Add Event' button in the /events editor must
+    populate the event_list dict with the configured blurb so the
+    follow-up 'Build Announcement' click produces the right text. This
+    used to drop the blurb on the floor."""
+
+    def test_added_event_dict_carries_resolved_blurb(self, seeded_db):
+        """White-box: the dict appended by the add_event handler should
+        contain key/name/dt/blurb so build_announcement renders it
+        correctly, even when called without a guild_id fallback."""
+        from datetime import datetime
+        from zoneinfo import ZoneInfo
+        from config import save_guild_event
+        from scheduler import _resolve_event_info, build_announcement
+        from tests.constants import TEST_GUILD_ID
+
+        save_guild_event(TEST_GUILD_ID, {
+            "short_key": "test_event",
+            "name":      "Test Event",
+            "timezone":  "America/New_York",
+            "default_time": "10:00",
+            "announcement_blurb": "TEST_EVENT_BLURB at {time} ({server_time}).",
+            "schedule_type": "manual",
+            "anchor_date": "",
+            "interval_days": 3,
+            "draft_channel_id": 1,
+            "announcement_channel_id": 2,
+            "draft_time": "09:00",
+            "five_min_warning": 1,
+            "active": 1,
+        })
+
+        # Reproduce what the fixed add_event handler now does.
+        info = _resolve_event_info("test_event", TEST_GUILD_ID)
+        ET   = ZoneInfo("America/New_York")
+        event = {
+            "key":   "test_event",
+            "name":  info.get("name", "test_event"),
+            "dt":    datetime(2026, 5, 1, 10, 0, tzinfo=ET),
+            "blurb": info.get("blurb", ""),
+        }
+        assert event["blurb"], "Bug: resolved info has no blurb"
+
+        # And feeding that into build_announcement (no guild_id) renders it.
+        msg = build_announcement([event])
+        assert "TEST_EVENT_BLURB at" in msg

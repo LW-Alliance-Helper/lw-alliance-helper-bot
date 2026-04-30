@@ -164,6 +164,26 @@ class CreateChannelModal(discord.ui.Modal):
 
 
 class ChannelSelectStep(discord.ui.View):
+    """Picks a destination channel or thread for a wizard step.
+
+    Usual flow when both options are available (Premium guild with active
+    threads): start with two buttons — **📢 Channel** and **🧵 Thread** —
+    and reveal the appropriate select after the user picks. After picking,
+    a "Pick a {other} instead" button stays visible so the user can swap
+    if they chose the wrong type.
+
+    Used because Discord's native `ChannelSelect` silently drops thread
+    results when text-channel types are also in the picker (confirmed
+    via /admin_debug_channels in production). Splitting them into a
+    button-then-select flow guarantees both work.
+
+    Falls back to a single ChannelSelect when:
+      * `include_threads=False`, or
+      * a guild isn't passed, or
+      * the guild has no pickable threads (active, non-archived, in a
+        channel the bot can post in, not auto-generated).
+    """
+
     def __init__(
         self,
         placeholder: str,
@@ -171,6 +191,7 @@ class ChannelSelectStep(discord.ui.View):
         suggested_name: str = "",
         allow_create: bool = True,
         include_threads: bool = False,
+        guild: discord.Guild | None = None,
     ):
         super().__init__(timeout=WIZARD_TIMEOUT)
         self.selected_channel = None
@@ -178,82 +199,251 @@ class ChannelSelectStep(discord.ui.View):
         self.suggested_name   = suggested_name
         self.allow_create     = allow_create
 
-        types = list(channel_types) if channel_types else [discord.ChannelType.text]
-        if include_threads:
-            for t in (
+        # State carried across the button-driven flow.
+        self._placeholder      = placeholder
+        self._explicit_types   = channel_types
+        self._include_threads  = include_threads
+        self._guild            = guild
+        self._thread_lookup: dict[str, discord.Thread] = {}
+        self._pickable_threads: list[discord.Thread] = (
+            self._collect_pickable_threads(guild)
+            if (include_threads and guild is not None)
+            else []
+        )
+
+        # Decide initial state. If we have threads to offer, start with the
+        # button-driven choice. Otherwise just show the channel select
+        # straight away — same as the pre-fix behavior.
+        if self._pickable_threads:
+            self._render_initial_choice()
+        else:
+            self._render_channel_select(switchable=False)
+
+    # ── Initial state: two buttons ─────────────────────────────────────
+
+    def _render_initial_choice(self) -> None:
+        self.clear_items()
+
+        async def _on_channel(inter: discord.Interaction):
+            self._render_channel_select(switchable=True)
+            await inter.response.edit_message(view=self)
+
+        async def _on_thread(inter: discord.Interaction):
+            self._render_thread_select(switchable=True)
+            await inter.response.edit_message(view=self)
+
+        ch_btn = discord.ui.Button(
+            label="📢 Channel", style=discord.ButtonStyle.primary, row=0,
+        )
+        ch_btn.callback = _on_channel
+        self.add_item(ch_btn)
+
+        th_btn = discord.ui.Button(
+            label="🧵 Thread", style=discord.ButtonStyle.primary, row=0,
+        )
+        th_btn.callback = _on_thread
+        self.add_item(th_btn)
+
+    # ── Channel-select state ───────────────────────────────────────────
+
+    def _channel_types_for_select(self) -> list[discord.ChannelType]:
+        """Decide which channel_types to send to Discord's ChannelSelect.
+
+        When we have pickable threads, we use **text-only** here because
+        threads come from the manual Select in the other state. When we
+        don't have a guild (e.g. unit-test path), we fall back to the
+        old mixed-types list — which is what the existing tests assert.
+        """
+        if self._explicit_types:
+            return list(self._explicit_types)
+        if self._include_threads and not self._pickable_threads:
+            return [
+                discord.ChannelType.text,
                 discord.ChannelType.public_thread,
                 discord.ChannelType.private_thread,
                 discord.ChannelType.news_thread,
-            ):
-                if t not in types:
-                    types.append(t)
+            ]
+        return [discord.ChannelType.text]
+
+    def _render_channel_select(self, *, switchable: bool) -> None:
+        self.clear_items()
+
+        types = self._channel_types_for_select()
         select = discord.ui.ChannelSelect(
-            placeholder=placeholder,
-            min_values=1,
-            max_values=1,
-            channel_types=types,
-            row=0,
+            placeholder=self._placeholder,
+            min_values=1, max_values=1,
+            channel_types=types, row=0,
         )
-        async def _cb(interaction: discord.Interaction):
+
+        async def _select_cb(inter: discord.Interaction):
             self.selected_channel = select.values[0]
             self.confirmed        = True
-            select.disabled       = True
-            await interaction.response.edit_message(
+            for item in self.children:
+                item.disabled = True
+            await inter.response.edit_message(
                 content=f"✅ Selected: **{self.selected_channel.name}**",
                 view=self,
             )
             self.stop()
-        select.callback = _cb
+        select.callback = _select_cb
         self.add_item(select)
 
-        # Show create button for text channels only — hide if any thread
-        # type is in the picker, since we can't sensibly "create" a thread.
-        has_threads = any(
-            t in types
-            for t in (
+        if switchable and self._pickable_threads:
+            switch_btn = discord.ui.Button(
+                label="🧵 Pick a thread instead",
+                style=discord.ButtonStyle.secondary, row=1,
+            )
+            async def _switch(inter: discord.Interaction):
+                self._render_thread_select(switchable=True)
+                await inter.response.edit_message(view=self)
+            switch_btn.callback = _switch
+            self.add_item(switch_btn)
+
+        # The "Create a new channel" button is irrelevant in the
+        # button-driven flow (the user would have picked Channel already
+        # and is now on this state). Only show it on the simple, single-
+        # ChannelSelect path — i.e., when the picker doesn't include
+        # threads at all and we're not in the switchable variant.
+        has_threads_in_picker = any(
+            t in types for t in (
                 discord.ChannelType.public_thread,
                 discord.ChannelType.private_thread,
                 discord.ChannelType.news_thread,
             )
         )
-        if allow_create and not has_threads:
-            create_btn = discord.ui.Button(
-                label="➕ Create a new channel",
-                style=discord.ButtonStyle.secondary,
-                row=1,
+        if self.allow_create and not has_threads_in_picker and not switchable:
+            self._add_create_button(row=1)
+
+    # ── Thread-select state ────────────────────────────────────────────
+
+    def _render_thread_select(self, *, switchable: bool) -> None:
+        self.clear_items()
+        self._thread_lookup.clear()
+
+        # Sort so the dropdown groups threads under their parent and is
+        # alphabetised within each group — easier for the user to find.
+        sorted_threads = sorted(
+            self._pickable_threads,
+            key=lambda t: ((t.parent.name if t.parent else "zzz"), t.name),
+        )
+
+        thread_select = discord.ui.Select(
+            placeholder="Pick a thread...",
+            min_values=1, max_values=1, row=0,
+        )
+        # Discord caps Select options at 25.
+        for t in sorted_threads[:25]:
+            parent_name = t.parent.name if t.parent else "?"
+            label = f"{t.name} (in #{parent_name})"[:100]
+            value = str(t.id)
+            thread_select.add_option(label=label, value=value)
+            self._thread_lookup[value] = t
+
+        async def _select_cb(inter: discord.Interaction):
+            picked = self._thread_lookup.get(thread_select.values[0])
+            if picked is None:
+                await inter.response.send_message(
+                    "⚠️ Could not resolve that thread. Try again.",
+                    ephemeral=True,
+                )
+                return
+            self.selected_channel = picked
+            self.confirmed        = True
+            for item in self.children:
+                item.disabled = True
+            parent_name = picked.parent.name if picked.parent else "?"
+            await inter.response.edit_message(
+                content=f"✅ Selected thread: **{picked.name}** (in #{parent_name})",
+                view=self,
             )
-            async def _create_cb(interaction: discord.Interaction):
-                modal = CreateChannelModal(suggested_name=self.suggested_name)
-                await interaction.response.send_modal(modal)
-                await modal.wait()
-                if not modal.channel_name:
-                    return
+            self.stop()
+        thread_select.callback = _select_cb
+        self.add_item(thread_select)
+
+        if switchable:
+            switch_btn = discord.ui.Button(
+                label="📢 Pick a channel instead",
+                style=discord.ButtonStyle.secondary, row=1,
+            )
+            async def _switch(inter: discord.Interaction):
+                self._render_channel_select(switchable=True)
+                await inter.response.edit_message(view=self)
+            switch_btn.callback = _switch
+            self.add_item(switch_btn)
+
+    # ── Create-channel button ──────────────────────────────────────────
+
+    def _add_create_button(self, *, row: int) -> None:
+        create_btn = discord.ui.Button(
+            label="➕ Create a new channel",
+            style=discord.ButtonStyle.secondary,
+            row=row,
+        )
+        async def _create_cb(interaction: discord.Interaction):
+            modal = CreateChannelModal(suggested_name=self.suggested_name)
+            await interaction.response.send_modal(modal)
+            await modal.wait()
+            if not modal.channel_name:
+                return
+            try:
+                new_channel = await interaction.guild.create_text_channel(
+                    name=modal.channel_name,
+                    reason=f"Created during Alliance Helper setup by {interaction.user.display_name}",
+                )
+                self.selected_channel = new_channel
+                self.confirmed        = True
+                for item in self.children:
+                    item.disabled = True
+                await interaction.message.edit(
+                    content=f"✅ Created and selected: **#{new_channel.name}**",
+                    view=self,
+                )
+                self.stop()
+            except discord.Forbidden:
+                await interaction.followup.send(
+                    "⚠️ I don't have permission to create channels. Please create it manually first, then run `/setup` again.",
+                    ephemeral=True,
+                )
+            except Exception as e:
+                await interaction.followup.send(
+                    f"⚠️ Could not create channel: {e}",
+                    ephemeral=True,
+                )
+        create_btn.callback = _create_cb
+        self.add_item(create_btn)
+
+    @staticmethod
+    def _collect_pickable_threads(guild: discord.Guild) -> list[discord.Thread]:
+        """Return active threads in `guild` that are reasonable destinations
+        for an announcement / reminder. Filters out:
+          * archived or locked threads (Discord wouldn't accept posts anyway)
+          * threads under channels the bot can't post in (avoids picking a
+            destination that will then fail)
+          * survey-* threads under the configured survey channel — those
+            are auto-generated per-user threads, not destinations.
+        """
+        cfg          = get_config(guild.id)
+        survey_chan  = cfg.survey_channel_id if cfg else 0
+        bot_member   = guild.me
+        results: list[discord.Thread] = []
+        for t in guild.threads:
+            if t.archived or t.locked:
+                continue
+            if t.parent is None:
+                continue
+            # Skip auto-generated survey threads on the survey channel.
+            if survey_chan and t.parent_id == survey_chan:
+                continue
+            # Make sure the bot can post here.
+            if bot_member is not None:
                 try:
-                    new_channel = await interaction.guild.create_text_channel(
-                        name=modal.channel_name,
-                        reason=f"Created during Alliance Helper setup by {interaction.user.display_name}",
-                    )
-                    self.selected_channel = new_channel
-                    self.confirmed        = True
-                    for item in self.children:
-                        item.disabled = True
-                    await interaction.message.edit(
-                        content=f"✅ Created and selected: **#{new_channel.name}**",
-                        view=self,
-                    )
-                    self.stop()
-                except discord.Forbidden:
-                    await interaction.followup.send(
-                        "⚠️ I don't have permission to create channels. Please create it manually first, then run `/setup` again.",
-                        ephemeral=True,
-                    )
-                except Exception as e:
-                    await interaction.followup.send(
-                        f"⚠️ Could not create channel: {e}",
-                        ephemeral=True,
-                    )
-            create_btn.callback = _create_cb
-            self.add_item(create_btn)
+                    perms = t.permissions_for(bot_member)
+                    if not perms.send_messages_in_threads:
+                        continue
+                except Exception:
+                    pass
+            results.append(t)
+        return results
 
 
 class ConfirmView(discord.ui.View):
@@ -1250,6 +1440,7 @@ async def run_setup(interaction: discord.Interaction, bot):
         "Select leadership channel...",
         suggested_name="leadership",
         include_threads=is_premium_flag,
+        guild=interaction.guild,
     )
     await channel.send("\u200b", view=v)
     await v.wait()
@@ -2046,6 +2237,7 @@ async def run_train_setup(interaction: discord.Interaction, bot):
             "Select the reminder channel...",
             suggested_name="leadership",
             include_threads=is_premium_flag,
+            guild=interaction.guild,
         )
         await channel.send(
             "**Step 7a of 7 — Reminder Channel**\n"
@@ -2364,6 +2556,7 @@ async def run_survey_setup(interaction: discord.Interaction, bot,
         "Select the survey channel...",
         suggested_name="squad-survey",
         include_threads=is_premium_flag,
+        guild=interaction.guild,
     )
     await channel.send(
         "**Step 1 of 6 — Survey Channel**\n"
@@ -2381,6 +2574,7 @@ async def run_survey_setup(interaction: discord.Interaction, bot,
         "Select the survey notification channel...",
         suggested_name="survey-responses",
         include_threads=is_premium_flag,
+        guild=interaction.guild,
     )
     await channel.send(
         "**Step 2 of 6 — Survey Notification Channel**\n"
@@ -2950,6 +3144,7 @@ async def run_storm_setup(interaction: discord.Interaction, bot, event_type: str
         f"Select the {label} log channel...",
         suggested_name="storm-log",
         include_threads=is_premium_flag,
+        guild=interaction.guild,
     )
     await channel.send(
         f"**Step 3 of 6 — Storm Log Channel**\n"
@@ -2967,6 +3162,7 @@ async def run_storm_setup(interaction: discord.Interaction, bot, event_type: str
         f"Select the {label} mail post channel...",
         suggested_name=f"{'desert' if event_type == 'DS' else 'canyon'}-storm",
         include_threads=is_premium_flag,
+        guild=interaction.guild,
     )
     await channel.send(
         f"**Step 4 of 6 — Mail Post Channel**\n"
@@ -3747,6 +3943,7 @@ async def run_event_setup(interaction: discord.Interaction, bot):
             "Select the draft channel...",
             suggested_name="event-drafts",
             include_threads=is_premium_flag,
+            guild=interaction.guild,
         )
         await channel.send(
             "**Step 1 of 5 — Draft Channel**\n"
@@ -3765,6 +3962,7 @@ async def run_event_setup(interaction: discord.Interaction, bot):
             "Select the announcement channel...",
             suggested_name="announcements",
             include_threads=is_premium_flag,
+            guild=interaction.guild,
         )
         await channel.send(
             "**Step 2 of 5 — Announcement Channel**\n"
@@ -4376,6 +4574,7 @@ async def run_birthday_setup(interaction: discord.Interaction, bot):
             "Select the birthday announcement channel...",
             suggested_name="birthdays",
             include_threads=is_premium_flag,
+            guild=interaction.guild,
         )
         await channel.send(
             "**Step 8a of 8 — Birthday Announcement Channel**\n"

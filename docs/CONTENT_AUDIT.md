@@ -695,10 +695,14 @@ Here is the schedule for events today:
 | Wizard prompt | `**Step 1 of 7 — Schedule Sheet Tab**\nWhich tab in your Google Sheet stores the train schedule?\n⚠️ *Make sure this tab exists in your sheet before continuing.*` | `setup_cog.py` |
 | Modal title | `Sheet Tab Name` | `setup_cog.py` |
 | Input label | `Tab name` | `setup_cog.py` |
-| Button | `✅ Use default: {default}` (success) | `setup_cog.py` |
+| Button (no saved value, or saved == default) | `✅ Use default: {default}` (success) | `setup_cog.py` |
+| Button (saved differs — appears alongside the two below) | `✅ Keep current: {current}` (success) | `setup_cog.py` |
+| Button (saved differs — appears alongside the two above) | `↩️ Use default: {default}` (secondary) | `setup_cog.py` |
 | Button | `✏️ Define my own` (secondary) | `setup_cog.py` |
-| Success | `✅ Using **{default}**` | `setup_cog.py` |
-| Success | `✅ Using **{value}**` | `setup_cog.py` |
+| Success — kept default | `✅ Using **{default}**` | `setup_cog.py` |
+| Success — kept current | `✅ Using **{current}**` | `setup_cog.py` |
+| Success — reverted to default from saved | `✅ Reverted to default: **{default}**` | `setup_cog.py` |
+| Success — defined own | `✅ Using **{value}**` | `setup_cog.py` |
 | Timeout | `⏰ Timed out. Run \`/setup_train\` to start again.` | `setup_cog.py` |
 
 #### 6.1.3 Step 2 — Blurb Generation

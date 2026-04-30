@@ -7,6 +7,44 @@ they just run `/upgrade`.
 
 ---
 
+## 0. Bot prerequisites — Privileged Gateway Intents
+
+Before any of the Premium setup below will work, the bot needs the
+**Server Members Intent** enabled in the Discord Developer Portal.
+This is also a hard prerequisite for the bot to start at all — the
+gateway will refuse the connection if the code requests an intent the
+portal hasn't granted.
+
+1. Go to https://discord.com/developers/applications
+2. Pick the Alliance Helper application.
+3. Left sidebar → **Bot**.
+4. Scroll to **Privileged Gateway Intents**.
+5. Toggle **SERVER MEMBERS INTENT** on. (Save if the portal asks.)
+
+Why this matters:
+
+- **Member Roster Sync** (`/sync_members`) iterates `guild.members` to
+  write the roster sheet. Without this intent, `guild.members` is just
+  the small handful of users Discord surfaces via interactions — so
+  `/sync_members` would write 0 rows even though the SKU is paid for.
+- **Auto-resync on join/leave/role-change** depends on the
+  `on_member_join` / `on_member_remove` / `on_member_update` gateway
+  events firing. Those events do not fire without this intent.
+- **Birthday DMs** and **train DMs** look up Discord IDs from the
+  roster — so they're empty downstream unless the roster is populated.
+
+Discord allows this intent without verification for any bot in fewer
+than 100 guilds. Once you cross 100 guilds, Discord will require the
+bot to be verified before it can keep the intent on (you'll get a
+~30-day grace period). At that point, plan for the verification
+process — there's no Premium-side workaround.
+
+The other two privileged intents (PRESENCE INTENT, MESSAGE CONTENT
+INTENT) — only `MESSAGE CONTENT` is also required (used elsewhere in
+the bot). PRESENCE is **not** needed and should stay off.
+
+---
+
 ## 1. Create the SKU in Discord Developer Portal
 
 1. Open your bot's app in the Discord Developer Portal:

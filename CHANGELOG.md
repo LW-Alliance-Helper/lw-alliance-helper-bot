@@ -86,6 +86,104 @@ After this work, OGV's real guild ID appears only in:
   scheduled `tasks.loop`. Removed the duplicates; each now runs exactly
   once on boot via the loop's `.start()` immediate-fire behavior.
 
+### Fixed — post-strip launch readiness
+
+- **`/cancel` actually stops view-based wizard steps.** Bare
+  `view.wait()` doesn't know about the cancel registry, so when a
+  user ran `/cancel` mid-wizard the active view sat there until its
+  own 2-minute timeout fired and the wizard then posted a misleading
+  "⏰ Timed out" message. New `wizard_registry.wait_view_or_cancel()`
+  races the view's `wait()` against the cancel event; cancel now
+  returns silently. Threaded through ~40 callsites in `setup_cog.py`.
+- **CS draft renders full zone names.** `build_cs_mail` was deriving
+  zone labels from dict keys via `key.replace('s1 ', '').title()`,
+  which collapsed `s1_dc1` → `Dc1` instead of "Data Center 1". The
+  same loop also rendered `s3_pop_pair1` as a `Pop Pair1` zone *and*
+  as the `{subs}` block, duplicating sub pairs. Introduced a single
+  `CS_ZONE_STRUCTURE` source of truth shared by the template
+  builder, parser, and mail builder. Output now groups zones under
+  `**Stage 1/2/3**` headers with full labels. DS was unaffected
+  (DS uses user-entered zone names directly as keys).
+- **`/sync_members` writes the actual member count.** The bot was
+  constructed with `Intents.default()` plus `message_content`, but
+  `default()` deliberately omits the privileged `members` intent. So
+  even with the SERVER MEMBERS INTENT toggled on in the Developer
+  Portal, the gateway connection wasn't requesting member data —
+  leaving `guild.members` populated only with users Discord surfaces
+  via interactions, and `/sync_members` writing 0 rows. Added
+  `intents.members = True` plus `_ensure_member_cache(guild)` (calls
+  `guild.chunk()` before each sync) and a `[ROSTER]` warning when
+  the cache is dramatically smaller than `guild.member_count`. Side
+  benefit: `on_member_join` / `_remove` / `_update` now fire, so
+  Member Roster auto-resync actually works (was silently dead).
+- **Custom event blurb shows up in `/events` announcements.** The
+  EventEditorView's "Add Event" handler appended `{key, dt}` to
+  `event_list` without `name` or `blurb`, so `build_announcement`
+  saw an empty blurb, fell through `EVENT_LIBRARY` (no entry for
+  guild-defined keys like `glacieradon`), and hit the f-string
+  fallback `f"{key} at {time}..."` — rendering the lowercase
+  short_key. Now populates `name` + `blurb` from
+  `_resolve_event_info()`. Added defense-in-depth: `build_announcement`
+  gained an optional `guild_id` kwarg that re-resolves the blurb
+  from `guild_events` when the dict is missing it.
+- **Wizard "Use default" label no longer mislabels saved guild
+  values.** `ask_keep_or_change` took a single `default=` parameter
+  that callers pre-resolved as `current.get("X") or "fallback"`, and
+  the button hardcoded `✅ Use default: {default}`. Result: an OGV
+  admin running `/setup_birthdays` saw their saved
+  `Season 5 - Off-Season` tab labelled as "Use default" — confusing.
+  Split into separate `default=` (hardcoded baseline) and
+  `current=` (saved value). Now renders 3 buttons when they differ:
+  `✅ Keep current: <saved>` / `↩️ Use default: <hardcoded>` /
+  `✏️ Define my own`. Two-button layout retained when they match.
+
+### Added — post-strip launch readiness
+
+- **Next-snapshot date in `/setup_growth` and `/growth`.** After
+  picking a custom interval, users had no idea when the first
+  snapshot would actually fire. New `growth.compute_next_snapshot()`
+  helper mirrors `bot.growth_task`'s scheduling rules (22:00 ET on
+  monthly day or every-N-days-from-2026-01-01) and surfaces the
+  result as a Discord-localized timestamp (`<t:N:F> (<t:N:R>)` —
+  full date plus relative). Both the wizard confirmation embed and
+  `/growth` status now display it.
+- **`docs/USER_TESTING.md` refresh.** Added regression hooks for
+  every fix above so testers know what specific behaviour to verify
+  and report. New section covers `/cancel`, the `/setup_*` family,
+  the Reference IDs that now appear in error messages, and the
+  Premium channel/thread destination chooser.
+
+### Tests — coverage audit
+
+- **+81 tests across 7 high-impact background-task / view-callback
+  paths** that had shipped without dedicated coverage. New files:
+  `test_events_command.py` (9 — `/events` end-to-end),
+  `test_scheduler_helpers.py::TestParseTimeStr` (+22 — 12h/24h/12am/
+  12pm boundaries), `test_approval_view.py` (7 — Send-As-Is +
+  Edit-And-Send + timeout/missing-channel), `test_growth_task.py`
+  (11 — fire-decision loop + multi-guild crash isolation),
+  `test_fire_warning.py` (8 — 5-min path + `pending_warnings`
+  lifecycle), `test_storm_remind.py` (9 — Premium-gate + roster
+  iteration + DM tally), `test_train_reminder_loop.py` (9 —
+  time-match + idempotency + Premium DM-to-assignee),
+  `test_survey_scheduled_dm.py` (6 — DM branch + Premium-lapse +
+  weekly + multi-guild isolation). The `run_scheduler` main loop
+  is the only audit gap deferred (Large effort, low ROI per minute
+  given its individual components are now individually covered).
+  Total: 476 passing, 18 skipped (`free_tier_only` markers under
+  the `FORCE_PREMIUM=1` CI lane).
+
+### Documentation
+
+- **`docs/PREMIUM_SETUP.md`** — added a "Bot prerequisites" section
+  documenting that **SERVER MEMBERS INTENT** must be toggled on in
+  the Discord Developer Portal. Without it the bot won't start
+  (gateway refuses the connection) and `/sync_members` would write
+  0 rows even with a paid SKU.
+- **`docs/CONTENT_AUDIT.md`** — updated the
+  `ask_keep_or_change` wizard step entry to reflect the new
+  current-vs-default 3-button layout.
+
 ## [1.0.0] — 2026-04-28
 
 Initial public release.

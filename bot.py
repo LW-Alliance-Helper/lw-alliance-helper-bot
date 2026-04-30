@@ -170,6 +170,34 @@ async def on_ready():
         await bot.load_extension("member_roster")
         print(f"[INFO] Member Roster cog loaded")
 
+    # ── One-shot: clear guild-scoped slash commands ────────────────────────
+    # If CLEAR_GUILD_COMMANDS=1 is set in the environment, push an empty
+    # guild-scoped command list to every guild the bot is in. This removes
+    # stale guild-scoped commands left over from earlier bot versions
+    # (e.g. commands renamed or removed in code but still registered on
+    # Discord because they were originally synced with sync(guild=...)).
+    #
+    # Discord stores guild-scoped commands separately from global ones —
+    # global syncs don't touch them. The bot has been on global-only sync
+    # for a while; this hook is the manual cleanup for the leftovers.
+    #
+    # Set the env var on Railway, redeploy once, watch the logs for the
+    # "Cleared guild commands" lines, then unset the env var so it doesn't
+    # run on every restart.
+    if os.getenv("CLEAR_GUILD_COMMANDS") == "1":
+        guilds = list(bot.guilds)
+        print(f"[INFO] CLEAR_GUILD_COMMANDS=1 — clearing guild-scoped commands across {len(guilds)} guild(s)")
+        for g in guilds:
+            try:
+                # The local tree has no guild-scoped commands registered,
+                # so syncing the empty list to a guild deletes whatever
+                # guild-scoped commands Discord has stored for that guild.
+                await bot.tree.sync(guild=g)
+                print(f"[INFO]   Cleared guild commands for {g.name} (id={g.id})")
+            except Exception as e:
+                print(f"[INFO]   Could not clear guild commands for {g.name} (id={g.id}): {e}")
+        print("[INFO] Done. Unset CLEAR_GUILD_COMMANDS to skip this on next restart.")
+
     # Sync slash commands globally so they work in any server
     synced = await bot.tree.sync()
     print(f"[INFO] Synced {len(synced)} slash commands globally")

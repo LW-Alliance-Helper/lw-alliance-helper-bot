@@ -18,6 +18,7 @@ from config import (
     GuildConfig,
 )
 import premium
+from wizard_registry import wait_view_or_cancel
 
 WIZARD_TIMEOUT = 120  # 2 minutes per step
 
@@ -526,12 +527,14 @@ async def ask_keep_or_change(
     modal_title: str,
     modal_label: str,
     timeout_cmd: str | None = None,
+    cancel_event=None,
 ) -> str | None:
     """Show a `Use default / Define your own` view and return the chosen value.
 
     The default is shown directly in the button label so the prompt body never
     has to repeat it. Returns None on timeout (and posts a timeout message
-    referencing `timeout_cmd` if provided).
+    referencing `timeout_cmd` if provided), or on /cancel (silently — the
+    /cancel command itself acks the user).
     """
 
     class KeepOrChangeDefaultView(discord.ui.View):
@@ -571,7 +574,9 @@ async def ask_keep_or_change(
 
     view = KeepOrChangeDefaultView()
     await channel.send(prompt, view=view)
-    await view.wait()
+    await wait_view_or_cancel(view, cancel_event)
+    if view.cancelled:
+        return None
     if not view.confirmed:
         if timeout_cmd:
             await channel.send(f"⏰ Timed out. Run `/{timeout_cmd}` to start again.")
@@ -677,7 +682,9 @@ async def _manage_train_templates(
             at_cap=cap is not None and len(templates) >= cap,
         )
         await channel.send(embed=embed, view=list_view)
-        await list_view.wait()
+        await wait_view_or_cancel(list_view, cancel_event)
+        if list_view.cancelled:
+            return None, None
 
         if list_view.action is None:
             await channel.send("⏰ Timed out. Run `/setup_train` to start again.")
@@ -708,7 +715,9 @@ async def _manage_train_templates(
 
             pick = PickView()
             await channel.send("Which template?", view=pick)
-            await pick.wait()
+            await wait_view_or_cancel(pick, cancel_event)
+            if pick.cancelled:
+                return None, None
             if pick.idx is None:
                 await channel.send("⏰ Timed out. Run `/setup_train` to start again.")
                 return None, None
@@ -1406,7 +1415,9 @@ async def run_setup(interaction: discord.Interaction, bot):
 
         eoc_view = EditOrCancelView()
         await channel.send(embed=existing_embed, view=eoc_view)
-        await eoc_view.wait()
+        await wait_view_or_cancel(eoc_view, cancel_event)
+        if eoc_view.cancelled:
+            return
         if not eoc_view.proceed:
             await channel.send("✅ No changes made. Your existing setup is still active.")
             return
@@ -1422,7 +1433,9 @@ async def run_setup(interaction: discord.Interaction, bot):
     await channel.send("**Step 1 of 6 — Member Role**\nSelect the role that all alliance members have:")
     v = RoleSelectStep("Select member role...")
     await channel.send("\u200b", view=v)
-    await v.wait()
+    await wait_view_or_cancel(v, cancel_event)
+    if v.cancelled:
+        return
     if not v.confirmed:
         await channel.send("⏰ Setup timed out. Run `/setup` to start again.")
         return
@@ -1433,7 +1446,9 @@ async def run_setup(interaction: discord.Interaction, bot):
     await channel.send("**Step 2 of 6 — Leadership Role**\nSelect the elevated role for alliance leadership:")
     v = RoleSelectStep("Select leadership role...")
     await channel.send("\u200b", view=v)
-    await v.wait()
+    await wait_view_or_cancel(v, cancel_event)
+    if v.cancelled:
+        return
     if not v.confirmed:
         await channel.send("⏰ Setup timed out. Run `/setup` to start again.")
         return
@@ -1452,7 +1467,9 @@ async def run_setup(interaction: discord.Interaction, bot):
         guild=interaction.guild,
     )
     await channel.send("\u200b", view=v)
-    await v.wait()
+    await wait_view_or_cancel(v, cancel_event)
+    if v.cancelled:
+        return
     if not v.confirmed:
         await channel.send("⏰ Setup timed out. Run `/setup` to start again.")
         return
@@ -1467,7 +1484,9 @@ async def run_setup(interaction: discord.Interaction, bot):
         "Desert Storm/Canyon Storm times, and train reminders throughout the bot:"
     )
     await channel.send("\u200b", view=tz_view)
-    await tz_view.wait()
+    await wait_view_or_cancel(tz_view, cancel_event)
+    if tz_view.cancelled:
+        return
     if not tz_view.confirmed:
         await channel.send("⏰ Setup timed out. Run `/setup` to start again.")
         return
@@ -1482,7 +1501,9 @@ async def run_setup(interaction: discord.Interaction, bot):
     modal   = TextInputModal("Google Sheet ID", "Sheet ID", placeholder="Paste your Sheet ID here...")
     modal_v = ModalLaunchView(modal)
     await channel.send("\u200b", view=modal_v)
-    await modal_v.wait()
+    await wait_view_or_cancel(modal_v, cancel_event)
+    if modal_v.cancelled:
+        return
     if not modal_v.confirmed:
         await channel.send("⏰ Setup timed out. Run `/setup` to start again.")
         return
@@ -1519,7 +1540,9 @@ async def run_setup(interaction: discord.Interaction, bot):
     done_view.children[0].label = "✅ I've shared the sheet"
     done_view.children[1].label = "❌ Cancel setup"
     await channel.send(embed=share_embed, view=done_view)
-    await done_view.wait()
+    await wait_view_or_cancel(done_view, cancel_event)
+    if done_view.cancelled:
+        return
     if not done_view.confirmed:
         await channel.send("❌ Setup cancelled. Run `/setup` to start again.")
         return
@@ -1543,7 +1566,9 @@ async def run_setup(interaction: discord.Interaction, bot):
 
     confirm_view = ConfirmView()
     await channel.send(embed=embed, view=confirm_view)
-    await confirm_view.wait()
+    await wait_view_or_cancel(confirm_view, cancel_event)
+    if confirm_view.cancelled:
+        return
     if not confirm_view.confirmed:
         await channel.send("❌ Setup cancelled. Run `/setup` to start again.")
         return
@@ -1617,7 +1642,9 @@ async def run_growth_setup(interaction: discord.Interaction, bot):
         "Should the bot automatically take snapshots of your members' stats on a schedule?",
         view=enabled_view,
     )
-    await enabled_view.wait()
+    await wait_view_or_cancel(enabled_view, cancel_event)
+    if enabled_view.cancelled:
+        return
     if enabled_view.selected is None:
         await channel.send("⏰ Timed out. Run `/setup_growth` to start again.")
         return
@@ -1646,6 +1673,7 @@ async def run_growth_setup(interaction: discord.Interaction, bot):
         modal_title="Source Tab",
         modal_label="Tab name",
         timeout_cmd="setup_growth",
+        cancel_event=cancel_event,
     )
     if tab_source is None:
         return
@@ -1659,6 +1687,7 @@ async def run_growth_setup(interaction: discord.Interaction, bot):
         modal_title="Data Start Row",
         modal_label="Row number",
         timeout_cmd="setup_growth",
+        cancel_event=cancel_event,
     )
     if start_raw is None:
         return
@@ -1677,6 +1706,7 @@ async def run_growth_setup(interaction: discord.Interaction, bot):
         modal_title="Name Column",
         modal_label="Column letter",
         timeout_cmd="setup_growth",
+        cancel_event=cancel_event,
     )
     if name_raw is None:
         return
@@ -1780,7 +1810,9 @@ async def run_growth_setup(interaction: discord.Interaction, bot):
 
         action_view = MetricsActionView()
         await channel.send(embed=_metrics_embed(cap=metrics_cap), view=action_view)
-        await action_view.wait()
+        await wait_view_or_cancel(action_view, cancel_event)
+        if action_view.cancelled:
+            return
 
         if action_view.choice is None:
             await channel.send("⏰ Timed out. Run `/setup_growth` to start again.")
@@ -1823,7 +1855,9 @@ async def run_growth_setup(interaction: discord.Interaction, bot):
         pick_view = PickMetricView()
         verb = "edit" if action_view.choice == "edit" else "delete"
         await channel.send(f"Which metric do you want to {verb}?", view=pick_view)
-        await pick_view.wait()
+        await wait_view_or_cancel(pick_view, cancel_event)
+        if pick_view.cancelled:
+            return
         if pick_view.index is None:
             await channel.send("⏰ Timed out. Run `/setup_growth` to start again.")
             return
@@ -1856,7 +1890,9 @@ async def run_growth_setup(interaction: discord.Interaction, bot):
             f"Editing **{existing['label']}** (column {existing['col']}). Click below to update.",
             view=edit_launch,
         )
-        await edit_launch.wait()
+        await wait_view_or_cancel(edit_launch, cancel_event)
+        if edit_launch.cancelled:
+            return
         if edit_launch.modal.label_value and edit_launch.modal.col_value and edit_launch.modal.col_value.isalpha():
             metrics[pick_view.index] = {
                 "label": edit_launch.modal.label_value,
@@ -1877,6 +1913,7 @@ async def run_growth_setup(interaction: discord.Interaction, bot):
         modal_title="Growth Tracking Tab",
         modal_label="Tab name",
         timeout_cmd="setup_growth",
+        cancel_event=cancel_event,
     )
     if tab_growth is None:
         return
@@ -1917,7 +1954,9 @@ async def run_growth_setup(interaction: discord.Interaction, bot):
         freq_prompt,
         view=freq_view,
     )
-    await freq_view.wait()
+    await wait_view_or_cancel(freq_view, cancel_event)
+    if freq_view.cancelled:
+        return
     if not freq_view.selected:
         await channel.send("⏰ Timed out. Run `/setup_growth` to start again.")
         return
@@ -1935,6 +1974,7 @@ async def run_growth_setup(interaction: discord.Interaction, bot):
             modal_title="Snapshot Day",
             modal_label="Day of month (1–28)",
             timeout_cmd="setup_growth",
+            cancel_event=cancel_event,
         )
         if day_raw is None:
             return
@@ -1951,6 +1991,7 @@ async def run_growth_setup(interaction: discord.Interaction, bot):
             modal_title="Interval",
             modal_label="Days between snapshots",
             timeout_cmd="setup_growth",
+            cancel_event=cancel_event,
         )
         if interval_raw is None:
             return
@@ -2034,6 +2075,7 @@ async def run_train_setup(interaction: discord.Interaction, bot):
         modal_title="Sheet Tab Name",
         modal_label="Tab name",
         timeout_cmd="setup_train",
+        cancel_event=cancel_event,
     )
     if tab_name is None:
         return
@@ -2047,7 +2089,9 @@ async def run_train_setup(interaction: discord.Interaction, bot):
         "*(You can always set this up later by running `/setup_train` again)*",
         view=blurb_view,
     )
-    await blurb_view.wait()
+    await wait_view_or_cancel(blurb_view, cancel_event)
+    if blurb_view.cancelled:
+        return
     if blurb_view.selected is None:
         await channel.send("⏰ Timed out. Run `/setup_train` to start again.")
         return
@@ -2115,7 +2159,9 @@ async def run_train_setup(interaction: discord.Interaction, bot):
             + cap_note_themes,
             view=themes_keep_view,
         )
-        await themes_keep_view.wait()
+        await wait_view_or_cancel(themes_keep_view, cancel_event)
+        if themes_keep_view.cancelled:
+            return
         if themes_keep_view.keep_existing is None:
             await channel.send("⏰ Timed out. Run `/setup_train` to start again.")
             return
@@ -2150,7 +2196,9 @@ async def run_train_setup(interaction: discord.Interaction, bot):
             + cap_note_tones,
             view=tones_keep_view,
         )
-        await tones_keep_view.wait()
+        await wait_view_or_cancel(tones_keep_view, cancel_event)
+        if tones_keep_view.cancelled:
+            return
         if tones_keep_view.keep_existing is None:
             await channel.send("⏰ Timed out. Run `/setup_train` to start again.")
             return
@@ -2194,7 +2242,9 @@ async def run_train_setup(interaction: discord.Interaction, bot):
             f"Which tone should be pre-selected by default?",
             view=tone_default_view,
         )
-        await tone_default_view.wait()
+        await wait_view_or_cancel(tone_default_view, cancel_event)
+        if tone_default_view.cancelled:
+            return
         if not tone_default_view.selected:
             await channel.send("⏰ Timed out. Run `/setup_train` to start again.")
             return
@@ -2228,7 +2278,9 @@ async def run_train_setup(interaction: discord.Interaction, bot):
         "Should the bot post a reminder to leadership when someone is assigned the train each day?",
         view=reminder_view,
     )
-    await reminder_view.wait()
+    await wait_view_or_cancel(reminder_view, cancel_event)
+    if reminder_view.cancelled:
+        return
     if reminder_view.selected is None:
         await channel.send("⏰ Timed out. Run `/setup_train` to start again.")
         return
@@ -2253,7 +2305,9 @@ async def run_train_setup(interaction: discord.Interaction, bot):
             "Which channel should the train reminder be posted to?",
             view=reminder_ch_view,
         )
-        await reminder_ch_view.wait()
+        await wait_view_or_cancel(reminder_ch_view, cancel_event)
+        if reminder_ch_view.cancelled:
+            return
         if not reminder_ch_view.confirmed:
             await channel.send("⏰ Timed out. Run `/setup_train` to start again.")
             return
@@ -2278,6 +2332,7 @@ async def run_train_setup(interaction: discord.Interaction, bot):
                 modal_title="Reminder Time",
                 modal_label="Time",
                 timeout_cmd="setup_train",
+                cancel_event=cancel_event,
             )
             if time_raw is None:
                 return
@@ -2572,7 +2627,9 @@ async def run_survey_setup(interaction: discord.Interaction, bot,
         "Select the channel where the survey button will be posted for members to access:",
         view=survey_ch_view,
     )
-    await survey_ch_view.wait()
+    await wait_view_or_cancel(survey_ch_view, cancel_event)
+    if survey_ch_view.cancelled:
+        return
     if not survey_ch_view.confirmed:
         await channel.send("⏰ Timed out. Run `/setup_survey` to start again.")
         return
@@ -2590,7 +2647,9 @@ async def run_survey_setup(interaction: discord.Interaction, bot,
         "Select the channel where leadership will be notified when a member submits the survey:",
         view=notify_ch_view,
     )
-    await notify_ch_view.wait()
+    await wait_view_or_cancel(notify_ch_view, cancel_event)
+    if notify_ch_view.cancelled:
+        return
     if not notify_ch_view.confirmed:
         await channel.send("⏰ Timed out. Run `/setup_survey` to start again.")
         return
@@ -2607,6 +2666,7 @@ async def run_survey_setup(interaction: discord.Interaction, bot,
         modal_title="Member Statistics Tab",
         modal_label="Tab name",
         timeout_cmd="setup_survey",
+        cancel_event=cancel_event,
     )
     if tab_squad_powers is None:
         return
@@ -2622,6 +2682,7 @@ async def run_survey_setup(interaction: discord.Interaction, bot,
         modal_title="Survey History Tab",
         modal_label="Tab name",
         timeout_cmd="setup_survey",
+        cancel_event=cancel_event,
     )
     if tab_history is None:
         return
@@ -2692,7 +2753,9 @@ async def run_survey_setup(interaction: discord.Interaction, bot,
         "Would you like to use the defaults, edit your existing questions, or start from scratch?",
         view=q_start_view,
     )
-    await q_start_view.wait()
+    await wait_view_or_cancel(q_start_view, cancel_event)
+    if q_start_view.cancelled:
+        return
     if not q_start_view.choice:
         await channel.send("⏰ Timed out. Run `/setup_survey` to start again.")
         return
@@ -2780,7 +2843,9 @@ async def run_survey_setup(interaction: discord.Interaction, bot,
                     f"**Survey Questions:**\n{q_display}",
                     view=list_view,
                 )
-                await list_view.wait()
+                await wait_view_or_cancel(list_view, cancel_event)
+                if list_view.cancelled:
+                    return
 
                 if not list_view.action:
                     await channel.send("⏰ Timed out. Run `/setup_survey` to start again.")
@@ -2874,7 +2939,9 @@ async def run_survey_setup(interaction: discord.Interaction, bot,
                         + type_extra
                     )
                     await channel.send(type_prompt, view=type_view)
-                    await type_view.wait()
+                    await wait_view_or_cancel(type_view, cancel_event)
+                    if type_view.cancelled:
+                        return
                     if not type_view.selected:
                         await channel.send("⏰ Timed out. Run `/setup_survey` to start again.")
                         return False
@@ -3104,6 +3171,7 @@ async def run_storm_setup(interaction: discord.Interaction, bot, event_type: str
         modal_title="Sheet Tab Name",
         modal_label="Tab name",
         timeout_cmd=cmd_name,
+        cancel_event=cancel_event,
     )
     if tab_name is None:
         return
@@ -3140,7 +3208,9 @@ async def run_storm_setup(interaction: discord.Interaction, bot, event_type: str
         f"**Step 2 of 6 — Which teams do you run for {label}?**",
         view=team_view,
     )
-    await team_view.wait()
+    await wait_view_or_cancel(team_view, cancel_event)
+    if team_view.cancelled:
+        return
     if not team_view.selected:
         await channel.send(f"⏰ Timed out. Run `/{cmd_name}` to start again.")
         return
@@ -3160,7 +3230,9 @@ async def run_storm_setup(interaction: discord.Interaction, bot, event_type: str
         f"Select the channel where {label} participation/log summaries will be posted:",
         view=log_ch_view,
     )
-    await log_ch_view.wait()
+    await wait_view_or_cancel(log_ch_view, cancel_event)
+    if log_ch_view.cancelled:
+        return
     if not log_ch_view.confirmed:
         await channel.send(f"⏰ Timed out. Run `/{cmd_name}` to start again.")
         return
@@ -3180,7 +3252,9 @@ async def run_storm_setup(interaction: discord.Interaction, bot, event_type: str
         f"the finished mail will be posted to this channel:",
         view=post_ch_view,
     )
-    await post_ch_view.wait()
+    await wait_view_or_cancel(post_ch_view, cancel_event)
+    if post_ch_view.cancelled:
+        return
     if not post_ch_view.confirmed:
         await channel.send(f"⏰ Timed out. Run `/{cmd_name}` to start again.")
         return
@@ -3221,7 +3295,9 @@ async def run_storm_setup(interaction: discord.Interaction, bot, event_type: str
             f"Would you like to use this or edit it?",
             view=choice_view,
         )
-        await choice_view.wait()
+        await wait_view_or_cancel(choice_view, cancel_event)
+        if choice_view.cancelled:
+            return
         if choice_view.use_default is None:
             await channel.send(f"⏰ Timed out. Run `/{cmd_name}` to start again.")
             return None
@@ -3274,7 +3350,9 @@ async def run_storm_setup(interaction: discord.Interaction, bot, event_type: str
             "Do you want one template that applies to both teams, or separate templates per team?",
             view=shared_view,
         )
-        await shared_view.wait()
+        await wait_view_or_cancel(shared_view, cancel_event)
+        if shared_view.cancelled:
+            return
         if not shared_view.selected:
             await channel.send(f"⏰ Timed out. Run `/{cmd_name}` to start again.")
             return
@@ -3417,7 +3495,9 @@ async def _run_storm_participation_step(
         f"your alliance runs the event.",
         view=enable_view,
     )
-    await enable_view.wait()
+    await wait_view_or_cancel(enable_view, cancel_event)
+    if enable_view.cancelled:
+        return None
     if enable_view.selected is None:
         await channel.send(f"⏰ Timed out. Run `/{cmd_name}` to start again.")
         return None
@@ -3448,6 +3528,7 @@ async def _run_storm_participation_step(
         modal_title="Participation Tab",
         modal_label="Tab name",
         timeout_cmd=cmd_name,
+        cancel_event=cancel_event,
     )
     if tab_name is None:
         return None
@@ -3475,6 +3556,7 @@ async def _run_storm_participation_step(
         modal_title="Roster Tab",
         modal_label="Tab name",
         timeout_cmd=cmd_name,
+        cancel_event=cancel_event,
     )
     if roster_tab is None:
         return None
@@ -3488,6 +3570,7 @@ async def _run_storm_participation_step(
         modal_title="Name column",
         modal_label="Column letter",
         timeout_cmd=cmd_name,
+        cancel_event=cancel_event,
     )
     if raw_name_col is None:
         return None
@@ -3504,7 +3587,9 @@ async def _run_storm_participation_step(
         "Do you have an alias column?",
         view=alias_view,
     )
-    await alias_view.wait()
+    await wait_view_or_cancel(alias_view, cancel_event)
+    if alias_view.cancelled:
+        return None
     if alias_view.selected is None:
         await channel.send(f"⏰ Timed out. Run `/{cmd_name}` to start again.")
         return None
@@ -3524,6 +3609,7 @@ async def _run_storm_participation_step(
             modal_title="Alias column",
             modal_label="Column letter",
             timeout_cmd=cmd_name,
+            cancel_event=cancel_event,
         )
         if raw_alias is None:
             return None
@@ -3542,6 +3628,7 @@ async def _run_storm_participation_step(
         modal_title="Data start row",
         modal_label="Row number",
         timeout_cmd=cmd_name,
+        cancel_event=cancel_event,
     )
     if raw_start is None:
         return None
@@ -3631,7 +3718,9 @@ async def _run_storm_participation_step(
             f"{cap_note}\n\n{_summarize()}",
             view=view,
         )
-        await view.wait()
+        await wait_view_or_cancel(view, cancel_event)
+        if view.cancelled:
+            return
         if view.action is None:
             await channel.send(f"⏰ Timed out. Run `/{cmd_name}` to start again.")
             return None
@@ -3756,7 +3845,9 @@ async def _build_participation_question(
     type_view = _TypeView()
     type_extra = f"\n*Existing type:* `{existing.get('type')}`" if existing else ""
     await channel.send(f"**Question — Answer Type**{type_extra}", view=type_view)
-    await type_view.wait()
+    await wait_view_or_cancel(type_view, cancel_event)
+    if type_view.cancelled:
+        return
     if type_view.selected is None:
         await channel.send(f"⏰ Timed out. Run `/{cmd_name}` to start again.")
         return None
@@ -3845,7 +3936,7 @@ async def run_event_setup(interaction: discord.Interaction, bot):
 
     async def ask_view(prompt: str, view: discord.ui.View):
         await channel.send(prompt, view=view)
-        await view.wait()
+        await wait_view_or_cancel(view, cancel_event)
         return view
 
     from config import get_config, get_guild_events, save_guild_event, get_or_create_config, update_config_field
@@ -3917,7 +4008,9 @@ async def run_event_setup(interaction: discord.Interaction, bot):
 
         action_view = EventActionView()
         await channel.send(embed=summary_embed, view=action_view)
-        await action_view.wait()
+        await wait_view_or_cancel(action_view, cancel_event)
+        if action_view.cancelled:
+            return
 
         if not action_view.choice or action_view.choice == "done":
             await channel.send("✅ No changes made.")
@@ -3960,7 +4053,9 @@ async def run_event_setup(interaction: discord.Interaction, bot):
             "*(This applies to all events)*",
             view=draft_ch_view,
         )
-        await draft_ch_view.wait()
+        await wait_view_or_cancel(draft_ch_view, cancel_event)
+        if draft_ch_view.cancelled:
+            return
         if not draft_ch_view.confirmed:
             await channel.send("⏰ Timed out. Run `/setup_events` to start again.")
             return
@@ -3979,7 +4074,9 @@ async def run_event_setup(interaction: discord.Interaction, bot):
             "*(This applies to all events)*",
             view=ann_ch_view,
         )
-        await ann_ch_view.wait()
+        await wait_view_or_cancel(ann_ch_view, cancel_event)
+        if ann_ch_view.cancelled:
+            return
         if not ann_ch_view.confirmed:
             await channel.send("⏰ Timed out. Run `/setup_events` to start again.")
             return
@@ -4000,6 +4097,7 @@ async def run_event_setup(interaction: discord.Interaction, bot):
                 modal_title="Draft Posting Time",
                 modal_label="Time",
                 timeout_cmd="setup_events",
+                cancel_event=cancel_event,
             )
             if not draft_time_raw:
                 return
@@ -4030,7 +4128,9 @@ async def run_event_setup(interaction: discord.Interaction, bot):
             "*(This applies to all events)*",
             view=warn_view,
         )
-        await warn_view.wait()
+        await wait_view_or_cancel(warn_view, cancel_event)
+        if warn_view.cancelled:
+            return
         if warn_view.selected is None:
             await channel.send("⏰ Timed out. Run `/setup_events` to start again.")
             return
@@ -4121,7 +4221,9 @@ async def run_event_setup(interaction: discord.Interaction, bot):
                 f"**Step 5 of 5 — Your Events:**\n{event_display}",
                 view=list_view,
             )
-            await list_view.wait()
+            await wait_view_or_cancel(list_view, cancel_event)
+            if list_view.cancelled:
+                return
 
             if not list_view.action:
                 await channel.send("⏰ Timed out. Run `/setup_events` to start again.")
@@ -4179,6 +4281,7 @@ async def run_event_setup(interaction: discord.Interaction, bot):
                             modal_title="Event Time",
                             modal_label="Time",
                             timeout_cmd="setup_events",
+                            cancel_event=cancel_event,
                         )
                     else:
                         time_raw = await ask_text(
@@ -4215,7 +4318,9 @@ async def run_event_setup(interaction: discord.Interaction, bot):
                     "Does this event repeat on a fixed cycle, or do you add it manually each time?",
                     view=sched_view,
                 )
-                await sched_view.wait()
+                await wait_view_or_cancel(sched_view, cancel_event)
+                if sched_view.cancelled:
+                    return
                 if not sched_view.selected:
                     await channel.send("⏰ Timed out. Run `/setup_events` to start again.")
                     return False
@@ -4248,6 +4353,7 @@ async def run_event_setup(interaction: discord.Interaction, bot):
                         modal_title="Cycle Interval",
                         modal_label="Days between occurrences",
                         timeout_cmd="setup_events",
+                        cancel_event=cancel_event,
                     )
                     if not interval_raw:
                         return False
@@ -4305,7 +4411,9 @@ async def run_event_setup(interaction: discord.Interaction, bot):
                     blurb_msg += f"\n**Existing:** `{cur_blurb[:100]}{'...' if len(cur_blurb) > 100 else ''}`"
 
                 await channel.send(blurb_msg, view=blurb_view)
-                await blurb_view.wait()
+                await wait_view_or_cancel(blurb_view, cancel_event)
+                if blurb_view.cancelled:
+                    return
                 if not blurb_view.choice:
                     await channel.send("⏰ Timed out. Run `/setup_events` to start again.")
                     return False
@@ -4415,7 +4523,9 @@ async def run_birthday_setup(interaction: discord.Interaction, bot):
         "Should the bot track member birthdays from your Google Sheet?",
         view=enabled_view,
     )
-    await enabled_view.wait()
+    await wait_view_or_cancel(enabled_view, cancel_event)
+    if enabled_view.cancelled:
+        return
     if enabled_view.selected is None:
         await channel.send("⏰ Timed out. Run `/setup_birthdays` to start again.")
         return
@@ -4436,6 +4546,7 @@ async def run_birthday_setup(interaction: discord.Interaction, bot):
         modal_title="Sheet Tab Name",
         modal_label="Tab name",
         timeout_cmd="setup_birthdays",
+        cancel_event=cancel_event,
     )
     if tab_name is None:
         return
@@ -4453,6 +4564,7 @@ async def run_birthday_setup(interaction: discord.Interaction, bot):
         modal_title="Name Column",
         modal_label="Column letter",
         timeout_cmd="setup_birthdays",
+        cancel_event=cancel_event,
     )
     if name_col_raw is None:
         return
@@ -4470,6 +4582,7 @@ async def run_birthday_setup(interaction: discord.Interaction, bot):
         modal_title="Birthday Column",
         modal_label="Column letter",
         timeout_cmd="setup_birthdays",
+        cancel_event=cancel_event,
     )
     if bday_col_raw is None:
         return
@@ -4485,7 +4598,9 @@ async def run_birthday_setup(interaction: discord.Interaction, bot):
         "Should the bot automatically add members to the train schedule on their birthday?",
         view=train_view,
     )
-    await train_view.wait()
+    await wait_view_or_cancel(train_view, cancel_event)
+    if train_view.cancelled:
+        return
     if train_view.selected is None:
         await channel.send("⏰ Timed out. Run `/setup_birthdays` to start again.")
         return
@@ -4526,7 +4641,9 @@ async def run_birthday_setup(interaction: discord.Interaction, bot):
             "If the member's birthday is already taken on the train schedule, what should the bot do?",
             view=placement_view,
         )
-        await placement_view.wait()
+        await wait_view_or_cancel(placement_view, cancel_event)
+        if placement_view.cancelled:
+            return
         if placement_view.selected is None:
             await channel.send("⏰ Timed out. Run `/setup_birthdays` to start again.")
             return
@@ -4545,6 +4662,7 @@ async def run_birthday_setup(interaction: discord.Interaction, bot):
             modal_title="Lookahead Days",
             modal_label="Number of days",
             timeout_cmd="setup_birthdays",
+            cancel_event=cancel_event,
         )
         if lookahead_raw is None:
             return
@@ -4564,7 +4682,9 @@ async def run_birthday_setup(interaction: discord.Interaction, bot):
         f"*(It will post: \"🎂 Today is **[name]**'s birthday!\")*",
         view=remind_view,
     )
-    await remind_view.wait()
+    await wait_view_or_cancel(remind_view, cancel_event)
+    if remind_view.cancelled:
+        return
     if remind_view.selected is None:
         await channel.send("⏰ Timed out. Run `/setup_birthdays` to start again.")
         return
@@ -4590,7 +4710,9 @@ async def run_birthday_setup(interaction: discord.Interaction, bot):
             "Which channel should birthday announcements be posted in?",
             view=remind_ch_view,
         )
-        await remind_ch_view.wait()
+        await wait_view_or_cancel(remind_ch_view, cancel_event)
+        if remind_ch_view.cancelled:
+            return
         if not remind_ch_view.confirmed:
             await channel.send("⏰ Timed out. Run `/setup_birthdays` to start again.")
             return
@@ -4614,6 +4736,7 @@ async def run_birthday_setup(interaction: discord.Interaction, bot):
                 modal_title="Reminder Time",
                 modal_label="Time",
                 timeout_cmd="setup_birthdays",
+                cancel_event=cancel_event,
             )
             if time_raw is None:
                 return

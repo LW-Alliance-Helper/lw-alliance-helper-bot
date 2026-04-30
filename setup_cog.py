@@ -528,14 +528,30 @@ async def ask_keep_or_change(
     modal_label: str,
     timeout_cmd: str | None = None,
     cancel_event=None,
+    current: str | None = None,
 ) -> str | None:
     """Show a `Use default / Define your own` view and return the chosen value.
 
-    The default is shown directly in the button label so the prompt body never
-    has to repeat it. Returns None on timeout (and posts a timeout message
-    referencing `timeout_cmd` if provided), or on /cancel (silently — the
-    /cancel command itself acks the user).
+    Two-vs-three button rendering:
+      * If `current` is None or equals `default`, render the original
+        two-button layout: **✅ Use default: {default}** / **✏️ Define
+        my own**. The keep button returns `default`.
+      * If `current` is provided AND differs from `default`, render
+        three buttons: **✅ Keep current: {current}** / **↩️ Use
+        default: {default}** / **✏️ Define my own**. This stops the
+        wizard from labelling a previously-saved guild value as the
+        "default" (which is misleading — "default" should mean the
+        bot's hardcoded baseline, not whatever the guild last entered)
+        while still letting the user revert to that baseline in one
+        click instead of typing it manually.
+
+    The button labels include the value so the prompt body never has to
+    repeat it. Returns None on timeout (and posts a timeout message
+    referencing `timeout_cmd` if provided), or on /cancel (silently —
+    the /cancel command itself acks the user).
     """
+    has_distinct_current = bool(current) and current != default
+    pre_filled = current if has_distinct_current else default
 
     class KeepOrChangeDefaultView(discord.ui.View):
         def __init__(self):
@@ -543,34 +559,65 @@ async def ask_keep_or_change(
             self.value     = None
             self.confirmed = False
 
-        @discord.ui.button(
-            label=f"✅ Use default: {default}"[:80],
-            style=discord.ButtonStyle.success,
-        )
-        async def keep(self, inter: discord.Interaction, button: discord.ui.Button):
-            self.value     = default
-            self.confirmed = True
-            for item in self.children: item.disabled = True
-            await inter.response.edit_message(
-                content=f"✅ Using **{default}**", view=self
+            # Build buttons explicitly so we can vary the layout based on
+            # whether `current` differs from `default`. Decorator-based
+            # buttons can't be conditionally added.
+            keep_label = (
+                f"✅ Keep current: {current}"[:80]
+                if has_distinct_current else
+                f"✅ Use default: {default}"[:80]
             )
-            self.stop()
+            keep_btn = discord.ui.Button(label=keep_label, style=discord.ButtonStyle.success)
 
-        @discord.ui.button(label="✏️ Define my own", style=discord.ButtonStyle.secondary)
-        async def change(self, inter: discord.Interaction, button: discord.ui.Button):
-            modal = TextInputModal(modal_title, modal_label, default=default)
-            await inter.response.send_modal(modal)
-            await modal.wait()
-            self.value     = (modal.value or default).strip() or default
-            self.confirmed = True
-            for item in self.children: item.disabled = True
-            try:
-                await inter.message.edit(
-                    content=f"✅ Using **{self.value}**", view=self
+            async def _keep_cb(inter: discord.Interaction):
+                chosen         = current if has_distinct_current else default
+                self.value     = chosen
+                self.confirmed = True
+                for item in self.children: item.disabled = True
+                await inter.response.edit_message(
+                    content=f"✅ Using **{chosen}**", view=self
                 )
-            except discord.HTTPException:
-                pass
-            self.stop()
+                self.stop()
+            keep_btn.callback = _keep_cb
+            self.add_item(keep_btn)
+
+            if has_distinct_current:
+                revert_btn = discord.ui.Button(
+                    label=f"↩️ Use default: {default}"[:80],
+                    style=discord.ButtonStyle.secondary,
+                )
+
+                async def _revert_cb(inter: discord.Interaction):
+                    self.value     = default
+                    self.confirmed = True
+                    for item in self.children: item.disabled = True
+                    await inter.response.edit_message(
+                        content=f"✅ Reverted to default: **{default}**", view=self
+                    )
+                    self.stop()
+                revert_btn.callback = _revert_cb
+                self.add_item(revert_btn)
+
+            change_btn = discord.ui.Button(
+                label="✏️ Define my own", style=discord.ButtonStyle.secondary,
+            )
+
+            async def _change_cb(inter: discord.Interaction):
+                modal = TextInputModal(modal_title, modal_label, default=pre_filled)
+                await inter.response.send_modal(modal)
+                await modal.wait()
+                self.value     = (modal.value or pre_filled).strip() or pre_filled
+                self.confirmed = True
+                for item in self.children: item.disabled = True
+                try:
+                    await inter.message.edit(
+                        content=f"✅ Using **{self.value}**", view=self
+                    )
+                except discord.HTTPException:
+                    pass
+                self.stop()
+            change_btn.callback = _change_cb
+            self.add_item(change_btn)
 
     view = KeepOrChangeDefaultView()
     await channel.send(prompt, view=view)
@@ -1620,13 +1667,17 @@ async def run_growth_setup(interaction: discord.Interaction, bot):
     from config import get_growth_config, save_growth_config
     current = get_growth_config(guild_id)
 
-    # Defaults: prefer previously saved value, otherwise hardcoded fallback
-    DEFAULT_TAB_SOURCE     = current.get("tab_source")     or "Squad Powers"
-    DEFAULT_DATA_START_ROW = current.get("data_start_row") or 2
-    DEFAULT_NAME_COL       = current.get("name_col")       or "A"
-    DEFAULT_TAB_GROWTH     = current.get("tab_growth")     or "Growth Tracking"
-    DEFAULT_SNAPSHOT_DAY      = current.get("snapshot_day")      or 1
-    DEFAULT_SNAPSHOT_INTERVAL = current.get("snapshot_interval") or 30
+    # Hardcoded defaults — what the bot ships with. These are passed as
+    # `default=` to ask_keep_or_change. The user's previously-saved value
+    # (if any) is passed as `current=` so the wizard can label it
+    # accurately ("Keep current: X" vs "Use default: Y") instead of
+    # showing every saved value as the "default".
+    DEFAULT_TAB_SOURCE        = "Squad Powers"
+    DEFAULT_DATA_START_ROW    = 2
+    DEFAULT_NAME_COL          = "A"
+    DEFAULT_TAB_GROWTH        = "Growth Tracking"
+    DEFAULT_SNAPSHOT_DAY      = 1
+    DEFAULT_SNAPSHOT_INTERVAL = 30
 
     await channel.send(
         "⚙️ **Growth Tracking Setup**\n"
@@ -1670,6 +1721,7 @@ async def run_growth_setup(interaction: discord.Interaction, bot):
         "Which tab in your Google Sheet contains your member data?\n"
         "⚠️ *Make sure this tab exists in your sheet.*",
         default=DEFAULT_TAB_SOURCE,
+        current=current.get("tab_source", ""),
         modal_title="Source Tab",
         modal_label="Tab name",
         timeout_cmd="setup_growth",
@@ -1684,6 +1736,7 @@ async def run_growth_setup(interaction: discord.Interaction, bot):
         "**Step 3 of 7 — Data Start Row**\n"
         "Which row does your member data start on? (Row 1 is usually the header)",
         default=str(DEFAULT_DATA_START_ROW),
+        current=str(current.get("data_start_row") or ""),
         modal_title="Data Start Row",
         modal_label="Row number",
         timeout_cmd="setup_growth",
@@ -1703,6 +1756,7 @@ async def run_growth_setup(interaction: discord.Interaction, bot):
         "**Step 4 of 7 — Name Column**\n"
         "Which column contains the member's name?",
         default=DEFAULT_NAME_COL,
+        current=current.get("name_col", ""),
         modal_title="Name Column",
         modal_label="Column letter",
         timeout_cmd="setup_growth",
@@ -1910,6 +1964,7 @@ async def run_growth_setup(interaction: discord.Interaction, bot):
         "Which tab should snapshots be written to?\n"
         "⚠️ *If the tab doesn't exist, the bot will create it automatically.*",
         default=DEFAULT_TAB_GROWTH,
+        current=current.get("tab_growth", ""),
         modal_title="Growth Tracking Tab",
         modal_label="Tab name",
         timeout_cmd="setup_growth",
@@ -1971,6 +2026,7 @@ async def run_growth_setup(interaction: discord.Interaction, bot):
             "**Step 7a of 7 — Snapshot Day**\n"
             "Which day of the month should the snapshot run? (1–28)",
             default=str(DEFAULT_SNAPSHOT_DAY),
+            current=str(current.get("snapshot_day") or ""),
             modal_title="Snapshot Day",
             modal_label="Day of month (1–28)",
             timeout_cmd="setup_growth",
@@ -1988,6 +2044,7 @@ async def run_growth_setup(interaction: discord.Interaction, bot):
             "**Step 7a of 7 — Interval (days)**\n"
             "How many days between each snapshot?",
             default=str(DEFAULT_SNAPSHOT_INTERVAL),
+            current=str(current.get("snapshot_interval") or ""),
             modal_title="Interval",
             modal_label="Days between snapshots",
             timeout_cmd="setup_growth",
@@ -2090,13 +2147,13 @@ async def run_train_setup(interaction: discord.Interaction, bot):
     )
 
     # ── Step 1: Sheet tab ──────────────────────────────────────────────────────
-    default_tab = current["tab_name"] or "Train Schedule"
-    tab_name    = await ask_keep_or_change(
+    tab_name = await ask_keep_or_change(
         channel,
         "**Step 1 of 7 — Schedule Sheet Tab**\n"
         "Which tab in your Google Sheet stores the train schedule?\n"
         "⚠️ *Make sure this tab exists in your sheet before continuing.*",
-        default=default_tab,
+        default="Train Schedule",
+        current=current.get("tab_name", ""),
         modal_title="Sheet Tab Name",
         modal_label="Tab name",
         timeout_cmd="setup_train",
@@ -2354,6 +2411,7 @@ async def run_train_setup(interaction: discord.Interaction, bot):
                 f"What time should the reminder fire? *(in your timezone: {tz_label})*\n"
                 f"*(e.g. `10:00pm`, `9:00am`)*",
                 default="10:00pm",
+                current=current.get("reminder_time", ""),
                 modal_title="Reminder Time",
                 modal_label="Time",
                 timeout_cmd="setup_train",
@@ -2681,13 +2739,13 @@ async def run_survey_setup(interaction: discord.Interaction, bot,
     survey_notify_channel_id = notify_ch_view.selected_channel.id
 
     # ── Step 3: Squad Powers tab ───────────────────────────────────────────────
-    default_sp_tab   = current.get("tab_squad_powers") or "Squad Powers"
     tab_squad_powers = await ask_keep_or_change(
         channel,
         "**Step 3 of 6 — Member Statistics Tab**\n"
         "Which tab stores your members' statistics? We will update this sheet on each submission.\n"
         "⚠️ *Make sure this tab exists in your sheet before continuing.*",
-        default=default_sp_tab,
+        default="Squad Powers",
+        current=current.get("tab_squad_powers", ""),
         modal_title="Member Statistics Tab",
         modal_label="Tab name",
         timeout_cmd="setup_survey",
@@ -2697,13 +2755,13 @@ async def run_survey_setup(interaction: discord.Interaction, bot,
         return
 
     # ── Step 4: Survey History tab ─────────────────────────────────────────────
-    default_hist_tab = current.get("tab_history") or "Survey History"
-    tab_history      = await ask_keep_or_change(
+    tab_history = await ask_keep_or_change(
         channel,
         "**Step 4 of 6 — Survey History Tab**\n"
         "Which tab stores the full history of all submissions?\n"
         "⚠️ *Make sure this tab exists in your sheet before continuing.*",
-        default=default_hist_tab,
+        default="Survey History",
+        current=current.get("tab_history", ""),
         modal_title="Survey History Tab",
         modal_label="Tab name",
         timeout_cmd="setup_survey",
@@ -3184,15 +3242,16 @@ async def run_storm_setup(interaction: discord.Interaction, bot, event_type: str
     is_premium_flag = await premium.is_premium(guild_id, interaction=interaction)
 
     # ── Step 1: Sheet tab ──────────────────────────────────────────────────────
-    default_tab = current.get("tab_name") or ("DS Assignments" if event_type == "DS" else "CS Assignments")
-    tab_name    = await ask_keep_or_change(
+    hardcoded_tab = "DS Assignments" if event_type == "DS" else "CS Assignments"
+    tab_name = await ask_keep_or_change(
         channel,
         f"**Step 1 of 6 — Sheet Tab**\n"
         f"Which tab in your Google Sheet stores the {label} zone assignments?\n"
         f"⚠️ *Make sure this tab exists in your sheet before continuing.*\n"
         f"ℹ️ *The bot will manage the data structure of this tab automatically — "
         f"you don't need to set up any specific columns or formatting beforehand.*",
-        default=default_tab,
+        default=hardcoded_tab,
+        current=current.get("tab_name", ""),
         modal_title="Sheet Tab Name",
         modal_label="Tab name",
         timeout_cmd=cmd_name,
@@ -3540,16 +3599,15 @@ async def _run_storm_participation_step(
         }
 
     # ── 6.2 Sheet tab ──────────────────────────────────────────────────────────
-    default_tab = cur_part.get("tab_name") or (
-        "DS Participation Log" if event_type == "DS" else "CS Participation Log"
-    )
+    hardcoded_tab = "DS Participation Log" if event_type == "DS" else "CS Participation Log"
     tab_name = await ask_keep_or_change(
         channel,
         f"**Step 6.1 — Participation Sheet Tab**\n"
         f"Which tab should the bot write {label} participation rows to?\n"
         f"ℹ️ *The bot will create this tab automatically if it doesn't exist "
         f"and will manage the column structure based on the questions you define.*",
-        default=default_tab,
+        default=hardcoded_tab,
+        current=cur_part.get("tab_name", ""),
         modal_title="Participation Tab",
         modal_label="Tab name",
         timeout_cmd=cmd_name,
@@ -3559,9 +3617,10 @@ async def _run_storm_participation_step(
         return None
 
     # ── 6.3 Roster source ──────────────────────────────────────────────────────
-    # Smart default: prefer a previously-saved roster source for this event
-    # type, else fall back to the survey stats tab if configured, else
-    # birthday tab, else empty.
+    # Smart "current" suggestion: prefer a previously-saved roster source
+    # for this event type, else fall back to the survey stats tab if
+    # configured, else birthday tab. The hardcoded default ("Squad
+    # Powers") is the bot's baseline if none of those exist either.
     survey_cfg     = get_survey_config(guild_id) or {}
     birthday_cfg   = get_birthday_config(guild_id) or {}
     suggested_tab  = (
@@ -3577,7 +3636,8 @@ async def _run_storm_participation_step(
         f"member names from here when you use a `Roster names` question.\n"
         f"*Tip: this is often the same tab you use for `/setup_survey` or "
         f"`/setup_birthdays`.*",
-        default=suggested_tab or "Squad Powers",
+        default="Squad Powers",
+        current=suggested_tab,
         modal_title="Roster Tab",
         modal_label="Tab name",
         timeout_cmd=cmd_name,
@@ -3586,12 +3646,17 @@ async def _run_storm_participation_step(
     if roster_tab is None:
         return None
 
-    name_col_default = str(cur_part.get("roster_name_col", 0))
+    saved_name_col_idx = cur_part.get("roster_name_col")
     raw_name_col = await ask_keep_or_change(
         channel,
         f"**Step 6.3 — Roster Source: Name Column**\n"
         f"Which column letter has the member name? (e.g. `A`, `B`, `E`)",
-        default=_col_index_to_letter(int(name_col_default) if name_col_default.isdigit() else 0),
+        default="A",
+        current=(
+            _col_index_to_letter(saved_name_col_idx)
+            if isinstance(saved_name_col_idx, int) and saved_name_col_idx >= 0
+            else ""
+        ),
         modal_title="Name column",
         modal_label="Column letter",
         timeout_cmd=cmd_name,
@@ -3621,16 +3686,18 @@ async def _run_storm_participation_step(
 
     roster_alias_col = -1
     if alias_view.selected:
-        alias_default = cur_part.get("roster_alias_col")
-        alias_default_str = (
-            _col_index_to_letter(alias_default)
-            if alias_default is not None and alias_default >= 0
-            else _col_index_to_letter(roster_name_col + 1)
-        )
+        saved_alias = cur_part.get("roster_alias_col")
+        # Hardcoded default = column right after the name column (a sensible
+        # convention). Saved value (if any) is shown as "current".
         raw_alias = await ask_keep_or_change(
             channel,
             "**Alias Column**\nWhich column letter has the alias / nickname?",
-            default=alias_default_str,
+            default=_col_index_to_letter(roster_name_col + 1),
+            current=(
+                _col_index_to_letter(saved_alias)
+                if isinstance(saved_alias, int) and saved_alias >= 0
+                else ""
+            ),
             modal_title="Alias column",
             modal_label="Column letter",
             timeout_cmd=cmd_name,
@@ -3643,13 +3710,13 @@ async def _run_storm_participation_step(
             await channel.send(f"⚠️ `{raw_alias}` isn't a valid column letter. Run `/{cmd_name}` to start again.")
             return None
 
-    start_row_default = str(cur_part.get("roster_start_row", 2))
     raw_start = await ask_keep_or_change(
         channel,
         "**Step 6.5 — Roster Source: First Data Row**\n"
         "In your existing roster tab above, which row does the member data start on? "
         "Usually `2` if your sheet has a header row in row 1.",
-        default=start_row_default,
+        default="2",
+        current=str(cur_part.get("roster_start_row") or ""),
         modal_title="Data start row",
         modal_label="Row number",
         timeout_cmd=cmd_name,
@@ -4118,7 +4185,8 @@ async def run_event_setup(interaction: discord.Interaction, bot):
                 f"**Step 3 of 5 — Draft Posting Time**\n"
                 f"What time should the bot post the draft each event day? *(in {tz_label})*\n"
                 f"*(e.g. `12:00pm` for noon)*",
-                default=draft_time or "12:00",
+                default="12:00",
+                current=draft_time or "",
                 modal_title="Draft Posting Time",
                 modal_label="Time",
                 timeout_cmd="setup_events",
@@ -4297,12 +4365,18 @@ async def run_event_setup(interaction: discord.Interaction, bot):
                 default_time  = None
                 while True:
                     if existing_time:
+                        # Editing an event — there's no hardcoded baseline
+                        # for "event time" since it varies per event. Pass
+                        # `current` AND `default` as the same existing
+                        # value; the helper's `current == default` branch
+                        # renders the standard two-button layout.
                         time_raw = await ask_keep_or_change(
                             channel,
                             f"**{name} — Event Time**\n"
                             f"What time does this event usually start? *(in {tz_label})*\n"
                             f"*(e.g. `10:15pm`, `9:00am`)*",
                             default=existing_time,
+                            current=existing_time,
                             modal_title="Event Time",
                             modal_label="Time",
                             timeout_cmd="setup_events",
@@ -4374,7 +4448,12 @@ async def run_event_setup(interaction: discord.Interaction, bot):
                         channel,
                         f"**{name} — Cycle Interval**\n"
                         "How many days between each occurrence? (e.g. `3`)",
-                        default=str(interval_days or 3),
+                        default="3",
+                        current=(
+                            str(existing['interval_days'])
+                            if existing and existing.get('interval_days')
+                            else ""
+                        ),
                         modal_title="Cycle Interval",
                         modal_label="Days between occurrences",
                         timeout_cmd="setup_events",
@@ -4561,13 +4640,13 @@ async def run_birthday_setup(interaction: discord.Interaction, bot):
         return
 
     # ── Step 2: Sheet tab ─────────────────────────────────────────────────────
-    default_tab = current.get("tab_name") or "Birthdays"
-    tab_name    = await ask_keep_or_change(
+    tab_name = await ask_keep_or_change(
         channel,
         "**Step 2 of 8 — Sheet Tab**\n"
         "Which tab in your Google Sheet contains birthday data?\n"
         "⚠️ *Make sure this tab exists in your sheet before continuing.*",
-        default=default_tab,
+        default="Birthdays",
+        current=current.get("tab_name", ""),
         modal_title="Sheet Tab Name",
         modal_label="Tab name",
         timeout_cmd="setup_birthdays",
@@ -4581,11 +4660,17 @@ async def run_birthday_setup(interaction: discord.Interaction, bot):
     discord_id_col = current.get("discord_id_col", -1)
 
     # ── Step 3: Name column ────────────────────────────────────────────────────
+    saved_name_col = current.get("name_col")
     name_col_raw = await ask_keep_or_change(
         channel,
         "**Step 3 of 8 — Name Column**\n"
         "Which column contains the member's name?",
-        default=index_to_letter(current.get("name_col", 0)),
+        default="A",
+        current=(
+            index_to_letter(saved_name_col)
+            if isinstance(saved_name_col, int) and saved_name_col >= 0
+            else ""
+        ),
         modal_title="Name Column",
         modal_label="Column letter",
         timeout_cmd="setup_birthdays",
@@ -4599,11 +4684,17 @@ async def run_birthday_setup(interaction: discord.Interaction, bot):
         return
 
     # ── Step 4: Birthday column ────────────────────────────────────────────────
+    saved_bday_col = current.get("birthday_col")
     bday_col_raw = await ask_keep_or_change(
         channel,
         "**Step 4 of 8 — Birthday Column**\n"
         "Which column contains the member's birthday?",
-        default=index_to_letter(current.get("birthday_col", 1)),
+        default="B",
+        current=(
+            index_to_letter(saved_bday_col)
+            if isinstance(saved_bday_col, int) and saved_bday_col >= 0
+            else ""
+        ),
         modal_title="Birthday Column",
         modal_label="Column letter",
         timeout_cmd="setup_birthdays",
@@ -4683,7 +4774,8 @@ async def run_birthday_setup(interaction: discord.Interaction, bot):
             "schedule? This only applies to train-integration auto-placement; "
             "the birthday announcement itself always fires on the day.\n"
             "*(we recommend 14)*",
-            default=str(current.get("lookahead_days", 14) or 14),
+            default="14",
+            current=str(current.get("lookahead_days") or ""),
             modal_title="Lookahead Days",
             modal_label="Number of days",
             timeout_cmd="setup_birthdays",
@@ -4758,6 +4850,7 @@ async def run_birthday_setup(interaction: discord.Interaction, bot):
                 f"What time should birthday announcements be posted? *(in {tz_label})*\n"
                 f"*(e.g. `8:00am`, `12:00pm`)*",
                 default="8:00am",
+                current=current.get("reminder_time", ""),
                 modal_title="Reminder Time",
                 modal_label="Time",
                 timeout_cmd="setup_birthdays",

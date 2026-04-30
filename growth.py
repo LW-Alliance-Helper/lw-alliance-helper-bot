@@ -20,10 +20,78 @@ Sheet structure (Growth Tracking tab):
 
 import os
 import json
-from datetime import datetime, date
+from datetime import datetime, date, timedelta
 from zoneinfo import ZoneInfo
 
 ET = ZoneInfo("America/New_York")
+
+# Snapshots fire at 22:00 ET (10pm) — matches bot.growth_task. Single source
+# of truth so compute_next_snapshot stays in sync with the scheduler.
+SNAPSHOT_FIRE_HOUR_ET = 22
+
+# Anchor for interval-based schedules: every N days from this date. Matches
+# the epoch baked into bot.growth_task.
+INTERVAL_EPOCH = date(2026, 1, 1)
+
+
+def compute_next_snapshot(gcfg: dict, now: datetime | None = None) -> datetime | None:
+    """Compute the next scheduled snapshot datetime, in America/New_York.
+
+    Returns None if growth tracking isn't enabled. Otherwise returns the
+    next datetime at which `bot.growth_task` will actually fire — i.e.
+    22:00 ET on:
+      * monthly  → the next occurrence of day == snapshot_day (1–28)
+      * interval → the next date where (date - INTERVAL_EPOCH).days is a
+                   multiple of snapshot_interval
+
+    `now` is injectable for tests; defaults to the real current time. If
+    a naive datetime is passed it's interpreted as ET to keep the
+    semantics consistent with the scheduler.
+    """
+    if not gcfg.get("enabled"):
+        return None
+
+    if now is None:
+        now = datetime.now(tz=ET)
+    elif now.tzinfo is None:
+        now = now.replace(tzinfo=ET)
+    else:
+        now = now.astimezone(ET)
+
+    today = now.date()
+    freq  = gcfg.get("snapshot_frequency", "monthly")
+
+    if freq == "monthly":
+        # Stored value is always clamped to 1..28 by the wizard, so we can
+        # rely on the date being valid in every month.
+        day = max(1, min(28, int(gcfg.get("snapshot_day", 1))))
+        candidate = today.replace(day=day)
+        if candidate < today or (
+            candidate == today and now.hour >= SNAPSHOT_FIRE_HOUR_ET
+        ):
+            year, month = today.year, today.month + 1
+            if month > 12:
+                year, month = year + 1, 1
+            candidate = date(year, month, day)
+        return datetime(
+            candidate.year, candidate.month, candidate.day,
+            SNAPSHOT_FIRE_HOUR_ET, 0, tzinfo=ET,
+        )
+
+    if freq == "interval":
+        interval = max(1, int(gcfg.get("snapshot_interval", 30)))
+        delta    = (today - INTERVAL_EPOCH).days
+        remainder = delta % interval
+        if remainder == 0 and now.hour < SNAPSHOT_FIRE_HOUR_ET:
+            candidate = today
+        else:
+            candidate = today + timedelta(days=interval - remainder)
+        return datetime(
+            candidate.year, candidate.month, candidate.day,
+            SNAPSHOT_FIRE_HOUR_ET, 0, tzinfo=ET,
+        )
+
+    return None
 
 
 

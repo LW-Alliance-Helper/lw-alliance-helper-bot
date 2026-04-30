@@ -464,6 +464,18 @@ async def growth_slash(interaction: discord.Interaction):
     embed.add_field(name="Source Tab",     value=gcfg.get("tab_source", "*not set*"),            inline=False)
     embed.add_field(name="Growth Tab",     value=gcfg.get("tab_growth", "*not set*"),            inline=False)
     embed.add_field(name="Snapshot",       value=sched,                                          inline=False)
+
+    if enabled:
+        from growth import compute_next_snapshot
+        next_dt = compute_next_snapshot(gcfg)
+        if next_dt is not None:
+            ts = int(next_dt.timestamp())
+            embed.add_field(
+                name="Next Snapshot",
+                value=f"<t:{ts}:F> (<t:{ts}:R>)",
+                inline=False,
+            )
+
     embed.add_field(
         name=f"Metrics ({len(metrics)})",
         value=("\n".join(f"• **{m['label']}** — column {m['col']}" for m in metrics) or "*none configured*")[:1024],

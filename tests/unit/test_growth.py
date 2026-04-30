@@ -1,7 +1,10 @@
 """
 Unit tests for growth.py — load_member_data, _run_growth_snapshot_inner,
-snapshot skipping logic, column header generation.
+snapshot skipping logic, column header generation, and the
+compute_next_snapshot helper used to surface "next fire" date in
+/setup_growth and /growth.
 """
+from datetime import datetime
 import pytest
 from unittest.mock import patch, MagicMock, call
 import sys, os
@@ -255,3 +258,162 @@ class TestRunGrowthSnapshotInner:
         mock_sh.add_worksheet.assert_called_once_with(
             title="New Growth Tab", rows=500, cols=50
         )
+
+
+# ── Next-snapshot date helper ─────────────────────────────────────────────────
+
+class TestComputeNextSnapshot:
+    """The wizard and /growth use this to tell users when the next snapshot
+    will fire. Must stay aligned with the scheduling logic in
+    bot.growth_task — same epoch (2026-01-01), same fire hour (22:00 ET)."""
+
+    def _now(self, year, month, day, hour=12):
+        from growth import ET
+        return datetime(year, month, day, hour, 0, tzinfo=ET)
+
+    def test_returns_none_when_disabled(self):
+        from growth import compute_next_snapshot
+        assert compute_next_snapshot({}) is None
+        assert compute_next_snapshot({"enabled": 0}) is None
+
+    # ── Monthly schedule ──────────────────────────────────────────────────────
+
+    def test_monthly_today_before_snapshot_day_returns_this_month(self):
+        from growth import compute_next_snapshot
+        nxt = compute_next_snapshot(
+            {"enabled": 1, "snapshot_frequency": "monthly", "snapshot_day": 5},
+            now=self._now(2026, 5, 1),
+        )
+        assert nxt.date().isoformat() == "2026-05-05"
+        assert nxt.hour == 22
+
+    def test_monthly_today_equals_snapshot_day_before_22_returns_today(self):
+        from growth import compute_next_snapshot
+        nxt = compute_next_snapshot(
+            {"enabled": 1, "snapshot_frequency": "monthly", "snapshot_day": 5},
+            now=self._now(2026, 5, 5, hour=14),
+        )
+        assert nxt.date().isoformat() == "2026-05-05"
+
+    def test_monthly_today_equals_snapshot_day_after_22_returns_next_month(self):
+        from growth import compute_next_snapshot
+        nxt = compute_next_snapshot(
+            {"enabled": 1, "snapshot_frequency": "monthly", "snapshot_day": 5},
+            now=self._now(2026, 5, 5, hour=23),
+        )
+        assert nxt.date().isoformat() == "2026-06-05"
+
+    def test_monthly_today_after_snapshot_day_returns_next_month(self):
+        from growth import compute_next_snapshot
+        nxt = compute_next_snapshot(
+            {"enabled": 1, "snapshot_frequency": "monthly", "snapshot_day": 5},
+            now=self._now(2026, 5, 15),
+        )
+        assert nxt.date().isoformat() == "2026-06-05"
+
+    def test_monthly_december_wraps_into_january(self):
+        from growth import compute_next_snapshot
+        nxt = compute_next_snapshot(
+            {"enabled": 1, "snapshot_frequency": "monthly", "snapshot_day": 5},
+            now=self._now(2026, 12, 10),
+        )
+        assert nxt.date().isoformat() == "2027-01-05"
+
+    def test_monthly_clamps_snapshot_day_to_28(self):
+        """Stored snapshot_day is already clamped to 1..28 by the wizard,
+        but the helper guards against bad data slipping through."""
+        from growth import compute_next_snapshot
+        nxt = compute_next_snapshot(
+            {"enabled": 1, "snapshot_frequency": "monthly", "snapshot_day": 99},
+            now=self._now(2026, 5, 1),
+        )
+        # Clamps to 28, so May 28 is the next valid fire.
+        assert nxt.day == 28
+
+    # ── Interval schedule ─────────────────────────────────────────────────────
+
+    def test_interval_today_is_epoch_before_22_returns_today(self):
+        """2026-01-01 is the epoch — interval=14 means today is a fire day."""
+        from growth import compute_next_snapshot
+        nxt = compute_next_snapshot(
+            {"enabled": 1, "snapshot_frequency": "interval", "snapshot_interval": 14},
+            now=self._now(2026, 1, 1, hour=14),
+        )
+        assert nxt.date().isoformat() == "2026-01-01"
+        assert nxt.hour == 22
+
+    def test_interval_today_is_epoch_after_22_skips_to_next_window(self):
+        from growth import compute_next_snapshot
+        nxt = compute_next_snapshot(
+            {"enabled": 1, "snapshot_frequency": "interval", "snapshot_interval": 14},
+            now=self._now(2026, 1, 1, hour=23),
+        )
+        assert nxt.date().isoformat() == "2026-01-15"
+
+    def test_interval_today_not_a_multiple_returns_next_multiple(self):
+        from growth import compute_next_snapshot
+        # Jan 5 → 4 days into the cycle, next 14-day mark is Jan 15.
+        nxt = compute_next_snapshot(
+            {"enabled": 1, "snapshot_frequency": "interval", "snapshot_interval": 14},
+            now=self._now(2026, 1, 5),
+        )
+        assert nxt.date().isoformat() == "2026-01-15"
+
+    def test_interval_one_day_returns_today_or_tomorrow(self):
+        """interval=1 should always be today (before 22:00) or tomorrow."""
+        from growth import compute_next_snapshot
+        nxt = compute_next_snapshot(
+            {"enabled": 1, "snapshot_frequency": "interval", "snapshot_interval": 1},
+            now=self._now(2026, 5, 15, hour=14),
+        )
+        assert nxt.date().isoformat() == "2026-05-15"
+
+        nxt2 = compute_next_snapshot(
+            {"enabled": 1, "snapshot_frequency": "interval", "snapshot_interval": 1},
+            now=self._now(2026, 5, 15, hour=23),
+        )
+        assert nxt2.date().isoformat() == "2026-05-16"
+
+    def test_interval_alignment_matches_scheduler_epoch(self):
+        """Critical: the helper's "next fire" must agree with the
+        scheduler's `(today - epoch).days % interval == 0` rule. If we
+        ever change INTERVAL_EPOCH on one side and forget the other,
+        users will see one date but get a snapshot on a different one."""
+        from growth import compute_next_snapshot, INTERVAL_EPOCH
+        # Sanity: epoch matches the bot.growth_task hardcode.
+        assert INTERVAL_EPOCH.isoformat() == "2026-01-01"
+
+        # Pick an arbitrary day, verify the helper returns a date that
+        # would actually trigger the scheduler.
+        from growth import ET
+        from datetime import date as _date
+        now = self._now(2026, 7, 4)
+        for interval in (1, 7, 14, 30, 90):
+            nxt = compute_next_snapshot(
+                {"enabled": 1, "snapshot_frequency": "interval", "snapshot_interval": interval},
+                now=now,
+            )
+            delta = (nxt.date() - INTERVAL_EPOCH).days
+            assert delta % interval == 0, \
+                f"interval={interval}: next={nxt.date()} (delta={delta}) is not a multiple"
+
+    # ── Defensive ─────────────────────────────────────────────────────────────
+
+    def test_unknown_frequency_returns_none(self):
+        from growth import compute_next_snapshot
+        nxt = compute_next_snapshot(
+            {"enabled": 1, "snapshot_frequency": "weekly"},
+            now=self._now(2026, 5, 1),
+        )
+        assert nxt is None
+
+    def test_naive_datetime_treated_as_et(self):
+        """Pass a naive datetime — the helper should interpret it as ET
+        rather than UTC, otherwise the "before 22:00" comparison wraps."""
+        from growth import compute_next_snapshot
+        naive = datetime(2026, 5, 5, 14, 0)  # no tzinfo
+        nxt = compute_next_snapshot(
+            {"enabled": 1, "snapshot_frequency": "monthly", "snapshot_day": 5},
+            now=naive,
+        )
+        assert nxt.date().isoformat() == "2026-05-05"

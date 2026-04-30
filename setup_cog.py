@@ -2018,12 +2018,37 @@ async def run_growth_setup(interaction: discord.Interaction, bot):
     )
     metrics_display = "\n".join(f"• **{m['label']}** — column {m['col']}" for m in metrics)
 
+    # Compute when the very first snapshot will fire under this config so
+    # the user isn't left guessing "OK now what?" when they pick a custom
+    # interval — picking 14 days doesn't tell them whether the first
+    # snapshot is today, tomorrow, or 14 days from now.
+    from growth import compute_next_snapshot
+    next_dt = compute_next_snapshot({
+        "enabled": 1,
+        "snapshot_frequency": snapshot_frequency,
+        "snapshot_day": snapshot_day,
+        "snapshot_interval": snapshot_interval,
+    })
+    if next_dt is not None:
+        ts = int(next_dt.timestamp())
+        # Discord renders <t:N:F> as a localized full date/time per viewer
+        # and <t:N:R> as a relative "in 3 days" string — the combo gives
+        # leadership a clear answer regardless of their personal timezone.
+        next_value = (
+            f"<t:{ts}:F> (<t:{ts}:R>)\n"
+            f"*Want to start tracking from today instead? "
+            f"Run `/growth` and click **📸 Run Snapshot Now**.*"
+        )
+    else:
+        next_value = "*Could not compute — check `/growth` for status.*"
+
     embed = discord.Embed(title="✅ Growth Tracking Configured", color=discord.Color.green())
     embed.add_field(name="Source Tab",        value=tab_source,           inline=False)
     embed.add_field(name="Name Column",       value=f"Column {name_col}", inline=False)
     embed.add_field(name="Data Start Row",    value=str(data_start_row),  inline=False)
     embed.add_field(name="Growth Tab",        value=tab_growth,           inline=False)
     embed.add_field(name="Snapshot Schedule", value=freq_desc,            inline=False)
+    embed.add_field(name="Next Snapshot",     value=next_value,           inline=False)
     embed.add_field(name="Metrics",           value=metrics_display,      inline=False)
     embed.set_footer(text="Run /setup_growth again to update. Use /growth to take a manual snapshot.")
     await channel.send(embed=embed)

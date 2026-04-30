@@ -95,10 +95,15 @@ def _enabled_roster_cfg(discord_id_col: int = 0, tab_name: str = "Member Roster"
     }
 
 
-# Bypass _guard so tests don't need to set up channel categories / roles.
+# Bypass _guard so tests don't need to set up channel categories / roles,
+# and stub config.get_storm_config so tests don't need a seeded SQLite DB
+# just to read `dm_reminder_message`. Tests that want a custom DM template
+# can still wrap their own `patch("config.get_storm_config", ...)` — the
+# inner patch wins under unittest.mock's stacking rules.
 @pytest.fixture
 def _bypass_guard():
-    with patch("storm_log._guard", AsyncMock(return_value=True)):
+    with patch("storm_log._guard", AsyncMock(return_value=True)), \
+         patch("config.get_storm_config", return_value={"dm_reminder_message": ""}):
         yield
 
 
@@ -241,7 +246,6 @@ class TestStormReminderEventTypeLabel:
         send_spy = AsyncMock(return_value=True)
         with patch("config.get_member_roster_config", return_value=_enabled_roster_cfg()), \
              patch("config.get_member_roster_sheet", return_value=_make_sheet(sheet_rows)), \
-             patch("config.get_storm_config", return_value={"dm_reminder_message": ""}), \
              patch("dm.send_dm_to_id", send_spy):
             await _send_storm_reminder(MagicMock(), interaction, "DS")
 
@@ -261,7 +265,6 @@ class TestStormReminderEventTypeLabel:
         send_spy = AsyncMock(return_value=True)
         with patch("config.get_member_roster_config", return_value=_enabled_roster_cfg()), \
              patch("config.get_member_roster_sheet", return_value=_make_sheet(sheet_rows)), \
-             patch("config.get_storm_config", return_value={"dm_reminder_message": ""}), \
              patch("dm.send_dm_to_id", send_spy):
             await _send_storm_reminder(MagicMock(), interaction, "CS")
 

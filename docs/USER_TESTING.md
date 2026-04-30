@@ -29,6 +29,7 @@ While exercising the bot, please pay particular attention to:
 3. **Friction** — Too many steps, too many buttons, awkward order, confusing emoji or icons.
 4. **Broken flows** — Buttons that do nothing, wizards that hang, errors that don't explain themselves.
 5. **Helpful vs. in the way** — Does each command save effort, or does it feel like a chore?
+6. **Errors are actionable** — When something fails, the bot's message should tell you *why* and *what to do next*. Most error messages also include a short **Reference ID** (e.g. `Reference: a1b2c3d4`); copying that into a ticket lets us correlate to the exact failure on our side.
 
 Findings of any of these kinds — including positive ones (a flow that felt particularly smooth) — are useful.
 
@@ -59,6 +60,16 @@ To verify roles: in Discord, right-click your name in the member list and look a
 
 If anything in setup looks off, flag it in **#testing-feedback** before continuing.
 
+### Wizards and `/cancel`
+
+Most setup commands open a multi-step wizard in the channel. If you get stuck mid-wizard — wrong answer, second thoughts, you don't know the next value — run **`/cancel`** and the bot will stop the active wizard cleanly. If `/cancel` ever leaves a wizard hanging (still showing a prompt or buttons after the cancel acknowledgement), please flag it.
+
+### A note on the setup commands
+
+The bot has a family of `/setup_*` wizards (`/setup`, `/setup_train`, `/setup_events`, `/setup_growth`, `/setup_birthdays`, `/setup_desertstorm`, `/setup_canyonstorm`, `/setup_survey`, `/setup_members`). On the testing server these are typically already configured for you. **Do not run `/setup_reset`** on a configured test server — it wipes the whole configuration. Re-running an individual `/setup_*` command to *update* a section is fine and is a useful thing to test.
+
+If you are testing a fresh install (your own private test guild), feel free to walk through `/setup` end-to-end — feedback on first-time setup is especially valuable.
+
 ---
 
 ## Tasks to try
@@ -81,6 +92,7 @@ The bot can post in-game event reminders (Plague Marauder, Zombie Siege, etc.) o
 - [ ] **Try each editor button** — Add Event, Edit Time, Remove Event, Add Announcement Text, Build Announcement. Note whether each button's purpose is clear before clicking.
 - [ ] Run `/events_log`. Note whether the message format and information level feel useful.
 - [ ] Add custom announcement text to today's events, then build the announcement. Note whether confirm vs. cancel is clearly distinguished.
+- [ ] **Custom-blurb round-trip.** Run `/setup_events` and either add a new event or edit one to give it a custom announcement blurb. The only placeholders are `{time}` (event time in the alliance timezone) and `{server_time}` (UTC). Example: *"We will be doing Glacieradon at {time} ({server_time} Server Time)! Remember to start with only 10 hits."* Then run `/events`, add that event to today's schedule, and click **Build Announcement**. The draft should contain your custom wording — *not* a generic "&lt;event_key&gt; at {time} ({server_time} Server Time)." fallback (which would also render the key in lowercase). If the wording is wrong, please flag it.
 
 ---
 
@@ -92,6 +104,7 @@ The bot tracks the daily alliance train assignment and (when configured) generat
 - [ ] **Add a member to today's or tomorrow's slot.** Walk through the wizard. Note any prompts that required guesswork.
 - [ ] If a blurb template is configured, test the **Generate Prompt** button. Note whether the resulting prompt is usable as-is.
 - [ ] Try the **Clear** button and cancel out of the confirmation. Note whether the cancel-result message is clear.
+- [ ] Run `/train_log` to see past entries. Note whether the rendered output is easy to scan.
 
 ---
 
@@ -115,7 +128,7 @@ Mail drafting, participation logging, and event lookups for both DS and CS.
   - Note whether each step's instruction is clear.
   - Note whether it is unambiguous whether the mail has been *posted* yet (vs. only saved as the template for next time).
   - Review the final Post & Copy output.
-- [ ] Repeat with `/canyonstorm_draft`.
+- [ ] Repeat with `/canyonstorm_draft`. The CS draft groups zones under **Stage 1 / Stage 2 / Stage 3** headers and uses full zone names — *Data Center 1*, *Sample Warehouse 2*, *Defense System 1*, *Serum Factory 2*, etc. If you see abbreviated forms (*Dc1*, *Sw2*, *Ds1*, *Sf2*) instead, please flag it.
 
 #### Participation logging
 
@@ -127,6 +140,7 @@ Mail drafting, participation logging, and event lookups for both DS and CS.
 
 - [ ] Run `/desertstorm_log` with no date argument (defaults to today). Review the rendered output.
 - [ ] Run `/desertstorm_log April 14` (or any past date). Note whether the entry was found and rendered cleanly.
+- [ ] Repeat with `/canyonstorm_log` — same flow, same date argument.
 
 ---
 
@@ -155,8 +169,9 @@ The squad-powers survey: members click a button and submit their stats in a priv
 
 Periodic stat snapshots so the alliance can track progress over time.
 
-- [ ] Run `/growth`. Review the status display and available actions.
-- [ ] Take a manual snapshot. Note whether the success message communicates what was captured.
+- [ ] Run `/growth`. Review the status display and available actions. The status should include a **Next Snapshot** date — note whether it's clear when the next automatic snapshot will fire.
+- [ ] Take a manual snapshot via the **📸 Run Snapshot Now** button. Note whether the success message communicates what was captured.
+- [ ] Run `/setup_growth` and pick a custom interval (e.g. every 14 days). The confirmation embed should tell you exactly when the next snapshot will fire and offer a one-click way to start tracking from today instead.
 
 ---
 
@@ -168,9 +183,13 @@ Premium adds member-aware automation: DMs to roster members, multi-survey, sched
 
 Once setup is confirmed, the relevant tasks are:
 
-- [ ] Run `/sync_members` and verify the reported member count.
+- [ ] Run `/setup_members` to walk the roster-sync wizard. The final embed reports how many members were written on the initial sync.
+- [ ] Run `/sync_members` and verify the reported member count **matches the actual size of the test server** (excluding bots). If the count is `0` or wildly low, please flag it — it usually means the bot is missing a server-level permission.
 - [ ] Run `/desertstorm_remind` and `/canyonstorm_remind` to fire DM reminders. Review the DM body for tone and clarity.
 - [ ] In `/survey_remind`, set up a **scheduled** reminder (DM-via-roster delivery) for a time within the next several minutes. Wait for it to fire. Review the DM body.
+- [ ] **Channel/thread destinations.** When a Premium guild's wizard asks for a channel (e.g. an announcement channel), there should be a **📢 Channel** / **🧵 Thread** chooser before the actual picker. Try both paths — pick a thread, run the wizard to completion, and verify the bot posts to the chosen thread.
+
+Run `/upgrade` to see the upgrade flow as a non-premium tester would. The free → premium upsell shows up automatically when a free-tier guild attempts a Premium-only command; please flag any upsell whose wording feels confusing or misleading.
 
 ---
 

@@ -170,6 +170,13 @@ async def on_ready():
         await bot.load_extension("member_roster")
         print(f"[INFO] Member Roster cog loaded")
 
+    # TEMPORARY: load /admin_debug_channels when DEBUG_COMMANDS=1 is set.
+    # Used for production diagnosis of the channel/thread picker issue.
+    # Remove this block + debug_commands.py once the issue is resolved.
+    if os.getenv("DEBUG_COMMANDS") == "1" and "debug_commands" not in bot.extensions:
+        await bot.load_extension("debug_commands")
+        print(f"[INFO] DEBUG cog loaded (DEBUG_COMMANDS=1)")
+
     # ── One-shot: clear guild-scoped slash commands ────────────────────────
     # If CLEAR_GUILD_COMMANDS=1 is set in the environment, push an empty
     # guild-scoped command list to every guild the bot is in. This removes

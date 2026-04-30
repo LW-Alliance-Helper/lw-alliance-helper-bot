@@ -118,6 +118,125 @@ class TestIsFriday:
         assert is_friday(date(2026, 4,  4)) is False  # Saturday
 
 
+# ── parse_time_str ────────────────────────────────────────────────────────────
+
+class TestParseTimeStr:
+    """The /events editor's Add Event handler feeds raw user input through
+    `parse_time_str` to derive (hour, minute) for the new event's
+    datetime. If parsing returns None the editor posts a "Could not
+    parse that time" error and bails — so any regression here breaks
+    leadership's ability to add events at non-default times."""
+
+    # ── 12-hour format ────────────────────────────────────────────────────────
+
+    def test_pm_basic(self):
+        from scheduler import parse_time_str
+        assert parse_time_str("10:15pm") == (22, 15)
+
+    def test_pm_no_minutes(self):
+        from scheduler import parse_time_str
+        assert parse_time_str("5pm") == (17, 0)
+
+    def test_am_basic(self):
+        from scheduler import parse_time_str
+        assert parse_time_str("9:00am") == (9, 0)
+
+    def test_am_no_minutes(self):
+        from scheduler import parse_time_str
+        assert parse_time_str("8am") == (8, 0)
+
+    def test_uppercase_period_accepted(self):
+        from scheduler import parse_time_str
+        assert parse_time_str("10:15PM") == (22, 15)
+
+    def test_mixed_case_period_accepted(self):
+        from scheduler import parse_time_str
+        assert parse_time_str("9:00 Am") == (9, 0)
+
+    def test_whitespace_between_time_and_period(self):
+        from scheduler import parse_time_str
+        assert parse_time_str("9:00 AM") == (9, 0)
+        assert parse_time_str("9:00   am") == (9, 0)
+
+    # ── 12am / 12pm boundary cases ────────────────────────────────────────────
+    # These are the easiest to get wrong — and the ones leadership trips
+    # on most often when entering literal "noon" or "midnight".
+
+    def test_12am_is_midnight(self):
+        from scheduler import parse_time_str
+        assert parse_time_str("12am") == (0, 0)
+
+    def test_12_30am_is_just_past_midnight(self):
+        from scheduler import parse_time_str
+        assert parse_time_str("12:30am") == (0, 30)
+
+    def test_12pm_is_noon(self):
+        from scheduler import parse_time_str
+        assert parse_time_str("12pm") == (12, 0)
+
+    def test_12_30pm_is_just_past_noon(self):
+        from scheduler import parse_time_str
+        assert parse_time_str("12:30pm") == (12, 30)
+
+    # ── 24-hour format ────────────────────────────────────────────────────────
+
+    def test_24h_evening(self):
+        from scheduler import parse_time_str
+        assert parse_time_str("17:00") == (17, 0)
+
+    def test_24h_midnight(self):
+        from scheduler import parse_time_str
+        assert parse_time_str("00:00") == (0, 0)
+
+    def test_24h_noon(self):
+        from scheduler import parse_time_str
+        assert parse_time_str("12:00") == (12, 0)
+
+    def test_24h_late_night(self):
+        from scheduler import parse_time_str
+        assert parse_time_str("23:45") == (23, 45)
+
+    def test_24h_minutes_preserved(self):
+        from scheduler import parse_time_str
+        assert parse_time_str("9:30") == (9, 30)
+
+    # ── 12-hour wins when both formats look plausible ────────────────────────
+
+    def test_12h_format_takes_precedence_over_24h_when_period_present(self):
+        """`10:30pm` should parse as 22:30, not as bare 10:30 (which
+        would be ambiguous). The regex tries 12h first."""
+        from scheduler import parse_time_str
+        assert parse_time_str("10:30pm") == (22, 30)
+
+    # ── Garbage input ─────────────────────────────────────────────────────────
+
+    def test_empty_string_returns_none(self):
+        from scheduler import parse_time_str
+        assert parse_time_str("") is None
+
+    def test_garbage_returns_none(self):
+        from scheduler import parse_time_str
+        assert parse_time_str("not a time") is None
+
+    def test_letters_only_returns_none(self):
+        from scheduler import parse_time_str
+        assert parse_time_str("evening") is None
+
+    def test_lone_number_without_format_returns_none(self):
+        """A bare `5` isn't enough — parser needs at least am/pm or HH:MM."""
+        from scheduler import parse_time_str
+        assert parse_time_str("5") is None
+
+    # ── Surrounding-text tolerance ────────────────────────────────────────────
+    # parse_time_str uses re.search (not match), so it'll find times
+    # embedded in longer strings. Document this behavior so callers know
+    # what they're getting.
+
+    def test_finds_time_embedded_in_sentence(self):
+        from scheduler import parse_time_str
+        assert parse_time_str("event at 10:15pm please") == (22, 15)
+
+
 # ── build_announcement: blurb resolution ─────────────────────────────────────
 
 class TestBuildAnnouncementBlurb:

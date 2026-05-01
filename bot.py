@@ -12,7 +12,7 @@ from scheduler import (
 )
 from stats_publisher import publish_alliance_count
 from zoneinfo import ZoneInfo
-from config import init_db, get_config, get_or_create_config
+from config import init_db, get_config
 
 load_dotenv()
 

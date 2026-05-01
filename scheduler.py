@@ -25,7 +25,7 @@ from zoneinfo import ZoneInfo
 
 import discord
 import discord.ext.commands
-from config import get_config, init_db
+from config import get_config
 
 # ── Channel IDs ────────────────────────────────────────────────────────────────
 ET = ZoneInfo("America/New_York")
@@ -157,11 +157,6 @@ def format_et(dt: datetime) -> str:
     return f"{hour12}:{dt:%M%p}".lower()
 
 
-def __noon_dt_for(event_date: date) -> datetime:
-    run_date = event_date + timedelta(days=1) if is_friday(event_date) else event_date
-    return datetime(run_date.year, run_date.month, run_date.day, 12, 0, tzinfo=ET)
-
-
 def make_et_datetime(run_date: date, hour: int, minute: int) -> datetime:
     return datetime(run_date.year, run_date.month, run_date.day, hour, minute, tzinfo=ET)
 
@@ -260,9 +255,6 @@ def build_warning_message(event_list: list[dict], guild_id: int = None) -> str:
         )
     name = info.get("name") or key
     return f"{name} in 5 minutes! Make sure you're online!"
-
-
-SHIELD_REMINDER = "Buster day reminder - log in and shield up if you aren't going hunting!"
 
 
 # ── Time parsing ───────────────────────────────────────────────────────────────
@@ -926,27 +918,6 @@ async def post_editor(bot, event_list: list[dict], event_key: str, run_date: dat
         view=view,
     )
     print(f"[SCHEDULER] Event editor posted for {event_key}")
-
-
-async def post_shield_draft(bot, event_key: str, cfg=None):
-    if cfg is None:
-        return
-    channel = bot.get_channel(cfg.leadership_channel_id)
-    if channel is None:
-        return
-
-    view = ApprovalView(
-        bot=bot,
-        draft_message=SHIELD_REMINDER,
-        event_key=event_key,
-        is_shield=True,
-        guild_id=cfg.guild_id,
-    )
-    await channel.send(
-        f"🛡️ **Friday shield reminder — please review and approve:**\n\n{SHIELD_REMINDER}",
-        view=view,
-    )
-    print("[SCHEDULER] Shield reminder draft posted")
 
 
 async def fire_warning(bot, event_key: str, event_list: list[dict], cfg=None):

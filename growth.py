@@ -95,13 +95,6 @@ def compute_next_snapshot(gcfg: dict, now: datetime | None = None) -> datetime |
 
 
 
-# Column indices in Squad Powers (0-based)
-SP_USERNAME_COL   = 0   # A
-SP_DISCORD_ID_COL = 1   # B
-SP_SQUAD1_COL     = 2   # C
-SP_SQUAD2_COL     = 4   # E
-SP_SQUAD3_COL     = 6   # G
-
 
 def _get_spreadsheet(guild_id: int = None):
     """Return an authenticated gspread Spreadsheet object."""

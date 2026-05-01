@@ -30,11 +30,6 @@ import discord
 from discord import app_commands
 from discord.ext import commands
 from config import get_config
-from zoneinfo import ZoneInfo
-
-ET = ZoneInfo("America/New_York")
-
-
 
 WIZARD_TIMEOUT = 600  # 10 minutes
 

@@ -23,7 +23,7 @@ import asyncio
 import json
 import os
 import re
-from datetime import datetime, timezone, date as date_cls
+from datetime import datetime, timezone
 
 import discord
 from discord import app_commands
@@ -33,24 +33,6 @@ from config import get_config
 # ── Config ─────────────────────────────────────────────────────────────────────
 
 SURVEY_TIMEOUT      = 600  # 10 minutes per step
-
-SQUAD_TYPES         = ["Missile", "Air", "Tank"]
-PROFESSIONS         = ["War Leader", "Engineer"]
-BANNER_OPTIONS      = ["Yes", "No"]
-AID_REMOVAL_OPTIONS = ["Yes", "Only Medical Aid", "Only Ruin Removal", "No"]
-
-# Squad Powers sheet columns (0-indexed):
-# A=Username, B=Discord ID, C=1st Squad, D=1st Squad Type, E=2nd Squad,
-# F=3rd Squad, G=Drone Level, H=Gorilla Level, I=THP, J=Total Kills,
-# K=Profession, L=Banner, M=Aid/Removal, N=Date Modified
-
-HISTORY_HEADERS = [
-    "Timestamp", "Discord ID", "Username",
-    "1st Squad", "1st Squad Type", "2nd Squad", "3rd Squad",
-    "Drone Level", "Gorilla Level", "Total Hero Power (THP)",
-    "Total Kills", "Profession", "Banner", "Aid/Removal",
-]
-
 
 # ── Sheets helpers ─────────────────────────────────────────────────────────────
 
@@ -69,14 +51,6 @@ def _get_spreadsheet(guild_id: int = None):
     from config import get_spreadsheet_id
     sheet_id = get_spreadsheet_id(guild_id)
     return gc.open_by_key(sheet_id)
-
-
-def _to_millions(val: str) -> str:
-    """Convert a user-entered number to millions. '301' → '301000000'."""
-    try:
-        return str(int(float(val.strip()) * 1_000_000))
-    except (ValueError, AttributeError):
-        return val
 
 
 def update_squad_powers(discord_id: str, username: str, data: dict,
@@ -532,15 +506,6 @@ async def _finalize_survey_thread(thread):
 
 
 # ── Persistent survey button ───────────────────────────────────────────────────
-
-# Custom-id format for the multi-survey answer button. The capture group
-# names the survey (`default` for the guild's main survey, otherwise the
-# `survey_id` from `guild_extra_surveys`).
-SURVEY_BUTTON_CUSTOM_ID_PREFIX = "survey_answer_button"
-SURVEY_BUTTON_CUSTOM_ID_RE     = re.compile(
-    r"^survey_answer_button(?::(?P<survey_id>[A-Za-z0-9_\-]{1,64}))?$"
-)
-
 
 async def _start_survey_answer_flow(interaction: discord.Interaction,
                                     survey_id: str = "default"):
@@ -1377,7 +1342,7 @@ class _DayPickView(discord.ui.View):
 
 async def _run_schedule_wizard(interaction: discord.Interaction, bot, is_premium_flag: bool):
     """Walk leadership through configuring a survey's scheduled reminder."""
-    from config import save_survey_reminder, _parse_12h_time as _parse_time_helper  # type: ignore
+    from config import save_survey_reminder
     # Pick which survey
     survey = await _pick_survey(
         interaction,

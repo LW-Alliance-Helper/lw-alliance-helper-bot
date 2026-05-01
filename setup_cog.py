@@ -4089,11 +4089,6 @@ async def run_event_setup(interaction: discord.Interaction, bot):
             return None
         return reply.content.strip()[:max_chars]
 
-    async def ask_view(prompt: str, view: discord.ui.View):
-        await channel.send(prompt, view=view)
-        await wait_view_or_cancel(view, cancel_event)
-        return view
-
     from config import get_config, get_guild_events, save_guild_event, get_or_create_config, update_config_field
     import re as _re
 

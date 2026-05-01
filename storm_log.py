@@ -35,12 +35,6 @@ WIZARD_TIMEOUT      = 600  # 10 minutes
 # Checked by /cancel in train.py so one command covers everything
 active_logs: dict = {}
 
-LOG_HEADERS = [
-    "Date", "Event", "Vote Count", "RTF No Vote",
-    "Sitting Out", "Prior Sit-Out No Request",
-]
-
-
 # ── Sheets helpers ─────────────────────────────────────────────────────────────
 
 def _get_spreadsheet(guild_id: int = None):
@@ -80,74 +74,6 @@ def _get_log_sheet(guild_id: int = None, event_type: str | None = None):
     cfg = get_config(guild_id)
     tab = cfg.tab_sitouts if cfg else "DS-CS Sit-outs"
     return sh.worksheet(tab)
-
-
-def _ensure_headers(ws):
-    existing = ws.row_values(1)
-    if not any(existing):
-        ws.update("A1", [LOG_HEADERS], value_input_option="USER_ENTERED")
-
-
-def append_log_row(event_type, log_date, vote_count, rtf_no_vote, sitting_out, prior_no_request, guild_id=None):
-    ws = _get_log_sheet(guild_id)
-    _ensure_headers(ws)
-    row = [
-        f"{log_date.month}/{log_date.day}/{log_date.year}",
-        event_type,
-        str(vote_count) if vote_count is not None else "",
-        ", ".join(rtf_no_vote),
-        ", ".join(sitting_out),
-        ", ".join(prior_no_request),
-    ]
-    ws.append_row(row, value_input_option="USER_ENTERED")
-    print(f"[LOG] {event_type} log appended for {log_date.isoformat()}")
-
-
-def load_member_names():
-    """
-    Load member names and aliases from the active member tab.
-    Col E (index 4) = Name, Col F (index 5) = Alias (optional), starting row 10.
-    Returns (names, alias_map) where alias_map is { alias.lower(): full_name }.
-    """
-    try:
-        from train import get_member_tab_name, _get_member_sheet
-        tab_name  = get_member_tab_name()
-        ws        = _get_member_sheet(tab_name)
-        rows      = ws.get_all_values()
-        names     = []
-        alias_map = {}
-        for row in rows[9:]:
-            if len(row) >= 5:
-                name = row[4].strip()
-                if name:
-                    names.append(name)
-                    # Read alias from col F if present
-                    if len(row) >= 6:
-                        alias = row[5].strip()
-                        if alias:
-                            alias_map[alias.lower()] = name
-        print(f"[LOG] Loaded {len(names)} members ({len(alias_map)} aliases) from '{tab_name}'")
-        return names, alias_map
-    except Exception as e:
-        print(f"[LOG] Error loading member names: {e}")
-        return [], {}
-
-
-def get_prior_sitouts(event_type, guild_id=None):
-    try:
-        ws   = _get_log_sheet(guild_id)
-        rows = ws.get_all_values()
-        if len(rows) <= 1:
-            return []
-        for row in reversed(rows[1:]):
-            if len(row) >= 2 and row[1].strip().upper() == event_type.upper():
-                raw = row[4].strip() if len(row) >= 5 else ""
-                if raw:
-                    return [n.strip() for n in raw.split(",") if n.strip()]
-        return []
-    except Exception as e:
-        print(f"[LOG] Error reading prior sit-outs: {e}")
-        return []
 
 
 # ── Name entry modal ──────────────────────────────────────────────────────────
@@ -382,8 +308,7 @@ class ShortSelectView(discord.ui.View):
 def load_roster_from_config(guild_id: int, event_type: str) -> tuple[list[str], dict[str, str]]:
     """
     Read the configured roster source for the given (guild, event_type) and
-    return (names, alias_map). Replaces an earlier hardcoded col-E lookup
-    in `load_member_names()` — every alliance configures their own roster
+    return (names, alias_map). Every alliance configures their own roster
     tab + name column + optional alias column via /setup_desertstorm or
     /setup_canyonstorm.
     """

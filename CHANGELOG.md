@@ -220,6 +220,55 @@ the configured-template flow end-to-end. 501 passed (was 476).
   `ask_keep_or_change` wizard step entry to reflect the new
   current-vs-default 3-button layout.
 
+## [1.0.1] — 2026-05-01
+
+### Fixed
+
+- **`/survey_remind` "Manage scheduled reminders" path no longer
+  fails on entry.** `survey._run_schedule_wizard` opened with
+  `from config import save_survey_reminder, _parse_12h_time as _parse_time_helper`,
+  but `_parse_12h_time` lives in `setup_cog`, not `config`. A
+  `# type: ignore` masked the guaranteed `ImportError`. The aliased
+  name was never used inside the function — the actual time parser
+  is correctly re-imported from `setup_cog` further down. Dropped
+  the broken alias.
+- **`train_ui.run_blurb_wizard_for_entry` no longer fetches a value
+  it doesn't read.** The wizard collects all five schedule-entry
+  fields (`name`, `theme`, `tone`, `notes`, `prompt_retrieved`)
+  fresh on each run, so the unused `existing = schedule.get(...)`
+  line was dead. Removed.
+
+### Removed — dead code (zero callers, verified across the repo)
+
+- `sheets.py` (~85 LOC, OGV-era leftover; nothing imports it).
+- `storm_log.py` legacy log path: `append_log_row`, `LOG_HEADERS`,
+  `_ensure_headers`, `load_member_names`, `get_prior_sitouts`
+  (~80 LOC). Replaced long ago by the configurable participation
+  flow that reads through `get_participation_config`.
+- `scheduler.py` Friday shield workflow: `__noon_dt_for`,
+  `post_shield_draft`, `SHIELD_REMINDER` (~30 LOC). Pre-`/events`-rewrite
+  feature, no longer wired into the scheduler loop.
+- `growth.py` OGV-era column-index constants
+  (`SP_USERNAME_COL` and four siblings).
+- `survey.py` OGV-era constants: `SQUAD_TYPES`, `PROFESSIONS`,
+  `BANNER_OPTIONS`, `AID_REMOVAL_OPTIONS`, `HISTORY_HEADERS`,
+  `SURVEY_BUTTON_CUSTOM_ID_PREFIX`, `SURVEY_BUTTON_CUSTOM_ID_RE`,
+  `_to_millions`. The current dynamic-survey code derives all of
+  these from per-guild config.
+- `setup_cog.py` `ask_view` local helper inside `run_event_setup`
+  (no callers; the wizard uses `wait_view_or_cancel` directly).
+- `storm.py` unused `ZoneInfo` import + `ET` constant.
+- `train.py` unused `app_commands` and `tasks` imports (slash
+  commands moved to `train_cog.py`).
+- `survey.py` unused `date as date_cls` import.
+- `bot.py` unused `get_or_create_config` import.
+- `scheduler.py` unused `init_db` import.
+- `config.set_member_tab`, `train_birthdays.get_birthday_lookahead`,
+  `train_birthdays.DEFAULT_MEMBER_TAB` and the matching
+  re-exports in `train.py`.
+
+Net: ~250 LOC of dead code removed. 501 tests still pass.
+
 ## [1.0.0] — 2026-04-28
 
 Initial public release.

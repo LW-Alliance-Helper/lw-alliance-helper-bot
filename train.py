@@ -19,8 +19,7 @@ import json
 import os
 import re
 import discord
-from discord import app_commands
-from discord.ext import commands, tasks
+from discord.ext import commands
 from datetime import datetime, timedelta, date
 from zoneinfo import ZoneInfo
 
@@ -30,9 +29,7 @@ from config import get_config
 # Re-export here so existing imports (`from train import load_birthdays`,
 # `check_and_add_birthdays`, etc.) keep working.
 from train_birthdays import (
-    DEFAULT_MEMBER_TAB,
     BIRTHDAY_LOOKAHEAD,
-    get_birthday_lookahead,
     load_birthdays,
     get_member_tab_name,
     parse_birthday,
@@ -59,7 +56,7 @@ active_wizards: dict[int, asyncio.Event] = {}
 #   E: Notes
 #   F: Prompt Retrieved (TRUE/FALSE)
 #
-# All reads/writes go through gspread using the same service account as sheets.py
+# All reads/writes go through gspread using the same service account as the rest of the bot
 
 def _get_train_sheet(guild_id: int = None):
     """Return the Train Schedule worksheet."""

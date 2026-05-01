@@ -510,11 +510,6 @@ def update_config_field(guild_id: int, field: str, value) -> bool:
         ).fetchone()[0] > 0
 
 
-def set_member_tab(guild_id: int, tab_name: str):
-    """Update the active member tab name for a guild."""
-    update_config_field(guild_id, "tab_member_default", tab_name)
-
-
 def get_member_tab(guild_id: int) -> str:
     """Get the active member tab name for a guild."""
     cfg = get_config(guild_id)

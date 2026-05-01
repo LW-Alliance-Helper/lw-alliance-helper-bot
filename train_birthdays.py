@@ -45,19 +45,9 @@ _BIRTHDAY_MONTH_MAP = {
 
 
 # ── Birthday sheet config ──────────────────────────────────────────────────────
-#
-# The active member tab name is stored in cell H1 of the Train Schedule tab.
-# G1 contains the label "Active Member Tab:" for human readability.
-# Default value if not set: "Season 5 - Off-Season"
 
-DEFAULT_MEMBER_TAB = "Season 5 - Off-Season"
 BIRTHDAY_LOOKAHEAD = 14  # default, overridden per-guild by database
 
-def get_birthday_lookahead(guild_id: int = None) -> int:
-    """Return the birthday lookahead days for a guild."""
-    from config import get_birthday_config
-    cfg = get_birthday_config(guild_id) if guild_id else {}
-    return cfg.get("lookahead_days", 14)
 
 def load_birthdays(tab_name: str, guild_id: int = None) -> list[dict]:
     """

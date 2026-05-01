@@ -180,10 +180,16 @@ class DropdownView(discord.ui.View):
             self.selected  = select.values[0]
             self.confirmed = True
             select.disabled = True
-            await interaction.response.edit_message(
-                content=f"**{self.label}** {self.selected}",
-                view=self,
-            )
+            content = f"**{self.label}** {self.selected}"
+            try:
+                await interaction.response.edit_message(content=content, view=self)
+            except discord.NotFound:
+                # Interaction token expired (10062) — fall back to a direct edit
+                # so the dropdown still shows the selection and the survey continues.
+                try:
+                    await interaction.message.edit(content=content, view=self)
+                except discord.HTTPException:
+                    pass
             self.stop()
         select.callback = _cb
         self.add_item(select)
@@ -314,10 +320,14 @@ async def run_survey(bot, thread: discord.Thread, user: discord.Member,
         async def _cb(inter: discord.Interaction):
             result["values"] = list(select.values)
             select.disabled  = True
-            await inter.response.edit_message(
-                content=f"**{label}** {', '.join(result['values'])}",
-                view=view,
-            )
+            content = f"**{label}** {', '.join(result['values'])}"
+            try:
+                await inter.response.edit_message(content=content, view=view)
+            except discord.NotFound:
+                try:
+                    await inter.message.edit(content=content, view=view)
+                except discord.HTTPException:
+                    pass
             view.stop()
         select.callback = _cb
         view.add_item(select)

@@ -229,6 +229,28 @@ the configured-template flow end-to-end. 501 passed (was 476).
   `ask_keep_or_change` wizard step entry to reflect the new
   current-vs-default 3-button layout.
 
+## [1.0.6] — 2026-05-02
+
+### Fixed — scheduler crash on production DBs carrying retired columns
+
+`scheduler.run_scheduler` reads `guild_configs` rows directly via raw
+SQL and builds `GuildConfig(**dict(row))` for each one. The 1.0.5
+"physically drop legacy columns" migration runs an `ALTER TABLE …
+DROP COLUMN` that silently no-ops on SQLite < 3.35, so the Railway
+production DB still carried `storm_log_thread_id` — and every
+scheduler tick crashed with:
+
+```
+TypeError: GuildConfig.__init__() got an unexpected keyword argument
+'storm_log_thread_id'
+```
+
+`get_config` already filters unknown columns against
+`GuildConfig.__dataclass_fields__` for exactly this reason; the
+scheduler now applies the same filter before instantiation. Added
+`test_scheduler_row_instantiation_tolerates_legacy_columns` as a
+regression guard.
+
 ## [1.0.5] — 2026-05-01
 
 ### Removed — physically drop dead `guild_configs` columns

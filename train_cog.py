@@ -69,10 +69,9 @@ date_cls = date
 
 class TrainCog(commands.Cog):
     def __init__(self, bot):
-        self.bot                 = bot
-        self.reminder_sent_today = False  # kept for backward compat
-        self.last_reminder_date  = None
-        self.reminders_fired     = set()
+        self.bot                = bot
+        self.last_reminder_date = None
+        self.reminders_fired    = set()
         self.check_reminder.start()
 
     def cog_unload(self):
@@ -369,12 +368,8 @@ class TrainCog(commands.Cog):
 
         # Reset daily flag at midnight ET
         if self.last_reminder_date != today:
-            self.last_reminder_date  = today
-            self.reminder_sent_today = False
-            self.reminders_fired     = set()  # track which guilds already fired today
-
-        if not hasattr(self, "reminders_fired"):
-            self.reminders_fired = set()
+            self.last_reminder_date = today
+            self.reminders_fired    = set()  # track which guilds already fired today
 
         # ── Birthday auto-population and Discord announcements ────────────────
         try:

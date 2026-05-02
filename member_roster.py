@@ -36,7 +36,7 @@ def _format_joined(member: discord.Member) -> str:
     return member.joined_at.strftime("%Y-%m-%d")
 
 
-def _format_roles(member: discord.Member, role_filter_id: int) -> str:
+def _format_roles(member: discord.Member) -> str:
     """Comma-separated list of role names, excluding @everyone."""
     names = [r.name for r in member.roles if r.name != "@everyone"]
     return ", ".join(sorted(names))
@@ -63,7 +63,7 @@ def _build_roster_rows(guild: discord.Guild, cfg: dict) -> list[list[str]]:
         cfg["name_col"]:       ("Name",         lambda m: m.name),
         cfg["display_col"]:    ("Display Name", lambda m: m.display_name),
         cfg["joined_col"]:     ("Joined",       _format_joined),
-        cfg["roles_col"]:      ("Roles",        lambda m: _format_roles(m, role_filter)),
+        cfg["roles_col"]:      ("Roles",        lambda m: _format_roles(m)),
     }
     width = max(cols.keys()) + 1
 

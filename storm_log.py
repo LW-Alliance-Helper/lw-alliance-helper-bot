@@ -38,20 +38,8 @@ active_logs: dict = {}
 # ── Sheets helpers ─────────────────────────────────────────────────────────────
 
 def _get_spreadsheet(guild_id: int = None):
-    import gspread
-    from google.oauth2.service_account import Credentials
-    scopes           = ["https://www.googleapis.com/auth/spreadsheets"]
-    credentials_json = os.getenv("GOOGLE_CREDENTIALS_JSON")
-    if credentials_json:
-        info  = json.loads(credentials_json)
-        creds = Credentials.from_service_account_info(info, scopes=scopes)
-    else:
-        key_file = os.getenv("GOOGLE_SERVICE_ACCOUNT_FILE", "service_account.json")
-        creds    = Credentials.from_service_account_file(key_file, scopes=scopes)
-    gc = gspread.authorize(creds)
-    from config import get_spreadsheet_id
-    sheet_id = get_spreadsheet_id(guild_id)
-    return gc.open_by_key(sheet_id)
+    from config import get_spreadsheet
+    return get_spreadsheet(guild_id)
 
 
 def _get_log_sheet(guild_id: int = None, event_type: str | None = None):
@@ -95,7 +83,7 @@ class NameEntryModal(discord.ui.Modal):
         self.text_input = discord.ui.TextInput(
             label="Names (comma-separated or one per line)",
             style=discord.TextStyle.paragraph,
-            placeholder="e.g. Jon, Lionel, Ice — or leave blank and submit for none",
+            placeholder="e.g. Alice, Bob, Chris — or leave blank and submit for none",
             required=False,
             max_length=1000,
         )

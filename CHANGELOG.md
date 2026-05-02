@@ -220,6 +220,109 @@ the configured-template flow end-to-end. 501 passed (was 476).
   `ask_keep_or_change` wizard step entry to reflect the new
   current-vs-default 3-button layout.
 
+## [1.0.4] — 2026-05-01
+
+### Changed — pre-launch polish (audit Round 4)
+
+Smaller cleanups grouped together. None change behaviour beyond fixing
+small bugs the broader code already handled defensively.
+
+- **`growth.py` snapshot loop** now narrows the worksheet-creation
+  catch from `except Exception` to `except gspread.exceptions.WorksheetNotFound`,
+  drops a write-only `col_header` local, and rewrites the module
+  docstring to describe the per-guild `guild_growth_config` flow
+  instead of the OGV-era hardcoded Squad Powers shape.
+- **`storm.py` defaults** strip the OGV member names that shipped as
+  `DEFAULT_CS_A` / `DEFAULT_CS_B` values (the keys are still required
+  by `test_default_cs_assignments_only_use_canonical_keys`, so the
+  dicts now hold empty strings instead). The 35 lines of `"Member
+  Name"` placeholders for `DEFAULT_A_ZONES` / `DEFAULT_B_ZONES` /
+  `DEFAULT_A_SUBS` / `DEFAULT_B_SUBS` collapse to a single
+  `DEFAULTS = {"A": ({}, []), "B": ({}, [])}`. The "e.g. Jon, Lionel,
+  Ice" Modal placeholder in `storm_log.py` is now "Alice, Bob, Chris".
+- **Dead method/attribute pruning.**
+  - `member_roster._format_roles` no longer accepts a `role_filter_id`
+    argument it never read.
+  - `train_cog.TrainCog` drops the `reminder_sent_today` attribute
+    (and the matching defensive `hasattr(self, "reminders_fired")`
+    branch that `__init__` always satisfied). Test fixture updated
+    in lockstep.
+  - `setup_cog.YesNoView.__init__` no longer accepts `yes_label` /
+    `no_label` (buttons were always hardcoded "Yes" / "No").
+  - `setup_cog.BlurbChoiceView.__init__` no longer accepts a
+    `has_existing` flag it never stored.
+- **Module-docstring refresh** for `scheduler.py` (drops the
+  Marauder/Siege/Friday-shield narrative — events are now per-guild
+  and Friday shields were retired in Round 1) and `train_birthdays.py`
+  (drops the "exposes the lookahead window" line — that helper was
+  removed in Round 1).
+
+## [1.0.3] — 2026-05-01
+
+### Changed — duplication + step-numbering cleanup (audit Round 3)
+
+- **One column-letter helper, not three.** `_col_letter_to_index` and
+  `_col_index_to_letter` (the AA+ aware module-level pair in
+  `setup_cog.py`) are now the single source of truth. The local
+  `_col_letter` inside `_send_view_configuration` becomes a thin
+  display wrapper, and the local `col_letter_to_index` /
+  `index_to_letter` inside `run_birthday_setup` are deleted (their
+  callers now use the module-level pair directly).
+- **`EventEditorView` content rendering deduplicated.** The five
+  copies of the editor content string are replaced with calls to a
+  new `_render_editor_content()` method. `post_editor` (which built
+  the initial editor message via a parallel local loop using
+  `EVENT_LIBRARY` directly) now also calls the same method, so
+  custom-event names render consistently with `_resolve_event_info`.
+- **`_get_spreadsheet` is now one function.** `growth.py`,
+  `storm.py`, `storm_log.py`, and `survey.py` all delegate to a new
+  `config.get_spreadsheet(guild_id)` helper. The four ~15-line
+  gspread-bootstrap copies become 2-line wrappers.
+- **Train themes/tones step migrated to `ask_keep_or_change`.** The
+  hand-rolled `KeepOrChangeView` in `run_train_setup` mislabelled
+  the saved guild value as "**Defaults:**" — same regression
+  `ask_keep_or_change` was fixed for elsewhere. The themes/tones
+  prompts now go through that helper (capped values passed in for
+  both the hardcoded baseline and the saved value), so users see
+  the proper 3-button **Keep current / Use default / Define my
+  own** layout. The integration test for free-tier theme truncation
+  was updated in lockstep.
+- **`config.init_db` migration block deduplicated.** The four
+  `event_*` ALTERs that appeared in two places now only run once,
+  with a comment explaining why the silent-swallow earlier block
+  is kept (handles upgrades from the very oldest schema versions).
+- **`/setup_desertstorm` and `/setup_canyonstorm` step counter
+  fixed** from "Step X of 6" to "Step X of 7". The participation
+  step (#6) and reminder-DM step (#7) had been added without
+  updating the earlier prompts, so wizard progress looked
+  truncated to the user.
+
+## [1.0.2] — 2026-05-01
+
+### Removed — dead schema columns (audit Round 2)
+
+These columns lived on the `guild_configs` dataclass + CREATE TABLE
+but had zero readers anywhere in the repo. Per the audit's
+recommended migration policy: drop them from schema/dataclass and
+leave any existing physical columns in production DBs untouched.
+A new filter in `config.get_config` (`{k: v for k, v in dict(row)
+if k in GuildConfig.__dataclass_fields__}`) keeps `GuildConfig(**...)`
+from blowing up when a legacy column is still in a row.
+
+- **`storm_log_thread_id`** — replaced by event-typed log channels.
+- **`tab_squad_powers`, `tab_growth_tracking`** — survey/growth use
+  their own per-feature config tables. The one stale fallback
+  (`survey.update_squad_powers` referencing `cfg.tab_squad_powers`)
+  is replaced with the literal `"Squad Powers"` default.
+- **Pre-`/events`-rewrite game-time fields**: `marauder_time_normal`,
+  `siege_time_normal`, `marauder_time_saturday`,
+  `siege_time_saturday`, `shield_warning_time`, `cycle_days`,
+  `anchor_date`, plus the `anchor_date_parsed()` helper. All
+  superseded by `guild_events` rows.
+
+`tests/conftest.py` no longer assigns the dropped
+`storm_log_thread_id` field.
+
 ## [1.0.1] — 2026-05-01
 
 ### Fixed

@@ -43,7 +43,6 @@ class GuildConfig:
     leadership_role_name:     str        = "Leadership"
     survey_channel_id:        int        = 0
     survey_notify_channel_id: int        = 0
-    storm_log_thread_id:      int        = 0
     ds_log_channel_id:        int        = 0
     cs_log_channel_id:        int        = 0
     event_draft_channel_id:   int        = 0
@@ -52,24 +51,12 @@ class GuildConfig:
     event_five_min_warning:   int        = 1
     spreadsheet_id:           str        = ""
     timezone:                 str        = "America/New_York"
-    tab_squad_powers:         str        = "Squad Powers"
-    tab_growth_tracking:      str        = "Growth Tracking"
     tab_train_schedule:       str        = "Train Schedule"
     tab_ds_assignments:       str        = "DS Assignments"
     tab_sitouts:              str        = "DS-CS Sit-outs"
     tab_survey_history:       str        = "Survey History"
     tab_member_default:       str        = "Season 5 - Off-Season"
-    anchor_date:              str        = "2026-03-30"
-    cycle_days:               int        = 3
-    marauder_time_normal:     str        = "22:15"
-    siege_time_normal:        str        = "22:45"
-    marauder_time_saturday:   str        = "17:00"
-    siege_time_saturday:      str        = "17:30"
-    shield_warning_time:      str        = "21:55"
     setup_complete:           bool       = False
-
-    def anchor_date_parsed(self) -> date:
-        return date.fromisoformat(self.anchor_date)
 
     def parse_time(self, time_str: str) -> tuple[int, int]:
         """Parse 'HH:MM' into (hour, minute)."""
@@ -109,7 +96,6 @@ def init_db():
                 leadership_role_name     TEXT    DEFAULT 'Leadership',
                 survey_channel_id        INTEGER DEFAULT 0,
                 survey_notify_channel_id INTEGER DEFAULT 0,
-                storm_log_thread_id      INTEGER DEFAULT 0,
                 ds_log_channel_id          INTEGER DEFAULT 0,
                 cs_log_channel_id          INTEGER DEFAULT 0,
                 event_draft_channel_id     INTEGER DEFAULT 0,
@@ -118,20 +104,11 @@ def init_db():
                 event_five_min_warning     INTEGER DEFAULT 1,
                 spreadsheet_id           TEXT    DEFAULT '',
                 timezone                 TEXT    DEFAULT 'America/New_York',
-                tab_squad_powers         TEXT    DEFAULT 'Squad Powers',
-                tab_growth_tracking      TEXT    DEFAULT 'Growth Tracking',
                 tab_train_schedule       TEXT    DEFAULT 'Train Schedule',
                 tab_ds_assignments       TEXT    DEFAULT 'DS Assignments',
                 tab_sitouts              TEXT    DEFAULT 'DS-CS Sit-outs',
                 tab_survey_history       TEXT    DEFAULT 'Survey History',
                 tab_member_default       TEXT    DEFAULT 'Season 5 - Off-Season',
-                anchor_date              TEXT    DEFAULT '2026-03-30',
-                cycle_days               INTEGER DEFAULT 3,
-                marauder_time_normal     TEXT    DEFAULT '22:15',
-                siege_time_normal        TEXT    DEFAULT '22:45',
-                marauder_time_saturday   TEXT    DEFAULT '17:00',
-                siege_time_saturday      TEXT    DEFAULT '17:30',
-                shield_warning_time      TEXT    DEFAULT '21:55',
                 setup_complete           INTEGER DEFAULT 0
             )
         """)
@@ -432,11 +409,11 @@ def init_db():
                 pass
 
         # ── guild_configs event/survey channel migrations ──────────────────────
+        # Note: event_draft_channel_id, event_announce_channel_id,
+        # event_draft_time, event_five_min_warning are also added by an
+        # earlier silent-swallow block above; covered here so logging
+        # picks up upgrades from the very oldest schema versions.
         for col, definition in [
-            ("event_draft_channel_id",    "INTEGER DEFAULT 0"),
-            ("event_announce_channel_id", "INTEGER DEFAULT 0"),
-            ("event_draft_time",          "TEXT DEFAULT '12:00'"),
-            ("event_five_min_warning",    "INTEGER DEFAULT 1"),
             ("survey_channel_id",         "INTEGER DEFAULT 0"),
             ("survey_notify_channel_id",  "INTEGER DEFAULT 0"),
             ("ds_log_channel_id",         "INTEGER DEFAULT 0"),
@@ -466,7 +443,11 @@ def get_config(guild_id: int) -> Optional[GuildConfig]:
         ).fetchone()
         if row is None:
             return None
-        return GuildConfig(**dict(row))
+        # Filter to known dataclass fields so any legacy columns still
+        # present in production DBs (left in place when columns were
+        # retired from the schema) don't break instantiation.
+        d = {k: v for k, v in dict(row).items() if k in GuildConfig.__dataclass_fields__}
+        return GuildConfig(**d)
 
 
 def get_or_create_config(guild_id: int) -> GuildConfig:
@@ -520,6 +501,30 @@ def get_spreadsheet_id(guild_id: int) -> str:
     """Get the Google Sheet ID for a guild from the config database."""
     cfg = get_config(guild_id)
     return cfg.spreadsheet_id if cfg and cfg.spreadsheet_id else ""
+
+
+def get_spreadsheet(guild_id: int = None):
+    """Return an authenticated gspread Spreadsheet for a guild.
+
+    Reads creds from `GOOGLE_CREDENTIALS_JSON` (Railway-style env var) or
+    falls back to the path in `GOOGLE_SERVICE_ACCOUNT_FILE`. Centralised
+    so storm/storm_log/survey/growth all use one bootstrap.
+    """
+    import gspread
+    from google.oauth2.service_account import Credentials
+
+    scopes = ["https://www.googleapis.com/auth/spreadsheets"]
+    credentials_json = os.getenv("GOOGLE_CREDENTIALS_JSON")
+    if credentials_json:
+        info  = json.loads(credentials_json)
+        creds = Credentials.from_service_account_info(info, scopes=scopes)
+    else:
+        key_file = os.getenv("GOOGLE_SERVICE_ACCOUNT_FILE", "service_account.json")
+        creds    = Credentials.from_service_account_file(key_file, scopes=scopes)
+
+    gc       = gspread.authorize(creds)
+    sheet_id = get_spreadsheet_id(guild_id)
+    return gc.open_by_key(sheet_id)
 
 
 def is_setup_complete(guild_id: int) -> bool:

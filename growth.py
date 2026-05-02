@@ -1,21 +1,15 @@
 """
-growth.py — Monthly squad power growth tracking
+growth.py — Configurable per-guild growth snapshots.
 
-Runs on the 1st of every month at 10pm ET (server reset).
-Also runs once immediately on first deploy to establish a baseline.
+Snapshots fire at 22:00 ET on the day picked in `/setup_growth`
+(monthly day-of-month, or every-N-days from a fixed anchor). The
+snapshot reads each member's metric values (one column per metric,
+configured per guild) from the source tab and appends them as a new
+period column to the growth tab.
 
-Process:
-  1. Read all members from the Squad Powers tab (Discord ID, Username, 1st/2nd/3rd Squad)
-  2. Calculate combined squad power per member (1st + 2nd + 3rd)
-  3. Open the Growth Tracking tab
-  4. Match members by Discord ID — update existing rows, add new rows
-  5. Append a new "Combined Power MMM YYYY" column with this month's totals
-  6. If a previous month's column exists, append a "% Growth MMM-MMM YYYY" column
-
-Sheet structure (Growth Tracking tab):
-  Col A: Discord ID
-  Col B: Name (kept current)
-  Col C+: alternating Combined Power and % Growth columns per month
+The source tab, name column, data start row, and metric columns are
+all per-guild config. Nothing in here is hardcoded to a particular
+sheet layout — see `guild_growth_config` in `config.py`.
 """
 
 import os
@@ -98,22 +92,8 @@ def compute_next_snapshot(gcfg: dict, now: datetime | None = None) -> datetime |
 
 def _get_spreadsheet(guild_id: int = None):
     """Return an authenticated gspread Spreadsheet object."""
-    import gspread
-    from google.oauth2.service_account import Credentials
-
-    scopes = ["https://www.googleapis.com/auth/spreadsheets"]
-    credentials_json = os.getenv("GOOGLE_CREDENTIALS_JSON")
-    if credentials_json:
-        info  = json.loads(credentials_json)
-        creds = Credentials.from_service_account_info(info, scopes=scopes)
-    else:
-        key_file = os.getenv("GOOGLE_SERVICE_ACCOUNT_FILE", "service_account.json")
-        creds    = Credentials.from_service_account_file(key_file, scopes=scopes)
-
-    gc = gspread.authorize(creds)
-    from config import get_spreadsheet_id
-    sheet_id = get_spreadsheet_id(guild_id)
-    return gc.open_by_key(sheet_id)
+    from config import get_spreadsheet
+    return get_spreadsheet(guild_id)
 
 
 def _safe_float(val: str) -> float:
@@ -208,17 +188,16 @@ def _run_growth_snapshot_inner(guild_id: int = None):
         print(f"[GROWTH] Skipping guild {guild_id} — growth tracking not fully configured. Run /setup_growth.")
         return
 
+    import gspread
     now         = datetime.now(tz=ET)
     month_label = now.strftime("%b %Y")
-    col_header  = month_label
 
     # Check if snapshot already exists for this period
     sh  = _get_spreadsheet(guild_id)
     tab_growth = gcfg["tab_growth"]
     try:
         ws = sh.worksheet(tab_growth)
-    except Exception:
-        # Create the tab if it doesn't exist
+    except gspread.exceptions.WorksheetNotFound:
         ws = sh.add_worksheet(title=tab_growth, rows=500, cols=50)
         print(f"[GROWTH] Created growth tracking tab '{tab_growth}' for guild {guild_id}")
 

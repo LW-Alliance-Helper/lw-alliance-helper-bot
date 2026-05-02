@@ -1,20 +1,20 @@
 """
-scheduler.py — Event reminder scheduler with leadership approval workflow
+scheduler.py — Per-guild event scheduler with leadership approval flow.
 
 Schedule logic:
-  - Events run on a 3-day cooldown anchored to 2026-03-30
-  - Normal run: Marauder 10:15pm ET, Siege 10:45pm ET
-  - Friday exception: shifted to Saturday at 5:00pm ET / 5:30pm ET
-  - Server time = ET + 2 hours (fixed UTC-2 offset)
+  - Each guild defines its own events in `guild_events` via `/setup_events`.
+  - Events can be repeating (anchor + interval) or manual one-offs.
+  - Times and timezones are per-event; the scheduler computes the next
+    fire dt for every active event independently.
 
 Announcement flow:
-  - Noon on event day → leadership sees the event list editor
-  - Leadership can add/edit/remove events and times, add optional notes
-  - Build Announcement → crafts the message from the event list
-  - Approval flow → Send As-Is or Edit & Send (shows current text for easy copying)
-  - On approval → posts to the announcements channel with the configured member-role mention, stamps leadership channel
-  - 5-minute warning auto-fires based on first event's time
-  - Friday 9:55pm ET → shield reminder through same approval flow
+  - At each event's `draft_time` → leadership sees the EventEditorView.
+  - Leadership can add/edit/remove events and times, add optional notes.
+  - Build Announcement → crafts the message from the event list.
+  - Approval flow → Send As-Is or Edit & Send.
+  - On approval → posts to the configured announcement channel; the
+    leadership channel gets a stamp.
+  - 5-minute warning auto-fires based on the first event's time.
 """
 
 import asyncio
@@ -313,14 +313,16 @@ class EventEditorView(discord.ui.View):
             lines.append(f"{i}. **{name}** — {t} ET ({sv} server)")
         return "\n".join(lines) if lines else "*No events set*"
 
-    async def refresh(self, interaction: discord.Interaction):
-        """Update the editor message with the current event list."""
-        content = (
+    def _render_editor_content(self) -> str:
+        return (
             f"📣 **Event Editor** — adjust today's event schedule, then build the announcement.\n\n"
             f"**Current events:**\n{self.format_event_list_text()}\n\n"
             f"**Announcement text:** {self.notes if self.notes else '*None*'}"
         )
-        await interaction.message.edit(content=content, view=self)
+
+    async def refresh(self, interaction: discord.Interaction):
+        """Update the editor message with the current event list."""
+        await interaction.message.edit(content=self._render_editor_content(), view=self)
 
     async def on_timeout(self):
         """Disable buttons when the view expires."""
@@ -404,14 +406,7 @@ class EventEditorView(discord.ui.View):
                 await channel.send("⏰ Timed out waiting for time input.", delete_after=8)
 
             # Refresh the editor
-            await interaction.message.edit(
-                content=(
-                    f"📣 **Event Editor** — adjust today's event schedule, then build the announcement.\n\n"
-                    f"**Current events:**\n{self.format_event_list_text()}\n\n"
-                    f"**Announcement text:** {self.notes if self.notes else '*None*'}"
-                ),
-                view=self,
-            )
+            await interaction.message.edit(content=self._render_editor_content(), view=self)
 
         select.callback = on_select
         view = discord.ui.View(timeout=60)
@@ -475,14 +470,7 @@ class EventEditorView(discord.ui.View):
             except asyncio.TimeoutError:
                 await channel.send("⏰ Timed out.", delete_after=8)
 
-            await interaction.message.edit(
-                content=(
-                    f"📣 **Event Editor** — adjust today's event schedule, then build the announcement.\n\n"
-                    f"**Current events:**\n{self.format_event_list_text()}\n\n"
-                    f"**Announcement text:** {self.notes if self.notes else '*None*'}"
-                ),
-                view=self,
-            )
+            await interaction.message.edit(content=self._render_editor_content(), view=self)
 
         select.callback = on_select
         view = discord.ui.View(timeout=60)
@@ -522,14 +510,7 @@ class EventEditorView(discord.ui.View):
             await select_interaction.response.edit_message(
                 content=f"✅ **{lib_name}** removed.", view=None
             )
-            await interaction.message.edit(
-                content=(
-                    f"📣 **Event Editor** — adjust today's event schedule, then build the announcement.\n\n"
-                    f"**Current events:**\n{self.format_event_list_text()}\n\n"
-                    f"**Announcement text:** {self.notes if self.notes else '*None*'}"
-                ),
-                view=self,
-            )
+            await interaction.message.edit(content=self._render_editor_content(), view=self)
 
         select.callback = on_select
         view = discord.ui.View(timeout=60)
@@ -569,14 +550,7 @@ class EventEditorView(discord.ui.View):
         except asyncio.TimeoutError:
             await channel.send("⏰ Timed out.", delete_after=8)
 
-        await interaction.message.edit(
-            content=(
-                f"📣 **Event Editor** — adjust today's event schedule, then build the announcement.\n\n"
-                f"**Current events:**\n{self.format_event_list_text()}\n\n"
-                f"**Announcement text:** {self.notes if self.notes else '*None*'}"
-            ),
-            view=self,
-        )
+        await interaction.message.edit(content=self._render_editor_content(), view=self)
 
     @discord.ui.button(label="📣 Build Announcement", style=discord.ButtonStyle.success, row=1)
     async def build_announcement_btn(self, interaction: discord.Interaction, button: discord.ui.Button):
@@ -903,20 +877,7 @@ async def post_editor(bot, event_list: list[dict], event_key: str, run_date: dat
         return
 
     view = EventEditorView(bot=bot, event_list=event_list, event_key=event_key, run_date=run_date, guild_id=cfg.guild_id)
-
-    lines = []
-    for event in event_list:
-        lib  = EVENT_LIBRARY.get(event["key"], {})
-        name = lib.get("name", event["key"])
-        t    = format_et(event["dt"])
-        sv   = to_server_time_str(event["dt"])
-        lines.append(f"{len(lines)+1}. **{name}** — {t} ET ({sv} server)")
-
-    await channel.send(
-        f"📣 **Event Editor** — adjust today's event schedule, then build the announcement.\n\n"
-        f"**Current events:**\n" + "\n".join(lines) + "\n\n**Announcement text:** *None*",
-        view=view,
-    )
+    await channel.send(view._render_editor_content(), view=view)
     print(f"[SCHEDULER] Event editor posted for {event_key}")
 
 

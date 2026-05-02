@@ -37,20 +37,8 @@ SURVEY_TIMEOUT      = 600  # 10 minutes per step
 # ── Sheets helpers ─────────────────────────────────────────────────────────────
 
 def _get_spreadsheet(guild_id: int = None):
-    import gspread
-    from google.oauth2.service_account import Credentials
-    scopes           = ["https://www.googleapis.com/auth/spreadsheets"]
-    credentials_json = os.getenv("GOOGLE_CREDENTIALS_JSON")
-    if credentials_json:
-        info  = json.loads(credentials_json)
-        creds = Credentials.from_service_account_info(info, scopes=scopes)
-    else:
-        key_file = os.getenv("GOOGLE_SERVICE_ACCOUNT_FILE", "service_account.json")
-        creds    = Credentials.from_service_account_file(key_file, scopes=scopes)
-    gc = gspread.authorize(creds)
-    from config import get_spreadsheet_id
-    sheet_id = get_spreadsheet_id(guild_id)
-    return gc.open_by_key(sheet_id)
+    from config import get_spreadsheet
+    return get_spreadsheet(guild_id)
 
 
 def update_squad_powers(discord_id: str, username: str, data: dict,
@@ -60,19 +48,14 @@ def update_squad_powers(discord_id: str, username: str, data: dict,
     Columns are derived from the survey's question config. If `survey` is
     provided (multi-survey path), its questions/tab override the default.
     """
-    from config import get_config, get_survey_config
+    from config import get_survey_config
     if survey is None:
         survey_cfg = get_survey_config(guild_id) if guild_id else {}
     else:
         survey_cfg = survey
     questions  = survey_cfg.get("questions") or []
-    cfg        = get_config(guild_id)
     sh         = _get_spreadsheet(guild_id)
-    # Prefer the survey's own tab name. Fall back to guild-level for legacy.
-    tab_name   = (
-        survey_cfg.get("tab_squad_powers")
-        or (cfg.tab_squad_powers if cfg else "Squad Powers")
-    )
+    tab_name   = survey_cfg.get("tab_squad_powers") or "Squad Powers"
     ws         = sh.worksheet(tab_name)
     rows       = ws.get_all_values()
 

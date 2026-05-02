@@ -1,10 +1,11 @@
 """
 train_birthdays.py — Birthday roster + schedule integration.
 
-Loads birthdays from the configured member sheet, places them into the
-train schedule with conflict avoidance, and exposes the birthday lookahead
-window. Pure logic — no Discord types — so it can be imported by both train.py
-and the train cog without circular import concerns.
+Loads birthdays from the configured member sheet and places them into
+the train schedule with conflict avoidance. Pure logic — no Discord
+types — so it can be imported by both train.py and the train cog
+without circular import concerns. The lookahead window comes from
+each guild's `guild_birthday_config.lookahead_days`.
 """
 
 import json

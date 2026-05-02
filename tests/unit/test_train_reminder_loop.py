@@ -56,7 +56,6 @@ def _make_cog():
     cog = train_cog.TrainCog.__new__(train_cog.TrainCog)
     cog.bot                  = bot
     cog.last_reminder_date   = None
-    cog.reminder_sent_today  = False
     cog.reminders_fired      = set()
     return cog
 

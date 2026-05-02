@@ -89,7 +89,6 @@ def seeded_db(temp_db, monkeypatch):
     cfg.announcement_channel_id  = 222222222222222222
     cfg.survey_channel_id        = 333333333333333333
     cfg.survey_notify_channel_id = 444444444444444444
-    cfg.storm_log_thread_id      = 555555555555555555
     cfg.timezone                 = "America/New_York"
     cfg.spreadsheet_id           = TEST_SHEET_ID
     cfg.setup_complete           = True

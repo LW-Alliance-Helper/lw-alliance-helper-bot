@@ -1747,7 +1747,7 @@ Please fill out this survey each week, if possible, to help us keep track of squ
 
 | Type | Copy | File |
 |---|---|---|
-| Validation retry (text too long) | `⚠️ That entry is too long (max {max_chars} characters). Please try the survey again.` | `survey.py` |
+| Validation retry (text too long) | `⚠️ That entry is too long (max {max_chars} characters). Please re-enter your answer for this question.` | `survey.py` |
 | Validation retry (numeric, NaN) | `⚠️ \`{raw}\` isn't a number. Please re-enter your answer for this question.` | `survey.py` |
 | Validation retry (numeric, below min) | `⚠️ Must be at least **{min_val}**. Please re-enter your answer for this question.` | `survey.py` |
 | Validation retry (numeric, above max) | `⚠️ Must be at most **{max_val}**. Please re-enter your answer for this question.` | `survey.py` |

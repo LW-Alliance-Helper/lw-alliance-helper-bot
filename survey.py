@@ -222,17 +222,38 @@ async def run_survey(bot, thread: discord.Thread, user: discord.Member,
         return m.author == user and m.channel == thread
 
     async def ask_number(prompt: str, max_chars: int = 10) -> str | None:
-        await thread.send(prompt)
-        try:
-            reply = await bot.wait_for("message", check=check, timeout=SURVEY_TIMEOUT)
-        except asyncio.TimeoutError:
-            await thread.send("⏰ Survey timed out. You can start again by clicking the Answer button.")
-            return None
-        val = reply.content.strip()
-        if len(val) > max_chars:
-            await thread.send(f"⚠️ That entry is too long (max {max_chars} characters). Please try the survey again.")
-            return None
-        return val
+        """
+        Text question with a length cap. On too-long input, re-prompts the
+        same question (up to 5 attempts) so the user doesn't have to restart
+        the whole survey for one slip — e.g. typing `153,725,881` instead
+        of `154` for a THP-in-millions field.
+        """
+        attempts_left = 5
+        first_pass    = True
+        while attempts_left > 0:
+            if first_pass:
+                await thread.send(prompt)
+                first_pass = False
+            try:
+                reply = await bot.wait_for("message", check=check, timeout=SURVEY_TIMEOUT)
+            except asyncio.TimeoutError:
+                await thread.send("⏰ Survey timed out. You can start again by clicking the Answer button.")
+                return None
+            val = reply.content.strip()
+            if len(val) > max_chars:
+                attempts_left -= 1
+                await thread.send(
+                    f"⚠️ That entry is too long (max {max_chars} characters). "
+                    f"Please re-enter your answer for this question."
+                )
+                continue
+            return val
+
+        await thread.send(
+            "⚠️ Too many invalid attempts on this question. "
+            "Cancelling the survey — click the Answer button to start over when you're ready."
+        )
+        return None
 
     async def ask_dropdown(prompt: str, options: list, placeholder: str, label: str = "") -> str | None:
         view = DropdownView(placeholder, options, label=label)

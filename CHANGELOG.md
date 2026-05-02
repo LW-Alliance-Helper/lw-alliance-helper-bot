@@ -88,6 +88,15 @@ After this work, OGV's real guild ID appears only in:
 
 ### Fixed — post-strip launch readiness
 
+- **Survey too-long input no longer cancels the whole survey.** A
+  member typing `153,725,881` for a THP-in-millions field (max 3
+  characters) used to see "Please try the survey again" and have to
+  click the Answer button to restart from question 1. The text
+  question handler (`ask_number`) now re-prompts the same question up
+  to 5 times — matching the existing retry behaviour of the Premium
+  `numeric` and `date` question types — so one slip costs one re-entry,
+  not the entire survey. Reported by an OGV member who hit it on the
+  THP question.
 - **`/cancel` actually stops view-based wizard steps.** Bare
   `view.wait()` doesn't know about the cancel registry, so when a
   user ran `/cancel` mid-wizard the active view sat there until its

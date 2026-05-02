@@ -147,7 +147,10 @@ class TestSurveyFlow:
 
     @pytest.mark.asyncio
     async def test_survey_text_max_chars_enforced(self, seeded_db):
-        """If user types more than max_chars, survey exits gracefully."""
+        """
+        If user keeps typing more than max_chars, the survey eventually
+        bails (after the retry budget is exhausted) rather than saving.
+        """
         from survey import run_survey
         from config import save_survey_config
 
@@ -164,7 +167,7 @@ class TestSurveyFlow:
         # leadership-notify branch in run_survey skips cleanly.
         bot.get_channel = MagicMock(return_value=None)
 
-        # Reply is too long
+        # Every reply is too long — survey burns through all retries
         bot.wait_for = AsyncMock(
             return_value=make_message("TOOLONGVALUE", author=user, channel=thread)
         )
@@ -173,6 +176,57 @@ class TestSurveyFlow:
              patch("survey.append_survey_history") as mock_ah:
             await run_survey(bot, thread, user)
             mock_up.assert_not_called()
+
+    @pytest.mark.asyncio
+    async def test_survey_text_max_chars_recovers_on_retry(self, seeded_db):
+        """
+        A user who fat-fingers a too-long value should be re-prompted for
+        the *same* question rather than have the whole survey cancel.
+        Regression guard for the THP-millions slip reported by an OGV
+        member (typed `153,725,881` instead of `154`).
+        """
+        from survey import run_survey
+        from config import save_survey_config
+
+        questions = [
+            {"key": "thp", "label": "Total Hero Power (THP)", "type": "text",
+             "options": [], "placeholder": "e.g. 301", "max_chars": 3},
+        ]
+        save_survey_config(TEST_GUILD_ID, "Stats", "History", questions, "")
+
+        thread = self._make_thread()
+        user   = self._make_user()
+        bot    = AsyncMock()
+        bot.get_channel = MagicMock(return_value=None)
+
+        # First reply is too long; second is valid → survey should recover
+        replies = iter(["153,725,881", "154"])
+        async def fake_wait_for(*a, **kw):
+            return make_message(next(replies), author=user, channel=thread)
+        bot.wait_for = AsyncMock(side_effect=fake_wait_for)
+
+        captured = {}
+        def fake_update(discord_id, username, data, guild_id=None, survey=None):
+            captured.update(data)
+
+        with patch("survey.update_squad_powers",   side_effect=fake_update) as mock_up, \
+             patch("survey.append_survey_history"), \
+             patch("survey._finalize_survey_thread", new_callable=AsyncMock):
+            await run_survey(bot, thread, user)
+
+        # The valid second answer landed in the saved data
+        assert captured.get("thp") == "154"
+        mock_up.assert_called_once()
+
+        # User saw the per-question retry prompt, not the "try the survey
+        # again" cancel-the-whole-thing message
+        sent_text = " ".join(
+            (c.args[0] if c.args else c.kwargs.get("content", ""))
+            for c in thread.send.call_args_list
+            if c.args and isinstance(c.args[0], str)
+        )
+        assert "re-enter your answer for this question" in sent_text
+        assert "try the survey again" not in sent_text
 
     @pytest.mark.asyncio
     async def test_survey_all_text_questions(self, seeded_db):

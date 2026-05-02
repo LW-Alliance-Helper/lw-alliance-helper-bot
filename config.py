@@ -434,6 +434,31 @@ def init_db():
         except Exception:
             pass  # Column already exists — expected on fresh or already-upgraded installs
 
+        # ── Drop dead columns from guild_configs (1.0.2 follow-up) ─────────────
+        # Retired in 1.0.2 from the dataclass + CREATE TABLE but left
+        # physically in place at the time. Now safe to drop. Idempotent
+        # (the ALTER fails harmlessly once the column is gone), and a
+        # no-op on SQLite < 3.35 — the surviving `get_config` filter
+        # keeps the dataclass instantiation safe in either case.
+        for col in (
+            "storm_log_thread_id",
+            "tab_squad_powers",
+            "tab_growth_tracking",
+            "anchor_date",
+            "cycle_days",
+            "marauder_time_normal",
+            "siege_time_normal",
+            "marauder_time_saturday",
+            "siege_time_saturday",
+            "shield_warning_time",
+        ):
+            try:
+                conn.execute(f"ALTER TABLE guild_configs DROP COLUMN {col}")
+                conn.commit()
+                print(f"[CONFIG] Dropped legacy column {col} from guild_configs")
+            except Exception:
+                pass
+
 
 def get_config(guild_id: int) -> Optional[GuildConfig]:
     """Retrieve config for a guild. Returns None if not found."""

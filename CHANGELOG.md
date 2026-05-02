@@ -229,6 +229,30 @@ the configured-template flow end-to-end. 501 passed (was 476).
   `ask_keep_or_change` wizard step entry to reflect the new
   current-vs-default 3-button layout.
 
+## [1.0.5] — 2026-05-01
+
+### Removed — physically drop dead `guild_configs` columns
+
+The 10 columns retired in 1.0.2 (dropped from the dataclass + CREATE
+TABLE but left in production rows) are now physically dropped via a
+new idempotent migration block in `init_db()`. Runs once on the next
+bot startup; subsequent runs are no-ops because the `ALTER TABLE …
+DROP COLUMN` fails harmlessly when the column is already gone.
+
+Columns dropped: `storm_log_thread_id`, `tab_squad_powers`,
+`tab_growth_tracking`, `anchor_date`, `cycle_days`,
+`marauder_time_normal`, `siege_time_normal`,
+`marauder_time_saturday`, `siege_time_saturday`,
+`shield_warning_time`.
+
+The defensive `get_config` filter that ignored unknown columns stays
+in for now — once production confirms the DROP COLUMN ran, both the
+filter and this migration block can be deleted in a follow-up.
+
+Verified by feeding `init_db()` a synthetic DB seeded with all 10
+legacy columns; post-migration `PRAGMA table_info(guild_configs)`
+returned only the live schema fields.
+
 ## [1.0.4] — 2026-05-01
 
 ### Changed — pre-launch polish (audit Round 4)

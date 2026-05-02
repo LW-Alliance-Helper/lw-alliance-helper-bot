@@ -545,26 +545,23 @@ class TestPremiumCaps:
         interaction = make_mock_interaction()
         bot         = AsyncMock()
 
-        replies = iter([
-            "T1, T2, T3, T4, T5, T6",
-            "tn1, tn2, tn3, tn4",
-        ])
-
-        async def fake_wait_for(*a, **kw):
-            return MagicMock(content=next(replies, "default"))
-        bot.wait_for = AsyncMock(side_effect=fake_wait_for)
-
         yn_views = [
             MagicMock(selected=True,  wait=AsyncMock()),
             MagicMock(selected=False, wait=AsyncMock()),
         ]
 
+        # Themes/tones now flow through ask_keep_or_change (Define my own
+        # path returns the user's typed string). The first response feeds
+        # the tab-name step; the next two feed themes and tones.
         with patch("setup_cog.YesNoView", side_effect=yn_views), \
-             patch_keep_or_change(["Train Schedule"]):
+             patch_keep_or_change([
+                 "Train Schedule",
+                 "T1, T2, T3, T4, T5, T6",
+                 "tn1, tn2, tn3, tn4",
+             ]):
             make_send_handler(
                 interaction.channel,
                 view_overrides={
-                    "keep_existing": False,
                     "selected":      "tn1",
                     "skipped":       True,
                     # New template manager exits via Done button

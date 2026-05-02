@@ -30,51 +30,17 @@ import discord
 from discord import app_commands
 from discord.ext import commands
 from config import get_config
-from zoneinfo import ZoneInfo
-
-ET = ZoneInfo("America/New_York")
-
-
 
 WIZARD_TIMEOUT = 600  # 10 minutes
 
 
 # ── Default assignments ────────────────────────────────────────────────────────
+# DS rosters start empty per team. Leadership fills them in via
+# `/desertstorm_draft`; the saved sheet is the source of truth thereafter.
 
-# Team A — starts empty, leadership fills on first use
-DEFAULT_A_ZONES = {
-    "Nuclear Silo":       "Member Name",
-    "Oil Refinery I":     "Member Name",
-    "Oil Refinery II":    "Member Name",
-    "Science Hub":        "Member Name",
-    "Info Center":        "Member Name",
-    "Field Hospital I":   "Member Name",
-    "Field Hospital II":  "Member Name",
-    "Field Hospital III": "Member Name",
-    "Field Hospital IV":  "Member Name",
-    "Arsenal":            "Member Name",
-    "Mercenary Factory":  "Member Name",
-}
-DEFAULT_A_SUBS = []
-
-# Team B — starts with placeholders
-DEFAULT_B_ZONES = {
-    "Nuclear Silo":       "Member Name",
-    "Oil Refinery I":     "Member Name",
-    "Oil Refinery II":    "Member Name",
-    "Science Hub":        "Member Name",
-    "Info Center":        "Member Name",
-    "Field Hospital I":   "Member Name",
-    "Field Hospital II":  "Member Name",
-    "Field Hospital III": "Member Name",
-    "Field Hospital IV":  "Member Name",
-    "Arsenal":            "Member Name",
-    "Mercenary Factory":  "Member Name",
-}
-DEFAULT_B_SUBS = []
 DEFAULTS = {
-    "A": (DEFAULT_A_ZONES, DEFAULT_A_SUBS),
-    "B": (DEFAULT_B_ZONES, DEFAULT_B_SUBS),
+    "A": ({}, []),
+    "B": ({}, []),
 }
 
 
@@ -82,22 +48,8 @@ DEFAULTS = {
 # ── Google Sheets persistence ──────────────────────────────────────────────────
 
 def _get_spreadsheet(guild_id: int = None):
-    import gspread
-    from google.oauth2.service_account import Credentials
-
-    scopes = ["https://www.googleapis.com/auth/spreadsheets"]
-    credentials_json = os.getenv("GOOGLE_CREDENTIALS_JSON")
-    if credentials_json:
-        info  = json.loads(credentials_json)
-        creds = Credentials.from_service_account_info(info, scopes=scopes)
-    else:
-        key_file = os.getenv("GOOGLE_SERVICE_ACCOUNT_FILE", "service_account.json")
-        creds    = Credentials.from_service_account_file(key_file, scopes=scopes)
-
-    gc = gspread.authorize(creds)
-    from config import get_spreadsheet_id
-    sheet_id = get_spreadsheet_id(guild_id)
-    return gc.open_by_key(sheet_id)
+    from config import get_spreadsheet
+    return get_spreadsheet(guild_id)
 
 
 def load_ds_assignments(team: str, guild_id: int = None) -> tuple[dict, list]:
@@ -853,55 +805,36 @@ async def setup(bot: commands.Bot):
 
 # ── CS Defaults ───────────────────────────────────────────────────────────────
 
+# Empty placeholders — alliances fill these via `/canyonstorm_draft`.
+# Keys must match the canonical CS_ZONE_STRUCTURE (defined later in this
+# file) plus the CS_SUBS_KEY for {subs}; the existing test suite asserts
+# that property, so any key drift will fail loudly in CI.
 DEFAULT_CS_B = {
-    "s1_power_tower":    "Jon, Lionel, Ice, Sunshine",
-    "s1_dc1":            "Gonza, Glick, Bobby",
-    "s1_dc2":            "MG, Chuck, Kimberdog",
-    "s1_sw1":            "Mer, Lito",
-    "s1_sw2":            "Catie, Woozy",
-    "s1_sw3":            "Dingo, Miss Goose",
-    "s1_sw4":            "Anuedii, Drezy1",
-    "s1_floaters":       "Toxic, Legit",
-    "s2_ds1":            "Mer, Lito",
-    "s2_ds2":            "Catie, Woozy",
-    "s2_sf1":            "Dingo, Miss Goose",
-    "s2_sf2":            "Anuedii, Drezy1",
-    "s2_floaters":       "Toxic, Legit",
-    "s3_virus_lab":      "Jon, Lionel, Ice, Sunshine",
-    "s3_power_tower":    "MG, Gonza, Glick, Bobby",
-    "s3_dc1":            "Toxic, Legit",
-    "s3_dc2":            "Chuck, Kimberdog",
-    "s3_ds1":            "Mer, Lito",
-    "s3_ds2":            "Catie, Woozy",
-    "s3_sf1":            "Dingo, Miss Goose",
-    "s3_sf2":            "Anuedii, Drezy1",
-    "s3_pop_pair1":      "Dingo & Mer and Aneudii & Legit",
+    "s1_power_tower":    "",
+    "s1_dc1":            "",
+    "s1_dc2":            "",
+    "s1_sw1":            "",
+    "s1_sw2":            "",
+    "s1_sw3":            "",
+    "s1_sw4":            "",
+    "s1_floaters":       "",
+    "s2_ds1":            "",
+    "s2_ds2":            "",
+    "s2_sf1":            "",
+    "s2_sf2":            "",
+    "s2_floaters":       "",
+    "s3_virus_lab":      "",
+    "s3_power_tower":    "",
+    "s3_dc1":            "",
+    "s3_dc2":            "",
+    "s3_ds1":            "",
+    "s3_ds2":            "",
+    "s3_sf1":            "",
+    "s3_sf2":            "",
+    "s3_pop_pair1":      "",
 }
 
-DEFAULT_CS_A = {
-    "s1_power_tower":    "Pink, TRC, Lunar, Blades",
-    "s1_dc1":            "Corporal, Fosk, Monk",
-    "s1_dc2":            "AD, Kale, Death",
-    "s1_sw1":            "Loki, Loki BBG",
-    "s1_sw2":            "DSP, Raven",
-    "s1_sw3":            "Mrs. C, Landers",
-    "s1_sw4":            "Joy, Chaos",
-    "s1_floaters":       "Snacks, Arthur",
-    "s2_ds1":            "Loki, Loki BBG",
-    "s2_ds2":            "DSP, Raven",
-    "s2_sf1":            "Mrs. C, Landers",
-    "s2_sf2":            "Joy, Chaos",
-    "s2_floaters":       "Snacks, Arthur",
-    "s3_virus_lab":      "Pink, TRC, Lunar, Corporal",
-    "s3_power_tower":    "Kale, AD, Blades, Fosk",
-    "s3_dc1":            "Death, Monk",
-    "s3_dc2":            "Snacks, Arthur",
-    "s3_ds1":            "Loki, Loki BBG",
-    "s3_ds2":            "DSP, Raven",
-    "s3_sf1":            "Mrs. C, Landers",
-    "s3_sf2":            "Joy, Chaos",
-    "s3_pop_pair1":      "Arthur & Chaos and Raven & Loki",
-}
+DEFAULT_CS_A = {k: "" for k in DEFAULT_CS_B}
 
 CS_DEFAULTS = {"A": DEFAULT_CS_A, "B": DEFAULT_CS_B}
 

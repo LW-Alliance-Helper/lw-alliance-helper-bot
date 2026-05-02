@@ -1228,7 +1228,7 @@ class ScheduleTypeView(discord.ui.View):
 
 
 class YesNoView(discord.ui.View):
-    def __init__(self, yes_label="Yes", no_label="No"):
+    def __init__(self):
         super().__init__(timeout=120)
         self.selected = None
 
@@ -1280,10 +1280,10 @@ async def _send_view_configuration(interaction: discord.Interaction, cfg) -> Non
 
     def _col_letter(idx) -> str:
         try:
-            idx = int(idx)
+            i = int(idx)
         except (TypeError, ValueError):
             return "*not set*"
-        return chr(65 + idx) if 0 <= idx <= 25 else str(idx)
+        return _col_index_to_letter(i) if i >= 0 else "*not set*"
 
     tier_badge = "💎 Premium" if is_premium_flag else "Free tier"
     embed = discord.Embed(
@@ -2202,102 +2202,70 @@ async def run_train_setup(interaction: discord.Interaction, bot):
         return values[:cap], True
 
     if blurbs_enabled:
-        # ── Step 3: Themes ─────────────────────────────────────────────────────
-        # Apply cap up-front so the "defaults" preview matches what'll actually save.
-        cap_capped_themes, _ = _trim(list(current["themes"]), themes_cap)
-        existing_themes      = ", ".join(cap_capped_themes)
-        cap_note_themes      = (
-            f"\n*Free tier: up to {themes_cap} themes. Upgrade for unlimited.*"
-            if themes_cap is not None else ""
-        )
+        from defaults import DEFAULT_THEMES, DEFAULT_TONES
 
-        class KeepOrChangeView(discord.ui.View):
-            def __init__(self, label: str):
-                super().__init__(timeout=120)
-                self.keep_existing = None
-                self._label = label
+        async def _ask_csv_keep_or_change(
+            *, step_label: str, label: str, current_list: list[str],
+            default_list: list[str], cap: int | None,
+        ) -> list[str] | None:
+            """Wrapper around ask_keep_or_change for comma-separated lists.
 
-            @discord.ui.button(label="✅ Use defaults", style=discord.ButtonStyle.success)
-            async def keep(self, inter: discord.Interaction, button: discord.ui.Button):
-                self.keep_existing = True
-                for item in self.children: item.disabled = True
-                await inter.response.edit_message(
-                    content=f"✅ Using defaults for {self._label}.", view=self
-                )
-                self.stop()
+            Renders the same 2- or 3-button layout used everywhere else
+            (Keep current / Use default / Define my own), then parses the
+            returned string back into a list and applies the free-tier cap.
+            Returns None on timeout or cancel.
+            """
+            cap_capped_default, _ = _trim(list(default_list), cap)
+            cap_capped_current, _ = _trim(list(current_list), cap)
+            cap_note = (
+                f"\n*Free tier: up to {cap} {label}. Upgrade for unlimited.*"
+                if cap is not None else ""
+            )
 
-            @discord.ui.button(label="✏️ Define my own", style=discord.ButtonStyle.secondary)
-            async def change(self, inter: discord.Interaction, button: discord.ui.Button):
-                self.keep_existing = False
-                for item in self.children: item.disabled = True
-                await inter.response.edit_message(view=self)
-                self.stop()
-
-        themes_keep_view = KeepOrChangeView("themes")
-        await channel.send(
-            f"**Step 3 of 8 — Themes**\n"
-            f"These appear as options when selecting a theme for a member's train day.\n\n"
-            f"**Defaults:**\n`{existing_themes}`"
-            + cap_note_themes,
-            view=themes_keep_view,
-        )
-        await wait_view_or_cancel(themes_keep_view, cancel_event)
-        if themes_keep_view.cancelled:
-            return
-        if themes_keep_view.keep_existing is None:
-            await channel.send("⏰ Timed out. Run `/setup_train` to start again.")
-            return
-
-        if themes_keep_view.keep_existing:
-            themes = cap_capped_themes
-        else:
-            themes_raw = await ask_text("Enter your themes as a comma-separated list:")
-            if themes_raw is None:
-                return
-            entered = [t.strip() for t in themes_raw.split(",") if t.strip()] or current["themes"]
-            themes, truncated = _trim(entered, themes_cap)
+            chosen = await ask_keep_or_change(
+                channel,
+                f"{step_label}\n"
+                f"These appear as options when selecting a {label[:-1] if label.endswith('s') else label} "
+                f"for the train.{cap_note}",
+                default=", ".join(cap_capped_default),
+                current=", ".join(cap_capped_current),
+                modal_title=label.title(),
+                modal_label=f"{label.title()} (comma-separated)",
+                timeout_cmd="setup_train",
+                cancel_event=cancel_event,
+            )
+            if chosen is None:
+                return None
+            entered = [t.strip() for t in chosen.split(",") if t.strip()] or list(current_list)
+            trimmed, truncated = _trim(entered, cap)
             if truncated:
                 await channel.send(
-                    f"ℹ️ Free tier: only the first {themes_cap} themes were saved "
-                    f"(`{', '.join(themes)}`). Upgrade to Premium to save more."
+                    f"ℹ️ Free tier: only the first {cap} {label} were saved "
+                    f"(`{', '.join(trimmed)}`). Upgrade to Premium to save more."
                 )
+            return trimmed
+
+        # ── Step 3: Themes ─────────────────────────────────────────────────────
+        themes = await _ask_csv_keep_or_change(
+            step_label="**Step 3 of 8 — Themes**",
+            label="themes",
+            current_list=current["themes"],
+            default_list=DEFAULT_THEMES,
+            cap=themes_cap,
+        )
+        if themes is None:
+            return
 
         # ── Step 4: Tones ──────────────────────────────────────────────────────
-        cap_capped_tones, _ = _trim(list(current["tones"]), tones_cap)
-        existing_tones      = ", ".join(cap_capped_tones)
-        cap_note_tones      = (
-            f"\n*Free tier: up to {tones_cap} tones. Upgrade for unlimited.*"
-            if tones_cap is not None else ""
+        tones = await _ask_csv_keep_or_change(
+            step_label="**Step 4 of 8 — Tones**",
+            label="tones",
+            current_list=current["tones"],
+            default_list=DEFAULT_TONES,
+            cap=tones_cap,
         )
-
-        tones_keep_view = KeepOrChangeView("tones")
-        await channel.send(
-            f"**Step 4 of 8 — Tones**\n"
-            f"These let leadership adjust the writing style of the generated blurb.\n\n"
-            f"**Defaults:**\n`{existing_tones}`"
-            + cap_note_tones,
-            view=tones_keep_view,
-        )
-        await wait_view_or_cancel(tones_keep_view, cancel_event)
-        if tones_keep_view.cancelled:
+        if tones is None:
             return
-        if tones_keep_view.keep_existing is None:
-            await channel.send("⏰ Timed out. Run `/setup_train` to start again.")
-            return
-
-        if tones_keep_view.keep_existing:
-            tones = cap_capped_tones
-        else:
-            tones_raw = await ask_text("Enter your tones as a comma-separated list:")
-            if tones_raw is None:
-                return
-            entered = [t.strip() for t in tones_raw.split(",") if t.strip()] or current["tones"]
-            tones, truncated = _trim(entered, tones_cap)
-            if truncated:
-                await channel.send(
-                    f"ℹ️ Free tier: only the first {tones_cap} tones were saved "
-                    f"(`{', '.join(tones)}`). Upgrade to Premium to save more."
-                )
 
         # ── Step 5: Default tone ───────────────────────────────────────────────
         class ToneDefaultView(discord.ui.View):
@@ -3276,7 +3244,7 @@ async def run_storm_setup(interaction: discord.Interaction, bot, event_type: str
     hardcoded_tab = "DS Assignments" if event_type == "DS" else "CS Assignments"
     tab_name = await ask_keep_or_change(
         channel,
-        f"**Step 1 of 6 — Sheet Tab**\n"
+        f"**Step 1 of 7 — Sheet Tab**\n"
         f"Which tab in your Google Sheet stores the {label} zone assignments?\n"
         f"⚠️ *Make sure this tab exists in your sheet before continuing.*\n"
         f"ℹ️ *The bot will manage the data structure of this tab automatically — "
@@ -3320,7 +3288,7 @@ async def run_storm_setup(interaction: discord.Interaction, bot, event_type: str
 
     team_view = TeamChoiceView()
     await channel.send(
-        f"**Step 2 of 6 — Which teams do you run for {label}?**",
+        f"**Step 2 of 7 — Which teams do you run for {label}?**",
         view=team_view,
     )
     await wait_view_or_cancel(team_view, cancel_event)
@@ -3341,7 +3309,7 @@ async def run_storm_setup(interaction: discord.Interaction, bot, event_type: str
         guild=interaction.guild,
     )
     await channel.send(
-        f"**Step 3 of 6 — Storm Log Channel**\n"
+        f"**Step 3 of 7 — Storm Log Channel**\n"
         f"Select the channel where {label} participation/log summaries will be posted:",
         view=log_ch_view,
     )
@@ -3361,7 +3329,7 @@ async def run_storm_setup(interaction: discord.Interaction, bot, event_type: str
         guild=interaction.guild,
     )
     await channel.send(
-        f"**Step 4 of 6 — Mail Post Channel**\n"
+        f"**Step 4 of 7 — Mail Post Channel**\n"
         f"When leadership clicks **Post & Copy** at the end of `/"
         f"{'desertstorm' if event_type == 'DS' else 'canyonstorm'}_draft`, "
         f"the finished mail will be posted to this channel:",
@@ -3461,7 +3429,7 @@ async def run_storm_setup(interaction: discord.Interaction, bot, event_type: str
 
         shared_view = SharedTemplateView()
         await channel.send(
-            "**Step 5 of 6 — Mail Template**\n"
+            "**Step 5 of 7 — Mail Template**\n"
             "Do you want one template that applies to both teams, or separate templates per team?",
             view=shared_view,
         )
@@ -3484,7 +3452,7 @@ async def run_storm_setup(interaction: discord.Interaction, bot, event_type: str
 
     else:
         team_label = "Team A" if teams == "A" else "Team B"
-        await channel.send("**Step 5 of 6 — Mail Template**")
+        await channel.send("**Step 5 of 7 — Mail Template**")
         template = await get_template(team_label)
         if template is None:
             return
@@ -4089,11 +4057,6 @@ async def run_event_setup(interaction: discord.Interaction, bot):
             return None
         return reply.content.strip()[:max_chars]
 
-    async def ask_view(prompt: str, view: discord.ui.View):
-        await channel.send(prompt, view=view)
-        await wait_view_or_cancel(view, cancel_event)
-        return view
-
     from config import get_config, get_guild_events, save_guild_event, get_or_create_config, update_config_field
     import re as _re
 
@@ -4535,7 +4498,7 @@ async def run_event_setup(interaction: discord.Interaction, bot):
                 default_blurb = f"{name} at {{time}} ({{server_time}} Server Time)."
 
                 class BlurbChoiceView(discord.ui.View):
-                    def __init__(self, has_existing: bool):
+                    def __init__(self):
                         super().__init__(timeout=120)
                         self.choice = None
 
@@ -4555,7 +4518,7 @@ async def run_event_setup(interaction: discord.Interaction, bot):
                         await inter.response.edit_message(view=self)
                         self.stop()
 
-                blurb_view = BlurbChoiceView(has_existing=bool(cur_blurb))
+                blurb_view = BlurbChoiceView()
                 if cur_blurb:
                     keep_btn = discord.ui.Button(
                         label="⏭️ Keep existing", style=discord.ButtonStyle.secondary, row=1
@@ -4665,16 +4628,6 @@ async def run_birthday_setup(interaction: discord.Interaction, bot):
             return None
         return reply.content.strip()[:max_chars]
 
-    def col_letter_to_index(raw: str) -> int:
-        """Convert 'A' or 'a' to 0, 'B' to 1, etc. Returns -1 if invalid."""
-        raw = raw.strip().upper()
-        if len(raw) == 1 and raw.isalpha():
-            return ord(raw) - ord('A')
-        return -1
-
-    def index_to_letter(idx: int) -> str:
-        return chr(ord('A') + idx) if idx >= 0 else "—"
-
     from config import get_birthday_config
     current = get_birthday_config(guild_id)
 
@@ -4730,7 +4683,7 @@ async def run_birthday_setup(interaction: discord.Interaction, bot):
         "Which column contains the member's name?",
         default="A",
         current=(
-            index_to_letter(saved_name_col)
+            _col_index_to_letter(saved_name_col)
             if isinstance(saved_name_col, int) and saved_name_col >= 0
             else ""
         ),
@@ -4741,7 +4694,7 @@ async def run_birthday_setup(interaction: discord.Interaction, bot):
     )
     if name_col_raw is None:
         return
-    name_col = col_letter_to_index(name_col_raw)
+    name_col = _col_letter_to_index(name_col_raw)
     if name_col < 0:
         await channel.send("⚠️ Please enter a single column letter like `A`. Run `/setup_birthdays` to try again.")
         return
@@ -4754,7 +4707,7 @@ async def run_birthday_setup(interaction: discord.Interaction, bot):
         "Which column contains the member's birthday?",
         default="B",
         current=(
-            index_to_letter(saved_bday_col)
+            _col_index_to_letter(saved_bday_col)
             if isinstance(saved_bday_col, int) and saved_bday_col >= 0
             else ""
         ),
@@ -4765,7 +4718,7 @@ async def run_birthday_setup(interaction: discord.Interaction, bot):
     )
     if bday_col_raw is None:
         return
-    birthday_col = col_letter_to_index(bday_col_raw)
+    birthday_col = _col_letter_to_index(bday_col_raw)
     if birthday_col < 0:
         await channel.send("⚠️ Please enter a single column letter like `B`. Run `/setup_birthdays` to try again.")
         return
@@ -4989,9 +4942,9 @@ async def run_birthday_setup(interaction: discord.Interaction, bot):
 
     embed = discord.Embed(title="✅ Birthday Tracking Configured", color=discord.Color.green())
     embed.add_field(name="Sheet Tab",           value=tab_name,                            inline=True)
-    embed.add_field(name="Name Column",         value=f"Column {index_to_letter(name_col)}",     inline=True)
-    embed.add_field(name="Birthday Column",     value=f"Column {index_to_letter(birthday_col)}", inline=True)
-    embed.add_field(name="Discord ID Column",   value=f"Column {index_to_letter(discord_id_col)}" if discord_id_col >= 0 else "Not stored", inline=True)
+    embed.add_field(name="Name Column",         value=f"Column {_col_index_to_letter(name_col)}",     inline=True)
+    embed.add_field(name="Birthday Column",     value=f"Column {_col_index_to_letter(birthday_col)}", inline=True)
+    embed.add_field(name="Discord ID Column",   value=f"Column {_col_index_to_letter(discord_id_col)}" if discord_id_col >= 0 else "Not stored", inline=True)
     embed.add_field(name="Train Integration",   value="Enabled" if train_integration else "Disabled", inline=True)
     if train_integration:
         embed.add_field(name="Placement",       value="Flexible (±1 day)" if flexible_placement else "Birthday only", inline=True)

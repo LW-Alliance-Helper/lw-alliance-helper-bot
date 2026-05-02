@@ -173,7 +173,6 @@ async def run_blurb_wizard_for_entry(bot, channel, user, date_str: str, name: st
 
         # Persist back to schedule
         schedule = load_schedule(guild_id)
-        existing = schedule.get(date_str, {})
         schedule[date_str] = {
             "name":             name,
             "theme":            theme,

@@ -15,7 +15,7 @@ repo `../lw-alliance-helper.github.io` (the website) has its own
 
 - **Solo project**, but the bot repo uses a release-branch workflow:
   every change → GitHub issue → feature branch (`issue-NN-slug`) → PR
-  into the active `release/X.Y.Z` → squash-merge → release branch
+  into the active `release/X.Y.Z` → merge commit → release branch
   eventually PR'd into `main`. Railway deploys from `main`, so merging
   to main *is* the release. Delete feature branches after merge to
   release; **keep** release branches as history. See
@@ -43,8 +43,8 @@ repo `../lw-alliance-helper.github.io` (the website) has its own
   hook failures.
 - **Never `push --force` to main**, never `reset --hard`, never delete
   branches without confirming. Release branches are preserved as
-  history; feature branches are deleted only after their squash-merge
-  into release.
+  history; feature branches are deleted only after their merge into
+  release.
 - **Companion repo `../lw-alliance-helper.github.io`** (the website)
   keeps the older direct-to-main rule — push commits straight to
   `main` there.

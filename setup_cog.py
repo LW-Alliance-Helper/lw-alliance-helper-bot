@@ -671,7 +671,7 @@ async def _manage_train_templates(
             listing.append(f"`{i+1}.` **{t['name']}**{star}{preview_suffix}")
 
         embed = discord.Embed(
-            title="**Step 6 of 7 — Prompt Templates**",
+            title="**Step 6 of 8 — Prompt Templates**",
             description=(
                 "Saved ChatGPT prompt templates. The default ⭐ is the one used "
                 "by the blurb wizard unless a member's day overrides it.\n\n"

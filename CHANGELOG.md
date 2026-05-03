@@ -7,6 +7,26 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [1.0.12] — 2026-05-02
+
+### Fixed — stale version constant and stale wizard step label
+
+Two latent string bugs caught during the post-1.0.11 documentation
+audit:
+
+- **`bot.py` `__version__` was still `"1.0.0"` after eleven releases.**
+  Sentry reads this constant for its `release` tag, so every error
+  shipped since 1.0.0 was bucketed under that release — making it
+  impossible to tell which patch a crash came from. Now bumped to
+  `"1.0.12"` and will move with each release going forward.
+- **`setup_cog.py:674` rendered `"Step 6 of 7 — Prompt Templates"`
+  inside the train wizard's prompt-templates manager.** The parent
+  train wizard has been "of 8" since the Premium DM body step shipped
+  in 1.0.9; users saw contradictory step counts mid-wizard. Corrected
+  to `"Step 6 of 8"`.
+
+No behavioural changes — both fixes are pure string corrections.
+
 ## [1.0.11] — 2026-05-02
 
 ### Changed — doc sync for 1.0.7 (CLAUDE.md, CONTENT_AUDIT.md)

@@ -7,6 +7,22 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [1.0.14] — 2026-05-02
+
+### Removed — `docs/OGV_STRIP_INVENTORY.md`
+
+Working document used to plan the 1.0.9 OGV-server-specific code
+strip. The strip shipped seven steps fully executed in 1.0.9, so the
+inventory's "current model / removal impact / decision required"
+framing has been resolved for three releases. Deleting rather than
+banner-as-historical because the file was never linked from anywhere
+and its ground-truth references (`OGV_GUILD_ID` constant in
+`config.py`, the `ALWAYS_PREMIUM_GUILD_IDS` set in `premium.py`)
+have been replaced by `PREMIUM_BYPASS_GUILD_IDS` env-var-driven
+gating.
+
+No code changes.
+
 ## [1.0.13] — 2026-05-02
 
 ### Changed — README sync after post-1.0.11 audit

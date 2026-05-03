@@ -13,9 +13,26 @@ repo `../lw-alliance-helper.github.io` (the website) has its own
 
 ## Working agreement
 
-- **Solo project.** Push directly to `main`. Always fast-forward merge.
-- **No PRs unless explicitly asked.** Default workflow is branch → fix
-  → tests pass → fast-forward to main → push.
+- **Solo project**, but the bot repo uses a release-branch workflow:
+  every change → GitHub issue → feature branch (`issue-NN-slug`) → PR
+  into the active `release/X.Y.Z` → squash-merge → release branch
+  eventually PR'd into `main`. Railway deploys from `main`, so merging
+  to main *is* the release. Delete feature branches after merge to
+  release; **keep** release branches as history. See
+  `feedback_release_workflow_bot.md` in Memory for the full rule.
+- **Backlog lives in [GitHub Project #2](https://github.com/orgs/LW-Alliance-Helper/projects/2).**
+  Auto-add fires for both repos. Apply a label at issue-creation time
+  (`bug` / `feature` / `documentation` / `hotfix`).
+- **Hotfix exception.** Direct-to-main is allowed for urgent one-line
+  fixes, but only with explicit approval before each push. After a
+  hotfix lands on main, fast-forward the active release branch to
+  include it.
+- **Versioning is per-release.** Branch name encodes the version
+  (`release/1.0.16` → version `1.0.16`); one CHANGELOG entry per
+  release covering all merged issues. Bump `bot.py.__version__` and
+  write the CHANGELOG entry on the release branch right before
+  opening the PR to main, not on individual feature branches. Sentry
+  reads `__version__` for release tagging — keep it accurate.
 - **Tests must pass before commit.** Pre-commit hook enforces this. If
   it fails: investigate the underlying issue, don't bypass with
   `--no-verify`.
@@ -24,8 +41,13 @@ repo `../lw-alliance-helper.github.io` (the website) has its own
   trailer.
 - **Never amend** — always make a new commit, even after pre-commit
   hook failures.
-- **Never push --force to main**, never `reset --hard`, never delete
-  branches without confirming.
+- **Never `push --force` to main**, never `reset --hard`, never delete
+  branches without confirming. Release branches are preserved as
+  history; feature branches are deleted only after their squash-merge
+  into release.
+- **Companion repo `../lw-alliance-helper.github.io`** (the website)
+  keeps the older direct-to-main rule — push commits straight to
+  `main` there.
 
 ---
 

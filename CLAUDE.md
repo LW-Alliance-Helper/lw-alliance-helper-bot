@@ -183,6 +183,11 @@ the long form on each.
 
 | Version | What |
 |---|---|
+| `1.0.15` | Sheet-CI rerun-filter fix — too-narrow `--only-rerun` filters were preventing legitimate quota-pressure retries on the live-Sheets job |
+| `1.0.14` | Removed `docs/OGV_STRIP_INVENTORY.md` (resolved working doc; never linked) |
+| `1.0.13` | README sync after post-1.0.11 audit (wizard step counts rewritten, customisable DM body row added, removed Canyon Storm fixed-time claim) |
+| `1.0.12` | Fixed stale `__version__` constant (Sentry release tag was bucketing every error under `1.0.0`) and stale wizard step label `Step 6 of 7` → `of 8` |
+| `1.0.11` | Doc sync that should have ridden with 1.0.7 (CLAUDE.md `wizard_registry` row + new auto-post-timeout pattern, CONTENT_AUDIT.md view-timeout rows) |
 | `1.0.10` | Birthday → train auto-population: persistence bug fixed (in-place dict mutation defeated the change check) and gated to once-per-day instead of every-minute (was burning ~1440 sheet reads/day per guild) |
 | `1.0.9` | Wizard views no longer hang on Discord interaction-token expiry — new `safe_edit_response` helper threaded through ~100 sites |
 | `1.0.8` | Removed legacy-column shims (filter + scheduler patch + migration block) once production confirmed the 1.0.5 DROP COLUMN ran |
@@ -239,13 +244,17 @@ These have been thought through. Reopening them needs a real reason:
 
 ## Status snapshot
 
-- 1.0.0 launched 2026-04-28. Currently on `1.0.10` (see
-  `CHANGELOG.md` for the per-version detail).
+- 1.0.0 launched 2026-04-28. Currently on `1.0.15`; `release/1.0.16`
+  is open and accumulating issues for the next release. See
+  `CHANGELOG.md` for per-version detail.
 - 538 tests collected, 18 skipped under CI's `FORCE_PREMIUM=1` lane.
-- Pre-launch audit fully shipped. No outstanding cleanup queued.
+- Pre-launch audit fully shipped (Rounds 1–4 → 1.0.1–1.0.4; schema
+  drops → 1.0.5 + 1.0.8). No outstanding cleanup from that audit.
 - Transfer management feature designed, not built (see
-  `DESIGN_transfer_management.md`).
+  `DESIGN_transfer_management.md` and issue
+  [#16](https://github.com/LW-Alliance-Helper/lw-alliance-helper-bot/issues/16)).
 
-For per-version detail, see `CHANGELOG.md`. The `[Unreleased]` block
-above the latest version is where new in-flight work goes before
-cutting the next release.
+For per-version detail, see `CHANGELOG.md`. New in-flight work goes
+on a feature branch (`issue-NN-slug`) → PR into the active
+`release/X.Y.Z` branch. The release branch is where the next
+release accumulates before its own PR into `main`.

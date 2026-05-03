@@ -7,6 +7,35 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [1.0.13] — 2026-05-02
+
+### Changed — README sync after post-1.0.11 audit
+
+Documentation drift caught against the actual wizard step counts and
+post-1.0.9 customisable DM body feature. Every change is in `README.md`;
+no code changes.
+
+- **`/setup_train` step list** rewritten as the actual 8 steps. Was
+  collapsed to 3 numbered items; the rewrite calls out every step
+  including Step 6 (prompt templates with the free-vs-premium cap)
+  and Step 8 (Premium DM body).
+- **`/setup_birthdays` step list** rewritten as the actual 9 steps.
+  Added Step 1 (Enable birthday tracking?), Step 6 (placement) and
+  Step 7 (lookahead) as their own items, and Step 9 (Premium DM body).
+  Removed the outdated "Discord ID column" step — the wizard no
+  longer asks for it (the column is preserved if previously set but
+  collected via the birthday-sheet schema, not the wizard).
+- **`/setup_desertstorm` step list** now explicitly says "7 steps"
+  and includes Step 7 (Premium reminder DM body) as its own item.
+- **Canyon Storm fixed-time claim removed.** README previously said
+  *"Canyon Storm runs at 12:00 and 23:00 Server Time (displayed in
+  your timezone)"* — that's an OGV-server assumption that the 1.0.9
+  strip removed from the bot. Replaced with a note that CS times
+  vary by server and come from the alliance's own calendar.
+- **Premium-only feature matrix** now includes a "Customisable DM
+  bodies" row covering the birthday / train / storm DM body
+  overrides shipped in 1.0.9.
+
 ## [1.0.12] — 2026-05-02
 
 ### Fixed — stale version constant and stale wizard step label

@@ -55,6 +55,7 @@ Alliance Helper is **free to use at the base level** for every alliance — ever
 | **Member Roster Sync** | Writes every member's Discord ID + name to a sheet tab so other premium features can DM them. `/setup_members`, `/sync_members` |
 | **Birthday DMs** | DM each member a personal happy-birthday note when their day fires |
 | **Train assignment DMs** | DM the assigned member when their train day starts |
+| **Customisable DM bodies** | Each Premium DM (birthday, train assignment, storm reminder) ships with a sensible default; alliances can override the body via the relevant `/setup_*` wizard's final step |
 | **Auto-mention in train reminders** | Replace plain names with `<@id>` Discord mentions in the daily reminder |
 | **DM-via-roster for `/survey_remind`** | Send the reminder as a DM to every roster member (free tier posts to a channel instead) |
 | **`/desertstorm_remind`** / **`/canyonstorm_remind`** | DM every roster member a participation reminder before each storm |
@@ -152,15 +153,16 @@ You'll then see your event list with options to add, edit, or remove events. For
 
 **What to create in your sheet:** A tab for your train schedule (e.g. `Train Schedule`).
 
-Run `/setup_train` to configure the train schedule:
+Run `/setup_train` to configure the train schedule. The wizard walks through 8 steps:
 
 1. **Schedule tab** — which tab in your sheet stores the train schedule
-2. **Blurb generation** — whether you want the bot to generate a ChatGPT prompt each day. If yes:
-   - **Themes** — a list of themes leadership can choose from (e.g. `Birthday, Milestone, Welcome`)
-   - **Tones** — a list of tone options (e.g. `Default, More casual, More intense`)
-   - **Default tone** — which tone is pre-selected
-   - **Prompt template** — the full prompt you'd give ChatGPT, using `{name}`, `{theme}`, `{tone}`, and `{notes}` as placeholders
-3. **Reminders** — whether the bot should post a reminder when someone is assigned the train, and if so, which channel and what time
+2. **Blurb generation** — whether you want the bot to generate a ChatGPT prompt each day. If no, steps 3–6 are skipped.
+3. **Themes** — a list of themes leadership can choose from (e.g. `Birthday, Milestone, Welcome`)
+4. **Tones** — a list of tone options (e.g. `Default, More casual, More intense`)
+5. **Default tone** — which tone is pre-selected
+6. **Prompt templates** — saved ChatGPT prompts using `{name}`, `{theme}`, `{tone}`, and `{notes}` as placeholders. Free tier keeps a single "Default" template; 💎 Premium can save up to 10 named templates and pick which is the default.
+7. **Reminders** — whether the bot should post a reminder when someone is assigned the train, and if so, which channel and what time
+8. **💎 Train DM Body** *(Premium)* — the body of the DM sent to the assigned member each day. Has a sensible default; override here if you want different copy.
 
 **Day-to-day use:**
 - Use `/train` to manage the schedule — buttons for **Add**, **Update**, **Generate Prompt**, and **Clear**
@@ -174,23 +176,23 @@ Run `/setup_train` to configure the train schedule:
 
 **What to create in your sheet:** A tab containing your member roster with name and birthday columns (e.g. `Birthdays`, or your existing member tab).
 
-Run `/setup_birthdays` to configure birthday tracking:
+Run `/setup_birthdays` to configure birthday tracking. The wizard walks through 9 steps:
 
-1. **Sheet tab** — which tab contains birthday data
-2. **Name column** — the column letter containing member names (e.g. `A`)
-3. **Birthday column** — the column letter containing birthdays (e.g. `B`)
-4. **Discord ID column** *(optional)* — if you store Discord IDs, the bot can @mention members in birthday announcements
-5. **Train integration** — whether birthdays are automatically added to the train schedule
-   - If yes: choose whether to place on the exact birthday only, or allow 1 day before/after if the birthday is taken
-   - If yes: how many days in advance to look ahead (we recommend 14)
-6. **Birthday reminders** — whether the bot posts a birthday message in Discord
-   - If yes: which channel and what time
+1. **Enable birthday tracking** — opt in or skip the feature entirely
+2. **Sheet tab** — which tab contains birthday data
+3. **Name column** — the column letter containing member names (e.g. `A`)
+4. **Birthday column** — the column letter containing birthdays (e.g. `B`)
+5. **Train integration** — whether birthdays are automatically added to the train schedule. If no, steps 6–7 are skipped.
+6. **Birthday placement** — exact birthday only, or allow 1 day before/after if the birthday is taken
+7. **Train schedule lookahead** — how many days in advance to look ahead (default `14`)
+8. **Birthday reminders** — whether the bot posts a birthday message in Discord, and if so, which channel and what time
+9. **💎 Birthday DM Body** *(Premium)* — the personal happy-birthday DM each member receives. Requires Premium + Member Roster Sync + a Discord ID column in your birthday sheet.
 
 Birthday messages say: *🎂 Today is **[name]**'s birthday!*
 
 **Day-to-day use:**
 - Use `/birthdays` to see upcoming birthdays in the next 14 days
-- The bot auto-runs the birthday check once per day (after server-time midnight). Use `/train_addbirthdays` to run it on demand mid-day.
+- Birthdays auto-populate the train schedule once per day, just after server-time midnight. Use `/train_addbirthdays` to trigger the check on demand if you need a birthday added sooner.
 
 ---
 
@@ -198,7 +200,7 @@ Birthday messages say: *🎂 Today is **[name]**'s birthday!*
 
 **What to create in your sheet:** A tab for Desert Storm assignments (e.g. `DS Assignments`).
 
-Run `/setup_desertstorm` to configure Desert Storm. The wizard walks through:
+Run `/setup_desertstorm` to configure Desert Storm. The wizard walks through 7 steps:
 
 1. **Sheet tab** — the bot manages the data structure here automatically, no formatting needed
 2. **Teams** — whether you run Team A & B, Team A only, or Team B only
@@ -209,6 +211,7 @@ Run `/setup_desertstorm` to configure Desert Storm. The wizard walks through:
    - Tab to write rows to (default `DS Participation Log`)
    - Roster source: which sheet tab + which column has the member name + (optional) alias column for short forms / in-game tags + which row the data starts on
    - Questions builder: free tier supports 3 questions across `Text`, `Yes/No`, `Numeric`, and `Roster names` types. 💎 Premium unlocks unlimited questions plus `Single-select`, `Multi-select`, and `Date` types.
+7. **💎 Reminder DM Body** *(Premium)* — the body of the participation-reminder DM sent by `/desertstorm_remind`. Has a sensible default; override here if you want different copy.
 
 **Available placeholders in your template:**
 - `{alliance_name}` — your alliance name
@@ -229,9 +232,7 @@ Run `/setup_desertstorm` to configure Desert Storm. The wizard walks through:
 
 **What to create in your sheet:** A tab for Canyon Storm assignments (e.g. `CS Assignments`).
 
-Run `/setup_canyonstorm` — the setup is identical to Desert Storm above (7 steps including Post Channel, optional participation tracking, and an optional 💎 Premium reminder DM body).
-
-Canyon Storm runs at 12:00 and 23:00 Server Time (displayed in your timezone).
+Run `/setup_canyonstorm` — the setup is identical to Desert Storm above (7 steps including Post Channel, optional participation tracking, and an optional 💎 Premium reminder DM body). Canyon Storm event times vary by server, so the bot doesn't bake in a fixed schedule — your alliance's storm times come from your own calendar.
 
 **Day-to-day use:**
 - `/canyonstorm` — view current rosters and the configured mail template

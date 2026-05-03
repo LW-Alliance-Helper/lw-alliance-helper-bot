@@ -26,6 +26,9 @@ venv/
 .claude/settings.local.json
 .claude/worktrees/
 
+# Local planning docs (cross-session work tracker)
+PLANNING.md
+
 # IDE / OS noise
 .vscode/
 .idea/

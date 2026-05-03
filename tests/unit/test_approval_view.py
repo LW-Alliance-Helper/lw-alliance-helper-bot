@@ -307,3 +307,178 @@ class TestEditAndSend:
 
         # bot.wait_for should NOT have been called (we bailed before that).
         bot.wait_for.assert_not_called()
+
+    @pytest.mark.asyncio
+    async def test_revised_view_message_captured_for_timeout(self):
+        """The new ApprovalView posted from Edit & Send must have its
+        `message` attribute set to the sent draft. Without this, when
+        the new view eventually times out, on_timeout has nothing to
+        edit and the buttons stay live but unresponsive."""
+        from scheduler import ApprovalView
+
+        cfg          = _make_cfg()
+        revised_sent = MagicMock(name="revised_msg")
+        revised_sent.delete = AsyncMock()
+        leadership   = AsyncMock()
+        # First send (the prompt) returns a deletable; second send (the
+        # revised draft + new view) returns revised_sent. Use a list-style
+        # side effect so each await returns the next value.
+        leadership.send = AsyncMock(side_effect=[
+            MagicMock(delete=AsyncMock()),
+            revised_sent,
+        ])
+        bot = _make_bot({LEADERSHIP_CHAN_ID: leadership})
+
+        revised_msg              = MagicMock()
+        revised_msg.author       = MagicMock(); revised_msg.author.id = 9001
+        revised_msg.channel      = MagicMock(); revised_msg.channel.id = LEADERSHIP_CHAN_ID
+        revised_msg.content      = "edited body"
+        revised_msg.delete       = AsyncMock()
+        bot.wait_for = AsyncMock(return_value=revised_msg)
+
+        view = ApprovalView(
+            bot=bot, draft_message="orig",
+            event_key="event-key", event_list=_make_event_list(),
+            is_shield=False, guild_id=GUILD_ID,
+        )
+
+        with patch("config.get_config", return_value=cfg):
+            await view.edit_and_send.callback(_make_interaction())
+
+        new_view = leadership.send.await_args_list[1].kwargs["view"]
+        assert new_view.message is revised_sent, \
+            "Revised ApprovalView must carry the sent message ref so on_timeout can edit it"
+
+
+# ── on_timeout: dead buttons must be cleaned up ──────────────────────────────
+
+class TestApprovalViewOnTimeout:
+    """When the 1-hour ApprovalView timeout expires, the buttons must be
+    physically removed from the message and a 'use /events' notice
+    appended. Otherwise leadership clicks expired buttons and gets the
+    unhelpful 'Interaction failed' toast."""
+
+    @pytest.mark.asyncio
+    async def test_strips_buttons_and_posts_use_events_notice(self):
+        from scheduler import ApprovalView
+
+        view = ApprovalView(
+            bot=MagicMock(), draft_message="m",
+            event_key="k", event_list=[], is_shield=False, guild_id=GUILD_ID,
+        )
+        view.message = MagicMock()
+        view.message.content = "📣 Announcement draft body"
+        view.message.edit    = AsyncMock()
+
+        await view.on_timeout()
+
+        view.message.edit.assert_awaited_once()
+        kwargs = view.message.edit.await_args.kwargs
+        assert kwargs["view"] is None
+        assert "/events" in kwargs["content"]
+        assert "timed out" in kwargs["content"].lower()
+        # Original content is preserved.
+        assert "Announcement draft body" in kwargs["content"]
+
+    @pytest.mark.asyncio
+    async def test_no_op_when_message_never_captured(self):
+        """A view with no message ref (constructed in a test, or send
+        failed) must not raise on timeout."""
+        from scheduler import ApprovalView
+
+        view = ApprovalView(
+            bot=MagicMock(), draft_message="m",
+            event_key="k", event_list=[], is_shield=False, guild_id=GUILD_ID,
+        )
+        # view.message left as None by default.
+        await view.on_timeout()  # should not raise
+
+
+class TestEventEditorOnTimeout:
+    """Same contract for the event-editor view. The editor sits in the
+    leadership channel for an hour after the daily draft. If buttons
+    aren't stripped, leadership comes back next day and clicks dead
+    buttons."""
+
+    @pytest.mark.asyncio
+    async def test_strips_buttons_and_posts_use_events_notice(self):
+        from datetime import date as date_cls
+        from scheduler import EventEditorView
+
+        view = EventEditorView(
+            bot=MagicMock(), event_list=[], event_key="ek",
+            run_date=date_cls(2026, 5, 15), guild_id=GUILD_ID,
+        )
+        view.message = MagicMock()
+        view.message.content = "📣 **Event Editor** body"
+        view.message.edit    = AsyncMock()
+
+        await view.on_timeout()
+
+        view.message.edit.assert_awaited_once()
+        kwargs = view.message.edit.await_args.kwargs
+        assert kwargs["view"] is None
+        assert "/events" in kwargs["content"]
+        assert "Event Editor" in kwargs["content"]
+
+
+# ── post_editor / Build Announcement: must wire view.message ─────────────────
+
+class TestSentMessageWiring:
+    """post_editor and Build Announcement both send a View-bearing
+    message. They must capture the returned message into view.message
+    so the eventual on_timeout has something to edit."""
+
+    @pytest.mark.asyncio
+    async def test_post_editor_assigns_view_message(self):
+        from datetime import date as date_cls
+        from scheduler import post_editor
+
+        sent = MagicMock(name="sent")
+        channel = AsyncMock(); channel.send = AsyncMock(return_value=sent)
+        bot = _make_bot({LEADERSHIP_CHAN_ID: channel})
+        cfg = _make_cfg()
+
+        await post_editor(
+            bot, event_list=[], event_key="ek",
+            run_date=date_cls(2026, 5, 15),
+            cfg=cfg, draft_channel_id=LEADERSHIP_CHAN_ID,
+            announcement_channel_id=ANNOUNCEMENT_CHAN_ID,
+            five_min_warning=False,
+        )
+
+        # The view passed to channel.send must now carry message=sent.
+        kwargs = channel.send.await_args.kwargs
+        view   = kwargs["view"]
+        assert view.message is sent
+
+    @pytest.mark.asyncio
+    async def test_build_announcement_assigns_approval_view_message(self):
+        """When EventEditorView's Build Announcement button posts the
+        ApprovalView, the new view's `message` must point at the sent
+        draft so its 1-hour timeout can clean itself up."""
+        from datetime import date as date_cls
+        from scheduler import EventEditorView, ApprovalView
+
+        sent = MagicMock(name="approval_msg")
+        channel = AsyncMock(); channel.send = AsyncMock(return_value=sent)
+        bot = _make_bot({LEADERSHIP_CHAN_ID: channel})
+        cfg = _make_cfg()
+        cfg.role_mention = "@everyone"
+
+        view = EventEditorView(
+            bot=bot, event_list=_make_event_list(), event_key="ek",
+            run_date=date_cls(2026, 5, 15), guild_id=GUILD_ID,
+        )
+        # Need a message to satisfy the existing "disable buttons" edit.
+        editor_msg = MagicMock(); editor_msg.edit = AsyncMock()
+        interaction = _make_interaction()
+        interaction.message = editor_msg
+
+        with patch("config.get_config", return_value=cfg):
+            await view.build_announcement_btn.callback(interaction)
+
+        # ApprovalView was posted to the leadership channel.
+        approval_view = channel.send.await_args.kwargs["view"]
+        assert isinstance(approval_view, ApprovalView)
+        assert approval_view.message is sent

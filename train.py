@@ -465,6 +465,16 @@ class ReminderView(discord.ui.View):
         self.cog      = cog
         self.date_str = date_str
         self.name     = name
+        # Set by the reminder loop right after channel.send so on_timeout
+        # can strip the button + post the re-initiate hint.
+        self.message  = None
+
+    async def on_timeout(self):
+        """Strip the prompt button and tell the assignee how to re-open
+        it. Without this, the button looks live for an hour after the
+        view stopped listening — clicks fail with 'Interaction failed'."""
+        from wizard_registry import expire_view_message
+        await expire_view_message(self.message, command_hint="/train")
 
     @discord.ui.button(label="📋 View & Get Prompt", style=discord.ButtonStyle.success)
     async def launch(self, interaction: discord.Interaction, button: discord.ui.Button):

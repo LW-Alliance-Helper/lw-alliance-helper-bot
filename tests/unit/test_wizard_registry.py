@@ -16,8 +16,11 @@ import pytest
 
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__)))))
 
+from unittest.mock import AsyncMock, MagicMock
+
 from wizard_registry import (
     register, unregister, cancel_user, wait_view_or_cancel,
+    expire_view_message,
 )
 
 
@@ -130,3 +133,75 @@ class TestCancelUserDrivesViewWait:
             # cancel_user already cleared the registry, so unregister is
             # a no-op here. Safe to call regardless.
             unregister(user_id, cancel_event)
+
+
+# ── expire_view_message ───────────────────────────────────────────────────────
+
+class TestExpireViewMessage:
+    """When a View's timeout fires, expire_view_message strips the
+    buttons from the original Discord message and appends a notice
+    telling the user how to re-open the flow. Without this helper the
+    expired message keeps rendering active-looking buttons that fail
+    silently with 'Interaction failed' on click."""
+
+    @pytest.mark.asyncio
+    async def test_strips_view_and_appends_notice_with_command(self):
+        msg = MagicMock()
+        msg.content = "📣 Original draft body"
+        msg.edit    = AsyncMock()
+
+        await expire_view_message(msg, command_hint="/events")
+
+        msg.edit.assert_awaited_once()
+        kwargs = msg.edit.await_args.kwargs
+        # View is removed entirely — buttons gone.
+        assert kwargs["view"] is None
+        # Original content preserved + timeout notice appended with command.
+        assert kwargs["content"].startswith("📣 Original draft body")
+        assert "timed out" in kwargs["content"].lower()
+        assert "/events" in kwargs["content"]
+
+    @pytest.mark.asyncio
+    async def test_omits_command_suffix_when_hint_empty(self):
+        msg = MagicMock()
+        msg.content = "draft"
+        msg.edit    = AsyncMock()
+
+        await expire_view_message(msg)  # no command_hint
+
+        body = msg.edit.await_args.kwargs["content"]
+        assert "timed out" in body.lower()
+        assert "re-initiate" not in body.lower()
+
+    @pytest.mark.asyncio
+    async def test_idempotent_when_notice_already_present(self):
+        """Running twice on the same message must not double-append the
+        notice. Defends against on_timeout being called twice (e.g. an
+        explicit stop + the timer firing concurrently)."""
+        msg = MagicMock()
+        msg.edit = AsyncMock()
+        # Simulate first run already happened.
+        msg.content = "draft\n\n⏰ *The actions for this have timed out. Use `/events` to re-initiate.*"
+
+        await expire_view_message(msg, command_hint="/events")
+
+        msg.edit.assert_not_called()
+
+    @pytest.mark.asyncio
+    async def test_none_message_is_a_noop(self):
+        """A View constructed in tests (or never sent) carries
+        message=None. The helper must tolerate this without raising."""
+        await expire_view_message(None, command_hint="/events")  # no-op
+
+    @pytest.mark.asyncio
+    async def test_swallows_edit_errors(self):
+        """If the original message was deleted between draft post and
+        timeout, message.edit raises NotFound. The helper must swallow
+        it so the bot's task loop doesn't crash."""
+        msg = MagicMock()
+        msg.content = "draft"
+        msg.edit    = AsyncMock(side_effect=RuntimeError("message gone"))
+
+        # Should not raise.
+        await expire_view_message(msg, command_hint="/events")
+        msg.edit.assert_awaited_once()

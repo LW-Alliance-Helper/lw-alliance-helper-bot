@@ -229,6 +229,32 @@ the configured-template flow end-to-end. 501 passed (was 476).
   `ask_keep_or_change` wizard step entry to reflect the new
   current-vs-default 3-button layout.
 
+## [1.0.7] — 2026-05-02
+
+### Fixed — automated-post buttons no longer go silently dead on timeout
+
+The daily event-editor draft, the review/approval draft that follows,
+and the daily train reminder are all posted by background tasks with
+1-hour view timeouts. Before this release, when those views expired:
+
+- The Discord-side message kept rendering active-looking buttons.
+- A leadership click would fail with the unhelpful "Interaction failed"
+  toast, with no indication the draft had timed out.
+- `ApprovalView.on_timeout` set `disabled = True` on its in-memory
+  buttons but never edited the message, so the change never reached
+  Discord. `EventEditorView.on_timeout` and `ReminderView` (which
+  didn't define one at all) had the same problem.
+
+Now, when any of those automated approval/review posts time out, the
+buttons are physically removed and a notice is appended to the
+original message: *"⏰ The actions for this have timed out. Use
+`/events` (or `/train`) to re-initiate."* Leadership sees immediately
+that the draft is stale and knows the exact command to re-open it.
+
+The expire-and-notify pattern lives in
+`wizard_registry.expire_view_message` — a small helper any future
+View can call from its own `on_timeout` to get the same behaviour.
+
 ## [1.0.6] — 2026-05-02
 
 ### Fixed — scheduler crash on production DBs carrying retired columns

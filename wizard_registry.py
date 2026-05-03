@@ -86,6 +86,37 @@ async def wait_or_cancel(awaitable, cancel_event: asyncio.Event):
         raise
 
 
+async def expire_view_message(message, command_hint: str = "") -> None:
+    """
+    Strip buttons from a previously-posted message and append a friendly
+    timeout notice. Called from a discord.ui.View's `on_timeout` after
+    the view captured its own message (`view.message = await ch.send(...)`).
+
+    Without this, expired views still render apparently-active buttons —
+    clicking one fails with "Interaction failed" because the view
+    stopped listening on the bot side. The user just sees a dead UI.
+
+    `command_hint` is the slash command leadership should run to
+    re-initiate the flow (e.g. "/events", "/train"). Leave empty to
+    drop the suffix.
+
+    Idempotent — re-running on the same message is a no-op. Swallows
+    discord errors (deleted message, lost perms) so the timeout
+    handler never raises.
+    """
+    if message is None:
+        return
+    suffix = f" Use `{command_hint}` to re-initiate." if command_hint else ""
+    notice = f"\n\n⏰ *The actions for this have timed out.{suffix}*"
+    try:
+        existing = (getattr(message, "content", None) or "")
+        if "actions for this have timed out" in existing:
+            return
+        await message.edit(content=existing + notice, view=None)
+    except Exception:
+        pass
+
+
 async def wait_view_or_cancel(view, cancel_event):
     """Race a discord.ui.View's wait() against a cancel event.
 

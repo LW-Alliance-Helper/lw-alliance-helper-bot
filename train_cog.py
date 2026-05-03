@@ -505,7 +505,7 @@ class TrainCog(commands.Cog):
                     f"no rush, run it when the team is available.\n\n"
                     f"⚠️ *If the button stops working after a bot restart, use `/train` → 📋 Generate Prompt instead.*"
                 )
-                await channel.send(msg, view=view)
+                view.message = await channel.send(msg, view=view)
             else:
                 await channel.send(
                     f"🚂 **Reset! Today's train is for {display}.**"

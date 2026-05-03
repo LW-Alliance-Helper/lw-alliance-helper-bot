@@ -345,3 +345,68 @@ class TestTrainReminderDailyReset:
         )
         chan.send.assert_called_once(), \
             "After date rollover, reminders_fired is cleared and reminder fires again"
+
+
+# ── ReminderView lifecycle ───────────────────────────────────────────────────
+
+class TestReminderViewMessageWiring:
+    """The reminder loop must capture the sent message into
+    `view.message` so the View's 1-hour on_timeout can strip the
+    button. Without this, the prompt button stays visible all night
+    after the view stops listening — clicks fail with 'Interaction
+    failed'."""
+
+    @pytest.mark.asyncio
+    async def test_loop_assigns_view_message(self):
+        cog  = _make_cog()
+        sent = MagicMock(name="reminder_msg")
+        chan = AsyncMock(); chan.send = AsyncMock(return_value=sent)
+        today_iso = date_cls.today().isoformat()
+
+        await _run_loop(
+            cog,
+            now_in_guild_tz=datetime(2026, 5, 15, 22, 0, tzinfo=ET),
+            schedule={today_iso: {"name": "alice"}},
+            channels={REMINDER_CHAN_ID: chan},
+        )
+
+        # `channel.send(msg, view=view)` — view is the second arg as kwarg.
+        kwargs = chan.send.await_args.kwargs
+        view   = kwargs["view"]
+        assert view.message is sent, \
+            "ReminderView.message must be set so on_timeout can clean up the buttons"
+
+
+class TestReminderViewOnTimeout:
+    """The 1-hour ReminderView timeout must strip the button and tell
+    the assignee to use /train instead. Bug it fixes: previously
+    on_timeout didn't exist, so the button looked active for an hour
+    after the view stopped listening."""
+
+    @pytest.mark.asyncio
+    async def test_on_timeout_strips_button_and_posts_use_train(self):
+        from train import ReminderView
+
+        view = ReminderView(cog=MagicMock(), date_str="2026-05-15", name="alice")
+        view.message = MagicMock()
+        view.message.content = "🚂 Reset! Today's train is for alice."
+        view.message.edit    = AsyncMock()
+
+        await view.on_timeout()
+
+        view.message.edit.assert_awaited_once()
+        kwargs = view.message.edit.await_args.kwargs
+        assert kwargs["view"] is None
+        assert "/train" in kwargs["content"]
+        assert "timed out" in kwargs["content"].lower()
+        # Original announcement preserved.
+        assert "alice" in kwargs["content"]
+
+    @pytest.mark.asyncio
+    async def test_on_timeout_no_message_is_safe(self):
+        """View constructed without ever being sent (e.g. test) → no raise."""
+        from train import ReminderView
+
+        view = ReminderView(cog=MagicMock(), date_str="2026-05-15", name="alice")
+        # message left None
+        await view.on_timeout()  # should not raise

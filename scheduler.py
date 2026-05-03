@@ -302,6 +302,10 @@ class EventEditorView(discord.ui.View):
         self.run_date   = run_date
         self.notes      = ""
         self.guild_id   = guild_id
+        # Set by post_editor after the editor message is sent so on_timeout
+        # can strip the buttons + post the timeout notice. None when the
+        # view is constructed standalone (e.g. tests).
+        self.message    = None
 
     def format_event_list_text(self) -> str:
         lines = []
@@ -325,12 +329,9 @@ class EventEditorView(discord.ui.View):
         await interaction.message.edit(content=self._render_editor_content(), view=self)
 
     async def on_timeout(self):
-        """Disable buttons when the view expires."""
-        try:
-            # We don't have the message reference here, so just stop cleanly
-            pass
-        except Exception:
-            pass
+        """Strip the editor buttons and tell leadership how to re-open it."""
+        from wizard_registry import expire_view_message
+        await expire_view_message(self.message, command_hint="/events")
 
     @discord.ui.button(label="➕ Add Event", style=discord.ButtonStyle.primary, row=0)
     async def add_event(self, interaction: discord.Interaction, button: discord.ui.Button):
@@ -597,10 +598,11 @@ class EventEditorView(discord.ui.View):
         cfg = get_config(self.guild_id)
         channel = self.bot.get_channel(cfg.leadership_channel_id) if cfg else None
         if channel:
-            await channel.send(
+            sent = await channel.send(
                 f"📣 **Announcement draft — please review and approve:**\n\n{announcement}",
                 view=view,
             )
+            view.message = sent
         else:
             await interaction.followup.send("⚠️ Could not find the leadership channel.", ephemeral=True)
 
@@ -619,7 +621,9 @@ class ApprovalView(discord.ui.View):
         self.event_list    = event_list or []
         self.is_shield     = is_shield
         self.guild_id      = guild_id
-        # guild_id will be set by the caller
+        # Set by the caller right after channel.send so on_timeout can
+        # strip the buttons and post the re-initiate hint.
+        self.message       = None
 
     async def _post_to_announcements(self, message: str):
         from config import get_config
@@ -700,10 +704,11 @@ class ApprovalView(discord.ui.View):
                 is_shield=self.is_shield,
                 guild_id=self.guild_id,
             )
-            await channel.send(
+            sent = await channel.send(
                 f"📝 **Revised draft** (edited by {interaction.user.display_name}):\n\n{revised_text}",
                 view=new_view,
             )
+            new_view.message = sent
 
         except asyncio.TimeoutError:
             await channel.send(
@@ -713,8 +718,11 @@ class ApprovalView(discord.ui.View):
         self.stop()
 
     async def on_timeout(self):
-        for item in self.children:
-            item.disabled = True
+        """Strip the approval buttons and tell leadership how to re-open
+        the draft. Without the message edit, the buttons stayed on screen
+        but clicks failed silently with 'Interaction failed'."""
+        from wizard_registry import expire_view_message
+        await expire_view_message(self.message, command_hint="/events")
 
 
 # ── Main scheduler loop ────────────────────────────────────────────────────────
@@ -883,7 +891,8 @@ async def post_editor(bot, event_list: list[dict], event_key: str, run_date: dat
         return
 
     view = EventEditorView(bot=bot, event_list=event_list, event_key=event_key, run_date=run_date, guild_id=cfg.guild_id)
-    await channel.send(view._render_editor_content(), view=view)
+    sent = await channel.send(view._render_editor_content(), view=view)
+    view.message = sent
     print(f"[SCHEDULER] Event editor posted for {event_key}")
 
 

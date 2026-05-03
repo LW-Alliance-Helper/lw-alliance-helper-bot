@@ -184,6 +184,7 @@ the long form on each.
 
 | Version | What |
 |---|---|
+| `1.0.16` | Docs-only release: slim CHANGELOG (746 → 159 lines), CLAUDE.md working-agreement rewrite for the new release-branch workflow, version-table sync to 1.0.15, and follow-up workflow corrections (merge commit, descriptive feature branches). Bumped `__version__` for accurate Sentry release tagging. |
 | `1.0.15` | Sheet-CI rerun-filter fix — too-narrow `--only-rerun` filters were preventing legitimate quota-pressure retries on the live-Sheets job |
 | `1.0.14` | Removed `docs/OGV_STRIP_INVENTORY.md` (resolved working doc; never linked) |
 | `1.0.13` | README sync after post-1.0.11 audit (wizard step counts rewritten, customisable DM body row added, removed Canyon Storm fixed-time claim) |
@@ -245,9 +246,9 @@ These have been thought through. Reopening them needs a real reason:
 
 ## Status snapshot
 
-- 1.0.0 launched 2026-04-28. Currently on `1.0.15`; `release/1.0.16`
-  is open and accumulating issues for the next release. See
-  `CHANGELOG.md` for per-version detail.
+- 1.0.0 launched 2026-04-28. Currently on `1.0.16` (docs-only release
+  finalising the GitHub Project / release-branch workflow rollout).
+  See `CHANGELOG.md` for per-version detail.
 - 538 tests collected, 18 skipped under CI's `FORCE_PREMIUM=1` lane.
 - Pre-launch audit fully shipped (Rounds 1–4 → 1.0.1–1.0.4; schema
   drops → 1.0.5 + 1.0.8). No outstanding cleanup from that audit.
@@ -256,6 +257,7 @@ These have been thought through. Reopening them needs a real reason:
   [#16](https://github.com/LW-Alliance-Helper/lw-alliance-helper-bot/issues/16)).
 
 For per-version detail, see `CHANGELOG.md`. New in-flight work goes
-on a feature branch (`issue-NN-slug`) → PR into the active
-`release/X.Y.Z` branch. The release branch is where the next
-release accumulates before its own PR into `main`.
+on a descriptive feature branch (which may bundle several related
+issues) → PR into the active `release/X.Y.Z` branch with a merge
+commit. The release branch is where the next release accumulates
+before its own PR into `main`.

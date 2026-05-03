@@ -9,6 +9,16 @@ Each entry is a slim summary — heavier context (root cause, what we
 tried, design rationale) lives in the corresponding commit message
 and PR description.
 
+## [1.0.16] — 2026-05-03
+
+### Changed
+- Slimmed CHANGELOG.md to one-line-per-change format ([#17](https://github.com/LW-Alliance-Helper/lw-alliance-helper-bot/issues/17)). 746 → 159 lines.
+- Updated CLAUDE.md working agreement to reflect the release-branch workflow established 2026-05-03; gitignored `PLANNING.md` ([#19](https://github.com/LW-Alliance-Helper/lw-alliance-helper-bot/issues/19)).
+- Synced CLAUDE.md "Recent shipped highlights" table to 1.0.15 and refreshed the status snapshot ([#18](https://github.com/LW-Alliance-Helper/lw-alliance-helper-bot/issues/18)).
+- Corrected stale workflow references in CLAUDE.md after the workflow was refined: merge commit (not squash) and descriptive feature branches grouping multiple issues (not per-issue) ([#24](https://github.com/LW-Alliance-Helper/lw-alliance-helper-bot/issues/24)).
+
+This release is documentation only — no bot code changed. `__version__` and `bot.py`'s Sentry release tag move to `1.0.16` to keep release tagging accurate.
+
 ## [1.0.15] — 2026-05-03
 
 ### Fixed

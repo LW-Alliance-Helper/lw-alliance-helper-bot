@@ -18,6 +18,7 @@ from config import (
     GuildConfig,
 )
 import premium
+import wizard_registry
 from wizard_registry import wait_view_or_cancel
 
 WIZARD_TIMEOUT = 120  # 2 minutes per step
@@ -104,7 +105,8 @@ class RoleSelectStep(discord.ui.View):
             self.selected_role = select.values[0]
             self.confirmed     = True
             select.disabled    = True
-            await interaction.response.edit_message(
+            await wizard_registry.safe_edit_response(
+                interaction,
                 content=f"✅ Selected: **{self.selected_role.name}**",
                 view=self,
             )
@@ -227,11 +229,11 @@ class ChannelSelectStep(discord.ui.View):
 
         async def _on_channel(inter: discord.Interaction):
             self._render_channel_select(switchable=True)
-            await inter.response.edit_message(view=self)
+            await wizard_registry.safe_edit_response(inter, view=self)
 
         async def _on_thread(inter: discord.Interaction):
             self._render_thread_select(switchable=True)
-            await inter.response.edit_message(view=self)
+            await wizard_registry.safe_edit_response(inter, view=self)
 
         ch_btn = discord.ui.Button(
             label="📢 Channel", style=discord.ButtonStyle.primary, row=0,
@@ -281,7 +283,8 @@ class ChannelSelectStep(discord.ui.View):
             self.confirmed        = True
             for item in self.children:
                 item.disabled = True
-            await inter.response.edit_message(
+            await wizard_registry.safe_edit_response(
+                inter,
                 content=f"✅ Selected: **{self.selected_channel.name}**",
                 view=self,
             )
@@ -296,7 +299,7 @@ class ChannelSelectStep(discord.ui.View):
             )
             async def _switch(inter: discord.Interaction):
                 self._render_thread_select(switchable=True)
-                await inter.response.edit_message(view=self)
+                await wizard_registry.safe_edit_response(inter, view=self)
             switch_btn.callback = _switch
             self.add_item(switch_btn)
 
@@ -353,7 +356,8 @@ class ChannelSelectStep(discord.ui.View):
             for item in self.children:
                 item.disabled = True
             parent_name = picked.parent.name if picked.parent else "?"
-            await inter.response.edit_message(
+            await wizard_registry.safe_edit_response(
+                inter,
                 content=f"✅ Selected thread: **{picked.name}** (in #{parent_name})",
                 view=self,
             )
@@ -368,7 +372,7 @@ class ChannelSelectStep(discord.ui.View):
             )
             async def _switch(inter: discord.Interaction):
                 self._render_channel_select(switchable=True)
-                await inter.response.edit_message(view=self)
+                await wizard_registry.safe_edit_response(inter, view=self)
             switch_btn.callback = _switch
             self.add_item(switch_btn)
 
@@ -466,7 +470,7 @@ class ConfirmView(discord.ui.View):
         self.confirmed = True
         for item in self.children:
             item.disabled = True
-        await interaction.response.edit_message(view=self)
+        await wizard_registry.safe_edit_response(interaction, view=self)
         self.stop()
 
     @discord.ui.button(label="❌ Cancel", style=discord.ButtonStyle.danger)
@@ -474,7 +478,7 @@ class ConfirmView(discord.ui.View):
         self.confirmed = False
         for item in self.children:
             item.disabled = True
-        await interaction.response.edit_message(view=self)
+        await wizard_registry.safe_edit_response(interaction, view=self)
         self.stop()
 
 
@@ -574,7 +578,8 @@ async def ask_keep_or_change(
                 self.value     = chosen
                 self.confirmed = True
                 for item in self.children: item.disabled = True
-                await inter.response.edit_message(
+                await wizard_registry.safe_edit_response(
+                    inter,
                     content=f"✅ Using **{chosen}**", view=self
                 )
                 self.stop()
@@ -591,7 +596,8 @@ async def ask_keep_or_change(
                     self.value     = default
                     self.confirmed = True
                     for item in self.children: item.disabled = True
-                    await inter.response.edit_message(
+                    await wizard_registry.safe_edit_response(
+                        inter,
                         content=f"✅ Reverted to default: **{default}**", view=self
                     )
                     self.stop()
@@ -693,35 +699,35 @@ async def _manage_train_templates(
             async def add_btn(self, inter, button):
                 self.action = "add"
                 for c in self.children: c.disabled = True
-                await inter.response.edit_message(view=self)
+                await wizard_registry.safe_edit_response(inter, view=self)
                 self.stop()
 
             @discord.ui.button(label="✏️ Edit", style=discord.ButtonStyle.primary, row=0)
             async def edit_btn(self, inter, button):
                 self.action = "edit"
                 for c in self.children: c.disabled = True
-                await inter.response.edit_message(view=self)
+                await wizard_registry.safe_edit_response(inter, view=self)
                 self.stop()
 
             @discord.ui.button(label="⭐ Set Default", style=discord.ButtonStyle.secondary, row=0)
             async def set_default_btn(self, inter, button):
                 self.action = "default"
                 for c in self.children: c.disabled = True
-                await inter.response.edit_message(view=self)
+                await wizard_registry.safe_edit_response(inter, view=self)
                 self.stop()
 
             @discord.ui.button(label="🗑️ Delete", style=discord.ButtonStyle.danger, row=1)
             async def delete_btn(self, inter, button):
                 self.action = "delete"
                 for c in self.children: c.disabled = True
-                await inter.response.edit_message(view=self)
+                await wizard_registry.safe_edit_response(inter, view=self)
                 self.stop()
 
             @discord.ui.button(label="✅ Done", style=discord.ButtonStyle.success, row=1)
             async def done_btn(self, inter, button):
                 self.action = "done"
                 for c in self.children: c.disabled = True
-                await inter.response.edit_message(view=self)
+                await wizard_registry.safe_edit_response(inter, view=self)
                 self.stop()
 
         list_view = TemplateListView(
@@ -755,7 +761,7 @@ async def _manage_train_templates(
                     async def _cb(inter):
                         self.idx = int(sel.values[0])
                         for c in self.children: c.disabled = True
-                        await inter.response.edit_message(view=self)
+                        await wizard_registry.safe_edit_response(inter, view=self)
                         self.stop()
                     sel.callback = _cb
                     self.add_item(sel)
@@ -1196,8 +1202,8 @@ class TimezoneSelectView(discord.ui.View):
             self.confirmed   = True
             select.disabled  = True
             label = TIMEZONE_LABELS.get(self.selected, self.selected)
-            await interaction.response.edit_message(
-                content=f"✅ Timezone: **{label}**", view=self
+            await wizard_registry.safe_edit_response(
+                interaction, content=f"✅ Timezone: **{label}**", view=self
             )
             self.stop()
 
@@ -1215,7 +1221,9 @@ class ScheduleTypeView(discord.ui.View):
         self.selected = "repeating"
         for item in self.children:
             item.disabled = True
-        await interaction.response.edit_message(content="✅ Schedule: **Repeating cycle**", view=self)
+        await wizard_registry.safe_edit_response(
+            interaction, content="✅ Schedule: **Repeating cycle**", view=self
+        )
         self.stop()
 
     @discord.ui.button(label="📅 Add manually each time", style=discord.ButtonStyle.secondary)
@@ -1223,7 +1231,9 @@ class ScheduleTypeView(discord.ui.View):
         self.selected = "manual"
         for item in self.children:
             item.disabled = True
-        await interaction.response.edit_message(content="✅ Schedule: **Manual (add per event)**", view=self)
+        await wizard_registry.safe_edit_response(
+            interaction, content="✅ Schedule: **Manual (add per event)**", view=self
+        )
         self.stop()
 
 
@@ -1237,7 +1247,7 @@ class YesNoView(discord.ui.View):
         self.selected = True
         for item in self.children:
             item.disabled = True
-        await interaction.response.edit_message(view=self)
+        await wizard_registry.safe_edit_response(interaction, view=self)
         self.stop()
 
     @discord.ui.button(label="No", style=discord.ButtonStyle.secondary)
@@ -1245,7 +1255,7 @@ class YesNoView(discord.ui.View):
         self.selected = False
         for item in self.children:
             item.disabled = True
-        await interaction.response.edit_message(view=self)
+        await wizard_registry.safe_edit_response(interaction, view=self)
         self.stop()
 
 
@@ -1450,14 +1460,14 @@ async def run_setup(interaction: discord.Interaction, bot):
             async def edit(self, inter: discord.Interaction, button: discord.ui.Button):
                 self.proceed = True
                 for item in self.children: item.disabled = True
-                await inter.response.edit_message(view=self)
+                await wizard_registry.safe_edit_response(inter, view=self)
                 self.stop()
 
             @discord.ui.button(label="✅ No changes needed", style=discord.ButtonStyle.secondary)
             async def cancel(self, inter: discord.Interaction, button: discord.ui.Button):
                 self.proceed = False
                 for item in self.children: item.disabled = True
-                await inter.response.edit_message(view=self)
+                await wizard_registry.safe_edit_response(inter, view=self)
                 self.stop()
 
         eoc_view = EditOrCancelView()
@@ -1903,7 +1913,7 @@ async def run_growth_setup(interaction: discord.Interaction, bot):
             async def _on_select(self, inter: discord.Interaction):
                 self.index = int(self.select.values[0])
                 for item in self.children: item.disabled = True
-                await inter.response.edit_message(view=self)
+                await wizard_registry.safe_edit_response(inter, view=self)
                 self.stop()
 
         pick_view = PickMetricView()
@@ -1988,14 +1998,14 @@ async def run_growth_setup(interaction: discord.Interaction, bot):
         async def monthly(self, inter: discord.Interaction, button: discord.ui.Button):
             self.selected = "monthly"
             for item in self.children: item.disabled = True
-            await inter.response.edit_message(content="✅ Frequency: **Monthly**", view=self)
+            await wizard_registry.safe_edit_response(inter, content="✅ Frequency: **Monthly**", view=self)
             self.stop()
 
         @discord.ui.button(label="🔁 Custom interval (every X days) 💎", style=discord.ButtonStyle.secondary)
         async def custom(self, inter: discord.Interaction, button: discord.ui.Button):
             self.selected = "interval"
             for item in self.children: item.disabled = True
-            await inter.response.edit_message(view=self)
+            await wizard_registry.safe_edit_response(inter, view=self)
             self.stop()
 
     freq_view = FrequencyView()
@@ -2279,7 +2289,8 @@ async def run_train_setup(interaction: discord.Interaction, bot):
                 async def _cb(inter: discord.Interaction):
                     self.selected = select.values[0]
                     select.disabled = True
-                    await inter.response.edit_message(
+                    await wizard_registry.safe_edit_response(
+                        inter,
                         content=f"✅ Default tone: **{self.selected}**", view=self
                     )
                     self.stop()
@@ -2564,12 +2575,12 @@ async def run_remove_extra_survey(interaction: discord.Interaction, bot):
                 f"🗑️ Removed **{self.target.get('survey_name')}**."
                 if ok else "⚠️ Could not remove that survey."
             )
-            await inter.response.edit_message(content=msg, view=None)
+            await wizard_registry.safe_edit_response(inter, content=msg, view=None)
             self.stop()
 
         @discord.ui.button(label="❌ Cancel", style=discord.ButtonStyle.secondary)
         async def cancel(self, inter: discord.Interaction, button: discord.ui.Button):
-            await inter.response.edit_message(content="❌ Cancelled. No surveys removed.", view=None)
+            await wizard_registry.safe_edit_response(inter, content="❌ Cancelled. No surveys removed.", view=None)
             self.stop()
 
     class _RemovePickView(discord.ui.View):
@@ -2589,7 +2600,8 @@ async def run_remove_extra_survey(interaction: discord.Interaction, bot):
                 picked = next((s for s in extras if s.get("survey_id") == sid), None)
                 sel.disabled = True
                 name = picked.get("survey_name", sid) if picked else sid
-                await inter.response.edit_message(
+                await wizard_registry.safe_edit_response(
+                    inter,
                     content=f"⚠️ Confirm: remove **{name}**?",
                     view=_ConfirmRemoveView(picked),
                 )
@@ -2632,7 +2644,7 @@ async def run_pick_survey_to_edit(interaction: discord.Interaction, bot):
                                if (s.get("survey_id") or "default") == sid), None)
                 sel.disabled = True
                 name = (target.get("survey_name") if target else sid) or sid
-                await inter.response.edit_message(content=f"✏️ Editing **{name}**…", view=self)
+                await wizard_registry.safe_edit_response(inter, content=f"✏️ Editing **{name}**…", view=self)
                 self.stop()
                 # Dispatch into the wizard. `target_survey_id=None` means
                 # the default survey (run_survey_setup edits guild_survey_config).
@@ -2810,21 +2822,21 @@ async def run_survey_setup(interaction: discord.Interaction, bot,
         async def use_default(self, inter: discord.Interaction, button: discord.ui.Button):
             self.choice = "default"
             for item in self.children: item.disabled = True
-            await inter.response.edit_message(content="✅ Using default questions.", view=self)
+            await wizard_registry.safe_edit_response(inter, content="✅ Using default questions.", view=self)
             self.stop()
 
         @discord.ui.button(label="✏️ Edit existing questions", style=discord.ButtonStyle.primary)
         async def edit_existing(self, inter: discord.Interaction, button: discord.ui.Button):
             self.choice = "edit"
             for item in self.children: item.disabled = True
-            await inter.response.edit_message(content="✏️ Entering edit mode...", view=self)
+            await wizard_registry.safe_edit_response(inter, content="✏️ Entering edit mode...", view=self)
             self.stop()
 
         @discord.ui.button(label="🔄 Start from scratch", style=discord.ButtonStyle.secondary)
         async def start_scratch(self, inter: discord.Interaction, button: discord.ui.Button):
             self.choice = "scratch"
             for item in self.children: item.disabled = True
-            await inter.response.edit_message(content="🔄 Starting from scratch...", view=self)
+            await wizard_registry.safe_edit_response(inter, content="🔄 Starting from scratch...", view=self)
             self.stop()
 
     q_start_view = QuestionStartView()
@@ -2885,7 +2897,7 @@ async def run_survey_setup(interaction: discord.Interaction, bot,
                                 self.action     = "edit"
                                 self.edit_index = int(edit_select.values[0])
                                 for item in self.children: item.disabled = True
-                                await inter.response.edit_message(view=self)
+                                await wizard_registry.safe_edit_response(inter, view=self)
                                 self.stop()
                             edit_select.callback = _edit_cb
                             self.add_item(edit_select)
@@ -2901,7 +2913,7 @@ async def run_survey_setup(interaction: discord.Interaction, bot,
                                 self.action    = "delete"
                                 self.del_index = int(del_select.values[0])
                                 for item in self.children: item.disabled = True
-                                await inter.response.edit_message(view=self)
+                                await wizard_registry.safe_edit_response(inter, view=self)
                                 self.stop()
                             del_select.callback = _del_cb
                             self.add_item(del_select)
@@ -2910,14 +2922,14 @@ async def run_survey_setup(interaction: discord.Interaction, bot,
                     async def add_q(self, inter: discord.Interaction, button: discord.ui.Button):
                         self.action = "add"
                         for item in self.children: item.disabled = True
-                        await inter.response.edit_message(view=self)
+                        await wizard_registry.safe_edit_response(inter, view=self)
                         self.stop()
 
                     @discord.ui.button(label="✅ Finish Survey Setup", style=discord.ButtonStyle.success, row=2)
                     async def finish(self, inter: discord.Interaction, button: discord.ui.Button):
                         self.action = "finish"
                         for item in self.children: item.disabled = True
-                        await inter.response.edit_message(view=self)
+                        await wizard_registry.safe_edit_response(inter, view=self)
                         self.stop()
 
                 list_view = QuestionListView(len(questions))
@@ -3003,7 +3015,8 @@ async def run_survey_setup(interaction: discord.Interaction, bot,
                             async def _cb(inter: discord.Interaction):
                                 self.selected = select.values[0]
                                 select.disabled = True
-                                await inter.response.edit_message(
+                                await wizard_registry.safe_edit_response(
+                                    inter,
                                     content=f"✅ Type: **{_type_pretty.get(self.selected, self.selected)}**",
                                     view=self,
                                 )
@@ -3269,21 +3282,21 @@ async def run_storm_setup(interaction: discord.Interaction, bot, event_type: str
         async def both(self, inter: discord.Interaction, button: discord.ui.Button):
             self.selected = "both"
             for item in self.children: item.disabled = True
-            await inter.response.edit_message(content="✅ Teams: **Team A & Team B**", view=self)
+            await wizard_registry.safe_edit_response(inter, content="✅ Teams: **Team A & Team B**", view=self)
             self.stop()
 
         @discord.ui.button(label="Team A only", style=discord.ButtonStyle.secondary)
         async def a_only(self, inter: discord.Interaction, button: discord.ui.Button):
             self.selected = "A"
             for item in self.children: item.disabled = True
-            await inter.response.edit_message(content="✅ Teams: **Team A only**", view=self)
+            await wizard_registry.safe_edit_response(inter, content="✅ Teams: **Team A only**", view=self)
             self.stop()
 
         @discord.ui.button(label="Team B only", style=discord.ButtonStyle.secondary)
         async def b_only(self, inter: discord.Interaction, button: discord.ui.Button):
             self.selected = "B"
             for item in self.children: item.disabled = True
-            await inter.response.edit_message(content="✅ Teams: **Team B only**", view=self)
+            await wizard_registry.safe_edit_response(inter, content="✅ Teams: **Team B only**", view=self)
             self.stop()
 
     team_view = TeamChoiceView()
@@ -3356,7 +3369,8 @@ async def run_storm_setup(interaction: discord.Interaction, bot, event_type: str
             async def use_def(self, inter: discord.Interaction, button: discord.ui.Button):
                 self.use_default = True
                 for item in self.children: item.disabled = True
-                await inter.response.edit_message(
+                await wizard_registry.safe_edit_response(
+                    inter,
                     content=f"✅ Using default template for {team_label}.", view=self
                 )
                 self.stop()
@@ -3365,7 +3379,7 @@ async def run_storm_setup(interaction: discord.Interaction, bot, event_type: str
             async def edit(self, inter: discord.Interaction, button: discord.ui.Button):
                 self.use_default = False
                 for item in self.children: item.disabled = True
-                await inter.response.edit_message(view=self)
+                await wizard_registry.safe_edit_response(inter, view=self)
                 self.stop()
 
         choice_view = TemplateChoiceView()
@@ -3413,7 +3427,8 @@ async def run_storm_setup(interaction: discord.Interaction, bot, event_type: str
             async def shared(self, inter: discord.Interaction, button: discord.ui.Button):
                 self.selected = "shared"
                 for item in self.children: item.disabled = True
-                await inter.response.edit_message(
+                await wizard_registry.safe_edit_response(
+                    inter,
                     content="✅ **One shared template** for Team A & B", view=self
                 )
                 self.stop()
@@ -3422,7 +3437,8 @@ async def run_storm_setup(interaction: discord.Interaction, bot, event_type: str
             async def separate(self, inter: discord.Interaction, button: discord.ui.Button):
                 self.selected = "separate"
                 for item in self.children: item.disabled = True
-                await inter.response.edit_message(
+                await wizard_registry.safe_edit_response(
+                    inter,
                     content="✅ **Separate templates** for Team A & Team B", view=self
                 )
                 self.stop()
@@ -3793,7 +3809,7 @@ async def _run_storm_participation_step(
                         self.action   = "edit"
                         self.edit_idx = int(edit_sel.values[0])
                         for c in self.children: c.disabled = True
-                        await inter.response.edit_message(view=self)
+                        await wizard_registry.safe_edit_response(inter, view=self)
                         self.stop()
                     edit_sel.callback = _ec
                     self.add_item(edit_sel)
@@ -3808,7 +3824,7 @@ async def _run_storm_participation_step(
                         self.action  = "delete"
                         self.del_idx = int(del_sel.values[0])
                         for c in self.children: c.disabled = True
-                        await inter.response.edit_message(view=self)
+                        await wizard_registry.safe_edit_response(inter, view=self)
                         self.stop()
                     del_sel.callback = _dc
                     self.add_item(del_sel)
@@ -3817,14 +3833,14 @@ async def _run_storm_participation_step(
             async def add_q(self, inter: discord.Interaction, button: discord.ui.Button):
                 self.action = "add"
                 for c in self.children: c.disabled = True
-                await inter.response.edit_message(view=self)
+                await wizard_registry.safe_edit_response(inter, view=self)
                 self.stop()
 
             @discord.ui.button(label="✅ Done", style=discord.ButtonStyle.success, row=2)
             async def done(self, inter: discord.Interaction, button: discord.ui.Button):
                 self.action = "done"
                 for c in self.children: c.disabled = True
-                await inter.response.edit_message(view=self)
+                await wizard_registry.safe_edit_response(inter, view=self)
                 self.stop()
 
         cap_note = (
@@ -3957,7 +3973,8 @@ async def _build_participation_question(
             async def _cb(inter):
                 self.selected = sel.values[0]
                 sel.disabled = True
-                await inter.response.edit_message(
+                await wizard_registry.safe_edit_response(
+                    inter,
                     content=f"✅ Type: **{_PARTICIPATION_TYPE_LABELS.get(self.selected, self.selected)}**",
                     view=self,
                 )
@@ -4093,35 +4110,35 @@ async def run_event_setup(interaction: discord.Interaction, bot):
             async def edit_settings(self, inter: discord.Interaction, button: discord.ui.Button):
                 self.choice = "settings"
                 for item in self.children: item.disabled = True
-                await inter.response.edit_message(view=self)
+                await wizard_registry.safe_edit_response(inter, view=self)
                 self.stop()
 
             @discord.ui.button(label="➕ Add Event", style=discord.ButtonStyle.success, row=0)
             async def add_event(self, inter: discord.Interaction, button: discord.ui.Button):
                 self.choice = "add"
                 for item in self.children: item.disabled = True
-                await inter.response.edit_message(view=self)
+                await wizard_registry.safe_edit_response(inter, view=self)
                 self.stop()
 
             @discord.ui.button(label="✏️ Edit Event", style=discord.ButtonStyle.secondary, row=1)
             async def edit_event(self, inter: discord.Interaction, button: discord.ui.Button):
                 self.choice = "edit"
                 for item in self.children: item.disabled = True
-                await inter.response.edit_message(view=self)
+                await wizard_registry.safe_edit_response(inter, view=self)
                 self.stop()
 
             @discord.ui.button(label="🗑️ Delete Event", style=discord.ButtonStyle.danger, row=1)
             async def delete_event(self, inter: discord.Interaction, button: discord.ui.Button):
                 self.choice = "delete"
                 for item in self.children: item.disabled = True
-                await inter.response.edit_message(view=self)
+                await wizard_registry.safe_edit_response(inter, view=self)
                 self.stop()
 
             @discord.ui.button(label="✅ No changes needed", style=discord.ButtonStyle.secondary, row=2)
             async def done(self, inter: discord.Interaction, button: discord.ui.Button):
                 self.choice = "done"
                 for item in self.children: item.disabled = True
-                await inter.response.edit_message(view=self)
+                await wizard_registry.safe_edit_response(inter, view=self)
                 self.stop()
 
         action_view = EventActionView()
@@ -4300,7 +4317,7 @@ async def run_event_setup(interaction: discord.Interaction, bot):
                             self.action   = "edit"
                             self.edit_key = edit_select.values[0]
                             for item in self.children: item.disabled = True
-                            await inter.response.edit_message(view=self)
+                            await wizard_registry.safe_edit_response(inter, view=self)
                             self.stop()
                         edit_select.callback = _edit_cb
                         self.add_item(edit_select)
@@ -4316,7 +4333,7 @@ async def run_event_setup(interaction: discord.Interaction, bot):
                             self.action     = "delete"
                             self.delete_key = del_select.values[0]
                             for item in self.children: item.disabled = True
-                            await inter.response.edit_message(view=self)
+                            await wizard_registry.safe_edit_response(inter, view=self)
                             self.stop()
                         del_select.callback = _del_cb
                         self.add_item(del_select)
@@ -4325,14 +4342,14 @@ async def run_event_setup(interaction: discord.Interaction, bot):
                 async def add_btn(self, inter: discord.Interaction, button: discord.ui.Button):
                     self.action = "add"
                     for item in self.children: item.disabled = True
-                    await inter.response.edit_message(view=self)
+                    await wizard_registry.safe_edit_response(inter, view=self)
                     self.stop()
 
                 @discord.ui.button(label="✅ Finish", style=discord.ButtonStyle.success, row=2)
                 async def finish_btn(self, inter: discord.Interaction, button: discord.ui.Button):
                     self.action = "finish"
                     for item in self.children: item.disabled = True
-                    await inter.response.edit_message(view=self)
+                    await wizard_registry.safe_edit_response(inter, view=self)
                     self.stop()
 
             list_view = EventListView(events)
@@ -4506,7 +4523,8 @@ async def run_event_setup(interaction: discord.Interaction, bot):
                     async def use_default(self, inter: discord.Interaction, button: discord.ui.Button):
                         self.choice = "default"
                         for item in self.children: item.disabled = True
-                        await inter.response.edit_message(
+                        await wizard_registry.safe_edit_response(
+                            inter,
                             content=f"✅ Using default blurb:\n`{default_blurb}`", view=self
                         )
                         self.stop()
@@ -4515,7 +4533,7 @@ async def run_event_setup(interaction: discord.Interaction, bot):
                     async def enter_own(self, inter: discord.Interaction, button: discord.ui.Button):
                         self.choice = "custom"
                         for item in self.children: item.disabled = True
-                        await inter.response.edit_message(view=self)
+                        await wizard_registry.safe_edit_response(inter, view=self)
                         self.stop()
 
                 blurb_view = BlurbChoiceView()
@@ -4526,7 +4544,7 @@ async def run_event_setup(interaction: discord.Interaction, bot):
                     async def _keep_cb(inter: discord.Interaction):
                         blurb_view.choice = "keep"
                         for item in blurb_view.children: item.disabled = True
-                        await inter.response.edit_message(content="✅ Keeping existing blurb.", view=blurb_view)
+                        await wizard_registry.safe_edit_response(inter, content="✅ Keeping existing blurb.", view=blurb_view)
                         blurb_view.stop()
                     keep_btn.callback = _keep_cb
                     blurb_view.add_item(keep_btn)
@@ -4757,14 +4775,14 @@ async def run_birthday_setup(interaction: discord.Interaction, bot):
             async def birthday_only(self, inter: discord.Interaction, button: discord.ui.Button):
                 self.selected = 0
                 for item in self.children: item.disabled = True
-                await inter.response.edit_message(content="✅ Placement: **Birthday only**", view=self)
+                await wizard_registry.safe_edit_response(inter, content="✅ Placement: **Birthday only**", view=self)
                 self.stop()
 
             @discord.ui.button(label="📅 Assign nearby if taken", style=discord.ButtonStyle.secondary)
             async def flexible(self, inter: discord.Interaction, button: discord.ui.Button):
                 self.selected = 1
                 for item in self.children: item.disabled = True
-                await inter.response.edit_message(content="✅ Placement: **Assign 1 day before or after if birthday is taken**", view=self)
+                await wizard_registry.safe_edit_response(inter, content="✅ Placement: **Assign 1 day before or after if birthday is taken**", view=self)
                 self.stop()
 
         placement_view = PlacementView()

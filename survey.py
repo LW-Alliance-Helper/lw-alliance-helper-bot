@@ -29,6 +29,7 @@ import discord
 from discord import app_commands
 from discord.ext import commands, tasks
 from config import get_config
+import wizard_registry
 
 # ── Config ─────────────────────────────────────────────────────────────────────
 
@@ -138,15 +139,7 @@ class DropdownView(discord.ui.View):
             self.confirmed = True
             select.disabled = True
             content = f"**{self.label}** {self.selected}"
-            try:
-                await interaction.response.edit_message(content=content, view=self)
-            except discord.NotFound:
-                # Interaction token expired (10062) — fall back to a direct edit
-                # so the dropdown still shows the selection and the survey continues.
-                try:
-                    await interaction.message.edit(content=content, view=self)
-                except discord.HTTPException:
-                    pass
+            await wizard_registry.safe_edit_response(interaction, content=content, view=self)
             self.stop()
         select.callback = _cb
         self.add_item(select)
@@ -299,13 +292,7 @@ async def run_survey(bot, thread: discord.Thread, user: discord.Member,
             result["values"] = list(select.values)
             select.disabled  = True
             content = f"**{label}** {', '.join(result['values'])}"
-            try:
-                await inter.response.edit_message(content=content, view=view)
-            except discord.NotFound:
-                try:
-                    await inter.message.edit(content=content, view=view)
-                except discord.HTTPException:
-                    pass
+            await wizard_registry.safe_edit_response(inter, content=content, view=view)
             view.stop()
         select.callback = _cb
         view.add_item(select)
@@ -688,7 +675,7 @@ class _SurveyPickView(discord.ui.View):
             sel.disabled = True
             picked = next((s for s in surveys if (s.get("survey_id") or "default") == self.selected_id), None)
             label  = picked.get("survey_name", self.selected_id) if picked else self.selected_id
-            await inter.response.edit_message(content=f"✅ Survey: **{label}**", view=self)
+            await wizard_registry.safe_edit_response(inter, content=f"✅ Survey: **{label}**", view=self)
             self.stop()
 
         sel.callback = _cb
@@ -742,7 +729,7 @@ class _SurveyManageView(discord.ui.View):
     async def add_btn(self, inter: discord.Interaction, button: discord.ui.Button):
         from setup_cog import run_create_new_extra_survey
         for item in self.children: item.disabled = True
-        await inter.response.edit_message(view=self)
+        await wizard_registry.safe_edit_response(inter, view=self)
         await run_create_new_extra_survey(inter, inter.client)
         self.stop()
 
@@ -750,7 +737,7 @@ class _SurveyManageView(discord.ui.View):
     async def edit_btn(self, inter: discord.Interaction, button: discord.ui.Button):
         from setup_cog import run_pick_survey_to_edit
         for item in self.children: item.disabled = True
-        await inter.response.edit_message(view=self)
+        await wizard_registry.safe_edit_response(inter, view=self)
         await run_pick_survey_to_edit(inter, inter.client)
         self.stop()
 
@@ -758,7 +745,7 @@ class _SurveyManageView(discord.ui.View):
     async def remove_btn(self, inter: discord.Interaction, button: discord.ui.Button):
         from setup_cog import run_remove_extra_survey
         for item in self.children: item.disabled = True
-        await inter.response.edit_message(view=self)
+        await wizard_registry.safe_edit_response(inter, view=self)
         await run_remove_extra_survey(inter, inter.client)
         self.stop()
 
@@ -1127,7 +1114,7 @@ class _ReminderHubView(discord.ui.View):
         self.choice = "send"
         for item in self.children:
             item.disabled = True
-        await inter.response.edit_message(view=self)
+        await wizard_registry.safe_edit_response(inter, view=self)
         self.stop()
 
     @discord.ui.button(label="⚙️ Manage scheduled reminders", style=discord.ButtonStyle.primary)
@@ -1135,7 +1122,7 @@ class _ReminderHubView(discord.ui.View):
         self.choice = "schedule"
         for item in self.children:
             item.disabled = True
-        await inter.response.edit_message(view=self)
+        await wizard_registry.safe_edit_response(inter, view=self)
         self.stop()
 
     @discord.ui.button(label="❌ Cancel", style=discord.ButtonStyle.secondary)
@@ -1143,7 +1130,7 @@ class _ReminderHubView(discord.ui.View):
         self.choice = None
         for item in self.children:
             item.disabled = True
-        await inter.response.edit_message(content="Cancelled.", view=self)
+        await wizard_registry.safe_edit_response(inter, content="Cancelled.", view=self)
         self.stop()
 
 
@@ -1186,7 +1173,7 @@ class _DestinationPickView(discord.ui.View):
             self.choice = "channel"
             for item in self.children:
                 item.disabled = True
-            await inter.response.edit_message(view=self)
+            await wizard_registry.safe_edit_response(inter, view=self)
             self.stop()
         ch_btn.callback = _ch
         self.add_item(ch_btn)
@@ -1200,7 +1187,7 @@ class _DestinationPickView(discord.ui.View):
             self.choice = "dm"
             for item in self.children:
                 item.disabled = True
-            await inter.response.edit_message(view=self)
+            await wizard_registry.safe_edit_response(inter, view=self)
             self.stop()
         dm_btn.callback = _dm
         self.add_item(dm_btn)
@@ -1220,7 +1207,8 @@ class _ChannelPickView(discord.ui.View):
         async def _cb(inter: discord.Interaction):
             self.channel = sel.values[0].resolve() or sel.values[0]
             sel.disabled = True
-            await inter.response.edit_message(
+            await wizard_registry.safe_edit_response(
+                inter,
                 content=f"✅ Channel: {self.channel.mention if hasattr(self.channel, 'mention') else self.channel}",
                 view=self,
             )
@@ -1309,21 +1297,21 @@ class _FrequencyPickView(discord.ui.View):
     async def off(self, inter: discord.Interaction, button: discord.ui.Button):
         self.choice = "off"
         for item in self.children: item.disabled = True
-        await inter.response.edit_message(view=self)
+        await wizard_registry.safe_edit_response(inter, view=self)
         self.stop()
 
     @discord.ui.button(label="Daily", style=discord.ButtonStyle.primary)
     async def daily(self, inter: discord.Interaction, button: discord.ui.Button):
         self.choice = "daily"
         for item in self.children: item.disabled = True
-        await inter.response.edit_message(view=self)
+        await wizard_registry.safe_edit_response(inter, view=self)
         self.stop()
 
     @discord.ui.button(label="Weekly", style=discord.ButtonStyle.success)
     async def weekly(self, inter: discord.Interaction, button: discord.ui.Button):
         self.choice = "weekly"
         for item in self.children: item.disabled = True
-        await inter.response.edit_message(view=self)
+        await wizard_registry.safe_edit_response(inter, view=self)
         self.stop()
 
 
@@ -1338,7 +1326,7 @@ class _DayPickView(discord.ui.View):
         async def _cb(inter: discord.Interaction):
             self.day = int(sel.values[0])
             sel.disabled = True
-            await inter.response.edit_message(content=f"✅ Day: **{DAYS_OF_WEEK[self.day]}**", view=self)
+            await wizard_registry.safe_edit_response(inter, content=f"✅ Day: **{DAYS_OF_WEEK[self.day]}**", view=self)
             self.stop()
         sel.callback = _cb
         self.add_item(sel)
@@ -1605,7 +1593,7 @@ async def _ask_reminder_message(interaction: discord.Interaction, bot,
             self.modal = _MsgModal()
             self.modal.value = ""
             self.modal.confirmed = True
-            await inter.response.edit_message(content="✅ Will use the default reminder message.", view=self)
+            await wizard_registry.safe_edit_response(inter, content="✅ Will use the default reminder message.", view=self)
             self.stop()
 
     view = _MsgView()

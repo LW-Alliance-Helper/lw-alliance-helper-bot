@@ -22,6 +22,7 @@ import discord
 from discord.ext import commands
 from datetime import datetime, timedelta, date
 from zoneinfo import ZoneInfo
+import wizard_registry
 
 from config import get_config
 
@@ -492,7 +493,7 @@ class ReminderView(discord.ui.View):
             return
 
         button.disabled = True
-        await interaction.response.edit_message(view=self)
+        await wizard_registry.safe_edit_response(interaction, view=self)
 
         # Lazy import to avoid the train ⇆ train_ui circular import at load time
         from train_ui import run_blurb_wizard_for_entry

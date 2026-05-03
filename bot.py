@@ -13,6 +13,7 @@ from scheduler import (
 from stats_publisher import publish_alliance_count
 from zoneinfo import ZoneInfo
 from config import init_db, get_config
+import wizard_registry
 
 load_dotenv()
 
@@ -491,7 +492,7 @@ async def growth_slash(interaction: discord.Interaction):
         @discord.ui.button(label="📸 Run Snapshot Now", style=discord.ButtonStyle.success)
         async def run_now(self, inter: discord.Interaction, button: discord.ui.Button):
             for item in self.children: item.disabled = True
-            await inter.response.edit_message(view=self)
+            await wizard_registry.safe_edit_response(inter, view=self)
             try:
                 from growth import _run_growth_snapshot_inner
                 _run_growth_snapshot_inner(guild_id)
@@ -506,7 +507,7 @@ async def growth_slash(interaction: discord.Interaction):
         @discord.ui.button(label="⚙️ Edit Config", style=discord.ButtonStyle.primary)
         async def edit_config(self, inter: discord.Interaction, button: discord.ui.Button):
             for item in self.children: item.disabled = True
-            await inter.response.edit_message(view=self)
+            await wizard_registry.safe_edit_response(inter, view=self)
             await inter.followup.send(
                 "Run `/setup_growth` to update the growth tracking configuration.",
                 ephemeral=True,

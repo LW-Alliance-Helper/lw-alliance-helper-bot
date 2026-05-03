@@ -18,9 +18,12 @@ sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspa
 
 from unittest.mock import AsyncMock, MagicMock
 
+import discord
+
 from wizard_registry import (
     register, unregister, cancel_user, wait_view_or_cancel,
     expire_view_message,
+    safe_edit_response,
 )
 
 
@@ -205,3 +208,63 @@ class TestExpireViewMessage:
         # Should not raise.
         await expire_view_message(msg, command_hint="/events")
         msg.edit.assert_awaited_once()
+
+
+# ── safe_edit_response ────────────────────────────────────────────────────────
+
+def _make_not_found() -> discord.NotFound:
+    """Build a discord.NotFound with code 10062 (Unknown interaction)."""
+    resp = MagicMock()
+    resp.status = 404
+    resp.reason = "Not Found"
+    return discord.NotFound(resp, {"message": "Unknown interaction", "code": 10062})
+
+
+class TestSafeEditResponse:
+    """The helper that survives 10062 token-expiry on wizard view callbacks."""
+
+    @pytest.mark.asyncio
+    async def test_happy_path_uses_interaction_response(self):
+        """When the token is valid, the interaction-response edit is used and
+        no fallback runs."""
+        inter = MagicMock()
+        inter.response.edit_message = AsyncMock()
+        inter.message.edit          = AsyncMock()
+        view = MagicMock()
+        await safe_edit_response(inter, content="hi", view=view)
+        inter.response.edit_message.assert_awaited_once_with(content="hi", view=view)
+        inter.message.edit.assert_not_awaited()
+
+    @pytest.mark.asyncio
+    async def test_not_found_falls_back_to_message_edit(self):
+        """If the token has expired (10062), the helper edits the message
+        directly so the disabled view still renders and the caller's
+        self.stop() can run unconditionally."""
+        inter = MagicMock()
+        inter.response.edit_message = AsyncMock(side_effect=_make_not_found())
+        inter.message.edit          = AsyncMock()
+        view = MagicMock()
+        await safe_edit_response(inter, content="hi", view=view)
+        inter.response.edit_message.assert_awaited_once()
+        inter.message.edit.assert_awaited_once_with(content="hi", view=view)
+
+    @pytest.mark.asyncio
+    async def test_fallback_swallows_http_exception(self):
+        """If even the message-edit fallback fails (e.g. message deleted),
+        the helper must not propagate — that would leave the wizard hanging."""
+        inter = MagicMock()
+        inter.response.edit_message = AsyncMock(side_effect=_make_not_found())
+        resp = MagicMock(); resp.status = 500
+        inter.message.edit = AsyncMock(
+            side_effect=discord.HTTPException(resp, {"message": "boom", "code": 0})
+        )
+        await safe_edit_response(inter, view=MagicMock())  # must not raise
+
+    @pytest.mark.asyncio
+    async def test_passes_through_arbitrary_kwargs(self):
+        """Helper is **kwargs so callers can pass embed/embeds/attachments."""
+        inter = MagicMock()
+        inter.response.edit_message = AsyncMock()
+        embed = MagicMock()
+        await safe_edit_response(inter, embed=embed)
+        inter.response.edit_message.assert_awaited_once_with(embed=embed)

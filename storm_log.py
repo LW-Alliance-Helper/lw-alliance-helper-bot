@@ -26,6 +26,7 @@ import discord
 from discord import app_commands
 from discord.ext import commands
 from config import get_config
+import wizard_registry
 
 # ── Config ─────────────────────────────────────────────────────────────────────
 
@@ -138,7 +139,7 @@ class UnrecognizedView(discord.ui.View):
         self.save_as_is = True
         for item in self.children:
             item.disabled = True
-        await interaction.response.edit_message(view=self)
+        await wizard_registry.safe_edit_response(interaction, view=self)
         self.stop()
 
     @discord.ui.button(label="Re-enter Names", style=discord.ButtonStyle.primary, row=0)
@@ -146,7 +147,7 @@ class UnrecognizedView(discord.ui.View):
         self.redo = True
         for item in self.children:
             item.disabled = True
-        await interaction.response.edit_message(view=self)
+        await wizard_registry.safe_edit_response(interaction, view=self)
         self.stop()
 
 
@@ -249,7 +250,9 @@ class NameEntryView(discord.ui.View):
         self.unrecognized = []
         for item in self.children:
             item.disabled = True
-        await interaction.response.edit_message(content="*Skipped — none.*", view=self)
+        await wizard_registry.safe_edit_response(
+            interaction, content="*Skipped — none.*", view=self
+        )
         self.stop()
 
 
@@ -278,7 +281,7 @@ class ShortSelectView(discord.ui.View):
         self.confirmed = True
         for item in self.children:
             item.disabled = True
-        await interaction.response.edit_message(view=self)
+        await wizard_registry.safe_edit_response(interaction, view=self)
         self.stop()
 
     @discord.ui.button(label="Skip (none)", style=discord.ButtonStyle.secondary, row=1)
@@ -287,7 +290,7 @@ class ShortSelectView(discord.ui.View):
         self.selected  = set()
         for item in self.children:
             item.disabled = True
-        await interaction.response.edit_message(view=self)
+        await wizard_registry.safe_edit_response(interaction, view=self)
         self.stop()
 
 
@@ -712,7 +715,7 @@ class _YesNoLogView(discord.ui.View):
         self.value     = True
         self.confirmed = True
         for c in self.children: c.disabled = True
-        await inter.response.edit_message(view=self)
+        await wizard_registry.safe_edit_response(inter, view=self)
         self.stop()
 
     @discord.ui.button(label="No", style=discord.ButtonStyle.danger)
@@ -720,7 +723,7 @@ class _YesNoLogView(discord.ui.View):
         self.value     = False
         self.confirmed = True
         for c in self.children: c.disabled = True
-        await inter.response.edit_message(view=self)
+        await wizard_registry.safe_edit_response(inter, view=self)
         self.stop()
 
 

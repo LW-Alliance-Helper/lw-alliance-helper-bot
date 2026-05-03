@@ -30,6 +30,7 @@ import discord
 from discord import app_commands
 from discord.ext import commands
 from config import get_config
+import wizard_registry
 
 WIZARD_TIMEOUT = 600  # 10 minutes
 
@@ -301,7 +302,7 @@ class TemplateUseEditView(discord.ui.View):
         self.choice = "use"
         for item in self.children:
             item.disabled = True
-        await interaction.response.edit_message(view=self)
+        await wizard_registry.safe_edit_response(interaction, view=self)
         self.stop()
 
     @discord.ui.button(label="✏️ Edit", style=discord.ButtonStyle.primary)
@@ -309,7 +310,7 @@ class TemplateUseEditView(discord.ui.View):
         self.choice = "edit"
         for item in self.children:
             item.disabled = True
-        await interaction.response.edit_message(view=self)
+        await wizard_registry.safe_edit_response(interaction, view=self)
         self.stop()
 
 
@@ -440,7 +441,8 @@ async def _pick_storm_template(bot, channel, guild_id: int | None, event_type: s
             async def _cb(inter):
                 self.selected = sel.values[0]
                 sel.disabled  = True
-                await inter.response.edit_message(
+                await wizard_registry.safe_edit_response(
+                    inter,
                     content=f"✅ Template: **{self.selected}**", view=self,
                 )
                 self.stop()

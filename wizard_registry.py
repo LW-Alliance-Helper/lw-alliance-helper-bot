@@ -23,8 +23,34 @@ Usage in a wizard:
 
 import asyncio
 
+import discord
+
 # user_id -> list of asyncio.Event objects (one per active flow)
 _active: dict[int, list[asyncio.Event]] = {}
+
+
+async def safe_edit_response(interaction: discord.Interaction, **kwargs) -> None:
+    """Edit the originating component message, surviving interaction-token expiry.
+
+    Discord interaction tokens are valid for 3 seconds. If a wizard view's
+    button or select callback can't reach `interaction.response.edit_message`
+    in that window (slow network, idle wizard, busy event loop), Discord
+    rejects the response with `NotFound` (10062 "Unknown interaction"). Without
+    a fallback the exception propagates, `self.stop()` never runs, and the
+    wizard hangs on `view.wait()` until the view timeout fires.
+
+    This helper tries the normal interaction response first, then falls back to
+    `interaction.message.edit` so the disabled/updated view still renders and
+    the caller's `self.stop()` runs unconditionally. Accepts the same keyword
+    arguments as either underlying call (content, view, embed, embeds, …).
+    """
+    try:
+        await interaction.response.edit_message(**kwargs)
+    except discord.NotFound:
+        try:
+            await interaction.message.edit(**kwargs)
+        except discord.HTTPException:
+            pass
 
 
 def register(user_id: int) -> asyncio.Event:

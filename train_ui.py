@@ -16,6 +16,7 @@ from datetime import date, timedelta
 
 import discord
 
+import wizard_registry
 from train import (
     active_wizards,
     WIZARD_TIMEOUT,
@@ -154,7 +155,8 @@ async def run_blurb_wizard_for_entry(bot, channel, user, date_str: str, name: st
                         async def _cb(inter):
                             self.selected = sel.values[0]
                             sel.disabled  = True
-                            await inter.response.edit_message(
+                            await wizard_registry.safe_edit_response(
+                                inter,
                                 content=f"✅ Template: **{self.selected}**", view=self,
                             )
                             self.stop()
@@ -210,7 +212,7 @@ class RunWizardView(discord.ui.View):
     @discord.ui.button(label="✅ Run blurb wizard", style=discord.ButtonStyle.success)
     async def yes(self, inter: discord.Interaction, button: discord.ui.Button):
         for c in self.children: c.disabled = True
-        await inter.response.edit_message(view=self)
+        await wizard_registry.safe_edit_response(inter, view=self)
         await run_blurb_wizard_for_entry(
             self.bot, inter.channel, inter.user, self.date_iso, self.name, self.guild_id,
         )
@@ -219,7 +221,7 @@ class RunWizardView(discord.ui.View):
     @discord.ui.button(label="⏭️ Skip", style=discord.ButtonStyle.secondary)
     async def skip(self, inter: discord.Interaction, button: discord.ui.Button):
         for c in self.children: c.disabled = True
-        await inter.response.edit_message(view=self)
+        await wizard_registry.safe_edit_response(inter, view=self)
         self.stop()
 
 

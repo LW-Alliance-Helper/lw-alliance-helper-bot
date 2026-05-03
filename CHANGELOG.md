@@ -7,6 +7,36 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [1.0.9] — 2026-05-02
+
+### Fixed — wizard views no longer hang when the interaction token expires
+
+Discord interaction tokens are valid for 3 seconds. When a wizard view's
+button or select callback couldn't reach `interaction.response.edit_message`
+in that window (network blip, idle wizard, busy event loop), Discord
+rejected the response with `NotFound` (10062 "Unknown interaction").
+discord.py's default `on_error` logged the traceback at error level
+**and** the wizard hung on `view.wait()` until the view's own timeout
+fired — which then posted a misleading "Timed out" message.
+
+Sentry surfaced this for `ScheduleTypeView` in production (issue
+7456234387, `[UZD] DARK SOULS` guild), but the same pattern existed at
+~99 other `interaction.response.edit_message` sites across the
+codebase — every wizard step view, dropdown callback, confirm/cancel
+button, and persistent-button callback in the bot.
+
+A new `wizard_registry.safe_edit_response(interaction, **kwargs)` helper
+calls the normal interaction response, falls back to
+`interaction.message.edit` on `NotFound`, and swallows any remaining
+`HTTPException` (e.g. message deleted) — so the caller's `self.stop()`
+runs unconditionally and the wizard advances. Every
+`interaction.response.edit_message` callsite in `bot.py`, `scheduler.py`,
+`setup_cog.py`, `storm.py`, `storm_log.py`, `survey.py`, `train.py`, and
+`train_ui.py` was rewritten to use it (100 sites total). The two
+inline-fallbacks `survey.py` already had were collapsed onto the same
+helper. Helper covered by four new tests in
+`tests/unit/test_wizard_registry.py`.
+
 ### Changed — OGV strip (internal refactor, no user-facing behavior change for OGV)
 
 OGV (the bot owner's home alliance) was originally hardcoded into the bot

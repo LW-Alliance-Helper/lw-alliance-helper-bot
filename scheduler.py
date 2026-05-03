@@ -26,6 +26,7 @@ from zoneinfo import ZoneInfo
 import discord
 import discord.ext.commands
 from config import get_config
+import wizard_registry
 
 # ── Channel IDs ────────────────────────────────────────────────────────────────
 ET = ZoneInfo("America/New_York")
@@ -508,7 +509,8 @@ class EventEditorView(discord.ui.View):
             idx      = int(select_interaction.data["values"][0])
             lib_name = _resolve_event_info(self.event_list[idx]["key"], self.guild_id)["name"]
             self.event_list.pop(idx)
-            await select_interaction.response.edit_message(
+            await wizard_registry.safe_edit_response(
+                select_interaction,
                 content=f"✅ **{lib_name}** removed.", view=None
             )
             await interaction.message.edit(content=self._render_editor_content(), view=self)

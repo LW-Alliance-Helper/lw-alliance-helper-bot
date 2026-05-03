@@ -229,7 +229,7 @@ Run `/setup_desertstorm` to configure Desert Storm. The wizard walks through:
 
 **What to create in your sheet:** A tab for Canyon Storm assignments (e.g. `CS Assignments`).
 
-Run `/setup_canyonstorm` — the setup is identical to Desert Storm above (6 steps including Post Channel and optional participation tracking).
+Run `/setup_canyonstorm` — the setup is identical to Desert Storm above (7 steps including Post Channel, optional participation tracking, and an optional 💎 Premium reminder DM body).
 
 Canyon Storm runs at 12:00 and 23:00 Server Time (displayed in your timezone).
 

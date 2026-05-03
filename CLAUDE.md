@@ -49,7 +49,7 @@ repo `../lw-alliance-helper.github.io` (the website) has its own
 | `config.py` | Schema, migrations, `get_*` / `save_*` helpers, gspread client. | ~1.5K |
 | `stats_publisher.py` | Daily alliance-count publisher to website. | ~155 |
 
-Tests: `tests/unit/` and `tests/integration/`. 501 passing, 18 skipped
+Tests: `tests/unit/` and `tests/integration/`. 538 collected, 18 skip
 (intentional — `free_tier_only` markers under the `FORCE_PREMIUM=1` CI
 lane).
 
@@ -88,6 +88,15 @@ These are deliberate and tested. Don't refactor away:
 - Update the corresponding `CREATE TABLE` for fresh DBs.
 - Update `save_*_config` to write the new field.
 - Update `get_*_config` fallback dict to include the new field.
+- **Retiring a column?** Drop it from the dataclass, `CREATE TABLE`,
+  *and* add a one-shot `ALTER TABLE … DROP COLUMN` to the migration
+  block in the same release. Production SQLite supports
+  `DROP COLUMN` (3.35+ confirmed on Railway). Don't leave
+  retired-but-unmigrated columns around — `GuildConfig(**dict(row))`
+  will TypeError if the row carries unknown columns. (Precedent:
+  the 1.0.2/1.0.5/1.0.8 transition for `storm_log_thread_id` et al.
+  added defensive filters that had to be removed once the DROP
+  COLUMN ran.)
 
 ### Background `tasks.loop`
 - Test by calling `task_name.coro(*args)` directly with patched
@@ -134,38 +143,41 @@ These are deliberate and tested. Don't refactor away:
 
 ## Recent shipped highlights
 
-| Commit | What |
-|---|---|
-| `5c541ea` | Alliance-customisable DM bodies (birthday, train, storm) |
-| `2c577dd` | Wizard "Keep current" vs "Use default" labelling |
-| `4ef9481` | Custom event blurb propagates from `/setup_events` to `/events` announcements |
-| `aff6c20` | Growth: surface next snapshot date in wizard + `/growth` |
-| `72d61a5` | `/sync_members` actually requests the privileged `members` intent |
-| `f832f09` | CS draft renders full zone names ("Data Center 1") not abbreviations |
-| `555e1db` | `/cancel` actually stops view-based wizard steps |
-| `52cca61` | Test audit — 81 tests across 7 high-impact gaps |
+Versioned releases since 1.0.0 (the launch). See `CHANGELOG.md` for
+the long form on each.
 
-Test suite: **501 passing, 18 skipped** (matches CI lane). Total LOC:
-~17K.
+| Version | What |
+|---|---|
+| `1.0.9` | Wizard views no longer hang on Discord interaction-token expiry — new `safe_edit_response` helper threaded through ~100 sites |
+| `1.0.8` | Removed legacy-column shims (filter + scheduler patch + migration block) once production confirmed the 1.0.5 DROP COLUMN ran |
+| `1.0.7` | Timed-out automated-post buttons now strip themselves and tell leadership how to re-open |
+| `1.0.6` | (superseded by 1.0.8) Defensive scheduler filter for production DBs carrying retired columns — patched a misdiagnosed crash |
+| `1.0.5` | Physically dropped 10 retired `guild_configs` columns via one-shot migration |
+| `1.0.4` | Audit Round 4 — polish: dead local vars, narrow exceptions, sanitised storm defaults, dead `__init__` params, docstring refresh |
+| `1.0.3` | Audit Round 3 — column-letter helpers consolidated, `EventEditorView` content rendering deduplicated, `_get_spreadsheet` extracted to `config.get_spreadsheet`, train themes/tones migrated to `ask_keep_or_change`, storm setup step counter `6 → 7` |
+| `1.0.2` | Audit Round 2 — dropped 10 dead `guild_configs` schema columns + dataclass fields |
+| `1.0.1` | Audit Round 1 — fixed `survey._run_schedule_wizard` broken import + dead `train_ui` line, deleted `sheets.py` and ~250 LOC of dead code (12 items) |
+| `1.0.0` | Initial public release (2026-04-28) |
+
+Test suite: **538 collected, 18 skipped** (matches CI lane). Total
+LOC: ~17K.
 
 ---
 
 ## Parked work (local-only docs)
 
-These are untracked. Don't push them; keep them as future-pickup specs.
+These are untracked. Don't push them.
 
-- **`AUDIT_2026-04-30.md`** — pre-launch code-quality audit. Four
-  rounds of cleanup queued:
-  - Round 1 (A + B): 2 real bugs + 12 safe deletes
-  - Round 2 (C): dead schema columns
-  - Round 3 (D + F): bloat / duplication / storm step renumber
-  - Round 4 (E + G): polish + larger refactors (post-launch)
+- **`AUDIT_2026-04-30.md`** — pre-launch code-quality audit, **fully
+  shipped**. Rounds 1–4 landed as 1.0.1–1.0.4; the schema drops
+  ride 1.0.5 + 1.0.8. Doc is kept as a record of how the audit was
+  structured but should not generate new work.
 - **`DESIGN_transfer_management.md`** — fully-iterated spec for a
   Premium transfer-tracking feature (sheet-watcher + filter wizard +
   in-game message templates). ~7 days of work. Post-launch v1.x.
 
-When a chat session starts on either of these, that doc is the
-ground truth.
+When a chat session starts on `DESIGN_transfer_management.md`, that
+doc is the ground truth.
 
 ---
 
@@ -191,13 +203,13 @@ These have been thought through. Reopening them needs a real reason:
 
 ## Status snapshot
 
-- Pre-launch, ready to ship 1.0.
-- 501 tests passing.
-- Latest commit: `5c541ea` (alliance-customisable DM bodies).
-- Audit Round 1 cleanup pending (low risk, high confidence — see
-  `AUDIT_2026-04-30.md`).
+- 1.0.0 launched 2026-04-28. Currently on `1.0.9` (see
+  `CHANGELOG.md` for the per-version detail).
+- 538 tests collected, 18 skipped under CI's `FORCE_PREMIUM=1` lane.
+- Pre-launch audit fully shipped. No outstanding cleanup queued.
 - Transfer management feature designed, not built (see
   `DESIGN_transfer_management.md`).
 
-For week-by-week shipped work, see `CHANGELOG.md`'s `[Unreleased]`
-section.
+For per-version detail, see `CHANGELOG.md`. The `[Unreleased]` block
+above the latest version is where new in-flight work goes before
+cutting the next release.

@@ -644,14 +644,7 @@ Here is the schedule for events today:
 {notes if any}
 ```
 
-### 5.10 Friday shield reminder
-
-| Type | Copy | File |
-|---|---|---|
-| Default template (shield) | `Buster day reminder - log in and shield up if you aren't going hunting!` | `scheduler.py` |
-| Channel post (leadership) | `🛡️ **Friday shield reminder — please review and approve:**\n\n{SHIELD_REMINDER}` | `scheduler.py` |
-
-### 5.11 5-minute warning (auto-fired)
+### 5.10 5-minute warning (auto-fired)
 
 | Type | Copy | File |
 |---|---|---|
@@ -660,7 +653,7 @@ Here is the schedule for events today:
 | Channel post (announcements, generic) | `{name} in 5 minutes! Make sure you're online!` | `scheduler.py` |
 | Channel post (leadership stamp) | `⏱️ **5-minute warning auto-posted** at {_ts}` | `scheduler.py` |
 
-### 5.12 `/events_log`
+### 5.11 `/events_log`
 
 | Type | Copy | File |
 |---|---|---|
@@ -1486,7 +1479,7 @@ Question header (all types): `**Step {idx} of {total_steps} — {qlabel}**`
 |---|---|---|
 | Modal title | `{label}` *(truncated to 45 chars; sourced from question label)* | `storm_log.py` |
 | Input label | `Names (comma-separated or one per line)` | `storm_log.py` |
-| Input placeholder | `e.g. Jon, Lionel, Ice — or leave blank and submit for none` | `storm_log.py` |
+| Input placeholder | `e.g. Alice, Bob, Chris — or leave blank and submit for none` | `storm_log.py` |
 | Button | `✏️ Enter Names` (primary) | `storm_log.py` |
 | Button | `Skip (none)` (secondary) | `storm_log.py` |
 | Status | `*Skipped — none.*` | `storm_log.py` |

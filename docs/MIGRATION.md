@@ -56,7 +56,7 @@ state to migrate:
 - **Auto-mention in train reminders** — the channel post uses
   `<@id>` instead of plain text when the roster knows them.
 - **Multiple named templates** — for train prompts and storm mails.
-- **Multiple named surveys** *(schema only — UI in a follow-up)*.
+- **Multiple named surveys** — manage extras from `/survey` (Add / Edit / Remove).
 - **`/survey_remind`, `/desertstorm_remind`, `/canyonstorm_remind`** —
   manual DM blasts to the whole roster.
 - **30-day windows on `/events_log` and `/train_log`** (vs 7).

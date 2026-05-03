@@ -81,13 +81,19 @@ jobs:
           TEST_SHEET_ID: ${{ secrets.TEST_SHEET_ID }}
         run: |
           # pytest-rerunfailures retries each sheet test up to 2× with a
-          # 65-second pause when it hits a Google Sheets API 429 (Quota
-          # exceeded — the per-user limit is 60 writes/minute). Sleeping
-          # past the rolling-window edge resets the quota.
+          # 65-second pause. The per-user Google Sheets write quota is
+          # 60/minute and our save_* helpers each make ~5-7 API calls, so
+          # a serial run of ~18 live-write tests routinely trips the limit.
+          # Sleeping past the rolling-window edge resets the quota.
+          #
+          # We deliberately do NOT pin --only-rerun to "Quota exceeded" /
+          # "APIError" — the storm save_* helpers catch their own 429s
+          # internally and surface as plain AssertionErrors against
+          # empty-sheet reads, which never matched those filters. Rerunning
+          # any failure twice still catches real regressions (they'd fail
+          # 3× in a row); transient quota issues self-heal.
           pytest tests/sheets/ -v --tb=short -m "sheets" \
-            --reruns 2 --reruns-delay 65 \
-            --only-rerun "Quota exceeded" \
-            --only-rerun "APIError"
+            --reruns 2 --reruns-delay 65
 
   # ── Deploy gate ─────────────────────────────────────────────────────────────
   # Railway watches the main branch and deploys automatically.

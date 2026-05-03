@@ -7,6 +7,33 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [1.0.15] — 2026-05-03
+
+### Fixed — flaky sheet-integration CI under Google quota pressure
+
+The `tests/sheets/` job was failing intermittently on `main` pushes
+with `AssertionError: assert 'CS_A_ZONES' in []` against the live
+test spreadsheet, blocking Railway deploys. Root cause:
+
+1. The Google Sheets per-user write quota is 60/minute. The
+   `save_ds_assignments` / `save_cs_assignments` helpers each make
+   ~5–7 API calls (load other-team zones, load DS A & B, clear, update,
+   …). A serial run of ~18 live-write tests routinely tripped the
+   limit on a clean run.
+2. The CI workflow already configured `pytest-rerunfailures` for two
+   retries with a 65s pause, but with `--only-rerun "Quota exceeded"
+   / "APIError"` filters. Those filters never matched the failing test
+   because `save_cs_assignments` catches the 429 in its own try/except,
+   prints it, and lets the call return — the test then failed with a
+   plain `AssertionError` against an empty sheet, which the rerun
+   filter ignored.
+
+Dropped the `--only-rerun` filters in `.github/workflows/test.yml`.
+Any sheet-test failure now retries twice with the 65s pause; real
+regressions still fail 3× in a row, transient quota hits self-heal.
+
+No bot or doc changes.
+
 ## [1.0.14] — 2026-05-02
 
 ### Removed — `docs/OGV_STRIP_INVENTORY.md`

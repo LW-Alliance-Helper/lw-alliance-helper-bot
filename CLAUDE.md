@@ -148,6 +148,7 @@ the long form on each.
 
 | Version | What |
 |---|---|
+| `1.0.10` | Birthday → train auto-population: persistence bug fixed (in-place dict mutation defeated the change check) and gated to once-per-day instead of every-minute (was burning ~1440 sheet reads/day per guild) |
 | `1.0.9` | Wizard views no longer hang on Discord interaction-token expiry — new `safe_edit_response` helper threaded through ~100 sites |
 | `1.0.8` | Removed legacy-column shims (filter + scheduler patch + migration block) once production confirmed the 1.0.5 DROP COLUMN ran |
 | `1.0.7` | Timed-out automated-post buttons now strip themselves and tell leadership how to re-open |
@@ -203,7 +204,7 @@ These have been thought through. Reopening them needs a real reason:
 
 ## Status snapshot
 
-- 1.0.0 launched 2026-04-28. Currently on `1.0.9` (see
+- 1.0.0 launched 2026-04-28. Currently on `1.0.10` (see
   `CHANGELOG.md` for the per-version detail).
 - 538 tests collected, 18 skipped under CI's `FORCE_PREMIUM=1` lane.
 - Pre-launch audit fully shipped. No outstanding cleanup queued.

@@ -166,7 +166,7 @@ Run `/setup_train` to configure the train schedule:
 - Use `/train` to manage the schedule — buttons for **Add**, **Update**, **Generate Prompt**, and **Clear**
 - At your configured reminder time, the bot posts a reminder in your chosen channel. If blurb generation is enabled, a button lets you pull up the ChatGPT prompt instantly
 - Use `/train_log [date]` to look up past prompt log entries
-- Use `/train_addbirthdays` to manually add upcoming birthdays to the schedule
+- Birthdays auto-populate the schedule once per day (after server-time midnight). Use `/train_addbirthdays` to trigger the check on demand if you need a birthday added sooner.
 
 ---
 
@@ -190,7 +190,7 @@ Birthday messages say: *🎂 Today is **[name]**'s birthday!*
 
 **Day-to-day use:**
 - Use `/birthdays` to see upcoming birthdays in the next 14 days
-- Use `/train_addbirthdays` to manually run the birthday check now
+- The bot auto-runs the birthday check once per day (after server-time midnight). Use `/train_addbirthdays` to run it on demand mid-day.
 
 ---
 

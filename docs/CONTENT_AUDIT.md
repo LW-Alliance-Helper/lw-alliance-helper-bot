@@ -976,27 +976,27 @@ Paste the full ChatGPT prompt. Use these placeholders:
 
 | Type | Copy | File |
 |---|---|---|
-| Wizard prompt | `**Step 1 of 8 — Enable birthday tracking?**\nShould the bot track member birthdays from your Google Sheet?` | `setup_cog.py` |
+| Wizard prompt | `**Step 1 of 9 — Enable birthday tracking?**\nShould the bot track member birthdays from your Google Sheet?` | `setup_cog.py` |
 | Success | `✅ Birthday tracking disabled.` | `setup_cog.py` |
 
 #### 7.1.3 Step 2 — Sheet Tab
 
 | Type | Copy | File |
 |---|---|---|
-| Wizard prompt | `**Step 2 of 8 — Sheet Tab**\nWhich tab in your Google Sheet contains birthday data?\n⚠️ *Make sure this tab exists in your sheet before continuing.*` | `setup_cog.py` |
+| Wizard prompt | `**Step 2 of 9 — Sheet Tab**\nWhich tab in your Google Sheet contains birthday data?\n⚠️ *Make sure this tab exists in your sheet before continuing.*` | `setup_cog.py` |
 
 #### 7.1.4 Step 3 — Name Column
 
 | Type | Copy | File |
 |---|---|---|
-| Wizard prompt | `**Step 3 of 8 — Name Column**\nWhich column contains the member's name?` | `setup_cog.py` |
+| Wizard prompt | `**Step 3 of 9 — Name Column**\nWhich column contains the member's name?` | `setup_cog.py` |
 | Warning | `⚠️ Please enter a single column letter like \`A\`. Run \`/setup_birthdays\` to try again.` | `setup_cog.py` |
 
 #### 7.1.5 Step 4 — Birthday Column
 
 | Type | Copy | File |
 |---|---|---|
-| Wizard prompt | `**Step 4 of 8 — Birthday Column**\nWhich column contains the member's birthday?` | `setup_cog.py` |
+| Wizard prompt | `**Step 4 of 9 — Birthday Column**\nWhich column contains the member's birthday?` | `setup_cog.py` |
 | Modal title | `Birthday Column` | `setup_cog.py` |
 | Warning | `⚠️ Please enter a single column letter like \`B\`. Run \`/setup_birthdays\` to try again.` | `setup_cog.py` |
 
@@ -1004,14 +1004,15 @@ Paste the full ChatGPT prompt. Use these placeholders:
 
 | Type | Copy | File |
 |---|---|---|
-| Wizard prompt | `**Step 5 of 8 — Train Schedule Integration**\nShould the bot automatically add members to the train schedule on their birthday?` | `setup_cog.py` |
+| Wizard prompt | `**Step 5 of 9 — Train Schedule Integration**\nShould the bot automatically add members to the train schedule on their birthday?` | `setup_cog.py` |
 | Info | `ℹ️ *Skipping Steps 6–7 (placement and lookahead) — train integration is off.*` | `setup_cog.py` |
+| Info (when train integration on) | `ℹ️ Heads up: birthdays auto-populate the train schedule **once per day** (on the bot's first tick after server-time midnight). If you need a birthday reflected on the schedule sooner, run \`/train_addbirthdays\` to trigger the check on demand.` | `setup_cog.py` |
 
 #### 7.1.7 Step 6 — Birthday Placement
 
 | Type | Copy | File |
 |---|---|---|
-| Wizard prompt | `**Step 6 of 8 — Birthday Placement**\nIf the member's birthday is already taken on the train schedule, what should the bot do?` | `setup_cog.py` |
+| Wizard prompt | `**Step 6 of 9 — Birthday Placement**\nIf the member's birthday is already taken on the train schedule, what should the bot do?` | `setup_cog.py` |
 | Button | `🎂 Birthday only` (primary) | `setup_cog.py` |
 | Button | `📅 Assign nearby if taken` (secondary) | `setup_cog.py` |
 | Success | `✅ Placement: **Birthday only**` | `setup_cog.py` |
@@ -1021,7 +1022,7 @@ Paste the full ChatGPT prompt. Use these placeholders:
 
 | Type | Copy | File |
 |---|---|---|
-| Wizard prompt | `**Step 7 of 8 — Train Schedule Lookahead**\nSince you enabled train integration, how many days ahead of a member's birthday should the bot pre-populate them on the train schedule? This only applies to train-integration auto-placement; the birthday announcement itself always fires on the day.\n*(we recommend 14)*` | `setup_cog.py` |
+| Wizard prompt | `**Step 7 of 9 — Train Schedule Lookahead**\nSince you enabled train integration, how many days ahead of a member's birthday should the bot pre-populate them on the train schedule? This only applies to train-integration auto-placement; the birthday announcement itself always fires on the day.\n*(we recommend 14)*` | `setup_cog.py` |
 | Modal title | `Lookahead Days` | `setup_cog.py` |
 | Input label | `Number of days` | `setup_cog.py` |
 | Warning | `⚠️ Please enter a number like \`14\`. Run \`/setup_birthdays\` to try again.` | `setup_cog.py` |
@@ -1030,11 +1031,11 @@ Paste the full ChatGPT prompt. Use these placeholders:
 
 | Type | Copy | File |
 |---|---|---|
-| Wizard prompt | `**Step 8 of 8 — Birthday Reminders**\nShould the bot post a message in Discord on a member's birthday?\n*(It will post: "🎂 Today is **[name]**'s birthday!")*` | `setup_cog.py` |
+| Wizard prompt | `**Step 8 of 9 — Birthday Reminders**\nShould the bot post a message in Discord on a member's birthday?\n*(It will post: "🎂 Today is **[name]**'s birthday!")*` | `setup_cog.py` |
 | Info | `ℹ️ *Skipping Steps 8a–8b (reminder channel and time) — birthday reminders are off.*` | `setup_cog.py` |
-| Wizard prompt | `**Step 8a of 8 — Birthday Announcement Channel**\nWhich channel should birthday announcements be posted in?` | `setup_cog.py` |
+| Wizard prompt | `**Step 8a of 9 — Birthday Announcement Channel**\nWhich channel should birthday announcements be posted in?` | `setup_cog.py` |
 | Select placeholder | `Select the birthday announcement channel...` | `setup_cog.py` |
-| Wizard prompt | `**Step 8b of 8 — Reminder Time**\nWhat time should birthday announcements be posted? *(in {tz_label})*\n*(e.g. \`8:00am\`, \`12:00pm\`)*` | `setup_cog.py` |
+| Wizard prompt | `**Step 8b of 9 — Reminder Time**\nWhat time should birthday announcements be posted? *(in {tz_label})*\n*(e.g. \`8:00am\`, \`12:00pm\`)*` | `setup_cog.py` |
 | Warning | `⚠️ Could not read that time after a few tries. Run \`/setup_birthdays\` to start over.` | `setup_cog.py` |
 | Warning | `⚠️ Could not read **\`{time_raw}\`** as a time. Try \`8:00am\`, \`12:00pm\`, or \`08:00\`. Let's try once more.` | `setup_cog.py` |
 

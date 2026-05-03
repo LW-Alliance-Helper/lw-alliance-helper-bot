@@ -54,9 +54,10 @@ def _make_cog():
     bot.guilds      = []
     bot.get_channel = MagicMock(return_value=None)
     cog = train_cog.TrainCog.__new__(train_cog.TrainCog)
-    cog.bot                  = bot
-    cog.last_reminder_date   = None
-    cog.reminders_fired      = set()
+    cog.bot                       = bot
+    cog.last_reminder_date        = None
+    cog.reminders_fired           = set()
+    cog.birthday_population_fired = set()
     return cog
 
 

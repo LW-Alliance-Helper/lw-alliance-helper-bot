@@ -69,9 +69,10 @@ date_cls = date
 
 class TrainCog(commands.Cog):
     def __init__(self, bot):
-        self.bot                = bot
-        self.last_reminder_date = None
-        self.reminders_fired    = set()
+        self.bot                       = bot
+        self.last_reminder_date        = None
+        self.reminders_fired           = set()
+        self.birthday_population_fired = set()
         self.check_reminder.start()
 
     def cog_unload(self):
@@ -368,8 +369,9 @@ class TrainCog(commands.Cog):
 
         # Reset daily flag at midnight ET
         if self.last_reminder_date != today:
-            self.last_reminder_date = today
-            self.reminders_fired    = set()  # track which guilds already fired today
+            self.last_reminder_date        = today
+            self.reminders_fired           = set()  # train reminders fired today
+            self.birthday_population_fired = set()  # birthday auto-pop done today
 
         # ── Birthday auto-population and Discord announcements ────────────────
         try:
@@ -384,17 +386,35 @@ class TrainCog(commands.Cog):
                 if not cfg or not cfg.setup_complete or not bcfg.get("enabled"):
                     continue
 
-                # Birthday auto-population into train schedule
-                if bcfg.get("train_integration"):
-                    current_schedule = load_schedule(guild.id)
-                    updated_schedule, alerts = check_and_add_birthdays(current_schedule, guild_id=guild.id)
-                    if updated_schedule != current_schedule or alerts:
-                        save_schedule(updated_schedule, guild.id)
-                    if alerts:
-                        alert_channel = self.bot.get_channel(cfg.leadership_channel_id)
-                        if alert_channel:
-                            for alert in alerts:
-                                await alert_channel.send(alert)
+                # Birthday auto-population into the train schedule.
+                # Runs once per guild per day on the first tick after the
+                # daily reset; the manual /train_addbirthdays command is
+                # the escape hatch for immediate population mid-day.
+                # Marked fired even on error so a sheets outage doesn't
+                # spam logs and burn API quota every minute.
+                if bcfg.get("train_integration") and guild.id not in self.birthday_population_fired:
+                    self.birthday_population_fired.add(guild.id)
+                    try:
+                        current_schedule = load_schedule(guild.id)
+                        # Snapshot for change detection — check_and_add_birthdays
+                        # mutates `current_schedule` in place and returns the
+                        # same object, so comparing the return value to the
+                        # input would always be equal (the original 1.0.x bug).
+                        before = dict(current_schedule)
+                        updated_schedule, alerts = check_and_add_birthdays(
+                            current_schedule, guild_id=guild.id,
+                        )
+                        if updated_schedule != before or alerts:
+                            save_schedule(updated_schedule, guild.id)
+                        if alerts:
+                            alert_channel = self.bot.get_channel(cfg.leadership_channel_id)
+                            if alert_channel:
+                                for alert in alerts:
+                                    await alert_channel.send(alert)
+                    except Exception as e:
+                        import traceback
+                        print(f"[BIRTHDAY] Auto-population failed for guild {guild.id}: {e}")
+                        print(traceback.format_exc())
 
                 # Birthday Discord announcements
                 if not bcfg.get("reminders_enabled"):

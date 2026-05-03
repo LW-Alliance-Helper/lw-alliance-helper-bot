@@ -7,6 +7,42 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [1.0.10] — 2026-05-02
+
+### Fixed — birthday auto-population now persists, and only runs once a day
+
+Two related bugs in `TrainCog.check_reminder` were quietly burning Google
+Sheets API quota and spamming Railway logs every minute:
+
+1. **Save was a no-op.** `check_and_add_birthdays` mutates the schedule
+   dict in place and returns the same object, so the scheduler's
+   `if updated_schedule != current_schedule` guard was comparing a dict
+   to itself — always equal, so `save_schedule` never fired. The
+   in-memory additions were thrown away on each tick. The manual
+   `/train_addbirthdays` path was unaffected because it captures
+   `len(current_schedule)` before the call. Fixed by snapshotting
+   `before = dict(current_schedule)` and comparing against that.
+
+2. **Auto-population ran every minute.** The reminder loop ticks every
+   minute (it has to, for the per-minute time-match check on train and
+   birthday announcements) and was unconditionally running the birthday
+   sheet fetch + auto-placement on every tick. Trains only fire once a
+   day, so the auto-population only needs to run once a day. Now gated
+   by a per-day `birthday_population_fired` set (mirroring the existing
+   `reminders_fired` pattern) — fires on the first tick after the daily
+   reset and is skipped for the rest of the day. Marked fired even on
+   error so a transient sheets outage doesn't spam the same exception
+   every minute until midnight.
+
+For an alliance with birthdays enabled, this drops the auto-population
+sheet reads from ~1440/day per guild to 1/day per guild. The manual
+`/train_addbirthdays` command is still the escape hatch for "add this
+birthday to the schedule right now."
+
+`/setup_birthdays` now tells the user, when they enable train
+integration, that auto-population runs once per day at server-time
+midnight and points them to `/train_addbirthdays` for on-demand runs.
+
 ## [1.0.9] — 2026-05-02
 
 ### Fixed — wizard views no longer hang when the interaction token expires

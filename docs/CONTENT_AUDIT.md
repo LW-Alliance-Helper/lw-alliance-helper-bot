@@ -1039,7 +1039,18 @@ Paste the full ChatGPT prompt. Use these placeholders:
 | Warning | `⚠️ Could not read that time after a few tries. Run \`/setup_birthdays\` to start over.` | `setup_cog.py` |
 | Warning | `⚠️ Could not read **\`{time_raw}\`** as a time. Try \`8:00am\`, \`12:00pm\`, or \`08:00\`. Let's try once more.` | `setup_cog.py` |
 
-#### 7.1.10 Save summary
+#### 7.1.10 Step 9 — Birthday DM Body (💎 Premium)
+
+Step only runs if reminders were enabled in Step 8. Free guilds can configure the template now — it just won't fire until they have Premium + Member Roster Sync + a Discord ID column wired up in the birthday sheet. Uses the standard `ask_keep_or_change` flow.
+
+| Type | Copy | File |
+|---|---|---|
+| Wizard prompt | `**Step 9 of 9 — Birthday DM Body (💎 Premium)**\nWhen a birthday fires, the bot also DMs the member directly with a personal note. Free guilds can configure this now — it just won't fire until you have Premium + Member Roster Sync + a Discord ID column in your birthday sheet.\n\nUse \`{name}\` as a placeholder for the member's name.` | `setup_cog.py` |
+| Modal title | `Birthday DM Body` | `setup_cog.py` |
+| Input label | `DM body (max 1000 chars)` | `setup_cog.py` |
+| Default (used when "Use default" picked) | `🎂 Happy birthday, **{name}**! Wishing you a great day from everyone at the alliance.` | `train_cog.py` (`DEFAULT_BIRTHDAY_DM`) |
+
+#### 7.1.11 Save summary
 
 | Type | Copy | File |
 |---|---|---|

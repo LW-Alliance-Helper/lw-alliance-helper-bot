@@ -7,6 +7,33 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [1.0.11] — 2026-05-02
+
+### Changed — doc sync for 1.0.7 (CLAUDE.md, CONTENT_AUDIT.md)
+
+Doc sync that should have ridden with 1.0.7 but was missed. The 1.0.9
+and 1.0.10 doc syncs covered everything *except* the docs the 1.0.7
+fix changed:
+
+- **`CLAUDE.md` Repo layout** — `wizard_registry.py` row now lists
+  `expire_view_message` (1.0.7) and `safe_edit_response` (1.0.9)
+  alongside the original `wait_view_or_cancel`, and the LOC estimate
+  is updated to reflect the file's growth.
+- **`CLAUDE.md` Patterns to reuse** — added a new "Auto-posted
+  approval/review views must clean up on timeout" entry pointing
+  contributors at `expire_view_message` and the three canonical
+  callsites (`scheduler.EventEditorView`, `scheduler.ApprovalView`,
+  `train.ReminderView`). Without this entry, future View additions
+  would silently re-introduce the dead-button bug.
+- **`docs/CONTENT_AUDIT.md`** — three new view-timeout copy rows in
+  §5.3 Event Editor, §5.8 Build Announcement → Approval (alongside
+  the existing Edit & Send wait_for timeout), and §6.14 Daily train
+  reminder loop. §14 Wizard infrastructure was corrected: the
+  blanket "no user-facing strings" claim is no longer true now that
+  `wizard_registry.expire_view_message` emits the timeout notice.
+
+No code changes.
+
 ## [1.0.10] — 2026-05-02
 
 ### Fixed — birthday auto-population now persists, and only runs once a day

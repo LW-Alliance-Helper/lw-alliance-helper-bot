@@ -562,6 +562,7 @@ You can set up as many or as few of these as you need. Use `/help` at any time t
 | Button | `🗑️ Remove Event` (danger) | `scheduler.py` |
 | Button | `📝 Add Announcement Text` (secondary) | `scheduler.py` |
 | Button | `📣 Build Announcement` (success) | `scheduler.py` |
+| Timeout (view expired, appended to original message) | `\n\n⏰ *The actions for this have timed out. Use \`/events\` to re-initiate.*` | `wizard_registry.py` |
 
 ### 5.4 Add Event sub-flow
 
@@ -620,7 +621,8 @@ You can set up as many or as few of these as you need. Use `/help` at any time t
 | Channel post (leadership stamp) | `✅ **Approved by {interaction.user.display_name} at {_ts}**\n\`\`\`\n{self.draft_message}\n\`\`\`` | `scheduler.py` |
 | Wizard prompt | `✏️ {interaction.user.mention} — copy and edit the message below, then send your revised version:\n\n\`\`\`\n{self.draft_message}\n\`\`\`` | `scheduler.py` |
 | Channel post (revised draft) | `📝 **Revised draft** (edited by {interaction.user.display_name}):\n\n{revised_text}` | `scheduler.py` |
-| Timeout | `⏰ Edit timed out — no message received from {interaction.user.mention} within 5 minutes.` | `scheduler.py` |
+| Timeout (Edit & Send wait_for) | `⏰ Edit timed out — no message received from {interaction.user.mention} within 5 minutes.` | `scheduler.py` |
+| Timeout (approval view expired, appended to draft message) | `\n\n⏰ *The actions for this have timed out. Use \`/events\` to re-initiate.*` | `wizard_registry.py` |
 
 ### 5.9 Default templates and built-in event blurbs
 
@@ -957,6 +959,7 @@ Paste the full ChatGPT prompt. Use these placeholders:
 | Error (not configured) | `⚙️ Bot not configured. Run \`/setup\`.` | `train.py` |
 | Error (missing role) | `⛔ You need the **{req_role}** role.` | `train.py` |
 | DM (premium, to today's member) | `🚂 Heads up — **today's train is for you!** Leadership has been notified, so look out for the announcement.` | `train_cog.py` |
+| Timeout (view expired, appended to reminder message) | `\n\n⏰ *The actions for this have timed out. Use \`/train\` to re-initiate.*` | `wizard_registry.py` |
 
 ---
 
@@ -2231,9 +2234,21 @@ Unlock the full power of Alliance Helper for your alliance.
 
 ## 14. Wizard infrastructure
 
-`wizard_registry.py` and `dm.py` contain no user-facing strings. They are
-pure infrastructure: registry / cancel-event plumbing and DM helper functions
-that pass `content` / `embed` through from callers.
+`dm.py` contains no user-facing strings — pure infrastructure: DM helper
+functions that pass `content` / `embed` through from callers.
+
+`wizard_registry.py` is mostly infrastructure (registry / cancel-event
+plumbing, `safe_edit_response` fallback) but `expire_view_message` does
+emit user-facing copy:
+
+| Type | Copy | File |
+|---|---|---|
+| Timeout notice (appended to expired auto-post messages) | `\n\n⏰ *The actions for this have timed out. Use \`{command_hint}\` to re-initiate.*` | `wizard_registry.py` |
+| Timeout notice (no command hint passed) | `\n\n⏰ *The actions for this have timed out.*` | `wizard_registry.py` |
+
+The notice is rendered into context-specific copy at the callsites
+catalogued under §5.3, §5.8, and §6.14 (event editor, approval view,
+train reminder respectively).
 
 ---
 

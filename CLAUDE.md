@@ -42,7 +42,7 @@ repo `../lw-alliance-helper.github.io` (the website) has its own
 | `growth.py` | Growth-tracking snapshots. | ~300 |
 | `member_roster.py` | Premium roster sync. **Requires `members` privileged intent.** | ~390 |
 | `premium.py` | Central premium gating. Every premium check goes through here. | ~280 |
-| `wizard_registry.py` | `wait_view_or_cancel` for cancellable wizards. | ~145 |
+| `wizard_registry.py` | `wait_view_or_cancel` (cancel mid-wizard), `expire_view_message` (clean up timed-out auto-posts), `safe_edit_response` (survive interaction-token expiry). | ~200 |
 | `defaults.py` | Hardcoded copy: themes/tones, default mail templates, default DM bodies. | ~100 |
 | `dm.py` | DM helpers. | ~80 |
 | `donate.py` | `/donate` and `/upgrade` commands. | ~135 |
@@ -71,6 +71,19 @@ These are deliberate and tested. Don't refactor away:
   `view.wait()`. The `/cancel` command flips `cancel_event`. Without
   this helper, `/cancel` mid-wizard left views hanging until their own
   timeout fired and posted a misleading "⏰ Timed out" message.
+
+### Auto-posted approval/review views must clean up on timeout
+- Any background task that posts a `discord.ui.View` to a channel
+  (daily event editor, the approval review that follows, the train
+  reminder, etc.) must capture the sent message
+  (`view.message = await ch.send(...)`) and override `on_timeout` to
+  call `wizard_registry.expire_view_message(self.message,
+  command_hint="/X")`.
+- Without this, expired views render apparently-active buttons that
+  fail with "Interaction failed" on click — there's no signal that
+  the draft has gone stale. Canonical callsites:
+  `scheduler.EventEditorView`, `scheduler.ApprovalView`,
+  `train.ReminderView`.
 
 ### DM body templates (configurable per alliance)
 - Schema column stores user template; empty string = "use hardcoded

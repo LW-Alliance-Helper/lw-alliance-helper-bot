@@ -229,6 +229,31 @@ the configured-template flow end-to-end. 501 passed (was 476).
   `ask_keep_or_change` wizard step entry to reflect the new
   current-vs-default 3-button layout.
 
+## [1.0.8] — 2026-05-02
+
+### Removed — legacy-column shims (1.0.5 follow-up)
+
+Production startup logs from the 1.0.5 deploy confirmed all 10
+retired `guild_configs` columns physically dropped on Railway —
+SQLite is recent enough for `ALTER TABLE … DROP COLUMN`. The
+defensive scaffolding around them is now dead weight:
+
+- One-shot DROP COLUMN migration block in `init_db()` removed
+  (its job is done; re-running it would just emit no-op log lines).
+- `get_config` row-dict filter against `GuildConfig.__dataclass_fields__`
+  reverted to a plain `GuildConfig(**dict(row))`.
+- `scheduler.run_scheduler` row-instantiation filter (added in 1.0.6
+  for the same defensive reason) reverted in lockstep.
+- `test_scheduler_row_instantiation_tolerates_legacy_columns`
+  regression test deleted — the scenario it guarded against can't
+  happen anymore.
+
+If a future schema retirement is mishandled (column dropped from
+the dataclass without a matching `ALTER TABLE … DROP COLUMN`),
+the symptom will surface as a `TypeError` rather than being
+silently swallowed by a defensive filter — which is a feature,
+not a regression.
+
 ## [1.0.7] — 2026-05-02
 
 ### Fixed — automated-post buttons no longer go silently dead on timeout

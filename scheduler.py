@@ -748,13 +748,7 @@ async def run_scheduler(bot: discord.ext.commands.Bot):
 
         for row in rows:
             from config import GuildConfig, get_guild_events
-            # Filter to known dataclass fields so legacy columns still
-            # physically present in production DBs (the 1.0.5 DROP COLUMN
-            # migration is a no-op on SQLite < 3.35) don't break
-            # instantiation. Same defensive pattern get_config uses.
-            d      = {k: v for k, v in dict(row).items()
-                      if k in GuildConfig.__dataclass_fields__}
-            cfg    = GuildConfig(**d)
+            cfg    = GuildConfig(**dict(row))
             events = get_guild_events(cfg.guild_id, active_only=True)
 
             if not events:

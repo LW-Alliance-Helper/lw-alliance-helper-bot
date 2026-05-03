@@ -74,58 +74,6 @@ class TestGuildConfig:
         assert config.get_config(guild_a).timezone == "America/New_York"
         assert config.get_config(guild_b).timezone == "Asia/Tokyo"
 
-    def test_scheduler_row_instantiation_tolerates_legacy_columns(self, temp_db):
-        """
-        Regression: production DBs that pre-date the 1.0.5 column-drop
-        migration still carry retired columns like `storm_log_thread_id`
-        (SQLite < 3.35 silently no-ops the DROP COLUMN). The scheduler
-        loop reads rows directly via raw SQL and instantiates GuildConfig
-        from them; it must filter unknown columns the same way get_config
-        does, or the scheduler crashes on every tick. See traceback:
-            scheduler.py:743
-            TypeError: GuildConfig.__init__() got an unexpected keyword
-            argument 'storm_log_thread_id'
-        """
-        import sqlite3
-        import config
-
-        # Seed a normal row, then graft a retired column on top.
-        cfg = config.get_or_create_config(TEST_GUILD_ID)
-        cfg.setup_complete = True
-        config.save_config(cfg)
-
-        with config._get_conn() as conn:
-            try:
-                conn.execute(
-                    "ALTER TABLE guild_configs ADD COLUMN storm_log_thread_id INTEGER DEFAULT 0"
-                )
-            except sqlite3.OperationalError:
-                # Already exists in this lane — fine.
-                pass
-            conn.execute(
-                "UPDATE guild_configs SET storm_log_thread_id = ? WHERE guild_id = ?",
-                (1234567890123456789, TEST_GUILD_ID),
-            )
-            conn.commit()
-
-        # Mimic scheduler.run_scheduler's read path exactly.
-        with sqlite3.connect(config.DB_PATH) as conn:
-            conn.row_factory = sqlite3.Row
-            row = conn.execute(
-                "SELECT * FROM guild_configs WHERE setup_complete = 1"
-            ).fetchone()
-
-        assert row is not None
-        assert "storm_log_thread_id" in dict(row)  # legacy column really is in the row
-
-        # The fix: filter to known dataclass fields before instantiation.
-        from config import GuildConfig
-        d   = {k: v for k, v in dict(row).items()
-               if k in GuildConfig.__dataclass_fields__}
-        cfg = GuildConfig(**d)  # used to raise TypeError
-        assert cfg.guild_id == TEST_GUILD_ID
-        assert bool(cfg.setup_complete) is True
-
 
 class TestTrainConfig:
     """Test guild_train_config save/load."""

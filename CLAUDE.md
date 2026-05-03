@@ -14,11 +14,12 @@ repo `../lw-alliance-helper.github.io` (the website) has its own
 ## Working agreement
 
 - **Solo project**, but the bot repo uses a release-branch workflow:
-  every change → GitHub issue → feature branch (`issue-NN-slug`) → PR
-  into the active `release/X.Y.Z` → merge commit → release branch
-  eventually PR'd into `main`. Railway deploys from `main`, so merging
-  to main *is* the release. Delete feature branches after merge to
-  release; **keep** release branches as history. See
+  work is tracked as GitHub issues; a feature branch (descriptive
+  kebab-case slug, may bundle multiple related issues) is PR'd into
+  the active `release/X.Y.Z` with a merge commit; the release branch
+  is eventually PR'd into `main`. Railway deploys from `main`, so
+  merging to main *is* the release. Delete feature branches after
+  merge to release; **keep** release branches as history. See
   `feedback_release_workflow_bot.md` in Memory for the full rule.
 - **Backlog lives in [GitHub Project #2](https://github.com/orgs/LW-Alliance-Helper/projects/2).**
   Auto-add fires for both repos. Apply a label at issue-creation time

@@ -215,6 +215,17 @@ class TestBotEntitlementsFallback:
             result = await _premium.is_premium(TEST_GUILD_ID, bot=bot)
             assert result is True
             assert bot.entitlements.called
+
+            # Guard against the discord.py signature drifting out from under us:
+            # `Client.entitlements` takes `skus=`, not `sku_ids=`. Binding our
+            # actual kwargs against the real signature makes a typo here a
+            # test-time failure instead of a silent runtime fall-through to
+            # "not premium" in background tasks.
+            import inspect
+            import discord
+            sig = inspect.signature(discord.Client.entitlements)
+            _, call_kwargs = bot.entitlements.call_args
+            sig.bind_partial(bot, **call_kwargs)
         finally:
             _premium.clear_cache()
 

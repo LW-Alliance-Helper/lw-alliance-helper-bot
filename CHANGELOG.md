@@ -9,6 +9,13 @@ Each entry is a slim summary — heavier context (root cause, what we
 tried, design rationale) lives in the corresponding commit message
 and PR description.
 
+## [1.0.17] — 2026-05-05
+
+### Fixed
+- Premium fallback path no longer crashes for guilds without an interaction context — `bot.entitlements()` was being called with the pre-2.4 `sku_ids=` kwarg instead of `skus=`, so every background-task premium check (scheduler loops, daily reminders, growth snapshots, roster sync) was silently downgrading paying customers to free-tier ([#28](https://github.com/LW-Alliance-Helper/lw-alliance-helper-bot/issues/28)). Test now binds the call's kwargs against the real `discord.Client.entitlements` signature so the next rename fails loudly.
+
+Hotfix released direct to main per CLAUDE.md's hotfix exception.
+
 ## [1.0.16] — 2026-05-03
 
 ### Changed

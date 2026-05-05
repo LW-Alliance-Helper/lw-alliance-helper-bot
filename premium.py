@@ -164,7 +164,7 @@ async def is_premium(
     try:
         async for ent in bot.entitlements(
             guild=discord.Object(id=guild_id),
-            sku_ids=[discord.Object(id=PREMIUM_SKU_ID)],
+            skus=[discord.Object(id=PREMIUM_SKU_ID)],
             exclude_ended=True,
         ):
             if _entitlement_matches(ent):

@@ -10,7 +10,7 @@ Kept separate from train.py to keep that file at a manageable size.
 
 import asyncio
 from datetime import datetime, timedelta, date
-from zoneinfo import ZoneInfo
+from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
 
 import discord
 from discord import app_commands
@@ -70,7 +70,10 @@ date_cls = date
 class TrainCog(commands.Cog):
     def __init__(self, bot):
         self.bot                       = bot
-        self.last_reminder_date        = None
+        # Initialize to today's ET date so the first tick after deploy
+        # doesn't trip the "new day, run birthday auto-population" branch
+        # — without this, every Railway redeploy re-fires the daily run.
+        self.last_reminder_date        = datetime.now(tz=ET).date()
         self.reminders_fired           = set()
         self.birthday_population_fired = set()
         self.check_reminder.start()
@@ -365,7 +368,7 @@ class TrainCog(commands.Cog):
         from zoneinfo import ZoneInfo
 
         now   = datetime.now(tz=ET)
-        today = date_cls.today()
+        today = now.date()
 
         # Reset daily flag at midnight ET
         if self.last_reminder_date != today:
@@ -376,9 +379,7 @@ class TrainCog(commands.Cog):
         # ── Birthday auto-population and Discord announcements ────────────────
         try:
             from config import get_config, get_birthday_config
-            from datetime import date as _date
             from zoneinfo import ZoneInfo as _ZI
-            today_iso = _date.today().isoformat()
 
             for guild in self.bot.guilds:
                 cfg      = get_config(guild.id)
@@ -387,12 +388,17 @@ class TrainCog(commands.Cog):
                     continue
 
                 # Birthday auto-population into the train schedule.
-                # Runs once per guild per day on the first tick after the
-                # daily reset; the manual /train_addbirthdays command is
-                # the escape hatch for immediate population mid-day.
-                # Marked fired even on error so a sheets outage doesn't
-                # spam logs and burn API quota every minute.
-                if bcfg.get("train_integration") and guild.id not in self.birthday_population_fired:
+                # Fires once per guild per day at exactly 22:00 ET — that
+                # lines up with 00:00 server time, the alliance's nightly
+                # reset. Exact-minute trigger matches the Discord birthday
+                # announcement pattern below; if Railway is restarting
+                # across that minute, /train_addbirthdays is the manual
+                # escape hatch. The fired set is cleared at midnight ET.
+                if (
+                    bcfg.get("train_integration")
+                    and now.hour == 22 and now.minute == 0
+                    and guild.id not in self.birthday_population_fired
+                ):
                     self.birthday_population_fired.add(guild.id)
                     try:
                         current_schedule = load_schedule(guild.id)
@@ -427,11 +433,17 @@ class TrainCog(commands.Cog):
                     guild_now = datetime.now(tz=guild_tz)
                     if guild_now.hour != r_h or guild_now.minute != r_m:
                         continue
-                except Exception:
+                except (ValueError, IndexError, ZoneInfoNotFoundError) as e:
+                    print(f"[BIRTHDAY] Bad reminder_time={reminder_time!r} or "
+                          f"timezone={cfg.timezone!r} for guild {guild.id}: {e}")
                     continue
 
-                bday_channel = self.bot.get_channel(bcfg.get("reminder_channel_id", 0))
+                bday_channel_id = bcfg.get("reminder_channel_id", 0)
+                bday_channel    = self.bot.get_channel(bday_channel_id)
                 if not bday_channel:
+                    print(f"[BIRTHDAY] Reminder channel {bday_channel_id} not "
+                          f"resolvable for guild {guild.id} — Discord birthday "
+                          f"announcement skipped")
                     continue
 
                 # Find today's birthdays
@@ -491,7 +503,9 @@ class TrainCog(commands.Cog):
                 guild_now = datetime.now(tz=guild_tz)
                 if guild_now.hour != r_h or guild_now.minute != r_m:
                     continue
-            except Exception:
+            except (ValueError, IndexError, ZoneInfoNotFoundError) as e:
+                print(f"[TRAIN] Bad reminder_time={reminder_time!r} or "
+                      f"timezone={cfg.timezone!r} for guild {guild.id}: {e}")
                 continue
 
             # Check if someone is scheduled today
@@ -508,6 +522,11 @@ class TrainCog(commands.Cog):
             channel_id = train_cfg.get("reminder_channel_id") or cfg.leadership_channel_id
             channel    = self.bot.get_channel(channel_id)
             if channel is None:
+                # Marked fired so we don't retry every minute, but log the
+                # symptom — leadership won't notice "reminder stopped firing"
+                # unless we surface the channel-resolve failure here.
+                print(f"[TRAIN] Reminder channel {channel_id} not resolvable "
+                      f"for guild {guild.id} — daily reminder skipped")
                 self.reminders_fired.add(guild.id)
                 continue
 

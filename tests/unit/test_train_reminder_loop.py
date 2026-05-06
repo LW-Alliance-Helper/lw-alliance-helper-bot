@@ -43,6 +43,11 @@ LEADERSHIP_CHAN_ID  = 1111
 REMINDER_CHAN_ID    = 5555
 ET = ZoneInfo("America/New_York")
 
+# Tests pin `datetime.now(tz=ET)` to 2026-05-15 22:00 ET inside the
+# loop, so the loop derives `today` as 2026-05-15. Schedule keys must
+# match that date — not real today — for the reminder lookup to hit.
+PATCHED_TODAY_ISO = "2026-05-15"
+
 
 # ── Fixtures and helpers ─────────────────────────────────────────────────────
 
@@ -149,7 +154,7 @@ class TestTrainReminderFiringAtConfiguredTime:
     async def test_fires_when_local_time_matches(self):
         cog = _make_cog()
         chan = AsyncMock(); chan.send = AsyncMock()
-        today_iso = date_cls.today().isoformat()
+        today_iso = PATCHED_TODAY_ISO
 
         await _run_loop(
             cog,
@@ -169,7 +174,7 @@ class TestTrainReminderFiringAtConfiguredTime:
         cog = _make_cog()
         chan = AsyncMock(); chan.send = AsyncMock()
 
-        today_iso = date_cls.today().isoformat()
+        today_iso = PATCHED_TODAY_ISO
         await _run_loop(
             cog,
             now_in_guild_tz=datetime(2026, 5, 15, 22, 1, tzinfo=ET),  # one minute past
@@ -182,7 +187,7 @@ class TestTrainReminderFiringAtConfiguredTime:
     async def test_does_not_fire_when_hour_does_not_match(self):
         cog = _make_cog()
         chan = AsyncMock(); chan.send = AsyncMock()
-        today_iso = date_cls.today().isoformat()
+        today_iso = PATCHED_TODAY_ISO
         await _run_loop(
             cog,
             now_in_guild_tz=datetime(2026, 5, 15, 21, 0, tzinfo=ET),
@@ -200,7 +205,7 @@ class TestTrainReminderIdempotency:
     async def test_same_guild_does_not_fire_twice_in_one_day(self):
         cog = _make_cog()
         chan = AsyncMock(); chan.send = AsyncMock()
-        today_iso = date_cls.today().isoformat()
+        today_iso = PATCHED_TODAY_ISO
 
         # First tick fires.
         await _run_loop(
@@ -230,7 +235,7 @@ class TestTrainReminderConfigGates:
     async def test_reminders_enabled_zero_skips_post(self):
         cog = _make_cog()
         chan = AsyncMock(); chan.send = AsyncMock()
-        today_iso = date_cls.today().isoformat()
+        today_iso = PATCHED_TODAY_ISO
 
         await _run_loop(
             cog,
@@ -262,7 +267,7 @@ class TestTrainReminderConfigGates:
         """Configured reminder channel id is unknown to the bot →
         skip cleanly, mark fired so we don't retry every tick."""
         cog = _make_cog()
-        today_iso = date_cls.today().isoformat()
+        today_iso = PATCHED_TODAY_ISO
         await _run_loop(
             cog,
             now_in_guild_tz=datetime(2026, 5, 15, 22, 0, tzinfo=ET),
@@ -283,7 +288,7 @@ class TestTrainReminderPremiumDM:
         is wired to silently no-op via mention_or_name returning name."""
         cog = _make_cog()
         chan = AsyncMock(); chan.send = AsyncMock()
-        today_iso = date_cls.today().isoformat()
+        today_iso = PATCHED_TODAY_ISO
 
         send_dm_spy = await _run_loop(
             cog,
@@ -307,7 +312,7 @@ class TestTrainReminderPremiumDM:
         of the hardcoded default."""
         cog = _make_cog()
         chan = AsyncMock(); chan.send = AsyncMock()
-        today_iso = date_cls.today().isoformat()
+        today_iso = PATCHED_TODAY_ISO
 
         custom = "Hey {name}, train day! Don't forget to fill it out."
         send_dm_spy = await _run_loop(
@@ -337,7 +342,7 @@ class TestTrainReminderDailyReset:
         cog.last_reminder_date = date_cls(2026, 5, 14)  # yesterday
 
         chan = AsyncMock(); chan.send = AsyncMock()
-        today_iso = date_cls.today().isoformat()
+        today_iso = PATCHED_TODAY_ISO
         await _run_loop(
             cog,
             now_in_guild_tz=datetime(2026, 5, 15, 22, 0, tzinfo=ET),
@@ -346,6 +351,93 @@ class TestTrainReminderDailyReset:
         )
         chan.send.assert_called_once(), \
             "After date rollover, reminders_fired is cleared and reminder fires again"
+
+
+# ── Birthday auto-population gate ────────────────────────────────────────────
+
+class TestBirthdayAutoPopulationGate:
+    """The birthday → train auto-population must fire exactly once per
+    day at 22:00 ET (10pm ET == 00:00 server time, matching the
+    alliance's nightly reset). Regression for issue #29: previously
+    fired on every Railway redeploy and at 8pm ET (UTC midnight) due
+    to a tz-naive `date.today()` rollover gate."""
+
+    def _bday_on(self):
+        cfg = _bday_cfg(enabled=1)
+        cfg["train_integration"] = 1
+        return cfg
+
+    @pytest.mark.asyncio
+    async def test_fires_at_22_00_ET(self):
+        cog = _make_cog()
+        with patch("train_cog.check_and_add_birthdays", return_value=({}, [])) as mock_pop, \
+             patch("train_cog.save_schedule"):
+            await _run_loop(
+                cog,
+                now_in_guild_tz=datetime(2026, 5, 15, 22, 0, tzinfo=ET),
+                bday_cfg=self._bday_on(),
+            )
+        mock_pop.assert_called_once()
+        assert GUILD_ID in cog.birthday_population_fired
+
+    @pytest.mark.asyncio
+    async def test_does_not_fire_at_deploy_time(self):
+        """Most ticks of the per-minute loop are not 22:00 — including
+        every redeploy that lands at some other minute. Regression for
+        the 'fires on every push' bug."""
+        cog = _make_cog()
+        with patch("train_cog.check_and_add_birthdays", return_value=({}, [])) as mock_pop, \
+             patch("train_cog.save_schedule"):
+            await _run_loop(
+                cog,
+                now_in_guild_tz=datetime(2026, 5, 15, 10, 23, tzinfo=ET),
+                bday_cfg=self._bday_on(),
+            )
+        mock_pop.assert_not_called()
+        assert GUILD_ID not in cog.birthday_population_fired
+
+    @pytest.mark.asyncio
+    async def test_does_not_fire_one_minute_off(self):
+        """Same exact-minute discipline as the train reminder."""
+        cog = _make_cog()
+        with patch("train_cog.check_and_add_birthdays", return_value=({}, [])) as mock_pop, \
+             patch("train_cog.save_schedule"):
+            await _run_loop(
+                cog,
+                now_in_guild_tz=datetime(2026, 5, 15, 22, 1, tzinfo=ET),
+                bday_cfg=self._bday_on(),
+            )
+        mock_pop.assert_not_called()
+
+    @pytest.mark.asyncio
+    async def test_does_not_fire_twice_in_one_day(self):
+        """`birthday_population_fired` is a per-day set; same-minute
+        retick (or any retick before midnight ET) must not re-run."""
+        cog = _make_cog()
+        cog.birthday_population_fired = {GUILD_ID}
+        cog.last_reminder_date        = date_cls(2026, 5, 15)
+        with patch("train_cog.check_and_add_birthdays", return_value=({}, [])) as mock_pop, \
+             patch("train_cog.save_schedule"):
+            await _run_loop(
+                cog,
+                now_in_guild_tz=datetime(2026, 5, 15, 22, 0, tzinfo=ET),
+                bday_cfg=self._bday_on(),
+            )
+        mock_pop.assert_not_called()
+
+    @pytest.mark.asyncio
+    async def test_train_integration_off_skips(self):
+        cog = _make_cog()
+        bcfg = self._bday_on()
+        bcfg["train_integration"] = 0
+        with patch("train_cog.check_and_add_birthdays", return_value=({}, [])) as mock_pop, \
+             patch("train_cog.save_schedule"):
+            await _run_loop(
+                cog,
+                now_in_guild_tz=datetime(2026, 5, 15, 22, 0, tzinfo=ET),
+                bday_cfg=bcfg,
+            )
+        mock_pop.assert_not_called()
 
 
 # ── ReminderView lifecycle ───────────────────────────────────────────────────
@@ -362,7 +454,7 @@ class TestReminderViewMessageWiring:
         cog  = _make_cog()
         sent = MagicMock(name="reminder_msg")
         chan = AsyncMock(); chan.send = AsyncMock(return_value=sent)
-        today_iso = date_cls.today().isoformat()
+        today_iso = PATCHED_TODAY_ISO
 
         await _run_loop(
             cog,

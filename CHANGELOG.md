@@ -9,6 +9,17 @@ Each entry is a slim summary — heavier context (root cause, what we
 tried, design rationale) lives in the corresponding commit message
 and PR description.
 
+## [1.0.18] — 2026-05-05
+
+### Fixed
+- Birthday → train auto-population now fires at exactly 22:00 ET (10pm ET == 00:00 server time), and stops re-firing on every Railway redeploy. Previously the daily-rollover gate used `date.today()` (UTC on Railway), so the run landed at 8pm/7pm ET; and the in-memory `last_reminder_date` started as `None`, causing every cog re-init (i.e. every deploy) to trip the daily branch and hit Google Sheets again ([#29](https://github.com/LW-Alliance-Helper/lw-alliance-helper-bot/issues/29)).
+
+### Changed
+- Logging-gaps audit across DM, scheduler, train, premium, member-roster, survey, storm-log, and stats-publisher paths to support fleet observability now that 7+ guilds run the bot ([#31](https://github.com/LW-Alliance-Helper/lw-alliance-helper-bot/issues/31)). Three commits, severity-banded:
+  - **High** — `dm.send_dm_to_id` now logs the (guild, user) pair on `discord.Forbidden` (closed DMs); `scheduler.fire_warning` logs missing announcement channel; two `except Exception: continue` blocks in `train_cog.check_reminder` time-parse narrowed and now log per-guild; `survey.check_scheduled_reminders` error log now carries `guild_id`.
+  - **Medium** — scheduler trigger errors dump traceback; train/birthday channel-resolve fall-throughs log; five `train.py` sheet I/O error logs gain `guild_id`; `premium.is_premium` emits once-per-process warnings when `PREMIUM_SKU_ID` env var is missing or `bot=` wasn't passed; `member_roster._auto_sync_if_enabled` and `survey._send_reminder_to_channel` capture non-Discord exceptions to Sentry.
+  - **Low** — `storm_log._get_log_sheet` narrows the worksheet-lookup catch to `gspread.WorksheetNotFound` so transient API errors no longer silently route data to the wrong tab; `stats_publisher` 4xx/5xx PUT failures (expired PAT, etc.) now also Sentry-captured so the daily badge going stale surfaces in email instead of Railway-only stdout.
+
 ## [1.0.17] — 2026-05-05
 
 ### Fixed

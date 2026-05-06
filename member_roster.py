@@ -117,7 +117,11 @@ def _warn_if_cache_looks_thin(guild: discord.Guild) -> None:
         cached_count = len(guild.members)
         raw_total    = getattr(guild, "member_count", None)
         total_count  = int(raw_total) if isinstance(raw_total, int) else 0
-    except Exception:
+    except (AttributeError, TypeError) as e:
+        # Defensive: shouldn't happen with a real `discord.Guild`, but tests
+        # and edge cases (None members list) shouldn't suppress real errors.
+        print(f"[ROSTER] _warn_if_cache_looks_thin diagnostic failed for "
+              f"guild {getattr(guild, 'id', '?')}: {e}")
         return
     if total_count > 1 and cached_count < max(2, total_count // 2):
         print(
@@ -181,6 +185,16 @@ class MemberRosterCog(commands.Cog):
             )
         except Exception as e:
             print(f"[ROSTER] Auto-sync failed for guild {guild.id}: {e}")
+            # Auto-sync runs on every member-join/leave/role-change, so a
+            # transient error gets re-tried naturally. But unexpected bugs
+            # (template typos, schema drift) should land in Sentry instead
+            # of only stdout — the channel post path already logs, this
+            # surfaces non-Discord-API failures for triage.
+            try:
+                import sentry_sdk
+                sentry_sdk.capture_exception(e)
+            except Exception:
+                pass
 
     @app_commands.command(
         name="sync_members",

@@ -912,7 +912,11 @@ class SurveyCog(commands.Cog):
                 update_survey_reminder_last_fired(guild_id, survey_id, today_iso)
 
             except Exception as e:
-                print(f"[SURVEY] Error firing scheduled reminder: {e}")
+                # `guild_id` may not have been bound yet if `int(entry["guild_id"])`
+                # itself raised — read straight from `entry` so the log is always
+                # attributed to the offending row.
+                gid = entry.get("guild_id", "?")
+                print(f"[SURVEY] Error firing scheduled reminder for guild {gid}: {e}")
 
     @check_scheduled_reminders.before_loop
     async def _before_check_scheduled(self):
@@ -1053,12 +1057,26 @@ async def _send_reminder_to_channel(bot, guild_id: int, channel_id: int, body: s
     """Post a reminder body to a guild channel. Returns True on success."""
     channel = bot.get_channel(channel_id)
     if channel is None:
+        print(f"[REMINDER] Channel {channel_id} not resolvable (guild={guild_id}) "
+              f"— scheduled reminder skipped")
         return False
     try:
         await channel.send(body)
         return True
-    except Exception as e:
+    except discord.HTTPException as e:
+        # Forbidden / NotFound / bot-was-kicked are recoverable user-state
+        # errors; print so leadership can see, but don't escalate to Sentry.
         print(f"[REMINDER] Channel post failed (guild={guild_id}, channel={channel_id}): {e}")
+        return False
+    except Exception as e:
+        # Unexpected non-Discord errors (template bugs, schema drift) should
+        # surface in Sentry — Railway-only logs are easy to miss.
+        print(f"[REMINDER] Channel post failed (guild={guild_id}, channel={channel_id}): {e}")
+        try:
+            import sentry_sdk
+            sentry_sdk.capture_exception(e)
+        except Exception:
+            pass
         return False
 
 

@@ -70,7 +70,10 @@ date_cls = date
 class TrainCog(commands.Cog):
     def __init__(self, bot):
         self.bot                       = bot
-        self.last_reminder_date        = None
+        # Initialize to today's ET date so the first tick after deploy
+        # doesn't trip the "new day, run birthday auto-population" branch
+        # — without this, every Railway redeploy re-fires the daily run.
+        self.last_reminder_date        = datetime.now(tz=ET).date()
         self.reminders_fired           = set()
         self.birthday_population_fired = set()
         self.check_reminder.start()
@@ -365,7 +368,7 @@ class TrainCog(commands.Cog):
         from zoneinfo import ZoneInfo
 
         now   = datetime.now(tz=ET)
-        today = date_cls.today()
+        today = now.date()
 
         # Reset daily flag at midnight ET
         if self.last_reminder_date != today:
@@ -376,9 +379,7 @@ class TrainCog(commands.Cog):
         # ── Birthday auto-population and Discord announcements ────────────────
         try:
             from config import get_config, get_birthday_config
-            from datetime import date as _date
             from zoneinfo import ZoneInfo as _ZI
-            today_iso = _date.today().isoformat()
 
             for guild in self.bot.guilds:
                 cfg      = get_config(guild.id)
@@ -387,12 +388,17 @@ class TrainCog(commands.Cog):
                     continue
 
                 # Birthday auto-population into the train schedule.
-                # Runs once per guild per day on the first tick after the
-                # daily reset; the manual /train_addbirthdays command is
-                # the escape hatch for immediate population mid-day.
-                # Marked fired even on error so a sheets outage doesn't
-                # spam logs and burn API quota every minute.
-                if bcfg.get("train_integration") and guild.id not in self.birthday_population_fired:
+                # Fires once per guild per day at exactly 22:00 ET — that
+                # lines up with 00:00 server time, the alliance's nightly
+                # reset. Exact-minute trigger matches the Discord birthday
+                # announcement pattern below; if Railway is restarting
+                # across that minute, /train_addbirthdays is the manual
+                # escape hatch. The fired set is cleared at midnight ET.
+                if (
+                    bcfg.get("train_integration")
+                    and now.hour == 22 and now.minute == 0
+                    and guild.id not in self.birthday_population_fired
+                ):
                     self.birthday_population_fired.add(guild.id)
                     try:
                         current_schedule = load_schedule(guild.id)

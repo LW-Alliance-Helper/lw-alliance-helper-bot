@@ -57,9 +57,20 @@ def _get_log_sheet(guild_id: int = None, event_type: str | None = None):
         tab = pcfg.get("tab_name") or ""
         if tab:
             try:
+                import gspread
                 return sh.worksheet(tab)
-            except Exception:
-                pass  # tab missing — fall back below
+            except gspread.WorksheetNotFound:
+                # Configured tab doesn't exist — legitimate fall-through
+                # case (alliance hasn't created it yet, or renamed it
+                # without updating config).
+                pass
+            except Exception as e:
+                # API quota exhaustion, network failure, credential
+                # expiry — *not* the same as a missing tab. Falling back
+                # to the legacy tab silently could write data to the
+                # wrong sheet. Log so the symptom is recoverable.
+                print(f"[STORM-LOG] Worksheet({tab!r}) lookup failed for "
+                      f"guild {guild_id} ({event_type}): {e}")
     cfg = get_config(guild_id)
     tab = cfg.tab_sitouts if cfg else "DS-CS Sit-outs"
     return sh.worksheet(tab)

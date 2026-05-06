@@ -47,6 +47,11 @@ async def send_dm_to_id(
         await user.send(content=content or None, embed=embed)
         return True
     except discord.Forbidden:
+        # Closed DMs is the most common silent failure across train,
+        # birthday, survey, and storm reminder loops. Logging the
+        # (guild, user) pair lets leadership tell that member to
+        # re-open DMs instead of guessing why reminders stopped.
+        print(f"[DM] Forbidden — user {did} likely has DMs closed (guild={guild_id})")
         return False
     except Exception as e:
         print(f"[DM] Failed to send DM to {did} in guild {guild_id}: {e}")

@@ -10,7 +10,7 @@ Kept separate from train.py to keep that file at a manageable size.
 
 import asyncio
 from datetime import datetime, timedelta, date
-from zoneinfo import ZoneInfo
+from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
 
 import discord
 from discord import app_commands
@@ -427,11 +427,17 @@ class TrainCog(commands.Cog):
                     guild_now = datetime.now(tz=guild_tz)
                     if guild_now.hour != r_h or guild_now.minute != r_m:
                         continue
-                except Exception:
+                except (ValueError, IndexError, ZoneInfoNotFoundError) as e:
+                    print(f"[BIRTHDAY] Bad reminder_time={reminder_time!r} or "
+                          f"timezone={cfg.timezone!r} for guild {guild.id}: {e}")
                     continue
 
-                bday_channel = self.bot.get_channel(bcfg.get("reminder_channel_id", 0))
+                bday_channel_id = bcfg.get("reminder_channel_id", 0)
+                bday_channel    = self.bot.get_channel(bday_channel_id)
                 if not bday_channel:
+                    print(f"[BIRTHDAY] Reminder channel {bday_channel_id} not "
+                          f"resolvable for guild {guild.id} — Discord birthday "
+                          f"announcement skipped")
                     continue
 
                 # Find today's birthdays
@@ -491,7 +497,9 @@ class TrainCog(commands.Cog):
                 guild_now = datetime.now(tz=guild_tz)
                 if guild_now.hour != r_h or guild_now.minute != r_m:
                     continue
-            except Exception:
+            except (ValueError, IndexError, ZoneInfoNotFoundError) as e:
+                print(f"[TRAIN] Bad reminder_time={reminder_time!r} or "
+                      f"timezone={cfg.timezone!r} for guild {guild.id}: {e}")
                 continue
 
             # Check if someone is scheduled today
@@ -508,6 +516,11 @@ class TrainCog(commands.Cog):
             channel_id = train_cfg.get("reminder_channel_id") or cfg.leadership_channel_id
             channel    = self.bot.get_channel(channel_id)
             if channel is None:
+                # Marked fired so we don't retry every minute, but log the
+                # symptom — leadership won't notice "reminder stopped firing"
+                # unless we surface the channel-resolve failure here.
+                print(f"[TRAIN] Reminder channel {channel_id} not resolvable "
+                      f"for guild {guild.id} — daily reminder skipped")
                 self.reminders_fired.add(guild.id)
                 continue
 

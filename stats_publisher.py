@@ -120,6 +120,20 @@ async def _put_new(
                 return True
             body = await resp.text()
             print(f"[STATS] PUT failed ({resp.status}): {body[:300]}")
+            # 401/403/404 mean the PAT is expired, missing scope, or the
+            # repo moved — every daily run will keep failing silently
+            # until someone tails Railway logs at the right moment.
+            # Sentry-capture so it surfaces in email instead.
+            if resp.status in (401, 403, 404) or resp.status >= 500:
+                try:
+                    import sentry_sdk
+                    sentry_sdk.capture_message(
+                        f"[STATS] PUT stats.json returned {resp.status}: "
+                        f"{body[:300]}",
+                        level="error",
+                    )
+                except Exception:
+                    pass
             return False
     except (aiohttp.ClientError, asyncio.TimeoutError) as e:
         print(f"[STATS] PUT stats.json failed: {e}")

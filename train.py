@@ -103,7 +103,7 @@ def load_schedule(guild_id: int = None) -> dict:
             }
         return schedule
     except Exception as e:
-        print(f"[TRAIN] Error loading schedule from sheet: {e}")
+        print(f"[TRAIN] Error loading schedule from sheet (guild={guild_id}): {e}")
         return {}
 
 
@@ -134,7 +134,7 @@ def save_schedule(schedule: dict, guild_id: int = None):
         ws.update("A2", rows, value_input_option="USER_ENTERED")
         print(f"[TRAIN] Schedule saved to sheet ({len(rows)} entries)")
     except Exception as e:
-        print(f"[TRAIN] Error saving schedule to sheet: {e}")
+        print(f"[TRAIN] Error saving schedule to sheet (guild={guild_id}): {e}")
 
 
 def mark_blurb_generated(date_str: str, guild_id: int = None):
@@ -149,7 +149,7 @@ def mark_blurb_generated(date_str: str, guild_id: int = None):
                 return
         print(f"[TRAIN] Could not find row for {date_str} to mark as retrieved")
     except Exception as e:
-        print(f"[TRAIN] Error marking blurb generated: {e}")
+        print(f"[TRAIN] Error marking blurb generated (guild={guild_id}): {e}")
 
 
 def blurb_generated_today(guild_id: int = None) -> bool:
@@ -163,7 +163,7 @@ def blurb_generated_today(guild_id: int = None) -> bool:
                 return len(row) > 5 and row[5].strip().upper() == "TRUE"
         return False
     except Exception as e:
-        print(f"[TRAIN] Error checking blurb log: {e}")
+        print(f"[TRAIN] Error checking blurb log (guild={guild_id}): {e}")
         return False
 
 
@@ -178,7 +178,7 @@ def load_blurb_log(guild_id: int = None) -> set:
             if row and len(row) > 5 and row[5].strip().upper() == "TRUE"
         }
     except Exception as e:
-        print(f"[TRAIN] Error loading blurb log: {e}")
+        print(f"[TRAIN] Error loading blurb log (guild={guild_id}): {e}")
         return set()
 
 

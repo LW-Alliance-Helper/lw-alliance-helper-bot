@@ -912,7 +912,11 @@ class SurveyCog(commands.Cog):
                 update_survey_reminder_last_fired(guild_id, survey_id, today_iso)
 
             except Exception as e:
-                print(f"[SURVEY] Error firing scheduled reminder: {e}")
+                # `guild_id` may not have been bound yet if `int(entry["guild_id"])`
+                # itself raised — read straight from `entry` so the log is always
+                # attributed to the offending row.
+                gid = entry.get("guild_id", "?")
+                print(f"[SURVEY] Error firing scheduled reminder for guild {gid}: {e}")
 
     @check_scheduled_reminders.before_loop
     async def _before_check_scheduled(self):

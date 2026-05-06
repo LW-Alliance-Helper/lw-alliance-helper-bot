@@ -897,6 +897,9 @@ async def fire_warning(bot, event_key: str, event_list: list[dict], cfg=None):
         return
     channel = bot.get_channel(cfg.announcement_channel_id)
     if channel is None:
+        gid = getattr(cfg, "guild_id", "?")
+        print(f"[SCHEDULER][ERROR] Announcement channel {cfg.announcement_channel_id} "
+              f"not found for guild {gid} — 5-min warning for {event_key} skipped")
         return
 
     message = build_warning_message(event_list, guild_id=getattr(cfg, "guild_id", None))

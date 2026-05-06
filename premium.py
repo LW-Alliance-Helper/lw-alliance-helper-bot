@@ -41,6 +41,13 @@ PREMIUM_SKU_ID: Optional[int] = (
     else None
 )
 
+# Once-per-process flags so the silent-fallback warning doesn't spam every
+# minute (premium check fires on most slash commands and inside background
+# loops). Reset on process restart, which is the right cadence to detect a
+# regression introduced by a deploy.
+_warned_no_sku = False
+_warned_no_bot = False
+
 # Per-feature limits. None means unlimited.
 LIMITS: dict[str, dict[str, Optional[int]]] = {
     "events":             {"free": 5,  "premium": None},
@@ -156,8 +163,25 @@ async def is_premium(
         return cached
 
     # Cache miss — query Discord. Skipped silently if no SKU configured
-    # or no bot instance available.
-    if PREMIUM_SKU_ID is None or bot is None:
+    # or no bot instance available. Both branches log once per process so
+    # a missing env var or wiring regression surfaces in Railway instead
+    # of silently flipping every guild back to the free tier.
+    if PREMIUM_SKU_ID is None:
+        global _warned_no_sku
+        if not _warned_no_sku:
+            print("[PREMIUM] PREMIUM_SKU_ID env var is not set — every guild "
+                  "will resolve to free tier. Subscriptions cannot be detected "
+                  "until this is configured.")
+            _warned_no_sku = True
+        _cache_set(guild_id, False)
+        return False
+    if bot is None:
+        global _warned_no_bot
+        if not _warned_no_bot:
+            print(f"[PREMIUM] is_premium called without a bot instance "
+                  f"(guild={guild_id}); falling back to free tier. Callers "
+                  f"in background loops must pass bot=...")
+            _warned_no_bot = True
         _cache_set(guild_id, False)
         return False
 

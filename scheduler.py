@@ -863,7 +863,9 @@ async def run_scheduler(bot: discord.ext.commands.Bot):
             try:
                 await next_fn()
             except Exception as e:
+                import traceback
                 print(f"[SCHEDULER][ERROR] Failed to fire {next_label}: {e}")
+                print(f"[SCHEDULER][ERROR] Traceback:\n{traceback.format_exc()}")
             await asyncio.sleep(90)
         else:
             sleep_for = max(seconds_until - 30, 60)
@@ -883,7 +885,9 @@ async def post_editor(bot, event_list: list[dict], event_key: str, run_date: dat
     channel_id = draft_channel_id or cfg.leadership_channel_id
     channel    = bot.get_channel(channel_id)
     if channel is None:
-        print("[SCHEDULER][ERROR] Draft channel not found")
+        gid = getattr(cfg, "guild_id", "?")
+        print(f"[SCHEDULER][ERROR] Draft channel {channel_id} not found for "
+              f"guild {gid} — event editor for {event_key} skipped")
         return
 
     view = EventEditorView(bot=bot, event_list=event_list, event_key=event_key, run_date=run_date, guild_id=cfg.guild_id)

@@ -1057,12 +1057,26 @@ async def _send_reminder_to_channel(bot, guild_id: int, channel_id: int, body: s
     """Post a reminder body to a guild channel. Returns True on success."""
     channel = bot.get_channel(channel_id)
     if channel is None:
+        print(f"[REMINDER] Channel {channel_id} not resolvable (guild={guild_id}) "
+              f"— scheduled reminder skipped")
         return False
     try:
         await channel.send(body)
         return True
-    except Exception as e:
+    except discord.HTTPException as e:
+        # Forbidden / NotFound / bot-was-kicked are recoverable user-state
+        # errors; print so leadership can see, but don't escalate to Sentry.
         print(f"[REMINDER] Channel post failed (guild={guild_id}, channel={channel_id}): {e}")
+        return False
+    except Exception as e:
+        # Unexpected non-Discord errors (template bugs, schema drift) should
+        # surface in Sentry — Railway-only logs are easy to miss.
+        print(f"[REMINDER] Channel post failed (guild={guild_id}, channel={channel_id}): {e}")
+        try:
+            import sentry_sdk
+            sentry_sdk.capture_exception(e)
+        except Exception:
+            pass
         return False
 
 

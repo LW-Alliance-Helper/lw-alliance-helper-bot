@@ -244,15 +244,18 @@ def _run_growth_snapshot_inner(guild_id: int = None):
 
     # Write data rows
     updates = []
+    new_member_rows = []
     for member in members:
         name     = member["name"]
         row_idx  = name_to_row.get(name.lower())
 
         if row_idx is None:
-            # Append new row
+            # Reserve a row for this new member; the actual sheet append is
+            # batched into one call after the loop so a roster of 60+ members
+            # doesn't exhaust the 60/min Sheets write quota (#40).
             new_row = [name] + [""] * (len(header_row) - 1)
-            ws.append_row(new_row, value_input_option="USER_ENTERED")
             row_idx = len(all_values) + 1
+            new_member_rows.append(new_row)
             all_values.append(new_row)
             name_to_row[name.lower()] = row_idx
             print(f"[GROWTH] New member added: {name}")
@@ -268,6 +271,9 @@ def _run_growth_snapshot_inner(guild_id: int = None):
                     "range": f"{col_letter}{row_idx}",
                     "values": [[val]],
                 })
+
+    if new_member_rows:
+        ws.append_rows(new_member_rows, value_input_option="USER_ENTERED")
 
     if updates:
         ws.batch_update(updates, value_input_option="USER_ENTERED")

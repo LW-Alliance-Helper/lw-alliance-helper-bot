@@ -9,6 +9,13 @@ Each entry is a slim summary — heavier context (root cause, what we
 tried, design rationale) lives in the corresponding commit message
 and PR description.
 
+## [1.0.19] — 2026-05-07
+
+### Fixed
+- Growth snapshots no longer blow the 60/min Sheets write quota — `_run_growth_snapshot_inner` was calling `ws.append_row` once per new member inside its loop, so any first-ever snapshot of a populated roster (60+ members) hit a 429 mid-write and aborted partway. Collapsed into a single `ws.append_rows` after the loop ([#40](https://github.com/LW-Alliance-Helper/lw-alliance-helper-bot/issues/40)).
+
+Hotfix released direct to main per CLAUDE.md's hotfix exception.
+
 ## [1.0.18] — 2026-05-05
 
 ### Fixed

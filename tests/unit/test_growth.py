@@ -217,6 +217,46 @@ class TestRunGrowthSnapshotInner:
         updated_header = header_call[0][1][0]
         assert col_name in updated_header
 
+    def test_new_members_appended_in_one_batched_call(self, seeded_db):
+        """Regression for #40: a populated roster (60+ members) on a first-ever
+        snapshot must not call ws.append_row once per member — that exhausts
+        the 60/min Sheets write quota mid-write and aborts the snapshot. The
+        snapshot must use ws.append_rows (plural) once with all new rows."""
+        from growth import _run_growth_snapshot_inner
+        from config import save_growth_config
+        from datetime import datetime
+
+        save_growth_config(
+            TEST_GUILD_ID, enabled=1, tab_source="Powers", name_col="A",
+            metrics=[{"col": "B", "label": "Power"}],
+            tab_growth="Growth", snapshot_frequency="monthly",
+            snapshot_day=1, snapshot_interval=30, data_start_row=2,
+        )
+
+        mock_ws = MagicMock()
+        mock_ws.row_count      = 100
+        mock_ws.row_values     = MagicMock(return_value=["Name"])
+        mock_ws.get_all_values = MagicMock(return_value=[["Name"]])
+        mock_sh = MagicMock()
+        mock_sh.worksheet = MagicMock(return_value=mock_ws)
+
+        members = [
+            {"name": f"Member{i:02d}", "row_index": i + 2, "Power": float(i)}
+            for i in range(60)
+        ]
+
+        with patch("growth._get_spreadsheet", return_value=mock_sh), \
+             patch("growth.load_member_data", return_value=members):
+            _run_growth_snapshot_inner(TEST_GUILD_ID)
+
+        mock_ws.append_row.assert_not_called()
+        mock_ws.append_rows.assert_called_once()
+        appended = mock_ws.append_rows.call_args[0][0]
+        assert len(appended) == 60, \
+            f"expected 60 rows in the single append_rows call, got {len(appended)}"
+        assert appended[0][0] == "Member00"
+        assert appended[-1][0] == "Member59"
+
     def test_creates_growth_tab_if_missing(self, seeded_db):
         from growth import _run_growth_snapshot_inner
         from config import save_growth_config

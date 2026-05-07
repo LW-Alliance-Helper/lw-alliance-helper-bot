@@ -110,7 +110,9 @@ class DonateCog(commands.Cog):
                 "• 👥 Member roster sync, birthday DMs, train DMs, survey reminders\n"
                 "• 📅 30-day history windows on `/events_log` and `/train_log`\n"
                 "• 📜 Unlimited storm-log lookback\n\n"
-                "**$4.99/month**, billed by Discord. Cancel anytime."
+                "**$4.99/month**, billed by Discord. Cancel anytime.\n\n"
+                "🗂️ Premium adds features, not lock-in — your alliance's data continues "
+                "to live in your own Google Sheet."
             ),
             color=discord.Color.purple(),
         )

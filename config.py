@@ -280,6 +280,24 @@ def init_db():
         """)
         conn.commit()
 
+        # premium_assignments — bot-side assignment layer for the User
+        # Subscription SKU. Discord considers a subscriber's entitlement
+        # valid in every guild they share with the bot; this table lets a
+        # subscriber pin their one $4.99/mo to a single guild at a time
+        # (MEE6 pattern). One row per subscriber: PRIMARY KEY on user_id
+        # enforces one-assignment-per-user, UNIQUE on guild_id enforces
+        # one-subscriber-per-guild. Rows persist across subscription
+        # lapses so resubscribing auto-resumes Premium in the same guild.
+        # See premium.py and issue #41 for the full model.
+        conn.execute("""
+            CREATE TABLE IF NOT EXISTS premium_assignments (
+                user_id     INTEGER PRIMARY KEY,
+                guild_id    INTEGER NOT NULL UNIQUE,
+                assigned_at TEXT    NOT NULL
+            )
+        """)
+        conn.commit()
+
         # Add spreadsheet_id column if upgrading from an older schema that didn't have it
         try:
             conn.execute("ALTER TABLE guild_configs ADD COLUMN spreadsheet_id TEXT DEFAULT ''")
@@ -527,6 +545,84 @@ def is_setup_complete(guild_id: int) -> bool:
     """Check if a guild has completed setup."""
     cfg = get_config(guild_id)
     return cfg.setup_complete if cfg else False
+
+
+# ── Premium assignment helpers ─────────────────────────────────────────────────
+#
+# The bot's Premium SKU is User Subscription — Discord considers an entitlement
+# valid in every guild the subscriber shares with the bot. The
+# `premium_assignments` table pins each subscriber's one license to a single
+# guild they choose. See issue #41 and `premium.is_premium` for how this layer
+# is consulted on every premium check.
+
+def get_premium_assignment_for_guild(guild_id: int) -> Optional[int]:
+    """Return the user_id assigned to this guild, or None if no assignment."""
+    with _get_conn() as conn:
+        row = conn.execute(
+            "SELECT user_id FROM premium_assignments WHERE guild_id = ?", (guild_id,)
+        ).fetchone()
+        return row["user_id"] if row else None
+
+
+def get_premium_assignment_for_user(user_id: int) -> Optional[int]:
+    """Return the guild_id this user has assigned their license to, or None."""
+    with _get_conn() as conn:
+        row = conn.execute(
+            "SELECT guild_id FROM premium_assignments WHERE user_id = ?", (user_id,)
+        ).fetchone()
+        return row["guild_id"] if row else None
+
+
+def set_premium_assignment(user_id: int, guild_id: int) -> Optional[int]:
+    """Assign or move this user's license to `guild_id`.
+
+    Returns the user_id of any prior assignment that was cleared from
+    `guild_id` (a different subscriber being displaced should never happen
+    because callers reject duplicates first, but this still surfaces the
+    fact so the caller can invalidate caches correctly). The previous
+    guild this user was assigned to (if any) is replaced atomically;
+    callers should invalidate the premium cache for both the old and new
+    guild_ids.
+    """
+    from datetime import datetime, timezone
+    now = datetime.now(timezone.utc).isoformat()
+    with _get_conn() as conn:
+        # Check if another user already holds this guild — unique on
+        # guild_id would otherwise raise. Callers should have rejected
+        # this case before calling, but defend against a race.
+        prior_row = conn.execute(
+            "SELECT user_id FROM premium_assignments WHERE guild_id = ? AND user_id != ?",
+            (guild_id, user_id),
+        ).fetchone()
+        prior_user = prior_row["user_id"] if prior_row else None
+        if prior_user is not None:
+            conn.execute("DELETE FROM premium_assignments WHERE user_id = ?", (prior_user,))
+
+        conn.execute(
+            "INSERT INTO premium_assignments (user_id, guild_id, assigned_at) "
+            "VALUES (?, ?, ?) "
+            "ON CONFLICT(user_id) DO UPDATE SET guild_id = excluded.guild_id, "
+            "assigned_at = excluded.assigned_at",
+            (user_id, guild_id, now),
+        )
+        conn.commit()
+        return prior_user
+
+
+def remove_premium_assignment(user_id: int) -> Optional[int]:
+    """Remove this user's assignment. Returns the guild_id that was freed,
+    or None if there was no assignment. Caller should invalidate the
+    premium cache for the returned guild_id."""
+    with _get_conn() as conn:
+        row = conn.execute(
+            "SELECT guild_id FROM premium_assignments WHERE user_id = ?", (user_id,)
+        ).fetchone()
+        if row is None:
+            return None
+        guild_id = row["guild_id"]
+        conn.execute("DELETE FROM premium_assignments WHERE user_id = ?", (user_id,))
+        conn.commit()
+        return guild_id
 
 
 # ── Guild event helpers ────────────────────────────────────────────────────────

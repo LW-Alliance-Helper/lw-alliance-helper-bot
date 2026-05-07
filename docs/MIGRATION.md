@@ -66,6 +66,23 @@ state to migrate:
 
 ---
 
+## How licensing works
+
+Premium is a **per-user** subscription that applies to **one server at
+a time**. When you run `/upgrade`, the bot pins your subscription to the
+server you're in. To move it to a different alliance:
+
+- Run **`/premium_assign`** in the alliance you want Premium in.
+- Run **`/premium_status`** to see where it's currently active.
+- Run **`/premium_unassign`** to release the pin without canceling the
+  subscription (useful for "park it and come back later").
+
+If a server already has Premium from another subscriber, the bot will
+tell you and prompt you to pick a different alliance — two
+subscriptions can't both apply to the same server.
+
+---
+
 ## Downgrades
 
 If a premium subscriber cancels through Discord:
@@ -76,7 +93,9 @@ If a premium subscriber cancels through Discord:
   in the database; they're just not editable until premium is
   re-activated. (You can still read your roster sync sheet — that
   lives in your own Google Sheet.)
-- Re-subscribing restores full access immediately, no re-config.
+- **Your assignment is also kept.** If you re-subscribe, Premium
+  auto-resumes in the same server you had it pinned to before. No
+  re-config required.
 
 ---
 

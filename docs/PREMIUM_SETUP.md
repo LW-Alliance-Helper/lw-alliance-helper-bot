@@ -66,9 +66,10 @@ the bot). PRESENCE is **not** needed and should stay off.
    - **Pricing:** $4.99 USD / month
      *(Discord App Subscriptions only support monthly billing today —
      no annual plan.)*
-   - **Eligible audience:** Server-level (not user-level) — this is
-     critical: subscriptions apply to the whole guild, not the
-     individual.
+   - **Eligible audience:** **User Subscription** — Discord scopes the
+     entitlement to the buyer rather than the guild. The bot enforces
+     "one license = one guild at a time" via an in-bot assignment layer
+     (see "Licensing model" below). MEE6 uses the same pattern.
 6. Click **Save**, then **Publish** when you're ready.
 7. Copy the SKU ID — you'll need it in the next step.
 
@@ -102,6 +103,39 @@ guild permanent premium status without a Discord subscription — used in
 production for the bot owner's home alliance. `FORCE_PREMIUM` is a
 nuke option intended for local testing only; do not set it in
 production.
+
+## Licensing model — User Subscription + assignment layer
+
+Discord's **User Subscription** SKU type means the entitlement is valid
+in **every guild** the subscriber shares with the bot. That is not the
+licensing model — the intent is one $4.99/mo per *alliance*, with the
+subscriber able to move their license between alliances whenever they
+want.
+
+The bot enforces this with a small assignment layer (`premium_assignments`
+table; see `premium.py` and issue #41):
+
+- **One row per subscriber.** `user_id` PRIMARY KEY → a single Discord
+  user can only pin Premium to one guild at a time. `guild_id` UNIQUE →
+  a single guild can only hold one subscriber's pin at a time.
+- **`/upgrade` records context.** When a subscriber clicks the Discord
+  premium button, the bot remembers which guild they ran `/upgrade` in.
+  Once the checkout completes, `on_entitlement_create` consumes that
+  context and writes the assignment row.
+- **`/premium_assign` moves the pin.** A subscriber runs it from the
+  guild they want Premium in. The bot rejects with the existing
+  subscriber's username if the guild is already pinned by someone else.
+- **`/premium_status`** surfaces the current state (active sub +
+  assigned guild, lapsed sub with preserved assignment, etc.).
+- **`/premium_unassign`** releases the pin without canceling the
+  Discord subscription — useful for "park it and reassign later."
+- **Lapse is not destructive.** When a subscription ends, the
+  assignment row stays. If the user resubscribes, Premium auto-resumes
+  in the same guild without manual reconfiguration.
+
+`PREMIUM_BYPASS_GUILD_IDS` and `FORCE_PREMIUM` short-circuit before
+this assignment check, so the home-alliance bypass and dev-environment
+nuke options keep working unchanged.
 
 ## 3. Verify in Discord
 

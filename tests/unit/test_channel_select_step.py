@@ -313,3 +313,47 @@ class TestFallbackPaths:
         view = ChannelSelectStep("placeholder", include_threads=False, allow_create=True)
         labels = _labels(view)
         assert "➕ Create a new channel" in labels
+
+
+# ── Create-channel button visibility (#48) ────────────────────────────────────
+
+class TestCreateButtonAlwaysVisible:
+    """Pre-1.1.0 the create-channel button was hidden whenever the wizard
+    took a Premium path (button-driven Channel/Thread choice, or thread
+    types in the picker). It should be visible everywhere a channel select
+    is shown so admins can create the leadership channel mid-wizard."""
+
+    def test_create_button_visible_when_no_pickable_threads(self):
+        """Premium guild, but no pickable threads → channel select renders
+        with thread types in the picker. Create button should still appear."""
+        from setup_cog import ChannelSelectStep
+        guild = _make_guild([])  # premium-flagged, but no threads
+        view  = ChannelSelectStep(
+            "placeholder", include_threads=True, guild=guild, allow_create=True,
+        )
+        assert "➕ Create a new channel" in _labels(view)
+
+    @pytest.mark.asyncio
+    async def test_create_button_visible_after_clicking_channel(self):
+        """Premium guild with pickable threads → button-driven flow.
+        After the user picks Channel, the create button should be present."""
+        from setup_cog import ChannelSelectStep
+        guild = _make_guild([_make_thread("t1", "general", 100)])
+        view  = ChannelSelectStep(
+            "placeholder", include_threads=True, guild=guild, allow_create=True,
+        )
+
+        ch_btn = next(c for c in view.children
+                      if getattr(c, "label", "") == "📢 Channel")
+        inter = MagicMock(); inter.response.edit_message = AsyncMock()
+        await ch_btn.callback(inter)
+
+        assert "➕ Create a new channel" in _labels(view)
+
+    def test_allow_create_false_suppresses_button(self):
+        """Sanity: callers can still opt out via allow_create=False."""
+        from setup_cog import ChannelSelectStep
+        view = ChannelSelectStep(
+            "placeholder", include_threads=False, allow_create=False,
+        )
+        assert "➕ Create a new channel" not in _labels(view)

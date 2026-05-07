@@ -52,7 +52,6 @@ def _seed_leadership_setup(guild_id: int = TEST_GUILD_ID) -> "config.GuildConfig
     cfg = config.get_or_create_config(guild_id)
     cfg.leadership_role_name  = "Leadership"
     cfg.leadership_channel_id = 111111111111111111
-    cfg.leadership_category_id = 222222222222222222
     cfg.timezone              = "America/New_York"
     cfg.setup_complete        = 1
     config.save_config(cfg)
@@ -94,15 +93,14 @@ def _seed_repeating_event(
 
 def _make_events_interaction(guild_id: int = TEST_GUILD_ID):
     """Discord interaction shaped for the /events slash command. Includes
-    the leadership-role and category set on the guild config so the
-    `guard()` helper at the top of /events lets the command through.
+    the leadership role set on the guild config so the `guard()` helper at
+    the top of /events lets the command through.
     """
     interaction = make_mock_interaction(guild_id=guild_id)
 
     role = MagicMock()
     role.name = "Leadership"
     interaction.user.roles = [role]
-    interaction.channel.category_id = 222222222222222222
 
     interaction.response.defer        = AsyncMock()
     interaction.response.send_message = AsyncMock()

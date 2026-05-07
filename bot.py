@@ -125,29 +125,12 @@ def is_leadership(interaction: discord.Interaction) -> bool:
     return cfg.leadership_role_name in [r.name for r in interaction.user.roles]
 
 
-def in_leadership_channel(interaction: discord.Interaction) -> bool:
-    """Accept commands in any channel or thread within the leadership category."""
-    cfg = get_config(interaction.guild_id)
-    if not cfg:
-        return False
-    channel = interaction.channel
-    if isinstance(channel, discord.Thread):
-        parent = channel.parent
-        return parent is not None and getattr(parent, "category_id", None) == cfg.leadership_category_id
-    return getattr(channel, "category_id", None) == cfg.leadership_category_id
-
-
 async def guard(interaction: discord.Interaction) -> bool:
-    """Check role and channel. Respond with an error and return False if either fails."""
+    """Check setup-complete and leadership role. Respond with an error and return False if either fails."""
     cfg = get_config(interaction.guild_id)
     if not cfg or not cfg.setup_complete:
         await interaction.response.send_message(
             "⚙️ This bot hasn't been set up yet. Run `/setup` to get started.", ephemeral=True
-        )
-        return False
-    if not in_leadership_channel(interaction):
-        await interaction.response.send_message(
-            "⛔ This command can only be used in the leadership channel.", ephemeral=True
         )
         return False
     if not is_leadership(interaction):

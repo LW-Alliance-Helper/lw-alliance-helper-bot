@@ -77,6 +77,10 @@ WELCOME_DM = (
     "• Your alliance's timezone\n"
     "• Sharing your Google Sheet with the bot\n\n"
     "After setup, run **/help** to see every available feature.\n\n"
+    "💎 **Premium is a per-user subscription** — one $4.99/mo applies to "
+    "**one server at a time**. Run `/upgrade` to subscribe; the bot pins "
+    "your subscription to the server you ran it in. Use `/premium_assign` "
+    "to move it later, or `/premium_status` to see where it's active.\n\n"
     "📖 Setup guide: <https://lw-alliance-helper.github.io/setup.html>\n"
     "📋 All commands: <https://lw-alliance-helper.github.io/commands.html>\n"
     "💎 Pricing & Premium: <https://lw-alliance-helper.github.io/pricing.html>\n\n"
@@ -919,7 +923,10 @@ async def help_slash(interaction: discord.Interaction):
             "`/cancel` — Cancel any active wizard or log session and reset wizard state\n"
             "`/help` — Show this command list (always available)\n"
             "`/donate` — 💖 Show optional tip-jar links to support the bot's hosting\n"
-            "`/upgrade` — 💎 Subscribe to Premium for this server (Discord App Subscription)"
+            "`/upgrade` — 💎 Subscribe to Premium and pin it to this server\n"
+            "`/premium_assign` — 💎 Move your Premium subscription to this server\n"
+            "`/premium_status` — 💎 Show your subscription state and assigned server\n"
+            "`/premium_unassign` — 💎 Release the pin without canceling the subscription"
         ),
         inline=False,
     )

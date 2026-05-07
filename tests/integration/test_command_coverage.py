@@ -218,14 +218,13 @@ def _make_nonprivileged_interaction(guild_id=TEST_GUILD_ID):
     return interaction
 
 
-# Helper: build an interaction in the leadership channel with the
-# leadership role on a fully-set-up guild.
+# Helper: build a fully-privileged interaction (admin + leadership role)
+# on a fully-set-up guild.
 def _make_leadership_interaction(guild_id=TEST_GUILD_ID):
     interaction = make_mock_interaction(guild_id=guild_id, is_admin=True)
     role = MagicMock()
     role.name = "Leadership"
     interaction.user.roles = [role]
-    interaction.channel.category_id = 0  # leadership_category_id default
     return interaction
 
 
@@ -332,7 +331,7 @@ class TestMemberRosterCommandsGate:
         assert "Premium" in (embed.title or "")
 
 
-# ── Storm + LogCog command gates (leadership channel + role) ──────────────────
+# ── Storm + LogCog command gates (leadership role) ──────────────────────────
 
 class TestStormCommandsGate:
 
@@ -341,21 +340,18 @@ class TestStormCommandsGate:
         "desertstorm_draft", "canyonstorm_draft",
         "desertstorm", "canyonstorm",
     ])
-    async def test_rejects_caller_outside_leadership_channel(self, seeded_db, command_name):
+    async def test_rejects_caller_without_leadership_role(self, seeded_db, command_name):
         from storm import StormCog
         cog = _make_cog(StormCog)
 
         interaction = make_mock_interaction()
-        # Channel category != leadership_category_id => guard fails
-        interaction.channel.category_id = 99999999
-        role = MagicMock(); role.name = "Leadership"
-        interaction.user.roles = [role]
+        interaction.user.roles = []   # no leadership role
 
         cmd = getattr(cog, command_name)
         await cmd.callback(cog, interaction)
 
         content, _ = _last_message(interaction)
-        assert "leadership channel" in (content or "").lower()
+        assert "leadership" in (content or "").lower()
 
 
 class TestLogCommandsGate:
@@ -366,14 +362,12 @@ class TestLogCommandsGate:
         "desertstorm_log", "canyonstorm_log",
         "desertstorm_remind", "canyonstorm_remind",
     ])
-    async def test_rejects_caller_outside_leadership_channel(self, seeded_db, command_name):
+    async def test_rejects_caller_without_leadership_role(self, seeded_db, command_name):
         from storm_log import LogCog
         cog = _make_cog(LogCog)
 
         interaction = make_mock_interaction()
-        interaction.channel.category_id = 99999999
-        role = MagicMock(); role.name = "Leadership"
-        interaction.user.roles = [role]
+        interaction.user.roles = []   # no leadership role
 
         cmd = getattr(cog, command_name)
         # /[event]_log takes a date arg; the gate runs first, so any
@@ -386,7 +380,7 @@ class TestLogCommandsGate:
             await cmd.callback(cog, interaction, None)
 
         content, _ = _last_message(interaction)
-        assert "leadership channel" in (content or "").lower()
+        assert "leadership" in (content or "").lower()
 
 
 # ── Survey commands ───────────────────────────────────────────────────────────
@@ -397,20 +391,18 @@ class TestSurveyCommandsGate:
     @pytest.mark.parametrize("command_name", [
         "survey_post", "survey", "survey_remind",
     ])
-    async def test_rejects_caller_outside_leadership_channel(self, seeded_db, command_name):
+    async def test_rejects_caller_without_leadership_role(self, seeded_db, command_name):
         from survey import SurveyCog
         cog = _make_cog(SurveyCog)
         try:
             interaction = make_mock_interaction()
-            interaction.channel.category_id = 99999999
-            role = MagicMock(); role.name = "Leadership"
-            interaction.user.roles = [role]
+            interaction.user.roles = []   # no leadership role
 
             cmd = getattr(cog, command_name)
             await cmd.callback(cog, interaction)
 
             content, _ = _last_message(interaction)
-            assert "leadership channel" in (content or "").lower()
+            assert "leadership" in (content or "").lower()
         finally:
             try:
                 cog.check_scheduled_reminders.cancel()
@@ -426,14 +418,12 @@ class TestTrainCommandsGate:
     @pytest.mark.parametrize("command_name", [
         "train", "train_log", "train_addbirthdays", "birthdays",
     ])
-    async def test_rejects_caller_outside_leadership_channel(self, seeded_db, command_name):
+    async def test_rejects_caller_without_leadership_role(self, seeded_db, command_name):
         from train_cog import TrainCog
         cog = _make_cog(TrainCog)
         try:
             interaction = make_mock_interaction()
-            interaction.channel.category_id = 99999999
-            role = MagicMock(); role.name = "Leadership"
-            interaction.user.roles = [role]
+            interaction.user.roles = []   # no leadership role
 
             cmd = getattr(cog, command_name)
             try:
@@ -442,7 +432,7 @@ class TestTrainCommandsGate:
                 await cmd.callback(cog, interaction, None)  # /train_log [date]
 
             content, _ = _last_message(interaction)
-            assert "leadership channel" in (content or "").lower()
+            assert "leadership" in (content or "").lower()
         finally:
             try:
                 cog.check_reminder.cancel()

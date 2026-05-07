@@ -346,7 +346,7 @@ For the full list of every slash command and what it does, run `/help` in your l
 Slash commands can take up to an hour to appear after the bot first joins your server. If they still aren't showing after that, try removing and re-inviting the bot.
 
 **"You don't have permission to use this command"**
-Most feature commands need to be run in the leadership channel by someone with the leadership role configured during `/setup`. The various `/setup_*` commands also accept anyone with **Administrator** server permissions, so a server owner can configure a feature even without holding the leadership role.
+Most feature commands need to be run by someone with the leadership role configured during `/setup`. The various `/setup_*` commands also accept anyone with **Administrator** server permissions, so a server owner can configure a feature even without holding the leadership role.
 
 **"This bot hasn't been set up yet"**
 Run `/setup` first. The bot won't respond to feature commands until core setup is complete.

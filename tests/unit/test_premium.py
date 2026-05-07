@@ -432,9 +432,10 @@ class TestChannelSelectStepThreadGating:
         assert discord.ChannelType.private_thread  in select.channel_types
         assert discord.ChannelType.news_thread     in select.channel_types
 
-    def test_create_button_hidden_when_threads_included(self, fresh_premium):
-        """When threads are in the picker, hide the 'Create channel' button —
-        we can't sensibly create a thread from a wizard."""
+    def test_create_button_visible_when_threads_included(self, fresh_premium):
+        """The create button should appear in every channel-select state —
+        creating only ever produces a text channel, which is fine even
+        when the picker also offers thread types. (#48)"""
         from setup_cog import ChannelSelectStep
 
         view = ChannelSelectStep(
@@ -442,9 +443,8 @@ class TestChannelSelectStepThreadGating:
             include_threads=True,
             allow_create=True,
         )
-        # Children: just the ChannelSelect (no Create button).
         labels = [getattr(c, "label", None) for c in view.children]
-        assert "➕ Create a new channel" not in labels
+        assert "➕ Create a new channel" in labels
 
     def test_create_button_visible_when_text_only(self, fresh_premium):
         from setup_cog import ChannelSelectStep

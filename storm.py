@@ -592,24 +592,10 @@ async def run_ds_draft_flow(bot, channel, user, team: str,
 # ── Guards ─────────────────────────────────────────────────────────────────────
 
 async def _guard(interaction: discord.Interaction) -> bool:
-    cfg     = get_config(interaction.guild_id)
-    channel = interaction.channel
-    if isinstance(channel, discord.Thread):
-        parent = channel.parent
-        cat_id = cfg.leadership_category_id if cfg else 0
-        in_channel = parent is not None and getattr(parent, "category_id", None) == cat_id
-    else:
-        cat_id = cfg.leadership_category_id if cfg else 0
-        in_channel = getattr(channel, "category_id", None) == cat_id
-
+    cfg = get_config(interaction.guild_id)
     if not cfg or not cfg.setup_complete:
         await interaction.response.send_message(
             "⚙️ This bot hasn't been set up yet. Run `/setup` to get started.", ephemeral=True
-        )
-        return False
-    if not in_channel:
-        await interaction.response.send_message(
-            "⛔ This command can only be used in the leadership channel.", ephemeral=True
         )
         return False
     if cfg.leadership_role_name not in [r.name for r in interaction.user.roles]:

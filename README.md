@@ -24,13 +24,13 @@ A Discord bot built for Last War alliance leadership. Alliance Helper takes care
 
 ## Your Data Stays With You
 
-Alliance Helper is built around a simple principle: **your alliance's data lives in your own Google Sheet, not on our servers.** Power scores, growth snapshots, train history, participation logs, member rosters — all of it is written to the sheet *your alliance* shares with the bot, on the Google account *you* control. The bot orchestrates; you own the system of record.
+Alliance Helper is built around a simple principle: **your alliance's data lives in your own Google Sheet**, on the Google account *you* control. Power scores, growth snapshots, train history, participation logs, member rosters — all of it is written to the sheet *your alliance* shares with the bot. The bot helps to organize; you own the data.
 
-- **You own the data.** Your Sheet is canonical. The bot reads and writes; it doesn't keep its own copy of your alliance's data.
+- **You own the data.** The bot reads and writes; it doesn't keep its own copy of your alliance's data.
 - **Leaving doesn't trap you.** Revoke the bot's sheet access and you keep everything that matters — no export step, no migration request.
-- **Premium adds features, never lock-in.** Subscribing unlocks DMs, scheduled reminders, and roster sync — nothing about your data moves anywhere new.
+- **Premium adds features, it does not take away any data or lock you in to a plan.** Subscribing unlocks DMs, scheduled reminders, and roster sync — nothing about your data moves anywhere new.
 
-The bot's own SQLite database stores only operational config — wizard answers, channel/role IDs, schedule settings, draft state, premium status. That's the orchestration layer; the alliance data layer is your Sheet.
+The bot's own database stores only what it needs to do its job — wizard answers, channel/role IDs, schedule settings, draft state, premium status. The alliance data itself stays in your Sheet.
 
 ---
 

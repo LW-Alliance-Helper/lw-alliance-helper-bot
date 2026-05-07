@@ -72,7 +72,7 @@ WELCOME_DM = (
     "👋 Thanks for adding **LW Alliance Helper** to **{guild_name}**!\n\n"
     "**Your alliance's data stays with you.** Power scores, growth, train history, "
     "rosters — all of it lives in **your own Google Sheet**, on the Google account "
-    "you control. The bot orchestrates; you own the data.\n\n"
+    "you control. The bot helps to organize; you own the data.\n\n"
     "To get started, run **/setup** in your server's leadership channel. "
     "The wizard walks you through:\n"
     "• Member and leadership roles\n"
@@ -795,7 +795,7 @@ async def help_slash(interaction: discord.Interaction):
         description=(
             "All commands require the configured leadership role and must be used in the leadership channel.\n"
             "Run `/setup` first if you haven't configured the bot yet.\n\n"
-            "🗂️ **Your alliance's data lives in your own Google Sheet** — the bot orchestrates, "
+            "🗂️ **Your alliance's data lives in your own Google Sheet** — the bot helps to organize, "
             "you own the data. See [Privacy](https://lw-alliance-helper.github.io/privacy.html#where-your-data-lives) for details."
         ),
     )

@@ -19,10 +19,11 @@ from tests.constants import PREMIUM_TEST_GUILD_ID
 # ── Fixtures ──────────────────────────────────────────────────────────────────
 
 @pytest.fixture
-def fresh_premium(monkeypatch):
+def fresh_premium(monkeypatch, temp_db):
     """
     Re-import the premium module per-test so module-level env reads
-    (`PREMIUM_SKU_ID`) and the cache start clean.
+    (`PREMIUM_SKU_ID`) and the cache start clean. Composes `temp_db`
+    so `is_premium`'s assignment lookup hits a real (empty) table.
     """
     # Clear env so module-level reads default to None
     for var in ("PREMIUM_SKU_ID", "FORCE_PREMIUM", "PREMIUM_BYPASS_GUILD_IDS"):
@@ -38,7 +39,7 @@ def fresh_premium(monkeypatch):
 
 
 @pytest.fixture
-def fresh_premium_with_bypass(monkeypatch):
+def fresh_premium_with_bypass(monkeypatch, temp_db):
     """
     Like `fresh_premium`, but with `PREMIUM_TEST_GUILD_ID` pre-loaded
     into the `PREMIUM_BYPASS_GUILD_IDS` env var so it resolves as
@@ -59,12 +60,16 @@ def fresh_premium_with_bypass(monkeypatch):
 
 
 @pytest.fixture(autouse=True)
-def _isolate_premium_env(monkeypatch):
+def _isolate_premium_env(monkeypatch, temp_db):
     """
     Autouse isolation: clear premium env vars at both SETUP and teardown so
     these tests are unaffected by the outer-process FORCE_PREMIUM=1 lane (CI
     runs the suite twice, once with FORCE_PREMIUM unset and once with it
     set). Each test in this file must drive premium state explicitly.
+
+    Composes `temp_db` because `is_premium`'s assignment-layer lookup hits
+    the `premium_assignments` table — without it, every cache-miss would
+    raise a "no such table" OperationalError.
     """
     for var in ("PREMIUM_SKU_ID", "FORCE_PREMIUM", "PREMIUM_BYPASS_GUILD_IDS"):
         monkeypatch.delenv(var, raising=False)
@@ -148,93 +153,111 @@ class TestAlwaysPremiumShortCircuits:
             _premium.clear_cache()
 
 
-# ── Entitlement check via interaction ─────────────────────────────────────────
+# ── Assignment-layered is_premium flow ────────────────────────────────────────
+#
+# After issue #41 (User Subscription + assignment layer), `is_premium`
+# resolution is:
+#   FORCE_PREMIUM / bypass guilds → True
+#   else → look up assigned user → user_has_active_subscription(...)
+# Interaction-level entitlements no longer participate as a cheap path.
 
-class TestInteractionEntitlements:
+class TestAssignmentLayeredIsPremium:
 
     @pytest.mark.asyncio
-    async def test_no_sku_means_interaction_check_skipped(self, fresh_premium):
-        """Without PREMIUM_SKU_ID, even a matching interaction entitlement is ignored."""
-        interaction = MagicMock()
-        interaction.entitlements = [_make_entitlement(sku_id=12345)]
-        assert await fresh_premium.is_premium(TEST_GUILD_ID, interaction=interaction) is False
+    async def test_no_assignment_means_not_premium(self, fresh_premium):
+        """Empty assignment table → no guild is premium even with SKU set."""
+        assert await fresh_premium.is_premium(TEST_GUILD_ID) is False
 
     @pytest.mark.asyncio
-    async def test_matching_entitlement_grants_premium(self, monkeypatch):
+    async def test_assigned_user_with_active_sub_grants_premium(self, monkeypatch):
+        monkeypatch.setenv("PREMIUM_SKU_ID", "12345")
+        import premium as _premium
+        importlib.reload(_premium)
+        try:
+            user_id = 555000111
+            _premium.assign(user_id, TEST_GUILD_ID)
+
+            async def fake_iter(**kw):
+                yield _make_entitlement(sku_id=12345)
+
+            bot = MagicMock()
+            bot.entitlements = MagicMock(side_effect=lambda **kw: fake_iter(**kw))
+
+            assert await _premium.is_premium(TEST_GUILD_ID, bot=bot) is True
+
+            # Verify the bot.entitlements call used the assigned user, not
+            # the guild — the per-user lookup is the new contract.
+            _, call_kwargs = bot.entitlements.call_args
+            assert "user" in call_kwargs
+
+            # discord.py signature guard — bind kwargs against real signature.
+            import inspect
+            import discord
+            sig = inspect.signature(discord.Client.entitlements)
+            sig.bind_partial(bot, **call_kwargs)
+        finally:
+            _premium.clear_cache()
+
+    @pytest.mark.asyncio
+    async def test_assigned_user_without_active_sub_means_not_premium(self, monkeypatch):
+        """Assignment row exists but Discord says no entitlement (lapsed
+        sub) → guild reverts to free."""
+        monkeypatch.setenv("PREMIUM_SKU_ID", "12345")
+        import premium as _premium
+        importlib.reload(_premium)
+        try:
+            _premium.assign(555000111, TEST_GUILD_ID)
+
+            async def fake_iter(**kw):
+                if False:
+                    yield  # empty — sub lapsed
+                return
+
+            bot = MagicMock()
+            bot.entitlements = MagicMock(side_effect=lambda **kw: fake_iter(**kw))
+
+            assert await _premium.is_premium(TEST_GUILD_ID, bot=bot) is False
+        finally:
+            _premium.clear_cache()
+
+    @pytest.mark.asyncio
+    async def test_interaction_entitlements_no_longer_grant_premium(self, monkeypatch):
+        """User Subscription SKU: an interaction's entitlements reflect the
+        interaction user, not necessarily the guild's assigned subscriber.
+        The interaction path is no longer a cheap-positive — only the
+        assignment layer + bot-side lookup count."""
         monkeypatch.setenv("PREMIUM_SKU_ID", "12345")
         import premium as _premium
         importlib.reload(_premium)
         try:
             interaction = MagicMock()
             interaction.entitlements = [_make_entitlement(sku_id=12345)]
-            assert await _premium.is_premium(TEST_GUILD_ID, interaction=interaction) is True
-        finally:
-            _premium.clear_cache()
-
-    @pytest.mark.asyncio
-    async def test_deleted_entitlement_does_not_grant_premium(self, monkeypatch):
-        monkeypatch.setenv("PREMIUM_SKU_ID", "12345")
-        import premium as _premium
-        importlib.reload(_premium)
-        try:
-            interaction = MagicMock()
-            interaction.entitlements = [_make_entitlement(sku_id=12345, deleted=True)]
+            # No assignment for this guild → not premium, even with a
+            # matching entitlement on the interaction.
             assert await _premium.is_premium(TEST_GUILD_ID, interaction=interaction) is False
         finally:
             _premium.clear_cache()
 
     @pytest.mark.asyncio
-    async def test_wrong_sku_does_not_grant_premium(self, monkeypatch):
-        monkeypatch.setenv("PREMIUM_SKU_ID", "12345")
-        import premium as _premium
-        importlib.reload(_premium)
-        try:
-            interaction = MagicMock()
-            interaction.entitlements = [_make_entitlement(sku_id=99999)]
-            assert await _premium.is_premium(TEST_GUILD_ID, interaction=interaction) is False
-        finally:
-            _premium.clear_cache()
+    async def test_no_sku_means_not_premium_even_with_assignment(self, fresh_premium):
+        """Without PREMIUM_SKU_ID, user_has_active_subscription returns
+        False, so the assigned guild can't resolve premium."""
+        fresh_premium.assign(555000111, TEST_GUILD_ID)
+        bot = MagicMock()
+        assert await fresh_premium.is_premium(TEST_GUILD_ID, bot=bot) is False
 
 
-# ── Bot-API fallback + caching ────────────────────────────────────────────────
+# ── Caching of is_premium / user-subscription ────────────────────────────────
 
-class TestBotEntitlementsFallback:
+class TestPremiumCaching:
 
     @pytest.mark.asyncio
-    async def test_bot_lookup_called_when_no_interaction(self, monkeypatch):
+    async def test_repeated_is_premium_only_calls_discord_once(self, monkeypatch):
         monkeypatch.setenv("PREMIUM_SKU_ID", "12345")
         import premium as _premium
         importlib.reload(_premium)
         try:
-            async def fake_iter(**kw):
-                yield _make_entitlement(sku_id=12345)
-
-            bot = MagicMock()
-            bot.entitlements = MagicMock(side_effect=lambda **kw: fake_iter(**kw))
-
-            result = await _premium.is_premium(TEST_GUILD_ID, bot=bot)
-            assert result is True
-            assert bot.entitlements.called
-
-            # Guard against the discord.py signature drifting out from under us:
-            # `Client.entitlements` takes `skus=`, not `sku_ids=`. Binding our
-            # actual kwargs against the real signature makes a typo here a
-            # test-time failure instead of a silent runtime fall-through to
-            # "not premium" in background tasks.
-            import inspect
-            import discord
-            sig = inspect.signature(discord.Client.entitlements)
-            _, call_kwargs = bot.entitlements.call_args
-            sig.bind_partial(bot, **call_kwargs)
-        finally:
-            _premium.clear_cache()
-
-    @pytest.mark.asyncio
-    async def test_bot_lookup_caches_result_and_skips_second_call(self, monkeypatch):
-        monkeypatch.setenv("PREMIUM_SKU_ID", "12345")
-        import premium as _premium
-        importlib.reload(_premium)
-        try:
+            _premium.assign(555000111, TEST_GUILD_ID)
             call_count = {"n": 0}
 
             async def fake_iter(**kw):
@@ -248,22 +271,21 @@ class TestBotEntitlementsFallback:
             await _premium.is_premium(TEST_GUILD_ID, bot=bot)
             await _premium.is_premium(TEST_GUILD_ID, bot=bot)
 
-            # Only one fetch — subsequent calls served from cache.
             assert call_count["n"] == 1
         finally:
             _premium.clear_cache()
 
     @pytest.mark.asyncio
-    async def test_bot_lookup_negative_result_also_cached(self, monkeypatch):
+    async def test_negative_result_also_cached(self, monkeypatch):
         monkeypatch.setenv("PREMIUM_SKU_ID", "12345")
         import premium as _premium
         importlib.reload(_premium)
         try:
+            _premium.assign(555000111, TEST_GUILD_ID)
             call_count = {"n": 0}
 
             async def fake_iter(**kw):
                 call_count["n"] += 1
-                # No matching entitlement — empty iterator.
                 if False:
                     yield
                 return
@@ -278,20 +300,26 @@ class TestBotEntitlementsFallback:
             _premium.clear_cache()
 
     @pytest.mark.asyncio
-    async def test_bot_lookup_swallows_api_errors(self, monkeypatch):
+    async def test_api_errors_are_swallowed_and_not_cached(self, monkeypatch):
         monkeypatch.setenv("PREMIUM_SKU_ID", "12345")
         import premium as _premium
         importlib.reload(_premium)
         try:
+            _premium.assign(555000111, TEST_GUILD_ID)
+            call_count = {"n": 0}
+
             async def fake_iter(**kw):
+                call_count["n"] += 1
                 raise RuntimeError("Discord API down")
                 yield  # unreachable
 
             bot = MagicMock()
             bot.entitlements = MagicMock(side_effect=lambda **kw: fake_iter(**kw))
 
-            # Should default to False, not raise.
             assert await _premium.is_premium(TEST_GUILD_ID, bot=bot) is False
+            # Second call should retry, not be cache-locked at False.
+            assert await _premium.is_premium(TEST_GUILD_ID, bot=bot) is False
+            assert call_count["n"] == 2
         finally:
             _premium.clear_cache()
 

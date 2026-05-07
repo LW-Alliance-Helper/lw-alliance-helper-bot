@@ -62,7 +62,9 @@ Alliance Helper is **free to use at the base level** for every alliance — ever
 
 **How to subscribe**
 
-Run **`/upgrade`** in your leadership channel to open Discord's subscription dialog. Discord handles all billing — the bot is updated automatically the moment a subscription becomes active, no waiting period. Cancellations through Discord deactivate premium features at the end of the billing cycle (your saved data, including extra templates, is **kept** so you can resume any time).
+Run **`/upgrade`** in the leadership channel of the alliance you want Premium in. Discord handles billing; the bot pins your subscription to that server automatically once checkout completes.
+
+A subscription is **per-user** and applies to **one server at a time** — if you're in multiple alliance Discords, your $4.99/mo unlocks Premium in just the one you've assigned it to. Use `/premium_assign` from a different alliance to move it, `/premium_status` to see where it's currently active, or `/premium_unassign` to release the pin without canceling the subscription. Cancellations through Discord deactivate premium features at the end of the billing cycle; your saved data (and your assignment) is **kept** so you can resume any time.
 
 If you'd like to support the bot without subscribing, **`/donate`** shows tip-jar links — 100% optional.
 

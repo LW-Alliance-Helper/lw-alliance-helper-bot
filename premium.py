@@ -1,13 +1,23 @@
 """
 premium.py — Premium tier entitlement checks, feature limits, and UX helpers.
 
-The bot has two tiers: free and premium. Premium is sold via Discord App
-Subscriptions (SKU configured in the Discord Developer Portal). Entitlements
-are read from `interaction.entitlements` when an interaction is available
-(zero-cost) and from `bot.entitlements()` otherwise (cached for 5 minutes).
+The bot has two tiers: free and premium. Premium is sold via a Discord App
+**User Subscription** (SKU configured in the Discord Developer Portal). A
+User Subscription is valid in every guild the subscriber shares with the
+bot, which is not the licensing model — the intent is one $4.99/mo per
+*guild*, with the subscriber able to move their license between guilds.
+
+To enforce that, the bot maintains an assignment layer (`premium_assignments`
+table; see `config.py`):
+  - One subscriber → one assigned guild.
+  - `is_premium(guild_id)` first looks up the assigned user, then verifies
+    that user still has an active Discord subscription. The cached result
+    (5-minute TTL, keyed by guild_id) absorbs the cost of the per-user
+    `bot.entitlements()` lookup.
 
 For development and bypass scenarios (e.g. the bot owner's home alliance),
-two env-var overrides are available:
+two env-var overrides are available and short-circuit before the
+assignment check:
   - `FORCE_PREMIUM=1`             — flags every guild as premium (dev nuke)
   - `PREMIUM_BYPASS_GUILD_IDS`    — comma-separated guild ids that always
                                     resolve to premium (no subscription
@@ -18,8 +28,13 @@ two env-var overrides are available:
 
 Public API:
   - `is_premium(guild_id, interaction=None, bot=None)` → bool
-  - `get_limit(feature, guild_id, ...)`               → int | None  (None = unlimited)
-  - `is_premium_feature(name)`                        → bool        (declarative whitelist)
+  - `user_has_active_subscription(user_id, bot)`       → bool
+  - `get_assigned_guild(user_id)`                      → int | None
+  - `get_assigned_user(guild_id)`                      → int | None
+  - `assign(user_id, guild_id)`                        → int | None  (prior user displaced)
+  - `unassign(user_id)`                                → int | None  (guild freed)
+  - `get_limit(feature, guild_id, ...)`                → int | None  (None = unlimited)
+  - `is_premium_feature(name)`                         → bool        (declarative whitelist)
   - `limit_reached_embed(...)`, `premium_locked_embed(...)`, `upgrade_view(...)`
 """
 
@@ -47,6 +62,7 @@ PREMIUM_SKU_ID: Optional[int] = (
 # regression introduced by a deploy.
 _warned_no_sku = False
 _warned_no_bot = False
+_warned_no_assignment_table = False
 
 # Per-feature limits. None means unlimited.
 LIMITS: dict[str, dict[str, Optional[int]]] = {
@@ -83,6 +99,12 @@ PREMIUM_FEATURES: set[str] = {
 
 _CACHE_TTL_SECONDS = 300  # 5 minutes
 _entitlement_cache: dict[int, tuple[bool, float]] = {}
+# Per-user subscription cache. Discord's User Subscription SKU returns the
+# same answer regardless of which guild we're querying for, so caching by
+# user_id avoids re-fetching when the same subscriber is checked across
+# multiple guilds (or when /premium_status and /premium_assign run in quick
+# succession).
+_user_subscription_cache: dict[int, tuple[bool, float]] = {}
 
 
 def _cache_get(guild_id: int) -> Optional[bool]:
@@ -99,9 +121,32 @@ def _cache_set(guild_id: int, value: bool) -> None:
     _entitlement_cache[guild_id] = (value, time.time())
 
 
+def _cache_invalidate_guild(guild_id: int) -> None:
+    _entitlement_cache.pop(guild_id, None)
+
+
+def _user_cache_get(user_id: int) -> Optional[bool]:
+    entry = _user_subscription_cache.get(user_id)
+    if entry is None:
+        return None
+    value, ts = entry
+    if time.time() - ts >= _CACHE_TTL_SECONDS:
+        return None
+    return value
+
+
+def _user_cache_set(user_id: int, value: bool) -> None:
+    _user_subscription_cache[user_id] = (value, time.time())
+
+
+def _user_cache_invalidate(user_id: int) -> None:
+    _user_subscription_cache.pop(user_id, None)
+
+
 def clear_cache() -> None:
-    """Reset the entitlement cache. Useful in tests."""
+    """Reset the entitlement caches. Useful in tests."""
     _entitlement_cache.clear()
+    _user_subscription_cache.clear()
 
 
 # ── Env-driven dev overrides ──────────────────────────────────────────────────
@@ -126,7 +171,130 @@ def _bypass_guild_ids() -> set[int]:
     return out
 
 
+# ── Assignment layer (thin wrappers around config helpers) ────────────────────
+#
+# These are the single entry points premium-aware code should use. Cache
+# invalidation lives here so callers don't have to remember which guilds
+# need clearing on each operation.
+
+def get_assigned_guild(user_id: int) -> Optional[int]:
+    """Return the guild_id this user has pinned their license to, or None."""
+    from config import get_premium_assignment_for_user
+    return get_premium_assignment_for_user(user_id)
+
+
+def get_assigned_user(guild_id: int) -> Optional[int]:
+    """Return the user_id assigned to this guild, or None."""
+    from config import get_premium_assignment_for_guild
+    return get_premium_assignment_for_guild(guild_id)
+
+
+def assign(user_id: int, guild_id: int) -> Optional[int]:
+    """Pin this user's license to `guild_id`. Invalidates the premium cache
+    for the old guild (if any) and the new guild. Returns the user_id of a
+    prior subscriber whose claim on this guild was displaced, or None.
+    """
+    from config import (
+        get_premium_assignment_for_user,
+        set_premium_assignment,
+    )
+    prior_guild = get_premium_assignment_for_user(user_id)
+    displaced_user = set_premium_assignment(user_id, guild_id)
+    if prior_guild is not None:
+        _cache_invalidate_guild(prior_guild)
+    _cache_invalidate_guild(guild_id)
+    _user_cache_invalidate(user_id)
+    return displaced_user
+
+
+def unassign(user_id: int) -> Optional[int]:
+    """Remove this user's assignment. Invalidates the premium cache for
+    the freed guild. Returns the guild_id that was freed, or None.
+    """
+    from config import remove_premium_assignment
+    freed_guild = remove_premium_assignment(user_id)
+    if freed_guild is not None:
+        _cache_invalidate_guild(freed_guild)
+    _user_cache_invalidate(user_id)
+    return freed_guild
+
+
+def invalidate_for_user(user_id: int) -> None:
+    """Drop cached state for a user (per-user subscription cache + the
+    per-guild premium cache for the guild they're assigned to, if any).
+    Call this from `on_entitlement_create` / `on_entitlement_delete`
+    listeners so the next `is_premium` read picks up the fresh state.
+    """
+    from config import get_premium_assignment_for_user
+    _user_cache_invalidate(user_id)
+    assigned = get_premium_assignment_for_user(user_id)
+    if assigned is not None:
+        _cache_invalidate_guild(assigned)
+
+
 # ── Public API ────────────────────────────────────────────────────────────────
+
+async def user_has_active_subscription(
+    user_id: int,
+    bot: Optional[discord.Client] = None,
+) -> bool:
+    """Return True if this Discord user has an active Premium entitlement.
+
+    Cached per-user with the same TTL as the per-guild cache. Returns
+    False if `PREMIUM_SKU_ID` is unset, the bot instance is missing, or
+    the API lookup raises — in the last case the failure is intentionally
+    not cached so the next call retries (see `_lookup_user_subscription`).
+    """
+    result = await _lookup_user_subscription(user_id, bot=bot)
+    return bool(result)
+
+
+async def _lookup_user_subscription(
+    user_id: int,
+    bot: Optional[discord.Client] = None,
+) -> Optional[bool]:
+    """Internal: return True/False on a definitive answer, None on a
+    transient lookup failure. `is_premium` uses None to skip writing the
+    guild-level cache so a one-off Discord API error doesn't lock a
+    paying customer out of premium for the full 5-minute TTL.
+    """
+    cached = _user_cache_get(user_id)
+    if cached is not None:
+        return cached
+
+    if PREMIUM_SKU_ID is None:
+        global _warned_no_sku
+        if not _warned_no_sku:
+            print("[PREMIUM] PREMIUM_SKU_ID env var is not set — every guild "
+                  "will resolve to free tier. Subscriptions cannot be detected "
+                  "until this is configured.")
+            _warned_no_sku = True
+        return False
+    if bot is None:
+        global _warned_no_bot
+        if not _warned_no_bot:
+            print(f"[PREMIUM] user_has_active_subscription called without a "
+                  f"bot instance (user={user_id}); falling back to free "
+                  f"tier. Callers in background loops must pass bot=...")
+            _warned_no_bot = True
+        return False
+
+    try:
+        async for ent in bot.entitlements(
+            user=discord.Object(id=user_id),
+            skus=[discord.Object(id=PREMIUM_SKU_ID)],
+            exclude_ended=True,
+        ):
+            if _entitlement_matches(ent):
+                _user_cache_set(user_id, True)
+                return True
+    except Exception as exc:
+        print(f"[PREMIUM] Failed to fetch entitlements for user {user_id}: {exc}")
+        return None  # transient — let the next call retry
+
+    _user_cache_set(user_id, False)
+    return False
+
 
 async def is_premium(
     guild_id: int,
@@ -138,67 +306,51 @@ async def is_premium(
     Resolution order (first hit wins):
       1. `FORCE_PREMIUM` env var → True for everyone.
       2. `PREMIUM_BYPASS_GUILD_IDS` env var → True if guild_id is in the set.
-      3. `interaction.entitlements` if an interaction is supplied → True if a
-         non-deleted entitlement matches PREMIUM_SKU_ID.
-      4. Cached prior lookup (5-minute TTL).
-      5. `bot.entitlements()` API call → True if a non-ended entitlement
-         matches PREMIUM_SKU_ID. Result cached.
-      6. Otherwise False.
+      3. Cached prior lookup (5-minute TTL).
+      4. Look up the assigned user for this guild. No assignment → False.
+      5. Verify the assigned user's Discord subscription is still active.
+         Result cached.
+
+    `interaction` is accepted for backwards compatibility but no longer
+    used as a cheap path: with a User Subscription SKU, the interaction
+    user may not be the assigned subscriber (a different user could be
+    keeping this guild premium).
     """
     if _force_premium_enabled():
         return True
     if guild_id in _bypass_guild_ids():
         return True
 
-    # Cheap path: the interaction already carries entitlements.
-    if interaction is not None and PREMIUM_SKU_ID is not None:
-        for ent in getattr(interaction, "entitlements", []) or []:
-            if _entitlement_matches(ent):
-                _cache_set(guild_id, True)
-                return True
-
-    # Cache hit — avoid an API call.
     cached = _cache_get(guild_id)
     if cached is not None:
         return cached
 
-    # Cache miss — query Discord. Skipped silently if no SKU configured
-    # or no bot instance available. Both branches log once per process so
-    # a missing env var or wiring regression surfaces in Railway instead
-    # of silently flipping every guild back to the free tier.
-    if PREMIUM_SKU_ID is None:
-        global _warned_no_sku
-        if not _warned_no_sku:
-            print("[PREMIUM] PREMIUM_SKU_ID env var is not set — every guild "
-                  "will resolve to free tier. Subscriptions cannot be detected "
-                  "until this is configured.")
-            _warned_no_sku = True
-        _cache_set(guild_id, False)
-        return False
-    if bot is None:
-        global _warned_no_bot
-        if not _warned_no_bot:
-            print(f"[PREMIUM] is_premium called without a bot instance "
-                  f"(guild={guild_id}); falling back to free tier. Callers "
-                  f"in background loops must pass bot=...")
-            _warned_no_bot = True
-        _cache_set(guild_id, False)
-        return False
-
+    from config import get_premium_assignment_for_guild
     try:
-        async for ent in bot.entitlements(
-            guild=discord.Object(id=guild_id),
-            skus=[discord.Object(id=PREMIUM_SKU_ID)],
-            exclude_ended=True,
-        ):
-            if _entitlement_matches(ent):
-                _cache_set(guild_id, True)
-                return True
+        assigned_user = get_premium_assignment_for_guild(guild_id)
     except Exception as exc:
-        print(f"[PREMIUM] Failed to fetch entitlements for guild {guild_id}: {exc}")
+        # Defensive: if init_db hasn't run yet (or the schema is older
+        # than this code, or the file is locked), treat the lookup as
+        # "no assignment" rather than crashing the caller. Logged once
+        # per process via the warn flag below.
+        global _warned_no_assignment_table
+        if not _warned_no_assignment_table:
+            print(f"[PREMIUM] Failed to read premium_assignments "
+                  f"(guild={guild_id}): {exc}. Falling back to free tier "
+                  f"for now; this should self-heal once the table exists.")
+            _warned_no_assignment_table = True
+        return False
+    if assigned_user is None:
+        _cache_set(guild_id, False)
+        return False
 
-    _cache_set(guild_id, False)
-    return False
+    result = await _lookup_user_subscription(assigned_user, bot=bot)
+    if result is None:
+        # Transient API error — don't cache False or we'd lock the
+        # subscriber out for the full 5-minute TTL.
+        return False
+    _cache_set(guild_id, result)
+    return result
 
 
 def _entitlement_matches(ent) -> bool:

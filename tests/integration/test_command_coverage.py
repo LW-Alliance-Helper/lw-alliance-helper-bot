@@ -70,6 +70,7 @@ EXPECTED_COG_COMMANDS = {
     },
     "DonateCog": {
         "donate", "upgrade",
+        "premium_assign", "premium_status", "premium_unassign",
     },
 }
 

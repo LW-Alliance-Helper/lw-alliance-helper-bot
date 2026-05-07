@@ -1503,7 +1503,9 @@ async def run_setup(interaction: discord.Interaction, bot):
     is_premium_flag = await premium.is_premium(guild_id, interaction=interaction)
     await channel.send(
         "**Step 3 of 6 — Leadership Channel**\n"
-        "Select the private channel where leadership commands will be used:"
+        "Pick the channel where I should post drafts, reminders, and approvals "
+        "by default. Individual features (events, train reminders, etc.) can "
+        "override this with their own channel later."
     )
     v = ChannelSelectStep(
         "Select leadership channel...",

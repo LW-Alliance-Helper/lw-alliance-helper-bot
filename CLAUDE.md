@@ -19,8 +19,10 @@ repo `../lw-alliance-helper.github.io` (the website) has its own
   the active `release/X.Y.Z` with a merge commit; the release branch
   is eventually PR'd into `main`. Railway deploys from `main`, so
   merging to main *is* the release. Delete feature branches after
-  merge to release; **keep** release branches as history. See
-  `feedback_release_workflow_bot.md` in Memory for the full rule.
+  merge to release; delete release branches after they merge to
+  `main` — the GitHub Release tagged on the merge commit is the
+  historical record. See `feedback_release_workflow_bot.md` in
+  Memory for the full rule.
 - **Dev branch for major-change staging.** A long-lived `dev` branch
   backs a separate Railway service + separate Discord app for real
   end-to-end testing of high-blast-radius features (schema
@@ -60,9 +62,9 @@ repo `../lw-alliance-helper.github.io` (the website) has its own
 - **Never amend** — always make a new commit, even after pre-commit
   hook failures.
 - **Never `push --force` to main**, never `reset --hard`, never delete
-  branches without confirming. Release branches are preserved as
-  history; feature branches are deleted only after their merge into
-  release.
+  branches without confirming. Feature branches are deleted after
+  merging into release; release branches are deleted after merging
+  into main.
 - **Companion repo `../lw-alliance-helper.github.io`** (the website)
   keeps the older direct-to-main rule — push commits straight to
   `main` there.

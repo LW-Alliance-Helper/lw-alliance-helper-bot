@@ -551,6 +551,69 @@ def get_spreadsheet(guild_id: int = None):
     return gc.open_by_key(sheet_id)
 
 
+def describe_sheet_error(e: Exception, *,
+                         guild_id=None, tab: str = None) -> str:
+    """Render a gspread exception as a one-line diagnostic for logging.
+
+    Distinguishes worksheet-tab-missing from spreadsheet 404 / 403 / 429,
+    so the log line answers 'what should I check?' without the original
+    exception. Falls back to `type(e).__name__: e` for non-gspread errors.
+    """
+    import gspread
+
+    parts = []
+    if guild_id is not None:
+        parts.append(f"guild={guild_id}")
+    suffix = f" ({', '.join(parts)})" if parts else ""
+
+    if isinstance(e, gspread.exceptions.WorksheetNotFound):
+        # gspread sets str(e) = the missing tab name; prefer that since
+        # it's authoritative, with the caller-supplied tab as a fallback
+        # for cases where str(e) is empty.
+        wanted = str(e) or tab or "?"
+        return (
+            f"worksheet tab '{wanted}' not found in spreadsheet — "
+            f"check the tab name in /setup or rename the tab to match"
+            f"{suffix}"
+        )
+
+    if isinstance(e, gspread.exceptions.SpreadsheetNotFound):
+        return (
+            f"spreadsheet not found — was it deleted, or is the ID wrong "
+            f"in /setup?{suffix}"
+        )
+
+    if isinstance(e, gspread.exceptions.APIError):
+        status = None
+        reason = None
+        resp = getattr(e, "response", None)
+        if resp is not None:
+            status = getattr(resp, "status_code", None)
+            try:
+                reason = resp.json().get("error", {}).get("message")
+            except Exception:
+                reason = None
+        status = status or getattr(e, "code", None)
+        if status == 404:
+            return (
+                f"spreadsheet 404 — deleted or inaccessible to the bot's "
+                f"service account{suffix}"
+            )
+        if status == 403:
+            return (
+                f"spreadsheet 403 — share it with the bot's service account "
+                f"as Editor{suffix}"
+            )
+        if status == 429:
+            return f"sheets API rate-limited (429){suffix}"
+        if status:
+            msg = f": {reason}" if reason else ""
+            return f"sheets API error HTTP {status}{msg}{suffix}"
+        return f"sheets API error{suffix}: {e!r}"
+
+    return f"{type(e).__name__}: {e}{suffix}"
+
+
 def is_setup_complete(guild_id: int) -> bool:
     """Check if a guild has completed setup."""
     cfg = get_config(guild_id)

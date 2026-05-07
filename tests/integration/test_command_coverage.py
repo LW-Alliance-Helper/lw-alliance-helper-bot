@@ -504,17 +504,34 @@ class TestCancelCommand:
 
 # ── /help — module-level command in bot.py ────────────────────────────────────
 
+# Discord's hard cap on combined embed text (title + description + footer +
+# every field name and value). Any single embed that exceeds this fails the
+# slash-command call with HTTP 400 (50035) — which is exactly the regression
+# this assertion guards against.
+DISCORD_EMBED_CHAR_LIMIT = 6000
+
+
+def _embed_total_chars(embed) -> int:
+    parts = [embed.title or "", embed.description or ""]
+    if embed.footer and embed.footer.text:
+        parts.append(embed.footer.text)
+    for f in embed.fields:
+        parts.append(f.name or "")
+        parts.append(f.value or "")
+    return sum(len(p) for p in parts)
+
+
 class TestHelpCommand:
 
     @pytest.mark.asyncio
-    async def test_help_replies_with_embed(self, seeded_db):
-        """`/help` from bot.py should always succeed and return an embed
-        listing every section."""
+    async def test_help_replies_with_overview_embed_and_view(self, seeded_db):
+        """`/help` should reply with the overview embed + a HelpView with
+        a category dropdown."""
         import bot as bot_module
         import premium
+        from help_content import HelpView
         premium.clear_cache()
 
-        # /help is registered as a Command on bot.tree. Pull it by name.
         help_cmd = bot_module.bot.tree.get_command("help")
         assert help_cmd is not None, "bot.tree has no /help command"
 
@@ -523,6 +540,61 @@ class TestHelpCommand:
 
         await help_cmd.callback(interaction)
 
-        _, embed = _last_message(interaction)
+        # send_message was called with embed= and view= — pull both.
+        send = interaction.response.send_message
+        assert send.called, "/help should call response.send_message"
+        kwargs = send.call_args.kwargs
+        embed = kwargs.get("embed")
+        view = kwargs.get("view")
         assert embed is not None, "/help should reply with an embed"
         assert "Commands" in (embed.title or "")
+        assert isinstance(view, HelpView), "/help should attach a HelpView"
+        assert _embed_total_chars(embed) < DISCORD_EMBED_CHAR_LIMIT
+
+    def test_every_category_embed_fits_discord_limit(self):
+        """Every category embed (free + premium tier) must stay under the
+        6000-char cap so a future content edit can't silently break /help."""
+        from help_content import HELP_CATEGORIES, build_category_embed, build_overview_embed
+
+        for is_premium in (False, True):
+            overview = build_overview_embed(is_premium)
+            assert _embed_total_chars(overview) < DISCORD_EMBED_CHAR_LIMIT, (
+                f"Overview embed exceeds {DISCORD_EMBED_CHAR_LIMIT} "
+                f"(is_premium={is_premium})"
+            )
+            for cat_id in HELP_CATEGORIES:
+                embed = build_category_embed(cat_id, is_premium)
+                size = _embed_total_chars(embed)
+                assert size < DISCORD_EMBED_CHAR_LIMIT, (
+                    f"Category '{cat_id}' embed is {size} chars "
+                    f"(is_premium={is_premium}); Discord limit is {DISCORD_EMBED_CHAR_LIMIT}"
+                )
+
+    @pytest.mark.asyncio
+    async def test_help_dropdown_swaps_in_category_embed(self, seeded_db):
+        """Selecting a category in the dropdown should edit the message
+        with the category embed."""
+        from unittest.mock import AsyncMock, MagicMock, PropertyMock, patch
+        from help_content import HelpView, HELP_CATEGORIES
+
+        view = HelpView(is_premium=False, origin=None)
+        select = view.children[0]
+
+        # Pick the first real category (not the Overview sentinel).
+        first_cat = next(iter(HELP_CATEGORIES))
+
+        select_interaction = MagicMock()
+        select_interaction.response = MagicMock()
+        select_interaction.response.edit_message = AsyncMock()
+
+        # Select.values is a read-only property; patch at the class.
+        with patch.object(type(select), "values",
+                          new_callable=PropertyMock) as mock_values:
+            mock_values.return_value = [first_cat]
+            await select.callback(select_interaction)
+
+        select_interaction.response.edit_message.assert_called_once()
+        kwargs = select_interaction.response.edit_message.call_args.kwargs
+        embed = kwargs.get("embed")
+        assert embed is not None
+        assert HELP_CATEGORIES[first_cat]["label"] in (embed.title or "")

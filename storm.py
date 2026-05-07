@@ -107,7 +107,11 @@ def load_ds_assignments(team: str, guild_id: int = None) -> tuple[dict, list]:
             return dict(default_zones), list(default_subs)
 
     except Exception as e:
-        print(f"[STORM] Error loading Team {team} assignments: {e}")
+        from config import describe_sheet_error
+        print(
+            f"[STORM] Error loading Team {team} assignments: "
+            f"{describe_sheet_error(e, guild_id=guild_id, tab='DS Assignments')}"
+        )
         default_zones, default_subs = DEFAULTS[team]
         return dict(default_zones), list(default_subs)
 
@@ -160,7 +164,11 @@ def save_ds_assignments(team: str, zones: dict, subs: list,
         print(f"[STORM] Team {team} assignments saved ({len(zones)} zones, {len(subs)} sub pairs)")
 
     except Exception as e:
-        print(f"[STORM] Error saving Team {team} assignments: {e}")
+        from config import describe_sheet_error
+        print(
+            f"[STORM] Error saving Team {team} assignments: "
+            f"{describe_sheet_error(e, guild_id=guild_id, tab='DS Assignments')}"
+        )
 
 
 # ── Template builder & parser ──────────────────────────────────────────────────
@@ -858,7 +866,11 @@ def load_cs_assignments(team: str, guild_id: int = None) -> dict:
             print(f"[STORM] No saved CS Team {team} assignments — using defaults")
             return dict(CS_DEFAULTS[team])
     except Exception as e:
-        print(f"[STORM] Error loading CS Team {team} assignments: {e}")
+        from config import describe_sheet_error
+        print(
+            f"[STORM] Error loading CS Team {team} assignments: "
+            f"{describe_sheet_error(e, guild_id=guild_id, tab='DS Assignments')}"
+        )
         return dict(CS_DEFAULTS[team])
 
 
@@ -899,7 +911,11 @@ def save_cs_assignments(team: str, zones: dict, guild_id: int = None):
         ws.update("A1", rows, value_input_option="USER_ENTERED")
         print(f"[STORM] CS Team {team} assignments saved ({len(zones)} zones)")
     except Exception as e:
-        print(f"[STORM] Error saving CS Team {team} assignments: {e}")
+        from config import describe_sheet_error
+        print(
+            f"[STORM] Error saving CS Team {team} assignments: "
+            f"{describe_sheet_error(e, guild_id=guild_id, tab='DS Assignments')}"
+        )
 
 
 # ── CS Template builder & parser ───────────────────────────────────────────────

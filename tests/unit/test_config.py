@@ -321,3 +321,58 @@ class TestGuildEvents:
         config.save_guild_event(guild_a, event)
         assert config.get_guild_events(TEST_GUILD_ID) == []
         assert len(config.get_guild_events(guild_a))  == 1
+
+
+class TestDescribeSheetError:
+    """describe_sheet_error should turn opaque gspread exceptions into
+    one-line diagnostics that name the actual failure."""
+
+    def test_worksheet_not_found_includes_tab_name(self):
+        import gspread
+        import config
+        # gspread sets str(e) = the missing tab name
+        e = gspread.exceptions.WorksheetNotFound("Train Schedule")
+        msg = config.describe_sheet_error(e, guild_id=12345, tab="fallback")
+        assert "Train Schedule" in msg
+        assert "guild=12345" in msg
+        assert "tab" in msg.lower()
+
+    def test_worksheet_not_found_falls_back_to_caller_tab(self):
+        import gspread
+        import config
+        # Empty exception message — fall back to caller-supplied tab
+        e = gspread.exceptions.WorksheetNotFound("")
+        msg = config.describe_sheet_error(e, guild_id=99, tab="DS Assignments")
+        assert "DS Assignments" in msg
+
+    def test_api_error_404_says_deleted(self):
+        import gspread
+        import config
+        from unittest.mock import MagicMock
+        resp = MagicMock()
+        resp.status_code = 404
+        resp.json.return_value = {}
+        e = gspread.exceptions.APIError(resp)
+        msg = config.describe_sheet_error(e, guild_id=42)
+        assert "404" in msg
+        assert "deleted" in msg.lower() or "inaccessible" in msg.lower()
+        assert "guild=42" in msg
+
+    def test_api_error_403_says_permission(self):
+        import gspread
+        import config
+        from unittest.mock import MagicMock
+        resp = MagicMock()
+        resp.status_code = 403
+        resp.json.return_value = {}
+        e = gspread.exceptions.APIError(resp)
+        msg = config.describe_sheet_error(e, guild_id=7)
+        assert "403" in msg
+        assert "permission" in msg.lower() or "share" in msg.lower()
+
+    def test_non_gspread_error_falls_through(self):
+        import config
+        msg = config.describe_sheet_error(ValueError("bad input"), guild_id=1)
+        assert "ValueError" in msg
+        assert "bad input" in msg
+        assert "guild=1" in msg

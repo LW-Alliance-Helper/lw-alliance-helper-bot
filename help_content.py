@@ -1,0 +1,298 @@
+"""Content + interactive view for /help.
+
+`/help` opens an overview embed with a category dropdown. Picking a
+category swaps in a per-category embed listing each command with a
+short blurb. Centralising the content here keeps `bot.py` from growing
+every time a feature is added — new commands just append a tuple to
+the right category's `commands` list.
+"""
+
+from __future__ import annotations
+
+from typing import Optional
+
+import discord
+
+
+PRIVACY_URL = (
+    "https://lw-alliance-helper.github.io/privacy.html#where-your-data-lives"
+)
+
+OVERVIEW_DESCRIPTION = (
+    "Commands require the leadership role and the leadership channel. "
+    "Run `/setup` first if you haven't configured the bot.\n"
+    f"🗂️ Your alliance data lives in your own Google Sheet — see [Privacy]({PRIVACY_URL})."
+)
+
+ALWAYS_HANDY = (
+    "`/setup` — Roles, leadership channel, timezone, Google Sheet\n"
+    "`/view_configuration` — View all configured settings\n"
+    "`/setup_reset` — Clear configuration and start over\n"
+    "`/cancel` — Cancel any active wizard\n"
+    "`/help` — Show this menu\n"
+    "`/donate` — 💖 Tip-jar links\n"
+    "`/upgrade` — 💎 Subscribe and pin Premium here\n"
+    "`/premium_assign` — 💎 Move Premium to this server\n"
+    "`/premium_status` — 💎 Subscription state and assigned server\n"
+    "`/premium_unassign` — 💎 Release the pin (subscription stays)"
+)
+
+
+# Each category: emoji + label render in the dropdown and the embed
+# title; description sits at the top of the category embed; commands
+# is a list of (signature, blurb) tuples — one field per tuple.
+HELP_CATEGORIES: dict[str, dict] = {
+    "events": {
+        "emoji": "📣",
+        "label": "Event Announcements",
+        "description": (
+            "Schedule in-game events (Plague Marauder, Zombie Siege, etc). "
+            "Drafts post to leadership for review, then to your public channel."
+        ),
+        "commands": [
+            ("/setup_events",
+             "Configure events, leadership and public channels, daily draft "
+             "time, and the 5-min warning."),
+            ("/events [date]",
+             "Open the event editor for today or a chosen date. Edit, "
+             "approve, and post."),
+            ("/events_log",
+             "Show approved event posts (free: 7 days / 💎 Premium: 30 days)."),
+        ],
+    },
+    "train": {
+        "emoji": "🚂",
+        "label": "Train Schedule",
+        "description": (
+            "Track who's assigned the alliance train each day; optionally "
+            "generate a personalised ChatGPT blurb prompt."
+        ),
+        "commands": [
+            ("/setup_train",
+             "Configure the train tab, blurb generation, and reminders."),
+            ("/train",
+             "View the schedule with Add / Update / Generate Prompt / Clear "
+             "buttons."),
+            ("/train_log [date]",
+             "Recent prompt log entries (free: 7 days / 💎 Premium: 30 days)."),
+            ("/train_addbirthdays",
+             "Manually run the birthday → train auto-population now."),
+        ],
+    },
+    "birthdays": {
+        "emoji": "🎂",
+        "label": "Birthdays",
+        "description": (
+            "Track member birthdays from your sheet; optionally post "
+            "announcements and auto-assign the train."
+        ),
+        "commands": [
+            ("/setup_birthdays",
+             "Configure birthday tracking, train integration, and "
+             "announcement template."),
+            ("/birthdays",
+             "Show upcoming birthdays inside your lookahead window "
+             "(default 14 days)."),
+        ],
+    },
+    "desertstorm": {
+        "emoji": "⚔️",
+        "label": "Desert Storm",
+        "description": (
+            "Run weekly Desert Storm with structured drafts and configurable "
+            "participation tracking."
+        ),
+        "commands": [
+            ("/setup_desertstorm",
+             "Configure Team rosters, log channel, public post channel, and "
+             "mail template. Enable participation tracking and define exactly "
+             "what to log: vote counts, sit-outs, custom questions."),
+            ("/desertstorm",
+             "Show current rosters and the active mail template."),
+            ("/desertstorm_draft",
+             "Step through team → time → template, preview, and post."),
+            ("/desertstorm_participation",
+             "Run this week's participation log using your configured "
+             "questions."),
+            ("/desertstorm_log [date]",
+             "View a saved log entry (free: 4 most recent / 💎 Premium: full "
+             "history)."),
+            ("/desertstorm_remind",
+             "💎 DM the roster to participate this week."),
+        ],
+    },
+    "canyonstorm": {
+        "emoji": "🏜️",
+        "label": "Canyon Storm",
+        "description": (
+            "Same flow as Desert Storm — drafts, preview, configurable "
+            "participation."
+        ),
+        "commands": [
+            ("/setup_canyonstorm",
+             "Configure Team rosters, log channel, public post channel, and "
+             "mail template. Enable participation tracking and define exactly "
+             "what to log: vote counts, sit-outs, custom questions."),
+            ("/canyonstorm",
+             "Show current rosters and the active mail template."),
+            ("/canyonstorm_draft",
+             "Step through team → time → template, preview, and post."),
+            ("/canyonstorm_participation",
+             "Run this week's participation log using your configured "
+             "questions."),
+            ("/canyonstorm_log [date]",
+             "View a saved log entry (free: 4 most recent / 💎 Premium: full "
+             "history)."),
+            ("/canyonstorm_remind",
+             "💎 DM the roster to participate this week."),
+        ],
+    },
+    "survey": {
+        "emoji": "📋",
+        "label": "Survey",
+        "description": (
+            "Collect member stats through a private Discord thread. Answers "
+            "land in your sheet; leadership gets a notification per submission."
+        ),
+        "commands": [
+            ("/setup_survey",
+             "Configure questions, channels, sheet tabs, and the intro."),
+            ("/survey",
+             "View configured surveys. 💎 Premium gets Add / Edit / Remove "
+             "for managing multiple."),
+            ("/survey_post",
+             "Post or repost the answer button."),
+            ("/survey_remind",
+             "Send now or schedule. Free: channel post. 💎 Premium: also DM "
+             "via roster."),
+        ],
+    },
+    "growth": {
+        "emoji": "📈",
+        "label": "Growth Tracking",
+        "description": (
+            "Periodic snapshots of member stats, written to your sheet."
+        ),
+        "commands": [
+            ("/setup_growth",
+             "Configure source tab, metrics, and snapshot schedule."),
+            ("/growth",
+             "Show status with options to snapshot or edit config."),
+        ],
+    },
+    "premium": {
+        "emoji": "💎",
+        "label": "Premium Features",
+        "description": (
+            "Premium adds member-aware features that build on the free tier. "
+            "Unlock with `/upgrade`."
+        ),
+        "commands": [
+            ("/setup_members",
+             "Configure Member Roster Sync — writes Discord IDs to your "
+             "sheet so other features find members by name."),
+            ("/sync_members",
+             "Manually re-sync the roster now."),
+            ("Multiple named surveys",
+             "Manage from `/survey` directly via Add / Edit / Remove."),
+            ("DM-mode reminders",
+             "`/survey_remind`, `/desertstorm_remind`, `/canyonstorm_remind` "
+             "all gain DM-via-roster delivery; survey reminders can also "
+             "schedule recurring DMs."),
+            ("✨ More",
+             "Personal birthday DMs, train-assignment DMs, auto-mention "
+             "members in train reminders, threads as destinations, "
+             "multi-template train and storm support, advanced question "
+             "types (single-select, multi-select, date)."),
+        ],
+    },
+}
+
+
+def _tier_meta(is_premium: bool) -> tuple[str, discord.Color]:
+    if is_premium:
+        return "💎 Premium", discord.Color.gold()
+    return "Free tier", discord.Color.blurple()
+
+
+def build_overview_embed(is_premium: bool) -> discord.Embed:
+    badge, color = _tier_meta(is_premium)
+    embed = discord.Embed(
+        title=f"🤖 Alliance Helper — Commands  ·  {badge}",
+        color=color,
+        description=OVERVIEW_DESCRIPTION,
+    )
+    embed.add_field(name="🧰 Always handy", value=ALWAYS_HANDY, inline=False)
+    if is_premium:
+        embed.set_footer(
+            text="💎 Premium is active. Pick a category below for details.",
+        )
+    else:
+        embed.set_footer(
+            text="Pick a category below — or run /upgrade to unlock Premium.",
+        )
+    return embed
+
+
+def build_category_embed(category_id: str, is_premium: bool) -> discord.Embed:
+    cat = HELP_CATEGORIES[category_id]
+    badge, color = _tier_meta(is_premium)
+    embed = discord.Embed(
+        title=f"{cat['emoji']} {cat['label']}  ·  {badge}",
+        color=color,
+        description=cat["description"],
+    )
+    for name, value in cat["commands"]:
+        embed.add_field(name=name, value=value, inline=False)
+    embed.set_footer(text="Pick another category from the dropdown — or 🏠 Overview to go back.")
+    return embed
+
+
+class HelpCategorySelect(discord.ui.Select):
+    def __init__(self, is_premium: bool):
+        self.is_premium = is_premium
+        options = [
+            discord.SelectOption(
+                label="Overview", value="__overview", emoji="🏠",
+                description="Back to the main /help screen",
+            ),
+        ]
+        for cat_id, cat in HELP_CATEGORIES.items():
+            options.append(discord.SelectOption(
+                label=cat["label"], value=cat_id, emoji=cat["emoji"],
+            ))
+        super().__init__(
+            placeholder="Choose a category…",
+            options=options, min_values=1, max_values=1,
+        )
+
+    async def callback(self, interaction: discord.Interaction):
+        choice = self.values[0]
+        if choice == "__overview":
+            embed = build_overview_embed(self.is_premium)
+        else:
+            embed = build_category_embed(choice, self.is_premium)
+        await interaction.response.edit_message(embed=embed, view=self.view)
+
+
+class HelpView(discord.ui.View):
+    """Dropdown-driven /help. Stores the originating interaction so the
+    select can be disabled in place when the 3-min view timeout fires
+    (matches the auto-post-timeout cleanup pattern used elsewhere).
+    """
+
+    def __init__(self, is_premium: bool, *,
+                 origin: Optional[discord.Interaction] = None):
+        super().__init__(timeout=180)
+        self.origin = origin
+        self.add_item(HelpCategorySelect(is_premium))
+
+    async def on_timeout(self):
+        for item in self.children:
+            if hasattr(item, "disabled"):
+                item.disabled = True
+        if self.origin is not None:
+            try:
+                await self.origin.edit_original_response(view=self)
+            except discord.HTTPException:
+                pass

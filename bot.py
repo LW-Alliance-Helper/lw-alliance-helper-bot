@@ -22,7 +22,7 @@ DISCORD_TOKEN = os.getenv("DISCORD_TOKEN")
 # Semantic versioning per https://semver.org. Bump on each release; the
 # CHANGELOG.md file is the human-readable record of what each version
 # changed.
-__version__ = "1.1.0"
+__version__ = "1.1.1"
 
 # ── Sentry error reporting ───────────────────────────────────────────────────
 #
@@ -767,163 +767,16 @@ async def events_log_slash(interaction: discord.Interaction):
 )
 async def help_slash(interaction: discord.Interaction):
     import premium
+    from help_content import build_overview_embed, HelpView
+
     is_premium_flag = await premium.is_premium(
         interaction.guild_id, interaction=interaction, bot=bot,
     )
-    tier_badge = "💎 Premium" if is_premium_flag else "Free tier"
-
-    embed = discord.Embed(
-        title=f"🤖 Alliance Helper — Commands  ·  {tier_badge}",
-        color=discord.Color.gold() if is_premium_flag else discord.Color.blurple(),
-        description=(
-            "All commands require the configured leadership role and must be used in the leadership channel.\n"
-            "Run `/setup` first if you haven't configured the bot yet.\n\n"
-            "🗂️ **Your alliance's data lives in your own Google Sheet** — the bot helps to organize, "
-            "you own the data. See [Privacy](https://lw-alliance-helper.github.io/privacy.html#where-your-data-lives) for details."
-        ),
+    embed = build_overview_embed(is_premium_flag)
+    view = HelpView(is_premium_flag, origin=interaction)
+    await interaction.response.send_message(
+        embed=embed, view=view, ephemeral=True,
     )
-
-    embed.add_field(
-        name="⚙️ Core Setup",
-        value=(
-            "Configure the bot for your server. Start here before using any other features.\n"
-            "`/setup` — Configure roles, leadership channel, timezone, and Google Sheet\n"
-            "`/view_configuration` — View all configured settings across every wizard\n"
-            "`/setup_reset` — Clear server configuration and start over"
-        ),
-        inline=False,
-    )
-
-    embed.add_field(
-        name="📣 Event Announcements",
-        value=(
-            "Automate event scheduling for in-game events such as Plague Marauder and Zombie Siege. "
-            "Drafts are posted to a leadership channel for review before being sent to the public announcement channel — both channels are configured during `/setup_events`.\n"
-            "`/setup_events` — Configure events, announcement channels, draft time, and 5-min warning\n"
-            "`/events [date]` — Open the event editor for today or a specific date\n"
-            "`/events_log` — Show approved event posts (7d free / 30d premium)"
-        ),
-        inline=False,
-    )
-
-    embed.add_field(
-        name="🚂 Train Schedule",
-        value=(
-            "Track who is assigned the alliance train each day and optionally generate a personalised "
-            "ChatGPT prompt to write a blurb for that member's announcement.\n"
-            "`/setup_train` — Configure the train tab, blurb generation, and reminders\n"
-            "`/train` — View the schedule with Add / Update / Generate Prompt / Clear buttons\n"
-            "`/train_log [date]` — Show recent prompt log entries (7d free / 30d premium)\n"
-            "`/train_addbirthdays` — Manually run the birthday check now"
-        ),
-        inline=False,
-    )
-
-    embed.add_field(
-        name="🎂 Birthdays",
-        value=(
-            "Track member birthdays from your Google Sheet and optionally post announcements "
-            "in Discord and assign members to the train schedule on their birthday.\n"
-            "`/setup_birthdays` — Configure birthday tracking, train integration, and announcements\n"
-            "`/birthdays` — Show upcoming birthdays within your configured lookahead window (defaults to 14 days)"
-        ),
-        inline=False,
-    )
-
-    embed.add_field(
-        name="⚔️ Desert Storm",
-        value=(
-            "Generate weekly Desert Storm team mail drafts and log participation each event. "
-            "Setup Step 6 lets you turn on participation tracking and define exactly what you want to log — "
-            "vote count, sit-outs, custom questions — using free types (text, yes/no, numeric, roster names) "
-            "or 💎 Premium types (single-select, multi-select, date).\n"
-            "`/setup_desertstorm` — Configure teams, log channel, post channel, mail template, participation\n"
-            "`/desertstorm` — Show current rosters and the active mail template\n"
-            "`/desertstorm_draft` — Walk through team → time → template, then preview & post the mail\n"
-            "`/desertstorm_participation` — Run the configurable participation log for this week\n"
-            "`/desertstorm_log [date]` — View a Desert Storm log entry (free: 4 most recent / premium: all)\n"
-            "`/desertstorm_remind` — 💎 DM every roster member to participate in this week's DS"
-        ),
-        inline=False,
-    )
-
-    embed.add_field(
-        name="🏜️ Canyon Storm",
-        value=(
-            "Generate weekly Canyon Storm team mail drafts and log participation each event. "
-            "Same flow as Desert Storm — preview in leadership, post to a public channel, plus configurable "
-            "participation tracking on Setup Step 6.\n"
-            "`/setup_canyonstorm` — Configure teams, log channel, post channel, mail template, participation\n"
-            "`/canyonstorm` — Show current rosters and the active mail template\n"
-            "`/canyonstorm_draft` — Walk through team → time → template, then preview & post the mail\n"
-            "`/canyonstorm_participation` — Run the configurable participation log for this week\n"
-            "`/canyonstorm_log [date]` — View a Canyon Storm log entry (free: 4 most recent / premium: all)\n"
-            "`/canyonstorm_remind` — 💎 DM every roster member to participate in this week's CS"
-        ),
-        inline=False,
-    )
-
-    embed.add_field(
-        name="📋 Survey",
-        value=(
-            "Collect member statistics through a private Discord thread survey. "
-            "Each member clicks the survey button, gets walked through your configured questions in their own thread, and their answers land in your Google Sheet automatically. Leadership sees a notification embed in the configured notify channel for every submission.\n"
-            "`/setup_survey` — Configure the default survey (questions, channels, sheet tabs, intro)\n"
-            "`/survey` — View configured survey(s). 💎 Premium gets **Add / Edit / Remove** buttons here for managing multiple surveys.\n"
-            "`/survey_post` — Post (or repost) the answer button (Premium picks which survey)\n"
-            "`/survey_remind` — Send now or set up scheduled reminders. Free tier posts to a channel; "
-            "💎 Premium adds DM-via-roster delivery."
-        ),
-        inline=False,
-    )
-
-    embed.add_field(
-        name="📈 Growth Tracking",
-        value=(
-            "Take periodic snapshots of your members' stats to track alliance growth over time. "
-            "You define which metrics to track and how often — snapshots are saved to your Google Sheet.\n"
-            "`/setup_growth` — Configure source tab, metrics to track, and snapshot schedule\n"
-            "`/growth` — Show growth status with options to run a snapshot or edit config"
-        ),
-        inline=False,
-    )
-
-    embed.add_field(
-        name="💎 Premium Features",
-        value=(
-            "Unlock with `/upgrade`. Premium adds member-aware features that build on top of the free tier:\n"
-            "`/setup_members` — Configure the Member Roster Sync (writes Discord IDs to your sheet so other features can find members by name)\n"
-            "`/sync_members` — Manually re-sync the member roster now\n"
-            "Multiple named surveys — manage from `/survey` directly via Add / Edit / Remove buttons\n"
-            "`/survey_remind` — Send DM reminders via Member Roster, or schedule recurring DM reminders per survey\n"
-            "`/desertstorm_remind` — DM every roster member about this week's DS\n"
-            "`/canyonstorm_remind` — DM every roster member about this week's CS\n"
-            "*Plus: personal birthday DMs, train-assignment DMs, auto-mention members in train reminders, "
-            "use threads as destinations, multi-template train and storm support, advanced survey/participation "
-            "question types (single-select, multi-select, date), and more.*"
-        ),
-        inline=False,
-    )
-
-    embed.add_field(
-        name="🔧 Utilities",
-        value=(
-            "`/cancel` — Cancel any active wizard or log session and reset wizard state\n"
-            "`/help` — Show this command list (always available)\n"
-            "`/donate` — 💖 Show optional tip-jar links to support the bot's hosting\n"
-            "`/upgrade` — 💎 Subscribe to Premium and pin it to this server\n"
-            "`/premium_assign` — 💎 Move your Premium subscription to this server\n"
-            "`/premium_status` — 💎 Show your subscription state and assigned server\n"
-            "`/premium_unassign` — 💎 Release the pin without canceling the subscription"
-        ),
-        inline=False,
-    )
-
-    if is_premium_flag:
-        embed.set_footer(text="💎 Premium is active. Thanks for supporting LW Alliance Helper!")
-    else:
-        embed.set_footer(text="Alliance Helper — Run /upgrade to unlock Premium features")
-    await interaction.response.send_message(embed=embed, ephemeral=True)
 
 
 # Alias so date_cls doesn't conflict with the `date` parameter name in events_slash

@@ -9,6 +9,14 @@ Each entry is a slim summary — heavier context (root cause, what we
 tried, design rationale) lives in the corresponding commit message
 and PR description.
 
+## [1.1.1] — 2026-05-07
+
+### Fixed
+- `/help` rebuilt as a category-dropdown view so the embed no longer exceeds Discord's 6000-char limit (regression from 1.1.0's data-ownership copy).
+- Storm and train sheet-load error logs name what actually failed — missing worksheet tab, spreadsheet 404, 403, or rate-limit — instead of opaque gspread reprs.
+
+Hotfix released direct to main per CLAUDE.md's hotfix exception.
+
 ## [1.1.0] — 2026-05-07
 
 ### Added

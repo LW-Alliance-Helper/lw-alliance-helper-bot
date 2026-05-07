@@ -81,7 +81,7 @@ repo `../lw-alliance-helper.github.io` (the website) has its own
 
 | File | Role | Size |
 |---|---|---|
-| `bot.py` | Entry point. Gateway intents (`members` is privileged), slash command tree. | ~940 LOC |
+| `bot.py` | Entry point. Gateway intents (`members` is privileged), slash command tree. | ~790 LOC |
 | `setup_cog.py` | Every `/setup_*` wizard. Largest file. | ~5000 LOC |
 | `scheduler.py` | Background event scheduler — daily drafts, 5-min warnings, ApprovalView. | ~970 LOC |
 | `train.py` / `train_cog.py` / `train_birthdays.py` / `train_ui.py` | Train schedule + birthday integration. Cog file separated from data layer for size. | ~1.8K total |
@@ -92,12 +92,13 @@ repo `../lw-alliance-helper.github.io` (the website) has its own
 | `premium.py` | Central premium gating. Every premium check goes through here. | ~280 |
 | `wizard_registry.py` | `wait_view_or_cancel` (cancel mid-wizard), `expire_view_message` (clean up timed-out auto-posts), `safe_edit_response` (survive interaction-token expiry). | ~200 |
 | `defaults.py` | Hardcoded copy: themes/tones, default mail templates, default DM bodies. | ~100 |
+| `help_content.py` | `/help` content + interactive `HelpView` dropdown. New categories = append a tuple to the right `HELP_CATEGORIES` entry. | ~270 |
 | `dm.py` | DM helpers. | ~80 |
 | `donate.py` | `/donate` and `/upgrade` commands. | ~135 |
 | `config.py` | Schema, migrations, `get_*` / `save_*` helpers, gspread client. | ~1.5K |
 | `stats_publisher.py` | Daily alliance-count publisher to website. | ~155 |
 
-Tests: `tests/unit/` and `tests/integration/`. 538 collected, 18 skip
+Tests: `tests/unit/` and `tests/integration/`. 582 collected, 18 skip
 (intentional — `free_tier_only` markers under the `FORCE_PREMIUM=1` CI
 lane).
 
@@ -209,6 +210,7 @@ the long form on each.
 
 | Version | What |
 |---|---|
+| `1.1.1` | Hotfix: `/help` rebuilt as a category-dropdown view (overview + `discord.ui.Select`) — the 1.1.0 data-ownership copy pushed the embed past Discord's 6000-char limit, causing `HTTPException 50035` on every invocation; new `help_content.py` module owns the content + view so future categories are an append, not a rewrite. Storm and train sheet-load logs now route through a new `config.describe_sheet_error` helper that distinguishes missing-tab from spreadsheet 404 / 403 / rate-limit, replacing opaque gspread reprs (e.g. `<Response [404]>`). Direct-to-main per the hotfix exception. |
 | `1.1.0` | Premium per-user assignment layer ([#41](https://github.com/LW-Alliance-Helper/lw-alliance-helper-bot/issues/41)) — the SKU is now User Subscription, so the bot needs its own one-license-one-guild gate; new `/premium_assign` and `/premium_unassign` commands (with confirmation prompts) plus the `premium_assignments` SQLite table consulted on every premium check. Data-ownership story made explicit in README, welcome DM, `/help`, and `/upgrade` ([#39](https://github.com/LW-Alliance-Helper/lw-alliance-helper-bot/issues/39)). Setup wizard's "➕ Create a new channel" button no longer suppressed on Premium guilds ([#48](https://github.com/LW-Alliance-Helper/lw-alliance-helper-bot/issues/48)). Leadership commands no longer gated by channel category — role check is the security boundary, fixing `/cancel` mid-wizard and the empty-category edge case; `leadership_category_id` dropped via one-shot migration ([#49](https://github.com/LW-Alliance-Helper/lw-alliance-helper-bot/issues/49)). Working-agreement docs updated for the dev-branch staging workflow ([#36](https://github.com/LW-Alliance-Helper/lw-alliance-helper-bot/issues/36)) and the release-branch cleanup practice ([#46](https://github.com/LW-Alliance-Helper/lw-alliance-helper-bot/issues/46)). |
 | `1.0.19` | Hotfix: growth snapshots called `ws.append_row` per new member inside the loop, so any first-ever snapshot of a populated roster (60+ members) blew the 60/min Sheets write quota and aborted with a 429 ([#40](https://github.com/LW-Alliance-Helper/lw-alliance-helper-bot/issues/40)). Collapsed into a single `ws.append_rows` after the loop. Direct-to-main per the hotfix exception. |
 | `1.0.18` | Birthday → train auto-population now fires at 22:00 ET (10pm ET == 00:00 server time) instead of UTC midnight, and stops re-firing on every Railway redeploy ([#29](https://github.com/LW-Alliance-Helper/lw-alliance-helper-bot/issues/29)); plus a fleet-wide logging-gaps audit ([#31](https://github.com/LW-Alliance-Helper/lw-alliance-helper-bot/issues/31)) — DM-Forbidden now logs the (guild, user) pair, missing-channel scheduler/train/birthday fall-throughs log, `train.py` sheet I/O logs gain `guild_id`, `premium.is_premium` emits once-per-process warnings on missing SKU/bot, and several non-Discord exception paths now Sentry-capture instead of Railway-stdout-only. |
@@ -231,7 +233,7 @@ the long form on each.
 | `1.0.1` | Audit Round 1 — fixed `survey._run_schedule_wizard` broken import + dead `train_ui` line, deleted `sheets.py` and ~250 LOC of dead code (12 items) |
 | `1.0.0` | Initial public release (2026-04-28) |
 
-Test suite: **575 collected**, 18 skipped on the free-tier lane and
+Test suite: **582 collected**, 18 skipped on the free-tier lane and
 35 skipped under `FORCE_PREMIUM=1`. Total LOC: ~17K.
 
 ---
@@ -275,11 +277,10 @@ These have been thought through. Reopening them needs a real reason:
 
 ## Status snapshot
 
-- 1.0.0 launched 2026-04-28. Currently on `1.1.0` (Premium per-user
-  assignment layer for the new User Subscription SKU, plus
-  data-ownership messaging, two setup-wizard bug fixes, and
-  workflow-doc updates). See `CHANGELOG.md` for per-version detail.
-- 575 tests collected; 18 skipped on the free-tier lane, 35 skipped
+- 1.0.0 launched 2026-04-28. Currently on `1.1.1` (hotfix: `/help`
+  embed-size crash from 1.1.0, plus diagnostic upgrade to storm/train
+  sheet-load error logs). See `CHANGELOG.md` for per-version detail.
+- 582 tests collected; 18 skipped on the free-tier lane, 35 skipped
   under CI's `FORCE_PREMIUM=1` lane.
 - Pre-launch audit fully shipped (Rounds 1–4 → 1.0.1–1.0.4; schema
   drops → 1.0.5 + 1.0.8). No outstanding cleanup from that audit.

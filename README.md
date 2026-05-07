@@ -22,6 +22,18 @@ A Discord bot built for Last War alliance leadership. Alliance Helper takes care
 
 ---
 
+## Your Data Stays With You
+
+Alliance Helper is built around a simple principle: **your alliance's data lives in your own Google Sheet**, on the Google account *you* control. Power scores, growth snapshots, train history, participation logs, member rosters — all of it is written to the sheet *your alliance* shares with the bot. The bot helps to organize; you own the data.
+
+- **You own the data.** The bot reads and writes; it doesn't keep its own copy of your alliance's data.
+- **Leaving doesn't trap you.** Revoke the bot's sheet access and you keep everything that matters — no export step, no migration request.
+- **Premium adds features, it does not take away any data or lock you in to a plan.** Subscribing unlocks DMs, scheduled reminders, and roster sync — nothing about your data moves anywhere new.
+
+The bot's own database stores only what it needs to do its job — wizard answers, channel/role IDs, schedule settings, draft state, premium status. The alliance data itself stays in your Sheet.
+
+---
+
 ## Free vs Premium
 
 Alliance Helper is **free to use at the base level** for every alliance — every feature listed above works on the free tier with sensible limits that fit a typical alliance. **Premium** ($4.99/month, billed via Discord App Subscriptions) lifts the limits and unlocks a handful of features built around member identity (DMs, mentions, roster sync).

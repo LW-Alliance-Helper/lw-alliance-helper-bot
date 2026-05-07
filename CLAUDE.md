@@ -49,6 +49,12 @@ repo `../lw-alliance-helper.github.io` (the website) has its own
 - **Companion repo `../lw-alliance-helper.github.io`** (the website)
   keeps the older direct-to-main rule — push commits straight to
   `main` there.
+- **No time estimates, no S/M/L sizing.** Issues, proposals, and
+  audit-style fix lists frame work by *what changes for users (or
+  the bot's reliability)* and *why it matters*, not by hours or
+  effort buckets. This is a side project; things take however long
+  they take. Don't pad write-ups with "~2 hours", "small task",
+  "large feature", phased rollouts, or stakeholder-style scoping.
 
 ---
 

@@ -9,6 +9,20 @@ Each entry is a slim summary — heavier context (root cause, what we
 tried, design rationale) lives in the corresponding commit message
 and PR description.
 
+## [1.1.0] — 2026-05-07
+
+### Added
+- Premium per-user assignment layer with `/premium_assign` and `/premium_unassign` (both confirmation-gated) for the new User Subscription SKU ([#41](https://github.com/LW-Alliance-Helper/lw-alliance-helper-bot/issues/41)).
+
+### Changed
+- Data-ownership story made explicit in README, welcome DM, `/help`, and `/upgrade` ([#39](https://github.com/LW-Alliance-Helper/lw-alliance-helper-bot/issues/39)).
+- CLAUDE.md documents the dev-branch staging workflow ([#36](https://github.com/LW-Alliance-Helper/lw-alliance-helper-bot/issues/36)) and the release-branch cleanup practice ([#46](https://github.com/LW-Alliance-Helper/lw-alliance-helper-bot/issues/46)).
+- `/setup` step 3 prompt reworded to reflect the leadership channel's destination-only role.
+
+### Fixed
+- Setup wizard's "➕ Create a new channel" button no longer suppressed on Premium guilds ([#48](https://github.com/LW-Alliance-Helper/lw-alliance-helper-bot/issues/48)).
+- Leadership commands no longer gated by channel category — role check is the security boundary, fixing `/cancel` mid-wizard and the empty-category edge case; `leadership_category_id` dropped via one-shot migration ([#49](https://github.com/LW-Alliance-Helper/lw-alliance-helper-bot/issues/49)).
+
 ## [1.0.19] — 2026-05-07
 
 ### Fixed

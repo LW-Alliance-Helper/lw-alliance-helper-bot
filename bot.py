@@ -22,7 +22,7 @@ DISCORD_TOKEN = os.getenv("DISCORD_TOKEN")
 # Semantic versioning per https://semver.org. Bump on each release; the
 # CHANGELOG.md file is the human-readable record of what each version
 # changed.
-__version__ = "1.0.19"
+__version__ = "1.1.0"
 
 # ── Sentry error reporting ───────────────────────────────────────────────────
 #
@@ -70,6 +70,9 @@ bot = commands.Bot(command_prefix="!", intents=intents)
 
 WELCOME_DM = (
     "👋 Thanks for adding **LW Alliance Helper** to **{guild_name}**!\n\n"
+    "**Your alliance's data stays with you.** Power scores, growth, train history, "
+    "rosters — all of it lives in **your own Google Sheet**, on the Google account "
+    "you control. The bot helps to organize; you own the data.\n\n"
     "To get started, run **/setup** in your server's leadership channel. "
     "The wizard walks you through:\n"
     "• Member and leadership roles\n"
@@ -77,6 +80,10 @@ WELCOME_DM = (
     "• Your alliance's timezone\n"
     "• Sharing your Google Sheet with the bot\n\n"
     "After setup, run **/help** to see every available feature.\n\n"
+    "💎 **Premium is a per-user subscription** — one $4.99/mo applies to "
+    "**one server at a time**. Run `/upgrade` to subscribe; the bot pins "
+    "your subscription to the server you ran it in. Use `/premium_assign` "
+    "to move it later, or `/premium_status` to see where it's active.\n\n"
     "📖 Setup guide: <https://lw-alliance-helper.github.io/setup.html>\n"
     "📋 All commands: <https://lw-alliance-helper.github.io/commands.html>\n"
     "💎 Pricing & Premium: <https://lw-alliance-helper.github.io/pricing.html>\n\n"
@@ -118,29 +125,12 @@ def is_leadership(interaction: discord.Interaction) -> bool:
     return cfg.leadership_role_name in [r.name for r in interaction.user.roles]
 
 
-def in_leadership_channel(interaction: discord.Interaction) -> bool:
-    """Accept commands in any channel or thread within the leadership category."""
-    cfg = get_config(interaction.guild_id)
-    if not cfg:
-        return False
-    channel = interaction.channel
-    if isinstance(channel, discord.Thread):
-        parent = channel.parent
-        return parent is not None and getattr(parent, "category_id", None) == cfg.leadership_category_id
-    return getattr(channel, "category_id", None) == cfg.leadership_category_id
-
-
 async def guard(interaction: discord.Interaction) -> bool:
-    """Check role and channel. Respond with an error and return False if either fails."""
+    """Check setup-complete and leadership role. Respond with an error and return False if either fails."""
     cfg = get_config(interaction.guild_id)
     if not cfg or not cfg.setup_complete:
         await interaction.response.send_message(
             "⚙️ This bot hasn't been set up yet. Run `/setup` to get started.", ephemeral=True
-        )
-        return False
-    if not in_leadership_channel(interaction):
-        await interaction.response.send_message(
-            "⛔ This command can only be used in the leadership channel.", ephemeral=True
         )
         return False
     if not is_leadership(interaction):
@@ -787,7 +777,9 @@ async def help_slash(interaction: discord.Interaction):
         color=discord.Color.gold() if is_premium_flag else discord.Color.blurple(),
         description=(
             "All commands require the configured leadership role and must be used in the leadership channel.\n"
-            "Run `/setup` first if you haven't configured the bot yet."
+            "Run `/setup` first if you haven't configured the bot yet.\n\n"
+            "🗂️ **Your alliance's data lives in your own Google Sheet** — the bot helps to organize, "
+            "you own the data. See [Privacy](https://lw-alliance-helper.github.io/privacy.html#where-your-data-lives) for details."
         ),
     )
 
@@ -919,7 +911,10 @@ async def help_slash(interaction: discord.Interaction):
             "`/cancel` — Cancel any active wizard or log session and reset wizard state\n"
             "`/help` — Show this command list (always available)\n"
             "`/donate` — 💖 Show optional tip-jar links to support the bot's hosting\n"
-            "`/upgrade` — 💎 Subscribe to Premium for this server (Discord App Subscription)"
+            "`/upgrade` — 💎 Subscribe to Premium and pin it to this server\n"
+            "`/premium_assign` — 💎 Move your Premium subscription to this server\n"
+            "`/premium_status` — 💎 Show your subscription state and assigned server\n"
+            "`/premium_unassign` — 💎 Release the pin without canceling the subscription"
         ),
         inline=False,
     )

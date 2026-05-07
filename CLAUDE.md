@@ -19,8 +19,27 @@ repo `../lw-alliance-helper.github.io` (the website) has its own
   the active `release/X.Y.Z` with a merge commit; the release branch
   is eventually PR'd into `main`. Railway deploys from `main`, so
   merging to main *is* the release. Delete feature branches after
-  merge to release; **keep** release branches as history. See
-  `feedback_release_workflow_bot.md` in Memory for the full rule.
+  merge to release; delete release branches after they merge to
+  `main` — the GitHub Release tagged on the merge commit is the
+  historical record. See `feedback_release_workflow_bot.md` in
+  Memory for the full rule.
+- **Dev branch for major-change staging.** A long-lived `dev` branch
+  backs a separate Railway service + separate Discord app for real
+  end-to-end testing of high-blast-radius features (schema
+  migrations, persistent Views, scheduler/startup-hook changes,
+  anything that touches money paths). Routing:
+  - **Major features:** feature → PR to `dev` (merge commit) → test
+    on the staging server → PR `dev` into `release/X.Y.Z` →
+    `main`.
+  - **Small / doc changes:** feature → `release/X.Y.Z` → `main`,
+    same as before. They skip `dev`.
+  - **Hotfixes:** still direct to `main` per the hotfix rule below.
+  - **Keep `dev` in sync:** when `main` moves forward and `dev`
+    is *not* ahead with feature work in progress, fast-forward `dev`
+    to `main`. If `dev` has uncommitted-to-main feature work, leave
+    it alone — it'll resync after that feature ships.
+  - **Versioning still happens on the release branch.** Don't bump
+    `__version__` or write CHANGELOG entries on `dev`.
 - **Backlog lives in [GitHub Project #2](https://github.com/orgs/LW-Alliance-Helper/projects/2).**
   Auto-add fires for both repos. Apply a label at issue-creation time
   (`bug` / `feature` / `documentation` / `hotfix`).
@@ -43,9 +62,9 @@ repo `../lw-alliance-helper.github.io` (the website) has its own
 - **Never amend** — always make a new commit, even after pre-commit
   hook failures.
 - **Never `push --force` to main**, never `reset --hard`, never delete
-  branches without confirming. Release branches are preserved as
-  history; feature branches are deleted only after their merge into
-  release.
+  branches without confirming. Feature branches are deleted after
+  merging into release; release branches are deleted after merging
+  into main.
 - **Companion repo `../lw-alliance-helper.github.io`** (the website)
   keeps the older direct-to-main rule — push commits straight to
   `main` there.
@@ -190,6 +209,7 @@ the long form on each.
 
 | Version | What |
 |---|---|
+| `1.1.0` | Premium per-user assignment layer ([#41](https://github.com/LW-Alliance-Helper/lw-alliance-helper-bot/issues/41)) — the SKU is now User Subscription, so the bot needs its own one-license-one-guild gate; new `/premium_assign` and `/premium_unassign` commands (with confirmation prompts) plus the `premium_assignments` SQLite table consulted on every premium check. Data-ownership story made explicit in README, welcome DM, `/help`, and `/upgrade` ([#39](https://github.com/LW-Alliance-Helper/lw-alliance-helper-bot/issues/39)). Setup wizard's "➕ Create a new channel" button no longer suppressed on Premium guilds ([#48](https://github.com/LW-Alliance-Helper/lw-alliance-helper-bot/issues/48)). Leadership commands no longer gated by channel category — role check is the security boundary, fixing `/cancel` mid-wizard and the empty-category edge case; `leadership_category_id` dropped via one-shot migration ([#49](https://github.com/LW-Alliance-Helper/lw-alliance-helper-bot/issues/49)). Working-agreement docs updated for the dev-branch staging workflow ([#36](https://github.com/LW-Alliance-Helper/lw-alliance-helper-bot/issues/36)) and the release-branch cleanup practice ([#46](https://github.com/LW-Alliance-Helper/lw-alliance-helper-bot/issues/46)). |
 | `1.0.19` | Hotfix: growth snapshots called `ws.append_row` per new member inside the loop, so any first-ever snapshot of a populated roster (60+ members) blew the 60/min Sheets write quota and aborted with a 429 ([#40](https://github.com/LW-Alliance-Helper/lw-alliance-helper-bot/issues/40)). Collapsed into a single `ws.append_rows` after the loop. Direct-to-main per the hotfix exception. |
 | `1.0.18` | Birthday → train auto-population now fires at 22:00 ET (10pm ET == 00:00 server time) instead of UTC midnight, and stops re-firing on every Railway redeploy ([#29](https://github.com/LW-Alliance-Helper/lw-alliance-helper-bot/issues/29)); plus a fleet-wide logging-gaps audit ([#31](https://github.com/LW-Alliance-Helper/lw-alliance-helper-bot/issues/31)) — DM-Forbidden now logs the (guild, user) pair, missing-channel scheduler/train/birthday fall-throughs log, `train.py` sheet I/O logs gain `guild_id`, `premium.is_premium` emits once-per-process warnings on missing SKU/bot, and several non-Discord exception paths now Sentry-capture instead of Railway-stdout-only. |
 | `1.0.17` | Hotfix: `bot.entitlements()` was being called with the pre-2.4 `sku_ids=` kwarg instead of `skus=`, silently downgrading paying customers to free-tier in every background-task premium check ([#28](https://github.com/LW-Alliance-Helper/lw-alliance-helper-bot/issues/28)). Direct-to-main per the hotfix exception. |
@@ -211,8 +231,8 @@ the long form on each.
 | `1.0.1` | Audit Round 1 — fixed `survey._run_schedule_wizard` broken import + dead `train_ui` line, deleted `sheets.py` and ~250 LOC of dead code (12 items) |
 | `1.0.0` | Initial public release (2026-04-28) |
 
-Test suite: **544 collected, 18 skipped** (matches CI lane). Total
-LOC: ~17K.
+Test suite: **575 collected**, 18 skipped on the free-tier lane and
+35 skipped under `FORCE_PREMIUM=1`. Total LOC: ~17K.
 
 ---
 
@@ -255,10 +275,12 @@ These have been thought through. Reopening them needs a real reason:
 
 ## Status snapshot
 
-- 1.0.0 launched 2026-04-28. Currently on `1.0.19` (hotfix: batched
-  growth-snapshot member appends to stop blowing the Sheets write
-  quota). See `CHANGELOG.md` for per-version detail.
-- 544 tests collected, 18 skipped under CI's `FORCE_PREMIUM=1` lane.
+- 1.0.0 launched 2026-04-28. Currently on `1.1.0` (Premium per-user
+  assignment layer for the new User Subscription SKU, plus
+  data-ownership messaging, two setup-wizard bug fixes, and
+  workflow-doc updates). See `CHANGELOG.md` for per-version detail.
+- 575 tests collected; 18 skipped on the free-tier lane, 35 skipped
+  under CI's `FORCE_PREMIUM=1` lane.
 - Pre-launch audit fully shipped (Rounds 1–4 → 1.0.1–1.0.4; schema
   drops → 1.0.5 + 1.0.8). No outstanding cleanup from that audit.
 - Transfer management feature designed, not built (see

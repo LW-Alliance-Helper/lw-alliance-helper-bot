@@ -22,6 +22,18 @@ A Discord bot built for Last War alliance leadership. Alliance Helper takes care
 
 ---
 
+## Your Data Stays With You
+
+Alliance Helper is built around a simple principle: **your alliance's data lives in your own Google Sheet**, on the Google account *you* control. Power scores, growth snapshots, train history, participation logs, member rosters — all of it is written to the sheet *your alliance* shares with the bot. The bot helps to organize; you own the data.
+
+- **You own the data.** The bot reads and writes; it doesn't keep its own copy of your alliance's data.
+- **Leaving doesn't trap you.** Revoke the bot's sheet access and you keep everything that matters — no export step, no migration request.
+- **Premium adds features, it does not take away any data or lock you in to a plan.** Subscribing unlocks DMs, scheduled reminders, and roster sync — nothing about your data moves anywhere new.
+
+The bot's own database stores only what it needs to do its job — wizard answers, channel/role IDs, schedule settings, draft state, premium status. The alliance data itself stays in your Sheet.
+
+---
+
 ## Free vs Premium
 
 Alliance Helper is **free to use at the base level** for every alliance — every feature listed above works on the free tier with sensible limits that fit a typical alliance. **Premium** ($4.99/month, billed via Discord App Subscriptions) lifts the limits and unlocks a handful of features built around member identity (DMs, mentions, roster sync).
@@ -62,7 +74,9 @@ Alliance Helper is **free to use at the base level** for every alliance — ever
 
 **How to subscribe**
 
-Run **`/upgrade`** in your leadership channel to open Discord's subscription dialog. Discord handles all billing — the bot is updated automatically the moment a subscription becomes active, no waiting period. Cancellations through Discord deactivate premium features at the end of the billing cycle (your saved data, including extra templates, is **kept** so you can resume any time).
+Run **`/upgrade`** in the leadership channel of the alliance you want Premium in. Discord handles billing; the bot pins your subscription to that server automatically once checkout completes.
+
+A subscription is **per-user** and applies to **one server at a time** — if you're in multiple alliance Discords, your $4.99/mo unlocks Premium in just the one you've assigned it to. Use `/premium_assign` from a different alliance to move it, `/premium_status` to see where it's currently active, or `/premium_unassign` to release the pin without canceling the subscription. Cancellations through Discord deactivate premium features at the end of the billing cycle; your saved data (and your assignment) is **kept** so you can resume any time.
 
 If you'd like to support the bot without subscribing, **`/donate`** shows tip-jar links — 100% optional.
 
@@ -332,7 +346,7 @@ For the full list of every slash command and what it does, run `/help` in your l
 Slash commands can take up to an hour to appear after the bot first joins your server. If they still aren't showing after that, try removing and re-inviting the bot.
 
 **"You don't have permission to use this command"**
-Most feature commands need to be run in the leadership channel by someone with the leadership role configured during `/setup`. The various `/setup_*` commands also accept anyone with **Administrator** server permissions, so a server owner can configure a feature even without holding the leadership role.
+Most feature commands need to be run by someone with the leadership role configured during `/setup`. The various `/setup_*` commands also accept anyone with **Administrator** server permissions, so a server owner can configure a feature even without holding the leadership role.
 
 **"This bot hasn't been set up yet"**
 Run `/setup` first. The bot won't respond to feature commands until core setup is complete.

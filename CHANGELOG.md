@@ -9,6 +9,20 @@ Each entry is a slim summary — heavier context (root cause, what we
 tried, design rationale) lives in the corresponding commit message
 and PR description.
 
+## [1.1.0] — 2026-05-07
+
+### Added
+- Premium per-user assignment layer ([#41](https://github.com/LW-Alliance-Helper/lw-alliance-helper-bot/issues/41)). The Premium SKU is now User Subscription, so a single subscriber would otherwise unlock Premium in every alliance Discord they share with the bot. New `/premium_assign` and `/premium_unassign` slash commands let a subscriber pin their entitlement to one guild at a time; the bot-side `premium_assignments` table enforces one-license-one-guild and is consulted on every premium check. Both commands now confirm before pinning or releasing, naming the target guild.
+
+### Changed
+- Data-ownership story made explicit in README, welcome DM, `/help`, and `/upgrade` ([#39](https://github.com/LW-Alliance-Helper/lw-alliance-helper-bot/issues/39)).
+- CLAUDE.md documents the new dev-branch staging workflow ([#36](https://github.com/LW-Alliance-Helper/lw-alliance-helper-bot/issues/36)) and the release-branch cleanup practice — release branches are now deleted after merge to main, with the GitHub Release on the merge commit serving as history ([#46](https://github.com/LW-Alliance-Helper/lw-alliance-helper-bot/issues/46)).
+- `/setup` step 3 prompt reworded — the leadership channel is a posting destination, not a permission gate, now that leadership commands are role-gated only.
+
+### Fixed
+- Setup wizard's "➕ Create a new channel" button is no longer suppressed on Premium guilds — it was hidden whenever `include_threads=True` routed the picker through either the threads-exist or no-threads-exist Premium path ([#48](https://github.com/LW-Alliance-Helper/lw-alliance-helper-bot/issues/48)).
+- Leadership commands are no longer gated by channel category. The leadership-role check is the real security boundary; the category check created two papercuts: `/cancel` was rejected mid-wizard from non-leadership channels (the bot's own escape hatch), and a `0` value (no parent category) made every uncategorised channel match. The retired `leadership_category_id` config column is dropped via one-shot migration ([#49](https://github.com/LW-Alliance-Helper/lw-alliance-helper-bot/issues/49)).
+
 ## [1.0.19] — 2026-05-07
 
 ### Fixed

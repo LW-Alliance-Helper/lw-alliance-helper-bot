@@ -85,14 +85,22 @@ async def _resolve_user_label(bot: commands.Bot, user_id: int) -> str:
 
 # ── Confirmation views ────────────────────────────────────────────────────────
 
-class _ConfirmSwitchView(discord.ui.View):
-    """Two-button confirm/cancel for /premium_assign reassignment."""
+class _ConfirmActionView(discord.ui.View):
+    """Generic two-button confirm/cancel used by /premium_assign (both fresh
+    and switch flows) and /premium_unassign. The confirm button label is
+    configurable so each call site reads naturally."""
 
-    def __init__(self, *, owner_id: int):
+    def __init__(self, *, owner_id: int, confirm_label: str,
+                 confirm_style: discord.ButtonStyle = discord.ButtonStyle.primary):
         super().__init__(timeout=120)
         self.owner_id = owner_id
         self.confirmed: Optional[bool] = None
         self.message: Optional[discord.Message] = None
+        # Override the labels of the decorator-bound buttons so each call
+        # site can phrase the action explicitly ("Pin to this server",
+        # "Switch to this server", "Release pin").
+        self.confirm.label = confirm_label
+        self.confirm.style = confirm_style
 
     async def interaction_check(self, interaction: discord.Interaction) -> bool:
         if interaction.user.id != self.owner_id:
@@ -103,7 +111,7 @@ class _ConfirmSwitchView(discord.ui.View):
             return False
         return True
 
-    @discord.ui.button(label="Yes, switch to this server", style=discord.ButtonStyle.primary)
+    @discord.ui.button(label="Confirm", style=discord.ButtonStyle.primary)
     async def confirm(self, interaction: discord.Interaction, _btn: discord.ui.Button):
         self.confirmed = True
         for child in self.children:
@@ -373,24 +381,51 @@ class DonateCog(commands.Cog):
             await interaction.response.send_message(embed=embed, ephemeral=True)
             return
 
+        this_name = interaction.guild.name if interaction.guild else "this server"
+
         if current is None:
-            # Fresh assignment — no confirmation needed.
-            premium.assign(user_id, guild_id)
+            # Fresh assignment — confirm to make the destination guild
+            # explicit (the user shouldn't have to guess what server
+            # /premium_assign just bound to).
             embed = discord.Embed(
+                title="💎 Pin Premium to this server?",
+                description=(
+                    f"Your subscription will be pinned to **{this_name}**. "
+                    "Premium activates here immediately, and you can move it "
+                    "later with `/premium_assign` from a different server."
+                ),
+                color=discord.Color.purple(),
+            )
+
+            view = _ConfirmActionView(
+                owner_id=user_id,
+                confirm_label=f"Yes, pin to {this_name}"[:80],
+            )
+            await interaction.response.send_message(embed=embed, view=view, ephemeral=True)
+            view.message = await interaction.original_response()
+            await view.wait()
+
+            if not view.confirmed:
+                await interaction.followup.send(
+                    "Cancelled — your subscription is unchanged.", ephemeral=True,
+                )
+                return
+
+            premium.assign(user_id, guild_id)
+            confirm_embed = discord.Embed(
                 title="💎 Premium is now active in this server",
                 description=(
-                    "Your subscription has been pinned to this server. "
-                    "Run `/premium_status` to manage it later, or `/premium_unassign` "
-                    "to release it."
+                    f"**{this_name}** is now Premium. Run `/premium_status` to "
+                    "manage it later, or `/premium_unassign` to release it."
                 ),
                 color=discord.Color.gold(),
             )
-            await interaction.response.send_message(embed=embed, ephemeral=True)
+            await interaction.followup.send(embed=confirm_embed, ephemeral=True)
             return
 
-        # Reassignment — needs confirmation.
+        # Reassignment — confirm with the prior guild named so the move
+        # is unambiguous.
         prior_name = await _resolve_guild_name(self.bot, current)
-        this_name  = interaction.guild.name if interaction.guild else "this server"
         embed = discord.Embed(
             title="💎 Switch Premium to this server?",
             description=(
@@ -401,7 +436,10 @@ class DonateCog(commands.Cog):
             color=discord.Color.purple(),
         )
 
-        view = _ConfirmSwitchView(owner_id=user_id)
+        view = _ConfirmActionView(
+            owner_id=user_id,
+            confirm_label=f"Yes, switch to {this_name}"[:80],
+        )
         await interaction.response.send_message(embed=embed, view=view, ephemeral=True)
         view.message = await interaction.original_response()
         await view.wait()
@@ -498,8 +536,10 @@ class DonateCog(commands.Cog):
     async def premium_unassign(self, interaction: discord.Interaction):
         user_id = interaction.user.id
 
-        freed = premium.unassign(user_id)
-        if freed is None:
+        # Look up the current assignment before mutating, so the
+        # confirmation can name the guild that's about to revert.
+        current = premium.get_assigned_guild(user_id)
+        if current is None:
             embed = discord.Embed(
                 title="💎 Nothing to release",
                 description=(
@@ -511,8 +551,46 @@ class DonateCog(commands.Cog):
             await interaction.response.send_message(embed=embed, ephemeral=True)
             return
 
-        freed_name = await _resolve_guild_name(self.bot, freed)
+        current_name = await _resolve_guild_name(self.bot, current)
         embed = discord.Embed(
+            title="💎 Release Premium pin?",
+            description=(
+                f"**{current_name}** is currently pinned to your subscription. "
+                f"Releasing will revert **{current_name}** to Free; your "
+                "subscription stays active and can be reassigned to any "
+                "server with `/premium_assign`."
+            ),
+            color=discord.Color.purple(),
+        )
+
+        view = _ConfirmActionView(
+            owner_id=user_id,
+            confirm_label=f"Yes, release {current_name}"[:80],
+            confirm_style=discord.ButtonStyle.danger,
+        )
+        await interaction.response.send_message(embed=embed, view=view, ephemeral=True)
+        view.message = await interaction.original_response()
+        await view.wait()
+
+        if not view.confirmed:
+            await interaction.followup.send(
+                "Cancelled — your assignment is unchanged.", ephemeral=True,
+            )
+            return
+
+        # Re-check the assignment in case it changed between prompt and
+        # confirm (e.g. /premium_unassign run twice in parallel windows).
+        # The unassign helper's idempotent: returns None if already gone.
+        freed = premium.unassign(user_id)
+        if freed is None:
+            await interaction.followup.send(
+                "Nothing to release — your assignment was already cleared "
+                "before you confirmed.", ephemeral=True,
+            )
+            return
+
+        freed_name = await _resolve_guild_name(self.bot, freed)
+        confirm_embed = discord.Embed(
             title="💎 Premium pin released",
             description=(
                 f"**{freed_name}** has reverted to Free. Your subscription is "
@@ -521,7 +599,7 @@ class DonateCog(commands.Cog):
             ),
             color=discord.Color.orange(),
         )
-        await interaction.response.send_message(embed=embed, ephemeral=True)
+        await interaction.followup.send(embed=confirm_embed, ephemeral=True)
 
     # ── Entitlement listeners ─────────────────────────────────────────────────
 

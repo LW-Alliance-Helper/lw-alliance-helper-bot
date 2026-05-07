@@ -40,8 +40,7 @@ def _make_message():
 
 def _make_followup_interaction(guild_id=TEST_GUILD_ID, is_admin=True):
     """Interaction that the survey flow uses — needs working response and
-    followup, plus user.roles + channel.category_id matching the guild's
-    saved leadership-channel guard config."""
+    followup, plus user.roles matching the guild's saved leadership role."""
     import config as _config
     interaction = make_mock_interaction(guild_id=guild_id, is_admin=is_admin)
 
@@ -49,11 +48,9 @@ def _make_followup_interaction(guild_id=TEST_GUILD_ID, is_admin=True):
     leadership_role_name = (
         cfg.leadership_role_name if cfg and cfg.leadership_role_name else "Leadership"
     )
-    leadership_cat_id    = cfg.leadership_category_id if cfg else 0
 
     role = MagicMock(); role.name = leadership_role_name
     interaction.user.roles = [role]
-    interaction.channel.category_id = leadership_cat_id
     interaction.followup.send         = AsyncMock(return_value=_make_message())
     interaction.response.send_message = AsyncMock(return_value=_make_message())
     return interaction

@@ -303,19 +303,7 @@ class ChannelSelectStep(discord.ui.View):
             switch_btn.callback = _switch
             self.add_item(switch_btn)
 
-        # The "Create a new channel" button is irrelevant in the
-        # button-driven flow (the user would have picked Channel already
-        # and is now on this state). Only show it on the simple, single-
-        # ChannelSelect path — i.e., when the picker doesn't include
-        # threads at all and we're not in the switchable variant.
-        has_threads_in_picker = any(
-            t in types for t in (
-                discord.ChannelType.public_thread,
-                discord.ChannelType.private_thread,
-                discord.ChannelType.news_thread,
-            )
-        )
-        if self.allow_create and not has_threads_in_picker and not switchable:
+        if self.allow_create:
             self._add_create_button(row=1)
 
     # ── Thread-select state ────────────────────────────────────────────
@@ -1530,8 +1518,7 @@ async def run_setup(interaction: discord.Interaction, bot):
     if not v.confirmed:
         await channel.send("⏰ Setup timed out. Run `/setup` to start again.")
         return
-    cfg.leadership_channel_id  = v.selected_channel.id
-    cfg.leadership_category_id = getattr(v.selected_channel, "category_id", 0) or 0
+    cfg.leadership_channel_id = v.selected_channel.id
 
     # ── Step 4: Timezone ───────────────────────────────────────────────────────
     tz_view = TimezoneSelectView()

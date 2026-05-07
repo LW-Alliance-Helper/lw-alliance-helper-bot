@@ -614,28 +614,11 @@ def build_survey_button_view(survey_id: str = "default") -> discord.ui.View:
 
 # ── Guard (leadership only) ────────────────────────────────────────────────────
 
-def _in_leadership(interaction: discord.Interaction) -> bool:
-    cfg = get_config(interaction.guild_id)
-    if not cfg:
-        return False
-    cat_id = cfg.leadership_category_id
-    channel = interaction.channel
-    if isinstance(channel, discord.Thread):
-        parent = channel.parent
-        return parent is not None and getattr(parent, "category_id", None) == cat_id
-    return getattr(channel, "category_id", None) == cat_id
-
-
 async def _guard(interaction: discord.Interaction) -> bool:
     cfg = get_config(interaction.guild_id)
     if not cfg or not cfg.setup_complete:
         await interaction.response.send_message(
             "⚙️ This bot hasn't been set up yet. Run `/setup` to get started.", ephemeral=True
-        )
-        return False
-    if not _in_leadership(interaction):
-        await interaction.response.send_message(
-            "⛔ This command can only be used in the leadership channel.", ephemeral=True
         )
         return False
     if cfg.leadership_role_name not in [r.name for r in interaction.user.roles]:

@@ -37,7 +37,6 @@ class GuildConfig:
     guild_id:                 int
     leadership_channel_id:    int        = 0
     announcement_channel_id:  int        = 0
-    leadership_category_id:   int        = 0
     member_role_id:           int        = 0
     member_role_name:         str        = "Member"
     leadership_role_name:     str        = "Leadership"
@@ -90,7 +89,6 @@ def init_db():
                 guild_id                 INTEGER PRIMARY KEY,
                 leadership_channel_id    INTEGER DEFAULT 0,
                 announcement_channel_id  INTEGER DEFAULT 0,
-                leadership_category_id   INTEGER DEFAULT 0,
                 member_role_id           INTEGER DEFAULT 0,
                 member_role_name         TEXT    DEFAULT 'Member',
                 leadership_role_name     TEXT    DEFAULT 'Leadership',
@@ -451,6 +449,18 @@ def init_db():
             print("[CONFIG] Added timezone column to existing database")
         except Exception:
             pass  # Column already exists — expected on fresh or already-upgraded installs
+
+        # ── 1.1.0: drop leadership_category_id ─────────────────────────────────
+        # Channel/category gating was removed in favour of role-only gating.
+        # The column is dead; drop it so GuildConfig(**dict(row)) doesn't
+        # TypeError on rows that still carry it. SQLite 3.35+ (Railway prod
+        # confirmed) supports DROP COLUMN.
+        try:
+            conn.execute("ALTER TABLE guild_configs DROP COLUMN leadership_category_id")
+            conn.commit()
+            print("[CONFIG] Dropped leadership_category_id from guild_configs")
+        except Exception:
+            pass  # Column already absent — expected on fresh databases
 
 
 def get_config(guild_id: int) -> Optional[GuildConfig]:

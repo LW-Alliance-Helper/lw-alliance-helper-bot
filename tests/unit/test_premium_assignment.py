@@ -76,6 +76,24 @@ def _make_donate_cog():
     return DonateCog(bot), bot
 
 
+def _patch_confirm_view(monkeypatch, confirmed: bool):
+    """Replace donate._ConfirmActionView with a stub that immediately
+    resolves to the given decision. Slash-command tests use this to
+    exercise the post-confirmation branch without driving real button
+    clicks."""
+    import donate
+
+    class _StubView:
+        def __init__(self, *args, **kwargs):
+            self.confirmed = confirmed
+            self.message = None
+
+        async def wait(self):
+            return
+
+    monkeypatch.setattr(donate, "_ConfirmActionView", _StubView)
+
+
 # ── Data-layer helpers ────────────────────────────────────────────────────────
 
 class TestAssignmentHelpers:
@@ -290,7 +308,9 @@ class TestPremiumAssignCommand:
                "already" in embed.description.lower()
 
     @pytest.mark.asyncio
-    async def test_fresh_assignment_assigns_without_confirmation(self, monkeypatch):
+    async def test_fresh_assignment_confirms_then_assigns(self, monkeypatch):
+        """Fresh /premium_assign now prompts for confirmation naming the
+        target guild — only writes the assignment after the user confirms."""
         monkeypatch.setenv("PREMIUM_SKU_ID", "12345")
         import premium as _premium
         importlib.reload(_premium)
@@ -300,18 +320,55 @@ class TestPremiumAssignCommand:
             yield _make_entitlement(sku_id=12345, user_id=111)
         cog.bot.entitlements = MagicMock(side_effect=lambda **kw: matching_iter(**kw))
 
+        _patch_confirm_view(monkeypatch, confirmed=True)
+
         interaction = AsyncMock()
         interaction.guild_id = TEST_GUILD_ID
         interaction.user.id  = 111
         interaction.guild    = MagicMock()
         interaction.guild.name = "Test Alliance"
         interaction.response.send_message = AsyncMock()
+        interaction.followup.send         = AsyncMock()
+        interaction.original_response     = AsyncMock(return_value=MagicMock())
 
         await cog.premium_assign.callback(cog, interaction)
 
-        # Assignment should have been written.
+        # Confirmation embed shown first; assignment written after confirm.
+        prompt_call = interaction.response.send_message.call_args
+        prompt_embed = prompt_call.kwargs.get("embed") or prompt_call.args[0]
+        assert "pin premium" in prompt_embed.title.lower()
+        assert "Test Alliance" in prompt_embed.description
+
         from config import get_premium_assignment_for_guild
         assert get_premium_assignment_for_guild(TEST_GUILD_ID) == 111
+
+    @pytest.mark.asyncio
+    async def test_fresh_assignment_cancelled_does_not_write(self, monkeypatch):
+        """If the user cancels the confirmation, no assignment is written."""
+        monkeypatch.setenv("PREMIUM_SKU_ID", "12345")
+        import premium as _premium
+        importlib.reload(_premium)
+        cog, _ = _make_donate_cog()
+
+        async def matching_iter(**kw):
+            yield _make_entitlement(sku_id=12345, user_id=111)
+        cog.bot.entitlements = MagicMock(side_effect=lambda **kw: matching_iter(**kw))
+
+        _patch_confirm_view(monkeypatch, confirmed=False)
+
+        interaction = AsyncMock()
+        interaction.guild_id = TEST_GUILD_ID
+        interaction.user.id  = 111
+        interaction.guild    = MagicMock()
+        interaction.guild.name = "Test Alliance"
+        interaction.response.send_message = AsyncMock()
+        interaction.followup.send         = AsyncMock()
+        interaction.original_response     = AsyncMock(return_value=MagicMock())
+
+        await cog.premium_assign.callback(cog, interaction)
+
+        from config import get_premium_assignment_for_user
+        assert get_premium_assignment_for_user(111) is None
 
     @pytest.mark.asyncio
     async def test_blocked_by_other_subscriber(self, monkeypatch):
@@ -450,7 +507,9 @@ class TestPremiumUnassignCommand:
         assert "nothing to release" in embed.title.lower()
 
     @pytest.mark.asyncio
-    async def test_with_assignment_releases_and_invalidates_cache(self, monkeypatch):
+    async def test_with_assignment_confirms_then_releases(self, monkeypatch):
+        """/premium_unassign now prompts for confirmation naming the
+        guild that's about to revert — only releases after the user confirms."""
         monkeypatch.setenv("PREMIUM_SKU_ID", "12345")
         import premium as _premium
         importlib.reload(_premium)
@@ -461,14 +520,50 @@ class TestPremiumUnassignCommand:
         guild_obj.name = "ReleasedGuild"
         bot.get_guild = MagicMock(return_value=guild_obj)
 
+        _patch_confirm_view(monkeypatch, confirmed=True)
+
         interaction = AsyncMock()
         interaction.user.id = 111
         interaction.response.send_message = AsyncMock()
+        interaction.followup.send         = AsyncMock()
+        interaction.original_response     = AsyncMock(return_value=MagicMock())
+
+        await cog.premium_unassign.callback(cog, interaction)
+
+        # Confirmation embed names the guild being released.
+        prompt_call = interaction.response.send_message.call_args
+        prompt_embed = prompt_call.kwargs.get("embed") or prompt_call.args[0]
+        assert "release" in prompt_embed.title.lower()
+        assert "ReleasedGuild" in prompt_embed.description
+
+        from config import get_premium_assignment_for_user
+        assert get_premium_assignment_for_user(111) is None
+
+    @pytest.mark.asyncio
+    async def test_unassign_cancelled_does_not_release(self, monkeypatch):
+        """If the user cancels the confirmation, the assignment stays."""
+        monkeypatch.setenv("PREMIUM_SKU_ID", "12345")
+        import premium as _premium
+        importlib.reload(_premium)
+        _premium.assign(user_id=111, guild_id=TEST_GUILD_ID)
+
+        cog, bot = _make_donate_cog()
+        guild_obj = MagicMock()
+        guild_obj.name = "ReleasedGuild"
+        bot.get_guild = MagicMock(return_value=guild_obj)
+
+        _patch_confirm_view(monkeypatch, confirmed=False)
+
+        interaction = AsyncMock()
+        interaction.user.id = 111
+        interaction.response.send_message = AsyncMock()
+        interaction.followup.send         = AsyncMock()
+        interaction.original_response     = AsyncMock(return_value=MagicMock())
 
         await cog.premium_unassign.callback(cog, interaction)
 
         from config import get_premium_assignment_for_user
-        assert get_premium_assignment_for_user(111) is None
+        assert get_premium_assignment_for_user(111) == TEST_GUILD_ID  # unchanged
 
 
 # ── /upgrade auto-assign branch ───────────────────────────────────────────────

@@ -21,6 +21,23 @@ repo `../lw-alliance-helper.github.io` (the website) has its own
   merging to main *is* the release. Delete feature branches after
   merge to release; **keep** release branches as history. See
   `feedback_release_workflow_bot.md` in Memory for the full rule.
+- **Dev branch for major-change staging.** A long-lived `dev` branch
+  backs a separate Railway service + separate Discord app for real
+  end-to-end testing of high-blast-radius features (schema
+  migrations, persistent Views, scheduler/startup-hook changes,
+  anything that touches money paths). Routing:
+  - **Major features:** feature → PR to `dev` (merge commit) → test
+    on the staging server → PR `dev` into `release/X.Y.Z` →
+    `main`.
+  - **Small / doc changes:** feature → `release/X.Y.Z` → `main`,
+    same as before. They skip `dev`.
+  - **Hotfixes:** still direct to `main` per the hotfix rule below.
+  - **Keep `dev` in sync:** when `main` moves forward and `dev`
+    is *not* ahead with feature work in progress, fast-forward `dev`
+    to `main`. If `dev` has uncommitted-to-main feature work, leave
+    it alone — it'll resync after that feature ships.
+  - **Versioning still happens on the release branch.** Don't bump
+    `__version__` or write CHANGELOG entries on `dev`.
 - **Backlog lives in [GitHub Project #2](https://github.com/orgs/LW-Alliance-Helper/projects/2).**
   Auto-add fires for both repos. Apply a label at issue-creation time
   (`bug` / `feature` / `documentation` / `hotfix`).

@@ -294,8 +294,8 @@ class DonateCog(commands.Cog):
                 "🪪 Your subscription unlocks Premium in **one server at a time**. "
                 "After checkout the bot pins it to this server automatically; "
                 "use `/premium_assign` to move it later.\n\n"
-                "🗂️ Premium adds features; it does not take away any data or lock you in to a plan. "
-                "Your alliance's data continues to live in your own Google Sheet."
+                "🗂️ Premium adds features, your alliance data lives in your own Google Sheet. "
+                "If you ever cancel, the Sheet you've been using is still yours, with all your data intact."
             ),
             color=discord.Color.purple(),
         )

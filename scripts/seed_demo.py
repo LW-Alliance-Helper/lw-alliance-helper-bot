@@ -1,36 +1,46 @@
 """
-seed_demo.py — Populate a demo guild with fictional alliance data for screenshots.
+seed_demo.py — Reset a demo guild to a clean fictional-alliance state.
 
-Run from the bot repo root. Inserts a fully-configured guild row into the bot's
-SQLite (`guild_configs.db`) and, unless --skip-sheet is passed, writes fictional
-roster / birthdays / train schedule / growth / survey-history tabs to the
-configured Google Sheet via the bot's existing gspread bootstrap.
+Two ways to run:
 
-The demo data is deliberately marked with `[Demo]` prefixes and fantasy-style
-member names so screenshots taken from the demo server can never be confused
-with a real alliance's data.
+1. **Deploy-time (recommended for the production bot's demo guild):** set
+   `SEED_DEMO_ON_BOOT=1` plus the `SEED_DEMO_*` env vars in Railway and
+   redeploy. `bot.py`'s `on_ready` calls `seed_demo_guild_from_env()`,
+   which writes against the live mounted SQLite + gspread credentials.
+   Use this whenever the demo guild has drifted from clean state because
+   community members poked at it.
 
-USAGE
------
+2. **CLI (local dev / one-off testing):** run from the bot repo root:
 
-    python scripts/seed_demo.py \\
-      --guild-id 1234567890 \\
-      --sheet-id abc...XYZ \\
-      --leadership-channel 1111 \\
-      --leadership-role    2222 \\
-      --member-role        3333 \\
-      --post-channel       4444   # optional; falls back to leadership channel
+       python scripts/seed_demo.py \\
+         --guild-id 1234567890 \\
+         --sheet-id abc...XYZ \\
+         --leadership-channel 1111 \\
+         --leadership-role    2222 \\
+         --member-role        3333 \\
+         --post-channel       4444   # optional; falls back to leadership channel
+
+What it does (idempotent — safe to fire repeatedly as a reset):
+- Wipes user-added rows in `guild_events` and `guild_extra_surveys` for
+  the demo guild (so re-seeds produce a true reset, not an accumulation)
+- UPSERTs the canonical demo config across every per-guild config table
+- Wipes and rewrites every demo Sheet tab (roster, birthdays, train
+  schedule, survey history, etc.) with 20 fictional members and realistic
+  but invented numbers
+
+The demo data uses fantasy-style member names so screenshots from the
+demo server can never be confused with a real alliance's data.
 
 ENVIRONMENT
 -----------
 
-    CONFIG_DB_PATH              Path to the demo bot's SQLite. Defaults to the
-                                production path; OVERRIDE for the demo bot.
+    CONFIG_DB_PATH              Path to the bot's SQLite. Defaults to the
+                                production Railway volume path.
     GOOGLE_CREDENTIALS_JSON     OR
     GOOGLE_SERVICE_ACCOUNT_FILE Service account creds for sheet writes.
 
-The demo Sheet must already be shared with the service account email before
-running this script.
+The demo Sheet must already be shared with the service account email
+before the seed runs.
 """
 from __future__ import annotations
 
@@ -234,6 +244,27 @@ def seed_survey(args) -> None:
     print(f"  ✓ survey config written")
 
 
+def wipe_demo_extras(guild_id: int) -> None:
+    """Delete user-added rows so the seed produces a true reset.
+
+    The save_* helpers UPSERT the canonical config rows (one per guild), so
+    those overwrite cleanly on re-seed. But two tables can grow with rows
+    users add at runtime (extra events via /events, extra surveys via the
+    Premium /survey flow). Without explicit deletes here, those rows
+    accumulate across resets and the demo guild drifts further from the
+    canonical state every time someone plays with it.
+    """
+    with config._get_conn() as conn:
+        deleted_events = conn.execute(
+            "DELETE FROM guild_events WHERE guild_id = ?", (guild_id,)
+        ).rowcount
+        deleted_surveys = conn.execute(
+            "DELETE FROM guild_extra_surveys WHERE guild_id = ?", (guild_id,)
+        ).rowcount
+        conn.commit()
+    print(f"  ✓ Cleared {deleted_events} extra events and {deleted_surveys} extra surveys")
+
+
 def seed_growth(args) -> None:
     """Seed growth tracking with five demo metrics."""
     metrics = [
@@ -400,6 +431,7 @@ def seed_demo_guild_from_env() -> None:
     config.init_db()
 
     print(f"[SEED] Bot SQLite:")
+    wipe_demo_extras(args.guild_id)
     seed_core_config(args)
     seed_events(args)
     seed_train(args)
@@ -462,6 +494,7 @@ def main() -> int:
     config.init_db()
 
     print("Bot SQLite:")
+    wipe_demo_extras(args.guild_id)
     seed_core_config(args)
     seed_events(args)
     seed_train(args)

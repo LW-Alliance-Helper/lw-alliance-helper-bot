@@ -212,19 +212,24 @@ def seed_birthdays(args) -> None:
 
 
 def seed_storm(args) -> None:
-    """Seed Desert Storm + Canyon Storm configs with the default mail template."""
+    """Seed Desert Storm + Canyon Storm configs with the default mail template.
+
+    Time labels are slot identifiers (Early/Late), not team names — either
+    team can be assigned to either time slot in a given week. The bot's
+    button label format is `{label}: {local} ({server})`.
+    """
     for event_type in ("DS", "CS"):
         config.save_storm_config(
             guild_id           = args.guild_id,
             event_type         = event_type,
             tab_name           = f"{event_type} Assignments",
             mail_template      = DEFAULT_DS_TEMPLATE,
-            t1_label           = "Team A",
-            t1_local           = "21:00",
-            t1_server          = "23:00",
-            t2_label           = "Team B",
-            t2_local           = "16:00",
-            t2_server          = "18:00",
+            t1_label           = "Early",
+            t1_local           = "4pm ET",
+            t1_server          = "18:00 ST",
+            t2_label           = "Late",
+            t2_local           = "9pm ET",
+            t2_server          = "23:00 ST",
             timezone           = "America/New_York",
             log_channel_id     = args.leadership_channel,
             post_channel_id    = args.post_channel,
@@ -412,65 +417,91 @@ def seed_sheet(args) -> None:
     ws.update(values=rows, range_name="A1")
     print(f"  ✓ Growth Tracking tab — {len(growth_periods)} periods × {len(growth_metrics)} metrics")
 
-    # DS Assignments — Team A + Team B rosters in the bot's parser format
-    # (DS_X_ZONES / DS_X_SUBS section markers, zone rows, sub-pair rows).
+    # DS Assignments — real game-defined zones, balanced 10-member teams
+    # (snake-draft by 1st-squad power so neither team has a power advantage
+    # in the demo screenshots). One zone per team is left empty to show
+    # alliances don't always fill every slot.
     ds_zones_a = [
-        ("Power Tower",  ["Phoenix99", "Vortex", "Arclight"]),
-        ("Castle",       ["Valeria", "Tempest"]),
-        ("North Watch",  ["IronFist", "Maverick"]),
-        ("South Watch",  ["StormBreaker", "Hawthorne"]),
-        ("East Watch",   ["Sable"]),
-        ("West Watch",   ["Saber"]),
+        ("Nuclear Silo",      ["Phoenix99"]),
+        ("Oil Refinery I",    ["Valeria"]),
+        ("Oil Refinery II",   ["Tempest"]),
+        ("Science Hub",       ["IronFist"]),
+        ("Info Center",       ["Sable"]),
+        ("Field Hospital I",  ["Onyx"]),
+        ("Field Hospital II", ["Saber"]),
+        ("Field Hospital III",["Echo"]),
+        ("Field Hospital IV", ["Krieger"]),
+        ("Arsenal",           ["NightOwl"]),
+        ("Mercenary Factory", []),  # not filled this week
     ]
     ds_subs_a = [
-        ("Phoenix99",   "ShadowHunter"),
-        ("Vortex",      "NightOwl"),
-        ("IronFist",    "Cipher"),
+        ("Phoenix99",  "Onyx"),
+        ("Valeria",    "Tempest"),
+        ("IronFist",   "Saber"),
     ]
     ds_zones_b = [
-        ("Power Tower",  ["Onyx", "Frostbite", "Krieger"]),
-        ("Castle",       ["Echo", "Ravenshield"]),
-        ("North Watch",  ["Wraithborn"]),
-        ("South Watch",  ["NightOwl"]),
-        ("East Watch",   ["Cipher", "ShadowHunter"]),
-        ("West Watch",   ["Maverick"]),
+        ("Nuclear Silo",      ["Arclight"]),
+        ("Oil Refinery I",    ["Vortex"]),
+        ("Oil Refinery II",   ["ShadowHunter"]),
+        ("Science Hub",       ["Maverick"]),
+        ("Info Center",       ["Hawthorne"]),
+        ("Field Hospital I",  ["StormBreaker"]),
+        ("Field Hospital II", ["Frostbite"]),
+        ("Field Hospital III",["Ravenshield"]),
+        ("Field Hospital IV", ["Cipher"]),
+        ("Arsenal",           ["Wraithborn"]),
+        ("Mercenary Factory", []),
     ]
     ds_subs_b = [
-        ("Onyx",        "Frostbite"),
-        ("Echo",        "Ravenshield"),
-        ("Wraithborn",  "Krieger"),
+        ("Arclight",   "Hawthorne"),
+        ("Vortex",     "Frostbite"),
+        ("Maverick",   "Ravenshield"),
     ]
     ds_rows = _build_storm_assignment_rows("DS", ds_zones_a, ds_subs_a, ds_zones_b, ds_subs_b)
     ws = _ensure_tab(ss, "DS Assignments", rows=len(ds_rows) + 5, cols=2)
     ws.update(values=ds_rows, range_name="A1")
     print(f"  ✓ DS Assignments tab — Team A + Team B rosters populated")
 
-    # CS Assignments — same structure but Canyon-flavored zone names.
+    # CS Assignments — real game-defined zones with the same team split.
+    # Two Sample Warehouses left empty per team since CS has 12 zones and
+    # each team has 10 members.
     cs_zones_a = [
-        ("Bridge",        ["Phoenix99", "Arclight"]),
-        ("North Spire",   ["Valeria", "Tempest", "Hawthorne"]),
-        ("South Spire",   ["Vortex", "IronFist"]),
-        ("East Plateau",  ["StormBreaker", "Maverick"]),
-        ("West Plateau",  ["Saber"]),
-        ("Lava Pool",     ["Sable"]),
+        ("Virus Lab",            ["Phoenix99"]),
+        ("Power Tower",          ["Valeria"]),
+        ("Data Center I",        ["Tempest"]),
+        ("Data Center II",       ["IronFist"]),
+        ("Defense System I",     ["Sable"]),
+        ("Defense System II",    ["Onyx"]),
+        ("Serum Factory I",      ["Saber"]),
+        ("Serum Factory II",     ["Echo"]),
+        ("Sample Warehouse I",   ["Krieger"]),
+        ("Sample Warehouse II",  ["NightOwl"]),
+        ("Sample Warehouse III", []),
+        ("Sample Warehouse IV",  []),
     ]
     cs_subs_a = [
-        ("Phoenix99",   "ShadowHunter"),
-        ("Valeria",     "NightOwl"),
-        ("Vortex",      "Cipher"),
+        ("Phoenix99",  "Onyx"),
+        ("Valeria",    "Tempest"),
+        ("IronFist",   "Echo"),
     ]
     cs_zones_b = [
-        ("Bridge",        ["Onyx", "Frostbite"]),
-        ("North Spire",   ["Echo", "Ravenshield"]),
-        ("South Spire",   ["Krieger", "Wraithborn"]),
-        ("East Plateau",  ["Cipher"]),
-        ("West Plateau",  ["NightOwl", "ShadowHunter"]),
-        ("Lava Pool",     ["Maverick"]),
+        ("Virus Lab",            ["Arclight"]),
+        ("Power Tower",          ["Vortex"]),
+        ("Data Center I",        ["ShadowHunter"]),
+        ("Data Center II",       ["Maverick"]),
+        ("Defense System I",     ["Hawthorne"]),
+        ("Defense System II",    ["StormBreaker"]),
+        ("Serum Factory I",      ["Frostbite"]),
+        ("Serum Factory II",     ["Ravenshield"]),
+        ("Sample Warehouse I",   ["Cipher"]),
+        ("Sample Warehouse II",  ["Wraithborn"]),
+        ("Sample Warehouse III", []),
+        ("Sample Warehouse IV",  []),
     ]
     cs_subs_b = [
-        ("Onyx",        "Frostbite"),
-        ("Echo",        "Ravenshield"),
-        ("Krieger",     "Wraithborn"),
+        ("Arclight",   "Hawthorne"),
+        ("Vortex",     "Frostbite"),
+        ("Maverick",   "Ravenshield"),
     ]
     cs_rows = _build_storm_assignment_rows("CS", cs_zones_a, cs_subs_a, cs_zones_b, cs_subs_b)
     ws = _ensure_tab(ss, "CS Assignments", rows=len(cs_rows) + 5, cols=2)

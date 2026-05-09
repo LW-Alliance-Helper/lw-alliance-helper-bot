@@ -126,8 +126,8 @@ def seed_core_config(args) -> None:
         leadership_channel_id     = args.leadership_channel,
         announcement_channel_id   = args.post_channel,
         member_role_id            = args.member_role,
-        member_role_name          = "Member",
-        leadership_role_name      = "Leadership",
+        member_role_name          = args.member_role_name,
+        leadership_role_name      = args.leadership_role_name,
         survey_channel_id         = args.post_channel,
         survey_notify_channel_id  = args.leadership_channel,
         ds_log_channel_id         = args.leadership_channel,
@@ -342,7 +342,88 @@ def seed_sheet(args) -> None:
     print(f"  ✓ CS Assignments tab — empty (bot manages structure)")
 
 
-# ── Entry point ──────────────────────────────────────────────────────────────
+# ── Boot-time entry point (called from bot.py when SEED_DEMO_ON_BOOT=1) ─────
+
+def seed_demo_guild_from_env() -> None:
+    """Run the full demo seed using values pulled from env vars.
+
+    Designed to be called from `bot.py` at startup when `SEED_DEMO_ON_BOOT=1`,
+    so the seed runs against the production bot's mounted SQLite + gspread
+    credentials without any extra Railway-volume gymnastics.
+
+    Required env vars (all string-form integers except the role-name and
+    sheet-id ones):
+        SEED_DEMO_GUILD_ID
+        SEED_DEMO_SHEET_ID
+        SEED_DEMO_LEADERSHIP_CHANNEL
+        SEED_DEMO_LEADERSHIP_ROLE
+        SEED_DEMO_MEMBER_ROLE
+
+    Optional env vars (with sensible defaults):
+        SEED_DEMO_LEADERSHIP_ROLE_NAME   default "Leadership"
+        SEED_DEMO_MEMBER_ROLE_NAME       default "Member"
+        SEED_DEMO_POST_CHANNEL           default = leadership channel
+        SEED_DEMO_SKIP_SHEET             "1" to skip the gspread half
+    """
+    import argparse, os
+
+    required = [
+        "SEED_DEMO_GUILD_ID",
+        "SEED_DEMO_SHEET_ID",
+        "SEED_DEMO_LEADERSHIP_CHANNEL",
+        "SEED_DEMO_LEADERSHIP_ROLE",
+        "SEED_DEMO_MEMBER_ROLE",
+    ]
+    missing = [k for k in required if not os.getenv(k)]
+    if missing:
+        print(f"[SEED] Missing required env vars: {', '.join(missing)}")
+        print(f"[SEED] Aborting — set them in Railway and redeploy.")
+        return
+
+    leadership_channel = int(os.getenv("SEED_DEMO_LEADERSHIP_CHANNEL"))
+    args = argparse.Namespace(
+        guild_id              = int(os.getenv("SEED_DEMO_GUILD_ID")),
+        sheet_id              = os.getenv("SEED_DEMO_SHEET_ID"),
+        leadership_channel    = leadership_channel,
+        leadership_role       = int(os.getenv("SEED_DEMO_LEADERSHIP_ROLE")),
+        leadership_role_name  = os.getenv("SEED_DEMO_LEADERSHIP_ROLE_NAME", "Leadership"),
+        member_role           = int(os.getenv("SEED_DEMO_MEMBER_ROLE")),
+        member_role_name      = os.getenv("SEED_DEMO_MEMBER_ROLE_NAME", "Member"),
+        post_channel          = int(os.getenv("SEED_DEMO_POST_CHANNEL", str(leadership_channel))),
+        skip_sheet            = os.getenv("SEED_DEMO_SKIP_SHEET") == "1",
+    )
+
+    print(f"[SEED] Seeding demo data for guild {args.guild_id}…")
+    print(f"[SEED]   DB: {config.DB_PATH}")
+    print(f"[SEED]   Sheet: {args.sheet_id}")
+
+    config.init_db()
+
+    print(f"[SEED] Bot SQLite:")
+    seed_core_config(args)
+    seed_events(args)
+    seed_train(args)
+    seed_birthdays(args)
+    seed_storm(args)
+    seed_survey(args)
+    seed_growth(args)
+
+    if args.skip_sheet:
+        print(f"[SEED] Sheet writes skipped (SEED_DEMO_SKIP_SHEET=1).")
+    else:
+        print(f"[SEED] Google Sheet:")
+        try:
+            seed_sheet(args)
+        except Exception as e:
+            print(f"[SEED]   ✗ Sheet write failed: {type(e).__name__}: {e}")
+            print(f"[SEED]   (DB seeding succeeded; re-run with proper creds or set")
+            print(f"[SEED]    SEED_DEMO_SKIP_SHEET=1 and populate the Sheet manually.)")
+            return
+
+    print(f"[SEED] Done. Set SEED_DEMO_ON_BOOT=0 (or remove the env vars) for the next deploy.")
+
+
+# ── CLI entry point ──────────────────────────────────────────────────────────
 
 def main() -> int:
     p = argparse.ArgumentParser(
@@ -357,9 +438,13 @@ def main() -> int:
     p.add_argument("--leadership-channel",  type=int, required=True,
                    help="Channel ID for leadership-only commands and drafts")
     p.add_argument("--leadership-role",     type=int, required=True,
-                   help="Role ID for the leadership role (note: role name is hardcoded to 'Leadership')")
+                   help="Role ID for the leadership role")
+    p.add_argument("--leadership-role-name", type=str, default="Leadership",
+                   help="Exact name of the leadership role (the bot gates feature commands by name match). Default: 'Leadership'")
     p.add_argument("--member-role",         type=int, required=True,
                    help="Role ID for the alliance-member role")
+    p.add_argument("--member-role-name",    type=str, default="Member",
+                   help="Exact name of the member role. Default: 'Member'")
     p.add_argument("--post-channel",        type=int, default=None,
                    help="Channel ID for public posts (events, surveys, storm). Defaults to leadership channel.")
     p.add_argument("--skip-sheet",          action="store_true",

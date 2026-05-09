@@ -149,6 +149,16 @@ async def on_ready():
     init_db()
     print(f"[INFO] Logged in as {bot.user} (ID: {bot.user.id})")
 
+    # Temporary: one-shot demo guild seeder. Runs once when SEED_DEMO_ON_BOOT=1
+    # is set in the Railway env. Idempotent; safe to re-run. Remove this block
+    # and the SEED_DEMO_* env vars on the next deploy after the seed succeeds.
+    if os.getenv("SEED_DEMO_ON_BOOT") == "1":
+        try:
+            from scripts.seed_demo import seed_demo_guild_from_env
+            seed_demo_guild_from_env()
+        except Exception as e:
+            print(f"[SEED] Demo seed crashed: {type(e).__name__}: {e}")
+
     # Load cogs — skip if already loaded (happens on reconnect)
     if "train" not in bot.extensions:
         await bot.load_extension("train")

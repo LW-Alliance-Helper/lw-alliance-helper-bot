@@ -303,6 +303,29 @@ def _ensure_tab(ss, name: str, rows: int = 100, cols: int = 12):
     return ws
 
 
+def _build_storm_assignment_rows(event_type: str,
+                                 zones_a, subs_a,
+                                 zones_b, subs_b) -> list:
+    """Build the row list for a DS/CS Assignments tab in the format the
+    bot's storm parser expects: section markers (DS_A_ZONES / DS_A_SUBS /
+    DS_B_ZONES / DS_B_SUBS), zone rows (col A = zone name, col B = comma-
+    separated members), sub-pair rows (col A = starter, col B = sub),
+    blank separator rows between sections.
+    """
+    prefix = event_type.upper()  # "DS" or "CS"
+    rows = []
+    for team, zones, subs in [("A", zones_a, subs_a), ("B", zones_b, subs_b)]:
+        rows.append([f"{prefix}_{team}_ZONES", ""])
+        for zone, members in zones:
+            rows.append([zone, ", ".join(members)])
+        rows.append(["", ""])
+        rows.append([f"{prefix}_{team}_SUBS", ""])
+        for starter, sub in subs:
+            rows.append([starter, sub])
+        rows.append(["", ""])
+    return rows
+
+
 def seed_sheet(args) -> None:
     """Write the demo data tabs into the configured Google Sheet."""
     print("  Connecting to Sheet…")
@@ -359,18 +382,100 @@ def seed_sheet(args) -> None:
     ws.update(values=rows, range_name="A1")
     print(f"  ✓ Survey History tab — 6 weeks of submissions")
 
-    # Growth Tracking — empty header. The bot writes here on /growth runs.
-    ws = _ensure_tab(ss, "Growth Tracking", rows=200, cols=20)
-    ws.update(values=[["Name"]], range_name="A1")
-    print(f"  ✓ Growth Tracking tab — header only (run /growth in Discord to populate)")
+    # Growth Tracking — three months of historical snapshots so screenshots
+    # of /growth and the Sheet show real period-over-period change.
+    growth_metrics = ["1st Squad Power", "2nd Squad Power",
+                      "3rd Squad Power", "THP", "Total Kills"]
+    growth_periods = []  # (month_label, decay_factor)
+    today_dt = datetime.now()
+    for offset in (2, 1, 0):
+        month_dt = (today_dt.replace(day=15) - timedelta(days=offset * 30))
+        growth_periods.append((month_dt.strftime("%b %Y"), 0.94 + 0.03 * (2 - offset)))
+    ws = _ensure_tab(ss, "Growth Tracking",
+                     rows=len(DEMO_MEMBERS) + 5,
+                     cols=1 + len(growth_metrics) * len(growth_periods))
+    header = ["Name"]
+    for label, _ in growth_periods:
+        header.extend(f"{m} ({label})" for m in growth_metrics)
+    rows = [header]
+    for m in DEMO_MEMBERS:
+        row = [m[0]]  # name
+        for _, decay in growth_periods:
+            row.extend([
+                int(m[1] * decay),  # 1st squad
+                int(m[2] * decay),  # 2nd squad
+                int(m[3] * decay),  # 3rd squad
+                int(m[4] * decay),  # THP
+                int(m[5] * decay),  # total kills
+            ])
+        rows.append(row)
+    ws.update(values=rows, range_name="A1")
+    print(f"  ✓ Growth Tracking tab — {len(growth_periods)} periods × {len(growth_metrics)} metrics")
 
-    # DS Assignments — the bot manages the structure itself; just create empty.
-    ws = _ensure_tab(ss, "DS Assignments", rows=50, cols=6)
-    print(f"  ✓ DS Assignments tab — empty (bot manages structure)")
+    # DS Assignments — Team A + Team B rosters in the bot's parser format
+    # (DS_X_ZONES / DS_X_SUBS section markers, zone rows, sub-pair rows).
+    ds_zones_a = [
+        ("Power Tower",  ["Phoenix99", "Vortex", "Arclight"]),
+        ("Castle",       ["Valeria", "Tempest"]),
+        ("North Watch",  ["IronFist", "Maverick"]),
+        ("South Watch",  ["StormBreaker", "Hawthorne"]),
+        ("East Watch",   ["Sable"]),
+        ("West Watch",   ["Saber"]),
+    ]
+    ds_subs_a = [
+        ("Phoenix99",   "ShadowHunter"),
+        ("Vortex",      "NightOwl"),
+        ("IronFist",    "Cipher"),
+    ]
+    ds_zones_b = [
+        ("Power Tower",  ["Onyx", "Frostbite", "Krieger"]),
+        ("Castle",       ["Echo", "Ravenshield"]),
+        ("North Watch",  ["Wraithborn"]),
+        ("South Watch",  ["NightOwl"]),
+        ("East Watch",   ["Cipher", "ShadowHunter"]),
+        ("West Watch",   ["Maverick"]),
+    ]
+    ds_subs_b = [
+        ("Onyx",        "Frostbite"),
+        ("Echo",        "Ravenshield"),
+        ("Wraithborn",  "Krieger"),
+    ]
+    ds_rows = _build_storm_assignment_rows("DS", ds_zones_a, ds_subs_a, ds_zones_b, ds_subs_b)
+    ws = _ensure_tab(ss, "DS Assignments", rows=len(ds_rows) + 5, cols=2)
+    ws.update(values=ds_rows, range_name="A1")
+    print(f"  ✓ DS Assignments tab — Team A + Team B rosters populated")
 
-    # CS Assignments — same.
-    ws = _ensure_tab(ss, "CS Assignments", rows=50, cols=6)
-    print(f"  ✓ CS Assignments tab — empty (bot manages structure)")
+    # CS Assignments — same structure but Canyon-flavored zone names.
+    cs_zones_a = [
+        ("Bridge",        ["Phoenix99", "Arclight"]),
+        ("North Spire",   ["Valeria", "Tempest", "Hawthorne"]),
+        ("South Spire",   ["Vortex", "IronFist"]),
+        ("East Plateau",  ["StormBreaker", "Maverick"]),
+        ("West Plateau",  ["Saber"]),
+        ("Lava Pool",     ["Sable"]),
+    ]
+    cs_subs_a = [
+        ("Phoenix99",   "ShadowHunter"),
+        ("Valeria",     "NightOwl"),
+        ("Vortex",      "Cipher"),
+    ]
+    cs_zones_b = [
+        ("Bridge",        ["Onyx", "Frostbite"]),
+        ("North Spire",   ["Echo", "Ravenshield"]),
+        ("South Spire",   ["Krieger", "Wraithborn"]),
+        ("East Plateau",  ["Cipher"]),
+        ("West Plateau",  ["NightOwl", "ShadowHunter"]),
+        ("Lava Pool",     ["Maverick"]),
+    ]
+    cs_subs_b = [
+        ("Onyx",        "Frostbite"),
+        ("Echo",        "Ravenshield"),
+        ("Krieger",     "Wraithborn"),
+    ]
+    cs_rows = _build_storm_assignment_rows("CS", cs_zones_a, cs_subs_a, cs_zones_b, cs_subs_b)
+    ws = _ensure_tab(ss, "CS Assignments", rows=len(cs_rows) + 5, cols=2)
+    ws.update(values=cs_rows, range_name="A1")
+    print(f"  ✓ CS Assignments tab — Team A + Team B rosters populated")
 
 
 # ── Boot-time entry point (called from bot.py when SEED_DEMO_ON_BOOT=1) ─────

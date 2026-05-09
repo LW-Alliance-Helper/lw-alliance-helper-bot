@@ -192,12 +192,16 @@ def seed_train(args) -> None:
 
 
 def seed_birthdays(args) -> None:
-    """Seed birthday config (sheet tab + columns)."""
+    """Seed birthday config (sheet tab + columns).
+
+    Column indices are 0-based to match the bot's parser (`row[name_col]`):
+    A=0, B=1, C=2.
+    """
     config.save_birthday_config(
         guild_id            = args.guild_id,
         tab_name            = "Birthdays",
-        name_col            = 1,   # column A
-        birthday_col        = 2,   # column B
+        name_col            = 0,   # column A
+        birthday_col        = 1,   # column B
         discord_id_col      = -1,
         data_start_row      = 2,
         enabled             = 1,
@@ -344,14 +348,21 @@ def seed_sheet(args) -> None:
     ws.update(values=rows, range_name="A1")
     print(f"  ✓ Squad Powers tab — {len(DEMO_MEMBERS)} members")
 
-    # Birthdays — name + MM-DD birthday with a mix of past / upcoming so the
-    # "next 14 days" preview always finds at least one.
+    # Birthdays — name + M/D birthday in the slash format the bot's parser
+    # accepts (`parse_birthday` regex matches `^(\d{1,2})/(\d{1,2})...`).
+    # First member's birthday is always within the next 14 days so the
+    # /birthdays preview always finds at least one upcoming.
     ws = _ensure_tab(ss, "Birthdays", rows=len(DEMO_MEMBERS) + 5, cols=3)
     today    = date.today()
-    upcoming = (today + timedelta(days=5)).strftime("%m-%d")  # always within 14d
+    upcoming_dt = today + timedelta(days=5)
+    upcoming    = f"{upcoming_dt.month}/{upcoming_dt.day}"
     rows = [["Name", "Birthday"]]
     for i, m in enumerate(DEMO_MEMBERS):
-        bday = upcoming if i == 0 else m[6]   # first member's bday is always soon
+        if i == 0:
+            bday = upcoming
+        else:
+            month, day = m[6].split("-")
+            bday = f"{int(month)}/{int(day)}"
         rows.append([m[0], bday])
     ws.update(values=rows, range_name="A1")
     print(f"  ✓ Birthdays tab — {len(DEMO_MEMBERS)} members (next 14 days: {upcoming})")

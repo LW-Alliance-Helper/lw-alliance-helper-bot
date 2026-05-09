@@ -1,0 +1,57 @@
+name: 🐛 Bug report
+description: Something in the bot isn't working the way you expected.
+title: "[Bug] "
+labels: ["bug"]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Thanks for taking the time to report this. The more detail you can give, the faster it can be tracked down.
+
+  - type: textarea
+    id: what-happened
+    attributes:
+      label: What happened?
+      description: A clear description of what went wrong.
+      placeholder: e.g. The Desert Storm draft posted with the wrong time.
+    validations:
+      required: true
+
+  - type: textarea
+    id: expected
+    attributes:
+      label: What did you expect to happen?
+      placeholder: e.g. The draft should have used the time I picked in the wizard.
+    validations:
+      required: true
+
+  - type: textarea
+    id: steps
+    attributes:
+      label: Steps to reproduce
+      description: What did you click / type, in order?
+      placeholder: |
+        1. Ran `/desertstorm_draft`
+        2. Picked Team A
+        3. Picked 9pm ET
+        4. ...
+    validations:
+      required: false
+
+  - type: input
+    id: reference
+    attributes:
+      label: Reference code (if shown)
+      description: If the bot returned an error message with a `Reference: ...` code, paste it here. It lets us correlate to the exact failure on our side.
+      placeholder: e.g. Reference 7f3a-2c91
+    validations:
+      required: false
+
+  - type: input
+    id: command
+    attributes:
+      label: Which command or feature?
+      description: Optional — helps us route the issue faster.
+      placeholder: e.g. /desertstorm_draft, train reminder, growth snapshot
+    validations:
+      required: false

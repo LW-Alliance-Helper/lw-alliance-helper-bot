@@ -376,3 +376,77 @@ class TestEventEditorAddEventBlurb:
         # And feeding that into build_announcement (no guild_id) renders it.
         msg = build_announcement([event])
         assert "TEST_EVENT_BLURB at" in msg
+
+
+# ── format_et: timezone abbreviation in {time} ───────────────────────────────
+
+class TestFormatEtTimezoneSuffix:
+    """Regression: announcements rendered `5:00pm (19:00 Server Time)` with
+    no label on the local time, leaving members to guess which tz the
+    leader meant. format_et now appends dt.tzname() so {time} surfaces
+    `5:00pm EDT` (or KST, etc., for non-ET alliances)."""
+
+    def test_appends_et_abbreviation_for_eastern_time(self):
+        from datetime import datetime
+        from zoneinfo import ZoneInfo
+        from scheduler import format_et
+        # May → EDT (DST active)
+        dt = datetime(2026, 5, 1, 17, 0, tzinfo=ZoneInfo("America/New_York"))
+        assert format_et(dt) == "5:00pm EDT"
+
+    def test_appends_winter_abbreviation_for_eastern_time(self):
+        from datetime import datetime
+        from zoneinfo import ZoneInfo
+        from scheduler import format_et
+        # January → EST (no DST)
+        dt = datetime(2026, 1, 15, 17, 0, tzinfo=ZoneInfo("America/New_York"))
+        assert format_et(dt) == "5:00pm EST"
+
+    def test_appends_non_et_abbreviation(self):
+        from datetime import datetime
+        from zoneinfo import ZoneInfo
+        from scheduler import format_et
+        dt = datetime(2026, 5, 1, 17, 0, tzinfo=ZoneInfo("Asia/Seoul"))
+        assert format_et(dt) == "5:00pm KST"
+
+    def test_announcement_includes_local_tz_label(self):
+        """End-to-end: a custom blurb using {time} should now render with
+        the timezone abbreviation, not bare `5:00pm`."""
+        from datetime import datetime
+        from zoneinfo import ZoneInfo
+        from scheduler import build_announcement
+        event = {
+            "key":   "marauder",
+            "name":  "Plague Marauder",
+            "dt":    datetime(2026, 5, 8, 17, 0, tzinfo=ZoneInfo("America/New_York")),
+            "blurb": "Plague Marauder at {time} ({server_time} Server Time).",
+        }
+        msg = build_announcement([event])
+        assert "5:00pm EDT" in msg
+        assert "(19:00 Server Time)" in msg
+
+
+# ── make_event_datetime: per-event tz instead of forced ET ───────────────────
+
+class TestMakeEventDatetimeTimezone:
+    """Regression: Add Event / Edit Time used to call make_et_datetime
+    which always pinned the dt to America/New_York, silently coercing
+    any non-ET alliance's edits into ET. The new helper accepts an
+    explicit tz so the editor can preserve the per-event setting."""
+
+    def test_default_tz_is_et_when_none_passed(self):
+        from datetime import date
+        from zoneinfo import ZoneInfo
+        from scheduler import make_event_datetime
+        dt = make_event_datetime(date(2026, 5, 8), 17, 0)
+        assert dt.tzinfo == ZoneInfo("America/New_York")
+        assert dt.hour == 17
+
+    def test_explicit_tz_is_preserved(self):
+        from datetime import date
+        from zoneinfo import ZoneInfo
+        from scheduler import make_event_datetime
+        seoul = ZoneInfo("Asia/Seoul")
+        dt = make_event_datetime(date(2026, 5, 8), 17, 0, tz=seoul)
+        assert dt.tzinfo == seoul
+        assert dt.hour == 17  # local hour, not converted

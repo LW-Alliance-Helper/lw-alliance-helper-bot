@@ -154,12 +154,28 @@ def to_server_time_str(et_dt: datetime) -> str:
 
 
 def format_et(dt: datetime) -> str:
+    """Format a tz-aware datetime as `5:00pm EDT`. The function is named
+    `format_et` for legacy reasons — it does not coerce timezone, it
+    just formats whichever tz the dt carries. The trailing tz
+    abbreviation comes from `dt.tzname()` (e.g. EST/EDT for ET, KST for
+    Asia/Seoul) so members reading an announcement know which timezone
+    the local time is stated in. Falls back to no-suffix for naive dts.
+    """
     hour12 = dt.hour % 12 or 12
-    return f"{hour12}:{dt:%M%p}".lower()
+    base   = f"{hour12}:{dt:%M%p}".lower()
+    tz     = dt.tzname() if dt.tzinfo else None
+    return f"{base} {tz}" if tz else base
 
 
-def make_et_datetime(run_date: date, hour: int, minute: int) -> datetime:
-    return datetime(run_date.year, run_date.month, run_date.day, hour, minute, tzinfo=ET)
+def make_event_datetime(run_date: date, hour: int, minute: int,
+                        tz: ZoneInfo | None = None) -> datetime:
+    """Build a tz-aware datetime in the event's configured timezone.
+    Defaults to ET when no tz is supplied (legacy callers + free-tier
+    fallback). Add Event / Edit Time in EventEditorView pass through
+    the per-event tz so a custom-timezone alliance's edits stay in
+    that tz instead of getting silently coerced to ET."""
+    return datetime(run_date.year, run_date.month, run_date.day,
+                    hour, minute, tzinfo=tz or ET)
 
 
 # ── Event list helpers ─────────────────────────────────────────────────────────
@@ -315,7 +331,7 @@ class EventEditorView(discord.ui.View):
             name = info["name"]
             t    = format_et(event["dt"])
             sv   = to_server_time_str(event["dt"])
-            lines.append(f"{i}. **{name}** — {t} ET ({sv} server)")
+            lines.append(f"{i}. **{name}** — {t} ({sv} server)")
         return "\n".join(lines) if lines else "*No events set*"
 
     def _render_editor_content(self) -> str:
@@ -383,7 +399,21 @@ class EventEditorView(discord.ui.View):
 
                 if parsed:
                     h, m = parsed
-                    dt = make_et_datetime(self.run_date, h, m)
+                    # Resolve the chosen event's configured timezone so
+                    # leadership-entered times stay in that tz. Without
+                    # this, every Add Event silently became ET, which
+                    # rendered the wrong server-time offset for any
+                    # alliance on a non-ET schedule.
+                    ev_tz = ET
+                    if self.guild_id is not None:
+                        try:
+                            from config import get_guild_event
+                            cfg_event = get_guild_event(self.guild_id, chosen_key)
+                            if cfg_event and cfg_event.get("timezone"):
+                                ev_tz = ZoneInfo(cfg_event["timezone"])
+                        except Exception:
+                            pass
+                    dt = make_event_datetime(self.run_date, h, m, tz=ev_tz)
                     # Include name + blurb from the resolved event info so
                     # build_announcement can render the configured custom
                     # message. Without these, the announcement falls through
@@ -398,7 +428,7 @@ class EventEditorView(discord.ui.View):
                     # Keep list sorted by time
                     self.event_list.sort(key=lambda e: e["dt"])
                     await channel.send(
-                        f"✅ **{chosen_name}** added at {format_et(dt)} ET.",
+                        f"✅ **{chosen_name}** added at {format_et(dt)}.",
                         delete_after=5,
                     )
                 else:
@@ -426,7 +456,7 @@ class EventEditorView(discord.ui.View):
             placeholder="Choose an event to edit...",
             options=[
                 discord.SelectOption(
-                    label=f"{_resolve_event_info(e['key'], self.guild_id)['name']} — {format_et(e['dt'])} ET",
+                    label=f"{_resolve_event_info(e['key'], self.guild_id)['name']} — {format_et(e['dt'])}",
                     value=str(i),
                 )
                 for i, e in enumerate(self.event_list)
@@ -460,10 +490,17 @@ class EventEditorView(discord.ui.View):
 
                 if parsed:
                     h, m = parsed
-                    self.event_list[idx]["dt"] = make_et_datetime(self.run_date, h, m)
+                    # Preserve the event's existing timezone — the dt was
+                    # built with the per-event tz when the daily draft
+                    # fired, and an Edit Time should stay in that tz, not
+                    # silently coerce to ET.
+                    ev_tz = self.event_list[idx]["dt"].tzinfo or ET
+                    self.event_list[idx]["dt"] = make_event_datetime(
+                        self.run_date, h, m, tz=ev_tz,
+                    )
                     self.event_list.sort(key=lambda e: e["dt"])
                     await channel.send(
-                        f"✅ **{lib_name}** updated to {format_et(self.event_list[idx]['dt'])} ET.",
+                        f"✅ **{lib_name}** updated to {format_et(self.event_list[idx]['dt'])}.",
                         delete_after=5,
                     )
                 else:

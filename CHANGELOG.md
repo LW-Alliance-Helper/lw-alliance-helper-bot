@@ -9,6 +9,14 @@ Each entry is a slim summary — heavier context (root cause, what we
 tried, design rationale) lives in the corresponding commit message
 and PR description.
 
+## [1.1.2] — 2026-05-08
+
+### Fixed
+- Daily event announcements now surface the local timezone alongside server time — `5:00pm EDT (19:00 Server Time)` instead of bare `5:00pm`, so members reading the post know which tz the leader meant.
+- Add Event / Edit Time in the daily-draft editor preserve the alliance's per-event timezone instead of silently coercing every leadership-entered time into America/New_York.
+
+Hotfix released direct to main per CLAUDE.md's hotfix exception.
+
 ## [1.1.1] — 2026-05-07
 
 ### Fixed

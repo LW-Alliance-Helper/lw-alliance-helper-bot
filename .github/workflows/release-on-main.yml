@@ -1,0 +1,76 @@
+name: Auto-create GitHub Release on main
+
+# Fires whenever a release-branch PR (or hotfix) lands on main. Reads the
+# version from bot.py.__version__, extracts the matching CHANGELOG section,
+# and creates a GitHub Release tagged at the merge commit. Skips silently
+# when the tag already exists (e.g. docs-only pushes that don't bump
+# __version__).
+
+on:
+  push:
+    branches: [main]
+
+jobs:
+  release:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write   # required for `gh release create` to push the tag
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0   # full history so the tag-existence check sees old tags
+
+      - name: Read version from bot.py
+        id: version
+        run: |
+          VERSION=$(grep -oP '__version__ = "\K[^"]+' bot.py)
+          if [ -z "$VERSION" ]; then
+            echo "Could not parse __version__ from bot.py" >&2
+            exit 1
+          fi
+          echo "version=$VERSION" >> "$GITHUB_OUTPUT"
+          echo "Detected version: $VERSION"
+
+      - name: Skip if tag already exists
+        id: tag_check
+        run: |
+          TAG="v${{ steps.version.outputs.version }}"
+          if git rev-parse "$TAG" >/dev/null 2>&1; then
+            echo "Tag $TAG already exists — nothing to release."
+            echo "skip=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "Tag $TAG does not exist yet — will create release."
+            echo "skip=false" >> "$GITHUB_OUTPUT"
+          fi
+
+      - name: Extract CHANGELOG section
+        if: steps.tag_check.outputs.skip == 'false'
+        run: |
+          python3 - <<'PY' > release-notes.md
+          import re, sys
+          version = "${{ steps.version.outputs.version }}"
+          with open("CHANGELOG.md") as f:
+              content = f.read()
+          pattern = rf"^## \[{re.escape(version)}\][^\n]*\n(.*?)(?=^## \[|\Z)"
+          match = re.search(pattern, content, re.DOTALL | re.MULTILINE)
+          if match:
+              print(match.group(1).strip())
+          else:
+              print(f"Release v{version}")
+          PY
+          echo "--- release-notes.md ---"
+          cat release-notes.md
+          echo "--- end ---"
+
+      - name: Create GitHub Release
+        if: steps.tag_check.outputs.skip == 'false'
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          TAG="v${{ steps.version.outputs.version }}"
+          gh release create "$TAG" \
+            --title "$TAG" \
+            --notes-file release-notes.md \
+            --target "${{ github.sha }}"
+          echo "Created release $TAG at ${{ github.sha }}"

@@ -115,13 +115,13 @@ DEMO_EVENTS = [
         "active":             1,
     },
     {
-        "short_key":          "bombing_drill",
-        "name":               "Alliance Bombing Drill",
+        "short_key":          "glacieradon",
+        "name":               "Glacieradon",
         "default_time":       "22:00",
         "schedule_type":      "repeating",
         "anchor_date":        "",
         "interval_days":      7,
-        "announcement_blurb": "Bombing Drill starts at {time} ({server_time} ST). Coordinate your bombs in voice chat 5 minutes before.",
+        "announcement_blurb": "Glacieradon at {time} ({server_time} Server Time). Get in voice 5 minutes before the start.",
         "active":             1,
     },
 ]

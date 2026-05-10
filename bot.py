@@ -511,11 +511,27 @@ async def growth_slash(interaction: discord.Interaction):
         async def edit_config(self, inter: discord.Interaction, button: discord.ui.Button):
             for item in self.children: item.disabled = True
             await wizard_registry.safe_edit_response(inter, view=self)
+            from setup_cog import (
+                _has_leadership_or_admin,
+                _check_wizard_can_run,
+                run_growth_setup,
+            )
+            if not _has_leadership_or_admin(inter):
+                await inter.followup.send(
+                    "⛔ You need the leadership role (or admin) to edit growth tracking config.",
+                    ephemeral=True,
+                )
+                self.stop()
+                return
+            if not await _check_wizard_can_run(inter, "setup_growth"):
+                self.stop()
+                return
             await inter.followup.send(
-                "Run `/setup_growth` to update the growth tracking configuration.",
+                "⚙️ Starting growth tracking setup — check the channel for prompts!",
                 ephemeral=True,
             )
             self.stop()
+            await run_growth_setup(inter, bot)
 
     await interaction.response.send_message(embed=embed, view=GrowthActionView(), ephemeral=True)
 

@@ -1356,13 +1356,20 @@ async def _send_view_configuration(interaction: discord.Interaction, cfg) -> Non
         b_lines.append(f"**Reminder Time:** {birthday.get('reminder_time', '*not set*')}")
     embed.add_field(name="🎂 Birthdays", value="\n".join(b_lines)[:1024], inline=False)
 
+    from config import server_time_to_local
+
+    def _slot_line(scfg: dict, slot: int) -> str:
+        server = scfg.get(f"time_option_{slot}_server", "")
+        if not server:
+            return "*not set*"
+        local = server_time_to_local(server, scfg.get("timezone") or cfg.timezone)
+        return f"{local} ({server} ST)" if local else f"{server} ST"
+
     ds_lines = [
         f"**Sheet Tab:** {ds.get('tab_name', '*not set*')}",
         f"**Log Channel:** {_channel(cfg.ds_log_channel_id)}",
-        f"**Time Option 1:** {ds.get('time_option_1_label') or '*not set*'} "
-        f"({ds.get('time_option_1_local') or '?'} local / {ds.get('time_option_1_server') or '?'} server)",
-        f"**Time Option 2:** {ds.get('time_option_2_label') or '*not set*'} "
-        f"({ds.get('time_option_2_local') or '?'} local / {ds.get('time_option_2_server') or '?'} server)",
+        f"**Time Option 1:** {_slot_line(ds, 1)}",
+        f"**Time Option 2:** {_slot_line(ds, 2)}",
         f"**Mail Template:** {_yn(ds.get('mail_template'))}",
     ]
     embed.add_field(name="⚔️ Desert Storm", value="\n".join(ds_lines)[:1024], inline=False)
@@ -1370,10 +1377,8 @@ async def _send_view_configuration(interaction: discord.Interaction, cfg) -> Non
     cs_lines = [
         f"**Sheet Tab:** {cs.get('tab_name', '*not set*')}",
         f"**Log Channel:** {_channel(cfg.cs_log_channel_id)}",
-        f"**Time Option 1:** {cs.get('time_option_1_label') or '*not set*'} "
-        f"({cs.get('time_option_1_local') or '?'} local / {cs.get('time_option_1_server') or '?'} server)",
-        f"**Time Option 2:** {cs.get('time_option_2_label') or '*not set*'} "
-        f"({cs.get('time_option_2_local') or '?'} local / {cs.get('time_option_2_server') or '?'} server)",
+        f"**Time Option 1:** {_slot_line(cs, 1)}",
+        f"**Time Option 2:** {_slot_line(cs, 2)}",
         f"**Mail Template:** {_yn(cs.get('mail_template'))}",
     ]
     embed.add_field(name="🏜️ Canyon Storm", value="\n".join(cs_lines)[:1024], inline=False)
@@ -3246,7 +3251,7 @@ async def run_storm_setup(interaction: discord.Interaction, bot, event_type: str
     hardcoded_tab = "DS Assignments" if event_type == "DS" else "CS Assignments"
     tab_name = await ask_keep_or_change(
         channel,
-        f"**Step 1 of 7 — Sheet Tab**\n"
+        f"**Step 1 of 9 — Sheet Tab**\n"
         f"Which tab in your Google Sheet stores the {label} zone assignments?\n"
         f"⚠️ *Make sure this tab exists in your sheet before continuing.*\n"
         f"ℹ️ *The bot will manage the data structure of this tab automatically — "
@@ -3290,7 +3295,7 @@ async def run_storm_setup(interaction: discord.Interaction, bot, event_type: str
 
     team_view = TeamChoiceView()
     await channel.send(
-        f"**Step 2 of 7 — Which teams do you run for {label}?**",
+        f"**Step 2 of 9 — Which teams do you run for {label}?**",
         view=team_view,
     )
     await wait_view_or_cancel(team_view, cancel_event)
@@ -3311,7 +3316,7 @@ async def run_storm_setup(interaction: discord.Interaction, bot, event_type: str
         guild=interaction.guild,
     )
     await channel.send(
-        f"**Step 3 of 7 — Storm Log Channel**\n"
+        f"**Step 3 of 9 — Storm Log Channel**\n"
         f"Select the channel where {label} participation/log summaries will be posted:",
         view=log_ch_view,
     )
@@ -3331,7 +3336,7 @@ async def run_storm_setup(interaction: discord.Interaction, bot, event_type: str
         guild=interaction.guild,
     )
     await channel.send(
-        f"**Step 4 of 7 — Mail Post Channel**\n"
+        f"**Step 4 of 9 — Mail Post Channel**\n"
         f"When leadership clicks **Post & Copy** at the end of `/"
         f"{'desertstorm' if event_type == 'DS' else 'canyonstorm'}_draft`, "
         f"the finished mail will be posted to this channel:",
@@ -3345,7 +3350,82 @@ async def run_storm_setup(interaction: discord.Interaction, bot, event_type: str
         return
     post_channel_id = post_ch_view.selected_channel.id
 
-    # ── Step 5: Mail template(s) ───────────────────────────────────────────────
+    # ── Steps 5 & 6: Time slots ────────────────────────────────────────────────
+    # Server time is canonical (UTC-2, no DST). Local time is computed at
+    # render time from the guild timezone, so we don't ask leadership to
+    # type it twice. Both slots are optional — leave blank to skip.
+    from config import parse_server_time, format_server_time, server_time_to_local
+
+    async def ask_server_time(slot_num: int, default: str, current: str) -> str | None:
+        """Prompt for one server-time slot, validating + retrying on bad input.
+        Returns the normalized "HH:MM" string, "" if leadership cleared it,
+        or None if the user cancelled / timed out."""
+        attempts_left = 3
+        prompt = (
+            f"**Step {4 + slot_num} of 9 — Time Slot {slot_num} (server time)**\n"
+            f"What server time does Time Slot {slot_num} fire at? Use 24-hour format "
+            f"(server time is UTC-2 and does not observe DST).\n"
+            f"Example: `{default}`. Enter `none` to skip this slot."
+        )
+        while True:
+            raw = await ask_keep_or_change(
+                channel,
+                prompt,
+                default=default,
+                current=current,
+                modal_title=f"Time Slot {slot_num}",
+                modal_label="Server time (HH:MM)",
+                timeout_cmd=cmd_name,
+                cancel_event=cancel_event,
+            )
+            if raw is None:
+                return None
+            if raw.strip().lower() in ("none", "skip", "-", ""):
+                return ""
+            parsed = parse_server_time(raw)
+            if parsed is not None:
+                return format_server_time(parsed)
+            attempts_left -= 1
+            if attempts_left <= 0:
+                await channel.send(
+                    f"⚠️ Could not read **`{raw}`** as a server time. "
+                    f"Run `/{cmd_name}` to try again."
+                )
+                return None
+            await channel.send(
+                f"⚠️ Could not read **`{raw}`** as a server time. "
+                f"Try `21:00` or `09:30`. Let's try once more."
+            )
+
+    t1_server = await ask_server_time(
+        1, default="21:00",
+        current=current.get("time_option_1_server", ""),
+    )
+    if t1_server is None:
+        return
+    if t1_server:
+        local_preview = server_time_to_local(t1_server, timezone)
+        await channel.send(
+            f"✅ Time Slot 1: **{local_preview} ({t1_server} ST)**"
+            if local_preview else
+            f"✅ Time Slot 1: **{t1_server} ST**"
+        )
+
+    t2_server = await ask_server_time(
+        2, default="13:00",
+        current=current.get("time_option_2_server", ""),
+    )
+    if t2_server is None:
+        return
+    if t2_server:
+        local_preview = server_time_to_local(t2_server, timezone)
+        await channel.send(
+            f"✅ Time Slot 2: **{local_preview} ({t2_server} ST)**"
+            if local_preview else
+            f"✅ Time Slot 2: **{t2_server} ST**"
+        )
+
+    # ── Step 7: Mail template(s) ───────────────────────────────────────────────
 
     async def get_template(team_label: str) -> str | None:
         """Get template for one team — show default with use/edit choice."""
@@ -3434,7 +3514,7 @@ async def run_storm_setup(interaction: discord.Interaction, bot, event_type: str
 
         shared_view = SharedTemplateView()
         await channel.send(
-            "**Step 5 of 7 — Mail Template**\n"
+            "**Step 7 of 9 — Mail Template**\n"
             "Do you want one template that applies to both teams, or separate templates per team?",
             view=shared_view,
         )
@@ -3457,7 +3537,7 @@ async def run_storm_setup(interaction: discord.Interaction, bot, event_type: str
 
     else:
         team_label = "Team A" if teams == "A" else "Team B"
-        await channel.send("**Step 5 of 7 — Mail Template**")
+        await channel.send("**Step 7 of 9 — Mail Template**")
         template = await get_template(team_label)
         if template is None:
             return
@@ -3483,7 +3563,7 @@ async def run_storm_setup(interaction: discord.Interaction, bot, event_type: str
     saved_remind_dm   = (current.get("dm_reminder_message") or "").strip()
     remind_dm = await ask_keep_or_change(
         channel,
-        f"**Step 7 of 7 — {label} Reminder DM (💎 Premium)**\n"
+        f"**Step 9 of 9 — {label} Reminder DM (💎 Premium)**\n"
         f"When leadership runs `/{cmd_name.replace('setup_', '')}_remind`, the bot DMs every "
         f"roster member this message. Free guilds can configure it now — it just won't "
         f"fire until you have Premium + Member Roster Sync.\n\n"
@@ -3506,16 +3586,16 @@ async def run_storm_setup(interaction: discord.Interaction, bot, event_type: str
     from config import save_storm_config, save_participation_config, update_config_field
     if template_a:
         save_storm_config(guild_id, f"{event_type}_A", tab_name, template_a,
-                          "", "", "", "", "", "", timezone, log_channel_id,
+                          t1_server, t2_server, timezone, log_channel_id,
                           post_channel_id=post_channel_id,
                           dm_reminder_message=dm_reminder_message)
     if template_b:
         save_storm_config(guild_id, f"{event_type}_B", tab_name, template_b,
-                          "", "", "", "", "", "", timezone, log_channel_id,
+                          t1_server, t2_server, timezone, log_channel_id,
                           post_channel_id=post_channel_id,
                           dm_reminder_message=dm_reminder_message)
     save_storm_config(guild_id, event_type, tab_name, template_a or template_b,
-                      "", "", "", "", "", "", timezone, log_channel_id,
+                      t1_server, t2_server, timezone, log_channel_id,
                       post_channel_id=post_channel_id,
                       dm_reminder_message=dm_reminder_message)
 
@@ -3537,12 +3617,20 @@ async def run_storm_setup(interaction: discord.Interaction, bot, event_type: str
     else:
         update_config_field(guild_id, "cs_log_channel_id", log_channel_id)
 
+    def _slot_value(server: str) -> str:
+        if not server:
+            return "*not set*"
+        local = server_time_to_local(server, timezone)
+        return f"{local} ({server} ST)" if local else f"{server} ST"
+
     embed = discord.Embed(title=f"✅ {label} Configured", color=discord.Color.green())
     embed.add_field(name="Sheet Tab",    value=tab_name, inline=True)
     embed.add_field(name="Teams",        value={"both": "A & B", "A": "A only", "B": "B only"}[teams], inline=True)
     embed.add_field(name="Timezone",     value=tz_label, inline=True)
     embed.add_field(name="Log Channel",  value=f"<#{log_channel_id}>", inline=True)
     embed.add_field(name="Post Channel", value=f"<#{post_channel_id}>", inline=True)
+    embed.add_field(name="Time Slot 1",  value=_slot_value(t1_server), inline=True)
+    embed.add_field(name="Time Slot 2",  value=_slot_value(t2_server), inline=True)
     if participation_cfg["enabled"]:
         n_q = len(participation_cfg["questions"])
         embed.add_field(
@@ -3607,7 +3695,7 @@ async def _run_storm_participation_step(
     # ── 6.1 Enable? ────────────────────────────────────────────────────────────
     enable_view = YesNoView()
     await channel.send(
-        f"**Step 6 of 7 — Participation Tracking**\n"
+        f"**Step 8 of 9 — Participation Tracking**\n"
         f"Do you want to track {label} participation? Leadership runs "
         f"`/{cmd_name.replace('setup_', '')}_participation` after each event "
         f"to log who showed up, who sat out, etc.\n"
@@ -3638,7 +3726,7 @@ async def _run_storm_participation_step(
     hardcoded_tab = "DS Participation Log" if event_type == "DS" else "CS Participation Log"
     tab_name = await ask_keep_or_change(
         channel,
-        f"**Step 6.1 — Participation Sheet Tab**\n"
+        f"**Step 8.1 — Participation Sheet Tab**\n"
         f"Which tab should the bot write {label} participation rows to?\n"
         f"ℹ️ *The bot will create this tab automatically if it doesn't exist "
         f"and will manage the column structure based on the questions you define.*",
@@ -3667,7 +3755,7 @@ async def _run_storm_participation_step(
     )
     roster_tab = await ask_keep_or_change(
         channel,
-        f"**Step 6.2 — Roster Source: Sheet Tab**\n"
+        f"**Step 8.2 — Roster Source: Sheet Tab**\n"
         f"Which tab in your sheet has the list of members? The bot reads "
         f"member names from here when you use a `Roster names` question.\n"
         f"*Tip: this is often the same tab you use for `/setup_survey` or "
@@ -3685,7 +3773,7 @@ async def _run_storm_participation_step(
     saved_name_col_idx = cur_part.get("roster_name_col")
     raw_name_col = await ask_keep_or_change(
         channel,
-        f"**Step 6.3 — Roster Source: Name Column**\n"
+        f"**Step 8.3 — Roster Source: Name Column**\n"
         f"Which column letter has the member name? (e.g. `A`, `B`, `E`)",
         default="A",
         current=(
@@ -3707,7 +3795,7 @@ async def _run_storm_participation_step(
 
     alias_view = YesNoView()
     await channel.send(
-        "**Step 6.4 — Roster Source: Alias Column?**\n"
+        "**Step 8.4 — Roster Source: Alias Column?**\n"
         "If you have other names or nicknames that you call your members in these "
         "mails, this helps resolve to their full name in your sheet automatically. "
         "Do you have an alias column?",
@@ -3748,7 +3836,7 @@ async def _run_storm_participation_step(
 
     raw_start = await ask_keep_or_change(
         channel,
-        "**Step 6.5 — Roster Source: First Data Row**\n"
+        "**Step 8.5 — Roster Source: First Data Row**\n"
         "In your existing roster tab above, which row does the member data start on? "
         "Usually `2` if your sheet has a header row in row 1.",
         default="2",
@@ -3839,7 +3927,7 @@ async def _run_storm_participation_step(
         )
         view = _BuilderView(len(questions))
         await channel.send(
-            f"**Step 6.6 — Participation Questions**\n"
+            f"**Step 8.6 — Participation Questions**\n"
             f"Each question becomes a column on your sheet and a step in the "
             f"`/{cmd_name.replace('setup_', '')}_participation` flow.\n"
             f"Examples: *Vote count*, *Sitting out*, *Did anyone show up late?*\n"
@@ -4711,7 +4799,11 @@ async def run_birthday_setup(interaction: discord.Interaction, bot):
     bday_col_raw = await ask_keep_or_change(
         channel,
         "**Step 4 of 9 — Birthday Column**\n"
-        "Which column contains the member's birthday?",
+        "Which column contains the member's birthday?\n"
+        "ℹ️ *The bot accepts most date formats: `12/7`, `12-7`, `Dec 7`, "
+        "`December 7`, `1990-12-07`, etc. Bare numeric dates like `7/12` are "
+        "read as **M/D** (July 12) — use `Dec 7` if your alliance writes "
+        "day-first.*",
         default="B",
         current=(
             _col_index_to_letter(saved_bday_col)

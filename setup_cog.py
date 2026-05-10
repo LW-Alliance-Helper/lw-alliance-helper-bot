@@ -4799,7 +4799,11 @@ async def run_birthday_setup(interaction: discord.Interaction, bot):
     bday_col_raw = await ask_keep_or_change(
         channel,
         "**Step 4 of 9 — Birthday Column**\n"
-        "Which column contains the member's birthday?",
+        "Which column contains the member's birthday?\n"
+        "ℹ️ *The bot accepts most date formats: `12/7`, `12-7`, `Dec 7`, "
+        "`December 7`, `1990-12-07`, etc. Bare numeric dates like `7/12` are "
+        "read as **M/D** (July 12) — use `Dec 7` if your alliance writes "
+        "day-first.*",
         default="B",
         current=(
             _col_index_to_letter(saved_bday_col)

@@ -2976,15 +2976,15 @@ async def run_survey_setup(interaction: discord.Interaction, bot,
 
                     q_key = q_label.lower().replace(" ", "_").replace("(", "").replace(")", "").replace("/", "_")
 
-                    # Type — premium subscribers see three additional types.
+                    # Type — Numeric is free; Multi-select / Date are Premium.
                     is_premium_for_q = await premium.is_premium(guild_id, interaction=interaction)
                     type_options = [
                         discord.SelectOption(label="Text — member types their answer", value="text"),
                         discord.SelectOption(label="Dropdown — member selects from a list", value="dropdown"),
+                        discord.SelectOption(label="Numeric — number, with shorthand support", value="numeric"),
                     ]
                     if is_premium_for_q:
                         type_options += [
-                            discord.SelectOption(label="💎 Numeric — number with min/max validation", value="numeric"),
                             discord.SelectOption(label="💎 Multi-select — pick multiple options",     value="multi_select"),
                             discord.SelectOption(label="💎 Date — formatted date entry",              value="date"),
                         ]
@@ -3018,8 +3018,7 @@ async def run_survey_setup(interaction: discord.Interaction, bot,
                     type_extra   = f"\n*Existing type:* `{existing_type}`" if existing else ""
                     type_prompt  = (
                         f"**{q_num} — Answer Type**\n"
-                        + ("Pick how members answer this question." if is_premium_for_q
-                           else "Does your member answer by typing or selecting from a dropdown list?")
+                        "Pick how members answer this question."
                         + type_extra
                     )
                     await channel.send(type_prompt, view=type_view)
@@ -3072,27 +3071,97 @@ async def run_survey_setup(interaction: discord.Interaction, bot,
                             return False
 
                     if q_type == "numeric":
+                        # Magnitude — required for numeric. Tells the parser
+                        # what bare shorthand like `301` means for this field.
+                        mag_options = [
+                            discord.SelectOption(
+                                label="Exact number — type what you mean (e.g. drone level 150 stays 150)",
+                                value="raw",
+                            ),
+                            discord.SelectOption(
+                                label="Thousands (K) — 5 becomes 5,000",
+                                value="K",
+                            ),
+                            discord.SelectOption(
+                                label="Millions (M) — 301 becomes 301,000,000",
+                                value="M",
+                            ),
+                            discord.SelectOption(
+                                label="Billions (B) — 1.2 becomes 1,200,000,000",
+                                value="B",
+                            ),
+                        ]
+
+                        class MagnitudeView(discord.ui.View):
+                            def __init__(self):
+                                super().__init__(timeout=120)
+                                self.selected = None
+                                select = discord.ui.Select(
+                                    placeholder="Select number scale...",
+                                    options=mag_options,
+                                )
+                                async def _cb(inter: discord.Interaction):
+                                    self.selected = select.values[0]
+                                    select.disabled = True
+                                    pretty = {"raw": "Exact number", "K": "Thousands (K)",
+                                              "M": "Millions (M)", "B": "Billions (B)"}
+                                    await wizard_registry.safe_edit_response(
+                                        inter,
+                                        content=f"✅ Scale: **{pretty.get(self.selected, self.selected)}**",
+                                        view=self,
+                                    )
+                                    self.stop()
+                                select.callback = _cb
+                                self.add_item(select)
+
+                        existing_mag = (existing.get("magnitude") if existing else "") or ""
+                        mag_extra    = f"\n*Existing scale:* `{existing_mag or 'raw'}`" if existing else ""
+                        mag_view     = MagnitudeView()
                         await channel.send(
-                            f"**{q_num} — Numeric Bounds** *(💎 Premium)*\n"
-                            f"Reply with `min,max` (e.g. `0,100`), `min,` for only a minimum, "
-                            f"`,max` for only a maximum, or `none` to skip both bounds."
+                            f"**{q_num} — Number Scale**\n"
+                            f"How big are these numbers typically? Picking a scale lets members type "
+                            f"the natural shorthand (`301`) instead of the full value (`304,743,912`) — "
+                            f"the bot accepts both either way."
+                            + mag_extra,
+                            view=mag_view,
                         )
-                        try:
-                            bounds_reply = await bot.wait_for("message", check=check, timeout=120)
-                        except asyncio.TimeoutError:
+                        await wait_view_or_cancel(mag_view, cancel_event)
+                        if mag_view.cancelled:
+                            return
+                        if not mag_view.selected:
                             await channel.send("⏰ Timed out. Run `/setup_survey` to start again.")
                             return False
-                        raw = bounds_reply.content.strip().lower()
-                        if raw not in ("", "none"):
+                        extra_meta["magnitude"] = mag_view.selected
+
+                        # Min/max bounds — Premium-only. Free tier sees a
+                        # one-line teaser and we move on without bounds.
+                        if is_premium_for_q:
+                            await channel.send(
+                                f"**{q_num} — Numeric Bounds** *(💎 Premium)*\n"
+                                f"Reply with `min,max` (e.g. `0,100`), `min,` for only a minimum, "
+                                f"`,max` for only a maximum, or `none` to skip both bounds.\n"
+                                f"*Bounds are checked against the stored value after scaling.*"
+                            )
                             try:
-                                lo_s, _, hi_s = raw.partition(",")
-                                if lo_s.strip(): extra_meta["min"] = float(lo_s.strip())
-                                if hi_s.strip(): extra_meta["max"] = float(hi_s.strip())
-                            except ValueError:
-                                await channel.send(
-                                    "⚠️ Couldn't parse bounds. Run `/setup_survey` to try again."
-                                )
+                                bounds_reply = await bot.wait_for("message", check=check, timeout=120)
+                            except asyncio.TimeoutError:
+                                await channel.send("⏰ Timed out. Run `/setup_survey` to start again.")
                                 return False
+                            raw = bounds_reply.content.strip().lower()
+                            if raw not in ("", "none"):
+                                try:
+                                    lo_s, _, hi_s = raw.partition(",")
+                                    if lo_s.strip(): extra_meta["min"] = float(lo_s.strip())
+                                    if hi_s.strip(): extra_meta["max"] = float(hi_s.strip())
+                                except ValueError:
+                                    await channel.send(
+                                        "⚠️ Couldn't parse bounds. Run `/setup_survey` to try again."
+                                    )
+                                    return False
+                        else:
+                            await channel.send(
+                                "💎 *Min/max bounds are a Premium feature — this question will accept any number.*"
+                            )
 
                     if q_type == "date":
                         existing_fmt = existing.get("date_format") or "%m/%d/%Y"

@@ -10,6 +10,108 @@ sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspa
 from tests.conftest import TEST_GUILD_ID
 
 
+class TestParseMagnitudeInput:
+    """`_parse_magnitude_input` accepts the shapes players naturally type for
+    in-game stats (THP, squad power, kills) and normalises them to the field's
+    declared magnitude. Bare numbers ≥ 1M short-circuit the heuristic so a
+    player who pastes the full in-game number gets it stored as-is."""
+
+    @pytest.mark.parametrize("raw, magnitude, expected", [
+        # Bare shorthand — multiplied by the field's magnitude
+        ("301",       "M", 301_000_000),
+        ("43.27",     "M", 43_270_000),
+        ("1.2",       "B", 1_200_000_000),
+        ("5",         "K", 5_000),
+        ("150",       "raw", 150),
+        ("70",        None, 70),
+        # Explicit suffix — overrides whatever the field's magnitude is
+        ("300m",      "M", 300_000_000),
+        ("300M",      "M", 300_000_000),
+        ("300mil",    "M", 300_000_000),
+        ("300mill",   "M", 300_000_000),
+        ("300million","M", 300_000_000),
+        ("300m",      "raw", 300_000_000),  # suffix wins over raw too
+        ("300m",      None, 300_000_000),
+        ("1.2b",      "M", 1_200_000_000),
+        ("1.2B",      "M", 1_200_000_000),
+        ("1.2billion","M", 1_200_000_000),
+        ("5k",        "M", 5_000),
+        ("5K",        "M", 5_000),
+        # Comma grouping
+        ("304,743,912", "M", 304_743_912),
+        ("1,000,000",   "M", 1_000_000),     # ≥1M heuristic — stored as-is
+        ("999999",      "M", 999_999_000_000),  # just below threshold → scaled
+        # Whitespace tolerance
+        ("  301  ",   "M", 301_000_000),
+        ("300 m",     "M", 300_000_000),
+        # ≥1M heuristic — raw numbers don't get re-multiplied
+        ("304743912", "M", 304_743_912),
+        ("1500000",   "K", 1_500_000),       # 1.5M as bare ≥ threshold → raw
+    ])
+    def test_valid_inputs(self, raw, magnitude, expected):
+        from survey import _parse_magnitude_input
+        assert _parse_magnitude_input(raw, magnitude) == expected
+
+    @pytest.mark.parametrize("raw", [
+        "",
+        "   ",
+        "abc",
+        "300xyz",     # unrecognised suffix
+        "1.2.3",      # not a number
+        None,
+    ])
+    def test_invalid_inputs_return_none(self, raw):
+        from survey import _parse_magnitude_input
+        assert _parse_magnitude_input(raw, "M") is None
+
+    def test_returns_int_even_for_decimal_input(self):
+        """Stored values are always integers — `43.27` × 1M is `43_270_000`,
+        not `43_270_000.0`. The Sheets writer relies on integer typing."""
+        from survey import _parse_magnitude_input
+        result = _parse_magnitude_input("43.27", "M")
+        assert isinstance(result, int)
+        assert result == 43_270_000
+
+    def test_unknown_magnitude_treated_as_raw(self):
+        """A typo or stale magnitude value should pass-through, not crash."""
+        from survey import _parse_magnitude_input
+        assert _parse_magnitude_input("301", "raw") == 301
+        assert _parse_magnitude_input("301", "bogus") == 301
+
+
+class TestFormatResponseValue:
+    """`_fmt_response_value` formats stored numeric responses for the
+    leadership notification embed — `304743912` becomes `304,743,912` so
+    leadership doesn't have to mentally insert commas every submission."""
+
+    def test_comma_formats_numeric_int_string(self):
+        from survey import _fmt_response_value
+        assert _fmt_response_value("304743912", "numeric") == "304,743,912"
+
+    def test_comma_formats_numeric_float_string(self):
+        from survey import _fmt_response_value
+        assert _fmt_response_value("1234.5", "numeric") == "1,234.5"
+
+    def test_passes_through_dropdown_value(self):
+        from survey import _fmt_response_value
+        assert _fmt_response_value("Missile", "dropdown") == "Missile"
+
+    def test_passes_through_text_value(self):
+        from survey import _fmt_response_value
+        assert _fmt_response_value("43.27", "text") == "43.27"
+
+    def test_empty_renders_as_em_dash(self):
+        from survey import _fmt_response_value
+        assert _fmt_response_value("",   "numeric") == "—"
+        assert _fmt_response_value(None, "numeric") == "—"
+
+    def test_unparseable_numeric_passes_through(self):
+        """A stored value that can't be parsed (legacy data, garbage entry)
+        should render as-is rather than crashing the embed."""
+        from survey import _fmt_response_value
+        assert _fmt_response_value("not-a-number", "numeric") == "not-a-number"
+
+
 class TestSurveyQuestionConfig:
     """Test that survey questions save and load correctly."""
 
@@ -31,6 +133,25 @@ class TestSurveyQuestionConfig:
         for q in DEFAULT_SURVEY_QUESTIONS:
             if q["type"] == "text":
                 assert q["options"] == [], f"Text question has options: {q['label']}"
+
+    def test_numeric_questions_declare_magnitude(self, temp_db):
+        """Every numeric question in the default set must declare a magnitude
+        — otherwise the parser falls back to raw int/float and players' shorthand
+        (`301` for 301M) silently stops being scaled."""
+        from defaults import DEFAULT_SURVEY_QUESTIONS
+        for q in DEFAULT_SURVEY_QUESTIONS:
+            if q["type"] == "numeric":
+                assert "magnitude" in q, f"Numeric question missing magnitude: {q['label']}"
+                assert q["magnitude"] in ("raw", "K", "M", "B"), \
+                    f"Invalid magnitude '{q['magnitude']}' on {q['label']}"
+
+    def test_lw_power_questions_use_millions(self, temp_db):
+        """Squad power, THP, and total kills are entered as shorthand-in-millions
+        in Last War conversation — the defaults need to scale them accordingly."""
+        from defaults import DEFAULT_SURVEY_QUESTIONS
+        m_keys = {"squad1_power", "squad2_power", "squad3_power", "thp", "total_kills"}
+        seen = {q["key"] for q in DEFAULT_SURVEY_QUESTIONS if q.get("magnitude") == "M"}
+        assert m_keys.issubset(seen), f"Missing magnitude=M on: {m_keys - seen}"
 
     def test_all_questions_have_unique_keys(self, temp_db):
         from defaults import DEFAULT_SURVEY_QUESTIONS

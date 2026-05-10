@@ -99,8 +99,9 @@ class TestServerTimeToLocal:
             cfg.timezone = "America/New_York"
             config.save_config(cfg)
 
-    def test_falls_back_when_guild_id_unknown(self):
-        """Unknown guild_id → defaults to America/New_York instead of crashing."""
+    def test_falls_back_when_guild_id_unknown(self, seeded_db):
+        """Unknown guild_id (one with no row in guild_configs) → defaults to
+        America/New_York instead of crashing."""
         import config
         result = config.server_time_to_local(18, 0, 99999999)
         assert any(c.isdigit() for c in result)

@@ -170,8 +170,7 @@ class TestStormConfig:
             TEST_GUILD_ID, "DS",
             tab_name="DS Zones",
             mail_template="**{alliance_name}**\n{zones}\n{subs}\n{time}",
-            t1_label="", t1_local="", t1_server="",
-            t2_label="", t2_local="", t2_server="",
+            t1_server="", t2_server="",
             timezone="America/New_York",
             log_channel_id=888888,
         )
@@ -183,9 +182,9 @@ class TestStormConfig:
     def test_ds_and_cs_isolated(self, temp_db):
         import config
         config.save_storm_config(TEST_GUILD_ID, "DS", "DS Tab", "DS template",
-                                 "", "", "", "", "", "", "America/New_York", 0)
+                                 "", "", "America/New_York", 0)
         config.save_storm_config(TEST_GUILD_ID, "CS", "CS Tab", "CS template",
-                                 "", "", "", "", "", "", "America/New_York", 0)
+                                 "", "", "America/New_York", 0)
         ds = config.get_storm_config(TEST_GUILD_ID, "DS")
         cs = config.get_storm_config(TEST_GUILD_ID, "CS")
         assert ds["tab_name"]      == "DS Tab"

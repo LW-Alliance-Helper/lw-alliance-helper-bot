@@ -18,7 +18,7 @@ class TestBuildDsMail:
         template = "**{alliance_name} — Desert Storm**\n{zones}\n{subs}\n{time}"
         save_storm_config(
             TEST_GUILD_ID, "DS", "DS Assignments", template,
-            "", "", "", "", "", "", "America/New_York", 0
+            "", "", "America/New_York", 0
         )
         zones = {"Z1": ["Alice", "Bob"], "Z2": ["Carol"]}
         subs  = ["Dave"]
@@ -35,7 +35,7 @@ class TestBuildDsMail:
         template = "Subs: {subs}"
         save_storm_config(
             TEST_GUILD_ID, "DS", "DS Assignments", template,
-            "", "", "", "", "", "", "America/New_York", 0
+            "", "", "America/New_York", 0
         )
         result = build_ds_mail("A", {}, ["TestSub"], "18:00", guild_id=TEST_GUILD_ID)
         assert "TestSub" in result
@@ -46,7 +46,7 @@ class TestBuildDsMail:
         template = "{alliance_name}\n{zones}\n{subs}\n{time}"
         save_storm_config(
             TEST_GUILD_ID, "DS", "DS Assignments", template,
-            "", "", "", "", "", "", "America/New_York", 0
+            "", "", "America/New_York", 0
         )
         # Should not raise even with empty subs
         result = build_ds_mail("A", {"Z1": ["Alice"]}, [], "18:00", guild_id=TEST_GUILD_ID)
@@ -58,7 +58,7 @@ class TestBuildDsMail:
         template = "{time}"
         save_storm_config(
             TEST_GUILD_ID, "DS", "DS Assignments", template,
-            "", "", "", "", "", "", "America/New_York", 0
+            "", "", "America/New_York", 0
         )
         result = build_ds_mail("A", {}, [], "18:00 Server Time", guild_id=TEST_GUILD_ID)
         assert "18:00" in result
@@ -74,7 +74,7 @@ class TestBuildCsMail:
         template = "CS: {zones}\n{subs}\n{time}"
         save_storm_config(
             TEST_GUILD_ID, "CS", "CS Assignments", template,
-            "", "", "", "", "", "", "America/New_York", 0
+            "", "", "America/New_York", 0
         )
         zones = {"Z1": ["Alice"]}
         result = build_cs_mail("A", zones, "12:00", guild_id=TEST_GUILD_ID)
@@ -84,9 +84,9 @@ class TestBuildCsMail:
         from storm import build_ds_mail, build_cs_mail
         from config import save_storm_config
         save_storm_config(TEST_GUILD_ID, "DS", "DS Tab", "DS: {zones}",
-                          "", "", "", "", "", "", "America/New_York", 0)
+                          "", "", "America/New_York", 0)
         save_storm_config(TEST_GUILD_ID, "CS", "CS Tab", "CS: {zones}",
-                          "", "", "", "", "", "", "America/New_York", 0)
+                          "", "", "America/New_York", 0)
         ds = build_ds_mail("A", {"Z1": ["Alice"]}, [], "18:00", guild_id=TEST_GUILD_ID)
         cs = build_cs_mail("A", {"Z1": ["Alice"]}, "12:00", guild_id=TEST_GUILD_ID)
         assert ds.startswith("DS:")
@@ -104,7 +104,7 @@ class TestCsZoneLabelRendering:
         from config import save_storm_config
         save_storm_config(TEST_GUILD_ID, "CS", "CS Assignments",
                           "CS: {zones}\n{subs}\n{time}",
-                          "", "", "", "", "", "", "America/New_York", 0)
+                          "", "", "America/New_York", 0)
         zones = {
             "s1_dc1":         ["Alice"],
             "s1_sw1":         ["Bob"],
@@ -136,7 +136,7 @@ class TestCsZoneLabelRendering:
         from config import save_storm_config
         save_storm_config(TEST_GUILD_ID, "CS", "CS Assignments",
                           "CS: {zones}\n---SUBS---\n{subs}\n{time}",
-                          "", "", "", "", "", "", "America/New_York", 0)
+                          "", "", "America/New_York", 0)
         zones = {
             "s1_dc1":       ["Alice"],
             "s3_pop_pair1": "Bob & Carol",
@@ -155,7 +155,7 @@ class TestCsZoneLabelRendering:
         from config import save_storm_config
         save_storm_config(TEST_GUILD_ID, "CS", "CS Assignments",
                           "{zones}",
-                          "", "", "", "", "", "", "America/New_York", 0)
+                          "", "", "America/New_York", 0)
         zones = {
             "s1_dc1":   ["Alice"],
             "s1_dc2":   "(open)",
@@ -174,7 +174,7 @@ class TestCsZoneLabelRendering:
         from config import save_storm_config
         save_storm_config(TEST_GUILD_ID, "CS", "CS Assignments",
                           "{zones}",
-                          "", "", "", "", "", "", "America/New_York", 0)
+                          "", "", "America/New_York", 0)
         zones = {
             "s3_virus_lab": ["Eve"],
             "s1_dc1":       ["Alice"],
@@ -279,7 +279,7 @@ class TestParticipationConfig:
         from config import save_storm_config, get_participation_config
         save_storm_config(
             TEST_GUILD_ID, "DS", "DS Assignments", "Body",
-            "", "", "", "", "", "", "America/New_York", 0,
+            "", "", "America/New_York", 0,
         )
         pcfg = get_participation_config(TEST_GUILD_ID, "DS")
         assert pcfg["enabled"]    is False
@@ -291,7 +291,7 @@ class TestParticipationConfig:
         from config import save_storm_config, save_participation_config, get_participation_config
         save_storm_config(
             TEST_GUILD_ID, "DS", "DS Assignments", "Body",
-            "", "", "", "", "", "", "America/New_York", 0,
+            "", "", "America/New_York", 0,
         )
         questions = [
             {"key": "vote_count", "label": "Vote Count", "type": "numeric", "min": 0, "max": 200},
@@ -319,9 +319,9 @@ class TestParticipationConfig:
     def test_participation_config_is_independent_per_event_type(self, seeded_db):
         from config import save_storm_config, save_participation_config, get_participation_config
         save_storm_config(TEST_GUILD_ID, "DS", "DS Assignments", "B",
-                          "", "", "", "", "", "", "America/New_York", 0)
+                          "", "", "America/New_York", 0)
         save_storm_config(TEST_GUILD_ID, "CS", "CS Assignments", "B",
-                          "", "", "", "", "", "", "America/New_York", 0)
+                          "", "", "America/New_York", 0)
 
         save_participation_config(
             TEST_GUILD_ID, "DS",

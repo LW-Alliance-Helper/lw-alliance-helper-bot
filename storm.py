@@ -223,21 +223,24 @@ def parse_ds_template(text: str) -> tuple[dict, list, list]:
 def build_ds_mail(team: str, zones: dict, subs: list, time_key: str,
                   guild_id: int = None, template_name: str | None = None) -> str:
     """Build DS mail using a guild's stored template (named or default)."""
-    from config import get_storm_config, get_storm_template
+    from config import get_storm_config, get_storm_template, server_time_to_local
     cfg       = get_storm_config(guild_id, "DS") if guild_id else {}
     if guild_id:
         template = get_storm_template(guild_id, "DS", template_name)
     else:
         template = cfg.get("mail_template") or ""
 
-    # Build time string from config time options
-    if time_key == "1":
-        local_time  = cfg.get("time_option_1_local", "")
-        server_time = cfg.get("time_option_1_server", "")
+    # Resolve the time slot — `time_key` is "1" or "2" from TimeSelectView,
+    # or arbitrary text passed by tests (in which case fall through verbatim).
+    if time_key in ("1", "2"):
+        server_time = cfg.get(f"time_option_{time_key}_server", "")
+        if server_time:
+            local_str = server_time_to_local(server_time, cfg.get("timezone") or "America/New_York")
+            time_str  = f"{local_str} ({server_time} ST)" if local_str else f"{server_time} ST"
+        else:
+            time_str = time_key
     else:
-        local_time  = cfg.get("time_option_2_local", "")
-        server_time = cfg.get("time_option_2_server", "")
-    time_str = f"{local_time} ({server_time})" if local_time else time_key
+        time_str = time_key
 
     zone_lines = []
     for zone, members in zones.items():
@@ -352,16 +355,20 @@ class TimeSelectView(discord.ui.View):
     def __init__(self, event_type: str = "DS", guild_id: int = None):
         super().__init__(timeout=WIZARD_TIMEOUT)
         self.selected = None
-        from config import get_storm_config
+        from config import get_storm_config, server_time_to_local
         cfg = get_storm_config(guild_id, event_type) if guild_id else {}
-        t1_label = cfg.get("time_option_1_label") or "Option 1"
-        t2_label = cfg.get("time_option_2_label") or "Option 2"
-        t1_local = cfg.get("time_option_1_local", "")
+        tz_name = cfg.get("timezone") or "America/New_York"
         t1_server = cfg.get("time_option_1_server", "")
-        t2_local = cfg.get("time_option_2_local", "")
         t2_server = cfg.get("time_option_2_server", "")
-        btn1_label = f"{t1_label}: {t1_local} ({t1_server})" if t1_local else t1_label
-        btn2_label = f"{t2_label}: {t2_local} ({t2_server})" if t2_local else t2_label
+
+        def _btn_label(server: str, fallback: str) -> str:
+            if not server:
+                return fallback
+            local = server_time_to_local(server, tz_name)
+            return f"{local} ({server} ST)" if local else f"{server} ST"
+
+        btn1_label = _btn_label(t1_server, "Option 1")
+        btn2_label = _btn_label(t2_server, "Option 2")
 
         b1 = discord.ui.Button(label=btn1_label[:80], style=discord.ButtonStyle.secondary)
         b2 = discord.ui.Button(label=btn2_label[:80], style=discord.ButtonStyle.secondary)
@@ -747,26 +754,19 @@ async def _show_storm_overview(interaction: discord.Interaction, event_type: str
         title=f"{icon} {label}",
         color=discord.Color.dark_red() if event_type == "DS" else discord.Color.gold(),
     )
+    from config import server_time_to_local
+    tz_name = scfg.get("timezone") or "America/New_York"
+
+    def _slot_value(server: str) -> str:
+        if not server:
+            return "*not set*"
+        local = server_time_to_local(server, tz_name)
+        return f"{local} ({server} ST)" if local else f"{server} ST"
+
     embed.add_field(name="Sheet Tab",   value=scfg.get("tab_name", "*not set*"),                        inline=False)
     embed.add_field(name="Log Channel", value=f"<#{log_channel_id}>" if log_channel_id else "*not set*", inline=False)
-    embed.add_field(
-        name="Time Option 1",
-        value=(
-            f"{scfg.get('time_option_1_label') or '*not set*'} — "
-            f"{scfg.get('time_option_1_local') or '?'} local / "
-            f"{scfg.get('time_option_1_server') or '?'} server"
-        ),
-        inline=False,
-    )
-    embed.add_field(
-        name="Time Option 2",
-        value=(
-            f"{scfg.get('time_option_2_label') or '*not set*'} — "
-            f"{scfg.get('time_option_2_local') or '?'} local / "
-            f"{scfg.get('time_option_2_server') or '?'} server"
-        ),
-        inline=False,
-    )
+    embed.add_field(name="Time Option 1", value=_slot_value(scfg.get("time_option_1_server", "")), inline=False)
+    embed.add_field(name="Time Option 2", value=_slot_value(scfg.get("time_option_2_server", "")), inline=False)
 
     # Build the rendered mail template — same templating used by /[event]_draft
     try:
@@ -1008,20 +1008,22 @@ def parse_cs_template(text: str) -> tuple[dict, list]:
 def build_cs_mail(team: str, z: dict, time_key: str, guild_id: int = None,
                   template_name: str | None = None) -> str:
     """Build CS mail using a guild's stored template (named or default)."""
-    from config import get_storm_config, get_storm_template
+    from config import get_storm_config, get_storm_template, server_time_to_local
     cfg       = get_storm_config(guild_id, "CS") if guild_id else {}
     if guild_id:
         template = get_storm_template(guild_id, "CS", template_name)
     else:
         template = cfg.get("mail_template") or ""
 
-    if time_key == "1":
-        local_time  = cfg.get("time_option_1_local", "")
-        server_time = cfg.get("time_option_1_server", "")
+    if time_key in ("1", "2"):
+        server_time = cfg.get(f"time_option_{time_key}_server", "")
+        if server_time:
+            local_str = server_time_to_local(server_time, cfg.get("timezone") or "America/New_York")
+            time_str  = f"{local_str} ({server_time} ST)" if local_str else f"{server_time} ST"
+        else:
+            time_str = time_key
     else:
-        local_time  = cfg.get("time_option_2_local", "")
-        server_time = cfg.get("time_option_2_server", "")
-    time_str = f"{local_time} ({server_time})" if local_time else time_key
+        time_str = time_key
 
     # Build zones block in canonical order with full labels and stage headers.
     # Walk CS_ZONE_STRUCTURE first so familiar slots render with their proper

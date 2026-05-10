@@ -9,6 +9,14 @@ Each entry is a slim summary — heavier context (root cause, what we
 tried, design rationale) lives in the corresponding commit message
 and PR description.
 
+## [1.1.5] — 2026-05-10
+
+### Changed
+- Numeric survey question type moved from Premium to Free; min/max bounds on numeric questions remain the Premium differentiator ([#64](https://github.com/LW-Alliance-Helper/lw-alliance-helper-bot/issues/64)).
+- Numeric questions take a required magnitude (Exact / K / M / B), and `survey.ask_numeric` parses members' shorthand (`301` → 301M, `300m`, `1.2b`, `304,743,912`) into the stored full integer ([#64](https://github.com/LW-Alliance-Helper/lw-alliance-helper-bot/issues/64)).
+- Default LW survey questions ship as numeric with the right magnitude (`thp` / `squad*_power` / `total_kills` → M, `drone_level` / `gorilla_level` → Exact); a one-shot `init_db` backfill upgrades existing saved configs idempotently ([#64](https://github.com/LW-Alliance-Helper/lw-alliance-helper-bot/issues/64)).
+- Submission notification embed comma-formats numeric responses (`304,743,912` instead of `304743912`) ([#64](https://github.com/LW-Alliance-Helper/lw-alliance-helper-bot/issues/64)).
+
 ## [1.1.4] — 2026-05-10
 
 ### Fixed

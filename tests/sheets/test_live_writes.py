@@ -118,7 +118,6 @@ class TestParticipationRowWrite:
 
         save_storm_config(
             TEST_GUILD_ID, "DS", "DS Tab", "Body",
-            "", "", "", "", "", "",
             "America/New_York", 0,
         )
         save_participation_config(
@@ -179,7 +178,6 @@ class TestParticipationRowWrite:
 
         save_storm_config(
             TEST_GUILD_ID, "CS", "CS Tab", "Body",
-            "", "", "", "", "", "",
             "America/New_York", 0,
         )
         save_participation_config(

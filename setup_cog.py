@@ -1356,13 +1356,15 @@ async def _send_view_configuration(interaction: discord.Interaction, cfg) -> Non
         b_lines.append(f"**Reminder Time:** {birthday.get('reminder_time', '*not set*')}")
     embed.add_field(name="🎂 Birthdays", value="\n".join(b_lines)[:1024], inline=False)
 
+    from config import get_storm_slot_labels
+    ds_slot_labels = get_storm_slot_labels("DS", interaction.guild_id)
+    cs_slot_labels = get_storm_slot_labels("CS", interaction.guild_id)
+
     ds_lines = [
         f"**Sheet Tab:** {ds.get('tab_name', '*not set*')}",
         f"**Log Channel:** {_channel(cfg.ds_log_channel_id)}",
-        f"**Time Option 1:** {ds.get('time_option_1_label') or '*not set*'} "
-        f"({ds.get('time_option_1_local') or '?'} local / {ds.get('time_option_1_server') or '?'} server)",
-        f"**Time Option 2:** {ds.get('time_option_2_label') or '*not set*'} "
-        f"({ds.get('time_option_2_local') or '?'} local / {ds.get('time_option_2_server') or '?'} server)",
+        f"**Time Option 1:** {ds_slot_labels[0]}",
+        f"**Time Option 2:** {ds_slot_labels[1]}",
         f"**Mail Template:** {_yn(ds.get('mail_template'))}",
     ]
     embed.add_field(name="⚔️ Desert Storm", value="\n".join(ds_lines)[:1024], inline=False)
@@ -1370,10 +1372,8 @@ async def _send_view_configuration(interaction: discord.Interaction, cfg) -> Non
     cs_lines = [
         f"**Sheet Tab:** {cs.get('tab_name', '*not set*')}",
         f"**Log Channel:** {_channel(cfg.cs_log_channel_id)}",
-        f"**Time Option 1:** {cs.get('time_option_1_label') or '*not set*'} "
-        f"({cs.get('time_option_1_local') or '?'} local / {cs.get('time_option_1_server') or '?'} server)",
-        f"**Time Option 2:** {cs.get('time_option_2_label') or '*not set*'} "
-        f"({cs.get('time_option_2_local') or '?'} local / {cs.get('time_option_2_server') or '?'} server)",
+        f"**Time Option 1:** {cs_slot_labels[0]}",
+        f"**Time Option 2:** {cs_slot_labels[1]}",
         f"**Mail Template:** {_yn(cs.get('mail_template'))}",
     ]
     embed.add_field(name="🏜️ Canyon Storm", value="\n".join(cs_lines)[:1024], inline=False)
@@ -3506,16 +3506,16 @@ async def run_storm_setup(interaction: discord.Interaction, bot, event_type: str
     from config import save_storm_config, save_participation_config, update_config_field
     if template_a:
         save_storm_config(guild_id, f"{event_type}_A", tab_name, template_a,
-                          "", "", "", "", "", "", timezone, log_channel_id,
+                          timezone, log_channel_id,
                           post_channel_id=post_channel_id,
                           dm_reminder_message=dm_reminder_message)
     if template_b:
         save_storm_config(guild_id, f"{event_type}_B", tab_name, template_b,
-                          "", "", "", "", "", "", timezone, log_channel_id,
+                          timezone, log_channel_id,
                           post_channel_id=post_channel_id,
                           dm_reminder_message=dm_reminder_message)
     save_storm_config(guild_id, event_type, tab_name, template_a or template_b,
-                      "", "", "", "", "", "", timezone, log_channel_id,
+                      timezone, log_channel_id,
                       post_channel_id=post_channel_id,
                       dm_reminder_message=dm_reminder_message)
 
@@ -4711,7 +4711,11 @@ async def run_birthday_setup(interaction: discord.Interaction, bot):
     bday_col_raw = await ask_keep_or_change(
         channel,
         "**Step 4 of 9 — Birthday Column**\n"
-        "Which column contains the member's birthday?",
+        "Which column contains the member's birthday?\n"
+        "ℹ️ *The bot accepts most date formats: `12/7`, `12-7`, `Dec 7`, "
+        "`December 7`, `1990-12-07`, etc. Bare numeric dates like `7/12` are "
+        "read as **M/D** (July 12) — use `Dec 7` if your alliance writes "
+        "day-first.*",
         default="B",
         current=(
             _col_index_to_letter(saved_bday_col)

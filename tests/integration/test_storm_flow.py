@@ -38,7 +38,7 @@ class TestDsMailGeneration:
         from defaults import DEFAULT_DS_TEMPLATE
 
         save_storm_config(TEST_GUILD_ID, "DS", "DS Assignments", DEFAULT_DS_TEMPLATE,
-                          "", "", "", "", "", "", "America/New_York", 0)
+                          "America/New_York", 0)
 
         result = build_ds_mail("A", SAMPLE_DS_ZONES, SAMPLE_DS_SUBS,
                                "18:00 Server Time", guild_id=TEST_GUILD_ID)
@@ -56,7 +56,7 @@ class TestDsMailGeneration:
         from defaults import DEFAULT_DS_TEMPLATE
 
         save_storm_config(TEST_GUILD_ID, "DS", "DS Assignments", DEFAULT_DS_TEMPLATE,
-                          "", "", "", "", "", "", "America/New_York", 0)
+                          "America/New_York", 0)
 
         result = build_ds_mail("A", SAMPLE_DS_ZONES, [], "18:00 Server Time",
                                guild_id=TEST_GUILD_ID)
@@ -67,11 +67,11 @@ class TestDsMailGeneration:
         from config import save_storm_config
 
         save_storm_config(TEST_GUILD_ID, "DS_A", "DS Tab", "Team A: {zones}",
-                          "", "", "", "", "", "", "America/New_York", 0)
+                          "America/New_York", 0)
         save_storm_config(TEST_GUILD_ID, "DS_B", "DS Tab", "Team B: {zones}",
-                          "", "", "", "", "", "", "America/New_York", 0)
+                          "America/New_York", 0)
         save_storm_config(TEST_GUILD_ID, "DS", "DS Tab", "DS: {zones}",
-                          "", "", "", "", "", "", "America/New_York", 0)
+                          "America/New_York", 0)
 
         result_a = build_ds_mail("A", {"Z1": ["Alice"]}, [], "18:00", guild_id=TEST_GUILD_ID)
         result_b = build_ds_mail("B", {"Z1": ["Bob"]},   [], "18:00", guild_id=TEST_GUILD_ID)
@@ -85,7 +85,7 @@ class TestDsMailGeneration:
 
         save_storm_config(TEST_GUILD_ID, "DS", "DS Assignments",
                           "Zones:\n{zones}\nSubs:\n{subs}\nTime: {time}",
-                          "", "", "", "", "", "", "America/New_York", 0)
+                          "America/New_York", 0)
 
         result = build_ds_mail("A", {"Z1": ["Alice"]}, [], "18:00",
                                guild_id=TEST_GUILD_ID)
@@ -106,7 +106,7 @@ class TestCsMailGeneration:
         from defaults import DEFAULT_CS_TEMPLATE
 
         save_storm_config(TEST_GUILD_ID, "CS", "CS Assignments", DEFAULT_CS_TEMPLATE,
-                          "", "", "", "", "", "", "America/New_York", 0)
+                          "America/New_York", 0)
 
         result = build_cs_mail("A", SAMPLE_CS_ZONES, "12:00 Server Time",
                                guild_id=TEST_GUILD_ID)
@@ -120,7 +120,7 @@ class TestCsMailGeneration:
         from defaults import DEFAULT_CS_TEMPLATE
 
         save_storm_config(TEST_GUILD_ID, "CS", "CS Assignments", DEFAULT_CS_TEMPLATE,
-                          "", "", "", "", "", "", "America/New_York", 0)
+                          "America/New_York", 0)
 
         result = build_cs_mail("A", {"Z1": ["Alice"]}, "12:00 Server Time",
                                guild_id=TEST_GUILD_ID)
@@ -132,7 +132,7 @@ class TestCsMailGeneration:
 
         save_storm_config(TEST_GUILD_ID, "CS", "CS Assignments",
                           "Canyon Storm\n{zones}\n{subs}\n{time}",
-                          "", "", "", "", "", "", "America/New_York", 0)
+                          "America/New_York", 0)
 
         result = build_cs_mail("A", {"Z1": ["Alice"]}, "12:00",
                                guild_id=TEST_GUILD_ID)
@@ -167,39 +167,3 @@ class TestTemplateRoundTrip:
         assert parsed_zones or parsed_subs or True  # produces something
 
 
-class TestStormTimeLabels:
-    """Verify storm time labels display correctly per guild timezone."""
-
-    def test_ds_buttons_show_4pm_and_9pm_in_et(self, seeded_db):
-        from config import get_storm_time_labels
-
-        labels = get_storm_time_labels("DS", TEST_GUILD_ID)
-        local_times = [lbl[0] for lbl in labels]
-        # In ET summer: 18:00 ST → 4pm, 23:00 ST → 9pm
-        assert any("4" in t for t in local_times), f"Expected 4pm in {local_times}"
-        assert any("9" in t for t in local_times), f"Expected 9pm in {local_times}"
-
-    def test_cs_buttons_show_10am_and_9pm_in_et(self, seeded_db):
-        from config import get_storm_time_labels
-
-        labels = get_storm_time_labels("CS", TEST_GUILD_ID)
-        local_times = [lbl[0] for lbl in labels]
-        assert any("10" in t for t in local_times), f"Expected 10am in {local_times}"
-        assert any("9"  in t for t in local_times), f"Expected 9pm in {local_times}"
-
-    def test_different_timezone_produces_different_labels(self, seeded_db):
-        from config import get_storm_time_labels, get_config, save_config
-
-        cfg_et = get_config(TEST_GUILD_ID)
-        labels_et = get_storm_time_labels("DS", TEST_GUILD_ID)
-
-        cfg_et.timezone = "Europe/London"
-        save_config(cfg_et)
-        labels_london = get_storm_time_labels("DS", TEST_GUILD_ID)
-
-        # Times should be different strings for different timezones
-        assert labels_et[0][0] != labels_london[0][0]
-
-        # Restore
-        cfg_et.timezone = "America/New_York"
-        save_config(cfg_et)

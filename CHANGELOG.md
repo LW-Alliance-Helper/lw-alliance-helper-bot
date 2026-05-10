@@ -9,6 +9,19 @@ Each entry is a slim summary — heavier context (root cause, what we
 tried, design rationale) lives in the corresponding commit message
 and PR description.
 
+## [1.1.3] — 2026-05-09
+
+### Changed
+- `/desertstorm_draft` and `/canyonstorm_draft` time-picker buttons now read `4pm EDT (18:00 server time)` style — local clock from the guild timezone, server-time portion always spelled out ([#58](https://github.com/LW-Alliance-Helper/lw-alliance-helper-bot/issues/58)).
+- Birthday parser accepts dash, dot, ISO 8601, abbreviated months, day-first formats, 2-digit years, and whitespace around separators; bare numeric ambiguity defaults to M/D unless the first number is > 12 ([#60](https://github.com/LW-Alliance-Helper/lw-alliance-helper-bot/issues/60)).
+
+### Fixed
+- `/growth` Edit Config button now opens the `/setup_growth` wizard inline instead of telling the user to run the slash command themselves ([#59](https://github.com/LW-Alliance-Helper/lw-alliance-helper-bot/issues/59)).
+- Birthday parser rejects impossible dates (`Feb 30`, `13/45`) instead of silently writing garbage to the train schedule ([#60](https://github.com/LW-Alliance-Helper/lw-alliance-helper-bot/issues/60)).
+
+### Removed
+- All six `time_option_*` columns dropped from `guild_storm_config` — slot times are game-defined and computed at display time from the guild's timezone ([#58](https://github.com/LW-Alliance-Helper/lw-alliance-helper-bot/issues/58)).
+
 ## [1.1.2] — 2026-05-08
 
 ### Fixed

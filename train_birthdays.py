@@ -34,14 +34,29 @@ def _get_member_sheet_inner(tab_name: str, guild_id: int = None):
     return sh.worksheet(tab_name)
 
 
-# Minimal month-name lookup used by parse_birthday.
+# Month-name lookup used by parse_birthday. Includes full names plus 3-letter
+# and 4-letter abbreviations leadership commonly types ("Sept", "Sep").
 _BIRTHDAY_MONTH_MAP = {
     "january": 1, "february": 2, "march": 3, "april": 4,
     "may": 5, "june": 6, "july": 7, "august": 8,
     "september": 9, "october": 10, "november": 11, "december": 12,
     "jan": 1, "feb": 2, "mar": 3, "apr": 4, "jun": 6,
-    "jul": 7, "aug": 8, "sep": 9, "oct": 10, "nov": 11, "dec": 12,
+    "jul": 7, "aug": 8, "sep": 9, "sept": 9,
+    "oct": 10, "nov": 11, "dec": 12,
 }
+
+# Days per month, with February allowing 29 to keep leap-year birthdays
+# (we don't know the year, so we accept Feb 29 even in non-leap years).
+_DAYS_IN_MONTH = {
+    1: 31, 2: 29, 3: 31, 4: 30, 5: 31, 6: 30,
+    7: 31, 8: 31, 9: 30, 10: 31, 11: 30, 12: 31,
+}
+
+
+def _validate_month_day(month: int, day: int) -> bool:
+    if not (1 <= month <= 12):
+        return False
+    return 1 <= day <= _DAYS_IN_MONTH[month]
 
 
 
@@ -97,36 +112,73 @@ def get_member_tab_name(guild_id: int = None) -> str:
     return tab if tab else "Season 5 - Off-Season"
 
 def parse_birthday(raw: str) -> tuple[int, int] | None:
-    """
-    Parse a birthday string into (month, day), ignoring the year.
-    Handles formats like: 'December 7', 'December 7, 1990', '12/7', '12/7/1990'
-    Returns None if unparseable.
+    """Parse a birthday string into (month, day), ignoring the year.
+
+    Tolerates the variations leadership and members commonly type into the
+    Sheet: slash, dash, dot separators; ISO 8601 with year; abbreviated and
+    full month names; day-first ("7 December", "7-Dec") as well as
+    month-first; ordinal suffixes ("December 7th"); 2-digit and 4-digit
+    years. Bare numeric ambiguity (`7/12`) defaults to **M/D** unless the
+    first number is > 12, in which case it must be a day → swap.
+
+    Returns None for anything we can't confidently interpret OR for a
+    parseable but invalid (month, day) like `Feb 30` or `13/45` — so the
+    load loop's `if parsed:` skip kicks in instead of silently writing
+    garbage to the train schedule.
     """
     if not raw or not raw.strip():
         return None
 
-    raw = raw.strip()
+    # Collapse whitespace around separators ("12 / 7" → "12/7") so the
+    # patterns below don't have to match optional spacing.
+    raw = re.sub(r"\s*([-/.])\s*", r"\1", raw.strip())
 
-    # Numeric: 12/7 or 12/7/1990
-    numeric = re.match(r"^(\d{1,2})/(\d{1,2})(?:/\d+)?$", raw)
+    # 1. RFC 6450 month-day-only ("--12-07")
+    md_iso = re.match(r"^--(\d{1,2})-(\d{1,2})$", raw)
+    if md_iso:
+        m, d = int(md_iso.group(1)), int(md_iso.group(2))
+        return (m, d) if _validate_month_day(m, d) else None
+
+    # 2. ISO 8601 with year (1990-12-07, 2026-12-07)
+    iso = re.match(r"^\d{4}-(\d{1,2})-(\d{1,2})$", raw)
+    if iso:
+        m, d = int(iso.group(1)), int(iso.group(2))
+        return (m, d) if _validate_month_day(m, d) else None
+
+    # 3. Numeric M/D, M-D, M.D with optional trailing year
+    numeric = re.match(r"^(\d{1,2})[-/.](\d{1,2})(?:[-/.]\d+)?$", raw)
     if numeric:
-        try:
-            return int(numeric.group(1)), int(numeric.group(2))
-        except ValueError:
-            return None
+        a, b = int(numeric.group(1)), int(numeric.group(2))
+        # If the first number is unambiguously a day, swap.
+        if a > 12 and b <= 12:
+            month, day = b, a
+        else:
+            month, day = a, b
+        return (month, day) if _validate_month_day(month, day) else None
 
-    # Month name: December 7 or December 7, 1990
-    named = re.match(
-        r"^([A-Za-z]+)\s+(\d{1,2})(?:st|nd|rd|th)?(?:\s*,?\s*\d+)?$",
+    # 4. Month-name first: "December 7", "Dec 7", "Dec-7", "December 7th",
+    #    optionally followed by a year ("December 7, 1990").
+    named_first = re.match(
+        r"^([A-Za-z]+)[\s\-](\d{1,2})(?:st|nd|rd|th)?(?:[\s,\-]+\d+)?$",
         raw, re.IGNORECASE,
     )
-    if named:
-        month = _BIRTHDAY_MONTH_MAP.get(named.group(1).lower())
-        if month:
-            try:
-                return month, int(named.group(2))
-            except ValueError:
-                return None
+    if named_first:
+        month = _BIRTHDAY_MONTH_MAP.get(named_first.group(1).lower())
+        if month is not None:
+            day = int(named_first.group(2))
+            return (month, day) if _validate_month_day(month, day) else None
+
+    # 5. Day-first with month name: "7 December", "7-Dec", "7th December",
+    #    optionally followed by a year ("7 December 1990").
+    named_last = re.match(
+        r"^(\d{1,2})(?:st|nd|rd|th)?[\s\-]([A-Za-z]+)(?:[\s,\-]+\d+)?$",
+        raw, re.IGNORECASE,
+    )
+    if named_last:
+        month = _BIRTHDAY_MONTH_MAP.get(named_last.group(2).lower())
+        if month is not None:
+            day = int(named_last.group(1))
+            return (month, day) if _validate_month_day(month, day) else None
 
     return None
 

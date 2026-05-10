@@ -138,8 +138,6 @@ class TestDsDraftFlowUseAsIs:
         # Configure storm so the draft flow has a tab + post-channel.
         config.save_storm_config(
             TEST_GUILD_ID, "DS", "DS Tab", "Mail body for {time}",
-            "4PM EST", "16:00", "18:00",
-            "9PM EST", "21:00", "23:00",
             "America/New_York", 0,
             post_channel_id=12345,
         )
@@ -185,7 +183,6 @@ class TestDsDraftFlowEditCancel:
 
         config.save_storm_config(
             TEST_GUILD_ID, "DS", "DS Tab", "Body",
-            "", "", "", "", "", "",
             "America/New_York", 0,
         )
 
@@ -300,7 +297,6 @@ class TestParticipationFlowGate:
         # Enable participation but configure zero questions.
         config.save_storm_config(
             TEST_GUILD_ID, "CS", "CS Tab", "Body",
-            "", "", "", "", "", "",
             "America/New_York", 0,
         )
         config.save_participation_config(
@@ -339,7 +335,6 @@ class TestParticipationFlowHappyPath:
 
         config.save_storm_config(
             TEST_GUILD_ID, "DS", "DS Tab", "Body",
-            "", "", "", "", "", "",
             "America/New_York", 0,
         )
         config.save_participation_config(
@@ -412,7 +407,6 @@ class TestParticipationFlowNumericRetry:
 
         config.save_storm_config(
             TEST_GUILD_ID, "DS", "DS Tab", "Body",
-            "", "", "", "", "", "",
             "America/New_York", 0,
         )
         config.save_participation_config(

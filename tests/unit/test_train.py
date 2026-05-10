@@ -18,27 +18,113 @@ class TestParseBirthday:
         from train import parse_birthday
         self.parse = parse_birthday
 
+    # ── Slash-separated numeric (M/D, M/D/YYYY) ──────────────────────────────
     def test_mm_dd(self):
         assert self.parse("3/15")   == (3, 15)
         assert self.parse("12/25")  == (12, 25)
-
-    def test_month_day_text(self):
-        assert self.parse("March 15")   == (3, 15)
-        assert self.parse("December 25")== (12, 25)
 
     def test_mm_dd_yyyy(self):
         assert self.parse("3/15/1990")  == (3, 15)
         assert self.parse("12/25/2000") == (12, 25)
 
-    def test_invalid_returns_none(self):
-        assert self.parse("not a date") is None
-        assert self.parse("")            is None
-        # Note: parse_birthday doesn't validate month/day ranges,
-        # it only validates format — "99/99" parses as (99, 99)
+    def test_two_digit_year_stripped(self):
+        assert self.parse("12/7/90") == (12, 7)
+        assert self.parse("3-15-99") == (3, 15)
 
     def test_leading_zeros(self):
         assert self.parse("01/05") == (1, 5)
         assert self.parse("09/03") == (9, 3)
+
+    # ── Dash- and dot-separated numeric ──────────────────────────────────────
+    def test_dash_separated(self):
+        assert self.parse("12-7")   == (12, 7)
+        assert self.parse("12-07")  == (12, 7)
+        assert self.parse("3-15-1990") == (3, 15)
+
+    def test_dot_separated(self):
+        assert self.parse("12.7")     == (12, 7)
+        assert self.parse("12.7.1990") == (12, 7)
+
+    def test_whitespace_around_separators(self):
+        assert self.parse("12 / 7")  == (12, 7)
+        assert self.parse("12 - 7")  == (12, 7)
+        assert self.parse("12 . 7")  == (12, 7)
+
+    # ── ISO 8601 ─────────────────────────────────────────────────────────────
+    def test_iso_with_year(self):
+        assert self.parse("1990-12-07") == (12, 7)
+        assert self.parse("2026-03-15") == (3, 15)
+
+    def test_iso_month_day_only(self):
+        assert self.parse("--12-07") == (12, 7)
+        assert self.parse("--03-15") == (3, 15)
+
+    # ── Month-name first ─────────────────────────────────────────────────────
+    def test_month_day_text(self):
+        assert self.parse("March 15")    == (3, 15)
+        assert self.parse("December 25") == (12, 25)
+        assert self.parse("December 25, 1990") == (12, 25)
+
+    def test_ordinal_suffix(self):
+        assert self.parse("December 7th") == (12, 7)
+        assert self.parse("March 1st")    == (3, 1)
+        assert self.parse("July 22nd")    == (7, 22)
+        assert self.parse("October 3rd")  == (10, 3)
+
+    def test_abbreviated_month(self):
+        assert self.parse("Dec 7")    == (12, 7)
+        assert self.parse("Dec 7th")  == (12, 7)
+        assert self.parse("Mar 15")   == (3, 15)
+        assert self.parse("Sept 9")   == (9, 9)
+        assert self.parse("Sep 9")    == (9, 9)
+
+    def test_dash_with_month_name(self):
+        assert self.parse("Dec-7") == (12, 7)
+        assert self.parse("7-Dec") == (12, 7)
+
+    # ── Day-first with month name ────────────────────────────────────────────
+    def test_day_first_month_name(self):
+        assert self.parse("7 December")    == (12, 7)
+        assert self.parse("7 Dec")         == (12, 7)
+        assert self.parse("7th December")  == (12, 7)
+        assert self.parse("22nd July")     == (7, 22)
+
+    # ── Ambiguous numeric → M/D unless first > 12 ────────────────────────────
+    def test_ambiguous_defaults_to_md(self):
+        # 7/12: both ≤ 12, default M/D → July 12
+        assert self.parse("7/12") == (7, 12)
+
+    def test_first_over_12_treated_as_day(self):
+        # 15/7: first > 12 → must be day, so July 15
+        assert self.parse("15/7")   == (7, 15)
+        assert self.parse("25-12")  == (12, 25)
+
+    # ── Validation rejects garbage and impossible dates ─────────────────────
+    def test_invalid_returns_none(self):
+        assert self.parse("not a date") is None
+        assert self.parse("") is None
+        assert self.parse("garbage") is None
+        assert self.parse("2026") is None
+
+    def test_out_of_range_rejected(self):
+        # Both > 12: can't be either M/D or D/M
+        assert self.parse("99/99") is None
+        assert self.parse("13/45") is None
+        assert self.parse("15/15") is None
+
+    def test_feb_30_rejected(self):
+        assert self.parse("Feb 30")   is None
+        assert self.parse("2/30")     is None
+        assert self.parse("2-30-1990") is None
+
+    def test_feb_29_accepted(self):
+        # Leap-year birthday — we don't know the year, so accept.
+        assert self.parse("Feb 29") == (2, 29)
+        assert self.parse("2/29")   == (2, 29)
+
+    def test_april_31_rejected(self):
+        assert self.parse("4/31")    is None
+        assert self.parse("April 31") is None
 
 
 class TestBuildChatgptPrompt:

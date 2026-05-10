@@ -53,6 +53,13 @@ repo `../lw-alliance-helper.github.io` (the website) has its own
   write the CHANGELOG entry on the release branch right before
   opening the PR to main, not on individual feature branches. Sentry
   reads `__version__` for release tagging — keep it accurate.
+- **Release-branch PR description is the slim CHANGELOG entry.** When
+  opening `release/X.Y.Z` → `main`, paste the CHANGELOG section for
+  that version into the PR body (plus a short "Closes #…" footer for
+  every issue rolled in). Never leave the description blank — the
+  release-on-main workflow uses the CHANGELOG section as the GitHub
+  Release notes, and the PR body is what reviewers (and your future
+  self when bisecting) see first.
 - **Tests must pass before commit.** Pre-commit hook enforces this. If
   it fails: investigate the underlying issue, don't bypass with
   `--no-verify`.
@@ -98,7 +105,7 @@ repo `../lw-alliance-helper.github.io` (the website) has its own
 | `config.py` | Schema, migrations, `get_*` / `save_*` helpers, gspread client. | ~1.5K |
 | `stats_publisher.py` | Daily alliance-count publisher to website. | ~155 |
 
-Tests: `tests/unit/` and `tests/integration/`. 582 collected, 18 skip
+Tests: `tests/unit/` and `tests/integration/`. 610 collected, 18 skip
 (intentional — `free_tier_only` markers under the `FORCE_PREMIUM=1` CI
 lane).
 
@@ -210,6 +217,7 @@ the long form on each.
 
 | Version | What |
 |---|---|
+| `1.1.3` | Storm time-slot rendering reworked ([#58](https://github.com/LW-Alliance-Helper/lw-alliance-helper-bot/issues/58)): DS and CS slots are game-defined constants (DS 18:00 + 23:00, CS 12:00 + 23:00 server time, UTC-2 / no DST), so `TimeSelectView` buttons now render `4pm EDT (18:00 server time)` style — local clock computed from the guild's `timezone` at click time, server-time portion always spelled out (no "ST" abbreviation). All six `time_option_*` columns dropped from `guild_storm_config` via `ALTER TABLE … DROP COLUMN`. `/growth` Edit Config button now opens the wizard inline instead of telling the user to run `/setup_growth` themselves ([#59](https://github.com/LW-Alliance-Helper/lw-alliance-helper-bot/issues/59)). Birthday parser accepts dash, dot, ISO 8601, abbreviated months, day-first (`7 Dec`, `7th December`), 2-digit years; bare numeric defaults to M/D unless first > 12; rejects impossible dates (`Feb 30`, `13/45`) instead of writing garbage ([#60](https://github.com/LW-Alliance-Helper/lw-alliance-helper-bot/issues/60)). |
 | `1.1.2` | Hotfix: daily event announcements now print the local timezone alongside server time — `format_et` appends `dt.tzname()` so `{time}` renders as `5:00pm EDT` instead of bare `5:00pm`, leaving every existing custom blurb to surface the tz automatically. Add Event / Edit Time in the daily-draft editor used to call `make_et_datetime` which silently coerced every leadership-entered time to America/New_York; renamed to `make_event_datetime(tz=...)`, with Add Event looking up the per-event tz via `get_guild_event` and Edit Time preserving the existing `dt.tzinfo`. Direct-to-main per the hotfix exception. |
 | `1.1.1` | Hotfix: `/help` rebuilt as a category-dropdown view (overview + `discord.ui.Select`) — the 1.1.0 data-ownership copy pushed the embed past Discord's 6000-char limit, causing `HTTPException 50035` on every invocation; new `help_content.py` module owns the content + view so future categories are an append, not a rewrite. Storm and train sheet-load logs now route through a new `config.describe_sheet_error` helper that distinguishes missing-tab from spreadsheet 404 / 403 / rate-limit, replacing opaque gspread reprs (e.g. `<Response [404]>`). Direct-to-main per the hotfix exception. |
 | `1.1.0` | Premium per-user assignment layer ([#41](https://github.com/LW-Alliance-Helper/lw-alliance-helper-bot/issues/41)) — the SKU is now User Subscription, so the bot needs its own one-license-one-guild gate; new `/premium_assign` and `/premium_unassign` commands (with confirmation prompts) plus the `premium_assignments` SQLite table consulted on every premium check. Data-ownership story made explicit in README, welcome DM, `/help`, and `/upgrade` ([#39](https://github.com/LW-Alliance-Helper/lw-alliance-helper-bot/issues/39)). Setup wizard's "➕ Create a new channel" button no longer suppressed on Premium guilds ([#48](https://github.com/LW-Alliance-Helper/lw-alliance-helper-bot/issues/48)). Leadership commands no longer gated by channel category — role check is the security boundary, fixing `/cancel` mid-wizard and the empty-category edge case; `leadership_category_id` dropped via one-shot migration ([#49](https://github.com/LW-Alliance-Helper/lw-alliance-helper-bot/issues/49)). Working-agreement docs updated for the dev-branch staging workflow ([#36](https://github.com/LW-Alliance-Helper/lw-alliance-helper-bot/issues/36)) and the release-branch cleanup practice ([#46](https://github.com/LW-Alliance-Helper/lw-alliance-helper-bot/issues/46)). |
@@ -234,7 +242,7 @@ the long form on each.
 | `1.0.1` | Audit Round 1 — fixed `survey._run_schedule_wizard` broken import + dead `train_ui` line, deleted `sheets.py` and ~250 LOC of dead code (12 items) |
 | `1.0.0` | Initial public release (2026-04-28) |
 
-Test suite: **588 collected**, 18 skipped on the free-tier lane and
+Test suite: **610 collected**, 18 skipped on the free-tier lane and
 35 skipped under `FORCE_PREMIUM=1`. Total LOC: ~17K.
 
 ---
@@ -278,12 +286,12 @@ These have been thought through. Reopening them needs a real reason:
 
 ## Status snapshot
 
-- 1.0.0 launched 2026-04-28. Currently on `1.1.2` (hotfix: surface
-  the alliance's local timezone alongside server time in daily event
-  announcements, and preserve per-event tz on Add Event / Edit Time
-  instead of coercing to ET). See `CHANGELOG.md` for per-version detail.
-- 588 tests collected; 18 skipped on the free-tier lane, 35 skipped
-  under CI's `FORCE_PREMIUM=1` lane.
+- 1.0.0 launched 2026-04-28. Currently on `1.1.3` — storm time-slot
+  rendering reworked around the game-defined fixed times (#58),
+  `/growth` Edit Config button opens the wizard inline (#59), birthday
+  parser accepts more formats and rejects impossible dates (#60). See
+  `CHANGELOG.md` for per-version detail.
+- 610 tests collected; 18 skipped on the free-tier lane.
 - Pre-launch audit fully shipped (Rounds 1–4 → 1.0.1–1.0.4; schema
   drops → 1.0.5 + 1.0.8). No outstanding cleanup from that audit.
 - Transfer management feature designed, not built (see

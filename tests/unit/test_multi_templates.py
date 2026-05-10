@@ -140,7 +140,6 @@ class TestStormTemplates:
         config.save_storm_config(
             TEST_GUILD_ID, "DS", "DS Assignments",
             "Old DS template body",
-            "", "", "", "", "", "",
             "America/New_York", 0,
         )
         cfg = config.get_storm_config(TEST_GUILD_ID, "DS")
@@ -158,7 +157,6 @@ class TestStormTemplates:
         config.save_storm_config(
             TEST_GUILD_ID, "DS", "DS Assignments",
             "ignored fallback",
-            "", "", "", "", "", "",
             "America/New_York", 0,
             templates=templates, default_template="Alt-Format",
         )
@@ -173,7 +171,6 @@ class TestStormTemplates:
         config.save_storm_config(
             TEST_GUILD_ID, "CS", "CS Assignments",
             "ignored",
-            "", "", "", "", "", "",
             "America/New_York", 0,
             templates=[
                 {"name": "Default",  "template": "default cs body"},
@@ -191,7 +188,6 @@ class TestStormTemplates:
 
         config.save_storm_config(
             TEST_GUILD_ID, "DS", "DS", "ignored",
-            "", "", "", "", "", "",
             "America/New_York", 0,
             templates=[
                 {"name": "Plan A", "template": "x"},
@@ -208,12 +204,10 @@ class TestStormTemplates:
 
         config.save_storm_config(
             TEST_GUILD_ID, "DS", "DS Tab", "DS body only",
-            "", "", "", "", "", "",
             "America/New_York", 0,
         )
         config.save_storm_config(
             TEST_GUILD_ID, "CS", "CS Tab", "CS body only",
-            "", "", "", "", "", "",
             "America/New_York", 0,
         )
 

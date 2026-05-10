@@ -32,6 +32,7 @@ from datetime import date as date_cls, datetime
 from unittest.mock import AsyncMock, MagicMock, patch
 from zoneinfo import ZoneInfo
 
+import discord
 import pytest
 
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__)))))
@@ -438,6 +439,103 @@ class TestBirthdayAutoPopulationGate:
                 bday_cfg=bcfg,
             )
         mock_pop.assert_not_called()
+
+
+# ── Birthday channel Forbidden isolation ─────────────────────────────────────
+
+class TestBirthdayChannelForbiddenIsolation:
+    """Regression for 1.1.4: a `discord.Forbidden` raised by
+    `bday_channel.send` (e.g. bot lacks Send Messages on the
+    configured birthday channel for one alliance) used to escape the
+    inner loop, hit the broad outer `except Exception`, and abort
+    every other guild's birthday announcement for that minute. The
+    fix catches Forbidden at the channel-send call, logs the channel
+    info, and breaks out of that single guild's birthday loop —
+    without unwinding the whole task."""
+
+    def _bday_announcing(self):
+        """Birthday config that announces (not auto-pop) at the same
+        time the test pins the loop to."""
+        cfg = _bday_cfg(enabled=1)
+        cfg["reminders_enabled"]   = 1
+        cfg["reminder_time"]       = "08:00"
+        cfg["reminder_channel_id"] = REMINDER_CHAN_ID
+        return cfg
+
+    @pytest.mark.asyncio
+    async def test_forbidden_on_bday_channel_send_does_not_propagate(self, capsys):
+        """When the channel send raises Forbidden, the exception must
+        be swallowed and a per-guild log line must name the channel —
+        otherwise the outer loop catches a generic 'Error during
+        birthday check' and we can't tell leadership which alliance to
+        fix."""
+        cog = _make_cog()
+
+        # Member dict month/day must match real today, since the loop
+        # filters via `_d2.today()` (not the patched ET datetime).
+        from datetime import date as _date
+        real_today = _date.today()
+        members = [{
+            "name":       "alice",
+            "month":      real_today.month,
+            "day":        real_today.day,
+            "discord_id": None,
+        }]
+
+        chan      = AsyncMock()
+        chan.name = "birthdays"
+        forbidden = discord.Forbidden(MagicMock(status=403, reason="Forbidden"),
+                                      "Missing Access")
+        chan.send = AsyncMock(side_effect=forbidden)
+
+        with patch("train_cog.load_birthdays", return_value=members):
+            # Loop must complete cleanly even though the send raises.
+            await _run_loop(
+                cog,
+                now_in_guild_tz=datetime(2026, 5, 15, 8, 0, tzinfo=ET),
+                bday_cfg=self._bday_announcing(),
+                channels={REMINDER_CHAN_ID: chan},
+            )
+
+        chan.send.assert_called_once()
+        out = capsys.readouterr().out
+        assert "Missing perms" in out, \
+            "Forbidden must produce the per-guild diagnostic log line"
+        assert str(REMINDER_CHAN_ID) in out, \
+            "Log must name the channel id so leadership knows what to fix"
+        assert "birthdays" in out, "Log must include the channel name"
+        assert str(GUILD_ID) in out, "Log must name the guild"
+
+    @pytest.mark.asyncio
+    async def test_forbidden_breaks_inner_member_loop(self, capsys):
+        """Two birthdays today, both would fail with Forbidden — the
+        loop must break after the first failure rather than spamming
+        identical errors for every member."""
+        cog = _make_cog()
+
+        from datetime import date as _date
+        real_today = _date.today()
+        members = [
+            {"name": "alice", "month": real_today.month, "day": real_today.day, "discord_id": None},
+            {"name": "bob",   "month": real_today.month, "day": real_today.day, "discord_id": None},
+        ]
+
+        chan      = AsyncMock()
+        chan.name = "birthdays"
+        forbidden = discord.Forbidden(MagicMock(status=403, reason="Forbidden"),
+                                      "Missing Access")
+        chan.send = AsyncMock(side_effect=forbidden)
+
+        with patch("train_cog.load_birthdays", return_value=members):
+            await _run_loop(
+                cog,
+                now_in_guild_tz=datetime(2026, 5, 15, 8, 0, tzinfo=ET),
+                bday_cfg=self._bday_announcing(),
+                channels={REMINDER_CHAN_ID: chan},
+            )
+
+        assert chan.send.await_count == 1, \
+            "After the first Forbidden, remaining members for that guild are skipped"
 
 
 # ── ReminderView lifecycle ───────────────────────────────────────────────────

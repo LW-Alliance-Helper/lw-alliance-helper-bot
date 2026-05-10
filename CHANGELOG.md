@@ -9,6 +9,13 @@ Each entry is a slim summary — heavier context (root cause, what we
 tried, design rationale) lives in the corresponding commit message
 and PR description.
 
+## [1.1.4] — 2026-05-10
+
+### Fixed
+- Birthday announcement loop no longer aborts every guild's announcements when one guild's reminder channel has bad bot perms — `discord.Forbidden` is caught at the per-channel send and logged with guild id, channel id, and channel name so leadership can be told what to fix; remaining guilds still get their birthday posts.
+
+Hotfix released direct to main per CLAUDE.md's hotfix exception.
+
 ## [1.1.3] — 2026-05-09
 
 ### Changed

@@ -377,11 +377,16 @@ class TrainCog(commands.Cog):
             self.birthday_population_fired = set()  # birthday auto-pop done today
 
         # ── Birthday auto-population and Discord announcements ────────────────
-        try:
-            from config import get_config, get_birthday_config
-            from zoneinfo import ZoneInfo as _ZI
+        # Per-guild try/except: a single misconfigured guild (bad perms,
+        # missing tab, gspread hiccup) must not abort the loop for every
+        # other guild. Specific failure modes (channel-send Forbidden,
+        # DM Forbidden) are caught closer to the call so the log line
+        # names the channel/user that needs fixing.
+        from config import get_config, get_birthday_config
+        from zoneinfo import ZoneInfo as _ZI
 
-            for guild in self.bot.guilds:
+        for guild in self.bot.guilds:
+            try:
                 cfg      = get_config(guild.id)
                 bcfg     = get_birthday_config(guild.id)
                 if not cfg or not cfg.setup_complete or not bcfg.get("enabled"):
@@ -467,7 +472,20 @@ class TrainCog(commands.Cog):
                         mention = f"<@{discord_id}>"
                     else:
                         mention = f"**{name}**"
-                    await bday_channel.send(f"🎂 Today is {mention}'s birthday!")
+                    try:
+                        await bday_channel.send(f"🎂 Today is {mention}'s birthday!")
+                    except discord.Forbidden:
+                        # Bot lacks View Channel or Send Messages on the
+                        # configured birthday channel for this guild. No
+                        # point retrying the remaining members — every
+                        # send to this channel will fail the same way.
+                        chan_name = getattr(bday_channel, "name", "?")
+                        print(f"[BIRTHDAY] Missing perms to send in channel "
+                              f"{bday_channel_id} (#{chan_name}) for guild "
+                              f"{guild.id} ({guild.name}) — leadership must "
+                              f"grant View Channel + Send Messages or "
+                              f"reconfigure via /setup_birthdays")
+                        break
 
                     # 💎 Premium: also DM the member directly with a personal note.
                     if discord_id:
@@ -477,10 +495,11 @@ class TrainCog(commands.Cog):
                             content=_render_dm_body(bday_dm_tmpl, name=name),
                         )
 
-        except Exception as e:
-            import traceback
-            print(f"[BIRTHDAY] Error during birthday check: {e}")
-            print(f"[BIRTHDAY] Traceback:\n{traceback.format_exc()}")
+            except Exception as e:
+                import traceback
+                print(f"[BIRTHDAY] Error during birthday check for guild "
+                      f"{guild.id}: {e}")
+                print(f"[BIRTHDAY] Traceback:\n{traceback.format_exc()}")
 
         # ── Per-guild train reminders ──────────────────────────────────────────
         for guild in self.bot.guilds:

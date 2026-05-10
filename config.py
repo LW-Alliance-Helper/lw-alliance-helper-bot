@@ -476,6 +476,63 @@ def init_db():
             except Exception:
                 pass
 
+        # ── 1.1.4: backfill numeric+magnitude on default LW survey keys ────────
+        # The pre-rework hardcoded survey normalised shorthand like `301` to
+        # 301,000,000 before writing to Sheets. The configurable-survey rework
+        # dropped that, leaving stored values inconsistent with prior data and
+        # hard for sheet-side sums to interpret. Numeric is now a free-tier
+        # type and ships with a magnitude scaler. Backfill any saved guild
+        # config whose questions still carry the original LW default keys so
+        # leadership doesn't have to re-run /setup_survey by hand. Idempotent:
+        # only upgrades type=text questions that haven't been migrated.
+        _LW_DEFAULT_MAGNITUDES = {
+            "squad1_power":  "M",
+            "squad2_power":  "M",
+            "squad3_power":  "M",
+            "thp":           "M",
+            "total_kills":   "M",
+            "drone_level":   "raw",
+            "gorilla_level": "raw",
+        }
+        for _table in ("guild_survey_config", "guild_extra_surveys"):
+            try:
+                _rows = conn.execute(
+                    f"SELECT rowid, questions FROM {_table}"
+                ).fetchall()
+            except Exception:
+                continue
+            for _rowid, _raw in _rows:
+                if not _raw:
+                    continue
+                try:
+                    _qs = json.loads(_raw)
+                except Exception:
+                    continue
+                if not isinstance(_qs, list):
+                    continue
+                _changed = False
+                for _q in _qs:
+                    if not isinstance(_q, dict):
+                        continue
+                    _mag = _LW_DEFAULT_MAGNITUDES.get(_q.get("key"))
+                    if _mag is None:
+                        continue
+                    if _q.get("type") == "text" and "magnitude" not in _q:
+                        _q["type"]      = "numeric"
+                        _q["magnitude"] = _mag
+                        _changed = True
+                if _changed:
+                    try:
+                        conn.execute(
+                            f"UPDATE {_table} SET questions = ? WHERE rowid = ?",
+                            (json.dumps(_qs), _rowid),
+                        )
+                        conn.commit()
+                        print(f"[CONFIG] Upgraded LW default questions to numeric+magnitude "
+                              f"in {_table} rowid={_rowid}")
+                    except Exception as _e:
+                        print(f"[CONFIG] Could not write back {_table} rowid={_rowid}: {_e}")
+
 
 def get_config(guild_id: int) -> Optional[GuildConfig]:
     """Retrieve config for a guild. Returns None if not found."""

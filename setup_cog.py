@@ -3537,17 +3537,12 @@ async def run_storm_setup(interaction: discord.Interaction, bot, event_type: str
     else:
         update_config_field(guild_id, "cs_log_channel_id", log_channel_id)
 
-    from config import get_storm_slot_labels
-    slot_labels = get_storm_slot_labels(event_type, guild_id)
-
     embed = discord.Embed(title=f"✅ {label} Configured", color=discord.Color.green())
     embed.add_field(name="Sheet Tab",    value=tab_name, inline=True)
     embed.add_field(name="Teams",        value={"both": "A & B", "A": "A only", "B": "B only"}[teams], inline=True)
     embed.add_field(name="Timezone",     value=tz_label, inline=True)
     embed.add_field(name="Log Channel",  value=f"<#{log_channel_id}>", inline=True)
     embed.add_field(name="Post Channel", value=f"<#{post_channel_id}>", inline=True)
-    embed.add_field(name="Time Slot 1",  value=slot_labels[0], inline=True)
-    embed.add_field(name="Time Slot 2",  value=slot_labels[1], inline=True)
     if participation_cfg["enabled"]:
         n_q = len(participation_cfg["questions"])
         embed.add_field(

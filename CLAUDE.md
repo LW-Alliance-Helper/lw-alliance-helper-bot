@@ -53,6 +53,13 @@ repo `../lw-alliance-helper.github.io` (the website) has its own
   write the CHANGELOG entry on the release branch right before
   opening the PR to main, not on individual feature branches. Sentry
   reads `__version__` for release tagging — keep it accurate.
+- **Release-branch PR description is the slim CHANGELOG entry.** When
+  opening `release/X.Y.Z` → `main`, paste the CHANGELOG section for
+  that version into the PR body (plus a short "Closes #…" footer for
+  every issue rolled in). Never leave the description blank — the
+  release-on-main workflow uses the CHANGELOG section as the GitHub
+  Release notes, and the PR body is what reviewers (and your future
+  self when bisecting) see first.
 - **Tests must pass before commit.** Pre-commit hook enforces this. If
   it fails: investigate the underlying issue, don't bypass with
   `--no-verify`.

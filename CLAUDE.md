@@ -43,6 +43,19 @@ repo `../lw-alliance-helper.github.io` (the website) has its own
 - **Backlog lives in [GitHub Project #2](https://github.com/orgs/LW-Alliance-Helper/projects/2).**
   Auto-add fires for both repos. Apply a label at issue-creation time
   (`bug` / `feature` / `documentation` / `hotfix`).
+- **Project status updates automatically** via
+  `.github/workflows/project-status-sync.yml`. An issue's Status field
+  walks `Up Next → In progress → In review → Ready for Release →
+  Shipped` based on where its linked PR lives (PR opened → In progress;
+  push to `dev` → In review; push to `release/*` → Ready for Release;
+  push to `main` → Shipped). Manual statuses still work for `Backlog`,
+  `Up Next`, and `Canceled`. Driver: `closingIssuesReferences` on the
+  PR — the issue must appear as `Closes #N` (or markdown-linked
+  variant) in the PR body. Requires a `PROJECT_TOKEN` repo secret —
+  fine-grained PAT with org-level `Projects: Read and Write` (the
+  default `GITHUB_TOKEN` can't touch org Project v2). For one-off
+  bootstraps, run `scripts/sync_project_status.py --issue N --status
+  "..."` locally with `GH_TOKEN` exported.
 - **Hotfix exception.** Direct-to-main is allowed for urgent one-line
   fixes, but only with explicit approval before each push. After a
   hotfix lands on main, fast-forward the active release branch to

@@ -1,0 +1,93 @@
+name: Project status sync
+
+# Walks issues through Up Next -> In progress -> In review -> Ready for
+# Release -> Shipped without anyone touching the project board, by
+# inferring the right status from where the linked PR currently lives:
+#
+#   PR opened (referencing issue)   ->  In progress
+#   Push to dev                     ->  In review
+#   Push to release/X.Y.Z           ->  Ready for Release
+#   Push to main                    ->  Shipped
+#
+# All transitions are driven by `closingIssuesReferences` on the PR, so
+# the issue ref needs to be in the PR body as `Closes #N` (markdown link
+# wrapping is fine — the GitHub parser handles it).
+#
+# Requires a `PROJECT_TOKEN` secret with read+write on org-level Project
+# v2. The auto-injected GITHUB_TOKEN cannot touch org projects.
+
+on:
+  pull_request:
+    types: [opened, reopened, ready_for_review]
+  push:
+    branches:
+      - dev
+      - 'release/*'
+      - main
+
+jobs:
+  sync:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          sparse-checkout: scripts/sync_project_status.py
+          sparse-checkout-cone-mode: false
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+
+      - name: Determine target status and PR
+        id: target
+        env:
+          IS_DRAFT: ${{ github.event.pull_request.draft }}
+          PR_ACTION: ${{ github.event.action }}
+        run: |
+          STATUS=""
+          PR=""
+          case "${{ github.event_name }}" in
+            pull_request)
+              # Skip drafts unless they were just marked ready_for_review.
+              if [ "$IS_DRAFT" = "true" ] && [ "$PR_ACTION" != "ready_for_review" ]; then
+                echo "Draft PR, skipping"
+                exit 0
+              fi
+              STATUS="In progress"
+              PR="${{ github.event.pull_request.number }}"
+              ;;
+            push)
+              case "${{ github.ref }}" in
+                refs/heads/dev)        STATUS="In review" ;;
+                refs/heads/release/*)  STATUS="Ready for Release" ;;
+                refs/heads/main)       STATUS="Shipped" ;;
+              esac
+              ;;
+          esac
+          if [ -z "$STATUS" ]; then
+            echo "No matching status for this event, skipping"
+            exit 0
+          fi
+          {
+            echo "status=$STATUS"
+            echo "pr=$PR"
+          } >> "$GITHUB_OUTPUT"
+
+      - name: Sync project status
+        if: steps.target.outputs.status != ''
+        env:
+          GH_TOKEN: ${{ secrets.PROJECT_TOKEN }}
+        run: |
+          if [ -z "$GH_TOKEN" ]; then
+            echo "::warning::PROJECT_TOKEN secret not configured — skipping project sync"
+            exit 0
+          fi
+          if [ -n "${{ steps.target.outputs.pr }}" ]; then
+            python scripts/sync_project_status.py \
+              --pr "${{ steps.target.outputs.pr }}" \
+              --status "${{ steps.target.outputs.status }}"
+          else
+            python scripts/sync_project_status.py \
+              --commit "${{ github.sha }}" \
+              --status "${{ steps.target.outputs.status }}"
+          fi

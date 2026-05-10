@@ -223,22 +223,22 @@ def parse_ds_template(text: str) -> tuple[dict, list, list]:
 def build_ds_mail(team: str, zones: dict, subs: list, time_key: str,
                   guild_id: int = None, template_name: str | None = None) -> str:
     """Build DS mail using a guild's stored template (named or default)."""
-    from config import get_storm_config, get_storm_template, server_time_to_local
-    cfg       = get_storm_config(guild_id, "DS") if guild_id else {}
+    from config import (
+        get_storm_template, format_storm_slot, get_storm_slot_for_key,
+    )
     if guild_id:
         template = get_storm_template(guild_id, "DS", template_name)
     else:
-        template = cfg.get("mail_template") or ""
+        from config import get_storm_config
+        template = (get_storm_config(guild_id, "DS") or {}).get("mail_template") or ""
 
-    # Resolve the time slot — `time_key` is "1" or "2" from TimeSelectView,
-    # or arbitrary text passed by tests (in which case fall through verbatim).
-    if time_key in ("1", "2"):
-        server_time = cfg.get(f"time_option_{time_key}_server", "")
-        if server_time:
-            local_str = server_time_to_local(server_time, cfg.get("timezone") or "America/New_York")
-            time_str  = f"{local_str} ({server_time} ST)" if local_str else f"{server_time} ST"
-        else:
-            time_str = time_key
+    # `time_key` is "1" or "2" from TimeSelectView. Tests pass arbitrary text
+    # like "18:00 Server Time" — fall through to that string verbatim so
+    # build_X_mail stays composable in test fixtures.
+    slot = get_storm_slot_for_key("DS", time_key) if guild_id else None
+    if slot is not None:
+        h, m = slot
+        time_str = format_storm_slot(h, m, guild_id)
     else:
         time_str = time_key
 
@@ -351,27 +351,17 @@ async def _post_and_copy(channel, post_channel_id: int, event_label: str,
 
 
 class TimeSelectView(discord.ui.View):
-    """Dynamic time select — buttons built from guild storm config."""
+    """Dynamic time select — buttons built from the game-defined storm
+    times (DS_SERVER_TIMES / CS_SERVER_TIMES) rendered against the guild's
+    timezone."""
     def __init__(self, event_type: str = "DS", guild_id: int = None):
         super().__init__(timeout=WIZARD_TIMEOUT)
         self.selected = None
-        from config import get_storm_config, server_time_to_local
-        cfg = get_storm_config(guild_id, event_type) if guild_id else {}
-        tz_name = cfg.get("timezone") or "America/New_York"
-        t1_server = cfg.get("time_option_1_server", "")
-        t2_server = cfg.get("time_option_2_server", "")
+        from config import get_storm_slot_labels
+        labels = get_storm_slot_labels(event_type, guild_id)
 
-        def _btn_label(server: str, fallback: str) -> str:
-            if not server:
-                return fallback
-            local = server_time_to_local(server, tz_name)
-            return f"{local} ({server} ST)" if local else f"{server} ST"
-
-        btn1_label = _btn_label(t1_server, "Option 1")
-        btn2_label = _btn_label(t2_server, "Option 2")
-
-        b1 = discord.ui.Button(label=btn1_label[:80], style=discord.ButtonStyle.secondary)
-        b2 = discord.ui.Button(label=btn2_label[:80], style=discord.ButtonStyle.secondary)
+        b1 = discord.ui.Button(label=labels[0][:80], style=discord.ButtonStyle.secondary)
+        b2 = discord.ui.Button(label=labels[1][:80], style=discord.ButtonStyle.secondary)
 
         async def pick_1(interaction: discord.Interaction):
             self.selected = "1"
@@ -754,19 +744,13 @@ async def _show_storm_overview(interaction: discord.Interaction, event_type: str
         title=f"{icon} {label}",
         color=discord.Color.dark_red() if event_type == "DS" else discord.Color.gold(),
     )
-    from config import server_time_to_local
-    tz_name = scfg.get("timezone") or "America/New_York"
-
-    def _slot_value(server: str) -> str:
-        if not server:
-            return "*not set*"
-        local = server_time_to_local(server, tz_name)
-        return f"{local} ({server} ST)" if local else f"{server} ST"
+    from config import get_storm_slot_labels
+    slot_labels = get_storm_slot_labels(event_type, interaction.guild_id)
 
     embed.add_field(name="Sheet Tab",   value=scfg.get("tab_name", "*not set*"),                        inline=False)
     embed.add_field(name="Log Channel", value=f"<#{log_channel_id}>" if log_channel_id else "*not set*", inline=False)
-    embed.add_field(name="Time Option 1", value=_slot_value(scfg.get("time_option_1_server", "")), inline=False)
-    embed.add_field(name="Time Option 2", value=_slot_value(scfg.get("time_option_2_server", "")), inline=False)
+    embed.add_field(name="Time Option 1", value=slot_labels[0], inline=False)
+    embed.add_field(name="Time Option 2", value=slot_labels[1], inline=False)
 
     # Build the rendered mail template — same templating used by /[event]_draft
     try:
@@ -1008,20 +992,19 @@ def parse_cs_template(text: str) -> tuple[dict, list]:
 def build_cs_mail(team: str, z: dict, time_key: str, guild_id: int = None,
                   template_name: str | None = None) -> str:
     """Build CS mail using a guild's stored template (named or default)."""
-    from config import get_storm_config, get_storm_template, server_time_to_local
-    cfg       = get_storm_config(guild_id, "CS") if guild_id else {}
+    from config import (
+        get_storm_template, format_storm_slot, get_storm_slot_for_key,
+    )
     if guild_id:
         template = get_storm_template(guild_id, "CS", template_name)
     else:
-        template = cfg.get("mail_template") or ""
+        from config import get_storm_config
+        template = (get_storm_config(guild_id, "CS") or {}).get("mail_template") or ""
 
-    if time_key in ("1", "2"):
-        server_time = cfg.get(f"time_option_{time_key}_server", "")
-        if server_time:
-            local_str = server_time_to_local(server_time, cfg.get("timezone") or "America/New_York")
-            time_str  = f"{local_str} ({server_time} ST)" if local_str else f"{server_time} ST"
-        else:
-            time_str = time_key
+    slot = get_storm_slot_for_key("CS", time_key) if guild_id else None
+    if slot is not None:
+        h, m = slot
+        time_str = format_storm_slot(h, m, guild_id)
     else:
         time_str = time_key
 

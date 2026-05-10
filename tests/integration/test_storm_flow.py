@@ -38,7 +38,7 @@ class TestDsMailGeneration:
         from defaults import DEFAULT_DS_TEMPLATE
 
         save_storm_config(TEST_GUILD_ID, "DS", "DS Assignments", DEFAULT_DS_TEMPLATE,
-                          "", "", "America/New_York", 0)
+                          "America/New_York", 0)
 
         result = build_ds_mail("A", SAMPLE_DS_ZONES, SAMPLE_DS_SUBS,
                                "18:00 Server Time", guild_id=TEST_GUILD_ID)
@@ -56,7 +56,7 @@ class TestDsMailGeneration:
         from defaults import DEFAULT_DS_TEMPLATE
 
         save_storm_config(TEST_GUILD_ID, "DS", "DS Assignments", DEFAULT_DS_TEMPLATE,
-                          "", "", "America/New_York", 0)
+                          "America/New_York", 0)
 
         result = build_ds_mail("A", SAMPLE_DS_ZONES, [], "18:00 Server Time",
                                guild_id=TEST_GUILD_ID)
@@ -67,11 +67,11 @@ class TestDsMailGeneration:
         from config import save_storm_config
 
         save_storm_config(TEST_GUILD_ID, "DS_A", "DS Tab", "Team A: {zones}",
-                          "", "", "America/New_York", 0)
+                          "America/New_York", 0)
         save_storm_config(TEST_GUILD_ID, "DS_B", "DS Tab", "Team B: {zones}",
-                          "", "", "America/New_York", 0)
+                          "America/New_York", 0)
         save_storm_config(TEST_GUILD_ID, "DS", "DS Tab", "DS: {zones}",
-                          "", "", "America/New_York", 0)
+                          "America/New_York", 0)
 
         result_a = build_ds_mail("A", {"Z1": ["Alice"]}, [], "18:00", guild_id=TEST_GUILD_ID)
         result_b = build_ds_mail("B", {"Z1": ["Bob"]},   [], "18:00", guild_id=TEST_GUILD_ID)
@@ -85,7 +85,7 @@ class TestDsMailGeneration:
 
         save_storm_config(TEST_GUILD_ID, "DS", "DS Assignments",
                           "Zones:\n{zones}\nSubs:\n{subs}\nTime: {time}",
-                          "", "", "America/New_York", 0)
+                          "America/New_York", 0)
 
         result = build_ds_mail("A", {"Z1": ["Alice"]}, [], "18:00",
                                guild_id=TEST_GUILD_ID)
@@ -106,7 +106,7 @@ class TestCsMailGeneration:
         from defaults import DEFAULT_CS_TEMPLATE
 
         save_storm_config(TEST_GUILD_ID, "CS", "CS Assignments", DEFAULT_CS_TEMPLATE,
-                          "", "", "America/New_York", 0)
+                          "America/New_York", 0)
 
         result = build_cs_mail("A", SAMPLE_CS_ZONES, "12:00 Server Time",
                                guild_id=TEST_GUILD_ID)
@@ -120,7 +120,7 @@ class TestCsMailGeneration:
         from defaults import DEFAULT_CS_TEMPLATE
 
         save_storm_config(TEST_GUILD_ID, "CS", "CS Assignments", DEFAULT_CS_TEMPLATE,
-                          "", "", "America/New_York", 0)
+                          "America/New_York", 0)
 
         result = build_cs_mail("A", {"Z1": ["Alice"]}, "12:00 Server Time",
                                guild_id=TEST_GUILD_ID)
@@ -132,7 +132,7 @@ class TestCsMailGeneration:
 
         save_storm_config(TEST_GUILD_ID, "CS", "CS Assignments",
                           "Canyon Storm\n{zones}\n{subs}\n{time}",
-                          "", "", "America/New_York", 0)
+                          "America/New_York", 0)
 
         result = build_cs_mail("A", {"Z1": ["Alice"]}, "12:00",
                                guild_id=TEST_GUILD_ID)

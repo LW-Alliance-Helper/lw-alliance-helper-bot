@@ -1286,8 +1286,8 @@ Examples: *Vote count*, *Sitting out*, *Did anyone show up late?*
 | Embed title | `🏜️ Canyon Storm` | `storm.py` |
 | Embed field | `Sheet Tab` \| `{tab_name}` or `*not set*` | `storm.py` |
 | Embed field | `Log Channel` \| `<#{log_channel_id}>` or `*not set*` | `storm.py` |
-| Embed field | `Time Option 1` \| `{local} ({server} ST)` or `*not set*` | `storm.py` |
-| Embed field | `Time Option 2` \| `{local} ({server} ST)` or `*not set*` | `storm.py` |
+| Embed field | `Time Option 1` \| `{local} ({HH:MM} server time)` (game-fixed: DS=18:00, CS=12:00) | `storm.py` |
+| Embed field | `Time Option 2` \| `{local} ({HH:MM} server time)` (game-fixed: DS=23:00, CS=23:00) | `storm.py` |
 | Embed field | `Current Mail Template (Team A)` \| ` ```\n{preview}\n``` ` | `storm.py` |
 | Embed field (error) | `Current Mail Template` \| `⚠️ Could not load: {e}` | `storm.py` |
 | Embed footer | `Run /{setup_cmd} to update. Run /{cmd_name}_draft to generate a draft.` | `storm.py` |
@@ -1321,10 +1321,8 @@ Examples: *Vote count*, *Sitting out*, *Did anyone show up late?*
 |---|---|---|
 | Wizard prompt (DS) | `**Step 2 of 4 — Pick Time**\n⏰ What time is Desert Storm this week?` | `storm.py` |
 | Wizard prompt (CS) | `**Step 2 of 4 — Pick Time**\n⏰ What time is Canyon Storm this week?` | `storm.py` |
-| Button | `{local} ({server} ST)` or `{server} ST` (secondary, truncated to 80 chars) | `storm.py` |
-| Button | `{local} ({server} ST)` or `{server} ST` (secondary, truncated to 80 chars) | `storm.py` |
-| Default time label | `Option 1` (when slot is unset) | `storm.py` |
-| Default time label | `Option 2` (when slot is unset) | `storm.py` |
+| Button | `{local} ({HH:MM} server time)` (secondary, truncated to 80 chars; DS slot 1 = 18:00, CS slot 1 = 12:00) | `storm.py` |
+| Button | `{local} ({HH:MM} server time)` (secondary, truncated to 80 chars; both events slot 2 = 23:00) | `storm.py` |
 
 #### 8.3.4 Step 3 — Mail Template (Use as-is or Edit)
 

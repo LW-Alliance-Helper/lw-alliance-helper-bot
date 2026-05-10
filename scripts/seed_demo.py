@@ -218,8 +218,9 @@ def seed_birthdays(args) -> None:
 def seed_storm(args) -> None:
     """Seed Desert Storm + Canyon Storm configs with the default mail template.
 
-    Times are server-time-only (UTC-2, no DST); local time is rendered at
-    display time from the guild's timezone.
+    Time slots aren't seeded — they're game-defined constants
+    (DS_SERVER_TIMES / CS_SERVER_TIMES in config.py) rendered at display
+    time from the guild's timezone.
     """
     for event_type in ("DS", "CS"):
         config.save_storm_config(
@@ -227,8 +228,6 @@ def seed_storm(args) -> None:
             event_type         = event_type,
             tab_name           = f"{event_type} Assignments",
             mail_template      = DEFAULT_DS_TEMPLATE,
-            t1_server          = "18:00",
-            t2_server          = "23:00",
             timezone           = "America/New_York",
             log_channel_id     = args.leadership_channel,
             post_channel_id    = args.post_channel,

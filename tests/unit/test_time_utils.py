@@ -1,7 +1,7 @@
 """
 Unit tests for time parsing and Server Time conversion utilities.
-Covers _parse_12h_time, parse_server_time, format_server_time, and
-server_time_to_local.
+Covers _parse_12h_time, server_time_to_local, format_storm_slot,
+get_storm_slot_labels, get_storm_slot_for_key.
 """
 import pytest
 import sys, os
@@ -54,90 +54,140 @@ class TestParse12hTime:
         assert self.parse("10:15 pm") == "22:15"
 
 
-class TestParseServerTime:
-    """`parse_server_time` accepts canonical HH:MM plus a few legacy forms."""
-
-    def test_canonical_24h(self):
-        from config import parse_server_time
-        t = parse_server_time("23:00")
-        assert t is not None
-        assert (t.hour, t.minute) == (23, 0)
-
-    def test_canonical_short_hour(self):
-        from config import parse_server_time
-        t = parse_server_time("9:30")
-        assert t is not None
-        assert (t.hour, t.minute) == (9, 30)
-
-    def test_with_st_suffix(self):
-        from config import parse_server_time
-        t = parse_server_time("18:00 ST")
-        assert t is not None
-        assert (t.hour, t.minute) == (18, 0)
-
-    def test_hhmm_no_separator(self):
-        from config import parse_server_time
-        t = parse_server_time("2300")
-        assert t is not None
-        assert (t.hour, t.minute) == (23, 0)
-
-    def test_pm_short(self):
-        from config import parse_server_time
-        t = parse_server_time("9pm")
-        assert t is not None
-        assert (t.hour, t.minute) == (21, 0)
-
-    def test_garbage_returns_none(self):
-        from config import parse_server_time
-        assert parse_server_time("nonsense") is None
-        assert parse_server_time("") is None
-        assert parse_server_time("25:00") is None
-        assert parse_server_time("12:99") is None
-
-
-class TestFormatServerTime:
-    def test_zero_padded(self):
-        from config import format_server_time
-        from datetime import time
-        assert format_server_time(time(9, 0))  == "09:00"
-        assert format_server_time(time(23, 30)) == "23:30"
-
-
 class TestServerTimeToLocal:
-    """Server Time is UTC-2 (no DST). The new helper takes a stored
-    `HH:MM` string + a guild timezone name and renders the local clock
-    time. Output looks like `5:00 PM EST`."""
+    """server_time_to_local converts a (hour, minute, guild_id) triple from
+    Server Time (UTC-2) to the guild's local clock string. e.g. (18, 0)
+    with ET timezone in summer → "4pm EDT"."""
 
-    def test_18_00_in_et(self):
-        from config import server_time_to_local
-        # 18:00 UTC-2 → 20:00 UTC → 4:00 PM EDT (summer) / 3:00 PM EST (winter)
-        result = server_time_to_local("18:00", "America/New_York")
-        assert "PM" in result
-        # Either 4 (summer) or 3 (winter) depending on test run date
-        assert ("4:00" in result) or ("3:00" in result)
+    def test_ds_slot1_in_et(self, seeded_db):
+        """18:00 server time → 4pm in ET (summer baseline)."""
+        import config
+        result = config.server_time_to_local(18, 0, TEST_GUILD_ID)
+        assert "4" in result
+        assert "pm" in result.lower()
 
-    def test_handles_legacy_st_suffix(self):
-        from config import server_time_to_local
-        result = server_time_to_local("18:00 ST", "America/New_York")
-        assert "PM" in result
+    def test_ds_slot2_in_et(self, seeded_db):
+        """23:00 server time → 9pm in ET (summer baseline)."""
+        import config
+        result = config.server_time_to_local(23, 0, TEST_GUILD_ID)
+        assert "9" in result
+        assert "pm" in result.lower()
 
-    def test_returns_input_on_unparseable(self):
-        from config import server_time_to_local
-        # Garbage in → garbage out (raw string), so display still shows
-        # *something* instead of disappearing.
-        assert server_time_to_local("abc", "America/New_York") == "abc"
+    def test_cs_slot1_in_et(self, seeded_db):
+        """12:00 server time → 10am in ET (summer baseline)."""
+        import config
+        result = config.server_time_to_local(12, 0, TEST_GUILD_ID)
+        assert "10" in result
+        assert "am" in result.lower()
 
-    def test_empty_input_returns_empty(self):
-        from config import server_time_to_local
-        assert server_time_to_local("", "America/New_York") == ""
+    def test_includes_tz_abbreviation(self, seeded_db):
+        import config
+        result = config.server_time_to_local(18, 0, TEST_GUILD_ID)
+        assert any(tz in result for tz in ("EDT", "EST", "ET"))
 
-    def test_includes_tz_abbreviation(self):
-        from config import server_time_to_local
-        result = server_time_to_local("18:00", "America/New_York")
-        assert any(tz in result for tz in ("EDT", "EST"))
+    def test_different_timezone_changes_output(self, seeded_db):
+        import config
+        cfg = config.get_config(TEST_GUILD_ID)
+        et_result = config.server_time_to_local(18, 0, TEST_GUILD_ID)
 
-    def test_different_guild_tz_yields_different_string(self):
-        from config import server_time_to_local
-        et    = server_time_to_local("18:00", "America/New_York")
-        london = server_time_to_local("18:00", "Europe/London")
-        assert et != london
+        cfg.timezone = "Europe/London"
+        config.save_config(cfg)
+        try:
+            london_result = config.server_time_to_local(18, 0, TEST_GUILD_ID)
+            assert et_result != london_result
+        finally:
+            cfg.timezone = "America/New_York"
+            config.save_config(cfg)
+
+    def test_falls_back_when_guild_id_unknown(self):
+        """Unknown guild_id → defaults to America/New_York instead of crashing."""
+        import config
+        result = config.server_time_to_local(18, 0, 99999999)
+        assert any(c.isdigit() for c in result)
+
+
+class TestFormatStormSlot:
+    """format_storm_slot composes "<local> (HH:MM server time)" — the
+    canonical user-facing string used on every storm surface (TimeSelectView
+    buttons, /view_configuration, storm overview embeds, mail templates)."""
+
+    def test_includes_server_time_label_spelled_out(self, seeded_db):
+        """Must NEVER abbreviate to 'ST' — confuses users about which zone."""
+        import config
+        result = config.format_storm_slot(18, 0, TEST_GUILD_ID)
+        assert "server time" in result
+        assert "ST" not in result.split()  # not as a separate token like "(18:00 ST)"
+
+    def test_uses_lowercase_server_time(self, seeded_db):
+        import config
+        result = config.format_storm_slot(18, 0, TEST_GUILD_ID)
+        # Lowercase "server time" — matches the agreed copy convention
+        assert "server time" in result
+        assert "Server Time" not in result
+
+    def test_includes_server_hh_mm(self, seeded_db):
+        import config
+        result = config.format_storm_slot(18, 0, TEST_GUILD_ID)
+        assert "18:00" in result
+
+    def test_includes_local_clock(self, seeded_db):
+        """Local part uses lowercase am/pm, e.g. '4pm EDT'."""
+        import config
+        result = config.format_storm_slot(18, 0, TEST_GUILD_ID)
+        assert ("pm" in result.lower()) or ("am" in result.lower())
+
+
+class TestGetStormSlotLabels:
+    """get_storm_slot_labels returns the two slot labels in display order."""
+
+    def test_ds_returns_two(self, seeded_db):
+        import config
+        labels = config.get_storm_slot_labels("DS", TEST_GUILD_ID)
+        assert len(labels) == 2
+
+    def test_cs_returns_two(self, seeded_db):
+        import config
+        labels = config.get_storm_slot_labels("CS", TEST_GUILD_ID)
+        assert len(labels) == 2
+
+    def test_ds_labels_carry_18_and_23(self, seeded_db):
+        """DS hardcoded slots are 18:00 and 23:00 server time."""
+        import config
+        labels = config.get_storm_slot_labels("DS", TEST_GUILD_ID)
+        joined = " | ".join(labels)
+        assert "18:00 server time" in joined
+        assert "23:00 server time" in joined
+
+    def test_cs_labels_carry_12_and_23(self, seeded_db):
+        """CS hardcoded slots are 12:00 and 23:00 server time."""
+        import config
+        labels = config.get_storm_slot_labels("CS", TEST_GUILD_ID)
+        joined = " | ".join(labels)
+        assert "12:00 server time" in joined
+        assert "23:00 server time" in joined
+
+
+class TestGetStormSlotForKey:
+    """get_storm_slot_for_key resolves a TimeSelectView selection ('1'/'2')
+    back into (hour, minute) so mail builders can render the same slot."""
+
+    def test_ds_key_1_is_18_00(self):
+        from config import get_storm_slot_for_key
+        assert get_storm_slot_for_key("DS", "1") == (18, 0)
+
+    def test_ds_key_2_is_23_00(self):
+        from config import get_storm_slot_for_key
+        assert get_storm_slot_for_key("DS", "2") == (23, 0)
+
+    def test_cs_key_1_is_12_00(self):
+        from config import get_storm_slot_for_key
+        assert get_storm_slot_for_key("CS", "1") == (12, 0)
+
+    def test_cs_key_2_is_23_00(self):
+        from config import get_storm_slot_for_key
+        assert get_storm_slot_for_key("CS", "2") == (23, 0)
+
+    def test_unknown_key_returns_none(self):
+        from config import get_storm_slot_for_key
+        assert get_storm_slot_for_key("DS", "3") is None
+        assert get_storm_slot_for_key("DS", "18:00 Server Time") is None

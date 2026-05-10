@@ -12,12 +12,10 @@ particular alliance.
 
 import json
 import os
-import re
 import sqlite3
 from dataclasses import dataclass, field, asdict
-from datetime import date, datetime, time
+from datetime import date
 from typing import Optional
-from zoneinfo import ZoneInfo
 
 from defaults import (
     DEFAULT_THEMES,
@@ -30,74 +28,6 @@ from defaults import (
 )
 
 DB_PATH       = os.getenv("CONFIG_DB_PATH",    "/app/data/guild_configs.db")
-
-# Last War's game server runs on UTC-2 (no DST). IANA's `Etc/` zones invert
-# the sign convention, so `Etc/GMT+2` is what we want for UTC-2.
-GAME_SERVER_TZ = ZoneInfo("Etc/GMT+2")
-
-
-def parse_server_time(text: str) -> Optional[time]:
-    """Parse a storm time-slot string into a `time` object, or None if invalid.
-
-    Canonical input is 24-hour `HH:MM`. Tolerated for legacy data: a trailing
-    `ST` suffix, `HHMM` with no separator, and `Hpm` / `Ham` 12-hour forms.
-    Anything outside these patterns returns None so the caller can fall back
-    to displaying the raw stored string.
-    """
-    if not text:
-        return None
-    s = re.sub(r"\s*[Ss][Tt]$", "", str(text).strip()).strip()
-    m = re.match(r"^(\d{1,2}):(\d{2})$", s)
-    if m:
-        h, mi = int(m.group(1)), int(m.group(2))
-        if 0 <= h < 24 and 0 <= mi < 60:
-            return time(h, mi)
-        return None
-    m = re.match(r"^(\d{3,4})$", s)
-    if m:
-        v = m.group(1).zfill(4)
-        h, mi = int(v[:2]), int(v[2:])
-        if 0 <= h < 24 and 0 <= mi < 60:
-            return time(h, mi)
-        return None
-    m = re.match(r"^(\d{1,2})\s*([AaPp])[Mm]$", s)
-    if m:
-        h = int(m.group(1))
-        meridiem = m.group(2).upper()
-        if 1 <= h <= 12:
-            if meridiem == "P" and h != 12:
-                h += 12
-            elif meridiem == "A" and h == 12:
-                h = 0
-            return time(h, 0)
-    return None
-
-
-def format_server_time(t: time) -> str:
-    """Canonical "HH:MM" representation of a server time."""
-    return t.strftime("%H:%M")
-
-
-def server_time_to_local(server_time_str: str, guild_tz: str) -> str:
-    """Render a stored server-time string as the alliance's local clock time.
-
-    Returns the raw input if it can't be parsed (so legacy/garbage data
-    still displays something instead of disappearing). Output looks like
-    `5:00 PM EST`.
-    """
-    t = parse_server_time(server_time_str)
-    if t is None:
-        return server_time_str or ""
-    today = datetime.now(GAME_SERVER_TZ).date()
-    server_dt = datetime.combine(today, t, tzinfo=GAME_SERVER_TZ)
-    try:
-        tz = ZoneInfo(guild_tz) if guild_tz else ZoneInfo("America/New_York")
-    except Exception:
-        tz = ZoneInfo("America/New_York")
-    local_dt = server_dt.astimezone(tz)
-    # Windows lacks %-I; strip the leading zero ourselves.
-    hour_12 = local_dt.strftime("%I").lstrip("0") or "12"
-    return f"{hour_12}:{local_dt.strftime('%M %p %Z')}"
 
 
 # ── GuildConfig dataclass ──────────────────────────────────────────────────────
@@ -333,8 +263,6 @@ def init_db():
                 mail_template        TEXT    DEFAULT '',
                 templates_json       TEXT    DEFAULT '[]',
                 default_template     TEXT    DEFAULT 'Default',
-                time_option_1_server TEXT    DEFAULT '',
-                time_option_2_server TEXT    DEFAULT '',
                 timezone             TEXT    DEFAULT 'America/New_York',
                 log_channel_id       INTEGER DEFAULT 0,
                 post_channel_id      INTEGER DEFAULT 0,
@@ -528,15 +456,18 @@ def init_db():
         except Exception:
             pass  # Column already absent — expected on fresh databases
 
-        # ── 1.1.3: drop storm time-slot label/local columns ────────────────────
-        # Server time is the canonical value; local time is computed at
-        # render time from the guild's timezone. The label fields were
-        # never user-meaningful (the rendered times are self-explanatory).
+        # ── 1.1.3: drop storm time-slot columns entirely ───────────────────────
+        # Storm time slots are game-defined constants (DS: 18:00 + 23:00,
+        # CS: 12:00 + 23:00 server time, UTC-2, no DST). Local rendering is
+        # computed at display time from the guild's `timezone`. Nothing
+        # about the slot needs to be stored per-guild — drop the lot.
         for col in (
             "time_option_1_label",
             "time_option_1_local",
+            "time_option_1_server",
             "time_option_2_label",
             "time_option_2_local",
+            "time_option_2_server",
         ):
             try:
                 conn.execute(f"ALTER TABLE guild_storm_config DROP COLUMN {col}")
@@ -834,6 +765,78 @@ def delete_guild_event(guild_id: int, short_key: str):
         conn.commit()
 
 
+# ── Storm event fixed Server Time constants ───────────────────────────────────
+# Last War's Desert Storm and Canyon Storm both run at fixed server times
+# defined by the game (UTC-2, no DST). They never change per-alliance, so
+# we hardcode them here and compute the local rendering at display time
+# from each guild's `timezone`.
+
+DS_SERVER_TIMES = [(18, 0), (23, 0)]
+CS_SERVER_TIMES = [(12, 0), (23, 0)]
+
+SERVER_TZ_OFFSET = -2  # Server Time is UTC-2.
+
+
+def server_time_to_local(hour: int, minute: int, guild_id: int) -> str:
+    """Convert a Server Time (UTC-2) hour/minute to the guild's local clock.
+
+    Returns a `4pm EDT` / `9:30am EDT` style string (lowercase am/pm to
+    match the rest of the bot's user-facing copy). Falls back to a bare
+    `HH:MM Server Time` if the timezone lookup fails for any reason.
+    """
+    from zoneinfo import ZoneInfo
+    from datetime import datetime, timezone as _tz, timedelta
+    cfg    = get_config(guild_id) if guild_id else None
+    tz_str = cfg.timezone if cfg and cfg.timezone else "America/New_York"
+    try:
+        server_tz = _tz(timedelta(hours=SERVER_TZ_OFFSET))
+        # Use a stable date so DST behaves consistently for the rendered string.
+        server_dt = datetime(2026, 6, 1, hour, minute, tzinfo=server_tz)
+        local_dt  = server_dt.astimezone(ZoneInfo(tz_str))
+        h12       = local_dt.hour % 12 or 12
+        period    = "am" if local_dt.hour < 12 else "pm"
+        tz_abbr   = local_dt.strftime("%Z")
+        mins      = f":{local_dt.minute:02d}" if local_dt.minute != 0 else ""
+        return f"{h12}{mins}{period} {tz_abbr}"
+    except Exception:
+        return f"{hour:02d}:{minute:02d} server time"
+
+
+def format_storm_slot(hour: int, minute: int, guild_id: int) -> str:
+    """Compose the canonical storm-slot label.
+
+    Returns `<local> (HH:MM server time)` — the format used on every
+    user-facing surface (TimeSelectView buttons, /view_configuration,
+    storm overview embeds, mail `{time}` placeholder).
+    """
+    return f"{server_time_to_local(hour, minute, guild_id)} ({hour:02d}:{minute:02d} server time)"
+
+
+def get_storm_slot_labels(event_type: str, guild_id: int) -> list[str]:
+    """Return the two slot labels for DS or CS in display order.
+
+    Each label is `<local> (HH:MM server time)` for the corresponding
+    game-defined slot. Used by TimeSelectView so button labels and the
+    rendered mail's `{time}` placeholder both flow from one source.
+    """
+    times = DS_SERVER_TIMES if event_type == "DS" else CS_SERVER_TIMES
+    return [format_storm_slot(h, m, guild_id) for h, m in times]
+
+
+def get_storm_slot_for_key(event_type: str, time_key: str) -> tuple[int, int] | None:
+    """Resolve a TimeSelectView selection (`"1"` / `"2"`) to (hour, minute).
+
+    Returns None if the key isn't recognized — callers should fall back to
+    the raw string in that case (test helpers pass arbitrary text here).
+    """
+    times = DS_SERVER_TIMES if event_type == "DS" else CS_SERVER_TIMES
+    if time_key == "1":
+        return times[0]
+    if time_key == "2":
+        return times[1]
+    return None
+
+
 def _normalize_storm_templates(d: dict, event_type: str) -> dict:
     """
     Lift a guild's storm-template list into the canonical shape:
@@ -884,8 +887,6 @@ def get_storm_config(guild_id: int, event_type: str) -> dict:
         "mail_template":        DEFAULT_DS_TEMPLATE if event_type == "DS" else DEFAULT_CS_TEMPLATE,
         "templates_json":       "",
         "default_template":     "Default",
-        "time_option_1_server": "",
-        "time_option_2_server": "",
         "timezone":             "America/New_York",
         "post_channel_id":      0,
         "dm_reminder_message":  "",
@@ -895,7 +896,6 @@ def get_storm_config(guild_id: int, event_type: str) -> dict:
 
 def save_storm_config(guild_id: int, event_type: str, tab_name: str,
                       mail_template: str,
-                      t1_server: str, t2_server: str,
                       timezone: str, log_channel_id: int = 0,
                       templates: list | None = None,
                       default_template: str = "Default",
@@ -910,9 +910,9 @@ def save_storm_config(guild_id: int, event_type: str, tab_name: str,
     `post_channel_id` is the channel where /[event]_draft will post the
     final mail when leadership clicks "Post & Copy".
 
-    `t1_server` / `t2_server` are storm time-slot server-time strings (canonical
-    `HH:MM`, UTC-2). The local rendering is computed at display time from
-    `timezone`, so we don't store a redundant local value.
+    Storm time slots are game-defined constants (see DS_SERVER_TIMES /
+    CS_SERVER_TIMES below) and aren't stored per-guild — only the
+    `timezone` is used at display time to render local clock equivalents.
 
     `dm_reminder_message` is the body of the Premium DM that fires when
     leadership runs `/desertstorm_remind` or `/canyonstorm_remind`. Empty
@@ -931,21 +931,17 @@ def save_storm_config(guild_id: int, event_type: str, tab_name: str,
         conn.execute(
             "INSERT INTO guild_storm_config "
             "(guild_id, event_type, tab_name, mail_template, templates_json, default_template, "
-            "time_option_1_server, time_option_2_server, "
             "timezone, log_channel_id, post_channel_id, dm_reminder_message) "
-            "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?) "
+            "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?) "
             "ON CONFLICT(guild_id, event_type) DO UPDATE SET "
             "tab_name=excluded.tab_name, mail_template=excluded.mail_template, "
             "templates_json=excluded.templates_json, "
             "default_template=excluded.default_template, "
-            "time_option_1_server=excluded.time_option_1_server, "
-            "time_option_2_server=excluded.time_option_2_server, "
             "timezone=excluded.timezone, "
             "log_channel_id=excluded.log_channel_id, "
             "post_channel_id=excluded.post_channel_id, "
             "dm_reminder_message=excluded.dm_reminder_message",
             (guild_id, event_type, tab_name, default_text, templates_json, default_template,
-             t1_server, t2_server,
              timezone, log_channel_id, post_channel_id, dm_reminder_message)
         )
         conn.commit()

@@ -284,7 +284,7 @@ class DonateCog(commands.Cog):
                 "• 📣 Unlimited events (vs 5 free)\n"
                 "• 🚂 Up to 10 saved train prompt templates (vs 1 free)\n"
                 "• ⚔️ Up to 10 saved storm mail templates per team (vs 1 free)\n"
-                "• 📋 Multiple surveys + extra question types (numeric, multi-select, date)\n"
+                "• 📋 Multiple surveys + extra question types (multi-select, date) plus min/max bounds on numeric\n"
                 "• 📊 Custom snapshot intervals + unlimited tracked metrics\n"
                 "• 🧵 Use threads as destinations for any channel-pickable feature\n"
                 "• 👥 Member roster sync, birthday DMs, train DMs, survey reminders\n"

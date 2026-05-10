@@ -1604,17 +1604,24 @@ When your survey is posted, what introductory message do you want your members t
 | Success | `🗑️ Removed: **{label}**` | `setup_cog.py` |
 | Wizard prompt | `**{q_num} — Label**\nWhat is the label for this question? (e.g. \`1st Squad Power\`, \`Profession\`)` | `setup_cog.py` |
 | Wizard prompt | `**{q_num} — Answer Type**\nPick how members answer this question.` | `setup_cog.py` |
-| Wizard prompt | `**{q_num} — Answer Type**\nDoes your member answer by typing or selecting from a dropdown list?` | `setup_cog.py` |
 | Select placeholder | `Select answer type...` | `setup_cog.py` |
 | Select option | `Text — member types their answer` | `setup_cog.py` |
 | Select option | `Dropdown — member selects from a list` | `setup_cog.py` |
-| Select option | `💎 Numeric — number with min/max validation` | `setup_cog.py` |
+| Select option | `Numeric — number, with shorthand support` | `setup_cog.py` |
 | Select option | `💎 Multi-select — pick multiple options` | `setup_cog.py` |
 | Select option | `💎 Date — formatted date entry` | `setup_cog.py` |
 | Success | `✅ Type: **{Text\|Dropdown\|Numeric\|Multi-Select\|Date}**` | `setup_cog.py` |
 | Wizard prompt | `**{q_num} — Help Text**\nDo you want to show help text for this question? This appears as a hint to help members answer correctly.\n*(e.g. \`e.g. 43.27\` or \`What is your first squad's power?\`)*\nType your help text, or type \`none\` to skip.` | `setup_cog.py` |
 | Wizard prompt | `**{q_num} — Options**\nEnter the options as comma-separated values. Maximum of 25.\n*(e.g. \`Missile, Air, Tank\`)*` | `setup_cog.py` |
-| Wizard prompt | `**{q_num} — Numeric Bounds** *(💎 Premium)*\nReply with \`min,max\` (e.g. \`0,100\`), \`min,\` for only a minimum, \`,max\` for only a maximum, or \`none\` to skip both bounds.` | `setup_cog.py` |
+| Wizard prompt | `**{q_num} — Number Scale**\nHow big are these numbers typically? Picking a scale lets members type the natural shorthand (\`301\`) instead of the full value (\`304,743,912\`) — the bot accepts both either way.` | `setup_cog.py` |
+| Select placeholder | `Select number scale...` | `setup_cog.py` |
+| Select option | `Exact number — type what you mean (e.g. drone level 150 stays 150)` | `setup_cog.py` |
+| Select option | `Thousands (K) — 5 becomes 5,000` | `setup_cog.py` |
+| Select option | `Millions (M) — 301 becomes 301,000,000` | `setup_cog.py` |
+| Select option | `Billions (B) — 1.2 becomes 1,200,000,000` | `setup_cog.py` |
+| Success | `✅ Scale: **{Exact number\|Thousands (K)\|Millions (M)\|Billions (B)}**` | `setup_cog.py` |
+| Wizard prompt (Premium) | `**{q_num} — Numeric Bounds** *(💎 Premium)*\nReply with \`min,max\` (e.g. \`0,100\`), \`min,\` for only a minimum, \`,max\` for only a maximum, or \`none\` to skip both bounds.\n*Bounds are checked against the stored value after scaling.*` | `setup_cog.py` |
+| Note (Free) | `💎 *Min/max bounds are a Premium feature — this question will accept any number.*` | `setup_cog.py` |
 | Warning | `⚠️ Couldn't parse bounds. Run \`/setup_survey\` to try again.` | `setup_cog.py` |
 | Wizard prompt | `**{q_num} — Date Format** *(💎 Premium)*\nReply with a strptime-style format (e.g. \`%m/%d/%Y\`, \`%Y-%m-%d\`), or reply \`default\` for \`%m/%d/%Y\`.` | `setup_cog.py` |
 | Success | `✅ Updated: **{label}**` | `setup_cog.py` |
@@ -2198,7 +2205,7 @@ Unlock the full power of Alliance Helper for your alliance.
 • 📣 Unlimited events (vs 5 free)
 • 🚂 Up to 10 saved train prompt templates (vs 1 free)
 • ⚔️ Up to 10 saved storm mail templates per team (vs 1 free)
-• 📋 Multiple surveys + extra question types (numeric, multi-select, date)
+• 📋 Multiple surveys + extra question types (multi-select, date) plus min/max bounds on numeric
 • 📊 Custom snapshot intervals + unlimited tracked metrics
 • 🧵 Use threads as destinations for any channel-pickable feature
 • 👥 Member roster sync, birthday DMs, train DMs, survey reminders

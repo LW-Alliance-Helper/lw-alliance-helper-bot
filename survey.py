@@ -35,6 +35,107 @@ import wizard_registry
 
 SURVEY_TIMEOUT      = 600  # 10 minutes per step
 
+# ── Magnitude-aware numeric parsing ───────────────────────────────────────────
+
+# Suffixes a player might type instead of typing the full nine-digit number —
+# `300m` / `300mil` / `1.2b` / `5k`. Case-insensitive at the call site.
+_SUFFIX_MULTIPLIERS = {
+    "k":        1_000,
+    "m":        1_000_000,
+    "mil":      1_000_000,
+    "mill":     1_000_000,
+    "million":  1_000_000,
+    "b":        1_000_000_000,
+    "bil":      1_000_000_000,
+    "billion":  1_000_000_000,
+}
+
+# Field-magnitude → multiplier applied to bare numbers. `raw` (or any unknown
+# value, including None) means no scaling.
+_MAGNITUDE_MULTIPLIERS = {
+    "K": 1_000,
+    "M": 1_000_000,
+    "B": 1_000_000_000,
+}
+
+# A bare value at or above this is treated as already-raw on a scaled field —
+# the player typed the full in-game number (`304,743,912`), don't multiply it
+# into nonsense (3.04e17). Picked at 1M because no real shorthand value lands
+# that high — `300` shorthand max is 300M, but `300` < 1M as a bare number.
+_RAW_HEURISTIC_THRESHOLD = 1_000_000
+
+_NUMERIC_INPUT_RE = re.compile(
+    r"(?P<num>-?\d+(?:\.\d+)?)(?P<unit>[a-zA-Z]+)?",
+)
+
+
+def _parse_magnitude_input(raw: str, magnitude: str | None = None) -> int | None:
+    """Parse a numeric string with optional shorthand suffix into a stored integer.
+
+    `magnitude` is one of `"K"` / `"M"` / `"B"` (or `"raw"` / `None` for no
+    scaling). It tells the parser what bare numbers mean for this field —
+    e.g. on a magnitude=`"M"` field, `"301"` is shorthand for 301,000,000.
+
+    Tolerates the shapes players naturally type: bare integers and decimals
+    (`301`, `43.27`), shorthand suffixes (`300m`, `300mil`, `1.2b`, `5k`),
+    comma grouping (`304,743,912`), and surrounding whitespace.
+
+    Heuristics:
+      - A unit suffix on the input always overrides the field's magnitude.
+      - A bare value ≥ 1,000,000 on a scaled field is treated as raw — the
+        player typed the full in-game number, don't multiply it.
+
+    Returns the stored integer, or None on parse failure (caller re-prompts).
+    """
+    if raw is None:
+        return None
+    s = str(raw).strip().replace(",", "").replace(" ", "")
+    if not s:
+        return None
+
+    m = _NUMERIC_INPUT_RE.fullmatch(s)
+    if not m:
+        return None
+
+    try:
+        value = float(m.group("num"))
+    except ValueError:
+        return None
+
+    unit = (m.group("unit") or "").lower()
+    if unit:
+        if unit not in _SUFFIX_MULTIPLIERS:
+            return None
+        return int(round(value * _SUFFIX_MULTIPLIERS[unit]))
+
+    multiplier = _MAGNITUDE_MULTIPLIERS.get(magnitude or "", 1)
+    if multiplier > 1 and abs(value) >= _RAW_HEURISTIC_THRESHOLD:
+        return int(round(value))
+    return int(round(value * multiplier))
+
+
+def _fmt_response_value(value, qtype: str | None) -> str:
+    """Comma-format numeric responses for the leadership notification embed.
+
+    Numeric questions store full integers post-magnitude-scaling — `304743912`
+    is much harder to skim than `304,743,912`. Non-numeric responses
+    (dropdowns, text) are passed through unchanged."""
+    if value == "" or value is None:
+        return "—"
+    s = str(value).strip()
+    if not s:
+        return "—"
+    if qtype != "numeric":
+        return s
+    try:
+        return f"{int(s):,}"
+    except ValueError:
+        try:
+            return f"{float(s):,}"
+        except ValueError:
+            return s
+
+
 # ── Sheets helpers ─────────────────────────────────────────────────────────────
 
 def _get_spreadsheet(guild_id: int = None):
@@ -215,9 +316,16 @@ async def run_survey(bot, thread: discord.Thread, user: discord.Member,
         return view.selected
 
     async def ask_numeric(prompt: str, min_val: float | None = None,
-                           max_val: float | None = None) -> str | None:
+                           max_val: float | None = None,
+                           magnitude: str | None = None,
+                           max_chars: int = 0) -> str | None:
         """
-        Premium type: numeric input with optional min/max bounds.
+        Numeric input with optional magnitude scaling and min/max bounds.
+
+        Magnitude (`K` / `M` / `B`) lets members type the natural shorthand
+        (`301` for 301M THP, `43.27` for 43.27M squad power) — see
+        `_parse_magnitude_input` for the full set of accepted shapes. Min/max
+        bounds (Premium) are checked against the stored (post-scale) integer.
 
         On invalid input or out-of-bounds values the user is re-prompted
         for the same question (up to 5 attempts) instead of having the
@@ -229,6 +337,8 @@ async def run_survey(bot, thread: discord.Thread, user: discord.Member,
             if min_val is not None: bits.append(f"min: {min_val}")
             if max_val is not None: bits.append(f"max: {max_val}")
             full += f"\n*({', '.join(bits)})*"
+
+        scaled = magnitude in _MAGNITUDE_MULTIPLIERS
 
         attempts_left = 5
         first_pass    = True
@@ -242,14 +352,30 @@ async def run_survey(bot, thread: discord.Thread, user: discord.Member,
                 await thread.send("⏰ Survey timed out. You can start again by clicking the Answer button.")
                 return None
             raw = reply.content.strip()
-            try:
-                n = float(raw) if "." in raw else int(raw)
-            except ValueError:
+            if max_chars and len(raw) > max_chars:
                 attempts_left -= 1
                 await thread.send(
-                    f"⚠️ `{raw}` isn't a number. Please re-enter your answer for this question."
+                    f"⚠️ That entry is too long (max {max_chars} characters). "
+                    f"Please re-enter your answer for this question."
                 )
                 continue
+            if scaled:
+                n = _parse_magnitude_input(raw, magnitude)
+                if n is None:
+                    attempts_left -= 1
+                    await thread.send(
+                        f"⚠️ `{raw}` isn't a number. Please re-enter your answer for this question."
+                    )
+                    continue
+            else:
+                try:
+                    n = float(raw) if "." in raw else int(raw)
+                except ValueError:
+                    attempts_left -= 1
+                    await thread.send(
+                        f"⚠️ `{raw}` isn't a number. Please re-enter your answer for this question."
+                    )
+                    continue
             if min_val is not None and n < min_val:
                 attempts_left -= 1
                 await thread.send(
@@ -370,6 +496,8 @@ async def run_survey(bot, thread: discord.Thread, user: discord.Member,
                 f"**{label}**" + (f"\n*{placeholder}*" if placeholder else ""),
                 min_val=q.get("min"),
                 max_val=q.get("max"),
+                magnitude=q.get("magnitude"),
+                max_chars=int(q.get("max_chars") or 0),
             )
         elif qtype == "multi_select":
             val = await ask_multi_select(
@@ -436,9 +564,7 @@ async def run_survey(bot, thread: discord.Thread, user: discord.Member,
                 label = q.get("label", key) or key
                 if not key:
                     continue
-                value = data.get(key, "")
-                if value == "" or value is None:
-                    value = "—"
+                value = _fmt_response_value(data.get(key, ""), q.get("type"))
                 response_lines.append(f"**{label}:** {value}")
 
             embed.add_field(

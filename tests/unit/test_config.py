@@ -220,6 +220,89 @@ class TestSurveyConfig:
         assert cfg["intro_message"]         == "Please fill out the survey each week!"
 
 
+class TestNumericMagnitudeBackfill:
+    """init_db upgrades guild survey configs that still carry the original
+    LW default keys with `type: text` to `type: numeric` + the right
+    magnitude. Idempotent: re-running init_db on already-migrated data
+    leaves it alone, and custom (non-default-key) text questions are never
+    touched."""
+
+    def test_backfills_default_lw_keys(self, temp_db):
+        """A pre-rework guild config with `thp` / `squad*_power` as text-type
+        questions gets upgraded to numeric+magnitude on init_db."""
+        import config, json
+        legacy = [
+            {"key": "thp",          "label": "THP",          "type": "text",
+             "options": [], "placeholder": "e.g. 301", "max_chars": 3},
+            {"key": "squad1_power", "label": "1st Squad",    "type": "text",
+             "options": [], "placeholder": "e.g. 43.27", "max_chars": 5},
+            {"key": "drone_level",  "label": "Drone Level",  "type": "text",
+             "options": [], "placeholder": "e.g. 243", "max_chars": 5},
+        ]
+        config.save_survey_config(
+            TEST_GUILD_ID, "Squad Powers", "Survey History", legacy, ""
+        )
+        # Re-running init_db triggers the backfill block.
+        config.init_db()
+        upgraded = config.get_survey_config(TEST_GUILD_ID)["questions"]
+        by_key = {q["key"]: q for q in upgraded}
+        assert by_key["thp"]["type"]               == "numeric"
+        assert by_key["thp"]["magnitude"]          == "M"
+        assert by_key["squad1_power"]["type"]      == "numeric"
+        assert by_key["squad1_power"]["magnitude"] == "M"
+        assert by_key["drone_level"]["type"]       == "numeric"
+        assert by_key["drone_level"]["magnitude"]  == "raw"
+
+    def test_backfill_idempotent(self, temp_db):
+        """Running init_db twice on already-migrated data must not corrupt
+        anything — no double-applied magnitudes, no type churn."""
+        import config
+        legacy = [
+            {"key": "thp", "label": "THP", "type": "text",
+             "options": [], "placeholder": "", "max_chars": 3},
+        ]
+        config.save_survey_config(
+            TEST_GUILD_ID, "Squad Powers", "Survey History", legacy, ""
+        )
+        config.init_db()
+        config.init_db()  # second run should be a no-op
+        upgraded = config.get_survey_config(TEST_GUILD_ID)["questions"]
+        assert upgraded[0]["type"]      == "numeric"
+        assert upgraded[0]["magnitude"] == "M"
+
+    def test_backfill_skips_custom_keys(self, temp_db):
+        """A guild that defined their own `power` or `level` text-type questions
+        keeps them as text — only the documented LW default keys are touched."""
+        import config
+        custom = [
+            {"key": "my_custom_power", "label": "Power", "type": "text",
+             "options": [], "placeholder": "", "max_chars": 5},
+        ]
+        config.save_survey_config(
+            TEST_GUILD_ID, "Squad Powers", "Survey History", custom, ""
+        )
+        config.init_db()
+        kept = config.get_survey_config(TEST_GUILD_ID)["questions"]
+        assert kept[0]["type"] == "text"
+        assert "magnitude" not in kept[0]
+
+    def test_backfill_does_not_overwrite_explicit_magnitude(self, temp_db):
+        """If a question already declares a magnitude (someone re-ran the
+        wizard, or an earlier migration touched it), don't second-guess it."""
+        import config
+        already = [
+            {"key": "thp", "label": "THP", "type": "numeric",
+             "options": [], "placeholder": "", "max_chars": 3,
+             "magnitude": "K"},  # weird choice, but it's theirs
+        ]
+        config.save_survey_config(
+            TEST_GUILD_ID, "Squad Powers", "Survey History", already, ""
+        )
+        config.init_db()
+        kept = config.get_survey_config(TEST_GUILD_ID)["questions"]
+        assert kept[0]["magnitude"] == "K"
+
+
 class TestGrowthConfig:
     """Test guild_growth_config save/load."""
 

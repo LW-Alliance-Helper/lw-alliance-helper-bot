@@ -253,6 +253,11 @@ class AddEntryModal(discord.ui.Modal, title="Add Train Entry"):
             )
             return
 
+        # Defer before sheet I/O — a slow gspread round-trip can otherwise
+        # blow Discord's 3-second initial-response window and fail with
+        # NotFound 10062 Unknown interaction.
+        await interaction.response.defer(ephemeral=True)
+
         d_iso    = d.isoformat()
         schedule = load_schedule(self.guild_id)
         existed  = d_iso in schedule
@@ -271,12 +276,12 @@ class AddEntryModal(discord.ui.Modal, title="Add Train Entry"):
 
         if self.blurbs_enabled:
             view = RunWizardView(self.bot, self.guild_id, d_iso, name)
-            await interaction.response.send_message(
+            await interaction.followup.send(
                 f"{msg}\n\nRun the blurb wizard now to build the ChatGPT prompt?",
                 view=view, ephemeral=True,
             )
         else:
-            await interaction.response.send_message(msg, ephemeral=True)
+            await interaction.followup.send(msg, ephemeral=True)
 
 
 class UpdateEntryModal(discord.ui.Modal, title="Update Train Entry"):
@@ -311,6 +316,11 @@ class UpdateEntryModal(discord.ui.Modal, title="Update Train Entry"):
             )
             return
 
+        # Defer before sheet I/O — a slow gspread round-trip can otherwise
+        # blow Discord's 3-second initial-response window and fail with
+        # NotFound 10062 Unknown interaction.
+        await interaction.response.defer(ephemeral=True)
+
         new_iso  = d.isoformat()
         schedule = load_schedule(self.guild_id)
 
@@ -334,12 +344,12 @@ class UpdateEntryModal(discord.ui.Modal, title="Update Train Entry"):
 
         if self.blurbs_enabled:
             view = RunWizardView(self.bot, self.guild_id, new_iso, new_name)
-            await interaction.response.send_message(
+            await interaction.followup.send(
                 f"{msg}\n\nRe-run the blurb wizard to refresh the ChatGPT prompt?",
                 view=view, ephemeral=True,
             )
         else:
-            await interaction.response.send_message(msg, ephemeral=True)
+            await interaction.followup.send(msg, ephemeral=True)
 
 
 class UpdateSelectView(discord.ui.View):

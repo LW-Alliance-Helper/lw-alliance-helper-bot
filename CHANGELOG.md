@@ -9,6 +9,13 @@ Each entry is a slim summary — heavier context (root cause, what we
 tried, design rationale) lives in the corresponding commit message
 and PR description.
 
+## [1.1.7] — 2026-05-11
+
+### Fixed
+- `/train` Add Entry and Update Entry modals now defer the interaction before the Google Sheets round-trip, so a slow gspread call no longer expires the 3-second response token and crashes the submit with `NotFound 10062 Unknown interaction` ([#76](https://github.com/LW-Alliance-Helper/lw-alliance-helper-bot/issues/76)).
+
+Hotfix released direct to main per CLAUDE.md's hotfix exception.
+
 ## [1.1.6] — 2026-05-10
 
 ### Added

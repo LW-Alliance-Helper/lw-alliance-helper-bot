@@ -1131,7 +1131,7 @@ class SetupCog(commands.Cog):
         )
         await run_survey_setup(interaction, self.bot)
 
-    @app_commands.command(name="setup_shiny_tasks", description="Configure the daily shiny-tasks announcement — channel, server range, time")
+    @app_commands.command(name="setup_shiny_tasks", description="Daily announcement of today's shiny task servers for your Alliance")
     async def setup_shiny_tasks(self, interaction: discord.Interaction):
         if not _has_leadership_or_admin(interaction):
             await interaction.response.send_message(
@@ -1661,7 +1661,7 @@ async def run_setup(interaction: discord.Interaction, bot):
         "🏜️ `/setup_canyonstorm` — Canyon Storm mail drafts and participation logs\n"
         "📋 `/setup_survey` — Squad powers survey\n"
         "📈 `/setup_growth` — Growth tracking (snapshot your members' stats over time)\n"
-        "🌟 `/setup_shiny_tasks` — Daily announcement of today's shiny-task servers in your transfer range\n\n"
+        "🌟 `/setup_shiny_tasks` — Daily announcement of today's shiny task servers for your Alliance\n\n"
         "You can set up as many or as few of these as you need. Use `/help` at any time to see all available commands."
     )
     wizard_registry.unregister(user.id, cancel_event)
@@ -5098,15 +5098,14 @@ async def run_shiny_tasks_setup(interaction: discord.Interaction, bot):
     await channel.send(
         "🌟 **Daily Shiny Tasks Setup**\n"
         "Each day, the bot can post the list of Last War servers where "
-        "shiny tasks (plunderable bonus tasks) are available, filtered to "
-        "the servers your alliance can reach. The list is pulled from "
-        "cpt-hedge.com — the same source most leaderships read manually."
+        "shiny tasks are available, filtered to the servers your alliance "
+        "can reach."
     )
 
     # ── Step 1: Enable? ───────────────────────────────────────────────────────
     enabled_view = YesNoView()
     await channel.send(
-        "**Step 1 of 6 — Enable daily shiny-tasks announcement?**",
+        "**Step 1 of 6 — Enable daily shiny tasks announcement?**",
         view=enabled_view,
     )
     await wait_view_or_cancel(enabled_view, cancel_event)
@@ -5137,10 +5136,10 @@ async def run_shiny_tasks_setup(interaction: discord.Interaction, bot):
     is_premium_flag = await premium.is_premium(guild_id, interaction=interaction)
     await channel.send(
         "**Step 2 of 6 — Announcement Channel**\n"
-        "Pick the channel where the daily shiny-tasks post should go."
+        "Pick the channel where the daily shiny tasks post should be posted."
     )
     ch_view = ChannelSelectStep(
-        "Select shiny-tasks channel...",
+        "Select the shiny tasks channel...",
         suggested_name="shiny-tasks",
         include_threads=is_premium_flag,
         guild=interaction.guild,
@@ -5185,43 +5184,66 @@ async def run_shiny_tasks_setup(interaction: discord.Interaction, bot):
 
     saved_min = current.get("server_min") or 0
     saved_max = current.get("server_max") or 0
-    range_modal = ServerRangeModal(
-        min_default=str(saved_min) if saved_min else "",
-        max_default=str(saved_max) if saved_max else "",
-    )
-    range_launcher = ModalLaunchView(range_modal)
-    await channel.send(
+    range_prompt = (
         "**Step 3 of 6 — Server Range**\n"
-        "Enter the lowest and highest server numbers your alliance can reach. "
-        "Typically your transfer range — gaps in the range are handled "
-        "automatically, only servers known to cpt-hedge are included.",
-        view=range_launcher,
+        "Enter the lowest and highest server numbers your alliance can "
+        "reach. Typically your transfer range."
     )
-    await wait_view_or_cancel(range_launcher, cancel_event)
-    if range_launcher.cancelled:
-        wizard_registry.unregister(user.id, cancel_event)
-        return
-    if not range_launcher.confirmed:
-        await channel.send("⏰ Timed out. Run `/setup_shiny_tasks` to start again.")
-        wizard_registry.unregister(user.id, cancel_event)
-        return
-    try:
-        server_min = int(range_modal.min_value)
-        server_max = int(range_modal.max_value)
-    except (TypeError, ValueError):
-        await channel.send(
-            "⚠️ Server numbers must be whole numbers like `681` and `799`. "
-            "Run `/setup_shiny_tasks` to try again."
+    range_attempts_left = 3
+    server_min = server_max = None
+    while True:
+        range_modal = ServerRangeModal(
+            min_default=str(saved_min) if saved_min else "",
+            max_default=str(saved_max) if saved_max else "",
         )
-        wizard_registry.unregister(user.id, cancel_event)
-        return
-    if server_min < 1 or server_max < 1 or server_min > server_max:
-        await channel.send(
-            "⚠️ The lowest server must be ≥ 1 and ≤ the highest. "
-            "Run `/setup_shiny_tasks` to try again."
-        )
-        wizard_registry.unregister(user.id, cancel_event)
-        return
+        range_launcher = ModalLaunchView(range_modal)
+        await channel.send(range_prompt, view=range_launcher)
+        await wait_view_or_cancel(range_launcher, cancel_event)
+        if range_launcher.cancelled:
+            wizard_registry.unregister(user.id, cancel_event)
+            return
+        if not range_launcher.confirmed:
+            await channel.send("⏰ Timed out. Run `/setup_shiny_tasks` to start again.")
+            wizard_registry.unregister(user.id, cancel_event)
+            return
+
+        min_raw = (range_modal.min_value or "").strip()
+        max_raw = (range_modal.max_value or "").strip()
+        try:
+            candidate_min = int(min_raw)
+            candidate_max = int(max_raw)
+            valid_numbers = True
+        except (TypeError, ValueError):
+            valid_numbers = False
+
+        if valid_numbers and candidate_min >= 1 and candidate_min <= candidate_max:
+            server_min = candidate_min
+            server_max = candidate_max
+            break
+
+        range_attempts_left -= 1
+        if range_attempts_left <= 0:
+            await channel.send(
+                "⚠️ Could not read those server numbers after a few tries. "
+                "Run `/setup_shiny_tasks` to start over."
+            )
+            wizard_registry.unregister(user.id, cancel_event)
+            return
+
+        # Pre-fill the retry modal with whatever the user typed, so the
+        # correction is one tap away instead of re-entering both fields.
+        saved_min = min_raw
+        saved_max = max_raw
+        if not valid_numbers:
+            await channel.send(
+                f"⚠️ Could not read **`{min_raw}`** / **`{max_raw}`** as whole "
+                f"numbers. Try something like `681` and `799`. Let's try once more."
+            )
+        else:
+            await channel.send(
+                f"⚠️ The lowest server (**`{min_raw}`**) must be ≥ 1 and "
+                f"≤ the highest (**`{max_raw}`**). Let's try once more."
+            )
 
     # ── Step 4: Post time ─────────────────────────────────────────────────────
     attempts_left = 3
@@ -5269,9 +5291,8 @@ async def run_shiny_tasks_setup(interaction: discord.Interaction, bot):
     template_input = await ask_keep_or_change(
         channel,
         "**Step 5 of 6 — Announcement Message**\n"
-        "Customise the announcement body, or use the default. "
-        "Placeholders: `{servers}` (the comma-and-`and` joined list), "
-        "`{date}` (e.g. `Monday, May 11`).",
+        "Customize the announcement body, or use the default. "
+        "Placeholders: `{servers}` and `{date}`.",
         default=DEFAULT_SHINY_TASKS_MESSAGE,
         current=saved_template or None,
         modal_title="Shiny Tasks Message",
@@ -5325,9 +5346,23 @@ async def run_shiny_tasks_setup(interaction: discord.Interaction, bot):
         server_max=server_max,
         message_template=message_template,
     )
+
+    # Render the post time with the events-style `5:00pm EDT` suffix
+    # rather than a bare `09:00` — anchored on today's date so DST
+    # gives the right tz abbreviation (EDT vs EST).
+    from datetime import datetime as _dt
+    from zoneinfo import ZoneInfo as _ZI
+    from scheduler import format_et as _format_et
+    try:
+        _hh, _mm = (int(p) for p in post_time.split(":"))
+        _tz      = _ZI(cfg.timezone if cfg else "America/New_York")
+        _today   = _dt.now(tz=_tz).date()
+        _human   = _format_et(_dt(_today.year, _today.month, _today.day, _hh, _mm, tzinfo=_tz))
+    except Exception:
+        _human = post_time  # never block the success path on a format hiccup
+
     await channel.send(
-        "✅ Shiny-tasks announcement saved! The first post will fire on the "
-        f"next `{post_time}` in your timezone."
+        f"✅ Shiny-tasks announcement saved! The first post will fire at {_human}."
     )
     wizard_registry.unregister(user.id, cancel_event)
     print(f"[SETUP] Shiny tasks config saved for guild {guild_id}")

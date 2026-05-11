@@ -185,7 +185,7 @@ HELP_CATEGORIES: dict[str, dict] = {
         "label": "Shiny Tasks",
         "description": (
             "Daily auto-post of the Last War servers in your transfer range "
-            "that have shiny tasks today. Data from cpt-hedge.com."
+            "that have shiny tasks today."
         ),
         "commands": [
             ("/setup_shiny_tasks",

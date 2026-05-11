@@ -9,6 +9,16 @@ Each entry is a slim summary — heavier context (root cause, what we
 tried, design rationale) lives in the corresponding commit message
 and PR description.
 
+## [1.1.6] — 2026-05-10
+
+### Added
+- New `guild_install_metadata` SQLite table populated on join (capturing the audit-log inviter that on_guild_join already extracts for the welcome DM) and refreshed on every reconnect — lets a logged `guild_id` be matched to an alliance for support triage without a Railway shell session ([#67](https://github.com/LW-Alliance-Helper/lw-alliance-helper-bot/issues/67)).
+- Owner-only `/admin_guild_info <guild_id>` returns an embed with the metadata row plus the guild's `guild_configs` snapshot (sheet ID, setup state, leadership role); `/admin_forget_guild <guild_id>` is the confirmation-gated companion for data-removal requests ([#67](https://github.com/LW-Alliance-Helper/lw-alliance-helper-bot/issues/67)).
+- `data_removal.yml` GitHub issue template gives users a structured path to request deletion of the install-metadata and configuration records ([#67](https://github.com/LW-Alliance-Helper/lw-alliance-helper-bot/issues/67)).
+
+### Changed
+- Privacy policy, terms, and README disclose the new install-metadata record and point users at the data-removal template ([#67](https://github.com/LW-Alliance-Helper/lw-alliance-helper-bot/issues/67)).
+
 ## [1.1.5] — 2026-05-10
 
 ### Changed

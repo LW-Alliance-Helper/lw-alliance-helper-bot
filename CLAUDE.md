@@ -115,7 +115,7 @@ repo `../lw-alliance-helper.github.io` (the website) has its own
 | `help_content.py` | `/help` content + interactive `HelpView` dropdown. New categories = append a tuple to the right `HELP_CATEGORIES` entry. | ~270 |
 | `dm.py` | DM helpers. | ~80 |
 | `donate.py` | `/donate` and `/upgrade` commands. | ~135 |
-| `config.py` | Schema, migrations, `get_*` / `save_*` helpers, gspread client. | ~1.5K |
+| `config.py` | Schema, migrations, `get_*` / `save_*` helpers, gspread client. Also owns the `guild_install_metadata` table — operational record (guild name, owner, installer, install/last-seen timestamps) for support triage, refreshed on every `on_ready`. | ~1.5K |
 | `stats_publisher.py` | Daily alliance-count publisher to website. | ~155 |
 
 Tests: `tests/unit/` and `tests/integration/`. 610 collected, 18 skip

@@ -1131,6 +1131,21 @@ class SetupCog(commands.Cog):
         )
         await run_survey_setup(interaction, self.bot)
 
+    @app_commands.command(name="setup_shiny_tasks", description="Configure the daily shiny-tasks announcement — channel, server range, time")
+    async def setup_shiny_tasks(self, interaction: discord.Interaction):
+        if not _has_leadership_or_admin(interaction):
+            await interaction.response.send_message(
+                "⛔ You need the leadership role (or admin) to run `/setup_shiny_tasks`.",
+                ephemeral=True,
+            )
+            return
+        if not await _check_wizard_can_run(interaction, "setup_shiny_tasks"):
+            return
+        await interaction.response.send_message(
+            "⚙️ Starting Shiny Tasks setup — check the channel for prompts!", ephemeral=True
+        )
+        await run_shiny_tasks_setup(interaction, self.bot)
+
 
 # ── /Define Various Setup Commands ───────────────────────────────────────────────────────
 
@@ -1256,6 +1271,7 @@ async def _send_view_configuration(interaction: discord.Interaction, cfg) -> Non
     from config import (
         get_train_config, get_birthday_config, get_storm_config,
         get_survey_config, get_growth_config, get_guild_events,
+        get_shiny_tasks_config,
     )
     guild_id = interaction.guild_id
     train    = get_train_config(guild_id)
@@ -1264,6 +1280,7 @@ async def _send_view_configuration(interaction: discord.Interaction, cfg) -> Non
     cs       = get_storm_config(guild_id, "CS")
     survey   = get_survey_config(guild_id)
     growth   = get_growth_config(guild_id)
+    shiny    = get_shiny_tasks_config(guild_id)
     events   = get_guild_events(guild_id, active_only=True)
     is_premium_flag = await premium.is_premium(guild_id, interaction=interaction)
 
@@ -1407,6 +1424,17 @@ async def _send_view_configuration(interaction: discord.Interaction, cfg) -> Non
             + (", ".join(f"{m['label']} (col {m['col']})" for m in metrics) if metrics else "*none*"),
         ]
     embed.add_field(name="📈 Growth", value="\n".join(g_lines)[:1024], inline=False)
+
+    st_lines = [f"**Enabled:** {_enabled(shiny.get('enabled'))}"]
+    if shiny.get("enabled"):
+        st_lines += [
+            f"**Channel:** {_channel(shiny.get('channel_id'))}",
+            f"**Post Time:** {shiny.get('post_time', '*not set*')}",
+            f"**Server Range:** "
+            f"{shiny.get('server_min') or '?'} – {shiny.get('server_max') or '?'}",
+            f"**Custom Message:** {_yn(shiny.get('message_template'))}",
+        ]
+    embed.add_field(name="🌟 Shiny Tasks", value="\n".join(st_lines)[:1024], inline=False)
 
     if is_premium_flag:
         embed.set_footer(text="💎 Premium is active. Run any /setup_* command to update a section.")
@@ -1632,7 +1660,8 @@ async def run_setup(interaction: discord.Interaction, bot):
         "⚔️ `/setup_desertstorm` — Desert Storm mail drafts and participation logs\n"
         "🏜️ `/setup_canyonstorm` — Canyon Storm mail drafts and participation logs\n"
         "📋 `/setup_survey` — Squad powers survey\n"
-        "📈 `/setup_growth` — Growth tracking (snapshot your members' stats over time)\n\n"
+        "📈 `/setup_growth` — Growth tracking (snapshot your members' stats over time)\n"
+        "🌟 `/setup_shiny_tasks` — Daily announcement of today's shiny-task servers in your transfer range\n\n"
         "You can set up as many or as few of these as you need. Use `/help` at any time to see all available commands."
     )
     wizard_registry.unregister(user.id, cancel_event)
@@ -5044,6 +5073,265 @@ async def run_birthday_setup(interaction: discord.Interaction, bot):
     await channel.send(embed=embed)
     wizard_registry.unregister(user.id, cancel_event)
     print(f"[SETUP] Birthday config saved for guild {guild_id}")
+
+async def run_shiny_tasks_setup(interaction: discord.Interaction, bot):
+    """Walk leadership through configuring the daily shiny-tasks
+    announcement. Six steps: enable → channel → server range → post
+    time → message template → confirm. Free for all tiers."""
+    import wizard_registry
+    from config import (
+        get_config, get_shiny_tasks_config, save_shiny_tasks_config,
+    )
+    from defaults import DEFAULT_SHINY_TASKS_MESSAGE
+
+    guild_id     = interaction.guild_id
+    channel      = interaction.channel
+    user         = interaction.user
+    cancel_event = wizard_registry.register(user.id)
+
+    current  = get_shiny_tasks_config(guild_id)
+    cfg      = get_config(guild_id)
+    tz_label = TIMEZONE_LABELS.get(
+        cfg.timezone if cfg else "America/New_York", "ET",
+    )
+
+    await channel.send(
+        "🌟 **Daily Shiny Tasks Setup**\n"
+        "Each day, the bot can post the list of Last War servers where "
+        "shiny tasks (plunderable bonus tasks) are available, filtered to "
+        "the servers your alliance can reach. The list is pulled from "
+        "cpt-hedge.com — the same source most leaderships read manually."
+    )
+
+    # ── Step 1: Enable? ───────────────────────────────────────────────────────
+    enabled_view = YesNoView()
+    await channel.send(
+        "**Step 1 of 6 — Enable daily shiny-tasks announcement?**",
+        view=enabled_view,
+    )
+    await wait_view_or_cancel(enabled_view, cancel_event)
+    if enabled_view.cancelled:
+        wizard_registry.unregister(user.id, cancel_event)
+        return
+    if enabled_view.selected is None:
+        await channel.send("⏰ Timed out. Run `/setup_shiny_tasks` to start again.")
+        wizard_registry.unregister(user.id, cancel_event)
+        return
+    if not enabled_view.selected:
+        # Disable + persist the previously-saved range/channel/etc. so the
+        # next /setup_shiny_tasks run can offer them back as "current".
+        save_shiny_tasks_config(
+            guild_id,
+            enabled=0,
+            channel_id=current.get("channel_id", 0),
+            post_time=current.get("post_time", "09:00"),
+            server_min=current.get("server_min", 0),
+            server_max=current.get("server_max", 0),
+            message_template=current.get("message_template", ""),
+        )
+        await channel.send("✅ Shiny-tasks announcement disabled.")
+        wizard_registry.unregister(user.id, cancel_event)
+        return
+
+    # ── Step 2: Channel ───────────────────────────────────────────────────────
+    is_premium_flag = await premium.is_premium(guild_id, interaction=interaction)
+    await channel.send(
+        "**Step 2 of 6 — Announcement Channel**\n"
+        "Pick the channel where the daily shiny-tasks post should go."
+    )
+    ch_view = ChannelSelectStep(
+        "Select shiny-tasks channel...",
+        suggested_name="shiny-tasks",
+        include_threads=is_premium_flag,
+        guild=interaction.guild,
+    )
+    await channel.send("​", view=ch_view)
+    await wait_view_or_cancel(ch_view, cancel_event)
+    if ch_view.cancelled:
+        wizard_registry.unregister(user.id, cancel_event)
+        return
+    if not ch_view.confirmed:
+        await channel.send("⏰ Timed out. Run `/setup_shiny_tasks` to start again.")
+        wizard_registry.unregister(user.id, cancel_event)
+        return
+    channel_id = ch_view.selected_channel.id
+
+    # ── Step 3: Server range (min + max in one modal) ─────────────────────────
+    class ServerRangeModal(discord.ui.Modal):
+        def __init__(self, min_default: str = "", max_default: str = ""):
+            super().__init__(title="Server Range")
+            self.min_value = None
+            self.max_value = None
+            self._min = discord.ui.TextInput(
+                label="Lowest reachable server number",
+                placeholder="e.g. 681",
+                default=min_default,
+                required=True, max_length=5,
+            )
+            self._max = discord.ui.TextInput(
+                label="Highest reachable server number",
+                placeholder="e.g. 799",
+                default=max_default,
+                required=True, max_length=5,
+            )
+            self.add_item(self._min)
+            self.add_item(self._max)
+
+        async def on_submit(self, inter: discord.Interaction):
+            self.min_value = self._min.value.strip()
+            self.max_value = self._max.value.strip()
+            await inter.response.defer()
+            self.stop()
+
+    saved_min = current.get("server_min") or 0
+    saved_max = current.get("server_max") or 0
+    range_modal = ServerRangeModal(
+        min_default=str(saved_min) if saved_min else "",
+        max_default=str(saved_max) if saved_max else "",
+    )
+    range_launcher = ModalLaunchView(range_modal)
+    await channel.send(
+        "**Step 3 of 6 — Server Range**\n"
+        "Enter the lowest and highest server numbers your alliance can reach. "
+        "Typically your transfer range — gaps in the range are handled "
+        "automatically, only servers known to cpt-hedge are included.",
+        view=range_launcher,
+    )
+    await wait_view_or_cancel(range_launcher, cancel_event)
+    if range_launcher.cancelled:
+        wizard_registry.unregister(user.id, cancel_event)
+        return
+    if not range_launcher.confirmed:
+        await channel.send("⏰ Timed out. Run `/setup_shiny_tasks` to start again.")
+        wizard_registry.unregister(user.id, cancel_event)
+        return
+    try:
+        server_min = int(range_modal.min_value)
+        server_max = int(range_modal.max_value)
+    except (TypeError, ValueError):
+        await channel.send(
+            "⚠️ Server numbers must be whole numbers like `681` and `799`. "
+            "Run `/setup_shiny_tasks` to try again."
+        )
+        wizard_registry.unregister(user.id, cancel_event)
+        return
+    if server_min < 1 or server_max < 1 or server_min > server_max:
+        await channel.send(
+            "⚠️ The lowest server must be ≥ 1 and ≤ the highest. "
+            "Run `/setup_shiny_tasks` to try again."
+        )
+        wizard_registry.unregister(user.id, cancel_event)
+        return
+
+    # ── Step 4: Post time ─────────────────────────────────────────────────────
+    attempts_left = 3
+    post_time = "09:00"
+    while True:
+        time_raw = await ask_keep_or_change(
+            channel,
+            f"**Step 4 of 6 — Post Time**\n"
+            f"What time of day should the announcement post? "
+            f"*(in your timezone: {tz_label})*\n"
+            f"*(e.g. `9:00am`, `10:30am`, `9:00pm`)*",
+            default="9:00am",
+            current=current.get("post_time", ""),
+            modal_title="Post Time",
+            modal_label="Time",
+            timeout_cmd="setup_shiny_tasks",
+            cancel_event=cancel_event,
+        )
+        if time_raw is None:
+            wizard_registry.unregister(user.id, cancel_event)
+            return
+        parsed = _parse_12h_time(time_raw)
+        if parsed:
+            post_time = parsed
+            break
+        if (len(time_raw) == 5 and time_raw[2] == ":"
+                and time_raw.replace(":", "").isdigit()):
+            post_time = time_raw  # already 24h
+            break
+        attempts_left -= 1
+        if attempts_left <= 0:
+            await channel.send(
+                "⚠️ Could not read that time after a few tries. "
+                "Run `/setup_shiny_tasks` to start over."
+            )
+            wizard_registry.unregister(user.id, cancel_event)
+            return
+        await channel.send(
+            f"⚠️ Could not read **`{time_raw}`** as a time. "
+            f"Try `9:00am`, `10:30am`, or `09:00`. Let's try once more."
+        )
+
+    # ── Step 5: Message template ──────────────────────────────────────────────
+    saved_template = (current.get("message_template") or "").strip()
+    template_input = await ask_keep_or_change(
+        channel,
+        "**Step 5 of 6 — Announcement Message**\n"
+        "Customise the announcement body, or use the default. "
+        "Placeholders: `{servers}` (the comma-and-`and` joined list), "
+        "`{date}` (e.g. `Monday, May 11`).",
+        default=DEFAULT_SHINY_TASKS_MESSAGE,
+        current=saved_template or None,
+        modal_title="Shiny Tasks Message",
+        modal_label="Message body",
+        timeout_cmd="setup_shiny_tasks",
+        cancel_event=cancel_event,
+    )
+    if template_input is None:
+        wizard_registry.unregister(user.id, cancel_event)
+        return
+    # Store empty string when the user picks "use default" so a future
+    # change to DEFAULT_SHINY_TASKS_MESSAGE automatically propagates,
+    # instead of freezing today's wording in the DB.
+    message_template = (
+        "" if template_input.strip() == DEFAULT_SHINY_TASKS_MESSAGE.strip()
+        else template_input.strip()
+    )
+
+    # ── Step 6: Confirm + save ────────────────────────────────────────────────
+    embed = discord.Embed(
+        title="🌟 Shiny Tasks — Final Review",
+        description="Confirm to save this configuration.",
+        color=discord.Color.gold(),
+    )
+    embed.add_field(name="Status",         value="✅ Enabled",                       inline=True)
+    embed.add_field(name="Channel",        value=f"<#{channel_id}>",                inline=True)
+    embed.add_field(name="Server Range",   value=f"{server_min} – {server_max}",    inline=True)
+    embed.add_field(name="Post Time",      value=f"{post_time}  *({tz_label})*",    inline=True)
+    embed.add_field(
+        name="Message",
+        value=(message_template or DEFAULT_SHINY_TASKS_MESSAGE)[:1024],
+        inline=False,
+    )
+    confirm_view = ConfirmView()
+    await channel.send(embed=embed, view=confirm_view)
+    await wait_view_or_cancel(confirm_view, cancel_event)
+    if confirm_view.cancelled:
+        wizard_registry.unregister(user.id, cancel_event)
+        return
+    if not confirm_view.confirmed:
+        await channel.send("❌ Setup cancelled. Run `/setup_shiny_tasks` to start again.")
+        wizard_registry.unregister(user.id, cancel_event)
+        return
+
+    save_shiny_tasks_config(
+        guild_id,
+        enabled=1,
+        channel_id=channel_id,
+        post_time=post_time,
+        server_min=server_min,
+        server_max=server_max,
+        message_template=message_template,
+    )
+    await channel.send(
+        "✅ Shiny-tasks announcement saved! The first post will fire on the "
+        f"next `{post_time}` in your timezone."
+    )
+    wizard_registry.unregister(user.id, cancel_event)
+    print(f"[SETUP] Shiny tasks config saved for guild {guild_id}")
+
 
 async def setup(bot: commands.Bot):
     await bot.add_cog(SetupCog(bot))

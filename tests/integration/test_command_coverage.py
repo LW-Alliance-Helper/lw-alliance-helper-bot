@@ -47,7 +47,7 @@ EXPECTED_COG_COMMANDS = {
         "setup", "view_configuration", "setup_reset",
         "setup_train", "setup_growth", "setup_birthdays",
         "setup_desertstorm", "setup_canyonstorm",
-        "setup_events", "setup_survey",
+        "setup_events", "setup_survey", "setup_shiny_tasks",
     },
     "StormCog": {
         "desertstorm_draft", "canyonstorm_draft",
@@ -249,7 +249,7 @@ class TestSetupStarCommandsGateNonAdmins:
     @pytest.mark.parametrize("command_name", [
         "setup_train", "setup_growth", "setup_birthdays",
         "setup_desertstorm", "setup_canyonstorm",
-        "setup_events", "setup_survey",
+        "setup_events", "setup_survey", "setup_shiny_tasks",
     ])
     async def test_rejects_non_privileged_caller(self, seeded_db, command_name):
         from setup_cog import SetupCog

@@ -180,6 +180,19 @@ HELP_CATEGORIES: dict[str, dict] = {
              "Show status with options to snapshot or edit config."),
         ],
     },
+    "shiny_tasks": {
+        "emoji": "🌟",
+        "label": "Shiny Tasks",
+        "description": (
+            "Daily auto-post of the Last War servers in your transfer range "
+            "that have shiny tasks today. Data from cpt-hedge.com."
+        ),
+        "commands": [
+            ("/setup_shiny_tasks",
+             "Configure the announcement channel, server range, post "
+             "time, and message body."),
+        ],
+    },
     "premium": {
         "emoji": "💎",
         "label": "Premium Features",

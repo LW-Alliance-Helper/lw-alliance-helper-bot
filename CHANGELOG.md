@@ -13,7 +13,7 @@ and PR description.
 
 ### Added
 - New `guild_install_metadata` SQLite table populated on join (capturing the audit-log inviter that on_guild_join already extracts for the welcome DM) and refreshed on every reconnect — lets a logged `guild_id` be matched to an alliance for support triage without a Railway shell session ([#67](https://github.com/LW-Alliance-Helper/lw-alliance-helper-bot/issues/67)).
-- Owner-only `/admin_guild_info <guild_id>` returns an embed with the metadata row plus the guild's `guild_configs` snapshot (sheet ID, setup state, leadership role); `/admin_forget_guild <guild_id>` is the confirmation-gated companion for data-removal requests ([#67](https://github.com/LW-Alliance-Helper/lw-alliance-helper-bot/issues/67)).
+- Owner-only `/admin_guild_info <guild_id>` returns an embed with the metadata row plus the guild's `guild_configs` snapshot (sheet ID, setup state, leadership role); `/admin_forget_guild <guild_id>` is the confirmation-gated companion for data-removal requests. Both commands register only to the guilds listed in the new `BOT_ADMIN_GUILD_IDS` env var (comma-separated) so they never surface in alliance command pickers ([#67](https://github.com/LW-Alliance-Helper/lw-alliance-helper-bot/issues/67)).
 - `data_removal.yml` GitHub issue template gives users a structured path to request deletion of the install-metadata and configuration records ([#67](https://github.com/LW-Alliance-Helper/lw-alliance-helper-bot/issues/67)).
 
 ### Changed

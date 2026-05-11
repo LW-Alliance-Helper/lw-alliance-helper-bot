@@ -120,11 +120,50 @@ def test_delete_only_affects_target_guild(temp_db):
     assert config.get_guild_install_metadata(22222) is not None
 
 
-def test_admin_commands_registered():
-    """Sanity check: bot.py exposes /admin_guild_info and /admin_forget_guild
-    on the command tree. Booting Discord isn't needed — `bot.tree` is built
-    at import time."""
+def test_admin_commands_register_globally_when_env_unset(monkeypatch):
+    """With BOT_ADMIN_GUILD_IDS unset, the two admin commands fall back
+    to global registration (local-dev affordance)."""
+    monkeypatch.delenv("BOT_ADMIN_GUILD_IDS", raising=False)
+    import importlib
     import bot as bot_module
+    importlib.reload(bot_module)
     names = {c.name for c in bot_module.bot.tree.get_commands()}
     assert "admin_guild_info"   in names
     assert "admin_forget_guild" in names
+    assert bot_module._ADMIN_GUILD_IDS == ()
+
+
+def test_admin_commands_restricted_to_env_guilds(monkeypatch):
+    """With BOT_ADMIN_GUILD_IDS set, the commands appear in the configured
+    guilds' trees and NOT in the global tree."""
+    import discord
+    import importlib
+    monkeypatch.setenv("BOT_ADMIN_GUILD_IDS", "111111111111111111,222222222222222222")
+    import bot as bot_module
+    importlib.reload(bot_module)
+
+    global_names = {c.name for c in bot_module.bot.tree.get_commands()}
+    assert "admin_guild_info"   not in global_names
+    assert "admin_forget_guild" not in global_names
+
+    for gid in (111111111111111111, 222222222222222222):
+        guild_names = {c.name for c in bot_module.bot.tree.get_commands(guild=discord.Object(id=gid))}
+        assert "admin_guild_info"   in guild_names
+        assert "admin_forget_guild" in guild_names
+
+    # Unrelated guild sees neither.
+    other = {c.name for c in bot_module.bot.tree.get_commands(guild=discord.Object(id=999999999999999999))}
+    assert "admin_guild_info"   not in other
+    assert "admin_forget_guild" not in other
+
+    assert bot_module._ADMIN_GUILD_IDS == (111111111111111111, 222222222222222222)
+
+
+def test_admin_guild_ids_ignores_garbage_entries(monkeypatch):
+    """Non-digit entries in the comma list are silently dropped — matches
+    `PREMIUM_BYPASS_GUILD_IDS` parsing behaviour."""
+    import importlib
+    monkeypatch.setenv("BOT_ADMIN_GUILD_IDS", "111111111111111111, , not-a-number,222222222222222222")
+    import bot as bot_module
+    importlib.reload(bot_module)
+    assert bot_module._ADMIN_GUILD_IDS == (111111111111111111, 222222222222222222)

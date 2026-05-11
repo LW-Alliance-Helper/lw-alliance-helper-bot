@@ -189,9 +189,23 @@ async def on_ready():
         await bot.load_extension("member_roster")
         print(f"[INFO] Member Roster cog loaded")
 
-    # Sync slash commands globally so they work in any server
+    # Sync slash commands globally so they work in any server. Commands
+    # decorated with `guilds=[...]` are excluded from the global sync;
+    # they're pushed per-guild below.
     synced = await bot.tree.sync()
     print(f"[INFO] Synced {len(synced)} slash commands globally")
+
+    # Push guild-restricted admin commands to each configured admin guild.
+    # If `BOT_ADMIN_GUILD_IDS` is unset, _ADMIN_GUILD_IDS is empty and
+    # this loop is a no-op (admin commands fell back to global registration
+    # earlier — see the print at module import).
+    for gid in _ADMIN_GUILD_IDS:
+        try:
+            synced_guild = await bot.tree.sync(guild=discord.Object(id=gid))
+            print(f"[INFO] Synced {len(synced_guild)} admin command(s) to guild {gid}")
+        except discord.HTTPException as e:
+            print(f"[INFO] Could not sync admin commands to guild {gid}: {e}")
+            sentry_sdk.capture_exception(e)
 
     # Set the bot's presence to reflect the live guild count.
     await _update_presence()
@@ -864,6 +878,47 @@ async def help_slash(interaction: discord.Interaction):
 # identify an alliance from a logged `guild_id` and to action a data-removal
 # request without a Railway shell session. Slash commands take guild IDs as
 # strings — snowflakes can exceed JavaScript's safe-integer range.
+#
+# Discord has no "application-owner-only visibility" tier — the `bot.is_owner`
+# check only blocks *execution*, not *discoverability*. To keep these
+# commands out of the autocomplete picker in every alliance, registration is
+# scoped to the guilds listed in `BOT_ADMIN_GUILD_IDS` (comma-separated env
+# var; same parsing as `PREMIUM_BYPASS_GUILD_IDS`). When the env var is
+# unset (local dev) the commands fall back to global registration so the
+# developer doesn't have to think about it — production should always set
+# the var.
+
+
+def _admin_guild_ids() -> tuple[int, ...]:
+    """Parse `BOT_ADMIN_GUILD_IDS` (comma-separated guild IDs). Returns an
+    empty tuple if the env var is unset / blank, which means the admin
+    commands register globally — intended for local dev only.
+    """
+    raw = os.environ.get("BOT_ADMIN_GUILD_IDS", "").strip()
+    if not raw:
+        return ()
+    out: list[int] = []
+    for piece in raw.split(","):
+        piece = piece.strip()
+        if piece.isdigit():
+            out.append(int(piece))
+    return tuple(out)
+
+
+_ADMIN_GUILD_IDS = _admin_guild_ids()
+_admin_command_kwargs: dict = (
+    {"guilds": [discord.Object(id=gid) for gid in _ADMIN_GUILD_IDS]}
+    if _ADMIN_GUILD_IDS
+    else {}
+)
+if not _ADMIN_GUILD_IDS:
+    print(
+        "[INFO] BOT_ADMIN_GUILD_IDS unset — owner-only admin commands "
+        "will register globally. Set this in production to scope them "
+        "to specific guilds."
+    )
+else:
+    print(f"[INFO] Owner-only admin commands restricted to guild(s): {_ADMIN_GUILD_IDS}")
 
 
 async def _require_bot_owner(interaction: discord.Interaction) -> bool:
@@ -886,6 +941,7 @@ def _parse_guild_id(raw: str) -> int | None:
 @bot.tree.command(
     name="admin_guild_info",
     description="(Bot owner only) Look up stored metadata + config for a guild_id.",
+    **_admin_command_kwargs,
 )
 @app_commands.describe(guild_id="Discord guild ID — paste from log line / Sentry tag")
 async def admin_guild_info_slash(interaction: discord.Interaction, guild_id: str):
@@ -1003,6 +1059,7 @@ class _ForgetGuildConfirm(discord.ui.View):
 @bot.tree.command(
     name="admin_forget_guild",
     description="(Bot owner only) Delete the install-metadata row for a guild_id (data-removal request).",
+    **_admin_command_kwargs,
 )
 @app_commands.describe(guild_id="Discord guild ID to forget")
 async def admin_forget_guild_slash(interaction: discord.Interaction, guild_id: str):

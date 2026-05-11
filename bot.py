@@ -188,6 +188,9 @@ async def on_ready():
     if "member_roster" not in bot.extensions:
         await bot.load_extension("member_roster")
         print(f"[INFO] Member Roster cog loaded")
+    if "export_import_cog" not in bot.extensions:
+        await bot.load_extension("export_import_cog")
+        print(f"[INFO] Export/Import cog loaded")
 
     # Sync slash commands globally so they work in any server. Commands
     # decorated with `guilds=[...]` are excluded from the global sync;

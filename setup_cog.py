@@ -44,6 +44,28 @@ def _parse_12h_time(raw: str) -> str:
     return f"{hour:02d}:{minute:02d}"
 
 
+def _format_24h_to_12h(raw: str) -> str:
+    """Inverse of `_parse_12h_time`: render a stored 'HH:MM' 24-hour
+    value as e.g. '9:00am' for display in wizards. Pass-through on
+    empty / unparseable input so callers can pipe it through unchanged
+    when no saved value is present. Used wherever a setup step shows
+    a saved time back to leadership and the default it could revert
+    to is in 12-hour form — otherwise the 'Keep current' and 'Use
+    default' buttons sit side-by-side in mismatched formats."""
+    if not raw or ":" not in raw:
+        return raw or ""
+    try:
+        h_str, m_str = raw.split(":", 1)
+        hour, minute = int(h_str), int(m_str)
+    except ValueError:
+        return raw
+    if not (0 <= hour <= 23 and 0 <= minute <= 59):
+        return raw
+    period = "am" if hour < 12 else "pm"
+    hour12 = hour % 12 or 12
+    return f"{hour12}:{minute:02d}{period}"
+
+
 def _parse_month_day(raw: str) -> str:
     """
     Parse 'Month Day' into YYYY-MM-DD using the most recent occurrence.
@@ -5691,7 +5713,10 @@ async def run_shiny_tasks_setup(interaction: discord.Interaction, bot):
             f"*(in your timezone: {tz_label})*\n"
             f"*(e.g. `9:00am`, `10:30am`, `9:00pm`)*",
             default="9:00am",
-            current=current.get("post_time", ""),
+            # DB stores '09:00' (24h) — render as '9:00am' before showing
+            # so 'Keep current' and 'Use default' don't sit side-by-side
+            # in mismatched formats.
+            current=_format_24h_to_12h(current.get("post_time", "")),
             modal_title="Post Time",
             modal_label="Time",
             timeout_cmd="setup_shiny_tasks",

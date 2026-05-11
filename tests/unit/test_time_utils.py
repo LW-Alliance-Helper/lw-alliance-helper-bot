@@ -54,6 +54,45 @@ class TestParse12hTime:
         assert self.parse("10:15 pm") == "22:15"
 
 
+class TestFormat24hTo12h:
+    """`_format_24h_to_12h` is the inverse of `_parse_12h_time` — used
+    in setup wizards so 'Keep current' and 'Use default' buttons both
+    show 12-hour times (the DB stores 24-hour). The reverse mismatch
+    was reported in dev for /setup_shiny_tasks Step 4."""
+
+    def setup_method(self):
+        from setup_cog import _format_24h_to_12h
+        self.fmt = _format_24h_to_12h
+
+    def test_am_time(self):
+        assert self.fmt("09:00") == "9:00am"
+
+    def test_pm_time(self):
+        assert self.fmt("22:15") == "10:15pm"
+
+    def test_midnight_renders_as_12am(self):
+        assert self.fmt("00:00") == "12:00am"
+
+    def test_noon_renders_as_12pm(self):
+        assert self.fmt("12:00") == "12:00pm"
+
+    def test_round_trip_with_parse(self):
+        from setup_cog import _parse_12h_time
+        for raw in ("9:00am", "10:15pm", "12:00am", "12:00pm", "1:05am"):
+            assert self.fmt(_parse_12h_time(raw)) == raw
+
+    def test_empty_string_passthrough(self):
+        """Wizard call-sites pass `current` straight in; an empty
+        saved value must stay empty so `ask_keep_or_change` falls
+        back to the 2-button 'Use default' layout."""
+        assert self.fmt("") == ""
+
+    def test_unparseable_passthrough(self):
+        """Don't mangle garbage — let the caller surface it instead
+        of swallowing the value silently."""
+        assert self.fmt("garbage") == "garbage"
+
+
 class TestServerTimeToLocal:
     """server_time_to_local converts a (hour, minute, guild_id) triple from
     Server Time (UTC-2) to the guild's local clock string. e.g. (18, 0)

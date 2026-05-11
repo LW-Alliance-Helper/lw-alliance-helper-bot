@@ -157,19 +157,31 @@ def init_db():
         """)
         conn.commit()
 
-        # guild_growth_config — per-guild growth tracking settings
+        # guild_growth_config — per-guild growth tracking settings.
+        # Breakdown columns (#34) classify members by % change between
+        # snapshots. `breakdown_thresholds` / `breakdown_labels` are JSON
+        # dicts (Premium override, empty `{}` = use hardcoded defaults).
+        # `breakdown_post_channel_id` enables auto-post on snapshot (0 =
+        # off; Premium-gated at call time). `breakdown_bucket_filter` is
+        # a JSON list of bucket names included in the auto-post (empty `[]`
+        # = no filter, post every bucket).
         conn.execute("""
             CREATE TABLE IF NOT EXISTS guild_growth_config (
-                guild_id             INTEGER PRIMARY KEY,
-                enabled              INTEGER DEFAULT 0,
-                tab_source           TEXT    DEFAULT '',
-                name_col             TEXT    DEFAULT 'A',
-                metrics              TEXT    DEFAULT '',
-                tab_growth           TEXT    DEFAULT 'Growth Tracking',
-                snapshot_frequency   TEXT    DEFAULT 'monthly',
-                snapshot_day         INTEGER DEFAULT 1,
-                snapshot_interval    INTEGER DEFAULT 30,
-                data_start_row       INTEGER DEFAULT 2
+                guild_id                   INTEGER PRIMARY KEY,
+                enabled                    INTEGER DEFAULT 0,
+                tab_source                 TEXT    DEFAULT '',
+                name_col                   TEXT    DEFAULT 'A',
+                metrics                    TEXT    DEFAULT '',
+                tab_growth                 TEXT    DEFAULT 'Growth Tracking',
+                snapshot_frequency         TEXT    DEFAULT 'monthly',
+                snapshot_day               INTEGER DEFAULT 1,
+                snapshot_interval          INTEGER DEFAULT 30,
+                data_start_row             INTEGER DEFAULT 2,
+                tab_breakdown              TEXT    DEFAULT 'Growth Breakdown',
+                breakdown_thresholds       TEXT    DEFAULT '{}',
+                breakdown_labels           TEXT    DEFAULT '{}',
+                breakdown_post_channel_id  INTEGER DEFAULT 0,
+                breakdown_bucket_filter    TEXT    DEFAULT '[]'
             )
         """)
         conn.commit()
@@ -415,6 +427,21 @@ def init_db():
                 conn.execute(f"ALTER TABLE guild_train_config ADD COLUMN {col} {definition}")
                 conn.commit()
                 print(f"[CONFIG] Added {col} to guild_train_config")
+            except Exception:
+                pass
+
+        # ── guild_growth_config migrations (#34 Growth Breakdown) ──────────────
+        for col, definition in [
+            ("tab_breakdown",             "TEXT    DEFAULT 'Growth Breakdown'"),
+            ("breakdown_thresholds",      "TEXT    DEFAULT '{}'"),
+            ("breakdown_labels",          "TEXT    DEFAULT '{}'"),
+            ("breakdown_post_channel_id", "INTEGER DEFAULT 0"),
+            ("breakdown_bucket_filter",   "TEXT    DEFAULT '[]'"),
+        ]:
+            try:
+                conn.execute(f"ALTER TABLE guild_growth_config ADD COLUMN {col} {definition}")
+                conn.commit()
+                print(f"[CONFIG] Added {col} to guild_growth_config")
             except Exception:
                 pass
 
@@ -1186,7 +1213,10 @@ def save_participation_config(
 
 
 def get_growth_config(guild_id: int) -> dict:
-    """Return growth config for a guild."""
+    """Return growth config for a guild. Breakdown JSON fields
+    (`breakdown_thresholds`, `breakdown_labels`, `breakdown_bucket_filter`)
+    are parsed back into dicts/lists; empty / malformed JSON falls back to
+    empty defaults so callers don't need to handle parse errors."""
     import json
     with _get_conn() as conn:
         row = conn.execute(
@@ -1199,18 +1229,33 @@ def get_growth_config(guild_id: int) -> dict:
             d["metrics"] = json.loads(d["metrics"]) if d["metrics"] else []
         except (json.JSONDecodeError, TypeError):
             d["metrics"] = []
+        for json_field, fallback in (
+            ("breakdown_thresholds", {}),
+            ("breakdown_labels",     {}),
+            ("breakdown_bucket_filter", []),
+        ):
+            raw = d.get(json_field)
+            try:
+                d[json_field] = json.loads(raw) if raw else fallback
+            except (json.JSONDecodeError, TypeError):
+                d[json_field] = fallback
         return d
     return {
-        "guild_id":           guild_id,
-        "enabled":            0,
-        "tab_source":         "",
-        "name_col":           "A",
-        "metrics":            [],
-        "tab_growth":         "Growth Tracking",
-        "snapshot_frequency": "monthly",
-        "snapshot_day":       1,
-        "snapshot_interval":  30,
-        "data_start_row":     2,
+        "guild_id":                  guild_id,
+        "enabled":                   0,
+        "tab_source":                "",
+        "name_col":                  "A",
+        "metrics":                   [],
+        "tab_growth":                "Growth Tracking",
+        "snapshot_frequency":        "monthly",
+        "snapshot_day":              1,
+        "snapshot_interval":         30,
+        "data_start_row":            2,
+        "tab_breakdown":             "Growth Breakdown",
+        "breakdown_thresholds":      {},
+        "breakdown_labels":          {},
+        "breakdown_post_channel_id": 0,
+        "breakdown_bucket_filter":   [],
     }
 
 
@@ -1238,6 +1283,55 @@ def save_growth_config(guild_id: int, enabled: int, tab_source: str,
              tab_growth, snapshot_frequency, snapshot_day, snapshot_interval, data_start_row)
         )
         conn.commit()
+
+
+def save_growth_breakdown_config(
+    guild_id: int, *,
+    tab_breakdown: str             = "Growth Breakdown",
+    breakdown_thresholds: dict     = None,
+    breakdown_labels: dict         = None,
+    breakdown_post_channel_id: int = 0,
+    breakdown_bucket_filter: list  = None,
+) -> bool:
+    """Update the breakdown-specific fields on guild_growth_config without
+    touching the core growth-snapshot fields. Returns True if a row was
+    updated; False if the guild has no growth config yet (caller should
+    run `/setup_growth` first).
+
+    `breakdown_thresholds` is a dict like ``{"increased": 20, "steady": 10,
+    "low": 5, "none": 0}`` (Decline is implicit at < 0%). Empty dict means
+    "use hardcoded defaults". `breakdown_labels` is a dict keyed by the
+    canonical bucket names (``increased / steady / low / none / decline``).
+    `breakdown_bucket_filter` is a list of canonical bucket names that
+    fire the auto-post (empty list = post every bucket).
+    """
+    import json
+    if breakdown_thresholds is None:
+        breakdown_thresholds = {}
+    if breakdown_labels is None:
+        breakdown_labels = {}
+    if breakdown_bucket_filter is None:
+        breakdown_bucket_filter = []
+    with _get_conn() as conn:
+        cur = conn.execute(
+            "UPDATE guild_growth_config SET "
+            "  tab_breakdown = ?, "
+            "  breakdown_thresholds = ?, "
+            "  breakdown_labels = ?, "
+            "  breakdown_post_channel_id = ?, "
+            "  breakdown_bucket_filter = ? "
+            "WHERE guild_id = ?",
+            (
+                tab_breakdown,
+                json.dumps(breakdown_thresholds),
+                json.dumps(breakdown_labels),
+                int(breakdown_post_channel_id or 0),
+                json.dumps(breakdown_bucket_filter),
+                guild_id,
+            ),
+        )
+        conn.commit()
+        return cur.rowcount > 0
 
 
 def get_survey_config(guild_id: int) -> dict:

@@ -171,13 +171,20 @@ HELP_CATEGORIES: dict[str, dict] = {
         "emoji": "📈",
         "label": "Growth Tracking",
         "description": (
-            "Periodic snapshots of member stats, written to your sheet."
+            "Periodic snapshots of member stats, written to your sheet. "
+            "Each snapshot also classifies members into growth buckets — "
+            "click 📊 Breakdown on `/growth` to see who's climbing and "
+            "who's stalled."
         ),
         "commands": [
             ("/setup_growth",
              "Configure source tab, metrics, and snapshot schedule."),
+            ("/setup_growth_breakdown",
+             "💎 Configure the breakdown auto-post, bucket thresholds, "
+             "and bucket labels."),
             ("/growth",
-             "Show status with options to snapshot or edit config."),
+             "Show status with options to snapshot, view the breakdown, "
+             "or edit config."),
         ],
     },
     "premium": {

@@ -1056,6 +1056,34 @@ class SetupCog(commands.Cog):
         )
         await run_growth_setup(interaction, self.bot)
 
+    @app_commands.command(
+        name="setup_growth_breakdown",
+        description="💎 Premium — Configure the Growth Breakdown auto-post and bucket customization",
+    )
+    async def setup_growth_breakdown(self, interaction: discord.Interaction):
+        if not _has_leadership_or_admin(interaction):
+            await interaction.response.send_message(
+                "⛔ You need the leadership role (or admin) to run `/setup_growth_breakdown`.",
+                ephemeral=True,
+            )
+            return
+        if not await premium.is_premium(interaction.guild_id, interaction=interaction):
+            await interaction.response.send_message(
+                "💎 `/setup_growth_breakdown` is a Premium feature. The "
+                "**📊 Breakdown** button on `/growth` works on every tier — "
+                "this command configures the auto-post and the customizable "
+                "thresholds and labels. Run `/upgrade` to subscribe.",
+                ephemeral=True,
+            )
+            return
+        if not await _check_wizard_can_run(interaction, "setup_growth_breakdown"):
+            return
+        await interaction.response.send_message(
+            "⚙️ Starting Growth Breakdown setup — check the channel for prompts!",
+            ephemeral=True,
+        )
+        await run_growth_breakdown_setup(interaction, self.bot)
+
     @app_commands.command(name="setup_birthdays", description="Configure birthday tracking — sheet tab, columns, and lookahead days")
     async def setup_birthdays(self, interaction: discord.Interaction):
         if not _has_leadership_or_admin(interaction):
@@ -2110,6 +2138,398 @@ async def run_growth_setup(interaction: discord.Interaction, bot):
     await channel.send(embed=embed)
     wizard_registry.unregister(user.id, cancel_event)
     print(f"[SETUP] Growth config saved for guild {guild_id}")
+
+
+async def run_growth_breakdown_setup(interaction: discord.Interaction, bot):
+    """Premium-only wizard for the Growth Breakdown auto-post + customization.
+
+    The bucket-classification math itself ships free (the `/growth`
+    **📊 Breakdown** button reads the breakdown tab for any guild that's
+    enabled growth tracking). This wizard configures the Premium layer:
+
+      * sheet tab name for the breakdown
+      * auto-post channel (fires after every snapshot, premium-gated at
+        post time so a subscription lapse stops the alerts without any
+        config change)
+      * bucket filter (which buckets fire the auto-post — e.g. only
+        Decline + None)
+      * custom thresholds applied to every metric (global, not per-metric
+        — per-metric customization is parked as a follow-up if alliances
+        ask for it)
+      * custom labels for each bucket
+    """
+    import wizard_registry
+    from config import (
+        get_growth_config, save_growth_breakdown_config,
+    )
+    from growth import DEFAULT_THRESHOLDS, DEFAULT_BUCKET_LABELS, BUCKET_ORDER
+
+    guild_id = interaction.guild_id
+    channel  = interaction.channel
+    user     = interaction.user
+    cancel_event = wizard_registry.register(user.id)
+
+    current = get_growth_config(guild_id)
+    if not current.get("enabled") or not current.get("metrics"):
+        await channel.send(
+            "⚙️ Set up growth tracking first — run `/setup_growth` and add at "
+            "least one metric, then come back to `/setup_growth_breakdown` to "
+            "configure the breakdown layer."
+        )
+        wizard_registry.unregister(user.id, cancel_event)
+        return
+
+    await channel.send(
+        "📊 **Growth Breakdown Setup** (💎 Premium)\n"
+        "Classifies each member's growth between snapshots into one of "
+        "five buckets and (optionally) posts the summary to a channel "
+        "after every snapshot."
+    )
+
+    # ── Step 1: Breakdown tab ─────────────────────────────────────────────
+    tab_breakdown = await ask_keep_or_change(
+        channel,
+        "**Step 1 of 5 — Breakdown Tab**\n"
+        "Which tab in your Google Sheet should the breakdown data live in? "
+        "The bot creates it automatically if it doesn't exist yet.",
+        default="Growth Breakdown",
+        current=current.get("tab_breakdown") or "",
+        modal_title="Breakdown Tab",
+        modal_label="Tab name",
+        timeout_cmd="setup_growth_breakdown",
+        cancel_event=cancel_event,
+    )
+    if tab_breakdown is None:
+        return
+
+    # ── Step 2: Auto-post toggle + channel ────────────────────────────────
+    autopost_view = YesNoView()
+    await channel.send(
+        "**Step 2 of 5 — Auto-Post After Snapshots?**\n"
+        "Each time the bot finishes a snapshot, post the breakdown summary "
+        "to a channel so leadership doesn't have to click `/growth` to see "
+        "who's slowing down.",
+        view=autopost_view,
+    )
+    await wait_view_or_cancel(autopost_view, cancel_event)
+    if autopost_view.cancelled:
+        return
+    if autopost_view.selected is None:
+        await channel.send("⏰ Timed out. Run `/setup_growth_breakdown` to start again.")
+        return
+
+    post_channel_id = 0
+    if autopost_view.selected:
+        post_ch_view = ChannelSelectStep(
+            "Select the auto-post channel…",
+            suggested_name="growth-breakdown",
+            include_threads=True,
+            guild=interaction.guild,
+        )
+        await channel.send(
+            "**Auto-Post Channel**\n"
+            "Where should the breakdown summaries land?",
+            view=post_ch_view,
+        )
+        await wait_view_or_cancel(post_ch_view, cancel_event)
+        if post_ch_view.cancelled:
+            return
+        if not post_ch_view.confirmed:
+            await channel.send("⏰ Timed out. Run `/setup_growth_breakdown` to start again.")
+            return
+        post_channel_id = post_ch_view.selected_channel.id
+
+    # ── Step 3: Bucket filter ─────────────────────────────────────────────
+    # Surfaces only when auto-post is on — bucket filter doesn't apply to
+    # the on-demand /growth button (which always shows every bucket).
+    bucket_filter: list[str] = []
+    if post_channel_id:
+        class BucketFilterView(discord.ui.View):
+            def __init__(self):
+                super().__init__(timeout=WIZARD_TIMEOUT)
+                self.selected: list[str] | None = None
+
+                opts = [
+                    discord.SelectOption(
+                        label=DEFAULT_BUCKET_LABELS[b],
+                        value=b,
+                        description=f"{b.title()} growth bucket",
+                    )
+                    for b in BUCKET_ORDER
+                ]
+                select = discord.ui.Select(
+                    placeholder="Pick which buckets fire alerts (none = all)",
+                    options=opts,
+                    min_values=0,
+                    max_values=len(BUCKET_ORDER),
+                )
+
+                async def _select_cb(inter: discord.Interaction):
+                    self.selected = list(select.values)
+                    for item in self.children: item.disabled = True
+                    await wizard_registry.safe_edit_response(inter, view=self)
+                    self.stop()
+
+                select.callback = _select_cb
+                self.add_item(select)
+
+                all_btn = discord.ui.Button(
+                    label="Use all buckets",
+                    style=discord.ButtonStyle.secondary,
+                )
+
+                async def _all_cb(inter: discord.Interaction):
+                    self.selected = []
+                    for item in self.children: item.disabled = True
+                    await wizard_registry.safe_edit_response(inter, view=self)
+                    self.stop()
+
+                all_btn.callback = _all_cb
+                self.add_item(all_btn)
+
+        bf_view = BucketFilterView()
+        saved_filter = current.get("breakdown_bucket_filter") or []
+        if saved_filter:
+            saved_disp = ", ".join(
+                DEFAULT_BUCKET_LABELS.get(b, b) for b in saved_filter
+            )
+            await channel.send(
+                f"**Step 3 of 5 — Bucket Filter**\n"
+                f"Currently alerting on: **{saved_disp}**. Pick a new set of "
+                f"buckets, or hit **Use all buckets** to alert on every bucket.",
+                view=bf_view,
+            )
+        else:
+            await channel.send(
+                "**Step 3 of 5 — Bucket Filter**\n"
+                "Pick which buckets fire the auto-post — leave empty (or hit "
+                "**Use all buckets**) to alert on every bucket.",
+                view=bf_view,
+            )
+        await wait_view_or_cancel(bf_view, cancel_event)
+        if bf_view.cancelled:
+            return
+        if bf_view.selected is None:
+            await channel.send("⏰ Timed out. Run `/setup_growth_breakdown` to start again.")
+            return
+        bucket_filter = bf_view.selected
+
+    # ── Step 4: Custom thresholds ─────────────────────────────────────────
+    thresholds = dict(current.get("breakdown_thresholds") or {})
+
+    class ThresholdsModal(discord.ui.Modal):
+        def __init__(self):
+            super().__init__(title="Custom Thresholds (%)")
+            self.values_out: dict | None = None
+            self._increased = discord.ui.TextInput(
+                label="Increased ≥",
+                placeholder="e.g. 20 — bucket lower bound, %",
+                default=str(thresholds.get("increased", DEFAULT_THRESHOLDS["increased"])),
+                required=True, max_length=6,
+            )
+            self._steady = discord.ui.TextInput(
+                label="Steady ≥",
+                placeholder="e.g. 10",
+                default=str(thresholds.get("steady", DEFAULT_THRESHOLDS["steady"])),
+                required=True, max_length=6,
+            )
+            self._low = discord.ui.TextInput(
+                label="Low ≥",
+                placeholder="e.g. 5",
+                default=str(thresholds.get("low", DEFAULT_THRESHOLDS["low"])),
+                required=True, max_length=6,
+            )
+            self._none = discord.ui.TextInput(
+                label="None ≥",
+                placeholder="0 — usually leave as 0. Decline is < 0.",
+                default=str(thresholds.get("none", DEFAULT_THRESHOLDS["none"])),
+                required=True, max_length=6,
+            )
+            for i in (self._increased, self._steady, self._low, self._none):
+                self.add_item(i)
+
+        async def on_submit(self, inter: discord.Interaction):
+            try:
+                self.values_out = {
+                    "increased": float(self._increased.value),
+                    "steady":    float(self._steady.value),
+                    "low":       float(self._low.value),
+                    "none":      float(self._none.value),
+                }
+            except (ValueError, TypeError):
+                self.values_out = None
+            await inter.response.defer()
+            self.stop()
+
+    class ThresholdsChoiceView(discord.ui.View):
+        def __init__(self):
+            super().__init__(timeout=WIZARD_TIMEOUT)
+            self.choice = None
+
+        @discord.ui.button(label="✅ Use defaults", style=discord.ButtonStyle.success)
+        async def defaults_btn(self, inter: discord.Interaction, button: discord.ui.Button):
+            self.choice = "defaults"
+            for item in self.children: item.disabled = True
+            await wizard_registry.safe_edit_response(inter, view=self)
+            self.stop()
+
+        @discord.ui.button(label="✏️ Customize", style=discord.ButtonStyle.primary)
+        async def customize_btn(self, inter: discord.Interaction, button: discord.ui.Button):
+            modal = ThresholdsModal()
+            await inter.response.send_modal(modal)
+            await modal.wait()
+            self.choice = "customize" if modal.values_out else None
+            self._modal_values = modal.values_out
+            for item in self.children: item.disabled = True
+            try:
+                await inter.edit_original_response(view=self)
+            except Exception:
+                pass
+            self.stop()
+
+    t_view = ThresholdsChoiceView()
+    t_view._modal_values = None
+    await channel.send(
+        "**Step 4 of 5 — Bucket Thresholds**\n"
+        f"Defaults: Increased ≥ {DEFAULT_THRESHOLDS['increased']:.0f}%, "
+        f"Steady ≥ {DEFAULT_THRESHOLDS['steady']:.0f}%, "
+        f"Low ≥ {DEFAULT_THRESHOLDS['low']:.0f}%, "
+        f"None ≥ {DEFAULT_THRESHOLDS['none']:.0f}%, "
+        f"Decline < 0%.\n"
+        "Customize for stricter (or looser) growth standards — applies to "
+        "every metric. Per-metric thresholds are tracked as a follow-up.",
+        view=t_view,
+    )
+    await wait_view_or_cancel(t_view, cancel_event)
+    if t_view.cancelled:
+        return
+    if t_view.choice is None:
+        await channel.send(
+            "⏰ Timed out or invalid thresholds. Run `/setup_growth_breakdown` to start again."
+        )
+        return
+    if t_view.choice == "defaults":
+        thresholds = {}
+    else:
+        thresholds = t_view._modal_values
+
+    # ── Step 5: Custom labels ─────────────────────────────────────────────
+    labels = dict(current.get("breakdown_labels") or {})
+
+    class LabelsModal(discord.ui.Modal):
+        def __init__(self):
+            super().__init__(title="Custom Bucket Labels")
+            self.values_out: dict | None = None
+            self._inputs = {}
+            for b in BUCKET_ORDER:
+                ti = discord.ui.TextInput(
+                    label=DEFAULT_BUCKET_LABELS[b],
+                    placeholder=f"e.g. '{DEFAULT_BUCKET_LABELS[b]}'",
+                    default=str(labels.get(b, DEFAULT_BUCKET_LABELS[b])),
+                    required=True, max_length=30,
+                )
+                self._inputs[b] = ti
+                self.add_item(ti)
+
+        async def on_submit(self, inter: discord.Interaction):
+            self.values_out = {b: ti.value.strip() for b, ti in self._inputs.items()}
+            await inter.response.defer()
+            self.stop()
+
+    class LabelsChoiceView(discord.ui.View):
+        def __init__(self):
+            super().__init__(timeout=WIZARD_TIMEOUT)
+            self.choice = None
+
+        @discord.ui.button(label="✅ Use defaults", style=discord.ButtonStyle.success)
+        async def defaults_btn(self, inter: discord.Interaction, button: discord.ui.Button):
+            self.choice = "defaults"
+            for item in self.children: item.disabled = True
+            await wizard_registry.safe_edit_response(inter, view=self)
+            self.stop()
+
+        @discord.ui.button(label="✏️ Customize", style=discord.ButtonStyle.primary)
+        async def customize_btn(self, inter: discord.Interaction, button: discord.ui.Button):
+            modal = LabelsModal()
+            await inter.response.send_modal(modal)
+            await modal.wait()
+            self.choice = "customize" if modal.values_out else None
+            self._modal_values = modal.values_out
+            for item in self.children: item.disabled = True
+            try:
+                await inter.edit_original_response(view=self)
+            except Exception:
+                pass
+            self.stop()
+
+    l_view = LabelsChoiceView()
+    l_view._modal_values = None
+    await channel.send(
+        "**Step 5 of 5 — Bucket Labels**\n"
+        f"Defaults: {', '.join(DEFAULT_BUCKET_LABELS[b] for b in BUCKET_ORDER)}.\n"
+        "Rename buckets to match your alliance's voice (e.g. 'Crushing It', "
+        "'Stalled', 'Going Backwards').",
+        view=l_view,
+    )
+    await wait_view_or_cancel(l_view, cancel_event)
+    if l_view.cancelled:
+        return
+    if l_view.choice is None:
+        await channel.send(
+            "⏰ Timed out. Run `/setup_growth_breakdown` to start again."
+        )
+        return
+    if l_view.choice == "defaults":
+        labels = {}
+    else:
+        labels = l_view._modal_values
+
+    # ── Save ──────────────────────────────────────────────────────────────
+    saved_ok = save_growth_breakdown_config(
+        guild_id,
+        tab_breakdown=tab_breakdown,
+        breakdown_thresholds=thresholds,
+        breakdown_labels=labels,
+        breakdown_post_channel_id=post_channel_id,
+        breakdown_bucket_filter=bucket_filter,
+    )
+    if not saved_ok:
+        await channel.send(
+            "⚠️ Couldn't save the breakdown config — make sure `/setup_growth` "
+            "has been run for this server first."
+        )
+        wizard_registry.unregister(user.id, cancel_event)
+        return
+
+    embed = discord.Embed(title="✅ Growth Breakdown Configured", color=discord.Color.green())
+    embed.add_field(name="Breakdown Tab", value=tab_breakdown, inline=False)
+    if post_channel_id:
+        bf_text = (
+            ", ".join(DEFAULT_BUCKET_LABELS.get(b, b) for b in bucket_filter)
+            if bucket_filter else "All buckets"
+        )
+        embed.add_field(name="Auto-Post Channel", value=f"<#{post_channel_id}>", inline=False)
+        embed.add_field(name="Bucket Filter",     value=bf_text,                inline=False)
+    else:
+        embed.add_field(name="Auto-Post", value="❌ Off — use `/growth` → 📊 Breakdown to view on demand.", inline=False)
+    if thresholds:
+        t_text = (
+            f"Increased ≥ {thresholds['increased']:g}%, "
+            f"Steady ≥ {thresholds['steady']:g}%, "
+            f"Low ≥ {thresholds['low']:g}%, "
+            f"None ≥ {thresholds['none']:g}%, Decline < 0%"
+        )
+        embed.add_field(name="Custom Thresholds", value=t_text, inline=False)
+    else:
+        embed.add_field(name="Thresholds", value="Defaults (Increased ≥ 20%, Steady ≥ 10%, Low ≥ 5%, None ≥ 0%, Decline < 0%)", inline=False)
+    if labels:
+        l_text = ", ".join(f"{DEFAULT_BUCKET_LABELS[b]}→{labels[b]}" for b in BUCKET_ORDER if labels.get(b))
+        embed.add_field(name="Custom Labels", value=l_text or "—", inline=False)
+    embed.set_footer(text="Run /setup_growth_breakdown again to update.")
+    await channel.send(embed=embed)
+    wizard_registry.unregister(user.id, cancel_event)
+    print(f"[SETUP] Growth Breakdown config saved for guild {guild_id}")
+
 
 async def run_train_setup(interaction: discord.Interaction, bot):
     """Walk an admin through configuring the train schedule."""

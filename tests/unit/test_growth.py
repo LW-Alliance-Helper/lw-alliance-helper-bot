@@ -300,6 +300,399 @@ class TestRunGrowthSnapshotInner:
         )
 
 
+# ── Growth Breakdown (#34) ─────────────────────────────────────────────────
+
+class TestClassifyBucket:
+    """Verify the bucket classifier at every default-threshold edge plus
+    the prev=0 blank-out and the custom-threshold override."""
+
+    def test_returns_none_when_prev_is_zero(self):
+        from growth import classify_bucket
+        assert classify_bucket(0, 100) is None
+
+    def test_returns_none_when_prev_is_negative(self):
+        from growth import classify_bucket
+        assert classify_bucket(-5, 100) is None
+
+    def test_returns_none_when_prev_unparseable(self):
+        from growth import classify_bucket
+        assert classify_bucket("", 100) is None
+        assert classify_bucket("nope", 100) is None
+
+    def test_decline_when_curr_below_prev(self):
+        from growth import classify_bucket
+        assert classify_bucket(100, 99)   == "decline"
+        assert classify_bucket(100, 50)   == "decline"
+
+    def test_none_bucket_under_low_threshold(self):
+        from growth import classify_bucket
+        # 0% and 4.99% sit in the None bucket under default thresholds.
+        assert classify_bucket(100, 100)   == "none"
+        assert classify_bucket(100, 104.9) == "none"
+
+    def test_low_bucket_at_five_percent(self):
+        from growth import classify_bucket
+        # Default thresholds: low ≥ 5%, steady ≥ 10%.
+        assert classify_bucket(100, 105) == "low"
+        assert classify_bucket(100, 109) == "low"
+
+    def test_steady_bucket_at_ten_percent(self):
+        from growth import classify_bucket
+        assert classify_bucket(100, 110) == "steady"
+        assert classify_bucket(100, 119) == "steady"
+
+    def test_increased_bucket_at_twenty_percent(self):
+        from growth import classify_bucket
+        assert classify_bucket(100, 120) == "increased"
+        assert classify_bucket(100, 200) == "increased"
+
+    def test_custom_thresholds_shift_boundaries(self):
+        from growth import classify_bucket
+        # Tighter standards: Increased ≥ 30%, Steady ≥ 15%.
+        thresh = {"increased": 30, "steady": 15, "low": 5, "none": 0}
+        # 20% used to be `increased` under defaults; now sits in `steady`.
+        assert classify_bucket(100, 120, thresholds=thresh) == "steady"
+        # 30% hits the new `increased` floor.
+        assert classify_bucket(100, 130, thresholds=thresh) == "increased"
+
+    def test_custom_thresholds_ignore_unknown_keys(self):
+        from growth import classify_bucket
+        # Junk keys should not crash the classifier; valid keys still apply.
+        thresh = {"increased": 25, "garbage": "nope"}
+        assert classify_bucket(100, 125, thresholds=thresh) == "increased"
+        assert classify_bucket(100, 124, thresholds=thresh) == "steady"
+
+
+class TestComputePctChange:
+    def test_returns_none_when_prev_zero(self):
+        from growth import compute_pct_change
+        assert compute_pct_change(0, 100) is None
+
+    def test_returns_none_for_unparseable(self):
+        from growth import compute_pct_change
+        assert compute_pct_change("x", 100) is None
+
+    def test_rounds_to_two_decimals(self):
+        from growth import compute_pct_change
+        assert compute_pct_change(100, 114.333) == 14.33
+
+    def test_handles_negative_delta(self):
+        from growth import compute_pct_change
+        assert compute_pct_change(100, 99) == -1.0
+
+
+class TestExtractPeriodLabels:
+    def test_returns_unique_periods_in_first_appearance_order(self):
+        from growth import _extract_period_labels
+        header = [
+            "Name",
+            "Power (Apr 2026)",
+            "THP (Apr 2026)",
+            "Power (May 2026)",
+            "THP (May 2026)",
+        ]
+        assert _extract_period_labels(header, ["Power", "THP"]) == \
+               ["Apr 2026", "May 2026"]
+
+    def test_empty_header_returns_empty_list(self):
+        from growth import _extract_period_labels
+        assert _extract_period_labels([], ["Power"]) == []
+
+    def test_ignores_columns_for_unconfigured_metrics(self):
+        from growth import _extract_period_labels
+        # `Other (Apr 2026)` shouldn't register a period — Other isn't in
+        # metric_labels.
+        header = ["Name", "Other (Apr 2026)", "Power (May 2026)"]
+        assert _extract_period_labels(header, ["Power"]) == ["May 2026"]
+
+
+class TestFormatBreakdownEmbed:
+    def test_one_field_per_metric_with_buckets_listed(self):
+        from growth import format_breakdown_embed
+        summary = {
+            "Power": {
+                "increased": ["Alice"],
+                "steady":    ["Bob"],
+                "low":       [],
+                "none":      [],
+                "decline":   ["Carol"],
+            },
+            "THP": {b: [] for b in
+                    ["increased", "steady", "low", "none", "decline"]},
+        }
+        embed = format_breakdown_embed(
+            metric_labels=["Power", "THP"],
+            breakdown_summary=summary,
+            prev_period_label="Apr 2026",
+            curr_period_label="May 2026",
+        )
+        # One field per metric, in metric order.
+        field_names = [f.name for f in embed.fields]
+        assert field_names == ["Power", "THP"]
+        # Power field shows the three non-empty buckets with their members.
+        power_field = embed.fields[0].value
+        assert "Increased" in power_field and "Alice" in power_field
+        assert "Steady" in power_field and "Bob" in power_field
+        assert "Decline" in power_field and "Carol" in power_field
+        # Empty buckets aren't rendered.
+        assert "Low" not in power_field
+        assert "None" not in power_field
+
+    def test_bucket_filter_omits_unselected_buckets(self):
+        from growth import format_breakdown_embed
+        summary = {
+            "Power": {
+                "increased": ["Alice"],
+                "steady":    [],
+                "low":       [],
+                "none":      [],
+                "decline":   ["Carol"],
+            },
+        }
+        embed = format_breakdown_embed(
+            metric_labels=["Power"],
+            breakdown_summary=summary,
+            prev_period_label="A",
+            curr_period_label="B",
+            bucket_filter=["decline"],  # only Decline alerts
+        )
+        value = embed.fields[0].value
+        assert "Carol"    in value
+        assert "Alice"    not in value
+        assert "Increased" not in value
+
+    def test_custom_labels_used_in_render(self):
+        from growth import format_breakdown_embed
+        summary = {"Power": {b: [] for b in
+                             ["increased", "steady", "low", "none", "decline"]}}
+        summary["Power"]["increased"] = ["Alice"]
+        embed = format_breakdown_embed(
+            metric_labels=["Power"],
+            breakdown_summary=summary,
+            prev_period_label="A",
+            curr_period_label="B",
+            label_overrides={"increased": "Crushing It"},
+        )
+        assert "Crushing It" in embed.fields[0].value
+        assert "Increased"   not in embed.fields[0].value
+
+
+class TestSnapshotBreakdownWriting:
+    """Integration: _run_growth_snapshot_inner must trigger breakdown writes
+    on the second snapshot, be idempotent on re-runs, skip the very first
+    snapshot, and write blanks when a member's prev value is 0."""
+
+    def _build_mocks(self, growth_header, growth_rows, members,
+                     breakdown_header=None, breakdown_rows=None):
+        """Return (mock_sh, growth_ws, breakdown_ws). The breakdown tab
+        is registered with whatever name the test config uses; the source
+        tab returns the supplied members verbatim."""
+        import gspread
+        growth_ws = MagicMock()
+        growth_ws.row_count      = 100
+        growth_ws.row_values     = MagicMock(return_value=growth_header)
+        growth_ws.get_all_values = MagicMock(return_value=[growth_header] + growth_rows)
+        growth_ws.update         = MagicMock()
+        growth_ws.batch_update   = MagicMock()
+        growth_ws.append_rows    = MagicMock()
+
+        bd_ws = MagicMock()
+        bd_ws.row_count      = 100
+        bd_ws.get_all_values = MagicMock(
+            return_value=([breakdown_header] + (breakdown_rows or []))
+            if breakdown_header else []
+        )
+        bd_ws.update       = MagicMock()
+        bd_ws.batch_update = MagicMock()
+        bd_ws.append_rows  = MagicMock()
+
+        def fake_worksheet(name):
+            if name in ("Growth", "Growth Tracking"):
+                return growth_ws
+            if name == "Growth Breakdown":
+                return bd_ws
+            raise gspread.exceptions.WorksheetNotFound(name)
+
+        mock_sh = MagicMock()
+        mock_sh.worksheet     = MagicMock(side_effect=fake_worksheet)
+        mock_sh.add_worksheet = MagicMock(return_value=bd_ws)
+        return mock_sh, growth_ws, bd_ws
+
+    def _seed_config(self):
+        from config import save_growth_config
+        save_growth_config(
+            TEST_GUILD_ID, enabled=1, tab_source="Powers", name_col="A",
+            metrics=[{"col": "B", "label": "Power"}],
+            tab_growth="Growth", snapshot_frequency="monthly",
+            snapshot_day=1, snapshot_interval=30, data_start_row=2,
+        )
+
+    def test_first_snapshot_skips_breakdown(self, seeded_db):
+        from growth import _run_growth_snapshot_inner
+        self._seed_config()
+        mock_sh, growth_ws, bd_ws = self._build_mocks(
+            growth_header=["Name"], growth_rows=[],
+            members=[],
+        )
+        members = [{"name": "Alice", "row_index": 2, "Power": 100.0}]
+        with patch("growth._get_spreadsheet", return_value=mock_sh), \
+             patch("growth.load_member_data", return_value=members):
+            _run_growth_snapshot_inner(TEST_GUILD_ID)
+
+        # No breakdown writes — only one period exists after this snapshot.
+        bd_ws.batch_update.assert_not_called()
+        bd_ws.append_rows.assert_not_called()
+
+    def test_second_snapshot_writes_breakdown(self, seeded_db):
+        from datetime import datetime
+        from growth import _run_growth_snapshot_inner
+        self._seed_config()
+
+        month_label = datetime.now().strftime("%b %Y")
+        prev_label = "Apr 2026"  # any label that isn't the current month
+        # Pre-existing growth tab: one prev-period column with Alice's value.
+        growth_header = ["Name", f"Power ({prev_label})"]
+        growth_rows   = [["Alice", "100"], ["Bob", "0"]]
+        mock_sh, growth_ws, bd_ws = self._build_mocks(
+            growth_header=growth_header, growth_rows=growth_rows, members=[],
+        )
+
+        members = [
+            {"name": "Alice", "row_index": 2, "Power": 130.0},  # +30% → increased
+            {"name": "Bob",   "row_index": 3, "Power":  50.0},  # prev 0 → blank
+        ]
+        with patch("growth._get_spreadsheet", return_value=mock_sh), \
+             patch("growth.load_member_data", return_value=members):
+            _run_growth_snapshot_inner(TEST_GUILD_ID)
+
+        # Breakdown header should land with the two new transition columns.
+        first_update = bd_ws.update.call_args_list[0]
+        bd_header_written = first_update[0][1][0]
+        pct_col    = f"{prev_label} - {month_label} Power %"
+        bucket_col = f"{prev_label} - {month_label} Power Bucket"
+        assert pct_col    in bd_header_written
+        assert bucket_col in bd_header_written
+
+        # batch_update should have been called with at least Alice's row +
+        # Bob's blank row, two cells each (% and Bucket).
+        assert bd_ws.batch_update.called, \
+            "Breakdown batch_update never fired on second snapshot"
+
+        # Extract the values written. Each batch_update entry has
+        # `{"range": "<col><row>", "values": [[value]]}`.
+        cells = {}
+        for call_args in bd_ws.batch_update.call_args_list:
+            for entry in call_args[0][0]:
+                rng = entry["range"]
+                val = entry["values"][0][0]
+                cells[rng] = val
+        # Find the % values for Alice (row 2) and Bob (row 3). The exact
+        # column letter depends on header layout, so look for any cell
+        # whose value matches the expectation.
+        values_only = list(cells.values())
+        assert any(v == "30.00%" for v in values_only), \
+            f"Alice's 30% breakdown not in writes: {values_only}"
+        assert any(v == "Increased" for v in values_only)
+        # Bob had prev=0 — both his cells must be blank.
+        # We can't isolate Bob's cells without column mapping, but the
+        # combined writes shouldn't include any 'Decline' or extra bucket.
+        assert sum(1 for v in values_only if v == "Increased") == 1
+        assert not any(v == "Decline" for v in values_only)
+
+    def test_second_snapshot_idempotent_on_rerun(self, seeded_db):
+        """Re-running the same snapshot must not write breakdown rows
+        twice — idempotency check on the transition columns in the
+        breakdown tab header."""
+        from datetime import datetime
+        from growth import _run_growth_snapshot_inner
+        self._seed_config()
+
+        month_label = datetime.now().strftime("%b %Y")
+        prev_label  = "Apr 2026"
+        # The growth-tab side already carries the current period (idempotent
+        # path of the snapshot itself), and the breakdown tab already has
+        # the transition columns from a prior run.
+        growth_header = ["Name", f"Power ({prev_label})", f"Power ({month_label})"]
+        growth_rows   = [["Alice", "100", "130"]]
+        existing_bd_header = [
+            "Name",
+            f"{prev_label} - {month_label} Power %",
+            f"{prev_label} - {month_label} Power Bucket",
+        ]
+        existing_bd_rows = [["Alice", "30.00%", "Increased"]]
+
+        mock_sh, growth_ws, bd_ws = self._build_mocks(
+            growth_header=growth_header, growth_rows=growth_rows, members=[],
+            breakdown_header=existing_bd_header,
+            breakdown_rows=existing_bd_rows,
+        )
+
+        members = [{"name": "Alice", "row_index": 2, "Power": 130.0}]
+        with patch("growth._get_spreadsheet", return_value=mock_sh), \
+             patch("growth.load_member_data", return_value=members):
+            _run_growth_snapshot_inner(TEST_GUILD_ID)
+
+        # The snapshot side returns early (duplicate period), so neither
+        # tab gets any batch_update or append calls.
+        growth_ws.batch_update.assert_not_called()
+        bd_ws.batch_update.assert_not_called()
+        bd_ws.append_rows.assert_not_called()
+
+
+class TestReadLatestBreakdown:
+    def test_empty_tab_returns_has_data_false(self, seeded_db):
+        from growth import read_latest_breakdown
+        from config import save_growth_config
+        save_growth_config(
+            TEST_GUILD_ID, enabled=1, tab_source="Powers", name_col="A",
+            metrics=[{"col": "B", "label": "Power"}],
+            tab_growth="Growth", snapshot_frequency="monthly",
+            snapshot_day=1, snapshot_interval=30, data_start_row=2,
+        )
+        bd_ws = MagicMock()
+        bd_ws.get_all_values = MagicMock(return_value=[])
+        mock_sh = MagicMock()
+        mock_sh.worksheet = MagicMock(return_value=bd_ws)
+        with patch("growth._get_spreadsheet", return_value=mock_sh):
+            result = read_latest_breakdown(TEST_GUILD_ID)
+        assert result["has_data"] is False
+
+    def test_parses_latest_transition_only(self, seeded_db):
+        from growth import read_latest_breakdown
+        from config import save_growth_config
+        save_growth_config(
+            TEST_GUILD_ID, enabled=1, tab_source="Powers", name_col="A",
+            metrics=[{"col": "B", "label": "Power"}],
+            tab_growth="Growth", snapshot_frequency="monthly",
+            snapshot_day=1, snapshot_interval=30, data_start_row=2,
+        )
+        # Two transitions in the tab; the reader should pick the rightmost.
+        bd_values = [
+            [
+                "Name",
+                "Mar 2026 - Apr 2026 Power %", "Mar 2026 - Apr 2026 Power Bucket",
+                "Apr 2026 - May 2026 Power %", "Apr 2026 - May 2026 Power Bucket",
+            ],
+            ["Alice", "5.00%",  "Low",       "30.00%", "Increased"],
+            ["Bob",   "-2.00%", "Decline",   "1.00%",  "None"],
+        ]
+        bd_ws = MagicMock()
+        bd_ws.get_all_values = MagicMock(return_value=bd_values)
+        mock_sh = MagicMock()
+        mock_sh.worksheet = MagicMock(return_value=bd_ws)
+        with patch("growth._get_spreadsheet", return_value=mock_sh):
+            result = read_latest_breakdown(TEST_GUILD_ID)
+        assert result["has_data"] is True
+        assert result["prev_period_label"] == "Apr 2026"
+        assert result["curr_period_label"] == "May 2026"
+        assert result["metric_labels"]     == ["Power"]
+        # Latest transition: Alice → Increased, Bob → None.
+        assert result["summary"]["Power"]["increased"] == ["Alice"]
+        assert result["summary"]["Power"]["none"]      == ["Bob"]
+        # Earlier transition's data must not leak through.
+        assert result["summary"]["Power"]["decline"]   == []
+
+
 # ── Next-snapshot date helper ─────────────────────────────────────────────────
 
 class TestComputeNextSnapshot:

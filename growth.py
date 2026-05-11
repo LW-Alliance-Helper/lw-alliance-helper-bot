@@ -28,6 +28,108 @@ SNAPSHOT_FIRE_HOUR_ET = 22
 INTERVAL_EPOCH = date(2026, 1, 1)
 
 
+# ── Growth Breakdown (#34) ────────────────────────────────────────────────────
+# Classifies each member's period-over-period change into one of five buckets,
+# written alongside the raw snapshot data on a separate sheet tab. Forward-only:
+# only new transitions get a breakdown row, history isn't backfilled.
+
+# Canonical bucket keys, rendered top-down on the embed.
+BUCKET_ORDER: list[str] = ["increased", "steady", "low", "none", "decline"]
+
+# Default lower-bound thresholds (in %), one per bucket. Decline is anything
+# below 0 and has no threshold of its own.
+#   Increased ≥ 20%
+#   Steady    10–20%
+#   Low        5–10%
+#   None       0–5%
+#   Decline   <0%
+DEFAULT_THRESHOLDS: dict[str, float] = {
+    "none":       0.0,
+    "low":        5.0,
+    "steady":    10.0,
+    "increased": 20.0,
+}
+
+DEFAULT_BUCKET_LABELS: dict[str, str] = {
+    "increased": "Increased",
+    "steady":    "Steady",
+    "low":       "Low",
+    "none":      "None",
+    "decline":   "Decline",
+}
+
+
+def classify_bucket(prev: float, curr: float,
+                    thresholds: dict | None = None) -> str | None:
+    """Classify a period-over-period change into a canonical bucket key.
+
+    Returns one of ``BUCKET_ORDER`` (``increased`` / ``steady`` / ``low`` /
+    ``none`` / ``decline``), or ``None`` when no meaningful percentage can
+    be computed — that happens when ``prev <= 0`` (no recorded baseline,
+    or the member was literally at zero last period). The sheet leaves
+    both the % and Bucket cells blank in that case; users with no prior
+    value start contributing to breakdowns once they have two snapshots.
+
+    `thresholds` may override individual bucket lower bounds (e.g.
+    ``{"increased": 30}``). Missing keys fall back to the default.
+    """
+    try:
+        prev_f = float(prev)
+        curr_f = float(curr)
+    except (ValueError, TypeError):
+        return None
+    if prev_f <= 0:
+        return None
+    pct = ((curr_f - prev_f) / prev_f) * 100.0
+
+    effective = dict(DEFAULT_THRESHOLDS)
+    if thresholds:
+        for k, v in thresholds.items():
+            if k in effective:
+                try:
+                    effective[k] = float(v)
+                except (ValueError, TypeError):
+                    pass
+
+    if pct < 0:
+        return "decline"
+    # Walk highest → lowest, return first bucket whose lower bound is met.
+    for bucket in ("increased", "steady", "low", "none"):
+        if pct >= effective[bucket]:
+            return bucket
+    return "none"  # defensive fallback when "none" override is > 0
+
+
+def compute_pct_change(prev: float, curr: float) -> float | None:
+    """Return ``(curr - prev) / prev * 100`` rounded to 2 decimals, or
+    ``None`` when prev is non-positive (no meaningful percentage)."""
+    try:
+        prev_f = float(prev)
+        curr_f = float(curr)
+    except (ValueError, TypeError):
+        return None
+    if prev_f <= 0:
+        return None
+    return round(((curr_f - prev_f) / prev_f) * 100.0, 2)
+
+
+def _extract_period_labels(header_row: list[str], metric_labels: list[str]) -> list[str]:
+    """Return the unique period labels in `header_row` in order of first
+    appearance, by stripping the ``{metric} ({period})`` suffix from each
+    column header that matches a configured metric. Lets the snapshot
+    code identify the previous period without parsing dates."""
+    seen: list[str] = []
+    for h in header_row:
+        for m in metric_labels:
+            prefix = f"{m} ("
+            if h.startswith(prefix) and h.endswith(")"):
+                period = h[len(prefix):-1]
+                if period not in seen:
+                    seen.append(period)
+                break
+    return seen
+
+
 def compute_next_snapshot(gcfg: dict, now: datetime | None = None) -> datetime | None:
     """Compute the next scheduled snapshot datetime, in America/New_York.
 
@@ -279,4 +381,428 @@ def _run_growth_snapshot_inner(guild_id: int = None):
         ws.batch_update(updates, value_input_option="USER_ENTERED")
 
     print(f"[GROWTH] Snapshot complete for {month_label} — {len(members)} members (guild {guild_id})")
+
+    # ── Growth Breakdown: classify period-over-period change per member ──
+    # Forward-only: skip when no previous period exists. Idempotent: skip
+    # when a breakdown for this (prev, curr) transition has already been
+    # written. Premium auto-post fires after a successful write when
+    # `breakdown_post_channel_id` is set.
+    try:
+        _write_breakdown_for_snapshot(
+            sh, gcfg, members, metric_labels, all_values, header_row,
+            curr_period_label=month_label, guild_id=guild_id,
+        )
+    except Exception as e:
+        # Breakdown is a soft addition — never let it abort the snapshot
+        # itself if something goes wrong.
+        import traceback
+        print(f"[GROWTH] Breakdown write failed for guild {guild_id}: {e}")
+        print(f"[GROWTH] Breakdown traceback:\n{traceback.format_exc()}")
+
+
+def _write_breakdown_for_snapshot(sh, gcfg: dict, members: list, metric_labels: list[str],
+                                  all_values: list, header_row: list[str],
+                                  curr_period_label: str, guild_id: int | None) -> None:
+    """Compute the period-over-period breakdown for the snapshot that just
+    landed and append it to the configured breakdown tab.
+
+    `all_values` is the pre-snapshot view of the growth tab (used for
+    prev-period values); `members` carries the current-period values
+    (just read from the source tab). Idempotency is enforced by checking
+    whether the (prev → curr) transition columns already exist on the
+    breakdown tab.
+    """
+    import gspread
+
+    periods = _extract_period_labels(header_row, metric_labels)
+    if len(periods) < 2:
+        # First snapshot — nothing to compare against. Per the spec
+        # (forward-only), do not backfill historical transitions.
+        print(f"[GROWTH] Skipping breakdown for guild {guild_id} — first snapshot")
+        return
+    prev_period_label = periods[-2]
+    if periods[-1] != curr_period_label:
+        # Defensive: the snapshot we just wrote should be the last period.
+        # If it isn't (unusual ordering), fall back to comparing the last
+        # two periods we found in headers.
+        curr_period_label = periods[-1]
+        prev_period_label = periods[-2]
+
+    tab_breakdown = gcfg.get("tab_breakdown") or "Growth Breakdown"
+    try:
+        ws_bd = sh.worksheet(tab_breakdown)
+    except gspread.exceptions.WorksheetNotFound:
+        ws_bd = sh.add_worksheet(title=tab_breakdown, rows=500, cols=50)
+        ws_bd.update("A1", [["Name"]], value_input_option="USER_ENTERED")
+        print(f"[GROWTH] Created breakdown tab '{tab_breakdown}' for guild {guild_id}")
+
+    bd_existing = ws_bd.get_all_values()
+    if not bd_existing or not bd_existing[0]:
+        bd_header = ["Name"]
+        bd_existing = [bd_header]
+    else:
+        bd_header = list(bd_existing[0])
+
+    transition_prefix = f"{prev_period_label} - {curr_period_label}"
+    # Idempotency: if the % column for the first metric of this transition
+    # is already present, the breakdown has already been computed and
+    # written. Don't duplicate.
+    first_metric_pct_col = f"{transition_prefix} {metric_labels[0]} %"
+    if first_metric_pct_col in bd_header:
+        print(
+            f"[GROWTH] Breakdown for {transition_prefix} already exists — skipping "
+            f"(guild {guild_id})"
+        )
+        return
+
+    # Reserve new columns at the right edge: two per metric (% + Bucket).
+    new_cols: list[str] = []
+    for m in metric_labels:
+        new_cols.append(f"{transition_prefix} {m} %")
+        new_cols.append(f"{transition_prefix} {m} Bucket")
+    for col in new_cols:
+        if col not in bd_header:
+            bd_header.append(col)
+
+    # Read the pre-snapshot growth values for the previous period.
+    growth_header = header_row
+    prev_idxs = {}
+    for m in metric_labels:
+        col_name = f"{m} ({prev_period_label})"
+        if col_name in growth_header:
+            prev_idxs[m] = growth_header.index(col_name)
+
+    # Build name → prev-row index map on the growth tab pre-snapshot view.
+    growth_name_to_row = {}
+    for i, row in enumerate(all_values[1:], start=1):
+        if row and row[0].strip():
+            growth_name_to_row[row[0].strip().lower()] = row
+
+    # Render labels (Premium override → fallback to defaults).
+    label_overrides = gcfg.get("breakdown_labels") or {}
+    thresholds      = gcfg.get("breakdown_thresholds") or {}
+
+    def _label_for(bucket: str) -> str:
+        return str(label_overrides.get(bucket) or DEFAULT_BUCKET_LABELS[bucket])
+
+    # Build name → row index on breakdown tab; new members append.
+    bd_name_to_row = {}
+    for i, row in enumerate(bd_existing[1:], start=2):
+        if row and row[0].strip():
+            bd_name_to_row[row[0].strip().lower()] = i
+
+    appended_rows: list[list[str]] = []
+    updates: list[dict] = []
+    # Use the new bd_header for column indexing.
+    col_index = {h: i for i, h in enumerate(bd_header)}
+
+    # Sorted member walk so the auto-post embed (which reuses this loop's
+    # output via `breakdown_summary`) has stable ordering for tests.
+    breakdown_summary: dict[str, dict[str, list[str]]] = {
+        m: {b: [] for b in BUCKET_ORDER} for m in metric_labels
+    }
+
+    for member in members:
+        name = member["name"]
+        prev_row = growth_name_to_row.get(name.lower())
+        bd_row_idx = bd_name_to_row.get(name.lower())
+        if bd_row_idx is None:
+            new_row = [name] + [""] * (len(bd_header) - 1)
+            bd_row_idx = len(bd_existing) + len(appended_rows) + 1
+            appended_rows.append(new_row)
+            bd_name_to_row[name.lower()] = bd_row_idx
+
+        for m in metric_labels:
+            pct_col_name    = f"{transition_prefix} {m} %"
+            bucket_col_name = f"{transition_prefix} {m} Bucket"
+
+            curr_val = member.get(m, 0.0)
+            prev_val = 0.0
+            if prev_row is not None and m in prev_idxs:
+                idx = prev_idxs[m]
+                if idx < len(prev_row):
+                    try:
+                        prev_val = float(prev_row[idx]) if prev_row[idx] else 0.0
+                    except (ValueError, TypeError):
+                        prev_val = 0.0
+
+            pct_val = compute_pct_change(prev_val, curr_val)
+            bucket  = classify_bucket(prev_val, curr_val, thresholds=thresholds)
+
+            pct_cell    = "" if pct_val is None else f"{pct_val:.2f}%"
+            bucket_cell = "" if bucket is None else _label_for(bucket)
+
+            pct_col_idx    = col_index[pct_col_name]
+            bucket_col_idx = col_index[bucket_col_name]
+            pct_col_letter    = _col_letter(pct_col_idx)
+            bucket_col_letter = _col_letter(bucket_col_idx)
+
+            updates.append({"range": f"{pct_col_letter}{bd_row_idx}",
+                            "values": [[pct_cell]]})
+            updates.append({"range": f"{bucket_col_letter}{bd_row_idx}",
+                            "values": [[bucket_cell]]})
+
+            if bucket is not None:
+                breakdown_summary[m][bucket].append(name)
+
+    # Write the (possibly expanded) header row first so col letters resolve.
+    ws_bd.update("A1", [bd_header], value_input_option="USER_ENTERED")
+    if appended_rows:
+        ws_bd.append_rows(appended_rows, value_input_option="USER_ENTERED")
+    if updates:
+        ws_bd.batch_update(updates, value_input_option="USER_ENTERED")
+
+    print(
+        f"[GROWTH] Breakdown written for {transition_prefix} "
+        f"({len(metric_labels)} metric(s), {len(members)} member(s), guild {guild_id})"
+    )
+
+    # Fire premium auto-post if configured. Gated by `is_premium` so a
+    # subscription lapse stops the auto-post without needing config changes.
+    post_channel_id = int(gcfg.get("breakdown_post_channel_id") or 0)
+    if post_channel_id:
+        try:
+            _maybe_post_breakdown(
+                guild_id, post_channel_id, prev_period_label, curr_period_label,
+                metric_labels, breakdown_summary, gcfg,
+            )
+        except Exception as e:
+            import traceback
+            print(f"[GROWTH] Breakdown auto-post failed for guild {guild_id}: {e}")
+            print(f"[GROWTH] Auto-post traceback:\n{traceback.format_exc()}")
+
+
+def _col_letter(idx0: int) -> str:
+    """Convert 0-indexed column index to spreadsheet letter (A, B, ..., Z,
+    AA, AB, ...). Matches the convention used elsewhere in growth.py."""
+    letters = ""
+    n = idx0
+    while True:
+        letters = chr(ord('A') + (n % 26)) + letters
+        n = n // 26 - 1
+        if n < 0:
+            break
+    return letters
+
+
+def _maybe_post_breakdown(guild_id, post_channel_id, prev_period_label,
+                          curr_period_label, metric_labels, breakdown_summary,
+                          gcfg) -> None:
+    """Fire the Premium breakdown auto-post. No-op if the guild isn't
+    premium at the moment of posting. The bot/channel resolution and the
+    actual send happen on the bot's event loop via `bot.loop.create_task`,
+    so the snapshot (which runs in a background thread) doesn't have to
+    await Discord I/O directly.
+    """
+    if not guild_id:
+        return
+    import asyncio
+    try:
+        from bot import bot  # local import — bot is a singleton
+    except Exception as e:
+        print(f"[GROWTH] Cannot resolve bot for auto-post: {e}")
+        return
+    if bot is None or not bot.loop:
+        print("[GROWTH] Bot not ready — skipping auto-post")
+        return
+
+    async def _post():
+        import premium
+        if not await premium.is_premium(guild_id, bot=bot):
+            print(f"[GROWTH] Guild {guild_id} not premium — skipping auto-post")
+            return
+        channel = bot.get_channel(post_channel_id)
+        if channel is None:
+            try:
+                channel = await bot.fetch_channel(post_channel_id)
+            except Exception as e:
+                print(f"[GROWTH] Auto-post channel {post_channel_id} unreachable: {e}")
+                return
+        embed = format_breakdown_embed(
+            metric_labels=metric_labels,
+            breakdown_summary=breakdown_summary,
+            prev_period_label=prev_period_label,
+            curr_period_label=curr_period_label,
+            label_overrides=gcfg.get("breakdown_labels") or {},
+            bucket_filter=gcfg.get("breakdown_bucket_filter") or [],
+        )
+        try:
+            await channel.send(embed=embed)
+            print(f"[GROWTH] Auto-posted breakdown to channel {post_channel_id} "
+                  f"(guild {guild_id})")
+        except Exception as e:
+            print(f"[GROWTH] Failed to send breakdown to channel "
+                  f"{post_channel_id}: {e}")
+
+    asyncio.run_coroutine_threadsafe(_post(), bot.loop)
+
+
+def read_latest_breakdown(guild_id: int) -> dict:
+    """Read the breakdown tab and reconstruct the most-recent transition's
+    summary for rendering. Returns a dict with keys:
+
+      * ``has_data``: ``True`` only when at least one transition's columns
+        exist on the tab (no transitions yet → first-snapshot state).
+      * ``prev_period_label`` / ``curr_period_label``: the most-recent
+        transition's labels.
+      * ``metric_labels``: list of metric names in transition-column order.
+      * ``summary``: ``{metric → {bucket_key → [member names]}}``.
+
+    The dict's other fields are present-but-empty when ``has_data`` is
+    ``False`` so callers can branch cleanly.
+    """
+    from config import get_growth_config
+
+    empty = {
+        "has_data":          False,
+        "prev_period_label": "",
+        "curr_period_label": "",
+        "metric_labels":     [],
+        "summary":           {},
+    }
+
+    gcfg = get_growth_config(guild_id)
+    tab_breakdown = gcfg.get("tab_breakdown") or "Growth Breakdown"
+    label_overrides = gcfg.get("breakdown_labels") or {}
+
+    # Invert the labels map so the saved cell text round-trips back to the
+    # canonical bucket key (the sheet stores the display label, not the
+    # key, so a premium guild with `{"increased": "Crushing It"}` will
+    # have cells with `Crushing It` that we need to map back).
+    label_to_key = {}
+    for bucket_key, default_label in DEFAULT_BUCKET_LABELS.items():
+        display = label_overrides.get(bucket_key) or default_label
+        label_to_key[str(display).strip().lower()] = bucket_key
+        label_to_key[default_label.strip().lower()] = bucket_key  # always accept canonical too
+
+    try:
+        sh = _get_spreadsheet(guild_id)
+        ws = sh.worksheet(tab_breakdown)
+    except Exception as e:
+        print(f"[GROWTH] Could not open breakdown tab for guild {guild_id}: {e}")
+        return empty
+
+    values = ws.get_all_values()
+    if not values or len(values) < 1 or not values[0]:
+        return empty
+    header = values[0]
+
+    # Parse transition columns: each looks like
+    # `{prev_label} - {curr_label} {metric} Bucket` or `... %`. The pair
+    # appears together; we key by (prev, curr) and walk metrics in order.
+    # Use the rightmost transition (the most recent snapshot).
+    transitions: list[tuple[str, str]] = []
+    seen_keys: set[tuple[str, str]] = set()
+    transition_cols: dict[tuple[str, str], list[tuple[str, int, int]]] = {}
+    # ↑ {(prev, curr) → [(metric, pct_col_idx, bucket_col_idx)]}
+
+    for i, h in enumerate(header):
+        if h.endswith(" Bucket"):
+            # Find a matching `% column to its left.
+            base = h[: -len(" Bucket")]
+            pct_name = f"{base} %"
+            try:
+                pct_idx = header.index(pct_name)
+            except ValueError:
+                continue
+            # `base` is `{prev_label} - {curr_label} {metric}` — split on
+            # the first `' - '` for the prev/curr split, then strip the
+            # metric off the curr side.
+            if " - " not in base:
+                continue
+            prev_label, rest = base.split(" - ", 1)
+            # `rest` is `{curr_label} {metric}`. Match against configured
+            # metric labels (longest-first) so the split is unambiguous.
+            metric_match = None
+            for m in sorted((gcfg.get("metrics") or []), key=lambda m: -len(m["label"])):
+                m_label = m["label"]
+                suffix = f" {m_label}"
+                if rest.endswith(suffix):
+                    metric_match = m_label
+                    curr_label = rest[: -len(suffix)]
+                    break
+            if metric_match is None:
+                continue
+            key = (prev_label, curr_label)
+            if key not in seen_keys:
+                seen_keys.add(key)
+                transitions.append(key)
+            transition_cols.setdefault(key, []).append((metric_match, pct_idx, i))
+
+    if not transitions:
+        return empty
+    prev_period_label, curr_period_label = transitions[-1]
+    metric_entries = transition_cols[(prev_period_label, curr_period_label)]
+    # Preserve the configured metric order rather than column-discovery order.
+    configured_order = [m["label"] for m in (gcfg.get("metrics") or [])]
+    metric_entries.sort(
+        key=lambda t: (configured_order.index(t[0]) if t[0] in configured_order else len(configured_order))
+    )
+    metric_labels = [t[0] for t in metric_entries]
+
+    summary: dict = {m: {b: [] for b in BUCKET_ORDER} for m in metric_labels}
+    for row in values[1:]:
+        if not row or not row[0].strip():
+            continue
+        name = row[0].strip()
+        for metric, _, bucket_idx in metric_entries:
+            if bucket_idx >= len(row):
+                continue
+            cell = row[bucket_idx].strip()
+            if not cell:
+                continue
+            bucket_key = label_to_key.get(cell.lower())
+            if bucket_key:
+                summary[metric][bucket_key].append(name)
+
+    return {
+        "has_data":          True,
+        "prev_period_label": prev_period_label,
+        "curr_period_label": curr_period_label,
+        "metric_labels":     metric_labels,
+        "summary":           summary,
+    }
+
+
+def format_breakdown_embed(*, metric_labels: list[str],
+                           breakdown_summary: dict,
+                           prev_period_label: str,
+                           curr_period_label: str,
+                           label_overrides: dict | None = None,
+                           bucket_filter: list[str] | None = None):
+    """Render the breakdown summary as a Discord embed. Shared by the
+    Premium auto-post and the `/growth` button so both views read the
+    same. `bucket_filter` is a list of canonical bucket keys to include;
+    empty list = include every bucket (the typical case).
+    """
+    import discord
+    label_overrides = label_overrides or {}
+    bucket_filter   = bucket_filter or []
+
+    def _label(bucket: str) -> str:
+        return str(label_overrides.get(bucket) or DEFAULT_BUCKET_LABELS[bucket])
+
+    embed = discord.Embed(
+        title=f"📊 Growth Breakdown — {prev_period_label} → {curr_period_label}",
+        color=discord.Color.blue(),
+    )
+
+    for metric in metric_labels:
+        per_bucket = breakdown_summary.get(metric, {})
+        sections: list[str] = []
+        for bucket in BUCKET_ORDER:
+            if bucket_filter and bucket not in bucket_filter:
+                continue
+            names = per_bucket.get(bucket, [])
+            if not names:
+                continue
+            sections.append(f"**{_label(bucket)}** ({len(names)})\n" + ", ".join(names))
+        value = "\n\n".join(sections) if sections else "*No members in the included buckets.*"
+        # Embed field value cap is 1024 chars; truncate with an ellipsis if
+        # a metric has too many members to fit.
+        if len(value) > 1020:
+            value = value[:1017] + "…"
+        embed.add_field(name=metric, value=value, inline=False)
+
+    return embed
 

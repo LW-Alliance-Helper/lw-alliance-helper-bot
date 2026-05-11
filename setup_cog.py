@@ -5583,13 +5583,13 @@ async def run_shiny_tasks_setup(interaction: discord.Interaction, bot):
             self.max_value = None
             self._min = discord.ui.TextInput(
                 label="Lowest reachable server number",
-                placeholder="e.g. 681",
+                placeholder="e.g. 677",
                 default=min_default,
                 required=True, max_length=5,
             )
             self._max = discord.ui.TextInput(
                 label="Highest reachable server number",
-                placeholder="e.g. 799",
+                placeholder="e.g. 804",
                 default=max_default,
                 required=True, max_length=5,
             )
@@ -5672,7 +5672,7 @@ async def run_shiny_tasks_setup(interaction: discord.Interaction, bot):
         if not valid_numbers:
             await channel.send(
                 f"⚠️ Could not read **`{min_raw}`** / **`{max_raw}`** as whole "
-                f"numbers. Try something like `681` and `799`. Let's try once more."
+                f"numbers. Try something like `677` and `804`. Let's try once more."
             )
         else:
             await channel.send(

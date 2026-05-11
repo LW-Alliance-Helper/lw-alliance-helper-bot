@@ -49,6 +49,7 @@ CATEGORY_ORDER: list[str] = [
     "birthday",
     "growth",
     "surveys",
+    "shiny_tasks",
     "member_roster",
 ]
 
@@ -61,6 +62,7 @@ CATEGORY_LABELS: dict[str, str] = {
     "birthday":      "🎂 Birthday tracking",
     "growth":        "📈 Growth tracking (incl. breakdown)",
     "surveys":       "📋 Surveys (default + Premium named)",
+    "shiny_tasks":   "🌟 Shiny Tasks (daily announcement)",
     "member_roster": "💎 Member Roster sync (Premium)",
 }
 
@@ -92,6 +94,8 @@ FIELD_PURPOSES: dict[str, str] = {
     "birthday.reminder_channel_id":    "Birthday reminder channel",
     # Growth
     "growth.breakdown_post_channel_id": "Growth Breakdown auto-post channel",
+    # Shiny Tasks
+    "shiny_tasks.channel_id":          "Shiny Tasks announcement channel",
     # Surveys (default + extras)
     "surveys.survey_channel_id":       "Survey '{name}' post channel",
     "surveys.notify_channel_id":       "Survey '{name}' notifications channel",
@@ -572,6 +576,43 @@ def collect_surveys(guild_id: int, *,
     return out or None
 
 
+def collect_shiny_tasks(guild_id: int, *,
+                        channel_lookup: Callable[[int], str],
+                        role_lookup: Callable[[int], str]) -> dict | None:
+    """Collect the per-guild Daily Shiny Tasks config row, if any. The
+    operational `last_posted_date` column is not exported — it's
+    duplicate-suppression state for the scheduler loop, not config."""
+    from config import _get_conn
+    with _get_conn() as conn:
+        row = conn.execute(
+            "SELECT * FROM guild_shiny_tasks_config WHERE guild_id = ?",
+            (guild_id,),
+        ).fetchone()
+    if row is None:
+        return None
+    d = dict(row)
+    travels = {
+        "enabled":           int(d.get("enabled") or 0),
+        "post_time":         d.get("post_time") or "09:00",
+        "server_min":        int(d.get("server_min") or 0),
+        "server_max":        int(d.get("server_max") or 0),
+        "message_template":  d.get("message_template") or "",
+    }
+    remap_channels = [
+        entry for entry in (
+            _channel_remap("channel_id",
+                           "shiny_tasks.channel_id",
+                           int(d.get("channel_id") or 0),
+                           channel_lookup),
+        ) if entry is not None
+    ]
+    return {
+        "travels":        travels,
+        "remap_channels": remap_channels,
+        "remap_roles":    [],
+    }
+
+
 def collect_member_roster(guild_id: int, *,
                           channel_lookup: Callable[[int], str],
                           role_lookup: Callable[[int], str]) -> dict | None:
@@ -617,6 +658,7 @@ COLLECTORS: dict[str, Callable] = {
     "birthday":      collect_birthday,
     "growth":        collect_growth,
     "surveys":       collect_surveys,
+    "shiny_tasks":   collect_shiny_tasks,
     "member_roster": collect_member_roster,
 }
 
@@ -770,7 +812,7 @@ def parse_and_validate(file_bytes: bytes) -> dict:
     # won't write them).
     for cat in categories_present:
         section = data[cat]
-        if cat in ("core", "train", "birthday", "growth", "member_roster"):
+        if cat in ("core", "train", "birthday", "growth", "shiny_tasks", "member_roster"):
             if not isinstance(section, dict):
                 raise ImportValidationError(
                     f"`data.{cat}` must be an object."
@@ -856,20 +898,13 @@ def apply_import(guild_id: int, parsed: dict,
     which categories applied and which failed with their reason.
     """
     from config import (
-        get_config, save_config, save_growth_config,
+        get_config, save_config, save_growth_config, save_growth_breakdown_config,
         save_train_config, save_birthday_config, save_storm_config,
         save_member_roster_config, save_guild_event, save_survey_config,
         save_extra_survey, save_survey_reminder, save_participation_config,
+        save_shiny_tasks_config,
         _get_conn,
     )
-    # `save_growth_breakdown_config` lands with #34 (Growth Breakdown) —
-    # this PR (#42) intentionally doesn't depend on that merge order so
-    # each can ship independently. If the function isn't present, the
-    # growth-apply path just skips the breakdown layer.
-    try:
-        from config import save_growth_breakdown_config  # type: ignore[attr-defined]
-    except ImportError:
-        save_growth_breakdown_config = None  # type: ignore[assignment]
 
     summary = {"applied": [], "skipped": [], "warnings": []}
     data = parsed.get("data") or {}
@@ -1167,31 +1202,28 @@ def apply_import(guild_id: int, parsed: dict,
                 snapshot_interval=int(t.get("snapshot_interval") or 30),
                 data_start_row=int(t.get("data_start_row") or 2),
             )
-            # Breakdown layer is a separate setter that lands with #34.
-            # When merged, apply it; when not merged yet (and the
-            # exported file carries breakdown fields), skip silently —
-            # there's nowhere to write them.
-            if save_growth_breakdown_config is not None:
-                try:
-                    thresholds = _json.loads(t.get("breakdown_thresholds") or "{}")
-                except (json.JSONDecodeError, TypeError):
-                    thresholds = {}
-                try:
-                    labels = _json.loads(t.get("breakdown_labels") or "{}")
-                except (json.JSONDecodeError, TypeError):
-                    labels = {}
-                try:
-                    bucket_filter = _json.loads(t.get("breakdown_bucket_filter") or "[]")
-                except (json.JSONDecodeError, TypeError):
-                    bucket_filter = []
-                save_growth_breakdown_config(
-                    guild_id,
-                    tab_breakdown=t.get("tab_breakdown") or "Growth Breakdown",
-                    breakdown_thresholds=thresholds,
-                    breakdown_labels=labels,
-                    breakdown_post_channel_id=post_id,
-                    breakdown_bucket_filter=bucket_filter,
-                )
+            # Breakdown layer (#34) is a separate setter — only applies
+            # if the core growth row exists, which it now does.
+            try:
+                thresholds = _json.loads(t.get("breakdown_thresholds") or "{}")
+            except (json.JSONDecodeError, TypeError):
+                thresholds = {}
+            try:
+                labels = _json.loads(t.get("breakdown_labels") or "{}")
+            except (json.JSONDecodeError, TypeError):
+                labels = {}
+            try:
+                bucket_filter = _json.loads(t.get("breakdown_bucket_filter") or "[]")
+            except (json.JSONDecodeError, TypeError):
+                bucket_filter = []
+            save_growth_breakdown_config(
+                guild_id,
+                tab_breakdown=t.get("tab_breakdown") or "Growth Breakdown",
+                breakdown_thresholds=thresholds,
+                breakdown_labels=labels,
+                breakdown_post_channel_id=post_id,
+                breakdown_bucket_filter=bucket_filter,
+            )
         _apply("growth", _do_growth)
 
     # ── surveys (default + extras) ────────────────────────────────────────
@@ -1285,6 +1317,36 @@ def apply_import(guild_id: int, parsed: dict,
                         )
                         conn.commit()
         _apply("surveys", _do_surveys)
+
+    # ── shiny_tasks ───────────────────────────────────────────────────────
+    if "shiny_tasks" in cats:
+        def _do_shiny_tasks():
+            from config import _get_conn
+            t = data["shiny_tasks"].get("travels") or {}
+            channel_remap = {entry["field"]: entry
+                             for entry in data["shiny_tasks"].get("remap_channels") or []}
+            with _get_conn() as conn:
+                cur_row = conn.execute(
+                    "SELECT channel_id FROM guild_shiny_tasks_config "
+                    "WHERE guild_id = ?", (guild_id,),
+                ).fetchone()
+            cur_dict = dict(cur_row) if cur_row else {}
+            current_channel = int(cur_dict.get("channel_id") or 0)
+            channel_entry = channel_remap.get("channel_id")
+            channel_id = (_resolve_channel(int(channel_entry["source_id"]),
+                                           remap.channel_decisions,
+                                           current_channel)
+                          if channel_entry else current_channel)
+            save_shiny_tasks_config(
+                guild_id,
+                enabled=int(t.get("enabled") or 0),
+                channel_id=channel_id,
+                post_time=t.get("post_time", "09:00"),
+                server_min=int(t.get("server_min") or 0),
+                server_max=int(t.get("server_max") or 0),
+                message_template=t.get("message_template", ""),
+            )
+        _apply("shiny_tasks", _do_shiny_tasks)
 
     # ── member_roster ─────────────────────────────────────────────────────
     if "member_roster" in cats:

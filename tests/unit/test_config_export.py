@@ -130,19 +130,9 @@ class TestCollectGrowth:
             {"col": "B", "label": "Power"},
         ]
 
-    def test_carries_breakdown_fields_when_present(self, seeded_db):
-        # The breakdown columns and `save_growth_breakdown_config` setter
-        # land with #34. On a base that doesn't include them yet, skip;
-        # once both PRs are on dev, the test runs and covers the breakdown
-        # round-trip path.
-        try:
-            from config import save_growth_breakdown_config
-        except ImportError:
-            pytest.skip("save_growth_breakdown_config not present "
-                        "(#34 hasn't merged yet)")
-
+    def test_carries_breakdown_fields(self, seeded_db):
         import config_export
-        from config import save_growth_config
+        from config import save_growth_config, save_growth_breakdown_config
         save_growth_config(
             TEST_GUILD_ID, enabled=1, tab_source="Powers", name_col="A",
             metrics=[{"col": "B", "label": "Power"}],
@@ -170,6 +160,86 @@ class TestCollectGrowth:
         assert json.loads(t["breakdown_bucket_filter"])           == ["decline", "none"]
         channel_fields = {e["field"] for e in result["remap_channels"]}
         assert "breakdown_post_channel_id" in channel_fields
+
+
+class TestCollectShinyTasks:
+    def test_returns_none_when_unconfigured(self, seeded_db):
+        import config_export
+        # seeded_db doesn't pre-populate shiny_tasks, so the collector
+        # should report nothing-to-export.
+        result = config_export.collect_shiny_tasks(
+            TEST_GUILD_ID,
+            channel_lookup=_channel_lookup, role_lookup=_role_lookup,
+        )
+        assert result is None
+
+    def test_collects_travels_and_remaps_channel(self, seeded_db):
+        import config_export
+        from config import save_shiny_tasks_config
+        save_shiny_tasks_config(
+            TEST_GUILD_ID,
+            enabled=1,
+            channel_id=42424242,
+            post_time="07:30",
+            server_min=1000,
+            server_max=1500,
+            message_template="Shiny servers today: {servers}",
+        )
+        result = config_export.collect_shiny_tasks(
+            TEST_GUILD_ID,
+            channel_lookup=_channel_lookup, role_lookup=_role_lookup,
+        )
+        assert result is not None
+        t = result["travels"]
+        assert t["enabled"]          == 1
+        assert t["post_time"]        == "07:30"
+        assert t["server_min"]       == 1000
+        assert t["server_max"]       == 1500
+        assert t["message_template"] == "Shiny servers today: {servers}"
+        # The channel is a remap, not a travel — and `last_posted_date`
+        # is operational state, must not leak into the export.
+        assert "channel_id"       not in t
+        assert "last_posted_date" not in t
+        channel_fields = {e["field"] for e in result["remap_channels"]}
+        assert channel_fields == {"channel_id"}
+
+
+class TestApplyShinyTasks:
+    def test_round_trips_through_export_and_apply(self, seeded_db):
+        import config_export
+        from config import save_shiny_tasks_config, get_shiny_tasks_config
+
+        save_shiny_tasks_config(
+            TEST_GUILD_ID,
+            enabled=1, channel_id=11111, post_time="08:15",
+            server_min=2000, server_max=2500,
+            message_template="hello {servers}",
+        )
+        export = config_export.build_export(
+            TEST_GUILD_ID,
+            categories=["shiny_tasks"],
+            source_guild_name="Src",
+            exporter_user_id=1,
+            channel_lookup=_channel_lookup, role_lookup=_role_lookup,
+        )
+        payload = config_export.serialize_to_json_bytes(export)
+        parsed  = config_export.parse_and_validate(payload)
+        decisions = config_export.RemapDecisions(
+            channel_decisions={11111: ("set", 99999)},  # remap to a new channel
+            role_decisions={},
+            spreadsheet_id=None,
+            same_guild=False,
+        )
+        summary = config_export.apply_import(TEST_GUILD_ID, parsed, decisions)
+        assert "shiny_tasks" in summary["applied"]
+
+        after = get_shiny_tasks_config(TEST_GUILD_ID)
+        assert after["enabled"]          == 1
+        assert after["channel_id"]       == 99999  # the remapped value
+        assert after["post_time"]        == "08:15"
+        assert after["server_min"]       == 2000
+        assert after["server_max"]       == 2500
+        assert after["message_template"] == "hello {servers}"
 
 
 class TestBuildAndSerialize:

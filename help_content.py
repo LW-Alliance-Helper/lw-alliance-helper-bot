@@ -214,7 +214,7 @@ HELP_CATEGORIES: dict[str, dict] = {
             ("/export_config",
              "DMs you a JSON file with the categories you select "
              "(core setup, events, DS, CS, train, birthday, growth, "
-             "surveys, member roster)."),
+             "surveys, shiny tasks, member roster)."),
             ("/import_config <file>",
              "Apply a /export_config JSON to this server. The bot walks "
              "you through remapping each old channel and role to its new "

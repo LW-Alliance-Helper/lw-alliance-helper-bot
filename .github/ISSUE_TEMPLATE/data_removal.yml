@@ -1,0 +1,47 @@
+name: 🗑️ Data removal request
+description: Request deletion of the install-metadata record and / or configuration data the bot holds for your server.
+title: "[Data removal] "
+labels: ["data-removal"]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Use this template to request deletion of the data the bot holds for your server.
+
+        **Issues are public — do not paste any other personal information here.** The guild ID is all that's needed to look up and clear your records; anything else we need will be handled privately.
+
+        For context on what's stored and why, see the [Privacy Policy](https://lw-alliance-helper.github.io/privacy.html).
+
+  - type: input
+    id: guild-id
+    attributes:
+      label: Discord guild ID
+      description: |
+        The numeric ID of the server you want data removed for. To find it in Discord: enable Developer Mode (User Settings → Advanced → Developer Mode), then right-click the server icon and pick "Copy Server ID".
+      placeholder: e.g. 1234567890123456789
+    validations:
+      required: true
+
+  - type: checkboxes
+    id: scope
+    attributes:
+      label: What should be deleted?
+      description: Select everything that applies.
+      options:
+        - label: The install-metadata record (guild name, owner ID, installer ID, install / last-seen timestamps)
+        - label: The bot's per-server configuration row (`guild_configs` and related setup tables)
+        - label: All of the above
+
+  - type: textarea
+    id: notes
+    attributes:
+      label: Anything else?
+      description: Optional. Context that would help us handle the request — for example, whether the bot has already been removed from the server, or whether this is in preparation for re-installing fresh.
+      placeholder: e.g. The bot was removed from our server yesterday; want to make sure nothing about us is retained.
+    validations:
+      required: false
+
+  - type: markdown
+    attributes:
+      value: |
+        Once this issue is opened we'll confirm the deletion in a follow-up comment and close it. Member data in your Google Sheet is under your control — we don't retain copies of it, so the only step on your side is removing the bot's service-account email from your sheet's sharing settings if you haven't already.

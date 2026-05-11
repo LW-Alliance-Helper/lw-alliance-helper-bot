@@ -9,6 +9,16 @@ Each entry is a slim summary — heavier context (root cause, what we
 tried, design rationale) lives in the corresponding commit message
 and PR description.
 
+## [1.1.6] — 2026-05-10
+
+### Added
+- New `guild_install_metadata` SQLite table — guild name, owner ID, audit-log inviter, and install / last-seen timestamps per server, so logged `guild_id`s can be matched to an alliance for support ([#67](https://github.com/LW-Alliance-Helper/lw-alliance-helper-bot/issues/67)).
+- Owner-only `/admin_guild_info <guild_id>` and `/admin_forget_guild <guild_id>` slash commands for triage and data-removal requests, scoped via the new `BOT_ADMIN_GUILD_IDS` env var ([#67](https://github.com/LW-Alliance-Helper/lw-alliance-helper-bot/issues/67)).
+- `data_removal.yml` GitHub issue template for user-requested deletion of the install-metadata and config records ([#67](https://github.com/LW-Alliance-Helper/lw-alliance-helper-bot/issues/67)).
+
+### Changed
+- Privacy policy, terms, and README disclose the install-metadata record ([#67](https://github.com/LW-Alliance-Helper/lw-alliance-helper-bot/issues/67)).
+
 ## [1.1.5] — 2026-05-10
 
 ### Changed

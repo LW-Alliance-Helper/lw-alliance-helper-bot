@@ -97,3 +97,16 @@ DEFAULT_CS_TEMPLATE = """\
 {subs}
 
 **Time:** {time}"""
+
+
+# ── Shiny Tasks daily announcement (free tier) ──────────────────────────────
+#
+# `{servers}` renders as a comma-separated list with an "and" before the
+# last entry (e.g. "681, 682, 689 and 706"). `{date}` is the calendar
+# date the bot computed against, in the guild's timezone, formatted as
+# e.g. "Monday, May 11". Unknown placeholders render literally via
+# SafeDict so a typo doesn't crash the scheduler loop.
+
+DEFAULT_SHINY_TASKS_MESSAGE = (
+    "🌟 Daily shiny tasks are available on servers: {servers}."
+)

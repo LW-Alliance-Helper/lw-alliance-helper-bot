@@ -308,6 +308,46 @@ def init_db():
         """)
         conn.commit()
 
+        # guild_shiny_tasks_config — per-guild Daily Shiny Tasks settings.
+        # Free for all tiers. `channel_id` is the destination, `post_time`
+        # is HH:MM in the guild's `timezone` (mirrors birthday reminder
+        # config), `server_min`/`server_max` define the alliance's
+        # "transfer range" filter applied to `shiny_task_servers`, and
+        # `message_template` is the customised announcement body (empty
+        # string = use `DEFAULT_SHINY_TASKS_MESSAGE` from defaults.py).
+        # `last_posted_date` is an ISO date string used by the scheduler
+        # loop to prevent duplicate posts when Railway restarts across
+        # the configured minute.
+        conn.execute("""
+            CREATE TABLE IF NOT EXISTS guild_shiny_tasks_config (
+                guild_id          INTEGER PRIMARY KEY,
+                enabled           INTEGER DEFAULT 0,
+                channel_id        INTEGER DEFAULT 0,
+                post_time         TEXT    DEFAULT '09:00',
+                server_min        INTEGER DEFAULT 0,
+                server_max        INTEGER DEFAULT 0,
+                message_template  TEXT    DEFAULT '',
+                last_posted_date  TEXT    DEFAULT ''
+            )
+        """)
+
+        # shiny_task_servers — global table of every Last War server
+        # known to cpt-hedge, refreshed weekly. The 3-day shiny-task
+        # cycle is fully derivable from `creation_date` (no phase
+        # column needed). `last_seen_at` is bumped on every refresh;
+        # servers absent from the most recent fetch age out and are
+        # filtered from queries (soft delete). See shiny_tasks.py and
+        # docs/hedge_data_source.md.
+        conn.execute("""
+            CREATE TABLE IF NOT EXISTS shiny_task_servers (
+                server_number INTEGER PRIMARY KEY,
+                creation_date TEXT    NOT NULL,
+                region        TEXT    DEFAULT '',
+                last_seen_at  TEXT    NOT NULL
+            )
+        """)
+        conn.commit()
+
         # Add spreadsheet_id column if upgrading from an older schema that didn't have it
         try:
             conn.execute("ALTER TABLE guild_configs ADD COLUMN spreadsheet_id TEXT DEFAULT ''")
@@ -1804,4 +1844,150 @@ def save_train_config(guild_id: int, tab_name: str, themes: list,
         )
         conn.commit()
 
+
+# ── Shiny Tasks (free-tier daily announcement of shiny servers) ───────────────
+
+def get_shiny_tasks_config(guild_id: int) -> dict:
+    """Return shiny-tasks config for a guild, or a default dict if absent."""
+    with _get_conn() as conn:
+        row = conn.execute(
+            "SELECT * FROM guild_shiny_tasks_config WHERE guild_id = ?",
+            (guild_id,),
+        ).fetchone()
+    if row:
+        return dict(row)
+    return {
+        "guild_id":         guild_id,
+        "enabled":          0,
+        "channel_id":       0,
+        "post_time":        "09:00",
+        "server_min":       0,
+        "server_max":       0,
+        "message_template": "",
+        "last_posted_date": "",
+    }
+
+
+def save_shiny_tasks_config(
+    guild_id: int, *,
+    enabled: int,
+    channel_id: int,
+    post_time: str,
+    server_min: int,
+    server_max: int,
+    message_template: str,
+):
+    """Insert or replace a guild's shiny-tasks config.
+
+    `last_posted_date` is managed by the scheduler loop (see
+    `mark_shiny_tasks_posted`), not the wizard, so it isn't a parameter
+    here — leaving the column as-is on update preserves the loop's
+    duplicate-suppression state across re-runs of the setup wizard.
+    """
+    with _get_conn() as conn:
+        conn.execute(
+            "INSERT INTO guild_shiny_tasks_config "
+            "(guild_id, enabled, channel_id, post_time, server_min, server_max, "
+            " message_template, last_posted_date) "
+            "VALUES (?, ?, ?, ?, ?, ?, ?, COALESCE("
+            "  (SELECT last_posted_date FROM guild_shiny_tasks_config WHERE guild_id = ?),"
+            "  ''"
+            ")) "
+            "ON CONFLICT(guild_id) DO UPDATE SET "
+            "enabled=excluded.enabled, channel_id=excluded.channel_id, "
+            "post_time=excluded.post_time, server_min=excluded.server_min, "
+            "server_max=excluded.server_max, "
+            "message_template=excluded.message_template",
+            (guild_id, enabled, channel_id, post_time, server_min, server_max,
+             message_template, guild_id),
+        )
+        conn.commit()
+
+
+def mark_shiny_tasks_posted(guild_id: int, posted_date: str) -> None:
+    """Record that today's announcement has fired for this guild.
+
+    Called by the scheduler loop right after a successful channel.send so
+    a Railway restart across the configured minute can't double-post.
+    """
+    with _get_conn() as conn:
+        conn.execute(
+            "UPDATE guild_shiny_tasks_config SET last_posted_date = ? "
+            "WHERE guild_id = ?",
+            (posted_date, guild_id),
+        )
+        conn.commit()
+
+
+def list_shiny_enabled_guild_ids() -> list[int]:
+    """Return guild_ids with `enabled=1` shiny-tasks config.
+
+    Used by the per-minute scheduler loop to walk only the guilds that
+    actually opted in, instead of every configured guild.
+    """
+    with _get_conn() as conn:
+        rows = conn.execute(
+            "SELECT guild_id FROM guild_shiny_tasks_config WHERE enabled = 1"
+        ).fetchall()
+    return [r["guild_id"] for r in rows]
+
+
+def upsert_shiny_task_servers(
+    rows: list[tuple[int, str, str]], seen_at: str,
+) -> int:
+    """Upsert a batch of (server_number, creation_date, region) rows.
+
+    Every row gets `last_seen_at = seen_at`. Returns the number of rows
+    upserted. Called by `shiny_tasks.refresh_servers` after fetching the
+    cpt-hedge bundle.
+    """
+    if not rows:
+        return 0
+    payload = [(n, cd, region, seen_at) for (n, cd, region) in rows]
+    with _get_conn() as conn:
+        conn.executemany(
+            "INSERT INTO shiny_task_servers "
+            "(server_number, creation_date, region, last_seen_at) "
+            "VALUES (?, ?, ?, ?) "
+            "ON CONFLICT(server_number) DO UPDATE SET "
+            "creation_date=excluded.creation_date, "
+            "region=excluded.region, "
+            "last_seen_at=excluded.last_seen_at",
+            payload,
+        )
+        conn.commit()
+    return len(payload)
+
+
+def get_shiny_task_servers_in_range(
+    server_min: int, server_max: int, *, max_age_days: int = 30,
+) -> list[dict]:
+    """Return rows in [server_min, server_max] seen within `max_age_days`.
+
+    The `max_age_days` filter is the soft-delete mechanism: any server
+    missing from the last N refreshes is excluded automatically. Result
+    is sorted by server_number for deterministic announcement copy.
+    """
+    from datetime import datetime as _dt, timedelta as _td, timezone as _tz
+    cutoff = (_dt.now(tz=_tz.utc) - _td(days=max_age_days)).isoformat()
+    with _get_conn() as conn:
+        rows = conn.execute(
+            "SELECT server_number, creation_date, region, last_seen_at "
+            "FROM shiny_task_servers "
+            "WHERE server_number BETWEEN ? AND ? "
+            "  AND last_seen_at >= ? "
+            "ORDER BY server_number",
+            (server_min, server_max, cutoff),
+        ).fetchall()
+    return [dict(r) for r in rows]
+
+
+def count_shiny_task_servers() -> int:
+    """Return the total row count in `shiny_task_servers` (used to
+    decide whether the initial seed has run)."""
+    with _get_conn() as conn:
+        row = conn.execute(
+            "SELECT COUNT(*) AS n FROM shiny_task_servers"
+        ).fetchone()
+    return row["n"] if row else 0
 

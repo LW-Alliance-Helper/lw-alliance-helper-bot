@@ -5583,18 +5583,29 @@ async def run_shiny_tasks_setup(interaction: discord.Interaction, bot):
             self.max_value = None
             self._min = discord.ui.TextInput(
                 label="Lowest reachable server number",
-                placeholder="e.g. 681",
+                placeholder="e.g. 677",
                 default=min_default,
                 required=True, max_length=5,
             )
             self._max = discord.ui.TextInput(
                 label="Highest reachable server number",
-                placeholder="e.g. 799",
+                placeholder="e.g. 804",
                 default=max_default,
                 required=True, max_length=5,
             )
             self.add_item(self._min)
             self.add_item(self._max)
+
+        @property
+        def value(self) -> str:
+            """Display string consumed by `ModalLaunchView` after submit.
+            That view formats `✅ Entered: **{self.modal.value}**`, so
+            this property has to exist on every modal it wraps — without
+            it, the post-submit edit raises `AttributeError` and the
+            wizard step appears to hang."""
+            if self.min_value is None and self.max_value is None:
+                return ""
+            return f"{self.min_value or '?'} – {self.max_value or '?'}"
 
         async def on_submit(self, inter: discord.Interaction):
             self.min_value = self._min.value.strip()
@@ -5617,6 +5628,10 @@ async def run_shiny_tasks_setup(interaction: discord.Interaction, bot):
             max_default=str(saved_max) if saved_max else "",
         )
         range_launcher = ModalLaunchView(range_modal)
+        # Override the generic "Enter Value" button label so leadership
+        # sees domain wording. Same per-instance mutation `/setup` does
+        # to `ConfirmView` after construction.
+        range_launcher.children[0].label = "✏️ Enter Server Numbers"
         await channel.send(range_prompt, view=range_launcher)
         await wait_view_or_cancel(range_launcher, cancel_event)
         if range_launcher.cancelled:
@@ -5657,7 +5672,7 @@ async def run_shiny_tasks_setup(interaction: discord.Interaction, bot):
         if not valid_numbers:
             await channel.send(
                 f"⚠️ Could not read **`{min_raw}`** / **`{max_raw}`** as whole "
-                f"numbers. Try something like `681` and `799`. Let's try once more."
+                f"numbers. Try something like `677` and `804`. Let's try once more."
             )
         else:
             await channel.send(

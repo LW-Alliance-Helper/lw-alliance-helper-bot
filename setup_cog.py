@@ -5596,6 +5596,17 @@ async def run_shiny_tasks_setup(interaction: discord.Interaction, bot):
             self.add_item(self._min)
             self.add_item(self._max)
 
+        @property
+        def value(self) -> str:
+            """Display string consumed by `ModalLaunchView` after submit.
+            That view formats `✅ Entered: **{self.modal.value}**`, so
+            this property has to exist on every modal it wraps — without
+            it, the post-submit edit raises `AttributeError` and the
+            wizard step appears to hang."""
+            if self.min_value is None and self.max_value is None:
+                return ""
+            return f"{self.min_value or '?'} – {self.max_value or '?'}"
+
         async def on_submit(self, inter: discord.Interaction):
             self.min_value = self._min.value.strip()
             self.max_value = self._max.value.strip()
@@ -5617,6 +5628,10 @@ async def run_shiny_tasks_setup(interaction: discord.Interaction, bot):
             max_default=str(saved_max) if saved_max else "",
         )
         range_launcher = ModalLaunchView(range_modal)
+        # Override the generic "Enter Value" button label so leadership
+        # sees domain wording. Same per-instance mutation `/setup` does
+        # to `ConfirmView` after construction.
+        range_launcher.children[0].label = "✏️ Enter Server Numbers"
         await channel.send(range_prompt, view=range_launcher)
         await wait_view_or_cancel(range_launcher, cancel_event)
         if range_launcher.cancelled:

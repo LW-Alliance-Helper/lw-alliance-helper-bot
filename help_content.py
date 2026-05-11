@@ -180,6 +180,27 @@ HELP_CATEGORIES: dict[str, dict] = {
              "Show status with options to snapshot or edit config."),
         ],
     },
+    "data_portability": {
+        "emoji": "📦",
+        "label": "Data Portability",
+        "description": (
+            "Move your alliance's bot config to a new Discord server, or "
+            "snapshot it as a backup you can restore later. Your alliance "
+            "data lives in your Google Sheet either way — these commands "
+            "carry the bot's wizard answers (templates, channels, schedules) "
+            "alongside it."
+        ),
+        "commands": [
+            ("/export_config",
+             "DMs you a JSON file with the categories you select "
+             "(core setup, events, DS, CS, train, birthday, growth, "
+             "surveys, member roster)."),
+            ("/import_config <file>",
+             "Apply a /export_config JSON to this server. The bot walks "
+             "you through remapping each old channel and role to its new "
+             "equivalent, then writes the imported config to your tables."),
+        ],
+    },
     "premium": {
         "emoji": "💎",
         "label": "Premium Features",

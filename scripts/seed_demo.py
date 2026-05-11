@@ -312,8 +312,8 @@ def _build_storm_assignment_rows(event_type: str,
     """Build the row list for a DS/CS Assignments tab in the format the
     bot's storm parser expects: section markers (DS_A_ZONES / DS_A_SUBS /
     DS_B_ZONES / DS_B_SUBS), zone rows (col A = zone name, col B = comma-
-    separated members), sub-pair rows (col A = starter, col B = sub),
-    blank separator rows between sections.
+    separated members), one-column sub rows (col A = sub name), blank
+    separator rows between sections.
     """
     prefix = event_type.upper()  # "DS" or "CS"
     rows = []
@@ -323,8 +323,12 @@ def _build_storm_assignment_rows(event_type: str,
             rows.append([zone, ", ".join(members)])
         rows.append(["", ""])
         rows.append([f"{prefix}_{team}_SUBS", ""])
-        for starter, sub in subs:
-            rows.append([starter, sub])
+        for sub in subs:
+            # Tolerate legacy `(starter, sub)` tuples in the seed data —
+            # keep only the sub name, matching load_ds_assignments.
+            name = sub[1] if isinstance(sub, tuple) and len(sub) >= 2 else sub
+            if name:
+                rows.append([str(name)])
         rows.append(["", ""])
     return rows
 

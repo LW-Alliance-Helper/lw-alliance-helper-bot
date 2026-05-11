@@ -221,22 +221,110 @@ class TestCsZoneStructureConsistency:
 class TestParseDsTemplate:
     """Test round-trip parse of DS mail template."""
 
-    def test_parse_zones_from_template(self):
-        from storm import build_ds_template, parse_ds_template
-        zones = {"Zone 1": ["Alice", "Bob"], "Zone 2": ["Carol", "Dave"]}
-        subs  = [("Alice", "Eve"), ("Bob", "Frank")]  # (starter, sub) tuples
+    def test_parse_canonical_zones_round_trip(self):
+        from storm import build_ds_template, parse_ds_template, DS_ZONE_STRUCTURE
+        zones = {
+            "Nuclear Silo":     "Alice, Bob",
+            "Field Hospital I": "Carol, Dave",
+        }
+        subs  = [("Alice", "Eve"), ("Bob", "Frank")]
         text  = build_ds_template(zones, subs)
         parsed_zones, parsed_subs, errors = parse_ds_template(text)
-        # Zones should contain our zone names
-        assert len(parsed_zones) > 0 or len(errors) == 0
-        # Subs should contain our pairs
-        assert "Alice" in str(parsed_subs) or "Eve" in str(parsed_subs) or len(errors) == 0
+        assert parsed_zones["Nuclear Silo"]     == "Alice, Bob"
+        assert parsed_zones["Field Hospital I"] == "Carol, Dave"
+        # build_ds_template emits the full canonical scaffold; unassigned zones
+        # come back as empty strings.
+        assert all(z in parsed_zones for z in DS_ZONE_STRUCTURE)
+        assert parsed_subs == [("Alice", "Eve"), ("Bob", "Frank")]
+        assert errors == []
+
+    def test_parse_rejects_non_canonical_zone(self):
+        from storm import parse_ds_template
+        text = (
+            "ZONE ASSIGNMENTS\n"
+            "Nuclear Silo: Alice\n"
+            "Filed Hospital II: Bob\n"  # typo
+            "SUB PAIRS (Starter - Sub)\n"
+        )
+        parsed_zones, _, errors = parse_ds_template(text)
+        assert parsed_zones == {"Nuclear Silo": "Alice"}
+        assert any("Filed Hospital II" in e for e in errors), \
+            f"Expected an error mentioning the typo, got: {errors}"
+
+    def test_parse_zone_match_is_case_insensitive(self):
+        from storm import parse_ds_template
+        text = (
+            "ZONE ASSIGNMENTS\n"
+            "nuclear silo: Alice\n"
+            "FIELD HOSPITAL II: Bob\n"
+        )
+        parsed_zones, _, errors = parse_ds_template(text)
+        # Canonical-cased keys come back, preserving the structure regardless
+        # of the leader's casing.
+        assert parsed_zones["Nuclear Silo"]      == "Alice"
+        assert parsed_zones["Field Hospital II"] == "Bob"
+        assert errors == []
 
     def test_empty_template_handled(self):
         from storm import parse_ds_template
-        # Should not raise on empty
         result = parse_ds_template("")
         assert result is not None
+
+
+class TestDsZoneStructure:
+    """DS_ZONE_STRUCTURE is the source of truth for DS zones."""
+
+    def test_has_eleven_canonical_zones(self):
+        from storm import DS_ZONE_STRUCTURE
+        assert len(DS_ZONE_STRUCTURE) == 11
+        assert DS_ZONE_STRUCTURE[0]  == "Nuclear Silo"
+        assert "Field Hospital IV" in DS_ZONE_STRUCTURE
+        assert "Mercenary Factory" in DS_ZONE_STRUCTURE
+
+    def test_no_duplicate_zones(self):
+        from storm import DS_ZONE_STRUCTURE
+        assert len(DS_ZONE_STRUCTURE) == len(set(DS_ZONE_STRUCTURE))
+
+    def test_build_template_renders_full_scaffold(self):
+        from storm import build_ds_template, DS_ZONE_STRUCTURE
+        # Sparse input — only one zone assigned. Scaffold should still emit
+        # every canonical zone in canonical order, with blank values for
+        # unassigned zones, so leadership has a fill-in grid.
+        text = build_ds_template({"Nuclear Silo": "Alice"}, [])
+        for zone in DS_ZONE_STRUCTURE:
+            assert f"{zone}:" in text, f"Missing canonical zone `{zone}` in scaffold"
+        # Canonical order: Nuclear Silo before Mercenary Factory.
+        assert text.find("Nuclear Silo:") < text.find("Mercenary Factory:")
+
+    def test_build_template_drops_non_canonical_zones(self):
+        from storm import build_ds_template
+        text = build_ds_template({"Filed Hospital II": "Alice"}, [])
+        assert "Filed Hospital II" not in text
+
+
+class TestNonCanonicalZoneDetection:
+    """The draft flow uses these helpers to warn leadership about typo
+    zone keys carried over from older sheet data."""
+
+    def test_ds_helper_returns_only_non_canonical_with_values(self):
+        from storm import _non_canonical_ds_zones
+        zones = {
+            "Nuclear Silo":      "Alice",       # canonical, keep out
+            "Filed Hospital II": "Bob",         # typo, flag
+            "Unknown Zone":      "",            # non-canonical but empty, skip
+        }
+        result = _non_canonical_ds_zones(zones)
+        assert result == {"Filed Hospital II": "Bob"}
+
+    def test_cs_helper_excludes_subs_key(self):
+        from storm import _non_canonical_cs_zones, CS_SUBS_KEY
+        zones = {
+            "s1_dc1":         "Alice",   # canonical, keep out
+            "made_up_zone":   "Bob",     # non-canonical, flag
+            CS_SUBS_KEY:      "Carol",   # subs key — not a zone, keep out
+        }
+        result = _non_canonical_cs_zones(zones)
+        assert result == {"made_up_zone": "Bob"}
 
 
 class TestParseCsTemplate:

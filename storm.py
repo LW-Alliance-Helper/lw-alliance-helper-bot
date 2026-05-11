@@ -45,6 +45,42 @@ DEFAULTS = {
 }
 
 
+# ── Canonical DS zone structure ────────────────────────────────────────────────
+# Desert Storm zones are game-defined and identical across every alliance.
+# This is the single source of truth for build_ds_template, parse_ds_template,
+# and build_ds_mail — any zone name not in this list is treated as a typo
+# (parser rejects it, builder doesn't render it).
+DS_ZONE_STRUCTURE: list[str] = [
+    "Nuclear Silo",
+    "Oil Refinery I",
+    "Oil Refinery II",
+    "Science Hub",
+    "Info Center",
+    "Field Hospital I",
+    "Field Hospital II",
+    "Field Hospital III",
+    "Field Hospital IV",
+    "Arsenal",
+    "Mercenary Factory",
+]
+
+
+def _non_canonical_ds_zones(zones: dict) -> dict:
+    """Return {zone_name: members} entries from `zones` that aren't in
+    DS_ZONE_STRUCTURE and have a non-empty value. Used by the draft flow to
+    warn leadership when saved sheet data contains typo zone names that will
+    be dropped on next save."""
+    canonical = set(DS_ZONE_STRUCTURE)
+    return {k: v for k, v in zones.items() if k not in canonical and v}
+
+
+def _non_canonical_cs_zones(zones: dict) -> dict:
+    """CS analogue of _non_canonical_ds_zones. Skips the subs key (renders
+    via {subs}, not as a zone)."""
+    canonical = {k for _, k, _ in CS_ZONE_STRUCTURE} | {CS_SUBS_KEY}
+    return {k: v for k, v in zones.items() if k not in canonical and v}
+
+
 
 # ── Google Sheets persistence ──────────────────────────────────────────────────
 
@@ -174,9 +210,16 @@ def save_ds_assignments(team: str, zones: dict, subs: list,
 # ── Template builder & parser ──────────────────────────────────────────────────
 
 def build_ds_template(zones: dict, subs: list) -> str:
+    """Render the editable template for DS draft.
+
+    Walks DS_ZONE_STRUCTURE in canonical order so leadership always sees a
+    labeled grid — every zone renders, with `Zone: ` blank when unassigned.
+    Non-canonical zone keys in `zones` are silently skipped (they'll be
+    dropped on the next save; the draft flow surfaces them separately).
+    """
     lines = ["ZONE ASSIGNMENTS"]
-    for zone, members in zones.items():
-        lines.append(f"{zone}: {members}")
+    for zone in DS_ZONE_STRUCTURE:
+        lines.append(f"{zone}: {zones.get(zone, '')}")
     lines.append("")
     lines.append("SUB PAIRS (Starter - Sub)")
     for starter, sub in subs:
@@ -185,7 +228,15 @@ def build_ds_template(zones: dict, subs: list) -> str:
 
 
 def parse_ds_template(text: str) -> tuple[dict, list, list]:
-    """Parse the edited template. Returns (zones, subs, errors)."""
+    """Parse the edited DS template. Returns (zones, subs, errors).
+
+    Zone names must match DS_ZONE_STRUCTURE — non-canonical names go to
+    `errors` and are NOT added to the zones dict. Matching is
+    case-insensitive against the canonical list to forgive minor casing
+    differences without permitting typos.
+    """
+    canonical_by_lower = {z.lower(): z for z in DS_ZONE_STRUCTURE}
+    canonical_list     = ", ".join(DS_ZONE_STRUCTURE)
     zones   = {}
     subs    = []
     errors  = []
@@ -205,7 +256,15 @@ def parse_ds_template(text: str) -> tuple[dict, list, list]:
         if section == "zones":
             if ":" in line:
                 zone, _, members = line.partition(":")
-                zones[zone.strip()] = members.strip()
+                zone_stripped = zone.strip()
+                canonical = canonical_by_lower.get(zone_stripped.lower())
+                if canonical is None:
+                    errors.append(
+                        f"Unknown zone `{zone_stripped}` — must be one of: "
+                        f"{canonical_list}"
+                    )
+                else:
+                    zones[canonical] = members.strip()
             else:
                 errors.append(f"Could not parse zone line: {line}")
         elif section == "subs":
@@ -242,14 +301,34 @@ def build_ds_mail(team: str, zones: dict, subs: list, time_key: str,
     else:
         time_str = time_key
 
-    zone_lines = []
-    for zone, members in zones.items():
-        zone_lines.append(f"**{zone}**")
+    # Walk DS_ZONE_STRUCTURE in canonical order so the mail reads consistently
+    # for every alliance. Skip zones with no members. Any non-canonical keys
+    # left in `zones` (legacy fixtures, in-memory test data) emit at the end
+    # with the raw key as a fallback label, so nothing silently disappears.
+    zone_lines: list[str] = []
+    rendered: set[str] = set()
+
+    def _emit_members(members):
         if isinstance(members, list):
             zone_lines.append("\n".join(str(m) for m in members))
         else:
             zone_lines.append(str(members))
         zone_lines.append("")
+
+    for zone in DS_ZONE_STRUCTURE:
+        members = zones.get(zone)
+        if not members or members == "(open)":
+            rendered.add(zone)
+            continue
+        zone_lines.append(f"**{zone}**")
+        _emit_members(members)
+        rendered.add(zone)
+
+    extra = [(k, v) for k, v in zones.items() if k not in rendered and v and v != "(open)"]
+    for key, members in extra:
+        zone_lines.append(f"**{key}**")
+        _emit_members(members)
+
     zones_block = "\n".join(zone_lines).strip()
 
     if isinstance(subs, list) and subs:
@@ -501,6 +580,17 @@ async def run_ds_draft_flow(bot, channel, user, team: str,
     time_key = time_view.selected
 
     # ── Step 3: Mail Template — Use as-is or Edit ─────────────────────────────
+    stale = _non_canonical_ds_zones(current_zones)
+    if stale:
+        stale_lines = "\n".join(f"• `{k}` — {v}" for k, v in stale.items())
+        await channel.send(
+            "ℹ️ Your saved data has zones that aren't on the canonical "
+            "Desert Storm list — they'll be dropped on the next save:\n"
+            f"{stale_lines}\n"
+            "Re-enter assignments under the correct zone name in the "
+            "template below."
+        )
+
     template = build_ds_template(current_zones, current_subs)
     use_view = TemplateUseEditView()
     await channel.send(
@@ -1137,6 +1227,17 @@ async def run_cs_draft_flow(bot, channel, user, team: str, current_zones: dict):
     time_key = time_view.selected
 
     # ── Step 3: Mail Template — Use as-is or Edit ─────────────────────────────
+    stale = _non_canonical_cs_zones(current_zones)
+    if stale:
+        stale_lines = "\n".join(f"• `{k}` — {v}" for k, v in stale.items())
+        await channel.send(
+            "ℹ️ Your saved data has zones that aren't on the canonical "
+            "Canyon Storm list — they'll be dropped on the next save:\n"
+            f"{stale_lines}\n"
+            "Re-enter assignments under the correct zone name in the "
+            "template below."
+        )
+
     template = build_cs_template(current_zones)
     use_view = TemplateUseEditView()
     await channel.send(

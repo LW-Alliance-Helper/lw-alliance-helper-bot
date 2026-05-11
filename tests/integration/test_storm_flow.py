@@ -149,15 +149,15 @@ class TestTemplateRoundTrip:
             "Nuclear Silo":     "Alice, Bob",
             "Field Hospital I": "Carol",
         }
-        subs  = [("Dave", "Frank"), ("Eve", "Gina")]
+        subs  = ["Frank", "Gina"]
         text  = build_ds_template(zones, subs)
         parsed_zones, parsed_subs, _ = parse_ds_template(text)
 
         # Canonical zone names survive the round-trip.
         assert parsed_zones.get("Nuclear Silo")     == "Alice, Bob"
         assert parsed_zones.get("Field Hospital I") == "Carol"
-        assert ("Dave", "Frank") in parsed_subs
-        assert ("Eve",  "Gina")  in parsed_subs
+        # Subs are a flat list of names (post-#37).
+        assert parsed_subs == ["Frank", "Gina"]
 
     def test_cs_template_roundtrip(self):
         from storm import build_cs_template, parse_cs_template

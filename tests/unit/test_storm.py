@@ -227,7 +227,7 @@ class TestParseDsTemplate:
             "Nuclear Silo":     "Alice, Bob",
             "Field Hospital I": "Carol, Dave",
         }
-        subs  = [("Alice", "Eve"), ("Bob", "Frank")]
+        subs  = ["Eve", "Frank"]
         text  = build_ds_template(zones, subs)
         parsed_zones, parsed_subs, errors = parse_ds_template(text)
         assert parsed_zones["Nuclear Silo"]     == "Alice, Bob"
@@ -235,7 +235,7 @@ class TestParseDsTemplate:
         # build_ds_template emits the full canonical scaffold; unassigned zones
         # come back as empty strings.
         assert all(z in parsed_zones for z in DS_ZONE_STRUCTURE)
-        assert parsed_subs == [("Alice", "Eve"), ("Bob", "Frank")]
+        assert parsed_subs == ["Eve", "Frank"]
         assert errors == []
 
     def test_parse_rejects_non_canonical_zone(self):
@@ -325,6 +325,115 @@ class TestNonCanonicalZoneDetection:
         }
         result = _non_canonical_cs_zones(zones)
         assert result == {"made_up_zone": "Bob"}
+
+
+class TestFlatSubs:
+    """#37: DS and CS subs are a flat list of names. Verify the new shape
+    round-trips and that the legacy paired/inline shapes still parse for
+    backward compatibility."""
+
+    def test_ds_template_emits_subs_header_not_pairs(self):
+        from storm import build_ds_template
+        text = build_ds_template({}, ["Alice", "Bob"])
+        assert "SUBS" in text
+        assert "SUB PAIRS" not in text
+
+    def test_ds_template_flattens_legacy_tuple_subs(self):
+        # In-memory data may still carry tuples during the transition; the
+        # builder must emit just the sub name (right side of the pair),
+        # never the starter or the tuple repr.
+        from storm import build_ds_template
+        text = build_ds_template({}, [("Starter1", "Alice"), ("Starter2", "Bob")])
+        assert "Alice" in text
+        assert "Bob"   in text
+        assert "Starter1" not in text
+        assert "Starter2" not in text
+        assert "('"        not in text  # never the tuple repr
+
+    def test_ds_parse_subs_section_returns_flat_strings(self):
+        from storm import parse_ds_template
+        text = (
+            "ZONE ASSIGNMENTS\n"
+            "Nuclear Silo: Alice\n"
+            "SUBS\n"
+            "Eve\n"
+            "Frank\n"
+        )
+        _, subs, _ = parse_ds_template(text)
+        assert subs == ["Eve", "Frank"]
+
+    def test_ds_parse_legacy_sub_pairs_keeps_only_sub_side(self):
+        from storm import parse_ds_template
+        text = (
+            "ZONE ASSIGNMENTS\n"
+            "Nuclear Silo: Alice\n"
+            "SUB PAIRS (Starter - Sub)\n"
+            "Starter1 - Eve\n"
+            "Starter2 - Frank\n"
+        )
+        _, subs, _ = parse_ds_template(text)
+        # Only the right side (the actual sub) survives; starters are dropped.
+        assert subs == ["Eve", "Frank"]
+
+    def test_cs_subs_label_renamed_to_subs(self):
+        from storm import CS_SUBS_LABEL
+        assert CS_SUBS_LABEL == "Subs"
+
+    def test_cs_template_renders_subs_as_multi_line_section(self):
+        from storm import build_cs_template, CS_SUBS_KEY
+        zones = {"s1_dc1": "Alice", CS_SUBS_KEY: ["Eve", "Frank"]}
+        text = build_cs_template(zones)
+        # Header on its own line, then names one per line.
+        assert "\nSubs\nEve\nFrank" in text
+        # The legacy inline label form must be gone.
+        assert "Pop Pairs (last 30 sec):" not in text
+
+    def test_cs_parse_subs_section_returns_flat_list(self):
+        from storm import parse_cs_template, CS_SUBS_KEY
+        text = (
+            "STAGE 1\n"
+            "Data Center 1: Alice\n"
+            "\n"
+            "Subs\n"
+            "Eve\n"
+            "Frank\n"
+        )
+        zones, _ = parse_cs_template(text)
+        assert zones[CS_SUBS_KEY] == ["Eve", "Frank"]
+
+    def test_cs_parse_accepts_legacy_pop_pairs_header(self):
+        # Multi-line section under the legacy header label.
+        from storm import parse_cs_template, CS_SUBS_KEY
+        text = (
+            "STAGE 1\n"
+            "Data Center 1: Alice\n"
+            "\n"
+            "Pop Pairs (last 30 sec)\n"
+            "Eve\n"
+            "Frank\n"
+        )
+        zones, _ = parse_cs_template(text)
+        assert zones[CS_SUBS_KEY] == ["Eve", "Frank"]
+
+    def test_cs_parse_flattens_legacy_inline_subs(self):
+        # `Header: Alice & Bob, Carol & Dave` is the pre-#37 shape — split
+        # on commas, dashes, and ampersands. Everyone in the inline string
+        # is a sub (no starter side, unlike DS).
+        from storm import parse_cs_template, CS_SUBS_KEY
+        text = (
+            "STAGE 1\n"
+            "Data Center 1: Alice\n"
+            "Pop Pairs (last 30 sec): Eve & Frank, Gina - Hank\n"
+        )
+        zones, _ = parse_cs_template(text)
+        assert zones[CS_SUBS_KEY] == ["Eve", "Frank", "Gina", "Hank"]
+
+    def test_split_legacy_subs_handles_mixed_separators(self):
+        from storm import _split_legacy_subs
+        assert _split_legacy_subs("Alice & Bob, Carol - Dave") == \
+               ["Alice", "Bob", "Carol", "Dave"]
+        assert _split_legacy_subs("")    == []
+        assert _split_legacy_subs("Solo") == ["Solo"]
 
 
 class TestParseCsTemplate:

@@ -243,6 +243,10 @@ async def on_ready():
         print(f"[INFO] Growth tracker started")
         stats_publish_task.start()
         print(f"[INFO] Stats publisher started")
+        shiny_tasks_refresh_task.start()
+        print(f"[INFO] Shiny tasks weekly refresh started")
+        shiny_tasks_post_task.start()
+        print(f"[INFO] Shiny tasks per-minute post loop started")
 
 
 @bot.event
@@ -497,6 +501,148 @@ async def before_stats_publish_task():
     await bot.wait_until_ready()
 
 
+# ── Shiny Tasks scheduler loops ──────────────────────────────────────────────
+#
+# Two background loops drive the daily shiny-tasks announcement:
+#
+#   * `shiny_tasks_refresh_task` (weekly) keeps `shiny_task_servers`
+#     current with new Last War launches and ages out servers absent
+#     from cpt-hedge's table. Also seeds the table on first startup
+#     when it's empty.
+#
+#   * `shiny_tasks_post_task` (per minute) walks every enabled guild
+#     and posts the daily announcement when wall-clock time in the
+#     guild's timezone matches the configured `post_time`.
+#
+# Both loops emit failures to Sentry but never raise — a transient
+# Hedge outage or one misconfigured guild must not abort the loop for
+# everyone else.
+
+@tasks.loop(hours=24 * 7)
+async def shiny_tasks_refresh_task():
+    """Weekly: refresh `shiny_task_servers` from cpt-hedge."""
+    try:
+        from shiny_tasks import refresh_servers
+        n = await refresh_servers()
+        print(f"[SHINY] Weekly refresh upserted {n} server rows")
+    except Exception as e:
+        print(f"[SHINY] Weekly refresh failed: {e}")
+        sentry_sdk.capture_exception(e)
+
+
+@shiny_tasks_refresh_task.before_loop
+async def before_shiny_tasks_refresh_task():
+    await bot.wait_until_ready()
+    # First-run seed: if the table is empty (fresh install), pull the
+    # full set right away rather than waiting up to 7 days for the
+    # first scheduled refresh. Wrapped in its own try so a Cloudflare
+    # hiccup at startup doesn't crash the loop's launch.
+    try:
+        from config import count_shiny_task_servers
+        from shiny_tasks import refresh_servers
+        if count_shiny_task_servers() == 0:
+            n = await refresh_servers()
+            print(f"[SHINY] Initial seed upserted {n} server rows")
+    except Exception as e:
+        print(f"[SHINY] Initial seed failed: {e}")
+        sentry_sdk.capture_exception(e)
+
+
+@tasks.loop(minutes=1)
+async def shiny_tasks_post_task():
+    """Per-minute: walk enabled guilds, post if their configured
+    post_time matches wall-clock now in their timezone."""
+    from config import (
+        get_config, get_shiny_tasks_config,
+        get_shiny_task_servers_in_range,
+        list_shiny_enabled_guild_ids,
+        mark_shiny_tasks_posted,
+    )
+    from shiny_tasks import build_announcement_for_guild
+
+    try:
+        enabled_ids = list_shiny_enabled_guild_ids()
+    except Exception as e:
+        print(f"[SHINY] Could not list enabled guilds: {e}")
+        sentry_sdk.capture_exception(e)
+        return
+
+    for gid in enabled_ids:
+        try:
+            cfg  = get_config(gid)
+            scfg = get_shiny_tasks_config(gid)
+            if not cfg or not scfg.get("enabled"):
+                continue
+
+            # Time match: HH:MM in the guild's configured timezone.
+            try:
+                guild_tz  = ZoneInfo(cfg.timezone or "America/New_York")
+            except Exception:
+                guild_tz  = ET
+            guild_now = datetime.now(tz=guild_tz)
+            try:
+                hh, mm = scfg["post_time"].split(":")
+                hh, mm = int(hh), int(mm)
+            except (KeyError, ValueError, AttributeError):
+                continue
+            if guild_now.hour != hh or guild_now.minute != mm:
+                continue
+
+            today_iso = guild_now.date().isoformat()
+            if scfg.get("last_posted_date") == today_iso:
+                # Already fired today — Railway restart inside the
+                # configured minute, or the loop somehow ran twice.
+                continue
+
+            channel = bot.get_channel(scfg.get("channel_id") or 0)
+            if channel is None:
+                print(
+                    f"[SHINY] Channel {scfg.get('channel_id')} not resolvable "
+                    f"for guild {gid} — skipping post"
+                )
+                continue
+
+            rows = get_shiny_task_servers_in_range(
+                int(scfg.get("server_min") or 0),
+                int(scfg.get("server_max") or 0),
+            )
+            body = build_announcement_for_guild(
+                server_rows=rows,
+                server_min=int(scfg.get("server_min") or 0),
+                server_max=int(scfg.get("server_max") or 0),
+                today=guild_now.date(),
+                template=scfg.get("message_template") or "",
+            )
+            if body is None:
+                # No shinies in range today — record the date anyway so
+                # we don't recheck (cheaply) every minute for the rest
+                # of the matched minute, and so a /view_configuration
+                # reader can see the loop fired.
+                mark_shiny_tasks_posted(gid, today_iso)
+                continue
+
+            try:
+                await channel.send(body)
+                mark_shiny_tasks_posted(gid, today_iso)
+            except discord.Forbidden:
+                print(
+                    f"[SHINY] Missing send permission in channel "
+                    f"{channel.id} ({getattr(channel, 'name', '?')}) "
+                    f"for guild {gid}"
+                )
+            except discord.HTTPException as e:
+                print(f"[SHINY] HTTP error posting for guild {gid}: {e}")
+                sentry_sdk.capture_exception(e)
+        except Exception as e:
+            print(f"[SHINY] Per-minute loop error for guild {gid}: {e}")
+            sentry_sdk.capture_exception(e)
+
+
+@shiny_tasks_post_task.before_loop
+async def before_shiny_tasks_post_task():
+    await bot.wait_until_ready()
+
+
 @bot.event
 async def on_message(message):
     if message.author == bot.user:
@@ -555,6 +701,7 @@ async def growth_slash(interaction: discord.Interaction):
             super().__init__(timeout=120)
             if not enabled:
                 self.run_now.disabled = True
+                self.breakdown.disabled = True
 
         @discord.ui.button(label="📸 Run Snapshot Now", style=discord.ButtonStyle.success)
         async def run_now(self, inter: discord.Interaction, button: discord.ui.Button):
@@ -569,6 +716,36 @@ async def growth_slash(interaction: discord.Interaction):
                 )
             except Exception as e:
                 await inter.followup.send(f"⚠️ Growth snapshot failed: {e}", ephemeral=True)
+            self.stop()
+
+        @discord.ui.button(label="📊 Breakdown", style=discord.ButtonStyle.secondary)
+        async def breakdown(self, inter: discord.Interaction, button: discord.ui.Button):
+            for item in self.children: item.disabled = True
+            await wizard_registry.safe_edit_response(inter, view=self)
+            try:
+                from growth import read_latest_breakdown, format_breakdown_embed
+                data = await asyncio.to_thread(read_latest_breakdown, guild_id)
+            except Exception as e:
+                await inter.followup.send(f"⚠️ Could not load breakdown: {e}", ephemeral=True)
+                self.stop()
+                return
+            if not data.get("has_data"):
+                await inter.followup.send(
+                    "📊 No breakdown data yet — the breakdown is computed on each "
+                    "snapshot after the first one, so the second snapshot is when "
+                    "this lights up. Run a snapshot or wait for the scheduled one.",
+                    ephemeral=True,
+                )
+                self.stop()
+                return
+            embed = format_breakdown_embed(
+                metric_labels=data["metric_labels"],
+                breakdown_summary=data["summary"],
+                prev_period_label=data["prev_period_label"],
+                curr_period_label=data["curr_period_label"],
+                label_overrides=gcfg.get("breakdown_labels") or {},
+            )
+            await inter.followup.send(embed=embed, ephemeral=True)
             self.stop()
 
         @discord.ui.button(label="⚙️ Edit Config", style=discord.ButtonStyle.primary)

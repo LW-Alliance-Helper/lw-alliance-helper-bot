@@ -1056,6 +1056,34 @@ class SetupCog(commands.Cog):
         )
         await run_growth_setup(interaction, self.bot)
 
+    @app_commands.command(
+        name="setup_growth_breakdown",
+        description="💎 Premium — Configure the Growth Breakdown auto-post and bucket customization",
+    )
+    async def setup_growth_breakdown(self, interaction: discord.Interaction):
+        if not _has_leadership_or_admin(interaction):
+            await interaction.response.send_message(
+                "⛔ You need the leadership role (or admin) to run `/setup_growth_breakdown`.",
+                ephemeral=True,
+            )
+            return
+        if not await premium.is_premium(interaction.guild_id, interaction=interaction):
+            await interaction.response.send_message(
+                "💎 `/setup_growth_breakdown` is a Premium feature. The "
+                "**📊 Breakdown** button on `/growth` works on every tier — "
+                "this command configures the auto-post and the customizable "
+                "thresholds and labels. Run `/upgrade` to subscribe.",
+                ephemeral=True,
+            )
+            return
+        if not await _check_wizard_can_run(interaction, "setup_growth_breakdown"):
+            return
+        await interaction.response.send_message(
+            "⚙️ Starting Growth Breakdown setup — check the channel for prompts!",
+            ephemeral=True,
+        )
+        await run_growth_breakdown_setup(interaction, self.bot)
+
     @app_commands.command(name="setup_birthdays", description="Configure birthday tracking — sheet tab, columns, and lookahead days")
     async def setup_birthdays(self, interaction: discord.Interaction):
         if not _has_leadership_or_admin(interaction):
@@ -1130,6 +1158,21 @@ class SetupCog(commands.Cog):
             "⚙️ Starting survey setup — check the channel for prompts!", ephemeral=True
         )
         await run_survey_setup(interaction, self.bot)
+
+    @app_commands.command(name="setup_shiny_tasks", description="Daily announcement of today's shiny task servers for your Alliance")
+    async def setup_shiny_tasks(self, interaction: discord.Interaction):
+        if not _has_leadership_or_admin(interaction):
+            await interaction.response.send_message(
+                "⛔ You need the leadership role (or admin) to run `/setup_shiny_tasks`.",
+                ephemeral=True,
+            )
+            return
+        if not await _check_wizard_can_run(interaction, "setup_shiny_tasks"):
+            return
+        await interaction.response.send_message(
+            "⚙️ Starting Shiny Tasks setup — check the channel for prompts!", ephemeral=True
+        )
+        await run_shiny_tasks_setup(interaction, self.bot)
 
 
 # ── /Define Various Setup Commands ───────────────────────────────────────────────────────
@@ -1256,6 +1299,7 @@ async def _send_view_configuration(interaction: discord.Interaction, cfg) -> Non
     from config import (
         get_train_config, get_birthday_config, get_storm_config,
         get_survey_config, get_growth_config, get_guild_events,
+        get_shiny_tasks_config,
     )
     guild_id = interaction.guild_id
     train    = get_train_config(guild_id)
@@ -1264,6 +1308,7 @@ async def _send_view_configuration(interaction: discord.Interaction, cfg) -> Non
     cs       = get_storm_config(guild_id, "CS")
     survey   = get_survey_config(guild_id)
     growth   = get_growth_config(guild_id)
+    shiny    = get_shiny_tasks_config(guild_id)
     events   = get_guild_events(guild_id, active_only=True)
     is_premium_flag = await premium.is_premium(guild_id, interaction=interaction)
 
@@ -1407,6 +1452,17 @@ async def _send_view_configuration(interaction: discord.Interaction, cfg) -> Non
             + (", ".join(f"{m['label']} (col {m['col']})" for m in metrics) if metrics else "*none*"),
         ]
     embed.add_field(name="📈 Growth", value="\n".join(g_lines)[:1024], inline=False)
+
+    st_lines = [f"**Enabled:** {_enabled(shiny.get('enabled'))}"]
+    if shiny.get("enabled"):
+        st_lines += [
+            f"**Channel:** {_channel(shiny.get('channel_id'))}",
+            f"**Post Time:** {shiny.get('post_time', '*not set*')}",
+            f"**Server Range:** "
+            f"{shiny.get('server_min') or '?'} – {shiny.get('server_max') or '?'}",
+            f"**Custom Message:** {_yn(shiny.get('message_template'))}",
+        ]
+    embed.add_field(name="🌟 Shiny Tasks", value="\n".join(st_lines)[:1024], inline=False)
 
     if is_premium_flag:
         embed.set_footer(text="💎 Premium is active. Run any /setup_* command to update a section.")
@@ -1632,7 +1688,8 @@ async def run_setup(interaction: discord.Interaction, bot):
         "⚔️ `/setup_desertstorm` — Desert Storm mail drafts and participation logs\n"
         "🏜️ `/setup_canyonstorm` — Canyon Storm mail drafts and participation logs\n"
         "📋 `/setup_survey` — Squad powers survey\n"
-        "📈 `/setup_growth` — Growth tracking (snapshot your members' stats over time)\n\n"
+        "📈 `/setup_growth` — Growth tracking (snapshot your members' stats over time)\n"
+        "🌟 `/setup_shiny_tasks` — Daily announcement of today's shiny task servers for your Alliance\n\n"
         "You can set up as many or as few of these as you need. Use `/help` at any time to see all available commands."
     )
     wizard_registry.unregister(user.id, cancel_event)
@@ -2110,6 +2167,398 @@ async def run_growth_setup(interaction: discord.Interaction, bot):
     await channel.send(embed=embed)
     wizard_registry.unregister(user.id, cancel_event)
     print(f"[SETUP] Growth config saved for guild {guild_id}")
+
+
+async def run_growth_breakdown_setup(interaction: discord.Interaction, bot):
+    """Premium-only wizard for the Growth Breakdown auto-post + customization.
+
+    The bucket-classification math itself ships free (the `/growth`
+    **📊 Breakdown** button reads the breakdown tab for any guild that's
+    enabled growth tracking). This wizard configures the Premium layer:
+
+      * sheet tab name for the breakdown
+      * auto-post channel (fires after every snapshot, premium-gated at
+        post time so a subscription lapse stops the alerts without any
+        config change)
+      * bucket filter (which buckets fire the auto-post — e.g. only
+        Decline + None)
+      * custom thresholds applied to every metric (global, not per-metric
+        — per-metric customization is parked as a follow-up if alliances
+        ask for it)
+      * custom labels for each bucket
+    """
+    import wizard_registry
+    from config import (
+        get_growth_config, save_growth_breakdown_config,
+    )
+    from growth import DEFAULT_THRESHOLDS, DEFAULT_BUCKET_LABELS, BUCKET_ORDER
+
+    guild_id = interaction.guild_id
+    channel  = interaction.channel
+    user     = interaction.user
+    cancel_event = wizard_registry.register(user.id)
+
+    current = get_growth_config(guild_id)
+    if not current.get("enabled") or not current.get("metrics"):
+        await channel.send(
+            "⚙️ Set up growth tracking first — run `/setup_growth` and add at "
+            "least one metric, then come back to `/setup_growth_breakdown` to "
+            "configure the breakdown layer."
+        )
+        wizard_registry.unregister(user.id, cancel_event)
+        return
+
+    await channel.send(
+        "📊 **Growth Breakdown Setup** (💎 Premium)\n"
+        "Classifies each member's growth between snapshots into one of "
+        "five buckets and (optionally) posts the summary to a channel "
+        "after every snapshot."
+    )
+
+    # ── Step 1: Breakdown tab ─────────────────────────────────────────────
+    tab_breakdown = await ask_keep_or_change(
+        channel,
+        "**Step 1 of 5 — Breakdown Tab**\n"
+        "Which tab in your Google Sheet should the breakdown data live in? "
+        "The bot creates it automatically if it doesn't exist yet.",
+        default="Growth Breakdown",
+        current=current.get("tab_breakdown") or "",
+        modal_title="Breakdown Tab",
+        modal_label="Tab name",
+        timeout_cmd="setup_growth_breakdown",
+        cancel_event=cancel_event,
+    )
+    if tab_breakdown is None:
+        return
+
+    # ── Step 2: Auto-post toggle + channel ────────────────────────────────
+    autopost_view = YesNoView()
+    await channel.send(
+        "**Step 2 of 5 — Auto-Post After Snapshots?**\n"
+        "Each time the bot finishes a snapshot, post the breakdown summary "
+        "to a channel so leadership doesn't have to click `/growth` to see "
+        "who's slowing down.",
+        view=autopost_view,
+    )
+    await wait_view_or_cancel(autopost_view, cancel_event)
+    if autopost_view.cancelled:
+        return
+    if autopost_view.selected is None:
+        await channel.send("⏰ Timed out. Run `/setup_growth_breakdown` to start again.")
+        return
+
+    post_channel_id = 0
+    if autopost_view.selected:
+        post_ch_view = ChannelSelectStep(
+            "Select the auto-post channel…",
+            suggested_name="growth-breakdown",
+            include_threads=True,
+            guild=interaction.guild,
+        )
+        await channel.send(
+            "**Auto-Post Channel**\n"
+            "Where should the breakdown summaries land?",
+            view=post_ch_view,
+        )
+        await wait_view_or_cancel(post_ch_view, cancel_event)
+        if post_ch_view.cancelled:
+            return
+        if not post_ch_view.confirmed:
+            await channel.send("⏰ Timed out. Run `/setup_growth_breakdown` to start again.")
+            return
+        post_channel_id = post_ch_view.selected_channel.id
+
+    # ── Step 3: Bucket filter ─────────────────────────────────────────────
+    # Surfaces only when auto-post is on — bucket filter doesn't apply to
+    # the on-demand /growth button (which always shows every bucket).
+    bucket_filter: list[str] = []
+    if post_channel_id:
+        class BucketFilterView(discord.ui.View):
+            def __init__(self):
+                super().__init__(timeout=WIZARD_TIMEOUT)
+                self.selected: list[str] | None = None
+
+                opts = [
+                    discord.SelectOption(
+                        label=DEFAULT_BUCKET_LABELS[b],
+                        value=b,
+                        description=f"{b.title()} growth bucket",
+                    )
+                    for b in BUCKET_ORDER
+                ]
+                select = discord.ui.Select(
+                    placeholder="Pick which buckets fire alerts (none = all)",
+                    options=opts,
+                    min_values=0,
+                    max_values=len(BUCKET_ORDER),
+                )
+
+                async def _select_cb(inter: discord.Interaction):
+                    self.selected = list(select.values)
+                    for item in self.children: item.disabled = True
+                    await wizard_registry.safe_edit_response(inter, view=self)
+                    self.stop()
+
+                select.callback = _select_cb
+                self.add_item(select)
+
+                all_btn = discord.ui.Button(
+                    label="Use all buckets",
+                    style=discord.ButtonStyle.secondary,
+                )
+
+                async def _all_cb(inter: discord.Interaction):
+                    self.selected = []
+                    for item in self.children: item.disabled = True
+                    await wizard_registry.safe_edit_response(inter, view=self)
+                    self.stop()
+
+                all_btn.callback = _all_cb
+                self.add_item(all_btn)
+
+        bf_view = BucketFilterView()
+        saved_filter = current.get("breakdown_bucket_filter") or []
+        if saved_filter:
+            saved_disp = ", ".join(
+                DEFAULT_BUCKET_LABELS.get(b, b) for b in saved_filter
+            )
+            await channel.send(
+                f"**Step 3 of 5 — Bucket Filter**\n"
+                f"Currently alerting on: **{saved_disp}**. Pick a new set of "
+                f"buckets, or hit **Use all buckets** to alert on every bucket.",
+                view=bf_view,
+            )
+        else:
+            await channel.send(
+                "**Step 3 of 5 — Bucket Filter**\n"
+                "Pick which buckets fire the auto-post — leave empty (or hit "
+                "**Use all buckets**) to alert on every bucket.",
+                view=bf_view,
+            )
+        await wait_view_or_cancel(bf_view, cancel_event)
+        if bf_view.cancelled:
+            return
+        if bf_view.selected is None:
+            await channel.send("⏰ Timed out. Run `/setup_growth_breakdown` to start again.")
+            return
+        bucket_filter = bf_view.selected
+
+    # ── Step 4: Custom thresholds ─────────────────────────────────────────
+    thresholds = dict(current.get("breakdown_thresholds") or {})
+
+    class ThresholdsModal(discord.ui.Modal):
+        def __init__(self):
+            super().__init__(title="Custom Thresholds (%)")
+            self.values_out: dict | None = None
+            self._increased = discord.ui.TextInput(
+                label="Increased ≥",
+                placeholder="e.g. 20 — bucket lower bound, %",
+                default=str(thresholds.get("increased", DEFAULT_THRESHOLDS["increased"])),
+                required=True, max_length=6,
+            )
+            self._steady = discord.ui.TextInput(
+                label="Steady ≥",
+                placeholder="e.g. 10",
+                default=str(thresholds.get("steady", DEFAULT_THRESHOLDS["steady"])),
+                required=True, max_length=6,
+            )
+            self._low = discord.ui.TextInput(
+                label="Low ≥",
+                placeholder="e.g. 5",
+                default=str(thresholds.get("low", DEFAULT_THRESHOLDS["low"])),
+                required=True, max_length=6,
+            )
+            self._none = discord.ui.TextInput(
+                label="None ≥",
+                placeholder="0 — usually leave as 0. Decline is < 0.",
+                default=str(thresholds.get("none", DEFAULT_THRESHOLDS["none"])),
+                required=True, max_length=6,
+            )
+            for i in (self._increased, self._steady, self._low, self._none):
+                self.add_item(i)
+
+        async def on_submit(self, inter: discord.Interaction):
+            try:
+                self.values_out = {
+                    "increased": float(self._increased.value),
+                    "steady":    float(self._steady.value),
+                    "low":       float(self._low.value),
+                    "none":      float(self._none.value),
+                }
+            except (ValueError, TypeError):
+                self.values_out = None
+            await inter.response.defer()
+            self.stop()
+
+    class ThresholdsChoiceView(discord.ui.View):
+        def __init__(self):
+            super().__init__(timeout=WIZARD_TIMEOUT)
+            self.choice = None
+
+        @discord.ui.button(label="✅ Use defaults", style=discord.ButtonStyle.success)
+        async def defaults_btn(self, inter: discord.Interaction, button: discord.ui.Button):
+            self.choice = "defaults"
+            for item in self.children: item.disabled = True
+            await wizard_registry.safe_edit_response(inter, view=self)
+            self.stop()
+
+        @discord.ui.button(label="✏️ Customize", style=discord.ButtonStyle.primary)
+        async def customize_btn(self, inter: discord.Interaction, button: discord.ui.Button):
+            modal = ThresholdsModal()
+            await inter.response.send_modal(modal)
+            await modal.wait()
+            self.choice = "customize" if modal.values_out else None
+            self._modal_values = modal.values_out
+            for item in self.children: item.disabled = True
+            try:
+                await inter.edit_original_response(view=self)
+            except Exception:
+                pass
+            self.stop()
+
+    t_view = ThresholdsChoiceView()
+    t_view._modal_values = None
+    await channel.send(
+        "**Step 4 of 5 — Bucket Thresholds**\n"
+        f"Defaults: Increased ≥ {DEFAULT_THRESHOLDS['increased']:.0f}%, "
+        f"Steady ≥ {DEFAULT_THRESHOLDS['steady']:.0f}%, "
+        f"Low ≥ {DEFAULT_THRESHOLDS['low']:.0f}%, "
+        f"None ≥ {DEFAULT_THRESHOLDS['none']:.0f}%, "
+        f"Decline < 0%.\n"
+        "Customize for stricter (or looser) growth standards — applies to "
+        "every metric. Per-metric thresholds are tracked as a follow-up.",
+        view=t_view,
+    )
+    await wait_view_or_cancel(t_view, cancel_event)
+    if t_view.cancelled:
+        return
+    if t_view.choice is None:
+        await channel.send(
+            "⏰ Timed out or invalid thresholds. Run `/setup_growth_breakdown` to start again."
+        )
+        return
+    if t_view.choice == "defaults":
+        thresholds = {}
+    else:
+        thresholds = t_view._modal_values
+
+    # ── Step 5: Custom labels ─────────────────────────────────────────────
+    labels = dict(current.get("breakdown_labels") or {})
+
+    class LabelsModal(discord.ui.Modal):
+        def __init__(self):
+            super().__init__(title="Custom Bucket Labels")
+            self.values_out: dict | None = None
+            self._inputs = {}
+            for b in BUCKET_ORDER:
+                ti = discord.ui.TextInput(
+                    label=DEFAULT_BUCKET_LABELS[b],
+                    placeholder=f"e.g. '{DEFAULT_BUCKET_LABELS[b]}'",
+                    default=str(labels.get(b, DEFAULT_BUCKET_LABELS[b])),
+                    required=True, max_length=30,
+                )
+                self._inputs[b] = ti
+                self.add_item(ti)
+
+        async def on_submit(self, inter: discord.Interaction):
+            self.values_out = {b: ti.value.strip() for b, ti in self._inputs.items()}
+            await inter.response.defer()
+            self.stop()
+
+    class LabelsChoiceView(discord.ui.View):
+        def __init__(self):
+            super().__init__(timeout=WIZARD_TIMEOUT)
+            self.choice = None
+
+        @discord.ui.button(label="✅ Use defaults", style=discord.ButtonStyle.success)
+        async def defaults_btn(self, inter: discord.Interaction, button: discord.ui.Button):
+            self.choice = "defaults"
+            for item in self.children: item.disabled = True
+            await wizard_registry.safe_edit_response(inter, view=self)
+            self.stop()
+
+        @discord.ui.button(label="✏️ Customize", style=discord.ButtonStyle.primary)
+        async def customize_btn(self, inter: discord.Interaction, button: discord.ui.Button):
+            modal = LabelsModal()
+            await inter.response.send_modal(modal)
+            await modal.wait()
+            self.choice = "customize" if modal.values_out else None
+            self._modal_values = modal.values_out
+            for item in self.children: item.disabled = True
+            try:
+                await inter.edit_original_response(view=self)
+            except Exception:
+                pass
+            self.stop()
+
+    l_view = LabelsChoiceView()
+    l_view._modal_values = None
+    await channel.send(
+        "**Step 5 of 5 — Bucket Labels**\n"
+        f"Defaults: {', '.join(DEFAULT_BUCKET_LABELS[b] for b in BUCKET_ORDER)}.\n"
+        "Rename buckets to match your alliance's voice (e.g. 'Crushing It', "
+        "'Stalled', 'Going Backwards').",
+        view=l_view,
+    )
+    await wait_view_or_cancel(l_view, cancel_event)
+    if l_view.cancelled:
+        return
+    if l_view.choice is None:
+        await channel.send(
+            "⏰ Timed out. Run `/setup_growth_breakdown` to start again."
+        )
+        return
+    if l_view.choice == "defaults":
+        labels = {}
+    else:
+        labels = l_view._modal_values
+
+    # ── Save ──────────────────────────────────────────────────────────────
+    saved_ok = save_growth_breakdown_config(
+        guild_id,
+        tab_breakdown=tab_breakdown,
+        breakdown_thresholds=thresholds,
+        breakdown_labels=labels,
+        breakdown_post_channel_id=post_channel_id,
+        breakdown_bucket_filter=bucket_filter,
+    )
+    if not saved_ok:
+        await channel.send(
+            "⚠️ Couldn't save the breakdown config — make sure `/setup_growth` "
+            "has been run for this server first."
+        )
+        wizard_registry.unregister(user.id, cancel_event)
+        return
+
+    embed = discord.Embed(title="✅ Growth Breakdown Configured", color=discord.Color.green())
+    embed.add_field(name="Breakdown Tab", value=tab_breakdown, inline=False)
+    if post_channel_id:
+        bf_text = (
+            ", ".join(DEFAULT_BUCKET_LABELS.get(b, b) for b in bucket_filter)
+            if bucket_filter else "All buckets"
+        )
+        embed.add_field(name="Auto-Post Channel", value=f"<#{post_channel_id}>", inline=False)
+        embed.add_field(name="Bucket Filter",     value=bf_text,                inline=False)
+    else:
+        embed.add_field(name="Auto-Post", value="❌ Off — use `/growth` → 📊 Breakdown to view on demand.", inline=False)
+    if thresholds:
+        t_text = (
+            f"Increased ≥ {thresholds['increased']:g}%, "
+            f"Steady ≥ {thresholds['steady']:g}%, "
+            f"Low ≥ {thresholds['low']:g}%, "
+            f"None ≥ {thresholds['none']:g}%, Decline < 0%"
+        )
+        embed.add_field(name="Custom Thresholds", value=t_text, inline=False)
+    else:
+        embed.add_field(name="Thresholds", value="Defaults (Increased ≥ 20%, Steady ≥ 10%, Low ≥ 5%, None ≥ 0%, Decline < 0%)", inline=False)
+    if labels:
+        l_text = ", ".join(f"{DEFAULT_BUCKET_LABELS[b]}→{labels[b]}" for b in BUCKET_ORDER if labels.get(b))
+        embed.add_field(name="Custom Labels", value=l_text or "—", inline=False)
+    embed.set_footer(text="Run /setup_growth_breakdown again to update.")
+    await channel.send(embed=embed)
+    wizard_registry.unregister(user.id, cancel_event)
+    print(f"[SETUP] Growth Breakdown config saved for guild {guild_id}")
+
 
 async def run_train_setup(interaction: discord.Interaction, bot):
     """Walk an admin through configuring the train schedule."""
@@ -5044,6 +5493,300 @@ async def run_birthday_setup(interaction: discord.Interaction, bot):
     await channel.send(embed=embed)
     wizard_registry.unregister(user.id, cancel_event)
     print(f"[SETUP] Birthday config saved for guild {guild_id}")
+
+async def run_shiny_tasks_setup(interaction: discord.Interaction, bot):
+    """Walk leadership through configuring the daily shiny-tasks
+    announcement. Six steps: enable → channel → server range → post
+    time → message template → confirm. Free for all tiers."""
+    import wizard_registry
+    from config import (
+        get_config, get_shiny_tasks_config, save_shiny_tasks_config,
+    )
+    from defaults import DEFAULT_SHINY_TASKS_MESSAGE
+
+    guild_id     = interaction.guild_id
+    channel      = interaction.channel
+    user         = interaction.user
+    cancel_event = wizard_registry.register(user.id)
+
+    current  = get_shiny_tasks_config(guild_id)
+    cfg      = get_config(guild_id)
+    tz_label = TIMEZONE_LABELS.get(
+        cfg.timezone if cfg else "America/New_York", "ET",
+    )
+
+    await channel.send(
+        "🌟 **Daily Shiny Tasks Setup**\n"
+        "Each day, the bot can post the list of Last War servers where "
+        "shiny tasks are available, filtered to the servers your alliance "
+        "can reach."
+    )
+
+    # ── Step 1: Enable? ───────────────────────────────────────────────────────
+    enabled_view = YesNoView()
+    await channel.send(
+        "**Step 1 of 6 — Enable daily shiny tasks announcement?**",
+        view=enabled_view,
+    )
+    await wait_view_or_cancel(enabled_view, cancel_event)
+    if enabled_view.cancelled:
+        wizard_registry.unregister(user.id, cancel_event)
+        return
+    if enabled_view.selected is None:
+        await channel.send("⏰ Timed out. Run `/setup_shiny_tasks` to start again.")
+        wizard_registry.unregister(user.id, cancel_event)
+        return
+    if not enabled_view.selected:
+        # Disable + persist the previously-saved range/channel/etc. so the
+        # next /setup_shiny_tasks run can offer them back as "current".
+        save_shiny_tasks_config(
+            guild_id,
+            enabled=0,
+            channel_id=current.get("channel_id", 0),
+            post_time=current.get("post_time", "09:00"),
+            server_min=current.get("server_min", 0),
+            server_max=current.get("server_max", 0),
+            message_template=current.get("message_template", ""),
+        )
+        await channel.send("✅ Shiny-tasks announcement disabled.")
+        wizard_registry.unregister(user.id, cancel_event)
+        return
+
+    # ── Step 2: Channel ───────────────────────────────────────────────────────
+    is_premium_flag = await premium.is_premium(guild_id, interaction=interaction)
+    await channel.send(
+        "**Step 2 of 6 — Announcement Channel**\n"
+        "Pick the channel where the daily shiny tasks post should be posted."
+    )
+    ch_view = ChannelSelectStep(
+        "Select the shiny tasks channel...",
+        suggested_name="shiny-tasks",
+        include_threads=is_premium_flag,
+        guild=interaction.guild,
+    )
+    await channel.send("​", view=ch_view)
+    await wait_view_or_cancel(ch_view, cancel_event)
+    if ch_view.cancelled:
+        wizard_registry.unregister(user.id, cancel_event)
+        return
+    if not ch_view.confirmed:
+        await channel.send("⏰ Timed out. Run `/setup_shiny_tasks` to start again.")
+        wizard_registry.unregister(user.id, cancel_event)
+        return
+    channel_id = ch_view.selected_channel.id
+
+    # ── Step 3: Server range (min + max in one modal) ─────────────────────────
+    class ServerRangeModal(discord.ui.Modal):
+        def __init__(self, min_default: str = "", max_default: str = ""):
+            super().__init__(title="Server Range")
+            self.min_value = None
+            self.max_value = None
+            self._min = discord.ui.TextInput(
+                label="Lowest reachable server number",
+                placeholder="e.g. 681",
+                default=min_default,
+                required=True, max_length=5,
+            )
+            self._max = discord.ui.TextInput(
+                label="Highest reachable server number",
+                placeholder="e.g. 799",
+                default=max_default,
+                required=True, max_length=5,
+            )
+            self.add_item(self._min)
+            self.add_item(self._max)
+
+        async def on_submit(self, inter: discord.Interaction):
+            self.min_value = self._min.value.strip()
+            self.max_value = self._max.value.strip()
+            await inter.response.defer()
+            self.stop()
+
+    saved_min = current.get("server_min") or 0
+    saved_max = current.get("server_max") or 0
+    range_prompt = (
+        "**Step 3 of 6 — Server Range**\n"
+        "Enter the lowest and highest server numbers your alliance can "
+        "reach. Typically your transfer range."
+    )
+    range_attempts_left = 3
+    server_min = server_max = None
+    while True:
+        range_modal = ServerRangeModal(
+            min_default=str(saved_min) if saved_min else "",
+            max_default=str(saved_max) if saved_max else "",
+        )
+        range_launcher = ModalLaunchView(range_modal)
+        await channel.send(range_prompt, view=range_launcher)
+        await wait_view_or_cancel(range_launcher, cancel_event)
+        if range_launcher.cancelled:
+            wizard_registry.unregister(user.id, cancel_event)
+            return
+        if not range_launcher.confirmed:
+            await channel.send("⏰ Timed out. Run `/setup_shiny_tasks` to start again.")
+            wizard_registry.unregister(user.id, cancel_event)
+            return
+
+        min_raw = (range_modal.min_value or "").strip()
+        max_raw = (range_modal.max_value or "").strip()
+        try:
+            candidate_min = int(min_raw)
+            candidate_max = int(max_raw)
+            valid_numbers = True
+        except (TypeError, ValueError):
+            valid_numbers = False
+
+        if valid_numbers and candidate_min >= 1 and candidate_min <= candidate_max:
+            server_min = candidate_min
+            server_max = candidate_max
+            break
+
+        range_attempts_left -= 1
+        if range_attempts_left <= 0:
+            await channel.send(
+                "⚠️ Could not read those server numbers after a few tries. "
+                "Run `/setup_shiny_tasks` to start over."
+            )
+            wizard_registry.unregister(user.id, cancel_event)
+            return
+
+        # Pre-fill the retry modal with whatever the user typed, so the
+        # correction is one tap away instead of re-entering both fields.
+        saved_min = min_raw
+        saved_max = max_raw
+        if not valid_numbers:
+            await channel.send(
+                f"⚠️ Could not read **`{min_raw}`** / **`{max_raw}`** as whole "
+                f"numbers. Try something like `681` and `799`. Let's try once more."
+            )
+        else:
+            await channel.send(
+                f"⚠️ The lowest server (**`{min_raw}`**) must be ≥ 1 and "
+                f"≤ the highest (**`{max_raw}`**). Let's try once more."
+            )
+
+    # ── Step 4: Post time ─────────────────────────────────────────────────────
+    attempts_left = 3
+    post_time = "09:00"
+    while True:
+        time_raw = await ask_keep_or_change(
+            channel,
+            f"**Step 4 of 6 — Post Time**\n"
+            f"What time of day should the announcement post? "
+            f"*(in your timezone: {tz_label})*\n"
+            f"*(e.g. `9:00am`, `10:30am`, `9:00pm`)*",
+            default="9:00am",
+            current=current.get("post_time", ""),
+            modal_title="Post Time",
+            modal_label="Time",
+            timeout_cmd="setup_shiny_tasks",
+            cancel_event=cancel_event,
+        )
+        if time_raw is None:
+            wizard_registry.unregister(user.id, cancel_event)
+            return
+        parsed = _parse_12h_time(time_raw)
+        if parsed:
+            post_time = parsed
+            break
+        if (len(time_raw) == 5 and time_raw[2] == ":"
+                and time_raw.replace(":", "").isdigit()):
+            post_time = time_raw  # already 24h
+            break
+        attempts_left -= 1
+        if attempts_left <= 0:
+            await channel.send(
+                "⚠️ Could not read that time after a few tries. "
+                "Run `/setup_shiny_tasks` to start over."
+            )
+            wizard_registry.unregister(user.id, cancel_event)
+            return
+        await channel.send(
+            f"⚠️ Could not read **`{time_raw}`** as a time. "
+            f"Try `9:00am`, `10:30am`, or `09:00`. Let's try once more."
+        )
+
+    # ── Step 5: Message template ──────────────────────────────────────────────
+    saved_template = (current.get("message_template") or "").strip()
+    template_input = await ask_keep_or_change(
+        channel,
+        "**Step 5 of 6 — Announcement Message**\n"
+        "Customize the announcement body, or use the default. "
+        "Placeholders: `{servers}` and `{date}`.",
+        default=DEFAULT_SHINY_TASKS_MESSAGE,
+        current=saved_template or None,
+        modal_title="Shiny Tasks Message",
+        modal_label="Message body",
+        timeout_cmd="setup_shiny_tasks",
+        cancel_event=cancel_event,
+    )
+    if template_input is None:
+        wizard_registry.unregister(user.id, cancel_event)
+        return
+    # Store empty string when the user picks "use default" so a future
+    # change to DEFAULT_SHINY_TASKS_MESSAGE automatically propagates,
+    # instead of freezing today's wording in the DB.
+    message_template = (
+        "" if template_input.strip() == DEFAULT_SHINY_TASKS_MESSAGE.strip()
+        else template_input.strip()
+    )
+
+    # ── Step 6: Confirm + save ────────────────────────────────────────────────
+    embed = discord.Embed(
+        title="🌟 Shiny Tasks — Final Review",
+        description="Confirm to save this configuration.",
+        color=discord.Color.gold(),
+    )
+    embed.add_field(name="Status",         value="✅ Enabled",                       inline=True)
+    embed.add_field(name="Channel",        value=f"<#{channel_id}>",                inline=True)
+    embed.add_field(name="Server Range",   value=f"{server_min} – {server_max}",    inline=True)
+    embed.add_field(name="Post Time",      value=f"{post_time}  *({tz_label})*",    inline=True)
+    embed.add_field(
+        name="Message",
+        value=(message_template or DEFAULT_SHINY_TASKS_MESSAGE)[:1024],
+        inline=False,
+    )
+    confirm_view = ConfirmView()
+    await channel.send(embed=embed, view=confirm_view)
+    await wait_view_or_cancel(confirm_view, cancel_event)
+    if confirm_view.cancelled:
+        wizard_registry.unregister(user.id, cancel_event)
+        return
+    if not confirm_view.confirmed:
+        await channel.send("❌ Setup cancelled. Run `/setup_shiny_tasks` to start again.")
+        wizard_registry.unregister(user.id, cancel_event)
+        return
+
+    save_shiny_tasks_config(
+        guild_id,
+        enabled=1,
+        channel_id=channel_id,
+        post_time=post_time,
+        server_min=server_min,
+        server_max=server_max,
+        message_template=message_template,
+    )
+
+    # Render the post time with the events-style `5:00pm EDT` suffix
+    # rather than a bare `09:00` — anchored on today's date so DST
+    # gives the right tz abbreviation (EDT vs EST).
+    from datetime import datetime as _dt
+    from zoneinfo import ZoneInfo as _ZI
+    from scheduler import format_et as _format_et
+    try:
+        _hh, _mm = (int(p) for p in post_time.split(":"))
+        _tz      = _ZI(cfg.timezone if cfg else "America/New_York")
+        _today   = _dt.now(tz=_tz).date()
+        _human   = _format_et(_dt(_today.year, _today.month, _today.day, _hh, _mm, tzinfo=_tz))
+    except Exception:
+        _human = post_time  # never block the success path on a format hiccup
+
+    await channel.send(
+        f"✅ Shiny-tasks announcement saved! The first post will fire at {_human}."
+    )
+    wizard_registry.unregister(user.id, cancel_event)
+    print(f"[SETUP] Shiny tasks config saved for guild {guild_id}")
+
 
 async def setup(bot: commands.Bot):
     await bot.add_cog(SetupCog(bot))

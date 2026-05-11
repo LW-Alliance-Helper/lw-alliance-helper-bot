@@ -288,6 +288,24 @@ def init_db():
                 assigned_at TEXT    NOT NULL
             )
         """)
+
+        # Operational metadata about which guilds the bot is installed in.
+        # Lets support triage identify a guild from a logged `guild_id`
+        # without a live `bot.get_guild` lookup. `installer_user_id` comes
+        # from the audit log on join and is best-effort (the audit log only
+        # retains 45 days); `owner_id` is the always-available fallback
+        # contact path. Rows are deleted in `on_guild_remove` and on
+        # `/admin_forget_guild` so kicked guilds aren't retained.
+        conn.execute("""
+            CREATE TABLE IF NOT EXISTS guild_install_metadata (
+                guild_id          INTEGER PRIMARY KEY,
+                guild_name        TEXT    NOT NULL DEFAULT '',
+                owner_id          INTEGER NOT NULL DEFAULT 0,
+                installer_user_id INTEGER,
+                installed_at      TEXT    NOT NULL,
+                last_seen_at      TEXT    NOT NULL
+            )
+        """)
         conn.commit()
 
         # Add spreadsheet_id column if upgrading from an older schema that didn't have it
@@ -767,6 +785,75 @@ def remove_premium_assignment(user_id: int) -> Optional[int]:
         conn.execute("DELETE FROM premium_assignments WHERE user_id = ?", (user_id,))
         conn.commit()
         return guild_id
+
+
+# ── Guild install metadata helpers ─────────────────────────────────────────────
+#
+# Small operational record per guild used for support triage (matching a
+# logged `guild_id` to an alliance name without a live Discord lookup).
+# See `guild_install_metadata` schema in `init_db` for the column list.
+
+def upsert_guild_install_metadata(
+    guild_id: int,
+    guild_name: str,
+    owner_id: int,
+    installer_user_id: Optional[int] = None,
+) -> None:
+    """Insert or update the metadata row for a guild.
+
+    First sighting: writes all fields and stamps both `installed_at` and
+    `last_seen_at` to now. Subsequent sightings: refreshes `guild_name`,
+    `owner_id`, `last_seen_at`; preserves `installed_at` and only fills
+    `installer_user_id` if it's still NULL (audit-log lookups can fail on
+    later boots even when they succeeded once).
+    """
+    from datetime import datetime, timezone
+    now = datetime.now(timezone.utc).isoformat()
+    with _get_conn() as conn:
+        existing = conn.execute(
+            "SELECT installer_user_id FROM guild_install_metadata WHERE guild_id = ?",
+            (guild_id,),
+        ).fetchone()
+        if existing is None:
+            conn.execute(
+                """INSERT INTO guild_install_metadata
+                   (guild_id, guild_name, owner_id, installer_user_id, installed_at, last_seen_at)
+                   VALUES (?, ?, ?, ?, ?, ?)""",
+                (guild_id, guild_name, owner_id, installer_user_id, now, now),
+            )
+        else:
+            prev_installer = existing["installer_user_id"]
+            new_installer = prev_installer if prev_installer is not None else installer_user_id
+            conn.execute(
+                """UPDATE guild_install_metadata
+                   SET guild_name = ?, owner_id = ?, installer_user_id = ?, last_seen_at = ?
+                   WHERE guild_id = ?""",
+                (guild_name, owner_id, new_installer, now, guild_id),
+            )
+        conn.commit()
+
+
+def get_guild_install_metadata(guild_id: int) -> Optional[dict]:
+    """Return the metadata row as a dict, or None if absent."""
+    with _get_conn() as conn:
+        row = conn.execute(
+            "SELECT * FROM guild_install_metadata WHERE guild_id = ?",
+            (guild_id,),
+        ).fetchone()
+    return dict(row) if row is not None else None
+
+
+def delete_guild_install_metadata(guild_id: int) -> bool:
+    """Delete the metadata row. Returns True if a row was deleted, False
+    if no row existed for that guild_id.
+    """
+    with _get_conn() as conn:
+        cur = conn.execute(
+            "DELETE FROM guild_install_metadata WHERE guild_id = ?",
+            (guild_id,),
+        )
+        conn.commit()
+        return cur.rowcount > 0
 
 
 # ── Guild event helpers ────────────────────────────────────────────────────────

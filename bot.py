@@ -12,7 +12,11 @@ from scheduler import (
 )
 from stats_publisher import publish_alliance_count
 from zoneinfo import ZoneInfo
-from config import init_db, get_config
+from config import (
+    init_db, get_config,
+    upsert_guild_install_metadata, get_guild_install_metadata,
+    delete_guild_install_metadata,
+)
 import wizard_registry
 
 load_dotenv()
@@ -192,6 +196,27 @@ async def on_ready():
     # Set the bot's presence to reflect the live guild count.
     await _update_presence()
 
+    # Backfill install metadata for every connected guild. on_guild_join
+    # only fires for *new* installs, so without this pass the metadata
+    # table stays empty for guilds the bot was already in before this
+    # release shipped. Idempotent — the upsert preserves `installed_at`
+    # and `installer_user_id` on rows that already have them. We don't
+    # try to recover `installer_user_id` from the audit log here: it
+    # would mean an API call per guild on every reconnect, and the audit
+    # log only retains 45 days anyway.
+    for g in bot.guilds:
+        try:
+            upsert_guild_install_metadata(
+                guild_id=g.id,
+                guild_name=g.name,
+                owner_id=g.owner_id or 0,
+                installer_user_id=None,
+            )
+        except Exception as e:
+            print(f"[GUILD] Could not backfill metadata for {g.name} ({g.id}): {e}")
+            sentry_sdk.capture_exception(e)
+    print(f"[GUILD] Refreshed install metadata for {len(bot.guilds)} guild(s)")
+
     # Only start background tasks once — they persist across reconnects
     if not hasattr(bot, "_tasks_started"):
         bot._tasks_started = True
@@ -207,7 +232,8 @@ async def on_ready():
 async def on_guild_join(guild: discord.Guild):
     """When the bot is added to a new server, DM the inviter (or the owner
     if the inviter can't be determined) with a welcome / setup message,
-    and refresh the presence count.
+    persist a small operational-metadata record for support triage, and
+    refresh the presence count.
     """
     print(f"[GUILD] Joined {guild.name} (ID: {guild.id}) — {guild.member_count} members")
 
@@ -222,6 +248,20 @@ async def on_guild_join(guild: discord.Guild):
                 break
     except (discord.Forbidden, discord.HTTPException) as e:
         print(f"[GUILD] Couldn't read audit log on join for {guild.name}: {e}")
+
+    # Persist the install metadata row. Owner is always present on guilds
+    # the bot is in; inviter is best-effort. See `config.upsert_guild_install_metadata`
+    # for the upsert semantics.
+    try:
+        upsert_guild_install_metadata(
+            guild_id=guild.id,
+            guild_name=guild.name,
+            owner_id=guild.owner_id or 0,
+            installer_user_id=inviter.id if inviter else None,
+        )
+    except Exception as e:
+        print(f"[GUILD] Could not persist install metadata for {guild.name}: {e}")
+        sentry_sdk.capture_exception(e)
 
     # Fall back to the guild owner if the inviter isn't available.
     target_user = inviter or guild.owner
@@ -242,8 +282,15 @@ async def on_guild_join(guild: discord.Guild):
 
 @bot.event
 async def on_guild_remove(guild: discord.Guild):
-    """Refresh the presence count when the bot is removed from a server."""
+    """Refresh the presence count when the bot is removed from a server,
+    and drop the install metadata row so kicked guilds aren't retained.
+    """
     print(f"[GUILD] Removed from {guild.name} (ID: {guild.id})")
+    try:
+        delete_guild_install_metadata(guild.id)
+    except Exception as e:
+        print(f"[GUILD] Could not clear install metadata for {guild.name}: {e}")
+        sentry_sdk.capture_exception(e)
     await _update_presence()
 
 
@@ -805,6 +852,185 @@ async def help_slash(interaction: discord.Interaction):
     view = HelpView(is_premium_flag, origin=interaction)
     await interaction.response.send_message(
         embed=embed, view=view, ephemeral=True,
+    )
+
+
+# ── Owner-only diagnostic commands ─────────────────────────────────────────────
+#
+# Bot-operational metadata + cleanup. Gated by `bot.is_owner` so they're only
+# usable by whoever owns the Discord application (or its team), not by guild
+# admins. These read from `guild_install_metadata` (populated in
+# on_guild_join / on_ready) and `guild_configs` to make it possible to
+# identify an alliance from a logged `guild_id` and to action a data-removal
+# request without a Railway shell session. Slash commands take guild IDs as
+# strings — snowflakes can exceed JavaScript's safe-integer range.
+
+
+async def _require_bot_owner(interaction: discord.Interaction) -> bool:
+    """Send an ephemeral reject if the caller isn't the application owner."""
+    if await bot.is_owner(interaction.user):
+        return True
+    await interaction.response.send_message(
+        "⛔ This command is restricted to the bot owner.", ephemeral=True
+    )
+    return False
+
+
+def _parse_guild_id(raw: str) -> int | None:
+    try:
+        return int(raw.strip())
+    except (TypeError, ValueError):
+        return None
+
+
+@bot.tree.command(
+    name="admin_guild_info",
+    description="(Bot owner only) Look up stored metadata + config for a guild_id.",
+)
+@app_commands.describe(guild_id="Discord guild ID — paste from log line / Sentry tag")
+async def admin_guild_info_slash(interaction: discord.Interaction, guild_id: str):
+    if not await _require_bot_owner(interaction):
+        return
+
+    gid = _parse_guild_id(guild_id)
+    if gid is None:
+        await interaction.response.send_message(
+            f"⚠️ `{guild_id}` isn't a valid integer guild ID.", ephemeral=True
+        )
+        return
+
+    meta = get_guild_install_metadata(gid)
+    cfg  = get_config(gid)
+
+    if meta is None and cfg is None:
+        await interaction.response.send_message(
+            f"ℹ️ No record found for guild `{gid}`. The bot may not be in it, "
+            "or it joined before metadata tracking shipped and hasn't reconnected since.",
+            ephemeral=True,
+        )
+        return
+
+    title = (meta["guild_name"] if meta else None) or f"Guild {gid}"
+    embed = discord.Embed(title=f"🔎 {title}", color=discord.Color.blurple())
+    embed.add_field(name="Guild ID", value=f"`{gid}`", inline=False)
+
+    if meta is not None:
+        owner_line = f"<@{meta['owner_id']}> (`{meta['owner_id']}`)" if meta["owner_id"] else "*unknown*"
+        embed.add_field(name="Owner", value=owner_line, inline=False)
+        if meta["installer_user_id"]:
+            embed.add_field(
+                name="Installer",
+                value=f"<@{meta['installer_user_id']}> (`{meta['installer_user_id']}`)",
+                inline=False,
+            )
+        else:
+            embed.add_field(
+                name="Installer",
+                value="*not captured (joined before metadata tracking, or audit log unavailable)*",
+                inline=False,
+            )
+        embed.add_field(name="First seen", value=meta["installed_at"], inline=True)
+        embed.add_field(name="Last seen",  value=meta["last_seen_at"], inline=True)
+    else:
+        embed.add_field(
+            name="Install metadata",
+            value="*missing — guild has a config row but no metadata record yet (will appear on next reconnect)*",
+            inline=False,
+        )
+
+    if cfg is not None:
+        embed.add_field(name="Setup complete", value="✅" if cfg.setup_complete else "❌", inline=True)
+        embed.add_field(name="Timezone",       value=cfg.timezone or "*not set*", inline=True)
+        embed.add_field(name="Leadership role", value=cfg.leadership_role_name or "*not set*", inline=False)
+        sheet_id = (cfg.spreadsheet_id or "").strip()
+        if sheet_id:
+            sheet_link = f"[`{sheet_id}`](https://docs.google.com/spreadsheets/d/{sheet_id})"
+            embed.add_field(name="Sheet", value=sheet_link, inline=False)
+        else:
+            embed.add_field(name="Sheet", value="*not configured*", inline=False)
+    else:
+        embed.add_field(
+            name="Configuration",
+            value="*no `guild_configs` row — bot is installed but `/setup` was never completed*",
+            inline=False,
+        )
+
+    await interaction.response.send_message(embed=embed, ephemeral=True)
+
+
+class _ForgetGuildConfirm(discord.ui.View):
+    """Two-button confirm for /admin_forget_guild. Auto-cancels on timeout."""
+
+    def __init__(self, guild_id: int, owner_id: int):
+        super().__init__(timeout=60)
+        self._guild_id = guild_id
+        self._owner_id = owner_id
+        self._handled = False
+
+    async def interaction_check(self, interaction: discord.Interaction) -> bool:
+        if interaction.user.id != self._owner_id:
+            await interaction.response.send_message(
+                "⛔ Only the bot owner who started this can confirm.", ephemeral=True
+            )
+            return False
+        return True
+
+    @discord.ui.button(label="🗑️ Delete metadata row", style=discord.ButtonStyle.danger)
+    async def confirm(self, inter: discord.Interaction, button: discord.ui.Button):
+        self._handled = True
+        for item in self.children:
+            item.disabled = True
+        deleted = delete_guild_install_metadata(self._guild_id)
+        msg = (
+            f"✅ Cleared install metadata for `{self._guild_id}`."
+            if deleted
+            else f"ℹ️ No metadata row for `{self._guild_id}` (already absent)."
+        )
+        await inter.response.edit_message(content=msg, view=self)
+        self.stop()
+
+    @discord.ui.button(label="Cancel", style=discord.ButtonStyle.secondary)
+    async def cancel(self, inter: discord.Interaction, button: discord.ui.Button):
+        self._handled = True
+        for item in self.children:
+            item.disabled = True
+        await inter.response.edit_message(
+            content=f"❌ Cancelled — `{self._guild_id}` metadata left intact.", view=self,
+        )
+        self.stop()
+
+
+@bot.tree.command(
+    name="admin_forget_guild",
+    description="(Bot owner only) Delete the install-metadata row for a guild_id (data-removal request).",
+)
+@app_commands.describe(guild_id="Discord guild ID to forget")
+async def admin_forget_guild_slash(interaction: discord.Interaction, guild_id: str):
+    if not await _require_bot_owner(interaction):
+        return
+
+    gid = _parse_guild_id(guild_id)
+    if gid is None:
+        await interaction.response.send_message(
+            f"⚠️ `{guild_id}` isn't a valid integer guild ID.", ephemeral=True
+        )
+        return
+
+    meta = get_guild_install_metadata(gid)
+    if meta is None:
+        await interaction.response.send_message(
+            f"ℹ️ No metadata row for `{gid}` — nothing to delete.", ephemeral=True
+        )
+        return
+
+    name = meta.get("guild_name") or "(unnamed)"
+    view = _ForgetGuildConfirm(guild_id=gid, owner_id=interaction.user.id)
+    await interaction.response.send_message(
+        f"⚠️ About to delete the install-metadata row for **{name}** (`{gid}`). "
+        f"`guild_configs` and other tables are untouched — clear those separately "
+        f"if the request covers full config wipe. Confirm?",
+        view=view,
+        ephemeral=True,
     )
 
 

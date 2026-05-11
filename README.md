@@ -30,6 +30,8 @@ Alliance Helper is built around a simple principle: **your alliance's data lives
 
 The bot's own SQLite database stores only what it needs to do its job — wizard answers, channel/role IDs, schedule state, premium status. Alliance data itself stays in your sheet.
 
+Alongside the config, the bot keeps a small **install-metadata record** for each server it's in: guild ID, guild name, the owner's Discord ID, the Discord ID of the user who invited the bot (when readable from the audit log), and the timestamps for first install and most recent reconnect. This exists so that when an error appears in the logs against a particular guild ID, leadership can be contacted to fix it. The record is **deleted automatically** when the bot is removed from a server, and can be deleted on request at any time — open a [Data removal request](https://github.com/LW-Alliance-Helper/lw-alliance-helper-bot/issues/new/choose) with your guild ID.
+
 ---
 
 ## Free vs Premium

@@ -117,56 +117,136 @@ class CreateRoleModal(discord.ui.Modal):
 
 
 class RoleSelectStep(discord.ui.View):
-    def __init__(self, placeholder: str):
+    """Picks a role for a wizard step.
+
+    When `current_id` is set and resolves to a live role via
+    `guild.get_role`, a "Keep current" button is rendered above the
+    picker so leadership doesn't have to rediscover the saved value.
+    When `current_id` is set but no longer resolves (role deleted),
+    `is_current_stale` flips True so callers can post a warning above
+    the view.
+    """
+
+    def __init__(
+        self,
+        placeholder: str,
+        *,
+        current_id: int | None = None,
+        current_name: str | None = None,
+        guild: discord.Guild | None = None,
+    ):
         super().__init__(timeout=WIZARD_TIMEOUT)
         self.selected_role = None
         self.confirmed     = False
+        self._placeholder  = placeholder
 
-        select = discord.ui.RoleSelect(placeholder=placeholder, min_values=1, max_values=1, row=0)
-        async def _cb(interaction: discord.Interaction):
+        self.current_id = current_id
+        self._current_name = current_name
+        self._current_role: discord.Role | None = None
+        if current_id and guild is not None:
+            try:
+                resolved = guild.get_role(current_id)
+            except Exception:
+                resolved = None
+            if resolved is not None:
+                self._current_role = resolved
+
+        self._render()
+
+    @property
+    def is_current_stale(self) -> bool:
+        """True iff `current_id` was given but no longer resolves to a
+        live role. Wizards inspect this to surface a one-line warning.
+        Treats `0` as "not set" since that's the schema sentinel."""
+        return bool(self.current_id) and self._current_role is None
+
+    def _render(self) -> None:
+        self.clear_items()
+        # Keep-current button on row 0 when we have a resolved role.
+        if self._current_role is not None:
+            role = self._current_role
+            keep_btn = discord.ui.Button(
+                label=f"✅ Keep current: @{role.name}"[:80],
+                style=discord.ButtonStyle.success,
+                row=0,
+            )
+
+            async def _keep_cb(inter: discord.Interaction):
+                self.selected_role = role
+                self.confirmed     = True
+                for item in self.children:
+                    item.disabled = True
+                await wizard_registry.safe_edit_response(
+                    inter,
+                    content=f"✅ Keeping: **@{role.name}**",
+                    view=self,
+                )
+                self.stop()
+            keep_btn.callback = _keep_cb
+            self.add_item(keep_btn)
+            select_row = 1
+            create_row = 2
+        else:
+            select_row = 0
+            create_row = 1
+
+        select = discord.ui.RoleSelect(
+            placeholder=self._placeholder,
+            min_values=1, max_values=1, row=select_row,
+        )
+
+        async def _select_cb(interaction: discord.Interaction):
             self.selected_role = select.values[0]
             self.confirmed     = True
-            select.disabled    = True
+            for item in self.children:
+                item.disabled = True
             await wizard_registry.safe_edit_response(
                 interaction,
                 content=f"✅ Selected: **{self.selected_role.name}**",
                 view=self,
             )
             self.stop()
-        select.callback = _cb
+        select.callback = _select_cb
         self.add_item(select)
 
-    @discord.ui.button(label="➕ Create a new role", style=discord.ButtonStyle.secondary, row=1)
-    async def create_role(self, interaction: discord.Interaction, button: discord.ui.Button):
-        modal = CreateRoleModal()
-        await interaction.response.send_modal(modal)
-        await modal.wait()
-        if not modal.role_name:
-            return
-        try:
-            new_role = await interaction.guild.create_role(
-                name=modal.role_name,
-                reason=f"Created during Alliance Helper setup by {interaction.user.display_name}",
-            )
-            self.selected_role = new_role
-            self.confirmed     = True
-            for item in self.children:
-                item.disabled = True
-            await interaction.message.edit(
-                content=f"✅ Created and selected new role: **{new_role.name}**",
-                view=self,
-            )
-            self.stop()
-        except discord.Forbidden:
-            await interaction.followup.send(
-                "⚠️ I don't have permission to create roles. Please create the role manually first, then run `/setup` again.",
-                ephemeral=True,
-            )
-        except Exception as e:
-            await interaction.followup.send(
-                f"⚠️ Could not create role: {e}",
-                ephemeral=True,
-            )
+        create_btn = discord.ui.Button(
+            label="➕ Create a new role",
+            style=discord.ButtonStyle.secondary,
+            row=create_row,
+        )
+
+        async def _create_cb(interaction: discord.Interaction):
+            modal = CreateRoleModal()
+            await interaction.response.send_modal(modal)
+            await modal.wait()
+            if not modal.role_name:
+                return
+            try:
+                new_role = await interaction.guild.create_role(
+                    name=modal.role_name,
+                    reason=f"Created during Alliance Helper setup by {interaction.user.display_name}",
+                )
+                self.selected_role = new_role
+                self.confirmed     = True
+                for item in self.children:
+                    item.disabled = True
+                await interaction.message.edit(
+                    content=f"✅ Created and selected new role: **{new_role.name}**",
+                    view=self,
+                )
+                self.stop()
+            except discord.Forbidden:
+                await interaction.followup.send(
+                    "⚠️ I don't have permission to create roles. Please create the role manually first, then run `/setup` again.",
+                    ephemeral=True,
+                )
+            except Exception as e:
+                await interaction.followup.send(
+                    f"⚠️ Could not create role: {e}",
+                    ephemeral=True,
+                )
+        create_btn.callback = _create_cb
+        self.add_item(create_btn)
 
 
 class CreateChannelModal(discord.ui.Modal):
@@ -217,6 +297,9 @@ class ChannelSelectStep(discord.ui.View):
         allow_create: bool = True,
         include_threads: bool = False,
         guild: discord.Guild | None = None,
+        *,
+        current_id: int | None = None,
+        current_name: str | None = None,
     ):
         super().__init__(timeout=WIZARD_TIMEOUT)
         self.selected_channel = None
@@ -236,6 +319,27 @@ class ChannelSelectStep(discord.ui.View):
             else []
         )
 
+        # Keep-current support. If the wizard passes `current_id`, resolve
+        # it to a live channel/thread; when it still exists, render a
+        # "Keep current" button on top of the picker so leadership doesn't
+        # have to rediscover their saved value. When `current_id` is set
+        # but no longer resolves (channel deleted), `is_current_stale`
+        # flips True so the caller can post a warning above the view.
+        self.current_id = current_id
+        self._current_name = current_name
+        self._current_channel: discord.abc.GuildChannel | discord.Thread | None = None
+        if current_id and guild is not None:
+            resolved = None
+            if hasattr(guild, "get_channel"):
+                resolved = guild.get_channel(current_id)
+            if resolved is None and hasattr(guild, "get_thread"):
+                try:
+                    resolved = guild.get_thread(current_id)
+                except Exception:
+                    resolved = None
+            if resolved is not None:
+                self._current_channel = resolved
+
         # Decide initial state. If we have threads to offer, start with the
         # button-driven choice. Otherwise just show the channel select
         # straight away — same as the pre-fix behavior.
@@ -244,10 +348,55 @@ class ChannelSelectStep(discord.ui.View):
         else:
             self._render_channel_select(switchable=False)
 
+    @property
+    def is_current_stale(self) -> bool:
+        """True iff `current_id` was given but no longer resolves to a live
+        channel/thread. Wizards inspect this to decide whether to send a
+        one-line warning above the picker. Treats `0` as "not set" since
+        that's the schema sentinel for an unconfigured channel."""
+        return bool(self.current_id) and self._current_channel is None
+
+    def _maybe_add_keep_current(self, *, row: int) -> bool:
+        """Prepend a 'Keep current' button when a saved channel still
+        resolves. Returns True iff the button was added — callers use this
+        to know whether to shift the next component down a row."""
+        if self._current_channel is None:
+            return False
+        ch = self._current_channel
+        if isinstance(ch, discord.Thread):
+            parent = ch.parent.name if ch.parent else "?"
+            display = f"🧵 {ch.name} (in #{parent})"
+        else:
+            display = f"#{ch.name}"
+        keep_btn = discord.ui.Button(
+            label=f"✅ Keep current: {display}"[:80],
+            style=discord.ButtonStyle.success,
+            row=row,
+        )
+
+        async def _keep_cb(inter: discord.Interaction):
+            self.selected_channel = self._current_channel
+            self.confirmed        = True
+            for item in self.children:
+                item.disabled = True
+            await wizard_registry.safe_edit_response(
+                inter,
+                content=f"✅ Keeping: **{display}**",
+                view=self,
+            )
+            self.stop()
+        keep_btn.callback = _keep_cb
+        self.add_item(keep_btn)
+        return True
+
     # ── Initial state: two buttons ─────────────────────────────────────
 
     def _render_initial_choice(self) -> None:
         self.clear_items()
+        # Keep-current sits on its own row so the Channel/Thread choice
+        # still reads as a paired decision below it.
+        keep_added = self._maybe_add_keep_current(row=0)
+        button_row = 1 if keep_added else 0
 
         async def _on_channel(inter: discord.Interaction):
             self._render_channel_select(switchable=True)
@@ -258,13 +407,13 @@ class ChannelSelectStep(discord.ui.View):
             await wizard_registry.safe_edit_response(inter, view=self)
 
         ch_btn = discord.ui.Button(
-            label="📢 Channel", style=discord.ButtonStyle.primary, row=0,
+            label="📢 Channel", style=discord.ButtonStyle.primary, row=button_row,
         )
         ch_btn.callback = _on_channel
         self.add_item(ch_btn)
 
         th_btn = discord.ui.Button(
-            label="🧵 Thread", style=discord.ButtonStyle.primary, row=0,
+            label="🧵 Thread", style=discord.ButtonStyle.primary, row=button_row,
         )
         th_btn.callback = _on_thread
         self.add_item(th_btn)
@@ -292,12 +441,15 @@ class ChannelSelectStep(discord.ui.View):
 
     def _render_channel_select(self, *, switchable: bool) -> None:
         self.clear_items()
+        keep_added = self._maybe_add_keep_current(row=0)
+        select_row    = 1 if keep_added else 0
+        secondary_row = select_row + 1
 
         types = self._channel_types_for_select()
         select = discord.ui.ChannelSelect(
             placeholder=self._placeholder,
             min_values=1, max_values=1,
-            channel_types=types, row=0,
+            channel_types=types, row=select_row,
         )
 
         async def _select_cb(inter: discord.Interaction):
@@ -317,7 +469,7 @@ class ChannelSelectStep(discord.ui.View):
         if switchable and self._pickable_threads:
             switch_btn = discord.ui.Button(
                 label="🧵 Pick a thread instead",
-                style=discord.ButtonStyle.secondary, row=1,
+                style=discord.ButtonStyle.secondary, row=secondary_row,
             )
             async def _switch(inter: discord.Interaction):
                 self._render_thread_select(switchable=True)
@@ -326,13 +478,16 @@ class ChannelSelectStep(discord.ui.View):
             self.add_item(switch_btn)
 
         if self.allow_create:
-            self._add_create_button(row=1)
+            self._add_create_button(row=secondary_row)
 
     # ── Thread-select state ────────────────────────────────────────────
 
     def _render_thread_select(self, *, switchable: bool) -> None:
         self.clear_items()
         self._thread_lookup.clear()
+        keep_added = self._maybe_add_keep_current(row=0)
+        select_row    = 1 if keep_added else 0
+        secondary_row = select_row + 1
 
         # Sort so the dropdown groups threads under their parent and is
         # alphabetised within each group — easier for the user to find.
@@ -343,7 +498,7 @@ class ChannelSelectStep(discord.ui.View):
 
         thread_select = discord.ui.Select(
             placeholder="Pick a thread...",
-            min_values=1, max_values=1, row=0,
+            min_values=1, max_values=1, row=select_row,
         )
         # Discord caps Select options at 25.
         for t in sorted_threads[:25]:
@@ -378,7 +533,7 @@ class ChannelSelectStep(discord.ui.View):
         if switchable:
             switch_btn = discord.ui.Button(
                 label="📢 Pick a channel instead",
-                style=discord.ButtonStyle.secondary, row=1,
+                style=discord.ButtonStyle.secondary, row=secondary_row,
             )
             async def _switch(inter: discord.Interaction):
                 self._render_channel_select(switchable=True)
@@ -645,6 +800,163 @@ async def ask_keep_or_change(
             await channel.send(f"⏰ Timed out. Run `/{timeout_cmd}` to start again.")
         return None
     return view.value
+
+
+async def ask_proceed_with_existing_config(
+    channel,
+    *,
+    title: str,
+    description: str,
+    fields: list[tuple[str, str]],
+    cancel_event,
+    no_changes_message: str = "✅ No changes made. Your existing configuration is still active.",
+) -> bool | None:
+    """Show an existing-config summary embed with Edit / No changes buttons.
+
+    Each per-feature `/setup_*` calls this at the top so leadership sees
+    what's saved without walking the whole wizard. Returns:
+
+      * ``True``  — leadership clicked Edit. Caller should proceed into
+        the wizard's step-by-step flow.
+      * ``False`` — leadership clicked No changes. This helper has
+        already posted ``no_changes_message``; caller should return.
+      * ``None``  — `/cancel` or timeout. Caller should return silently
+        (timeout case posts no message — keep parity with the other
+        cancellable views in the wizard).
+
+    `fields` is a list of ``(label, value)`` tuples rendered as
+    embed fields, inline=False. Pass the same tuples that
+    ``/view_configuration`` would render for that feature.
+    """
+
+    class EditOrCancelView(discord.ui.View):
+        def __init__(self):
+            super().__init__(timeout=60)
+            self.proceed = None
+
+        @discord.ui.button(label="✏️ Edit settings", style=discord.ButtonStyle.primary)
+        async def edit(self, inter: discord.Interaction, button: discord.ui.Button):
+            self.proceed = True
+            for item in self.children:
+                item.disabled = True
+            await wizard_registry.safe_edit_response(inter, view=self)
+            self.stop()
+
+        @discord.ui.button(label="✅ No changes needed", style=discord.ButtonStyle.secondary)
+        async def cancel(self, inter: discord.Interaction, button: discord.ui.Button):
+            self.proceed = False
+            for item in self.children:
+                item.disabled = True
+            await wizard_registry.safe_edit_response(inter, view=self)
+            self.stop()
+
+    embed = discord.Embed(
+        title=title,
+        description=description,
+        color=discord.Color.blurple(),
+    )
+    for name, value in fields:
+        embed.add_field(name=name, value=value, inline=False)
+
+    view = EditOrCancelView()
+    await channel.send(embed=embed, view=view)
+    await wait_view_or_cancel(view, cancel_event)
+    if view.cancelled:
+        return None
+    if view.proceed is None:
+        # Timed out without an interaction.
+        return None
+    if not view.proceed:
+        await channel.send(no_changes_message)
+        return False
+    return True
+
+
+async def ask_disable_with_clear(
+    channel,
+    *,
+    feature_label: str,
+    setup_command: str,
+    had_prior_config: bool,
+    clear_fn,
+    cancel_event,
+) -> None:
+    """Post the disable confirmation after leadership picks No on an
+    enable-toggle wizard step.
+
+    When ``had_prior_config`` is True, the message tells leadership their
+    saved config is preserved and shows a Clear button that calls
+    ``clear_fn()`` to wipe it. When False (first-time disable, nothing
+    saved to lose), just posts the bare confirmation without the button.
+
+    ``feature_label`` — friendly noun for the message body
+    (e.g. "Shiny Tasks announcement").
+
+    ``setup_command`` — slash command leadership should re-run to
+    re-enable, sans the leading slash (e.g. "setup_shiny_tasks").
+
+    ``clear_fn`` — callable taking no arguments; runs synchronously
+    or via ``await`` (the helper auto-detects). Should wipe the
+    feature's saved config so a future re-enable starts clean. Each
+    wizard supplies its own — typically a ``DELETE FROM <table>
+    WHERE guild_id = ?`` since ``get_*_config`` already returns a
+    default dict when the row is absent.
+    """
+    import inspect
+
+    if not had_prior_config:
+        await channel.send(f"✅ {feature_label} disabled.")
+        return
+
+    body = (
+        f"✅ {feature_label} disabled. Your previous configuration is saved. "
+        f"Re-run `/{setup_command}` and pick Yes to restore it instantly."
+    )
+
+    class ClearConfigView(discord.ui.View):
+        def __init__(self):
+            super().__init__(timeout=300)
+            self.message: discord.Message | None = None
+            self.cleared = False
+
+        @discord.ui.button(
+            label="🗑️ Clear my saved configuration",
+            style=discord.ButtonStyle.danger,
+        )
+        async def clear(self, inter: discord.Interaction, button: discord.ui.Button):
+            try:
+                if inspect.iscoroutinefunction(clear_fn):
+                    await clear_fn()
+                else:
+                    clear_fn()
+            except Exception as e:
+                await wizard_registry.safe_edit_response(
+                    inter,
+                    content=(
+                        f"{body}\n\n⚠️ Could not clear configuration: {e}"
+                    ),
+                    view=None,
+                )
+                self.stop()
+                return
+            self.cleared = True
+            for item in self.children:
+                item.disabled = True
+            await wizard_registry.safe_edit_response(
+                inter,
+                content=f"✅ {feature_label} disabled and saved configuration cleared.",
+                view=self,
+            )
+            self.stop()
+
+        async def on_timeout(self):
+            await wizard_registry.expire_view_message(
+                self.message, command_hint=setup_command,
+            )
+
+    view = ClearConfigView()
+    view.message = await channel.send(body, view=view)
+    await wait_view_or_cancel(view, cancel_event)
 
 
 async def _manage_train_templates(

@@ -83,14 +83,24 @@ class TestTwoButtonLayoutWhenNoDistinctCurrent:
         assert len(view.children) == 2
 
     @pytest.mark.asyncio
-    async def test_button_label_says_use_default_when_current_equals_default(self):
-        """If the saved value happens to match the hardcoded default, the
-        UI is identical to the no-current case — no need for a separate
-        'Keep current' button when it's the same value."""
+    async def test_button_label_says_keep_current_when_current_equals_default(self):
+        """Saved value matches the hardcoded default → the primary
+        button still labels as 'Keep current: X', not 'Use default: X'.
+        Effect is identical (both return the same value), but the
+        wording matches the leadership's mental model when re-running
+        the wizard: 'I want to keep what's saved'.
+
+        Surfaced as feedback after the initial #80 rollout: leadership
+        running /setup_growth on a guild that accepted all defaults
+        the first time saw only 'Use default' buttons and worried
+        clicking them would wipe their config. Use-default also gone
+        from this case — there's nothing distinct to revert to."""
         _, view = await _invoke(default="Birthdays", current="Birthdays")
         labels = [item.label for item in view.children]
-        assert any("Use default" in lbl for lbl in labels)
-        assert not any("Keep current" in lbl for lbl in labels)
+        assert any("Keep current" in lbl and "Birthdays" in lbl for lbl in labels)
+        assert not any("Use default" in lbl for lbl in labels)
+        # Still two buttons total — Keep + Define my own — because
+        # there's no distinct default to revert to.
         assert len(view.children) == 2
 
     @pytest.mark.asyncio

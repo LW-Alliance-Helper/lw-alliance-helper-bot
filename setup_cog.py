@@ -692,6 +692,14 @@ class ModalLaunchView(discord.ui.View):
     current_value` and stops the view, so callers that read
     `modal.value` after `view.wait()` need no changes. `current_display`
     overrides the label text (useful for truncating long Sheet IDs).
+
+    `on_keep_current` is for modals whose `value` is a read-only
+    derived property (e.g. ``ServerRangeModal`` in `/setup_shiny_tasks`
+    where the wizard reads `min_value` / `max_value` rather than a
+    single `value`). When provided, the callable is invoked with the
+    modal as its only argument *instead* of the default ``modal.value
+    = current_value``, so the caller can populate whatever attributes
+    the wizard's post-submit code actually reads.
     """
     def __init__(
         self,
@@ -699,6 +707,7 @@ class ModalLaunchView(discord.ui.View):
         *,
         current_value: str | None = None,
         current_display: str | None = None,
+        on_keep_current=None,
     ):
         super().__init__(timeout=WIZARD_TIMEOUT)
         self.modal           = modal
@@ -714,7 +723,10 @@ class ModalLaunchView(discord.ui.View):
             )
 
             async def _keep_cb(inter: discord.Interaction):
-                self.modal.value = current_value
+                if on_keep_current is not None:
+                    on_keep_current(self.modal)
+                else:
+                    self.modal.value = current_value
                 self.confirmed   = True
                 for item in self.children:
                     item.disabled = True
@@ -753,28 +765,33 @@ async def ask_keep_or_change(
     cancel_event=None,
     current: str | None = None,
 ) -> str | None:
-    """Show a `Use default / Define your own` view and return the chosen value.
+    """Show a `Keep current / Use default / Define your own` view and
+    return the chosen value.
 
-    Two-vs-three button rendering:
-      * If `current` is None or equals `default`, render the original
-        two-button layout: **✅ Use default: {default}** / **✏️ Define
-        my own**. The keep button returns `default`.
-      * If `current` is provided AND differs from `default`, render
-        three buttons: **✅ Keep current: {current}** / **↩️ Use
-        default: {default}** / **✏️ Define my own**. This stops the
-        wizard from labelling a previously-saved guild value as the
-        "default" (which is misleading — "default" should mean the
-        bot's hardcoded baseline, not whatever the guild last entered)
-        while still letting the user revert to that baseline in one
-        click instead of typing it manually.
+    Rendering depends on what's been saved before:
+      * No saved value (``current`` is None or empty): two-button
+        layout **✅ Use default: {default}** / **✏️ Define my own**.
+        The keep button returns ``default``.
+      * Saved value matches the hardcoded default: two-button layout
+        **✅ Keep current: {current}** / **✏️ Define my own**. Labels
+        as "Keep current" rather than "Use default" so leadership
+        running the wizard a second time sees what's actually saved
+        (the values are identical anyway, but the wording makes the
+        Keep-current intent obvious — fixes the
+        "is Use default going to wipe my settings?" anxiety).
+      * Saved value differs from default: three-button layout
+        **✅ Keep current: {current}** / **↩️ Use default: {default}**
+        / **✏️ Define my own**. Lets leadership revert to the
+        hardcoded baseline in one click instead of typing it manually.
 
     The button labels include the value so the prompt body never has to
     repeat it. Returns None on timeout (and posts a timeout message
     referencing `timeout_cmd` if provided), or on /cancel (silently —
     the /cancel command itself acks the user).
     """
-    has_distinct_current = bool(current) and current != default
-    pre_filled = current if has_distinct_current else default
+    has_saved            = bool(current)
+    has_distinct_current = has_saved and current != default
+    pre_filled           = current if has_saved else default
 
     class KeepOrChangeDefaultView(discord.ui.View):
         def __init__(self):
@@ -783,17 +800,17 @@ async def ask_keep_or_change(
             self.confirmed = False
 
             # Build buttons explicitly so we can vary the layout based on
-            # whether `current` differs from `default`. Decorator-based
-            # buttons can't be conditionally added.
+            # whether anything is saved and whether it matches default.
+            # Decorator-based buttons can't be conditionally added.
             keep_label = (
                 f"✅ Keep current: {current}"[:80]
-                if has_distinct_current else
+                if has_saved else
                 f"✅ Use default: {default}"[:80]
             )
             keep_btn = discord.ui.Button(label=keep_label, style=discord.ButtonStyle.success)
 
             async def _keep_cb(inter: discord.Interaction):
-                chosen         = current if has_distinct_current else default
+                chosen         = current if has_saved else default
                 self.value     = chosen
                 self.confirmed = True
                 for item in self.children: item.disabled = True
@@ -2803,10 +2820,34 @@ async def run_growth_breakdown_setup(interaction: discord.Interaction, bot):
     # the on-demand /growth button (which always shows every bucket).
     bucket_filter: list[str] = []
     if post_channel_id:
+        saved_filter = current.get("breakdown_bucket_filter") or []
+
         class BucketFilterView(discord.ui.View):
             def __init__(self):
                 super().__init__(timeout=WIZARD_TIMEOUT)
                 self.selected: list[str] | None = None
+
+                # Keep-current button on its own row when leadership
+                # previously picked a filter. Sets `self.selected` to
+                # the saved list and stops — no Select interaction
+                # needed.
+                if saved_filter:
+                    saved_disp_short = ", ".join(
+                        DEFAULT_BUCKET_LABELS.get(b, b) for b in saved_filter
+                    )
+                    keep_btn = discord.ui.Button(
+                        label=f"✅ Keep current: {saved_disp_short}"[:80],
+                        style=discord.ButtonStyle.success,
+                        row=0,
+                    )
+
+                    async def _keep_cb(inter: discord.Interaction):
+                        self.selected = list(saved_filter)
+                        for item in self.children: item.disabled = True
+                        await wizard_registry.safe_edit_response(inter, view=self)
+                        self.stop()
+                    keep_btn.callback = _keep_cb
+                    self.add_item(keep_btn)
 
                 opts = [
                     discord.SelectOption(
@@ -2821,6 +2862,7 @@ async def run_growth_breakdown_setup(interaction: discord.Interaction, bot):
                     options=opts,
                     min_values=0,
                     max_values=len(BUCKET_ORDER),
+                    row=1 if saved_filter else 0,
                 )
 
                 async def _select_cb(inter: discord.Interaction):
@@ -2835,6 +2877,7 @@ async def run_growth_breakdown_setup(interaction: discord.Interaction, bot):
                 all_btn = discord.ui.Button(
                     label="Use all buckets",
                     style=discord.ButtonStyle.secondary,
+                    row=2 if saved_filter else 1,
                 )
 
                 async def _all_cb(inter: discord.Interaction):
@@ -2847,7 +2890,6 @@ async def run_growth_breakdown_setup(interaction: discord.Interaction, bot):
                 self.add_item(all_btn)
 
         bf_view = BucketFilterView()
-        saved_filter = current.get("breakdown_bucket_filter") or []
         if saved_filter:
             saved_disp = ", ".join(
                 DEFAULT_BUCKET_LABELS.get(b, b) for b in saved_filter
@@ -2925,6 +2967,29 @@ async def run_growth_breakdown_setup(interaction: discord.Interaction, bot):
             super().__init__(timeout=WIZARD_TIMEOUT)
             self.choice = None
 
+            # Keep-current button when leadership saved custom thresholds
+            # on a previous run. Demoted "Use defaults" to a secondary
+            # revert in that case so Keep current is the visually
+            # primary action.
+            if thresholds:
+                for child in self.children:
+                    if getattr(child, "label", None) == "✅ Use defaults":
+                        child.label = "↩️ Use defaults"
+                        child.style = discord.ButtonStyle.secondary
+                        break
+                keep_btn = discord.ui.Button(
+                    label="✅ Keep current values",
+                    style=discord.ButtonStyle.success,
+                )
+
+                async def _keep_cb(inter: discord.Interaction):
+                    self.choice = "keep"
+                    for item in self.children: item.disabled = True
+                    await wizard_registry.safe_edit_response(inter, view=self)
+                    self.stop()
+                keep_btn.callback = _keep_cb
+                self.add_item(keep_btn)
+
         @discord.ui.button(label="✅ Use defaults", style=discord.ButtonStyle.success)
         async def defaults_btn(self, inter: discord.Interaction, button: discord.ui.Button):
             self.choice = "defaults"
@@ -2969,6 +3034,10 @@ async def run_growth_breakdown_setup(interaction: discord.Interaction, bot):
         return
     if t_view.choice == "defaults":
         thresholds = {}
+    elif t_view.choice == "keep":
+        # Already loaded from current at the top of this step — no
+        # action needed; the wizard saves what's there.
+        pass
     else:
         thresholds = t_view._modal_values
 
@@ -2999,6 +3068,28 @@ async def run_growth_breakdown_setup(interaction: discord.Interaction, bot):
         def __init__(self):
             super().__init__(timeout=WIZARD_TIMEOUT)
             self.choice = None
+
+            # Mirror ThresholdsChoiceView: when leadership has saved
+            # custom bucket labels, surface Keep current as the primary
+            # action and demote Use defaults to a revert.
+            if labels:
+                for child in self.children:
+                    if getattr(child, "label", None) == "✅ Use defaults":
+                        child.label = "↩️ Use defaults"
+                        child.style = discord.ButtonStyle.secondary
+                        break
+                keep_btn = discord.ui.Button(
+                    label="✅ Keep current labels",
+                    style=discord.ButtonStyle.success,
+                )
+
+                async def _keep_cb(inter: discord.Interaction):
+                    self.choice = "keep"
+                    for item in self.children: item.disabled = True
+                    await wizard_registry.safe_edit_response(inter, view=self)
+                    self.stop()
+                keep_btn.callback = _keep_cb
+                self.add_item(keep_btn)
 
         @discord.ui.button(label="✅ Use defaults", style=discord.ButtonStyle.success)
         async def defaults_btn(self, inter: discord.Interaction, button: discord.ui.Button):
@@ -3040,6 +3131,9 @@ async def run_growth_breakdown_setup(interaction: discord.Interaction, bot):
         return
     if l_view.choice == "defaults":
         labels = {}
+    elif l_view.choice == "keep":
+        # Already loaded from current at the top of this step.
+        pass
     else:
         labels = l_view._modal_values
 
@@ -3440,7 +3534,10 @@ async def run_train_setup(interaction: discord.Interaction, bot):
                 f"What time should the reminder fire? *(in your timezone: {tz_label})*\n"
                 f"*(e.g. `10:00pm`, `9:00am`)*",
                 default="10:00pm",
-                current=current.get("reminder_time", ""),
+                # DB stores 24h ("22:00") — render as "10:00pm" so the
+                # Keep-current and Use-default button labels don't sit
+                # side-by-side in mismatched formats.
+                current=_format_24h_to_12h(current.get("reminder_time", "")),
                 modal_title="Reminder Time",
                 modal_label="Time",
                 timeout_cmd="setup_train",
@@ -3886,25 +3983,83 @@ async def run_survey_setup(interaction: discord.Interaction, bot,
         return
 
     # ── Step 5: Intro message ──────────────────────────────────────────────────
-    await channel.send(
-        "**Step 5 of 6 — Survey Intro Message**\n"
-        "When your survey is posted, what introductory message do you want your members to see "
-        "before they take the survey?\n\n"
-        "**Example:**\n"
-        "*Please fill out this survey each week to help us track squad powers, "
-        "balance our teams, and prepare for season events!*"
-    )
-    intro_reply = await wizard_registry.wait_or_cancel(
-        bot.wait_for("message", check=check, timeout=300),
-        cancel_event,
-    )
-    if intro_reply is None:
-        if cancel_event.is_set():
-            await channel.send("❌ Cancelled.")
+    # Intro message can be long-form / multi-line, so we use a free-text
+    # reply via bot.wait_for rather than a modal. When a saved intro
+    # already exists, show it back to leadership and offer Keep current
+    # so they don't have to retype a paragraph just to tweak channels
+    # or questions.
+    saved_intro = (current.get("intro_message") or "").strip()
+    intro_message: str | None = None
+
+    if saved_intro:
+        # Preview is truncated to keep the embed readable when leadership
+        # has saved a long intro.
+        preview = saved_intro if len(saved_intro) <= 500 else saved_intro[:500] + "…"
+
+        class IntroChoiceView(discord.ui.View):
+            def __init__(self):
+                super().__init__(timeout=120)
+                # Use a distinct attribute name so this view doesn't
+                # collide with QuestionStartView's `choice` field when
+                # send-handlers in tests broadcast view overrides.
+                self.intro_choice = None
+
+            @discord.ui.button(label="✅ Keep current", style=discord.ButtonStyle.success)
+            async def keep(self, inter: discord.Interaction, button: discord.ui.Button):
+                self.intro_choice = "keep"
+                for item in self.children: item.disabled = True
+                await wizard_registry.safe_edit_response(inter, view=self)
+                self.stop()
+
+            @discord.ui.button(label="✏️ Edit", style=discord.ButtonStyle.primary)
+            async def edit(self, inter: discord.Interaction, button: discord.ui.Button):
+                self.intro_choice = "edit"
+                for item in self.children: item.disabled = True
+                await wizard_registry.safe_edit_response(inter, view=self)
+                self.stop()
+
+        intro_view = IntroChoiceView()
+        await channel.send(
+            "**Step 5 of 6 — Survey Intro Message**\n"
+            "Members see this introductory message before taking the survey.\n\n"
+            f"**Currently saved:**\n>>> {preview}",
+            view=intro_view,
+        )
+        await wait_view_or_cancel(intro_view, cancel_event)
+        if intro_view.cancelled:
+            return
+        if intro_view.intro_choice == "keep":
+            intro_message = saved_intro
+        elif intro_view.intro_choice == "edit":
+            await channel.send(
+                "Type the new intro message below. Use the example from "
+                "the previous step as a guide, or paste in your own."
+            )
         else:
             await channel.send("⏰ Timed out. Run `/setup_survey` to start again.")
-        return
-    intro_message = intro_reply.content.strip()
+            return
+
+    if intro_message is None:
+        if not saved_intro:
+            await channel.send(
+                "**Step 5 of 6 — Survey Intro Message**\n"
+                "When your survey is posted, what introductory message do you want your members to see "
+                "before they take the survey?\n\n"
+                "**Example:**\n"
+                "*Please fill out this survey each week to help us track squad powers, "
+                "balance our teams, and prepare for season events!*"
+            )
+        intro_reply = await wizard_registry.wait_or_cancel(
+            bot.wait_for("message", check=check, timeout=300),
+            cancel_event,
+        )
+        if intro_reply is None:
+            if cancel_event.is_set():
+                await channel.send("❌ Cancelled.")
+            else:
+                await channel.send("⏰ Timed out. Run `/setup_survey` to start again.")
+            return
+        intro_message = intro_reply.content.strip()
 
     # ── Step 6: Survey Questions ───────────────────────────────────────────────
     # Show default questions and ask keep/edit/scratch
@@ -6186,7 +6341,10 @@ async def run_birthday_setup(interaction: discord.Interaction, bot):
                 f"What time should birthday announcements be posted? *(in {tz_label})*\n"
                 f"*(e.g. `8:00am`, `12:00pm`)*",
                 default="8:00am",
-                current=current.get("reminder_time", ""),
+                # DB stores 24h ("08:00") — render as "8:00am" so the
+                # Keep-current and Use-default button labels don't sit
+                # side-by-side in mismatched formats.
+                current=_format_24h_to_12h(current.get("reminder_time", "")),
                 modal_title="Reminder Time",
                 modal_label="Time",
                 timeout_cmd="setup_birthdays",
@@ -6457,11 +6615,37 @@ async def run_shiny_tasks_setup(interaction: discord.Interaction, bot):
             min_default=str(saved_min) if saved_min else "",
             max_default=str(saved_max) if saved_max else "",
         )
-        range_launcher = ModalLaunchView(range_modal)
+        # ServerRangeModal's `value` is a read-only @property derived
+        # from min_value + max_value, so ModalLaunchView's default
+        # `modal.value = current_value` path won't work. Use the
+        # on_keep_current callback to populate the underlying
+        # attributes directly when leadership clicks Keep current.
+        try:
+            has_saved_range = int(saved_min) >= 1 and int(saved_max) >= int(saved_min)
+        except (TypeError, ValueError):
+            has_saved_range = False
+        if has_saved_range:
+            keep_min, keep_max = int(saved_min), int(saved_max)
+
+            def _keep_range(modal, _min=keep_min, _max=keep_max):
+                modal.min_value = str(_min)
+                modal.max_value = str(_max)
+
+            range_launcher = ModalLaunchView(
+                range_modal,
+                current_value=f"{keep_min} – {keep_max}",
+                current_display=f"{keep_min} – {keep_max}",
+                on_keep_current=_keep_range,
+            )
+        else:
+            range_launcher = ModalLaunchView(range_modal)
         # Override the generic "Enter Value" button label so leadership
-        # sees domain wording. Same per-instance mutation `/setup` does
-        # to `ConfirmView` after construction.
-        range_launcher.children[0].label = "✏️ Enter Server Numbers"
+        # sees domain wording. Find by label rather than index because
+        # the Keep-current button (when present) sits at children[0].
+        for _child in range_launcher.children:
+            if isinstance(_child, discord.ui.Button) and _child.label == "✏️ Enter Value":
+                _child.label = "✏️ Enter Server Numbers"
+                break
         await channel.send(range_prompt, view=range_launcher)
         await wait_view_or_cancel(range_launcher, cancel_event)
         if range_launcher.cancelled:

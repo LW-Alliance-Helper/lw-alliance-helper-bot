@@ -712,9 +712,9 @@ class TestRunSurveySetup:
         ]
         ch_iter = iter(ch_views)
 
-        # Intro message comes via bot.wait_for.
-        bot.wait_for = AsyncMock(return_value=MagicMock(content="Survey!"))
-
+        # IntroChoiceView -> Keep current; QuestionStartView -> default
+        # (both use distinct attr names so the same view_overrides dict
+        # is safe to broadcast).
         ch_call_kwargs = []
 
         def _record_ch(*a, **kw):
@@ -725,11 +725,11 @@ class TestRunSurveySetup:
              patch_keep_or_change(["Squad Powers", "Survey History"]):
             make_send_handler(
                 interaction.channel,
-                # Summary -> Edit; QuestionStartView -> default.
                 view_overrides={
-                    "proceed":   True,
-                    "choice":    "default",
-                    "cancelled": False,
+                    "proceed":      True,
+                    "intro_choice": "keep",     # IntroChoiceView
+                    "choice":       "default",  # QuestionStartView
+                    "cancelled":    False,
                 },
             )
             await run_survey_setup(interaction, bot)

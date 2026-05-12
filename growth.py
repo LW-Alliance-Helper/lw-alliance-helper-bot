@@ -600,23 +600,24 @@ def _maybe_post_breakdown(guild_id, post_channel_id, prev_period_label,
     """Fire the Premium breakdown auto-post. No-op when the guild isn't
     premium at the moment of posting. The bot / channel resolution and
     the actual send happen on the bot's event loop, scheduled via
-    `asyncio.run_coroutine_threadsafe`. The loop reference comes from
-    `bot._event_loop` (captured at startup) rather than `bot.loop`
-    because discord.py 2.4+ raises when `bot.loop` is accessed from a
-    non-async context — including the thread-pool worker that runs the
-    scheduled snapshot, which is exactly the path that triggers this
-    auto-post. See #87.
+    `asyncio.run_coroutine_threadsafe`. The loop reference + bot
+    instance come from `bot_state` rather than `from bot import bot`
+    because Railway runs `python bot.py`, which means `bot.py` lives
+    in `sys.modules` as `__main__`; a downstream `import bot` would
+    return a *separate* (idle) copy whose `event_loop` is never set.
+    `bot_state` is only ever imported, so it has exactly one copy and
+    everyone sees the same state. See #87.
     """
     if not guild_id:
         return
     import asyncio
     try:
-        import bot as _bot_module
+        import bot_state
     except Exception as e:
-        print(f"[GROWTH] Cannot resolve bot module for auto-post: {e}")
+        print(f"[GROWTH] Cannot resolve bot_state for auto-post: {e}")
         return
-    bot = getattr(_bot_module, "bot", None)
-    loop = getattr(_bot_module, "_event_loop", None)
+    bot  = getattr(bot_state, "bot", None)
+    loop = getattr(bot_state, "event_loop", None)
     if bot is None or loop is None or not loop.is_running():
         print(f"[GROWTH] Bot loop not ready — skipping auto-post "
               f"(guild {guild_id})")

@@ -678,27 +678,30 @@ class TestSnapshotBreakdownWriting:
 
 
 class TestMaybePostBreakdown:
-    """The Premium auto-post path. discord.py 2.4+ raises if `bot.loop` is
-    accessed from a non-async context (the thread-pool worker that runs
-    the scheduled snapshot is exactly that), so the helper has to use the
-    captured `_event_loop` module-level handle on `bot`. Regression for
-    #87."""
+    """The Premium auto-post path. discord.py 2.4+ raises when `bot.loop`
+    is accessed from a non-async context (the thread-pool worker that
+    runs the scheduled snapshot is exactly that), so the helper has to
+    use the captured event loop in `bot_state`. `bot_state` lives in a
+    third module so the running `bot.py` (loaded as `__main__`) and any
+    downstream `import bot` (a separate idle copy) both point at the
+    same shared state. Regression for #87."""
 
     def _summary_stub(self):
         return {"Power": {b: [] for b in
                           ["increased", "steady", "low", "none", "decline"]}}
 
-    def test_no_op_when_loop_not_captured_yet(self):
-        """If `on_ready` hasn't run yet (or hasn't set `_event_loop`), the
-        helper logs a friendly message and returns without raising."""
+    def test_no_op_when_bot_state_not_populated(self):
+        """If `on_ready` hasn't populated `bot_state.event_loop` yet (or
+        `bot_state.bot` is None), the helper logs a friendly message
+        and returns without raising."""
         from growth import _maybe_post_breakdown
-        import bot as _bot_module
+        import bot_state
 
-        # Force the loop handle to None for this test, restore after.
-        previous_loop = getattr(_bot_module, "_event_loop", None)
-        _bot_module._event_loop = None
+        previous_loop = bot_state.event_loop
+        previous_bot  = bot_state.bot
+        bot_state.event_loop = None
+        bot_state.bot        = None
         try:
-            # Should not raise, even though there's no captured loop.
             _maybe_post_breakdown(
                 guild_id=12345,
                 post_channel_id=99999,
@@ -709,18 +712,23 @@ class TestMaybePostBreakdown:
                 gcfg={"breakdown_labels": {}, "breakdown_bucket_filter": []},
             )
         finally:
-            _bot_module._event_loop = previous_loop
+            bot_state.event_loop = previous_loop
+            bot_state.bot        = previous_bot
 
     def test_schedules_on_captured_loop_when_ready(self):
-        """When `_event_loop` is set and running, the helper hands the
-        coroutine to `asyncio.run_coroutine_threadsafe` on that loop."""
+        """When `bot_state` carries a running loop and a bot, the helper
+        hands the coroutine to `asyncio.run_coroutine_threadsafe` on
+        that loop."""
         from growth import _maybe_post_breakdown
-        import bot as _bot_module
+        import bot_state
 
         fake_loop = MagicMock()
         fake_loop.is_running = MagicMock(return_value=True)
-        previous_loop = getattr(_bot_module, "_event_loop", None)
-        _bot_module._event_loop = fake_loop
+        fake_bot  = MagicMock()
+        previous_loop = bot_state.event_loop
+        previous_bot  = bot_state.bot
+        bot_state.event_loop = fake_loop
+        bot_state.bot        = fake_bot
         try:
             with patch("asyncio.run_coroutine_threadsafe") as rcts:
                 _maybe_post_breakdown(
@@ -737,7 +745,8 @@ class TestMaybePostBreakdown:
             # Second arg is the loop — must be our captured fake.
             assert args[1] is fake_loop
         finally:
-            _bot_module._event_loop = previous_loop
+            bot_state.event_loop = previous_loop
+            bot_state.bot        = previous_bot
 
 
 class TestReadLatestBreakdown:

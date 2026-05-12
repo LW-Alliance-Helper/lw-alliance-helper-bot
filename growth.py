@@ -294,7 +294,6 @@ def _run_growth_snapshot_inner(guild_id: int = None):
     now         = datetime.now(tz=ET)
     month_label = now.strftime("%b %Y")
 
-    # Check if snapshot already exists for this period
     sh  = _get_spreadsheet(guild_id)
     tab_growth = gcfg["tab_growth"]
     try:
@@ -306,14 +305,13 @@ def _run_growth_snapshot_inner(guild_id: int = None):
     existing_headers = ws.row_values(1) if ws.row_count > 0 else []
     metric_labels    = [m["label"] for m in gcfg["metrics"]]
 
-    # Build column headers: Name, then one column per metric per snapshot period
-    # Check if this period's columns already exist
+    # `period_already_exists` only short-circuits the *metric column* write
+    # below — the breakdown writer at the bottom still fires either way so
+    # leadership clicking "Run Snapshot Now" on a guild whose current
+    # period was pre-populated (seeder, manual edit, prior in-period run)
+    # gets the missing breakdown computed. (#85)
     period_cols = [h for h in existing_headers if h.endswith(f"({month_label})")]
-    if len(period_cols) >= len(metric_labels):
-        print(f"[GROWTH] Snapshot for {month_label} already exists — skipping")
-        return
-
-    print(f"[GROWTH] Running snapshot for {month_label} (guild {guild_id})")
+    period_already_exists = len(period_cols) >= len(metric_labels)
 
     members = load_member_data(guild_id)
     if not members:
@@ -327,65 +325,76 @@ def _run_growth_snapshot_inner(guild_id: int = None):
         ws.update("A1", [["Name"]], value_input_option="USER_ENTERED")
         all_values = [["Name"]]
 
-    # Add new metric columns for this period
-    header_row  = all_values[0] if all_values else []
-    new_headers = [f"{label} ({month_label})" for label in metric_labels]
+    header_row = all_values[0] if all_values else []
 
-    for new_header in new_headers:
-        if new_header not in header_row:
-            header_row.append(new_header)
+    if period_already_exists:
+        print(
+            f"[GROWTH] Snapshot for {month_label} already exists "
+            f"(guild {guild_id}) — checking breakdown only"
+        )
+    else:
+        print(f"[GROWTH] Running snapshot for {month_label} (guild {guild_id})")
 
-    # Write updated header
-    ws.update("A1", [header_row], value_input_option="USER_ENTERED")
+        # Add new metric columns for this period
+        new_headers = [f"{label} ({month_label})" for label in metric_labels]
+        for new_header in new_headers:
+            if new_header not in header_row:
+                header_row.append(new_header)
 
-    # Build name → row index map
-    name_to_row = {}
-    for i, row in enumerate(all_values[1:], start=2):
-        if row and row[0].strip():
-            name_to_row[row[0].strip().lower()] = i
+        # Write updated header
+        ws.update("A1", [header_row], value_input_option="USER_ENTERED")
 
-    # Write data rows
-    updates = []
-    new_member_rows = []
-    for member in members:
-        name     = member["name"]
-        row_idx  = name_to_row.get(name.lower())
+        # Build name → row index map
+        name_to_row = {}
+        for i, row in enumerate(all_values[1:], start=2):
+            if row and row[0].strip():
+                name_to_row[row[0].strip().lower()] = i
 
-        if row_idx is None:
-            # Reserve a row for this new member; the actual sheet append is
-            # batched into one call after the loop so a roster of 60+ members
-            # doesn't exhaust the 60/min Sheets write quota (#40).
-            new_row = [name] + [""] * (len(header_row) - 1)
-            row_idx = len(all_values) + 1
-            new_member_rows.append(new_row)
-            all_values.append(new_row)
-            name_to_row[name.lower()] = row_idx
-            print(f"[GROWTH] New member added: {name}")
+        # Write data rows
+        updates = []
+        new_member_rows = []
+        for member in members:
+            name     = member["name"]
+            row_idx  = name_to_row.get(name.lower())
 
-        # Write each metric value into its column
-        for label in metric_labels:
-            col_name = f"{label} ({month_label})"
-            if col_name in header_row:
-                col_idx   = header_row.index(col_name)
-                col_letter = chr(ord('A') + col_idx)
-                val        = member.get(label, "")
-                updates.append({
-                    "range": f"{col_letter}{row_idx}",
-                    "values": [[val]],
-                })
+            if row_idx is None:
+                # Reserve a row for this new member; the actual sheet append is
+                # batched into one call after the loop so a roster of 60+ members
+                # doesn't exhaust the 60/min Sheets write quota (#40).
+                new_row = [name] + [""] * (len(header_row) - 1)
+                row_idx = len(all_values) + 1
+                new_member_rows.append(new_row)
+                all_values.append(new_row)
+                name_to_row[name.lower()] = row_idx
+                print(f"[GROWTH] New member added: {name}")
 
-    if new_member_rows:
-        ws.append_rows(new_member_rows, value_input_option="USER_ENTERED")
+            # Write each metric value into its column
+            for label in metric_labels:
+                col_name = f"{label} ({month_label})"
+                if col_name in header_row:
+                    col_idx   = header_row.index(col_name)
+                    col_letter = chr(ord('A') + col_idx)
+                    val        = member.get(label, "")
+                    updates.append({
+                        "range": f"{col_letter}{row_idx}",
+                        "values": [[val]],
+                    })
 
-    if updates:
-        ws.batch_update(updates, value_input_option="USER_ENTERED")
+        if new_member_rows:
+            ws.append_rows(new_member_rows, value_input_option="USER_ENTERED")
 
-    print(f"[GROWTH] Snapshot complete for {month_label} — {len(members)} members (guild {guild_id})")
+        if updates:
+            ws.batch_update(updates, value_input_option="USER_ENTERED")
+
+        print(f"[GROWTH] Snapshot complete for {month_label} — {len(members)} members (guild {guild_id})")
 
     # ── Growth Breakdown: classify period-over-period change per member ──
     # Forward-only: skip when no previous period exists. Idempotent: skip
     # when a breakdown for this (prev, curr) transition has already been
-    # written. Premium auto-post fires after a successful write when
+    # written. Always runs after the snapshot block, including the
+    # duplicate-period path, so a missing breakdown can still be filled in
+    # without forcing leadership to hand-edit the sheet. (#85) Premium
+    # auto-post fires after a successful write when
     # `breakdown_post_channel_id` is set.
     try:
         _write_breakdown_for_snapshot(
@@ -588,22 +597,29 @@ def _col_letter(idx0: int) -> str:
 def _maybe_post_breakdown(guild_id, post_channel_id, prev_period_label,
                           curr_period_label, metric_labels, breakdown_summary,
                           gcfg) -> None:
-    """Fire the Premium breakdown auto-post. No-op if the guild isn't
-    premium at the moment of posting. The bot/channel resolution and the
-    actual send happen on the bot's event loop via `bot.loop.create_task`,
-    so the snapshot (which runs in a background thread) doesn't have to
-    await Discord I/O directly.
+    """Fire the Premium breakdown auto-post. No-op when the guild isn't
+    premium at the moment of posting. The bot / channel resolution and
+    the actual send happen on the bot's event loop, scheduled via
+    `asyncio.run_coroutine_threadsafe`. The loop reference comes from
+    `bot._event_loop` (captured at startup) rather than `bot.loop`
+    because discord.py 2.4+ raises when `bot.loop` is accessed from a
+    non-async context — including the thread-pool worker that runs the
+    scheduled snapshot, which is exactly the path that triggers this
+    auto-post. See #87.
     """
     if not guild_id:
         return
     import asyncio
     try:
-        from bot import bot  # local import — bot is a singleton
+        import bot as _bot_module
     except Exception as e:
-        print(f"[GROWTH] Cannot resolve bot for auto-post: {e}")
+        print(f"[GROWTH] Cannot resolve bot module for auto-post: {e}")
         return
-    if bot is None or not bot.loop:
-        print("[GROWTH] Bot not ready — skipping auto-post")
+    bot = getattr(_bot_module, "bot", None)
+    loop = getattr(_bot_module, "_event_loop", None)
+    if bot is None or loop is None or not loop.is_running():
+        print(f"[GROWTH] Bot loop not ready — skipping auto-post "
+              f"(guild {guild_id})")
         return
 
     async def _post():
@@ -634,7 +650,11 @@ def _maybe_post_breakdown(guild_id, post_channel_id, prev_period_label,
             print(f"[GROWTH] Failed to send breakdown to channel "
                   f"{post_channel_id}: {e}")
 
-    asyncio.run_coroutine_threadsafe(_post(), bot.loop)
+    # `run_coroutine_threadsafe` is safe to call from the loop's own
+    # thread (manual /growth button path) and from a worker thread
+    # (scheduled run_in_executor path) — both end up enqueuing the
+    # coroutine for the event loop to run.
+    asyncio.run_coroutine_threadsafe(_post(), loop)
 
 
 def read_latest_breakdown(guild_id: int) -> dict:

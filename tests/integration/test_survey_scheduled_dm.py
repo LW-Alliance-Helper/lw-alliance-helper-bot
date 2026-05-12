@@ -39,6 +39,11 @@ from tests.conftest import TEST_GUILD_ID, PREMIUM_TEST_GUILD_ID
 
 ET = ZoneInfo("America/New_York")
 
+# Arbitrary Wednesday at 14:30 ET — picked so weekday math (`+3 % 7`)
+# trivially yields a different weekday and so the time-of-day match in
+# `survey.check_scheduled_reminders` is exercised, not flaked.
+FROZEN = datetime(2026, 5, 13, 14, 30, tzinfo=ET)
+
 
 # ── Premium env isolation (mirrors test_member_roster.py / test_storm_remind.py) ──
 
@@ -55,6 +60,26 @@ def _isolate_premium_env(monkeypatch):
         monkeypatch.delenv(var, raising=False)
     importlib.reload(_premium)
     _premium.clear_cache()
+
+
+# ── Frozen clock ─────────────────────────────────────────────────────────────
+
+@pytest.fixture
+def frozen_clock():
+    """Pin `survey.datetime.now(...)` to `FROZEN` for the test body.
+
+    `check_scheduled_reminders` reads `datetime.now(tz=guild_tz)` and
+    compares hour+minute to the seeded `reminder_time`. Without freezing,
+    the test seeds `target_time` from one wall-clock read and the SUT
+    compares against another — a minute roll between the two false-FAILs
+    positive assertions and pass-by-accidents negative ones.
+    """
+    with patch("survey.datetime") as mock_dt:
+        mock_dt.now.return_value = FROZEN
+        # Preserve the `datetime(...)` constructor for any callers that
+        # still build fresh datetimes through `survey.datetime`.
+        mock_dt.side_effect = lambda *a, **kw: datetime(*a, **kw)
+        yield FROZEN
 
 
 # ── Helpers ───────────────────────────────────────────────────────────────────
@@ -79,12 +104,8 @@ def _seed_setup_complete(guild_id: int):
     config.save_config(cfg)
 
 
-def _matching_time_now() -> tuple[datetime, str]:
-    """Return (now-in-ET, 'HH:MM' string for now). Used to seed a
-    reminder whose time matches the current minute."""
-    now      = datetime.now(tz=ET)
-    time_str = f"{now.hour:02d}:{now.minute:02d}"
-    return now, time_str
+def _hhmm(dt: datetime) -> str:
+    return f"{dt.hour:02d}:{dt.minute:02d}"
 
 
 # ── DM destination + Premium ──────────────────────────────────────────────────
@@ -92,7 +113,7 @@ def _matching_time_now() -> tuple[datetime, str]:
 class TestScheduledReminderDmBranch:
 
     @pytest.mark.asyncio
-    async def test_premium_guild_fires_dm_path(self, seeded_db):
+    async def test_premium_guild_fires_dm_path(self, seeded_db, frozen_clock):
         """Configured DM reminder + premium → `_send_reminder_via_dm`
         gets invoked exactly once, last_fired stamp updated."""
         import config
@@ -101,11 +122,10 @@ class TestScheduledReminderDmBranch:
             PREMIUM_TEST_GUILD_ID, "Squad Powers", "Survey History", [], "intro",
         )
 
-        _, target_time = _matching_time_now()
         config.save_survey_reminder(
             PREMIUM_TEST_GUILD_ID, "default",
             enabled=1, frequency="daily",
-            day_of_week=0, time_str=target_time,
+            day_of_week=0, time_str=_hhmm(frozen_clock),
             channel_id=0, use_dm=1,
             message="DM reminder body",
         )
@@ -122,14 +142,14 @@ class TestScheduledReminderDmBranch:
         assert args[1] == PREMIUM_TEST_GUILD_ID
         assert "DM reminder body" in args[2]
 
-        # last_fired should now be today — gates the next tick.
+        # last_fired should now be the frozen date — gates the next tick.
         sched = config.list_scheduled_survey_reminders()
         entry = next(e for e in sched if e["guild_id"] == PREMIUM_TEST_GUILD_ID)
-        assert entry["reminder_last_fired"] == datetime.now(tz=ET).date().isoformat()
+        assert entry["reminder_last_fired"] == frozen_clock.date().isoformat()
 
     @pytest.mark.asyncio
     @pytest.mark.free_tier_only
-    async def test_premium_lapsed_silently_skips_dm_path(self, seeded_db):
+    async def test_premium_lapsed_silently_skips_dm_path(self, seeded_db, frozen_clock):
         """Premium lapsed (TEST_GUILD_ID isn't in the bypass set) →
         `_send_reminder_via_dm` is NOT called and `reminder_last_fired`
         stays empty so the next tick after re-upgrade fires."""
@@ -139,11 +159,10 @@ class TestScheduledReminderDmBranch:
             TEST_GUILD_ID, "Squad Powers", "Survey History", [], "intro",
         )
 
-        _, target_time = _matching_time_now()
         config.save_survey_reminder(
             TEST_GUILD_ID, "default",
             enabled=1, frequency="daily",
-            day_of_week=0, time_str=target_time,
+            day_of_week=0, time_str=_hhmm(frozen_clock),
             channel_id=0, use_dm=1,
             message="DM body",
         )
@@ -167,7 +186,7 @@ class TestScheduledReminderDmBranch:
 class TestScheduledReminderWeeklySchedule:
 
     @pytest.mark.asyncio
-    async def test_weekly_only_fires_on_configured_weekday(self, seeded_db):
+    async def test_weekly_only_fires_on_configured_weekday(self, seeded_db, frozen_clock):
         """Weekly reminders include `reminder_day_of_week` (Mon=0).
         On a non-matching weekday → no fire."""
         import config
@@ -176,16 +195,13 @@ class TestScheduledReminderWeeklySchedule:
             PREMIUM_TEST_GUILD_ID, "Squad Powers", "Survey History", [], "intro",
         )
 
-        # Pick a weekday that's NOT today.
-        from zoneinfo import ZoneInfo
-        guild_now    = datetime.now(tz=ZoneInfo("America/New_York"))
-        wrong_weekday = (guild_now.weekday() + 3) % 7
-        target_time   = f"{guild_now.hour:02d}:{guild_now.minute:02d}"
+        # Pick a weekday that's NOT the frozen one.
+        wrong_weekday = (frozen_clock.weekday() + 3) % 7
 
         config.save_survey_reminder(
             PREMIUM_TEST_GUILD_ID, "default",
             enabled=1, frequency="weekly",
-            day_of_week=wrong_weekday, time_str=target_time,
+            day_of_week=wrong_weekday, time_str=_hhmm(frozen_clock),
             channel_id=33333, use_dm=0,
             message="weekly body",
         )
@@ -198,22 +214,17 @@ class TestScheduledReminderWeeklySchedule:
         target.send.assert_not_called()
 
     @pytest.mark.asyncio
-    async def test_weekly_fires_when_weekday_matches(self, seeded_db):
+    async def test_weekly_fires_when_weekday_matches(self, seeded_db, frozen_clock):
         import config
         _seed_setup_complete(PREMIUM_TEST_GUILD_ID)
         config.save_survey_config(
             PREMIUM_TEST_GUILD_ID, "Squad Powers", "Survey History", [], "intro",
         )
 
-        from zoneinfo import ZoneInfo
-        guild_now      = datetime.now(tz=ZoneInfo("America/New_York"))
-        matching_dow   = guild_now.weekday()
-        target_time    = f"{guild_now.hour:02d}:{guild_now.minute:02d}"
-
         config.save_survey_reminder(
             PREMIUM_TEST_GUILD_ID, "default",
             enabled=1, frequency="weekly",
-            day_of_week=matching_dow, time_str=target_time,
+            day_of_week=frozen_clock.weekday(), time_str=_hhmm(frozen_clock),
             channel_id=33334, use_dm=0,
             message="hello",
         )
@@ -231,7 +242,7 @@ class TestScheduledReminderWeeklySchedule:
 class TestScheduledReminderMultiGuildIsolation:
 
     @pytest.mark.asyncio
-    async def test_one_guild_helper_failure_does_not_block_another(self, seeded_db):
+    async def test_one_guild_helper_failure_does_not_block_another(self, seeded_db, frozen_clock):
         """Two guilds both due. Guild A's channel send raises; Guild
         B's still fires."""
         import config
@@ -244,7 +255,7 @@ class TestScheduledReminderMultiGuildIsolation:
                 gid, "Squad Powers", "Survey History", [], "intro",
             )
 
-        _, target_time = _matching_time_now()
+        target_time = _hhmm(frozen_clock)
         config.save_survey_reminder(
             gid_a, "default", enabled=1, frequency="daily",
             day_of_week=0, time_str=target_time,
@@ -278,7 +289,7 @@ class TestScheduledReminderMultiGuildIsolation:
 class TestScheduledReminderDbIdempotency:
 
     @pytest.mark.asyncio
-    async def test_db_last_fired_stamp_blocks_second_tick_same_day(self, seeded_db):
+    async def test_db_last_fired_stamp_blocks_second_tick_same_day(self, seeded_db, frozen_clock):
         """Once `reminder_last_fired` is today, the next tick (even
         with the time still matching) skips. This complements the
         existing in-memory test by exercising the DB-stamped path."""
@@ -288,20 +299,16 @@ class TestScheduledReminderDbIdempotency:
             PREMIUM_TEST_GUILD_ID, "Squad Powers", "Survey History", [], "intro",
         )
 
-        from zoneinfo import ZoneInfo
-        guild_now = datetime.now(tz=ZoneInfo("America/New_York"))
-        target_time = f"{guild_now.hour:02d}:{guild_now.minute:02d}"
-
-        # Pre-stamp last_fired = today.
+        # Pre-stamp last_fired = today (frozen).
         config.save_survey_reminder(
             PREMIUM_TEST_GUILD_ID, "default",
             enabled=1, frequency="daily",
-            day_of_week=0, time_str=target_time,
+            day_of_week=0, time_str=_hhmm(frozen_clock),
             channel_id=22222, use_dm=0,
             message="should not fire",
         )
         config.update_survey_reminder_last_fired(
-            PREMIUM_TEST_GUILD_ID, "default", guild_now.date().isoformat(),
+            PREMIUM_TEST_GUILD_ID, "default", frozen_clock.date().isoformat(),
         )
 
         cog = _make_cog()

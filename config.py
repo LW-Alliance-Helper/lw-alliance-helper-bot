@@ -157,19 +157,31 @@ def init_db():
         """)
         conn.commit()
 
-        # guild_growth_config — per-guild growth tracking settings
+        # guild_growth_config — per-guild growth tracking settings.
+        # Breakdown columns (#34) classify members by % change between
+        # snapshots. `breakdown_thresholds` / `breakdown_labels` are JSON
+        # dicts (Premium override, empty `{}` = use hardcoded defaults).
+        # `breakdown_post_channel_id` enables auto-post on snapshot (0 =
+        # off; Premium-gated at call time). `breakdown_bucket_filter` is
+        # a JSON list of bucket names included in the auto-post (empty `[]`
+        # = no filter, post every bucket).
         conn.execute("""
             CREATE TABLE IF NOT EXISTS guild_growth_config (
-                guild_id             INTEGER PRIMARY KEY,
-                enabled              INTEGER DEFAULT 0,
-                tab_source           TEXT    DEFAULT '',
-                name_col             TEXT    DEFAULT 'A',
-                metrics              TEXT    DEFAULT '',
-                tab_growth           TEXT    DEFAULT 'Growth Tracking',
-                snapshot_frequency   TEXT    DEFAULT 'monthly',
-                snapshot_day         INTEGER DEFAULT 1,
-                snapshot_interval    INTEGER DEFAULT 30,
-                data_start_row       INTEGER DEFAULT 2
+                guild_id                   INTEGER PRIMARY KEY,
+                enabled                    INTEGER DEFAULT 0,
+                tab_source                 TEXT    DEFAULT '',
+                name_col                   TEXT    DEFAULT 'A',
+                metrics                    TEXT    DEFAULT '',
+                tab_growth                 TEXT    DEFAULT 'Growth Tracking',
+                snapshot_frequency         TEXT    DEFAULT 'monthly',
+                snapshot_day               INTEGER DEFAULT 1,
+                snapshot_interval          INTEGER DEFAULT 30,
+                data_start_row             INTEGER DEFAULT 2,
+                tab_breakdown              TEXT    DEFAULT 'Growth Breakdown',
+                breakdown_thresholds       TEXT    DEFAULT '{}',
+                breakdown_labels           TEXT    DEFAULT '{}',
+                breakdown_post_channel_id  INTEGER DEFAULT 0,
+                breakdown_bucket_filter    TEXT    DEFAULT '[]'
             )
         """)
         conn.commit()
@@ -209,20 +221,21 @@ def init_db():
         # hardcoded default in train_cog.py". Supports `{name}` placeholder.
         conn.execute("""
             CREATE TABLE IF NOT EXISTS guild_birthday_config (
-                guild_id             INTEGER PRIMARY KEY,
-                tab_name             TEXT    DEFAULT 'Birthdays',
-                name_col             INTEGER DEFAULT 0,
-                birthday_col         INTEGER DEFAULT 1,
-                discord_id_col       INTEGER DEFAULT -1,
-                data_start_row       INTEGER DEFAULT 2,
-                enabled              INTEGER DEFAULT 1,
-                train_integration    INTEGER DEFAULT 0,
-                flexible_placement   INTEGER DEFAULT 1,
-                lookahead_days       INTEGER DEFAULT 14,
-                reminders_enabled    INTEGER DEFAULT 0,
-                reminder_channel_id  INTEGER DEFAULT 0,
-                reminder_time        TEXT    DEFAULT '08:00',
-                dm_message           TEXT    DEFAULT ''
+                guild_id                   INTEGER PRIMARY KEY,
+                tab_name                   TEXT    DEFAULT 'Birthdays',
+                name_col                   INTEGER DEFAULT 0,
+                birthday_col               INTEGER DEFAULT 1,
+                discord_id_col             INTEGER DEFAULT -1,
+                data_start_row             INTEGER DEFAULT 2,
+                enabled                    INTEGER DEFAULT 1,
+                train_integration          INTEGER DEFAULT 0,
+                flexible_placement         INTEGER DEFAULT 1,
+                lookahead_days             INTEGER DEFAULT 14,
+                reminders_enabled          INTEGER DEFAULT 0,
+                reminder_channel_id        INTEGER DEFAULT 0,
+                reminder_time              TEXT    DEFAULT '08:00',
+                dm_message                 TEXT    DEFAULT '',
+                last_train_population_date TEXT    DEFAULT ''
             )
         """)
         conn.commit()
@@ -304,6 +317,46 @@ def init_db():
                 installer_user_id INTEGER,
                 installed_at      TEXT    NOT NULL,
                 last_seen_at      TEXT    NOT NULL
+            )
+        """)
+        conn.commit()
+
+        # guild_shiny_tasks_config — per-guild Daily Shiny Tasks settings.
+        # Free for all tiers. `channel_id` is the destination, `post_time`
+        # is HH:MM in the guild's `timezone` (mirrors birthday reminder
+        # config), `server_min`/`server_max` define the alliance's
+        # "transfer range" filter applied to `shiny_task_servers`, and
+        # `message_template` is the customised announcement body (empty
+        # string = use `DEFAULT_SHINY_TASKS_MESSAGE` from defaults.py).
+        # `last_posted_date` is an ISO date string used by the scheduler
+        # loop to prevent duplicate posts when Railway restarts across
+        # the configured minute.
+        conn.execute("""
+            CREATE TABLE IF NOT EXISTS guild_shiny_tasks_config (
+                guild_id          INTEGER PRIMARY KEY,
+                enabled           INTEGER DEFAULT 0,
+                channel_id        INTEGER DEFAULT 0,
+                post_time         TEXT    DEFAULT '09:00',
+                server_min        INTEGER DEFAULT 0,
+                server_max        INTEGER DEFAULT 0,
+                message_template  TEXT    DEFAULT '',
+                last_posted_date  TEXT    DEFAULT ''
+            )
+        """)
+
+        # shiny_task_servers — global table of every Last War server
+        # known to cpt-hedge, refreshed weekly. The 3-day shiny-task
+        # cycle is fully derivable from `creation_date` (no phase
+        # column needed). `last_seen_at` is bumped on every refresh;
+        # servers absent from the most recent fetch age out and are
+        # filtered from queries (soft delete). See shiny_tasks.py and
+        # docs/hedge_data_source.md.
+        conn.execute("""
+            CREATE TABLE IF NOT EXISTS shiny_task_servers (
+                server_number INTEGER PRIMARY KEY,
+                creation_date TEXT    NOT NULL,
+                region        TEXT    DEFAULT '',
+                last_seen_at  TEXT    NOT NULL
             )
         """)
         conn.commit()
@@ -418,6 +471,21 @@ def init_db():
             except Exception:
                 pass
 
+        # ── guild_growth_config migrations (#34 Growth Breakdown) ──────────────
+        for col, definition in [
+            ("tab_breakdown",             "TEXT    DEFAULT 'Growth Breakdown'"),
+            ("breakdown_thresholds",      "TEXT    DEFAULT '{}'"),
+            ("breakdown_labels",          "TEXT    DEFAULT '{}'"),
+            ("breakdown_post_channel_id", "INTEGER DEFAULT 0"),
+            ("breakdown_bucket_filter",   "TEXT    DEFAULT '[]'"),
+        ]:
+            try:
+                conn.execute(f"ALTER TABLE guild_growth_config ADD COLUMN {col} {definition}")
+                conn.commit()
+                print(f"[CONFIG] Added {col} to guild_growth_config")
+            except Exception:
+                pass
+
         # ── guild_birthday_config migrations ───────────────────────────────────
         for col, definition in [
             ("discord_id_col",      "INTEGER DEFAULT -1"),
@@ -428,6 +496,13 @@ def init_db():
             ("reminder_time",       "TEXT DEFAULT '08:00'"),
             # Premium birthday DM body (empty → hardcoded default in train_cog.py)
             ("dm_message",          "TEXT DEFAULT ''"),
+            # SQLite-backed dedup for the 22:00 ET train-population fire.
+            # ISO date of the last successful auto-pop. Survives bot
+            # restarts and discord.py reconnects, which the prior
+            # in-memory `birthday_population_fired` set on the cog did
+            # not (Railway redeploys at 22:00 were re-firing the
+            # conflict alerts). See #89.
+            ("last_train_population_date", "TEXT DEFAULT ''"),
         ]:
             try:
                 conn.execute(f"ALTER TABLE guild_birthday_config ADD COLUMN {col} {definition}")
@@ -1186,7 +1261,10 @@ def save_participation_config(
 
 
 def get_growth_config(guild_id: int) -> dict:
-    """Return growth config for a guild."""
+    """Return growth config for a guild. Breakdown JSON fields
+    (`breakdown_thresholds`, `breakdown_labels`, `breakdown_bucket_filter`)
+    are parsed back into dicts/lists; empty / malformed JSON falls back to
+    empty defaults so callers don't need to handle parse errors."""
     import json
     with _get_conn() as conn:
         row = conn.execute(
@@ -1199,18 +1277,33 @@ def get_growth_config(guild_id: int) -> dict:
             d["metrics"] = json.loads(d["metrics"]) if d["metrics"] else []
         except (json.JSONDecodeError, TypeError):
             d["metrics"] = []
+        for json_field, fallback in (
+            ("breakdown_thresholds", {}),
+            ("breakdown_labels",     {}),
+            ("breakdown_bucket_filter", []),
+        ):
+            raw = d.get(json_field)
+            try:
+                d[json_field] = json.loads(raw) if raw else fallback
+            except (json.JSONDecodeError, TypeError):
+                d[json_field] = fallback
         return d
     return {
-        "guild_id":           guild_id,
-        "enabled":            0,
-        "tab_source":         "",
-        "name_col":           "A",
-        "metrics":            [],
-        "tab_growth":         "Growth Tracking",
-        "snapshot_frequency": "monthly",
-        "snapshot_day":       1,
-        "snapshot_interval":  30,
-        "data_start_row":     2,
+        "guild_id":                  guild_id,
+        "enabled":                   0,
+        "tab_source":                "",
+        "name_col":                  "A",
+        "metrics":                   [],
+        "tab_growth":                "Growth Tracking",
+        "snapshot_frequency":        "monthly",
+        "snapshot_day":              1,
+        "snapshot_interval":         30,
+        "data_start_row":            2,
+        "tab_breakdown":             "Growth Breakdown",
+        "breakdown_thresholds":      {},
+        "breakdown_labels":          {},
+        "breakdown_post_channel_id": 0,
+        "breakdown_bucket_filter":   [],
     }
 
 
@@ -1238,6 +1331,55 @@ def save_growth_config(guild_id: int, enabled: int, tab_source: str,
              tab_growth, snapshot_frequency, snapshot_day, snapshot_interval, data_start_row)
         )
         conn.commit()
+
+
+def save_growth_breakdown_config(
+    guild_id: int, *,
+    tab_breakdown: str             = "Growth Breakdown",
+    breakdown_thresholds: dict     = None,
+    breakdown_labels: dict         = None,
+    breakdown_post_channel_id: int = 0,
+    breakdown_bucket_filter: list  = None,
+) -> bool:
+    """Update the breakdown-specific fields on guild_growth_config without
+    touching the core growth-snapshot fields. Returns True if a row was
+    updated; False if the guild has no growth config yet (caller should
+    run `/setup_growth` first).
+
+    `breakdown_thresholds` is a dict like ``{"increased": 20, "steady": 10,
+    "low": 5, "none": 0}`` (Decline is implicit at < 0%). Empty dict means
+    "use hardcoded defaults". `breakdown_labels` is a dict keyed by the
+    canonical bucket names (``increased / steady / low / none / decline``).
+    `breakdown_bucket_filter` is a list of canonical bucket names that
+    fire the auto-post (empty list = post every bucket).
+    """
+    import json
+    if breakdown_thresholds is None:
+        breakdown_thresholds = {}
+    if breakdown_labels is None:
+        breakdown_labels = {}
+    if breakdown_bucket_filter is None:
+        breakdown_bucket_filter = []
+    with _get_conn() as conn:
+        cur = conn.execute(
+            "UPDATE guild_growth_config SET "
+            "  tab_breakdown = ?, "
+            "  breakdown_thresholds = ?, "
+            "  breakdown_labels = ?, "
+            "  breakdown_post_channel_id = ?, "
+            "  breakdown_bucket_filter = ? "
+            "WHERE guild_id = ?",
+            (
+                tab_breakdown,
+                json.dumps(breakdown_thresholds),
+                json.dumps(breakdown_labels),
+                int(breakdown_post_channel_id or 0),
+                json.dumps(breakdown_bucket_filter),
+                guild_id,
+            ),
+        )
+        conn.commit()
+        return cur.rowcount > 0
 
 
 def get_survey_config(guild_id: int) -> dict:
@@ -1510,20 +1652,21 @@ def get_birthday_config(guild_id: int) -> dict:
     if row:
         return dict(row)
     return {
-        "guild_id":            guild_id,
-        "tab_name":            "Birthdays",
-        "name_col":            0,
-        "birthday_col":        1,
-        "discord_id_col":      -1,
-        "data_start_row":      2,
-        "enabled":             0,
-        "train_integration":   0,
-        "flexible_placement":  1,
-        "lookahead_days":      14,
-        "reminders_enabled":   0,
-        "reminder_channel_id": 0,
-        "reminder_time":       "08:00",
-        "dm_message":          "",
+        "guild_id":                   guild_id,
+        "tab_name":                   "Birthdays",
+        "name_col":                   0,
+        "birthday_col":               1,
+        "discord_id_col":             -1,
+        "data_start_row":             2,
+        "enabled":                    0,
+        "train_integration":          0,
+        "flexible_placement":         1,
+        "lookahead_days":             14,
+        "reminders_enabled":          0,
+        "reminder_channel_id":        0,
+        "reminder_time":              "08:00",
+        "dm_message":                 "",
+        "last_train_population_date": "",
     }
 
 
@@ -1556,6 +1699,39 @@ def save_birthday_config(guild_id: int, tab_name: str, name_col: int,
             (guild_id, tab_name, name_col, birthday_col, discord_id_col, data_start_row,
              enabled, train_integration, flexible_placement, lookahead_days,
              reminders_enabled, reminder_channel_id, reminder_time, dm_message)
+        )
+        conn.commit()
+
+
+def get_birthday_population_last_fired(guild_id: int) -> str:
+    """Return the ISO date the birthday auto-population last fired for
+    this guild, or `""` when it hasn't fired yet (or the guild has no
+    birthday config row). Used by the train cog's 22:00 ET scheduler to
+    dedup across bot restarts — the previous in-memory set on the cog
+    instance got wiped on every Railway redeploy. See #89."""
+    with _get_conn() as conn:
+        row = conn.execute(
+            "SELECT last_train_population_date FROM guild_birthday_config "
+            "WHERE guild_id = ?",
+            (guild_id,),
+        ).fetchone()
+    if row is None:
+        return ""
+    return (dict(row).get("last_train_population_date") or "")
+
+
+def mark_birthday_population_fired(guild_id: int, date_iso: str) -> None:
+    """Stamp `last_train_population_date` so subsequent ticks (including
+    fresh-process ticks after a Railway redeploy) skip the auto-pop for
+    the rest of the day. UPDATE-only — the guild has to have run
+    `/setup_birthdays` first for the row to exist, in which case the
+    caller's `bcfg.get("train_integration")` check has already passed
+    so we know the row is present."""
+    with _get_conn() as conn:
+        conn.execute(
+            "UPDATE guild_birthday_config SET last_train_population_date = ? "
+            "WHERE guild_id = ?",
+            (date_iso, guild_id),
         )
         conn.commit()
 
@@ -1804,4 +1980,150 @@ def save_train_config(guild_id: int, tab_name: str, themes: list,
         )
         conn.commit()
 
+
+# ── Shiny Tasks (free-tier daily announcement of shiny servers) ───────────────
+
+def get_shiny_tasks_config(guild_id: int) -> dict:
+    """Return shiny-tasks config for a guild, or a default dict if absent."""
+    with _get_conn() as conn:
+        row = conn.execute(
+            "SELECT * FROM guild_shiny_tasks_config WHERE guild_id = ?",
+            (guild_id,),
+        ).fetchone()
+    if row:
+        return dict(row)
+    return {
+        "guild_id":         guild_id,
+        "enabled":          0,
+        "channel_id":       0,
+        "post_time":        "09:00",
+        "server_min":       0,
+        "server_max":       0,
+        "message_template": "",
+        "last_posted_date": "",
+    }
+
+
+def save_shiny_tasks_config(
+    guild_id: int, *,
+    enabled: int,
+    channel_id: int,
+    post_time: str,
+    server_min: int,
+    server_max: int,
+    message_template: str,
+):
+    """Insert or replace a guild's shiny-tasks config.
+
+    `last_posted_date` is managed by the scheduler loop (see
+    `mark_shiny_tasks_posted`), not the wizard, so it isn't a parameter
+    here — leaving the column as-is on update preserves the loop's
+    duplicate-suppression state across re-runs of the setup wizard.
+    """
+    with _get_conn() as conn:
+        conn.execute(
+            "INSERT INTO guild_shiny_tasks_config "
+            "(guild_id, enabled, channel_id, post_time, server_min, server_max, "
+            " message_template, last_posted_date) "
+            "VALUES (?, ?, ?, ?, ?, ?, ?, COALESCE("
+            "  (SELECT last_posted_date FROM guild_shiny_tasks_config WHERE guild_id = ?),"
+            "  ''"
+            ")) "
+            "ON CONFLICT(guild_id) DO UPDATE SET "
+            "enabled=excluded.enabled, channel_id=excluded.channel_id, "
+            "post_time=excluded.post_time, server_min=excluded.server_min, "
+            "server_max=excluded.server_max, "
+            "message_template=excluded.message_template",
+            (guild_id, enabled, channel_id, post_time, server_min, server_max,
+             message_template, guild_id),
+        )
+        conn.commit()
+
+
+def mark_shiny_tasks_posted(guild_id: int, posted_date: str) -> None:
+    """Record that today's announcement has fired for this guild.
+
+    Called by the scheduler loop right after a successful channel.send so
+    a Railway restart across the configured minute can't double-post.
+    """
+    with _get_conn() as conn:
+        conn.execute(
+            "UPDATE guild_shiny_tasks_config SET last_posted_date = ? "
+            "WHERE guild_id = ?",
+            (posted_date, guild_id),
+        )
+        conn.commit()
+
+
+def list_shiny_enabled_guild_ids() -> list[int]:
+    """Return guild_ids with `enabled=1` shiny-tasks config.
+
+    Used by the per-minute scheduler loop to walk only the guilds that
+    actually opted in, instead of every configured guild.
+    """
+    with _get_conn() as conn:
+        rows = conn.execute(
+            "SELECT guild_id FROM guild_shiny_tasks_config WHERE enabled = 1"
+        ).fetchall()
+    return [r["guild_id"] for r in rows]
+
+
+def upsert_shiny_task_servers(
+    rows: list[tuple[int, str, str]], seen_at: str,
+) -> int:
+    """Upsert a batch of (server_number, creation_date, region) rows.
+
+    Every row gets `last_seen_at = seen_at`. Returns the number of rows
+    upserted. Called by `shiny_tasks.refresh_servers` after fetching the
+    cpt-hedge bundle.
+    """
+    if not rows:
+        return 0
+    payload = [(n, cd, region, seen_at) for (n, cd, region) in rows]
+    with _get_conn() as conn:
+        conn.executemany(
+            "INSERT INTO shiny_task_servers "
+            "(server_number, creation_date, region, last_seen_at) "
+            "VALUES (?, ?, ?, ?) "
+            "ON CONFLICT(server_number) DO UPDATE SET "
+            "creation_date=excluded.creation_date, "
+            "region=excluded.region, "
+            "last_seen_at=excluded.last_seen_at",
+            payload,
+        )
+        conn.commit()
+    return len(payload)
+
+
+def get_shiny_task_servers_in_range(
+    server_min: int, server_max: int, *, max_age_days: int = 30,
+) -> list[dict]:
+    """Return rows in [server_min, server_max] seen within `max_age_days`.
+
+    The `max_age_days` filter is the soft-delete mechanism: any server
+    missing from the last N refreshes is excluded automatically. Result
+    is sorted by server_number for deterministic announcement copy.
+    """
+    from datetime import datetime as _dt, timedelta as _td, timezone as _tz
+    cutoff = (_dt.now(tz=_tz.utc) - _td(days=max_age_days)).isoformat()
+    with _get_conn() as conn:
+        rows = conn.execute(
+            "SELECT server_number, creation_date, region, last_seen_at "
+            "FROM shiny_task_servers "
+            "WHERE server_number BETWEEN ? AND ? "
+            "  AND last_seen_at >= ? "
+            "ORDER BY server_number",
+            (server_min, server_max, cutoff),
+        ).fetchall()
+    return [dict(r) for r in rows]
+
+
+def count_shiny_task_servers() -> int:
+    """Return the total row count in `shiny_task_servers` (used to
+    decide whether the initial seed has run)."""
+    with _get_conn() as conn:
+        row = conn.execute(
+            "SELECT COUNT(*) AS n FROM shiny_task_servers"
+        ).fetchone()
+    return row["n"] if row else 0
 

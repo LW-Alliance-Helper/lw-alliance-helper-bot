@@ -1337,7 +1337,7 @@ Examples: *Vote count*, *Sitting out*, *Did anyone show up late?*
 | Error (CS parse fail) | `⚠️ Could not parse any assignments. Make sure the format matches the template and try \`/canyonstorm_draft\` again.` | `storm.py` |
 | Warning (parse) | `⚠️ Some lines were skipped:\n• {error1}\n• {error2}…` | `storm.py` |
 | Validation retry (DS zone line) | `Could not parse zone line: {line}` | `storm.py` |
-| Validation retry (DS sub line) | `Could not parse sub pair: {line}` | `storm.py` |
+| Validation retry (DS unknown zone) | `Unknown zone \`{zone}\` — must be one of: {canonical_list}` | `storm.py` |
 | Validation retry (CS unrecognized) | `Unrecognized line in Stage {stage}: {line}` | `storm.py` |
 | Validation retry (CS unparseable) | `Could not parse: {line}` | `storm.py` |
 | Success | `💾 **Team {team} template saved (not posted).** Review the preview below before sending it out.` | `storm.py` |
@@ -1394,11 +1394,13 @@ Examples: *Vote count*, *Sitting out*, *Did anyone show up late?*
 ```text
 [Default DS template scaffold — build_ds_template]
 ZONE ASSIGNMENTS
-{zone}: {members}
+Nuclear Silo: {…}
+Oil Refinery I: {…}
 …
+Mercenary Factory: {…}
 
-SUB PAIRS (Starter - Sub)
-{starter} - {sub}
+SUBS
+{name}
 …
 ```
 
@@ -1430,7 +1432,10 @@ Defense System 1: {…}
 Defense System 2: {…}
 Serum Factory 1: {…}
 Serum Factory 2: {…}
-Pop Pairs (last 30 sec): {…}
+
+Subs
+{name}
+…
 ```
 
 ### 8.4 `/desertstorm_participation` and `/canyonstorm_participation`

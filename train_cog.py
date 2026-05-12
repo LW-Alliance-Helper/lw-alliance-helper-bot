@@ -69,13 +69,17 @@ date_cls = date
 
 class TrainCog(commands.Cog):
     def __init__(self, bot):
-        self.bot                       = bot
-        # Initialize to today's ET date so the first tick after deploy
-        # doesn't trip the "new day, run birthday auto-population" branch
-        # — without this, every Railway redeploy re-fires the daily run.
-        self.last_reminder_date        = datetime.now(tz=ET).date()
-        self.reminders_fired           = set()
-        self.birthday_population_fired = set()
+        self.bot                = bot
+        # Initialise to today's ET date so the first tick after deploy
+        # doesn't trip the "new day, reset reminders_fired" branch.
+        self.last_reminder_date = datetime.now(tz=ET).date()
+        self.reminders_fired    = set()  # train-assignment reminders sent today
+        # `birthday_population_fired` used to dedup the 22:00 ET train
+        # auto-pop via an in-memory set. Railway restarts wiped it, so
+        # the auto-pop re-fired and spammed conflict messages on every
+        # redeploy. Dedup now lives on `guild_birthday_config
+        # .last_train_population_date` (see #89), read fresh from
+        # SQLite on every tick.
         self.check_reminder.start()
 
     def cog_unload(self):
@@ -372,9 +376,8 @@ class TrainCog(commands.Cog):
 
         # Reset daily flag at midnight ET
         if self.last_reminder_date != today:
-            self.last_reminder_date        = today
-            self.reminders_fired           = set()  # train reminders fired today
-            self.birthday_population_fired = set()  # birthday auto-pop done today
+            self.last_reminder_date = today
+            self.reminders_fired    = set()  # train reminders fired today
 
         # ── Birthday auto-population and Discord announcements ────────────────
         # Per-guild try/except: a single misconfigured guild (bad perms,
@@ -398,34 +401,51 @@ class TrainCog(commands.Cog):
                 # reset. Exact-minute trigger matches the Discord birthday
                 # announcement pattern below; if Railway is restarting
                 # across that minute, /train_addbirthdays is the manual
-                # escape hatch. The fired set is cleared at midnight ET.
+                # escape hatch. Dedup persists in
+                # `guild_birthday_config.last_train_population_date` so
+                # Railway redeploys at 22:00 don't re-fire — the previous
+                # in-memory set was wiped on every restart (#89).
                 if (
                     bcfg.get("train_integration")
                     and now.hour == 22 and now.minute == 0
-                    and guild.id not in self.birthday_population_fired
                 ):
-                    self.birthday_population_fired.add(guild.id)
-                    try:
-                        current_schedule = load_schedule(guild.id)
-                        # Snapshot for change detection — check_and_add_birthdays
-                        # mutates `current_schedule` in place and returns the
-                        # same object, so comparing the return value to the
-                        # input would always be equal (the original 1.0.x bug).
-                        before = dict(current_schedule)
-                        updated_schedule, alerts = check_and_add_birthdays(
-                            current_schedule, guild_id=guild.id,
-                        )
-                        if updated_schedule != before or alerts:
-                            save_schedule(updated_schedule, guild.id)
-                        if alerts:
-                            alert_channel = self.bot.get_channel(cfg.leadership_channel_id)
-                            if alert_channel:
-                                for alert in alerts:
-                                    await alert_channel.send(alert)
-                    except Exception as e:
-                        import traceback
-                        print(f"[BIRTHDAY] Auto-population failed for guild {guild.id}: {e}")
-                        print(traceback.format_exc())
+                    from config import (
+                        get_birthday_population_last_fired,
+                        mark_birthday_population_fired,
+                    )
+                    today_iso = today.isoformat()
+                    # Skip the auto-pop block when today's run already
+                    # landed (Railway restart at 22:00, second tick
+                    # within the minute, etc.) — but fall through to
+                    # the Discord birthday announcement below either
+                    # way; that check has its own time gate.
+                    if get_birthday_population_last_fired(guild.id) != today_iso:
+                        try:
+                            current_schedule = load_schedule(guild.id)
+                            # Snapshot for change detection — check_and_add_birthdays
+                            # mutates `current_schedule` in place and returns the
+                            # same object, so comparing the return value to the
+                            # input would always be equal (the original 1.0.x bug).
+                            before = dict(current_schedule)
+                            updated_schedule, alerts = check_and_add_birthdays(
+                                current_schedule, guild_id=guild.id,
+                            )
+                            if updated_schedule != before or alerts:
+                                save_schedule(updated_schedule, guild.id)
+                            if alerts:
+                                alert_channel = self.bot.get_channel(cfg.leadership_channel_id)
+                                if alert_channel:
+                                    for alert in alerts:
+                                        await alert_channel.send(alert)
+                            # Stamp *after* a successful run so a mid-fire
+                            # crash leaves the day un-stamped and a manual
+                            # `/train_addbirthdays` (or the next deploy)
+                            # can retry.
+                            mark_birthday_population_fired(guild.id, today_iso)
+                        except Exception as e:
+                            import traceback
+                            print(f"[BIRTHDAY] Auto-population failed for guild {guild.id}: {e}")
+                            print(traceback.format_exc())
 
                 # Birthday Discord announcements
                 if not bcfg.get("reminders_enabled"):

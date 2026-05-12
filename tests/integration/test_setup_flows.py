@@ -710,6 +710,102 @@ class TestRunStormSetup:
         gcfg = config.get_config(TEST_GUILD_ID)
         assert gcfg.cs_log_channel_id == 666666
 
+    @pytest.mark.asyncio
+    async def test_existing_ds_config_shows_summary_and_keeps_unchanged(self, seeded_db):
+        """Re-running /setup_desertstorm on a configured guild opens with
+        the summary embed; No-changes keeps state intact. Regression
+        guard for #103."""
+        import config
+        from setup_cog import run_storm_setup
+
+        config.save_storm_config(
+            TEST_GUILD_ID, "DS",
+            tab_name="DS Assignments",
+            mail_template="template body",
+            timezone="America/New_York",
+            log_channel_id=555700,
+            post_channel_id=555800,
+        )
+        config.update_config_field(TEST_GUILD_ID, "ds_log_channel_id", 555700)
+
+        interaction = make_mock_interaction()
+        bot         = AsyncMock()
+
+        make_send_handler(
+            interaction.channel,
+            view_overrides={"proceed": False, "cancelled": False},
+        )
+        await run_storm_setup(interaction, bot, "DS")
+
+        # No changes were applied.
+        cfg = config.get_storm_config(TEST_GUILD_ID, "DS")
+        assert cfg["log_channel_id"]  == 555700
+        assert cfg["post_channel_id"] == 555800
+
+    @pytest.mark.asyncio
+    async def test_existing_ds_config_threads_both_channel_current_ids(self, seeded_db):
+        """Walking past the summary into Steps 3 + 4 must pass the saved
+        log_channel_id and post_channel_id as current_id to their
+        respective ChannelSelectStep calls."""
+        import config
+        from setup_cog import run_storm_setup
+
+        config.save_storm_config(
+            TEST_GUILD_ID, "DS",
+            tab_name="DS Assignments",
+            mail_template="template",
+            timezone="America/New_York",
+            log_channel_id=555900,
+            post_channel_id=555950,
+        )
+        config.update_config_field(TEST_GUILD_ID, "ds_log_channel_id", 555900)
+
+        interaction = make_mock_interaction()
+        bot         = AsyncMock()
+
+        new_log_ch  = MagicMock(id=555900)
+        new_post_ch = MagicMock(id=555950)
+        ch_views = [
+            MagicMock(
+                confirmed=True, cancelled=False, is_current_stale=False,
+                selected_channel=new_log_ch, wait=AsyncMock(),
+            ),
+            MagicMock(
+                confirmed=True, cancelled=False, is_current_stale=False,
+                selected_channel=new_post_ch, wait=AsyncMock(),
+            ),
+        ]
+        ch_iter = iter(ch_views)
+        ch_call_kwargs = []
+
+        def _record_ch(*a, **kw):
+            ch_call_kwargs.append(kw)
+            return next(ch_iter)
+
+        async def _skip_participation(*args, **kwargs):
+            return {"enabled": 0, "tab_name": "", "questions": [],
+                    "roster_tab": "", "roster_name_col": 0,
+                    "roster_alias_col": -1, "roster_start_row": 2}
+
+        with patch("setup_cog.ChannelSelectStep", side_effect=_record_ch), \
+             patch("setup_cog._run_storm_participation_step", side_effect=_skip_participation), \
+             patch_keep_or_change(["DS Assignments", ""]):
+            make_send_handler(
+                interaction.channel,
+                view_overrides={
+                    # Summary -> Edit; team -> A; template -> use default.
+                    "proceed":     True,
+                    "selected":    "A",
+                    "use_default": True,
+                    "cancelled":   False,
+                },
+            )
+            await run_storm_setup(interaction, bot, "DS")
+
+        assert len(ch_call_kwargs) == 2
+        assert ch_call_kwargs[0]["current_id"] == 555900
+        assert ch_call_kwargs[1]["current_id"] == 555950
+
 
 # ── /setup_growth ─────────────────────────────────────────────────────────────
 

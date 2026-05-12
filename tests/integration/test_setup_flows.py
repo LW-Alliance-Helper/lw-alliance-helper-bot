@@ -304,6 +304,98 @@ class TestRunTrainSetup:
         assert cfg["reminder_channel_id"] == 777777777
         assert cfg["reminder_time"]       == "22:00"
 
+    @pytest.mark.asyncio
+    async def test_existing_config_shows_summary_and_cancel(self, seeded_db):
+        """Re-running /setup_train on a configured guild opens with a
+        summary embed + Edit/No-changes; picking No keeps everything.
+        Regression guard for #97."""
+        import config
+        from setup_cog import run_train_setup
+
+        config.save_train_config(
+            TEST_GUILD_ID,
+            tab_name="My Tab",
+            themes=["Heroic"],
+            tones=["Serious"],
+            prompt_template="prompt",
+            default_tone="Serious",
+            blurbs_enabled=1,
+            reminders_enabled=1,
+            reminder_channel_id=600600,
+            reminder_time="22:00",
+        )
+
+        interaction = make_mock_interaction()
+        bot         = AsyncMock()
+
+        # Send-handler routes the inline EditOrCancelView -> proceed=False.
+        # No other views should ever fire because the helper returns
+        # early once proceed=False.
+        make_send_handler(
+            interaction.channel,
+            view_overrides={"proceed": False, "cancelled": False},
+        )
+        await run_train_setup(interaction, bot)
+
+        # Saved values unchanged.
+        cfg = config.get_train_config(TEST_GUILD_ID)
+        assert cfg["tab_name"]            == "My Tab"
+        assert cfg["reminder_channel_id"] == 600600
+
+    @pytest.mark.asyncio
+    async def test_existing_config_threads_reminder_channel_current_id(self, seeded_db):
+        """Re-running with saved config and walking through to Step 7a
+        must pass the saved reminder_channel_id as current_id."""
+        import config
+        from setup_cog import run_train_setup
+
+        config.save_train_config(
+            TEST_GUILD_ID,
+            tab_name="My Tab",
+            themes=["Heroic"],
+            tones=["Serious"],
+            prompt_template="prompt",
+            default_tone="Serious",
+            blurbs_enabled=0,             # skip Steps 3-6
+            reminders_enabled=1,
+            reminder_channel_id=600700,
+            reminder_time="22:00",
+        )
+
+        interaction = make_mock_interaction()
+        bot         = AsyncMock()
+
+        new_channel = MagicMock(id=600700)
+        ch_view = MagicMock(
+            confirmed=True, cancelled=False, is_current_stale=False,
+            selected_channel=new_channel, wait=AsyncMock(),
+        )
+
+        # Wizard step views: blurbs=No, reminders=Yes.
+        blurb_view  = MagicMock(selected=False, cancelled=False, wait=AsyncMock())
+        remind_view = MagicMock(selected=True,  cancelled=False, wait=AsyncMock())
+
+        ch_call_kwargs = []
+
+        def _record_ch(*a, **kw):
+            ch_call_kwargs.append(kw)
+            return ch_view
+
+        with patch("setup_cog.YesNoView",         side_effect=[blurb_view, remind_view]), \
+             patch("setup_cog.ChannelSelectStep", side_effect=_record_ch), \
+             patch_keep_or_change(["My Tab", "10:00pm", ""]):
+            # `view_overrides` covers the summary EditOrCancelView ->
+            # proceed=True so the wizard walks the steps.
+            make_send_handler(
+                interaction.channel,
+                view_overrides={"proceed": True, "cancelled": False},
+            )
+            await run_train_setup(interaction, bot)
+
+        # Single channel pick (Step 7a) — current_id should match the saved value.
+        assert len(ch_call_kwargs) == 1
+        assert ch_call_kwargs[0]["current_id"] == 600700
+
 
 # ── /setup_birthdays ──────────────────────────────────────────────────────────
 

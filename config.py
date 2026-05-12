@@ -1898,6 +1898,21 @@ def _normalize_train_templates(d: dict) -> dict:
     return d
 
 
+def has_train_config(guild_id: int) -> bool:
+    """True iff the guild has a row in `guild_train_config` — i.e. they
+    have run `/setup_train` at least once. `get_train_config` returns
+    a fallback dict on miss, so it can't distinguish "saved with all
+    defaults" from "never configured"; this helper exists for the
+    setup-wizard summary embed (#97) which only renders when there is
+    real saved config to show."""
+    with _get_conn() as conn:
+        row = conn.execute(
+            "SELECT 1 FROM guild_train_config WHERE guild_id = ?",
+            (guild_id,),
+        ).fetchone()
+    return row is not None
+
+
 def get_train_config(guild_id: int) -> dict:
     """Return the train config for a guild, falling back to framework defaults."""
     import json

@@ -646,6 +646,98 @@ class TestRunSurveySetup:
         assert survey_cfg["tab_history"]      == "Survey History"
         assert len(survey_cfg["questions"])   > 0   # defaults loaded
 
+    @pytest.mark.asyncio
+    async def test_existing_config_shows_summary_and_keeps_unchanged(self, seeded_db):
+        """Re-running /setup_survey on a configured guild opens with the
+        summary embed; picking No-changes leaves state intact."""
+        import config
+        from setup_cog import run_survey_setup
+
+        # Pre-seed channel ids on guild_configs + survey config row.
+        config.update_config_field(TEST_GUILD_ID, "survey_channel_id",        300100)
+        config.update_config_field(TEST_GUILD_ID, "survey_notify_channel_id", 300200)
+        config.save_survey_config(
+            TEST_GUILD_ID,
+            tab_squad_powers="Squad Powers",
+            tab_history="Survey History",
+            questions=[{"key": "q1", "label": "Q1", "type": "text", "help_text": "", "options": []}],
+            intro_message="Take the survey!",
+        )
+
+        interaction = make_mock_interaction()
+        bot         = AsyncMock()
+
+        make_send_handler(
+            interaction.channel,
+            view_overrides={"proceed": False, "cancelled": False},
+        )
+        await run_survey_setup(interaction, bot)
+
+        cfg = config.get_config(TEST_GUILD_ID)
+        assert cfg.survey_channel_id        == 300100
+        assert cfg.survey_notify_channel_id == 300200
+
+    @pytest.mark.asyncio
+    async def test_existing_config_threads_both_channel_current_ids(self, seeded_db):
+        """Walking past the summary and through Steps 1+2 must pass the
+        saved survey_channel_id and survey_notify_channel_id as
+        current_id to their respective ChannelSelectStep calls."""
+        import config
+        from setup_cog import run_survey_setup
+
+        config.update_config_field(TEST_GUILD_ID, "survey_channel_id",        300300)
+        config.update_config_field(TEST_GUILD_ID, "survey_notify_channel_id", 300400)
+        config.save_survey_config(
+            TEST_GUILD_ID,
+            tab_squad_powers="Squad Powers",
+            tab_history="Survey History",
+            questions=[{"key": "q1", "label": "Q1", "type": "text", "help_text": "", "options": []}],
+            intro_message="Take the survey!",
+        )
+
+        interaction = make_mock_interaction()
+        bot         = AsyncMock()
+
+        new_survey_ch = MagicMock(id=300300)
+        new_notify_ch = MagicMock(id=300400)
+        ch_views = [
+            MagicMock(
+                confirmed=True, cancelled=False, is_current_stale=False,
+                selected_channel=new_survey_ch, wait=AsyncMock(),
+            ),
+            MagicMock(
+                confirmed=True, cancelled=False, is_current_stale=False,
+                selected_channel=new_notify_ch, wait=AsyncMock(),
+            ),
+        ]
+        ch_iter = iter(ch_views)
+
+        # Intro message comes via bot.wait_for.
+        bot.wait_for = AsyncMock(return_value=MagicMock(content="Survey!"))
+
+        ch_call_kwargs = []
+
+        def _record_ch(*a, **kw):
+            ch_call_kwargs.append(kw)
+            return next(ch_iter)
+
+        with patch("setup_cog.ChannelSelectStep", side_effect=_record_ch), \
+             patch_keep_or_change(["Squad Powers", "Survey History"]):
+            make_send_handler(
+                interaction.channel,
+                # Summary -> Edit; QuestionStartView -> default.
+                view_overrides={
+                    "proceed":   True,
+                    "choice":    "default",
+                    "cancelled": False,
+                },
+            )
+            await run_survey_setup(interaction, bot)
+
+        assert len(ch_call_kwargs) == 2
+        assert ch_call_kwargs[0]["current_id"] == 300300
+        assert ch_call_kwargs[1]["current_id"] == 300400
+
 
 # ── /setup_desertstorm and /setup_canyonstorm ─────────────────────────────────
 

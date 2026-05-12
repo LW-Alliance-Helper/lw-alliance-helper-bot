@@ -3686,19 +3686,61 @@ async def run_survey_setup(interaction: discord.Interaction, bot,
     from config import (
         get_survey_config, save_survey_config,
         get_survey, save_extra_survey,
+        has_survey_config, get_config,
     )
     from defaults import DEFAULT_SURVEY_QUESTIONS
 
     if target_survey_id is None:
         current = get_survey_config(guild_id)
         wizard_label = "Survey Setup"
+        survey_already_configured = has_survey_config(guild_id)
+        # Main survey: channel ids live on guild_configs (legacy storage),
+        # not on guild_survey_config. Load them from there.
+        guild_cfg = get_config(guild_id)
+        saved_survey_ch = (guild_cfg.survey_channel_id if guild_cfg else 0) or 0
+        saved_notify_ch = (guild_cfg.survey_notify_channel_id if guild_cfg else 0) or 0
     else:
         current = get_survey(guild_id, target_survey_id) or {}
         # Carry the existing name through so we can preserve it on save.
         if not target_survey_name:
             target_survey_name = current.get("survey_name") or target_survey_id
         wizard_label = f"Survey Setup — {target_survey_name}"
+        survey_already_configured = bool(current)
+        # Extra surveys: channel ids are stored alongside the survey row.
+        saved_survey_ch = (current.get("survey_channel_id") or 0)
+        saved_notify_ch = (current.get("notify_channel_id") or 0)
     questions = list(current.get("questions") or [])
+
+    # ── If already configured, show summary and offer edit or cancel ─────────
+    if survey_already_configured:
+        q_count = len(questions)
+        fields = [
+            (
+                "Survey Channel",
+                f"<#{saved_survey_ch}>" if saved_survey_ch else "*not set*",
+            ),
+            (
+                "Notification Channel",
+                f"<#{saved_notify_ch}>" if saved_notify_ch else "*not set*",
+            ),
+            ("Stats Tab",   current.get("tab_squad_powers") or "*not set*"),
+            ("History Tab", current.get("tab_history")      or "*not set*"),
+            ("Questions",   f"{q_count} configured" if q_count else "*none*"),
+        ]
+        title = (
+            f"📋 Current Survey Setup — {target_survey_name}"
+            if target_survey_id else "📋 Current Survey Setup"
+        )
+        proceed = await ask_proceed_with_existing_config(
+            channel,
+            title=title,
+            description="This survey is already configured. Would you like to edit these settings?",
+            fields=fields,
+            cancel_event=cancel_event,
+            no_changes_message="✅ No changes made. Your survey setup is still active.",
+        )
+        if proceed is not True:
+            return
 
     await channel.send(
         f"⚙️ **{wizard_label}**\n"
@@ -3713,7 +3755,13 @@ async def run_survey_setup(interaction: discord.Interaction, bot,
         suggested_name="squad-survey",
         include_threads=is_premium_flag,
         guild=interaction.guild,
+        current_id=saved_survey_ch,
     )
+    if survey_ch_view.is_current_stale:
+        await channel.send(
+            "⚠️ Your previously configured survey channel no longer exists. "
+            "Pick a new one below."
+        )
     await channel.send(
         "**Step 1 of 6 — Survey Channel**\n"
         "Select the channel where the survey button will be posted for members to access:",
@@ -3733,7 +3781,13 @@ async def run_survey_setup(interaction: discord.Interaction, bot,
         suggested_name="survey-responses",
         include_threads=is_premium_flag,
         guild=interaction.guild,
+        current_id=saved_notify_ch,
     )
+    if notify_ch_view.is_current_stale:
+        await channel.send(
+            "⚠️ Your previously configured notification channel no longer exists. "
+            "Pick a new one below."
+        )
     await channel.send(
         "**Step 2 of 6 — Survey Notification Channel**\n"
         "Select the channel where leadership will be notified when a member submits the survey:",

@@ -2132,3 +2132,23 @@ def count_shiny_task_servers() -> int:
         ).fetchone()
     return row["n"] if row else 0
 
+
+def get_last_shiny_refresh_at():
+    """Return the most recent `last_seen_at` from `shiny_task_servers` as
+    a tz-aware UTC `datetime`, or `None` if the table is empty.
+
+    Used by the weekly refresh loop to gate cpt-hedge re-fetches across
+    process restarts: `tasks.loop` fires its body immediately on
+    `.start()`, so Railway redeploys would otherwise hammer Hedge once
+    per deploy. The 7-day interval lives in process memory only —
+    `MAX(last_seen_at)` is the persistent equivalent.
+    """
+    from datetime import datetime as _dt
+    with _get_conn() as conn:
+        row = conn.execute(
+            "SELECT MAX(last_seen_at) AS last FROM shiny_task_servers"
+        ).fetchone()
+    if not row or not row["last"]:
+        return None
+    return _dt.fromisoformat(row["last"])
+

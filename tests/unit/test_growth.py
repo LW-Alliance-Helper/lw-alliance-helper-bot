@@ -599,6 +599,44 @@ class TestSnapshotBreakdownWriting:
         assert sum(1 for v in values_only if v == "Increased") == 1
         assert not any(v == "Decline" for v in values_only)
 
+    def test_duplicate_period_still_writes_missing_breakdown(self, seeded_db):
+        """Regression for #85. The seeder (or a previous in-period
+        manual run) leaves the current period's columns on the growth
+        tab. Re-running 'Snapshot Now' must NOT skip silently — the
+        breakdown writer needs to run so a missing breakdown can be
+        filled in without forcing leadership to hand-edit the sheet."""
+        from datetime import datetime
+        from growth import _run_growth_snapshot_inner
+        self._seed_config()
+
+        month_label = datetime.now().strftime("%b %Y")
+        prev_label  = "Apr 2026"
+        # Growth tab already carries the current period's columns
+        # (period_already_exists=True path) AND a previous period.
+        growth_header = ["Name", f"Power ({prev_label})", f"Power ({month_label})"]
+        growth_rows   = [["Alice", "100", "130"]]
+        # Breakdown tab is empty — the bug being fixed.
+        mock_sh, growth_ws, bd_ws = self._build_mocks(
+            growth_header=growth_header, growth_rows=growth_rows, members=[],
+        )
+
+        members = [{"name": "Alice", "row_index": 2, "Power": 130.0}]
+        with patch("growth._get_spreadsheet", return_value=mock_sh), \
+             patch("growth.load_member_data", return_value=members):
+            _run_growth_snapshot_inner(TEST_GUILD_ID)
+
+        # The snapshot side skips writing metric columns (duplicate period).
+        growth_ws.batch_update.assert_not_called()
+        # But the breakdown writer DOES run and writes the missing transition.
+        assert bd_ws.batch_update.called, \
+            "Breakdown writer didn't run on the duplicate-period path"
+        # Header row should have been written with the new transition columns.
+        assert bd_ws.update.called
+        first_bd_update = bd_ws.update.call_args_list[0]
+        bd_header_written = first_bd_update[0][1][0]
+        assert f"{prev_label} - {month_label} Power %"      in bd_header_written
+        assert f"{prev_label} - {month_label} Power Bucket" in bd_header_written
+
     def test_second_snapshot_idempotent_on_rerun(self, seeded_db):
         """Re-running the same snapshot must not write breakdown rows
         twice — idempotency check on the transition columns in the

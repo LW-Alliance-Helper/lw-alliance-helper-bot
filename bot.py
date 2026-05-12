@@ -720,23 +720,26 @@ async def growth_slash(interaction: discord.Interaction):
 
         @discord.ui.button(label="📊 Breakdown", style=discord.ButtonStyle.secondary)
         async def breakdown(self, inter: discord.Interaction, button: discord.ui.Button):
-            for item in self.children: item.disabled = True
-            await wizard_registry.safe_edit_response(inter, view=self)
+            # Read-only render. Don't disable sibling buttons and don't
+            # `self.stop()` — leadership might want to follow the no-data
+            # message's own advice and click **Run Snapshot Now**, or
+            # re-click Breakdown after a snapshot completes. (#84)
+            await inter.response.defer(ephemeral=True)
             try:
                 from growth import read_latest_breakdown, format_breakdown_embed
                 data = await asyncio.to_thread(read_latest_breakdown, guild_id)
             except Exception as e:
                 await inter.followup.send(f"⚠️ Could not load breakdown: {e}", ephemeral=True)
-                self.stop()
                 return
             if not data.get("has_data"):
                 await inter.followup.send(
-                    "📊 No breakdown data yet — the breakdown is computed on each "
-                    "snapshot after the first one, so the second snapshot is when "
-                    "this lights up. Run a snapshot or wait for the scheduled one.",
+                    "📊 No breakdown data yet — click **📸 Run Snapshot Now** "
+                    "above (or wait for the next scheduled snapshot). The "
+                    "breakdown classifies each member's percent change between "
+                    "snapshots, so it needs at least two snapshots' worth of "
+                    "data before any classification can render.",
                     ephemeral=True,
                 )
-                self.stop()
                 return
             embed = format_breakdown_embed(
                 metric_labels=data["metric_labels"],
@@ -746,7 +749,6 @@ async def growth_slash(interaction: discord.Interaction):
                 label_overrides=gcfg.get("breakdown_labels") or {},
             )
             await inter.followup.send(embed=embed, ephemeral=True)
-            self.stop()
 
         @discord.ui.button(label="⚙️ Edit Config", style=discord.ButtonStyle.primary)
         async def edit_config(self, inter: discord.Interaction, button: discord.ui.Button):

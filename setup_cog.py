@@ -3022,8 +3022,37 @@ async def run_train_setup(interaction: discord.Interaction, bot):
             return None
         return reply.content.strip()[:max_chars]
 
-    from config import get_train_config
+    from config import get_train_config, has_train_config
     current = get_train_config(guild_id)
+    train_already_configured = has_train_config(guild_id)
+
+    # ── If already configured, show summary and offer edit or cancel ──────────
+    if train_already_configured:
+        themes = current.get("themes") or []
+        tones  = current.get("tones") or []
+        fields = [
+            ("Schedule Tab", current.get("tab_name") or "*not set*"),
+            ("Blurbs",       "✅ Enabled" if current.get("blurbs_enabled") else "❌ Disabled"),
+        ]
+        if current.get("blurbs_enabled"):
+            fields.append(("Themes", ", ".join(themes) if themes else "*none*"))
+            fields.append(("Tones",  ", ".join(tones)  if tones  else "*none*"))
+            fields.append(("Default Tone", current.get("default_tone") or "*not set*"))
+        fields.append(("Reminders", "✅ Enabled" if current.get("reminders_enabled") else "❌ Disabled"))
+        if current.get("reminders_enabled"):
+            rc = current.get("reminder_channel_id", 0) or 0
+            fields.append(("Reminder Channel", f"<#{rc}>" if rc else "*not set*"))
+            fields.append(("Reminder Time",    current.get("reminder_time") or "*not set*"))
+        proceed = await ask_proceed_with_existing_config(
+            channel,
+            title="🚂 Current Train Setup",
+            description="Your train schedule is already configured. Would you like to edit these settings?",
+            fields=fields,
+            cancel_event=cancel_event,
+            no_changes_message="✅ No changes made. Your train setup is still active.",
+        )
+        if proceed is not True:
+            return
 
     await channel.send(
         "⚙️ **Train Schedule Setup**\n"
@@ -3063,10 +3092,21 @@ async def run_train_setup(interaction: discord.Interaction, bot):
         return
     blurbs_enabled = 1 if blurb_view.selected else 0
     if not blurbs_enabled:
-        await channel.send(
-            "ℹ️ *Skipping Steps 3–6 (themes, tones, default tone, prompt template) — "
-            "blurb generation is off.*"
-        )
+        # If leadership had blurbs configured previously, their themes,
+        # tones, default tone, and templates are kept in the DB so a
+        # future re-enable starts where they left off. Tell them so they
+        # don't worry about losing config.
+        had_prior_blurbs = train_already_configured and current.get("blurbs_enabled")
+        if had_prior_blurbs:
+            await channel.send(
+                "ℹ️ Blurb generation disabled. Your themes, tones, and templates "
+                "remain saved — re-enable later to restore them."
+            )
+        else:
+            await channel.send(
+                "ℹ️ *Skipping Steps 3–6 (themes, tones, default tone, prompt template) — "
+                "blurb generation is off.*"
+            )
 
     themes        = current["themes"]
     tones         = current["tones"]
@@ -3153,16 +3193,44 @@ async def run_train_setup(interaction: discord.Interaction, bot):
 
         # ── Step 5: Default tone ───────────────────────────────────────────────
         class ToneDefaultView(discord.ui.View):
-            def __init__(self, tone_list: list):
+            def __init__(self, tone_list: list, *, current: str | None = None):
                 super().__init__(timeout=120)
                 self.selected = None
+
+                # Keep-current button on row 0 when the saved default
+                # tone still appears in the current tone_list (it may
+                # have been removed in Step 4).
+                keep_added = False
+                if current and current in tone_list:
+                    keep_btn = discord.ui.Button(
+                        label=f"✅ Keep current: {current}"[:80],
+                        style=discord.ButtonStyle.success,
+                        row=0,
+                    )
+
+                    async def _keep_cb(inter: discord.Interaction):
+                        self.selected = current
+                        for item in self.children:
+                            item.disabled = True
+                        await wizard_registry.safe_edit_response(
+                            inter,
+                            content=f"✅ Keeping default tone: **{current}**",
+                            view=self,
+                        )
+                        self.stop()
+                    keep_btn.callback = _keep_cb
+                    self.add_item(keep_btn)
+                    keep_added = True
+
                 select = discord.ui.Select(
                     placeholder="Select default tone...",
                     options=[discord.SelectOption(label=t, value=t) for t in tone_list],
+                    row=1 if keep_added else 0,
                 )
                 async def _cb(inter: discord.Interaction):
                     self.selected = select.values[0]
-                    select.disabled = True
+                    for item in self.children:
+                        item.disabled = True
                     await wizard_registry.safe_edit_response(
                         inter,
                         content=f"✅ Default tone: **{self.selected}**", view=self
@@ -3171,7 +3239,7 @@ async def run_train_setup(interaction: discord.Interaction, bot):
                 select.callback = _cb
                 self.add_item(select)
 
-        tone_default_view = ToneDefaultView(tones)
+        tone_default_view = ToneDefaultView(tones, current=current.get("default_tone"))
         await channel.send(
             f"**Step 5 of 8 — Default Tone**\n"
             f"Which tone should be pre-selected by default?",
@@ -3223,18 +3291,32 @@ async def run_train_setup(interaction: discord.Interaction, bot):
     reminder_channel_id = 0
     reminder_time       = "22:00"
     if not reminders_enabled:
-        await channel.send(
-            "ℹ️ *Skipping Steps 7a–7b (reminder channel and time) — train reminders are off.*"
-        )
+        had_prior_reminders = train_already_configured and current.get("reminders_enabled")
+        if had_prior_reminders:
+            await channel.send(
+                "ℹ️ Train reminders disabled. Your saved reminder channel and time "
+                "remain saved — re-enable later to restore them."
+            )
+        else:
+            await channel.send(
+                "ℹ️ *Skipping Steps 7a–7b (reminder channel and time) — train reminders are off.*"
+            )
 
     if reminders_enabled:
         # ── Step 7a: Reminder channel ──────────────────────────────────────────
+        saved_reminder_ch = current.get("reminder_channel_id", 0) or 0
         reminder_ch_view = ChannelSelectStep(
             "Select the reminder channel...",
             suggested_name="leadership",
             include_threads=is_premium_flag,
             guild=interaction.guild,
+            current_id=saved_reminder_ch,
         )
+        if reminder_ch_view.is_current_stale:
+            await channel.send(
+                "⚠️ Your previously configured reminder channel no longer exists. "
+                "Pick a new one below."
+            )
         await channel.send(
             "**Step 7a of 8 — Reminder Channel**\n"
             "Which channel should the train reminder be posted to?",

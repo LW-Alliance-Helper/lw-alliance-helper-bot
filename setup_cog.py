@@ -1818,43 +1818,24 @@ async def run_setup(interaction: discord.Interaction, bot):
     # ── If already configured, show summary and offer edit or cancel ──────────
     if cfg.setup_complete:
         tz_label = TIMEZONE_LABELS.get(cfg.timezone, cfg.timezone)
-        existing_embed = discord.Embed(
+        sheet_display = (
+            f"`{cfg.spreadsheet_id[:20]}...`" if cfg.spreadsheet_id else "Not set"
+        )
+        proceed = await ask_proceed_with_existing_config(
+            channel,
             title="⚙️ Current Core Setup",
             description="Your server is already configured. Would you like to edit these settings?",
-            color=discord.Color.blurple(),
+            fields=[
+                ("Member Role",        cfg.member_role_name),
+                ("Leadership Role",    cfg.leadership_role_name),
+                ("Leadership Channel", f"<#{cfg.leadership_channel_id}>"),
+                ("Timezone",           tz_label),
+                ("Sheet ID",           sheet_display),
+            ],
+            cancel_event=cancel_event,
+            no_changes_message="✅ No changes made. Your existing setup is still active.",
         )
-        existing_embed.add_field(name="Member Role",        value=cfg.member_role_name,              inline=False)
-        existing_embed.add_field(name="Leadership Role",    value=cfg.leadership_role_name,          inline=False)
-        existing_embed.add_field(name="Leadership Channel", value=f"<#{cfg.leadership_channel_id}>", inline=False)
-        existing_embed.add_field(name="Timezone",           value=tz_label,                          inline=False)
-        existing_embed.add_field(name="Sheet ID",           value=f"`{cfg.spreadsheet_id[:20]}...`" if cfg.spreadsheet_id else "Not set", inline=False)
-
-        class EditOrCancelView(discord.ui.View):
-            def __init__(self):
-                super().__init__(timeout=60)
-                self.proceed = None
-
-            @discord.ui.button(label="✏️ Edit settings", style=discord.ButtonStyle.primary)
-            async def edit(self, inter: discord.Interaction, button: discord.ui.Button):
-                self.proceed = True
-                for item in self.children: item.disabled = True
-                await wizard_registry.safe_edit_response(inter, view=self)
-                self.stop()
-
-            @discord.ui.button(label="✅ No changes needed", style=discord.ButtonStyle.secondary)
-            async def cancel(self, inter: discord.Interaction, button: discord.ui.Button):
-                self.proceed = False
-                for item in self.children: item.disabled = True
-                await wizard_registry.safe_edit_response(inter, view=self)
-                self.stop()
-
-        eoc_view = EditOrCancelView()
-        await channel.send(embed=existing_embed, view=eoc_view)
-        await wait_view_or_cancel(eoc_view, cancel_event)
-        if eoc_view.cancelled:
-            return
-        if not eoc_view.proceed:
-            await channel.send("✅ No changes made. Your existing setup is still active.")
+        if proceed is not True:
             return
 
     await channel.send(
@@ -1866,7 +1847,17 @@ async def run_setup(interaction: discord.Interaction, bot):
 
     # ── Step 1: Member role ────────────────────────────────────────────────────
     await channel.send("**Step 1 of 6 — Member Role**\nSelect the role that all alliance members have:")
-    v = RoleSelectStep("Select member role...")
+    v = RoleSelectStep(
+        "Select member role...",
+        current_id=cfg.member_role_id,
+        current_name=cfg.member_role_name,
+        guild=interaction.guild,
+    )
+    if v.is_current_stale:
+        await channel.send(
+            f"⚠️ Your previously configured member role **{cfg.member_role_name}** "
+            "no longer exists. Pick a new one below."
+        )
     await channel.send("\u200b", view=v)
     await wait_view_or_cancel(v, cancel_event)
     if v.cancelled:
@@ -1879,7 +1870,17 @@ async def run_setup(interaction: discord.Interaction, bot):
 
     # ── Step 2: Leadership role ────────────────────────────────────────────────
     await channel.send("**Step 2 of 6 — Leadership Role**\nSelect the elevated role for alliance leadership:")
-    v = RoleSelectStep("Select leadership role...")
+    v = RoleSelectStep(
+        "Select leadership role...",
+        current_id=cfg.leadership_role_id,
+        current_name=cfg.leadership_role_name,
+        guild=interaction.guild,
+    )
+    if v.is_current_stale:
+        await channel.send(
+            f"⚠️ Your previously configured leadership role **{cfg.leadership_role_name}** "
+            "no longer exists. Pick a new one below."
+        )
     await channel.send("\u200b", view=v)
     await wait_view_or_cancel(v, cancel_event)
     if v.cancelled:
@@ -1888,6 +1889,7 @@ async def run_setup(interaction: discord.Interaction, bot):
         await channel.send("⏰ Setup timed out. Run `/setup` to start again.")
         return
     cfg.leadership_role_name = v.selected_role.name
+    cfg.leadership_role_id   = v.selected_role.id
 
     # ── Step 3: Leadership channel ─────────────────────────────────────────────
     is_premium_flag = await premium.is_premium(guild_id, interaction=interaction)
@@ -1902,7 +1904,13 @@ async def run_setup(interaction: discord.Interaction, bot):
         suggested_name="leadership",
         include_threads=is_premium_flag,
         guild=interaction.guild,
+        current_id=cfg.leadership_channel_id,
     )
+    if v.is_current_stale:
+        await channel.send(
+            "⚠️ Your previously configured leadership channel no longer exists. "
+            "Pick a new one below."
+        )
     await channel.send("\u200b", view=v)
     await wait_view_or_cancel(v, cancel_event)
     if v.cancelled:

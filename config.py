@@ -39,6 +39,7 @@ class GuildConfig:
     announcement_channel_id:  int        = 0
     member_role_id:           int        = 0
     member_role_name:         str        = "Member"
+    leadership_role_id:       int        = 0
     leadership_role_name:     str        = "Leadership"
     survey_channel_id:        int        = 0
     survey_notify_channel_id: int        = 0
@@ -91,6 +92,7 @@ def init_db():
                 announcement_channel_id  INTEGER DEFAULT 0,
                 member_role_id           INTEGER DEFAULT 0,
                 member_role_name         TEXT    DEFAULT 'Member',
+                leadership_role_id       INTEGER DEFAULT 0,
                 leadership_role_name     TEXT    DEFAULT 'Leadership',
                 survey_channel_id        INTEGER DEFAULT 0,
                 survey_notify_channel_id INTEGER DEFAULT 0,
@@ -516,12 +518,15 @@ def init_db():
         # event_draft_time, event_five_min_warning are also added by an
         # earlier silent-swallow block above; covered here so logging
         # picks up upgrades from the very oldest schema versions.
+        # `leadership_role_id` (#95) lets the setup wizard's "Keep current"
+        # button survive a role rename — old guilds only had the name.
         for col, definition in [
             ("survey_channel_id",         "INTEGER DEFAULT 0"),
             ("survey_notify_channel_id",  "INTEGER DEFAULT 0"),
             ("ds_log_channel_id",         "INTEGER DEFAULT 0"),
             ("cs_log_channel_id",         "INTEGER DEFAULT 0"),
             ("timezone",                  "TEXT DEFAULT 'America/New_York'"),
+            ("leadership_role_id",        "INTEGER DEFAULT 0"),
         ]:
             try:
                 conn.execute(f"ALTER TABLE guild_configs ADD COLUMN {col} {definition}")

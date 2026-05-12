@@ -354,6 +354,160 @@ class TestRunBirthdaySetup:
         assert cfg["name_col"]     == 0   # "A"
         assert cfg["birthday_col"] == 1   # "B"
 
+    @pytest.mark.asyncio
+    async def test_existing_enabled_config_shows_summary_and_keeps_unchanged(self, seeded_db):
+        """Re-running /setup_birthdays on an enabled-and-configured guild
+        opens with a summary embed + Edit/No-changes; picking No keeps
+        the saved config. Regression guard for #98."""
+        import config
+        from setup_cog import run_birthday_setup
+
+        config.save_birthday_config(
+            TEST_GUILD_ID,
+            tab_name="Members",
+            name_col=0, birthday_col=1, discord_id_col=-1, data_start_row=2,
+            enabled=1,
+            train_integration=0, flexible_placement=0, lookahead_days=14,
+            reminders_enabled=1, reminder_channel_id=550550, reminder_time="08:00",
+            dm_message="",
+        )
+
+        interaction = make_mock_interaction()
+        bot         = AsyncMock()
+
+        # Summary EditOrCancelView -> proceed=False. Nothing else should run.
+        make_send_handler(
+            interaction.channel,
+            view_overrides={"proceed": False, "cancelled": False},
+        )
+        await run_birthday_setup(interaction, bot)
+
+        cfg = config.get_birthday_config(TEST_GUILD_ID)
+        assert cfg["enabled"]             == 1
+        assert cfg["reminder_channel_id"] == 550550
+
+    @pytest.mark.asyncio
+    async def test_existing_config_threads_reminder_channel_current_id(self, seeded_db):
+        """Re-running with saved config and walking to Step 8a must pass
+        the saved reminder_channel_id as current_id."""
+        import config
+        from setup_cog import run_birthday_setup
+
+        config.save_birthday_config(
+            TEST_GUILD_ID,
+            tab_name="Members",
+            name_col=0, birthday_col=1, discord_id_col=-1, data_start_row=2,
+            enabled=1,
+            train_integration=0, flexible_placement=0, lookahead_days=14,
+            reminders_enabled=1, reminder_channel_id=550600, reminder_time="08:00",
+            dm_message="",
+        )
+
+        interaction = make_mock_interaction()
+        bot         = AsyncMock()
+
+        new_channel = MagicMock(id=550600)
+        ch_view = MagicMock(
+            confirmed=True, cancelled=False, is_current_stale=False,
+            selected_channel=new_channel, wait=AsyncMock(),
+        )
+
+        # YesNoView order: enable=Yes, train_integration=No, reminders=Yes.
+        yn_views = [
+            MagicMock(selected=True,  cancelled=False, wait=AsyncMock()),
+            MagicMock(selected=False, cancelled=False, wait=AsyncMock()),
+            MagicMock(selected=True,  cancelled=False, wait=AsyncMock()),
+        ]
+
+        ch_call_kwargs = []
+
+        def _record_ch(*a, **kw):
+            ch_call_kwargs.append(kw)
+            return ch_view
+
+        with patch("setup_cog.YesNoView",         side_effect=yn_views), \
+             patch("setup_cog.ChannelSelectStep", side_effect=_record_ch), \
+             patch_keep_or_change(["Members", "A", "B", "8:00am", ""]):
+            make_send_handler(
+                interaction.channel,
+                view_overrides={"proceed": True, "cancelled": False},
+            )
+            await run_birthday_setup(interaction, bot)
+
+        assert len(ch_call_kwargs) == 1
+        assert ch_call_kwargs[0]["current_id"] == 550600
+
+    @pytest.mark.asyncio
+    async def test_disable_with_prior_config_offers_clear_button(self, seeded_db):
+        """When leadership picks No on Step 1 AND has prior config, the
+        ask_disable_with_clear helper fires with had_prior_config=True
+        (Clear button rendered). Captures the kwargs the wizard passes
+        to verify the gating is right."""
+        import config
+        from setup_cog import run_birthday_setup
+
+        # Pre-seed so has_birthday_config returns True.
+        config.save_birthday_config(
+            TEST_GUILD_ID,
+            tab_name="Members",
+            name_col=0, birthday_col=1, discord_id_col=-1, data_start_row=2,
+            enabled=1,
+            train_integration=0, flexible_placement=0, lookahead_days=14,
+            reminders_enabled=0, reminder_channel_id=0, reminder_time="08:00",
+            dm_message="",
+        )
+
+        interaction = make_mock_interaction()
+        bot         = AsyncMock()
+
+        # Step 1 -> No.
+        enabled_no = MagicMock(selected=False, cancelled=False, wait=AsyncMock())
+        captured   = {}
+
+        async def fake_disable(channel, **kwargs):
+            captured.update(kwargs)
+
+        with patch("setup_cog.YesNoView",                return_value=enabled_no), \
+             patch("setup_cog.ask_disable_with_clear",   side_effect=fake_disable):
+            make_send_handler(
+                interaction.channel,
+                view_overrides={"proceed": True, "cancelled": False},
+            )
+            await run_birthday_setup(interaction, bot)
+
+        assert captured["feature_label"]   == "Birthday tracking"
+        assert captured["setup_command"]   == "setup_birthdays"
+        assert captured["had_prior_config"] is True
+        # clear_fn should wipe the DB row when invoked.
+        captured["clear_fn"]()
+        assert config.has_birthday_config(TEST_GUILD_ID) is False
+
+    @pytest.mark.asyncio
+    async def test_disable_first_run_skips_clear_button(self, seeded_db):
+        """First-time disable (no saved row yet) should call
+        ask_disable_with_clear with had_prior_config=False so the
+        Clear button doesn't render."""
+        import config
+        from setup_cog import run_birthday_setup
+
+        # Make sure no row exists.
+        config.clear_birthday_config(TEST_GUILD_ID)
+
+        interaction = make_mock_interaction()
+        bot         = AsyncMock()
+        enabled_no  = MagicMock(selected=False, cancelled=False, wait=AsyncMock())
+        captured    = {}
+
+        async def fake_disable(channel, **kwargs):
+            captured.update(kwargs)
+
+        with patch("setup_cog.YesNoView",              return_value=enabled_no), \
+             patch("setup_cog.ask_disable_with_clear", side_effect=fake_disable):
+            make_send_handler(interaction.channel)
+            await run_birthday_setup(interaction, bot)
+
+        assert captured["had_prior_config"] is False
+
 
 # ── /setup_survey ─────────────────────────────────────────────────────────────
 

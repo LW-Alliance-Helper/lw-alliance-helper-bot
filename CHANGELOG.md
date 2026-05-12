@@ -12,28 +12,28 @@ and PR description.
 ## [1.3.0] — 2026-05-12
 
 ### Added
-- **Setup wizard re-entry UX overhaul** — re-running any `/setup_*` command (and `/setup_members`) on a configured guild now opens with a summary of saved config and offers Edit / No-changes. Channel, role, timezone, sheet ID, reminder time, default tone, intro message, and every `ask_keep_or_change` step now offer ✅ Keep current. Disable toggles on `/setup_birthdays`, `/setup_growth`, and `/setup_shiny_tasks` preserve saved config and surface a 🗑️ Clear my saved configuration button ([#80](https://github.com/LW-Alliance-Helper/lw-alliance-helper-bot/issues/80)).
+- Setup wizard re-entry: saved-config summary, Keep current buttons, and friendlier disable flow across every `/setup_*` ([#80](https://github.com/LW-Alliance-Helper/lw-alliance-helper-bot/issues/80)).
 
 ### Fixed
-- Shiny-tasks weekly refresh no longer re-fetches cpt-hedge on every Railway redeploy — gated on the last-seen timestamp in `shiny_task_servers` so re-deploys within the 7-day window skip the refresh ([#109](https://github.com/LW-Alliance-Helper/lw-alliance-helper-bot/issues/109)).
+- Shiny-tasks weekly refresh no longer re-fetches cpt-hedge on every Railway redeploy ([#109](https://github.com/LW-Alliance-Helper/lw-alliance-helper-bot/issues/109)).
 
 ## [1.2.0] — 2026-05-11
 
 ### Added
-- **Growth Breakdown** — every snapshot classifies each member's percent change since the previous snapshot into Increased / Steady / Low / None / Decline, written to a configurable `Growth Breakdown` tab. New 📊 See most recent Breakdown button on `/growth` renders an ephemeral embed grouped by metric and bucket. Premium `/setup_growth_breakdown` adds auto-post after every snapshot, bucket filter, custom thresholds, and custom bucket labels ([#34](https://github.com/LW-Alliance-Helper/lw-alliance-helper-bot/issues/34)).
-- **Daily Shiny Tasks announcement** — new free-tier `/setup_shiny_tasks` configures a once-a-day post listing every Last War server in the alliance's transfer range that has shiny tasks today; data refreshed weekly from cpt-hedge ([#72](https://github.com/LW-Alliance-Helper/lw-alliance-helper-bot/issues/72)).
-- **Data portability** — `/export_config` dumps the categories you pick (core setup, events, DS, CS, train, birthday, growth, surveys, shiny tasks, member roster) to a JSON file; `/import_config` walks a channel + role remap wizard on the destination server and applies per category ([#42](https://github.com/LW-Alliance-Helper/lw-alliance-helper-bot/issues/42)).
+- Growth Breakdown classifies snapshot deltas into Increased / Steady / Low / None / Decline buckets, with optional Premium auto-post ([#34](https://github.com/LW-Alliance-Helper/lw-alliance-helper-bot/issues/34)).
+- Daily Shiny Tasks announcement (free tier) ([#72](https://github.com/LW-Alliance-Helper/lw-alliance-helper-bot/issues/72)).
+- `/export_config` + `/import_config` move config between guilds with a channel/role remap wizard ([#42](https://github.com/LW-Alliance-Helper/lw-alliance-helper-bot/issues/42)).
 
 ### Changed
-- DS and CS zones lock to the canonical game-defined list; typo zone names are rejected at parse time and dropped on save, with a one-shot info notice in the draft flow listing what's about to be migrated ([#35](https://github.com/LW-Alliance-Helper/lw-alliance-helper-bot/issues/35)).
-- DS and CS subs flatten to a plain name list: `SUB PAIRS (Starter - Sub)` → `SUBS`, `Pop Pairs (last 30 sec)` → `Subs`. Legacy headers still parse for backward compat ([#37](https://github.com/LW-Alliance-Helper/lw-alliance-helper-bot/issues/37)).
+- DS and CS zones lock to canonical game-defined names ([#35](https://github.com/LW-Alliance-Helper/lw-alliance-helper-bot/issues/35)).
+- DS and CS subs flatten to plain name lists ([#37](https://github.com/LW-Alliance-Helper/lw-alliance-helper-bot/issues/37)).
 
 ### Fixed
-- 📊 See most recent Breakdown no longer disables the other `/growth` buttons on the no-data path, so leadership can follow the on-screen advice and click Run Snapshot Now without re-opening `/growth` ([#84](https://github.com/LW-Alliance-Helper/lw-alliance-helper-bot/issues/84)).
-- Growth Breakdown writes when "Run Snapshot Now" is clicked on a guild whose current period already has growth-tab columns — the duplicate-period guard no longer short-circuits the breakdown writer ([#85](https://github.com/LW-Alliance-Helper/lw-alliance-helper-bot/issues/85)).
-- Growth Breakdown auto-post no longer crashes on `bot.loop` access from the thread-pool worker that runs the scheduled snapshot; the loop reference now lives in a new `bot_state.py` module that's import-stable across the `__main__` vs `bot` module double-load ([#87](https://github.com/LW-Alliance-Helper/lw-alliance-helper-bot/issues/87)).
-- Birthday → train auto-population posts a single combined Discord message when multiple members hit the conflict path, and survives Railway restarts via a persisted dedup field on `guild_birthday_config` instead of an in-memory set that got wiped on every redeploy ([#89](https://github.com/LW-Alliance-Helper/lw-alliance-helper-bot/issues/89)).
-- Survey scheduled-DM tests no longer flake at minute boundaries — wall-clock is frozen via injected `now()` per test ([#79](https://github.com/LW-Alliance-Helper/lw-alliance-helper-bot/issues/79)).
+- `/growth` 📊 button no longer disables the other buttons on the no-data path ([#84](https://github.com/LW-Alliance-Helper/lw-alliance-helper-bot/issues/84)).
+- Growth Breakdown writes when Run Snapshot Now is clicked even within the same period ([#85](https://github.com/LW-Alliance-Helper/lw-alliance-helper-bot/issues/85)).
+- Growth Breakdown auto-post no longer crashes on `bot.loop` access from the thread pool ([#87](https://github.com/LW-Alliance-Helper/lw-alliance-helper-bot/issues/87)).
+- Birthday-train conflict spam consolidated into a single message; dedup survives restarts ([#89](https://github.com/LW-Alliance-Helper/lw-alliance-helper-bot/issues/89)).
+- Survey scheduled-DM tests no longer flake at minute boundaries ([#79](https://github.com/LW-Alliance-Helper/lw-alliance-helper-bot/issues/79)).
 
 ## [1.1.7] — 2026-05-11
 

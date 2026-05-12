@@ -264,18 +264,27 @@ Test suite: **610 collected**, 18 skipped on the free-tier lane and
 
 ## Parked work (local-only docs)
 
-These are untracked. Don't push them.
+Working docs that don't belong in the public tree live under `notes/`
+(gitignored). They're cross-session scratch space for planning, design
+parks, audit notes, recruiter prep, and ad-hoc test plans. Anything
+that should ship as a tracked reference belongs in `docs/` instead.
 
-- **`AUDIT_2026-04-30.md`** — pre-launch code-quality audit, **fully
-  shipped**. Rounds 1–4 landed as 1.0.1–1.0.4; the schema drops
-  ride 1.0.5 + 1.0.8. Doc is kept as a record of how the audit was
-  structured but should not generate new work.
-- **`DESIGN_transfer_management.md`** — fully-iterated spec for a
-  Premium transfer-tracking feature (sheet-watcher + filter wizard +
-  in-game message templates). ~7 days of work. Post-launch v1.x.
+Current contents (worth being aware of when picking up new work):
 
-When a chat session starts on `DESIGN_transfer_management.md`, that
-doc is the ground truth.
+- **`notes/AUDIT_2026-04-30.md`** — pre-launch code-quality audit,
+  **fully shipped**. Rounds 1–4 landed as 1.0.1–1.0.4; the schema
+  drops ride 1.0.5 + 1.0.8. Doc is kept as a record of how the audit
+  was structured but should not generate new work.
+- **`notes/DESIGN_transfer_management.md`** — fully-iterated spec for
+  a Premium transfer-tracking feature (sheet-watcher + filter wizard +
+  in-game message templates). Post-launch v1.x.
+- **`notes/PLANNING.md`** — cross-session work tracker.
+- **`notes/DEV_TEST_PLAN_*.md`** — ad-hoc test plans for a specific
+  release-batch dev validation session. Delete after the batch ships
+  unless something in there warrants tracking as an issue.
+
+When a chat session starts on `notes/DESIGN_transfer_management.md`,
+that doc is the ground truth.
 
 ---
 
@@ -310,7 +319,7 @@ These have been thought through. Reopening them needs a real reason:
 - Pre-launch audit fully shipped (Rounds 1–4 → 1.0.1–1.0.4; schema
   drops → 1.0.5 + 1.0.8). No outstanding cleanup from that audit.
 - Transfer management feature designed, not built (see
-  `DESIGN_transfer_management.md` and issue
+  `notes/DESIGN_transfer_management.md` and issue
   [#16](https://github.com/LW-Alliance-Helper/lw-alliance-helper-bot/issues/16)).
 
 For per-version detail, see `CHANGELOG.md`. New in-flight work goes

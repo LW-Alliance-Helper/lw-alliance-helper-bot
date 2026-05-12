@@ -26,8 +26,11 @@ venv/
 .claude/settings.local.json
 .claude/worktrees/
 
-# Local planning docs (cross-session work tracker)
-PLANNING.md
+# Local working docs (cross-session planning, design parks, audit
+# scratchpads, recruiter prep, ad-hoc test plans). See the "Parked work"
+# section in CLAUDE.md for what currently lives here. Anything that
+# should ship as a tracked reference belongs in `docs/` instead.
+notes/
 
 # IDE / OS noise
 .vscode/

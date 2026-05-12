@@ -1647,6 +1647,35 @@ def delete_extra_survey(guild_id: int, survey_id: str) -> bool:
     return cur.rowcount > 0
 
 
+def has_birthday_config(guild_id: int) -> bool:
+    """True iff the guild has a row in `guild_birthday_config` — i.e. they
+    have run `/setup_birthdays` at least once. `get_birthday_config`
+    returns a fallback dict on miss, so it can't distinguish "saved
+    with all defaults" from "never configured"; this helper exists for
+    the setup-wizard summary embed and the disable-with-clear gate
+    (#98)."""
+    with _get_conn() as conn:
+        row = conn.execute(
+            "SELECT 1 FROM guild_birthday_config WHERE guild_id = ?",
+            (guild_id,),
+        ).fetchone()
+    return row is not None
+
+
+def clear_birthday_config(guild_id: int) -> None:
+    """Delete the guild's birthday config row entirely. Called by the
+    `ask_disable_with_clear` Clear button when leadership picks "🗑️
+    Clear my saved configuration" after disabling birthday tracking.
+    `get_birthday_config` already returns a default dict when the row
+    is absent, so deletion is the cleanest reset."""
+    with _get_conn() as conn:
+        conn.execute(
+            "DELETE FROM guild_birthday_config WHERE guild_id = ?",
+            (guild_id,),
+        )
+        conn.commit()
+
+
 def get_birthday_config(guild_id: int) -> dict:
     """Return birthday config for a guild."""
     with _get_conn() as conn:

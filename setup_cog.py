@@ -5683,8 +5683,44 @@ async def run_birthday_setup(interaction: discord.Interaction, bot):
             return None
         return reply.content.strip()[:max_chars]
 
-    from config import get_birthday_config
+    from config import (
+        get_birthday_config, has_birthday_config, clear_birthday_config,
+    )
     current = get_birthday_config(guild_id)
+    birthdays_already_configured = has_birthday_config(guild_id)
+
+    # ── If already enabled, show summary and offer edit or cancel ─────────────
+    if birthdays_already_configured and current.get("enabled"):
+        rc = current.get("reminder_channel_id", 0) or 0
+        fields = [
+            ("Sheet Tab",          current.get("tab_name") or "*not set*"),
+            ("Name Column",        _col_index_to_letter(current.get("name_col", 0))),
+            ("Birthday Column",    _col_index_to_letter(current.get("birthday_col", 0))),
+            ("Train Integration",  "✅ Enabled" if current.get("train_integration") else "❌ Disabled"),
+        ]
+        if current.get("train_integration"):
+            fields.append((
+                "Placement",
+                "Flexible (±1 day)" if current.get("flexible_placement") else "Birthday only",
+            ))
+            fields.append(("Lookahead", f"{current.get('lookahead_days', 14)} days"))
+        fields.append((
+            "Reminders",
+            "✅ Enabled" if current.get("reminders_enabled") else "❌ Disabled",
+        ))
+        if current.get("reminders_enabled"):
+            fields.append(("Reminder Channel", f"<#{rc}>" if rc else "*not set*"))
+            fields.append(("Reminder Time",    current.get("reminder_time") or "*not set*"))
+        proceed = await ask_proceed_with_existing_config(
+            channel,
+            title="🎂 Current Birthday Setup",
+            description="Birthday tracking is already configured. Would you like to edit these settings?",
+            fields=fields,
+            cancel_event=cancel_event,
+            no_changes_message="✅ No changes made. Birthday tracking is still active.",
+        )
+        if proceed is not True:
+            return
 
     await channel.send(
         "⚙️ **Birthday Tracking Setup**\n"
@@ -5715,7 +5751,14 @@ async def run_birthday_setup(interaction: discord.Interaction, bot):
             **{k: v for k, v in current.items()
                if k not in ("guild_id", "enabled", "last_train_population_date")}
         )
-        await channel.send("✅ Birthday tracking disabled.")
+        await ask_disable_with_clear(
+            channel,
+            feature_label="Birthday tracking",
+            setup_command="setup_birthdays",
+            had_prior_config=birthdays_already_configured,
+            clear_fn=lambda: clear_birthday_config(guild_id),
+            cancel_event=cancel_event,
+        )
         return
 
     # ── Step 2: Sheet tab ─────────────────────────────────────────────────────
@@ -5906,12 +5949,19 @@ async def run_birthday_setup(interaction: discord.Interaction, bot):
     if reminders_enabled:
         # ── Step 8a: Reminder channel ──────────────────────────────────────────
         is_premium_flag = await premium.is_premium(guild_id, interaction=interaction)
+        saved_remind_ch = current.get("reminder_channel_id", 0) or 0
         remind_ch_view = ChannelSelectStep(
             "Select the birthday announcement channel...",
             suggested_name="birthdays",
             include_threads=is_premium_flag,
             guild=interaction.guild,
+            current_id=saved_remind_ch,
         )
+        if remind_ch_view.is_current_stale:
+            await channel.send(
+                "⚠️ Your previously configured birthday channel no longer exists. "
+                "Pick a new one below."
+            )
         await channel.send(
             "**Step 8a of 9 — Birthday Announcement Channel**\n"
             "Which channel should birthday announcements be posted in?",

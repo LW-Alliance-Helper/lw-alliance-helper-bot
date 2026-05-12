@@ -1853,6 +1853,21 @@ def mark_birthday_population_fired(guild_id: int, date_iso: str) -> None:
         conn.commit()
 
 
+def has_member_roster_config(guild_id: int) -> bool:
+    """True iff the guild has a row in `guild_member_roster_config` —
+    i.e. they have run `/setup_members` at least once.
+    `get_member_roster_config` returns a fallback dict on miss, so it
+    can't distinguish "saved with all defaults" from "never
+    configured"; this helper exists for the setup-wizard summary embed
+    gate."""
+    with _get_conn() as conn:
+        row = conn.execute(
+            "SELECT 1 FROM guild_member_roster_config WHERE guild_id = ?",
+            (guild_id,),
+        ).fetchone()
+    return row is not None
+
+
 def get_member_roster_config(guild_id: int) -> dict:
     """Return member-roster config for a guild, with sensible defaults."""
     with _get_conn() as conn:

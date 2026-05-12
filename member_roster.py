@@ -301,7 +301,11 @@ class MemberRosterCog(commands.Cog):
 async def run_member_roster_setup(interaction: discord.Interaction, bot):
     """Walk an admin through configuring the member-roster sync tab."""
     import wizard_registry
-    from setup_cog import ask_keep_or_change, YesNoView
+    from wizard_registry import wait_view_or_cancel
+    from setup_cog import (
+        ask_keep_or_change, YesNoView, ask_proceed_with_existing_config,
+    )
+    from config import has_member_roster_config
 
     guild_id     = interaction.guild_id
     channel      = interaction.channel
@@ -311,6 +315,30 @@ async def run_member_roster_setup(interaction: discord.Interaction, bot):
     current   = get_member_roster_config(guild_id)
     guild_cfg = get_config(guild_id)
     member_role_id = guild_cfg.member_role_id if guild_cfg else 0
+    roster_already_configured = has_member_roster_config(guild_id)
+
+    # ── If already configured, show summary and offer edit or cancel ─────────
+    if roster_already_configured:
+        rf_id = current.get("role_filter_id") or 0
+        fields = [
+            ("Roster Tab", current.get("tab_name") or "*not set*"),
+            (
+                "Role Filter",
+                f"<@&{rf_id}>" if rf_id else "All non-bots",
+            ),
+            ("Auto-Sync", "✅ Enabled" if current.get("auto_sync") else "❌ Disabled"),
+        ]
+        proceed = await ask_proceed_with_existing_config(
+            channel,
+            title="💎 Current Member Roster Sync Setup",
+            description="Member Roster Sync is already configured. Would you like to edit these settings?",
+            fields=fields,
+            cancel_event=cancel_event,
+            no_changes_message="✅ No changes made. Member Roster Sync is still active.",
+        )
+        if proceed is not True:
+            wizard_registry.unregister(user.id, cancel_event)
+            return
 
     await channel.send(
         "💎 **Member Roster Sync Setup**\n"
@@ -319,16 +347,21 @@ async def run_member_roster_setup(interaction: discord.Interaction, bot):
     )
 
     # ── Step 1: Tab name ──────────────────────────────────────────────────────
+    # Pass `current=` separately from `default=` so the helper renders
+    # "Keep current: X" instead of "Use default: X" when a guild-saved
+    # value is present.
     tab_name = await ask_keep_or_change(
         channel,
         "**Step 1 of 3 — Roster Tab**\n"
         "Which tab should the roster be written to?\n"
         "⚠️ *If the tab doesn't exist, the bot will create it automatically.*\n"
         "⚠️ *The tab will be **completely overwritten** on each sync.*",
-        default=current.get("tab_name") or "Member Roster",
+        default="Member Roster",
+        current=current.get("tab_name", ""),
         modal_title="Roster Tab Name",
         modal_label="Tab name",
         timeout_cmd="setup_members",
+        cancel_event=cancel_event,
     )
     if tab_name is None:
         return
@@ -342,7 +375,9 @@ async def run_member_roster_setup(interaction: discord.Interaction, bot):
         f"Pick **No** to include every (non-bot) member of the server.",
         view=filter_view,
     )
-    await filter_view.wait()
+    await wait_view_or_cancel(filter_view, cancel_event)
+    if filter_view.cancelled:
+        return
     if filter_view.selected is None:
         await channel.send("⏰ Timed out. Run `/setup_members` to start again.")
         return
@@ -356,7 +391,9 @@ async def run_member_roster_setup(interaction: discord.Interaction, bot):
         "change roles?\nPick **No** to only sync on `/sync_members`.",
         view=auto_view,
     )
-    await auto_view.wait()
+    await wait_view_or_cancel(auto_view, cancel_event)
+    if auto_view.cancelled:
+        return
     if auto_view.selected is None:
         await channel.send("⏰ Timed out. Run `/setup_members` to start again.")
         return

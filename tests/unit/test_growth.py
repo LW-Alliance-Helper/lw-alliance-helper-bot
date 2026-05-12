@@ -677,6 +677,69 @@ class TestSnapshotBreakdownWriting:
         bd_ws.append_rows.assert_not_called()
 
 
+class TestMaybePostBreakdown:
+    """The Premium auto-post path. discord.py 2.4+ raises if `bot.loop` is
+    accessed from a non-async context (the thread-pool worker that runs
+    the scheduled snapshot is exactly that), so the helper has to use the
+    captured `_event_loop` module-level handle on `bot`. Regression for
+    #87."""
+
+    def _summary_stub(self):
+        return {"Power": {b: [] for b in
+                          ["increased", "steady", "low", "none", "decline"]}}
+
+    def test_no_op_when_loop_not_captured_yet(self):
+        """If `on_ready` hasn't run yet (or hasn't set `_event_loop`), the
+        helper logs a friendly message and returns without raising."""
+        from growth import _maybe_post_breakdown
+        import bot as _bot_module
+
+        # Force the loop handle to None for this test, restore after.
+        previous_loop = getattr(_bot_module, "_event_loop", None)
+        _bot_module._event_loop = None
+        try:
+            # Should not raise, even though there's no captured loop.
+            _maybe_post_breakdown(
+                guild_id=12345,
+                post_channel_id=99999,
+                prev_period_label="Apr 2026",
+                curr_period_label="May 2026",
+                metric_labels=["Power"],
+                breakdown_summary=self._summary_stub(),
+                gcfg={"breakdown_labels": {}, "breakdown_bucket_filter": []},
+            )
+        finally:
+            _bot_module._event_loop = previous_loop
+
+    def test_schedules_on_captured_loop_when_ready(self):
+        """When `_event_loop` is set and running, the helper hands the
+        coroutine to `asyncio.run_coroutine_threadsafe` on that loop."""
+        from growth import _maybe_post_breakdown
+        import bot as _bot_module
+
+        fake_loop = MagicMock()
+        fake_loop.is_running = MagicMock(return_value=True)
+        previous_loop = getattr(_bot_module, "_event_loop", None)
+        _bot_module._event_loop = fake_loop
+        try:
+            with patch("asyncio.run_coroutine_threadsafe") as rcts:
+                _maybe_post_breakdown(
+                    guild_id=12345,
+                    post_channel_id=99999,
+                    prev_period_label="Apr 2026",
+                    curr_period_label="May 2026",
+                    metric_labels=["Power"],
+                    breakdown_summary=self._summary_stub(),
+                    gcfg={"breakdown_labels": {}, "breakdown_bucket_filter": []},
+                )
+            assert rcts.called, "run_coroutine_threadsafe was never called"
+            args, _ = rcts.call_args
+            # Second arg is the loop — must be our captured fake.
+            assert args[1] is fake_loop
+        finally:
+            _bot_module._event_loop = previous_loop
+
+
 class TestReadLatestBreakdown:
     def test_empty_tab_returns_has_data_false(self, seeded_db):
         from growth import read_latest_breakdown

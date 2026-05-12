@@ -70,6 +70,16 @@ intents.members = True
 bot = commands.Bot(command_prefix="!", intents=intents)
 
 
+# Captured at startup so sync code paths (background threads via
+# `run_in_executor`, sync functions called from async handlers) can
+# schedule coroutines onto the bot's loop without touching `bot.loop`
+# directly — discord.py 2.4+ raises when the latter is accessed from a
+# non-async context, breaking thread-pool callers like the Growth
+# Breakdown auto-post. Populated by `on_ready` below; readers should
+# tolerate `None` (defensive against pre-ready callers). See #87.
+_event_loop: "asyncio.AbstractEventLoop | None" = None
+
+
 # ── Welcome DM (sent to the inviter on every new guild add) ──────────────────
 
 WELCOME_DM = (
@@ -149,6 +159,14 @@ async def guard(interaction: discord.Interaction) -> bool:
 
 @bot.event
 async def on_ready():
+    # Capture the running loop so background-thread callers (Growth
+    # Breakdown auto-post, anything else off the event loop) can
+    # schedule coroutines onto it without touching `bot.loop` directly.
+    # on_ready can re-fire on reconnect; only grab the loop once.
+    global _event_loop
+    if _event_loop is None:
+        _event_loop = asyncio.get_running_loop()
+
     # Initialise the config database (creates tables and applies pending migrations)
     init_db()
     print(f"[INFO] Logged in as {bot.user} (ID: {bot.user.id})")

@@ -597,22 +597,29 @@ def _col_letter(idx0: int) -> str:
 def _maybe_post_breakdown(guild_id, post_channel_id, prev_period_label,
                           curr_period_label, metric_labels, breakdown_summary,
                           gcfg) -> None:
-    """Fire the Premium breakdown auto-post. No-op if the guild isn't
-    premium at the moment of posting. The bot/channel resolution and the
-    actual send happen on the bot's event loop via `bot.loop.create_task`,
-    so the snapshot (which runs in a background thread) doesn't have to
-    await Discord I/O directly.
+    """Fire the Premium breakdown auto-post. No-op when the guild isn't
+    premium at the moment of posting. The bot / channel resolution and
+    the actual send happen on the bot's event loop, scheduled via
+    `asyncio.run_coroutine_threadsafe`. The loop reference comes from
+    `bot._event_loop` (captured at startup) rather than `bot.loop`
+    because discord.py 2.4+ raises when `bot.loop` is accessed from a
+    non-async context — including the thread-pool worker that runs the
+    scheduled snapshot, which is exactly the path that triggers this
+    auto-post. See #87.
     """
     if not guild_id:
         return
     import asyncio
     try:
-        from bot import bot  # local import — bot is a singleton
+        import bot as _bot_module
     except Exception as e:
-        print(f"[GROWTH] Cannot resolve bot for auto-post: {e}")
+        print(f"[GROWTH] Cannot resolve bot module for auto-post: {e}")
         return
-    if bot is None or not bot.loop:
-        print("[GROWTH] Bot not ready — skipping auto-post")
+    bot = getattr(_bot_module, "bot", None)
+    loop = getattr(_bot_module, "_event_loop", None)
+    if bot is None or loop is None or not loop.is_running():
+        print(f"[GROWTH] Bot loop not ready — skipping auto-post "
+              f"(guild {guild_id})")
         return
 
     async def _post():
@@ -643,7 +650,11 @@ def _maybe_post_breakdown(guild_id, post_channel_id, prev_period_label,
             print(f"[GROWTH] Failed to send breakdown to channel "
                   f"{post_channel_id}: {e}")
 
-    asyncio.run_coroutine_threadsafe(_post(), bot.loop)
+    # `run_coroutine_threadsafe` is safe to call from the loop's own
+    # thread (manual /growth button path) and from a worker thread
+    # (scheduled run_in_executor path) — both end up enqueuing the
+    # coroutine for the event loop to run.
+    asyncio.run_coroutine_threadsafe(_post(), loop)
 
 
 def read_latest_breakdown(guild_id: int) -> dict:

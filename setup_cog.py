@@ -5124,7 +5124,13 @@ async def run_event_setup(interaction: discord.Interaction, bot):
             suggested_name="event-drafts",
             include_threads=is_premium_flag,
             guild=interaction.guild,
+            current_id=current_draft_id,
         )
+        if draft_ch_view.is_current_stale:
+            await channel.send(
+                "⚠️ Your previously configured draft channel no longer exists. "
+                "Pick a new one below."
+            )
         await channel.send(
             "**Step 1 of 5 — Draft Channel**\n"
             "Which channel should the bot post event announcement drafts for leadership to review?\n"
@@ -5145,7 +5151,13 @@ async def run_event_setup(interaction: discord.Interaction, bot):
             suggested_name="announcements",
             include_threads=is_premium_flag,
             guild=interaction.guild,
+            current_id=current_ann_id,
         )
+        if ann_ch_view.is_current_stale:
+            await channel.send(
+                "⚠️ Your previously configured announcement channel no longer exists. "
+                "Pick a new one below."
+            )
         await channel.send(
             "**Step 2 of 5 — Announcement Channel**\n"
             "Which channel should approved announcements be posted to?\n"

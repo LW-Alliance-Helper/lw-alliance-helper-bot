@@ -534,6 +534,94 @@ class TestRunGrowthSetup:
         assert cfg["snapshot_frequency"] == "monthly"
 
 
+# ── /setup_events ─────────────────────────────────────────────────────────────
+
+class TestRunEventSetup:
+    """Test /setup_events threads the saved channel ids through to the
+    Keep-current path on a re-run. Regression guard for #96."""
+
+    @pytest.mark.asyncio
+    async def test_existing_config_threads_current_id_through_channel_picks(self, seeded_db):
+        """Re-running /setup_events on a pre-configured guild and
+        picking 'Edit Event Settings' must construct each ChannelSelectStep
+        with the saved channel id so leadership sees Keep-current
+        buttons instead of blank dropdowns."""
+        import config
+        from setup_cog import run_event_setup
+
+        # Pre-seed event config + one event so the EventActionView fires.
+        config.update_config_field(TEST_GUILD_ID, "event_draft_channel_id",    700001)
+        config.update_config_field(TEST_GUILD_ID, "event_announce_channel_id", 700002)
+        config.update_config_field(TEST_GUILD_ID, "event_draft_time",          "12:00")
+        config.update_config_field(TEST_GUILD_ID, "event_five_min_warning",    1)
+        config.save_guild_event(TEST_GUILD_ID, {
+            "short_key":               "ev_1",
+            "name":                    "Test Event",
+            "timezone":                "America/New_York",
+            "default_time":            "21:00",
+            "announcement_blurb":      "test",
+            "schedule_type":           "manual",
+            "anchor_date":             "",
+            "interval_days":           0,
+            "draft_channel_id":        700001,
+            "announcement_channel_id": 700002,
+            "draft_time":              "12:00",
+            "five_min_warning":        1,
+            "active":                  1,
+        })
+
+        interaction = make_mock_interaction()
+        bot         = AsyncMock()
+
+        # Two channels picked through the wizard — same ids so the
+        # "Keep current" path would naturally be taken in production.
+        new_draft = MagicMock(name="draft");    new_draft.id = 700001
+        new_ann   = MagicMock(name="announce"); new_ann.id   = 700002
+        draft_view = MagicMock(
+            confirmed=True, cancelled=False,
+            is_current_stale=False,
+            selected_channel=new_draft, wait=AsyncMock(),
+        )
+        ann_view = MagicMock(
+            confirmed=True, cancelled=False,
+            is_current_stale=False,
+            selected_channel=new_ann, wait=AsyncMock(),
+        )
+
+        # YesNoView routes warn=True; ask_keep_or_change feeds the
+        # draft time prompt back as the existing value. EventActionView
+        # gets routed to "settings" via send-handler override.
+        warn_view = MagicMock(selected=True, cancelled=False, wait=AsyncMock())
+
+        ch_call_kwargs = []
+        ch_iter = iter([draft_view, ann_view])
+
+        def _record_ch(*a, **kw):
+            ch_call_kwargs.append(kw)
+            return next(ch_iter)
+
+        with patch("setup_cog.ChannelSelectStep", side_effect=_record_ch), \
+             patch("setup_cog.YesNoView",         return_value=warn_view), \
+             patch_keep_or_change(["12:00"]):
+            make_send_handler(
+                interaction.channel,
+                view_overrides={
+                    # EventActionView routes to "settings" so the wizard
+                    # walks the channel-pick steps. EventListView
+                    # routes to "finish" so we exit cleanly without
+                    # opening the event builder.
+                    "choice": "settings",
+                    "action": "finish",
+                },
+            )
+            await run_event_setup(interaction, bot)
+
+        # Both channel picks received the saved ids.
+        assert len(ch_call_kwargs) == 2
+        assert ch_call_kwargs[0]["current_id"] == 700001
+        assert ch_call_kwargs[1]["current_id"] == 700002
+
+
 # ── Premium tier caps (Phase 1) ───────────────────────────────────────────────
 
 @pytest.mark.free_tier_only

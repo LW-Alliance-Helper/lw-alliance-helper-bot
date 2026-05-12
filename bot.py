@@ -26,7 +26,7 @@ DISCORD_TOKEN = os.getenv("DISCORD_TOKEN")
 # Semantic versioning per https://semver.org. Bump on each release; the
 # CHANGELOG.md file is the human-readable record of what each version
 # changed.
-__version__ = "1.2.0"
+__version__ = "1.3.0"
 
 # ── Sentry error reporting ───────────────────────────────────────────────────
 #
@@ -539,9 +539,29 @@ async def before_stats_publish_task():
 
 @tasks.loop(hours=24 * 7)
 async def shiny_tasks_refresh_task():
-    """Weekly: refresh `shiny_task_servers` from cpt-hedge."""
+    """Weekly: refresh `shiny_task_servers` from cpt-hedge.
+
+    `tasks.loop` fires its body immediately on `.start()` and the 7-day
+    interval is in-process only, so a fresh process (Railway redeploy)
+    would re-fetch Hedge on every boot. Gate on the persistent
+    `MAX(last_seen_at)` so we genuinely refresh at most once per week
+    regardless of redeploy cadence.
+    """
     try:
+        from datetime import datetime, timedelta, timezone
+        from config import get_last_shiny_refresh_at
         from shiny_tasks import refresh_servers
+
+        last = get_last_shiny_refresh_at()
+        if last is not None:
+            age = datetime.now(tz=timezone.utc) - last
+            if age < timedelta(days=7):
+                hours = int(age.total_seconds() // 3600)
+                print(
+                    f"[SHINY] Weekly refresh skipped — last run "
+                    f"{age.days}d{hours % 24}h ago"
+                )
+                return
         n = await refresh_servers()
         print(f"[SHINY] Weekly refresh upserted {n} server rows")
     except Exception as e:

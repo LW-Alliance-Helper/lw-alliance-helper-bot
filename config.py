@@ -39,6 +39,7 @@ class GuildConfig:
     announcement_channel_id:  int        = 0
     member_role_id:           int        = 0
     member_role_name:         str        = "Member"
+    leadership_role_id:       int        = 0
     leadership_role_name:     str        = "Leadership"
     survey_channel_id:        int        = 0
     survey_notify_channel_id: int        = 0
@@ -91,6 +92,7 @@ def init_db():
                 announcement_channel_id  INTEGER DEFAULT 0,
                 member_role_id           INTEGER DEFAULT 0,
                 member_role_name         TEXT    DEFAULT 'Member',
+                leadership_role_id       INTEGER DEFAULT 0,
                 leadership_role_name     TEXT    DEFAULT 'Leadership',
                 survey_channel_id        INTEGER DEFAULT 0,
                 survey_notify_channel_id INTEGER DEFAULT 0,
@@ -516,12 +518,15 @@ def init_db():
         # event_draft_time, event_five_min_warning are also added by an
         # earlier silent-swallow block above; covered here so logging
         # picks up upgrades from the very oldest schema versions.
+        # `leadership_role_id` (#95) lets the setup wizard's "Keep current"
+        # button survive a role rename — old guilds only had the name.
         for col, definition in [
             ("survey_channel_id",         "INTEGER DEFAULT 0"),
             ("survey_notify_channel_id",  "INTEGER DEFAULT 0"),
             ("ds_log_channel_id",         "INTEGER DEFAULT 0"),
             ("cs_log_channel_id",         "INTEGER DEFAULT 0"),
             ("timezone",                  "TEXT DEFAULT 'America/New_York'"),
+            ("leadership_role_id",        "INTEGER DEFAULT 0"),
         ]:
             try:
                 conn.execute(f"ALTER TABLE guild_configs ADD COLUMN {col} {definition}")
@@ -1090,6 +1095,22 @@ def _normalize_storm_templates(d: dict, event_type: str) -> dict:
     return d
 
 
+def has_storm_config(guild_id: int, event_type: str) -> bool:
+    """True iff the guild has a row in `guild_storm_config` for this
+    event_type — i.e. they have run `/setup_desertstorm` or
+    `/setup_canyonstorm` at least once. The fallback dict from
+    `get_storm_config` doesn't distinguish "saved with all defaults"
+    from "never configured"; this helper exists for the setup-wizard
+    summary embed gate (#103)."""
+    with _get_conn() as conn:
+        row = conn.execute(
+            "SELECT 1 FROM guild_storm_config "
+            "WHERE guild_id = ? AND event_type = ?",
+            (guild_id, event_type),
+        ).fetchone()
+    return row is not None
+
+
 def get_storm_config(guild_id: int, event_type: str) -> dict:
     """Return storm config for a guild and event type (DS or CS)."""
     with _get_conn() as conn:
@@ -1260,6 +1281,35 @@ def save_participation_config(
 # DEFAULT_SURVEY_INTRO are imported at the top of this module.
 
 
+def has_growth_config(guild_id: int) -> bool:
+    """True iff the guild has a row in `guild_growth_config` — i.e. they
+    have run `/setup_growth` at least once. `get_growth_config` returns
+    a fallback dict on miss, so it can't distinguish "saved with all
+    defaults" from "never configured"; this helper exists for the
+    setup-wizard summary embed and the disable-with-clear gate (#99)."""
+    with _get_conn() as conn:
+        row = conn.execute(
+            "SELECT 1 FROM guild_growth_config WHERE guild_id = ?",
+            (guild_id,),
+        ).fetchone()
+    return row is not None
+
+
+def clear_growth_config(guild_id: int) -> None:
+    """Delete the guild's growth config row entirely. Called by the
+    `ask_disable_with_clear` Clear button after the user disables growth
+    tracking. Wipes both the snapshot config and the breakdown config
+    (which lives on the same row) — breakdown isn't functional without
+    growth metrics anyway, and `/setup_growth_breakdown` blocks when
+    growth is disabled or has no metrics."""
+    with _get_conn() as conn:
+        conn.execute(
+            "DELETE FROM guild_growth_config WHERE guild_id = ?",
+            (guild_id,),
+        )
+        conn.commit()
+
+
 def get_growth_config(guild_id: int) -> dict:
     """Return growth config for a guild. Breakdown JSON fields
     (`breakdown_thresholds`, `breakdown_labels`, `breakdown_bucket_filter`)
@@ -1333,6 +1383,28 @@ def save_growth_config(guild_id: int, enabled: int, tab_source: str,
         conn.commit()
 
 
+def has_growth_breakdown_config(guild_id: int) -> bool:
+    """True iff the guild has saved any non-default breakdown field —
+    i.e. they have walked `/setup_growth_breakdown` at least once and
+    changed something. Breakdown shares a row with growth, so the row
+    existing isn't a useful signal on its own; instead this checks the
+    breakdown-specific fields (post channel, thresholds, labels, bucket
+    filter, custom tab name) for any non-default value. Used by the
+    setup-wizard summary embed gate (#100)."""
+    cfg = get_growth_config(guild_id)
+    if (cfg.get("breakdown_post_channel_id") or 0) != 0:
+        return True
+    if cfg.get("breakdown_thresholds"):
+        return True
+    if cfg.get("breakdown_labels"):
+        return True
+    if cfg.get("breakdown_bucket_filter"):
+        return True
+    if cfg.get("tab_breakdown") not in ("", "Growth Breakdown"):
+        return True
+    return False
+
+
 def save_growth_breakdown_config(
     guild_id: int, *,
     tab_breakdown: str             = "Growth Breakdown",
@@ -1380,6 +1452,22 @@ def save_growth_breakdown_config(
         )
         conn.commit()
         return cur.rowcount > 0
+
+
+def has_survey_config(guild_id: int) -> bool:
+    """True iff the guild has a row in `guild_survey_config` — i.e. they
+    have run `/setup_survey` for the main survey at least once. The
+    fallback dict from `get_survey_config` doesn't distinguish that
+    case from "never configured"; this helper exists for the
+    setup-wizard summary embed gate (#102). Extra named surveys live
+    in a different table and aren't covered here — callers pass an
+    `or {}` over `get_survey()` and check the result directly."""
+    with _get_conn() as conn:
+        row = conn.execute(
+            "SELECT 1 FROM guild_survey_config WHERE guild_id = ?",
+            (guild_id,),
+        ).fetchone()
+    return row is not None
 
 
 def get_survey_config(guild_id: int) -> dict:
@@ -1642,6 +1730,35 @@ def delete_extra_survey(guild_id: int, survey_id: str) -> bool:
     return cur.rowcount > 0
 
 
+def has_birthday_config(guild_id: int) -> bool:
+    """True iff the guild has a row in `guild_birthday_config` — i.e. they
+    have run `/setup_birthdays` at least once. `get_birthday_config`
+    returns a fallback dict on miss, so it can't distinguish "saved
+    with all defaults" from "never configured"; this helper exists for
+    the setup-wizard summary embed and the disable-with-clear gate
+    (#98)."""
+    with _get_conn() as conn:
+        row = conn.execute(
+            "SELECT 1 FROM guild_birthday_config WHERE guild_id = ?",
+            (guild_id,),
+        ).fetchone()
+    return row is not None
+
+
+def clear_birthday_config(guild_id: int) -> None:
+    """Delete the guild's birthday config row entirely. Called by the
+    `ask_disable_with_clear` Clear button when leadership picks "🗑️
+    Clear my saved configuration" after disabling birthday tracking.
+    `get_birthday_config` already returns a default dict when the row
+    is absent, so deletion is the cleanest reset."""
+    with _get_conn() as conn:
+        conn.execute(
+            "DELETE FROM guild_birthday_config WHERE guild_id = ?",
+            (guild_id,),
+        )
+        conn.commit()
+
+
 def get_birthday_config(guild_id: int) -> dict:
     """Return birthday config for a guild."""
     with _get_conn() as conn:
@@ -1734,6 +1851,21 @@ def mark_birthday_population_fired(guild_id: int, date_iso: str) -> None:
             (date_iso, guild_id),
         )
         conn.commit()
+
+
+def has_member_roster_config(guild_id: int) -> bool:
+    """True iff the guild has a row in `guild_member_roster_config` —
+    i.e. they have run `/setup_members` at least once.
+    `get_member_roster_config` returns a fallback dict on miss, so it
+    can't distinguish "saved with all defaults" from "never
+    configured"; this helper exists for the setup-wizard summary embed
+    gate."""
+    with _get_conn() as conn:
+        row = conn.execute(
+            "SELECT 1 FROM guild_member_roster_config WHERE guild_id = ?",
+            (guild_id,),
+        ).fetchone()
+    return row is not None
 
 
 def get_member_roster_config(guild_id: int) -> dict:
@@ -1893,6 +2025,21 @@ def _normalize_train_templates(d: dict) -> dict:
     return d
 
 
+def has_train_config(guild_id: int) -> bool:
+    """True iff the guild has a row in `guild_train_config` — i.e. they
+    have run `/setup_train` at least once. `get_train_config` returns
+    a fallback dict on miss, so it can't distinguish "saved with all
+    defaults" from "never configured"; this helper exists for the
+    setup-wizard summary embed (#97) which only renders when there is
+    real saved config to show."""
+    with _get_conn() as conn:
+        row = conn.execute(
+            "SELECT 1 FROM guild_train_config WHERE guild_id = ?",
+            (guild_id,),
+        ).fetchone()
+    return row is not None
+
+
 def get_train_config(guild_id: int) -> dict:
     """Return the train config for a guild, falling back to framework defaults."""
     import json
@@ -1982,6 +2129,35 @@ def save_train_config(guild_id: int, tab_name: str, themes: list,
 
 
 # ── Shiny Tasks (free-tier daily announcement of shiny servers) ───────────────
+
+def has_shiny_tasks_config(guild_id: int) -> bool:
+    """True iff the guild has a row in `guild_shiny_tasks_config` — i.e.
+    they have run `/setup_shiny_tasks` at least once.
+    `get_shiny_tasks_config` returns a fallback dict on miss, so it
+    can't distinguish "saved with all defaults" from "never configured";
+    this helper exists for the setup-wizard summary embed and the
+    disable-with-clear gate (#101)."""
+    with _get_conn() as conn:
+        row = conn.execute(
+            "SELECT 1 FROM guild_shiny_tasks_config WHERE guild_id = ?",
+            (guild_id,),
+        ).fetchone()
+    return row is not None
+
+
+def clear_shiny_tasks_config(guild_id: int) -> None:
+    """Delete the guild's shiny-tasks config row entirely. Called by the
+    `ask_disable_with_clear` Clear button after the user disables the
+    daily announcement. `get_shiny_tasks_config` already returns a
+    default dict when the row is absent, so deletion is the cleanest
+    reset."""
+    with _get_conn() as conn:
+        conn.execute(
+            "DELETE FROM guild_shiny_tasks_config WHERE guild_id = ?",
+            (guild_id,),
+        )
+        conn.commit()
+
 
 def get_shiny_tasks_config(guild_id: int) -> dict:
     """Return shiny-tasks config for a guild, or a default dict if absent."""
@@ -2126,4 +2302,24 @@ def count_shiny_task_servers() -> int:
             "SELECT COUNT(*) AS n FROM shiny_task_servers"
         ).fetchone()
     return row["n"] if row else 0
+
+
+def get_last_shiny_refresh_at():
+    """Return the most recent `last_seen_at` from `shiny_task_servers` as
+    a tz-aware UTC `datetime`, or `None` if the table is empty.
+
+    Used by the weekly refresh loop to gate cpt-hedge re-fetches across
+    process restarts: `tasks.loop` fires its body immediately on
+    `.start()`, so Railway redeploys would otherwise hammer Hedge once
+    per deploy. The 7-day interval lives in process memory only —
+    `MAX(last_seen_at)` is the persistent equivalent.
+    """
+    from datetime import datetime as _dt
+    with _get_conn() as conn:
+        row = conn.execute(
+            "SELECT MAX(last_seen_at) AS last FROM shiny_task_servers"
+        ).fetchone()
+    if not row or not row["last"]:
+        return None
+    return _dt.fromisoformat(row["last"])
 

@@ -117,56 +117,154 @@ class CreateRoleModal(discord.ui.Modal):
 
 
 class RoleSelectStep(discord.ui.View):
-    def __init__(self, placeholder: str):
+    """Picks a role for a wizard step.
+
+    When `current_id` is set and resolves to a live role via
+    `guild.get_role`, a "Keep current" button is rendered above the
+    picker so leadership doesn't have to rediscover the saved value.
+    When `current_id` is set but no longer resolves (role deleted),
+    `is_current_stale` flips True so callers can post a warning above
+    the view.
+    """
+
+    def __init__(
+        self,
+        placeholder: str,
+        *,
+        current_id: int | None = None,
+        current_name: str | None = None,
+        guild: discord.Guild | None = None,
+    ):
         super().__init__(timeout=WIZARD_TIMEOUT)
         self.selected_role = None
         self.confirmed     = False
+        self._placeholder  = placeholder
 
-        select = discord.ui.RoleSelect(placeholder=placeholder, min_values=1, max_values=1, row=0)
-        async def _cb(interaction: discord.Interaction):
+        self.current_id = current_id
+        self._current_name = current_name
+        self._current_role: discord.Role | None = None
+        if current_id and guild is not None:
+            try:
+                resolved = guild.get_role(current_id)
+            except Exception:
+                resolved = None
+            if resolved is not None:
+                self._current_role = resolved
+
+        # Name-based fallback. Two cases this matters for:
+        #   * Migration window — old guilds stored `leadership_role` by
+        #     name only, so the new `leadership_role_id` column is 0
+        #     until the wizard re-saves. Without this fallback,
+        #     re-running /setup on an old guild shows no Keep-current
+        #     button for the leadership role.
+        #   * Rename safety — if the id was wiped but the name still
+        #     matches a live role, fall back rather than show a
+        #     misleading "deleted" warning.
+        if self._current_role is None and current_name and guild is not None:
+            for role in getattr(guild, "roles", []) or []:
+                if getattr(role, "name", None) == current_name:
+                    self._current_role = role
+                    break
+
+        self._render()
+
+    @property
+    def is_current_stale(self) -> bool:
+        """True iff a saved value was given (either id or name) but no
+        live role could be resolved. Wizards inspect this to surface a
+        one-line warning. `current_id = 0` is the schema sentinel for
+        "not set"; an empty `current_name` is the equivalent for the
+        name-only path."""
+        has_saved = bool(self.current_id) or bool(self._current_name)
+        return has_saved and self._current_role is None
+
+    def _render(self) -> None:
+        self.clear_items()
+        # Keep-current button on row 0 when we have a resolved role.
+        if self._current_role is not None:
+            role = self._current_role
+            keep_btn = discord.ui.Button(
+                label=f"✅ Keep current: @{role.name}"[:80],
+                style=discord.ButtonStyle.success,
+                row=0,
+            )
+
+            async def _keep_cb(inter: discord.Interaction):
+                self.selected_role = role
+                self.confirmed     = True
+                for item in self.children:
+                    item.disabled = True
+                await wizard_registry.safe_edit_response(
+                    inter,
+                    content=f"✅ Keeping: **@{role.name}**",
+                    view=self,
+                )
+                self.stop()
+            keep_btn.callback = _keep_cb
+            self.add_item(keep_btn)
+            select_row = 1
+            create_row = 2
+        else:
+            select_row = 0
+            create_row = 1
+
+        select = discord.ui.RoleSelect(
+            placeholder=self._placeholder,
+            min_values=1, max_values=1, row=select_row,
+        )
+
+        async def _select_cb(interaction: discord.Interaction):
             self.selected_role = select.values[0]
             self.confirmed     = True
-            select.disabled    = True
+            for item in self.children:
+                item.disabled = True
             await wizard_registry.safe_edit_response(
                 interaction,
                 content=f"✅ Selected: **{self.selected_role.name}**",
                 view=self,
             )
             self.stop()
-        select.callback = _cb
+        select.callback = _select_cb
         self.add_item(select)
 
-    @discord.ui.button(label="➕ Create a new role", style=discord.ButtonStyle.secondary, row=1)
-    async def create_role(self, interaction: discord.Interaction, button: discord.ui.Button):
-        modal = CreateRoleModal()
-        await interaction.response.send_modal(modal)
-        await modal.wait()
-        if not modal.role_name:
-            return
-        try:
-            new_role = await interaction.guild.create_role(
-                name=modal.role_name,
-                reason=f"Created during Alliance Helper setup by {interaction.user.display_name}",
-            )
-            self.selected_role = new_role
-            self.confirmed     = True
-            for item in self.children:
-                item.disabled = True
-            await interaction.message.edit(
-                content=f"✅ Created and selected new role: **{new_role.name}**",
-                view=self,
-            )
-            self.stop()
-        except discord.Forbidden:
-            await interaction.followup.send(
-                "⚠️ I don't have permission to create roles. Please create the role manually first, then run `/setup` again.",
-                ephemeral=True,
-            )
-        except Exception as e:
-            await interaction.followup.send(
-                f"⚠️ Could not create role: {e}",
-                ephemeral=True,
-            )
+        create_btn = discord.ui.Button(
+            label="➕ Create a new role",
+            style=discord.ButtonStyle.secondary,
+            row=create_row,
+        )
+
+        async def _create_cb(interaction: discord.Interaction):
+            modal = CreateRoleModal()
+            await interaction.response.send_modal(modal)
+            await modal.wait()
+            if not modal.role_name:
+                return
+            try:
+                new_role = await interaction.guild.create_role(
+                    name=modal.role_name,
+                    reason=f"Created during Alliance Helper setup by {interaction.user.display_name}",
+                )
+                self.selected_role = new_role
+                self.confirmed     = True
+                for item in self.children:
+                    item.disabled = True
+                await interaction.message.edit(
+                    content=f"✅ Created and selected new role: **{new_role.name}**",
+                    view=self,
+                )
+                self.stop()
+            except discord.Forbidden:
+                await interaction.followup.send(
+                    "⚠️ I don't have permission to create roles. Please create the role manually first, then run `/setup` again.",
+                    ephemeral=True,
+                )
+            except Exception as e:
+                await interaction.followup.send(
+                    f"⚠️ Could not create role: {e}",
+                    ephemeral=True,
+                )
+        create_btn.callback = _create_cb
+        self.add_item(create_btn)
 
 
 class CreateChannelModal(discord.ui.Modal):
@@ -217,6 +315,9 @@ class ChannelSelectStep(discord.ui.View):
         allow_create: bool = True,
         include_threads: bool = False,
         guild: discord.Guild | None = None,
+        *,
+        current_id: int | None = None,
+        current_name: str | None = None,
     ):
         super().__init__(timeout=WIZARD_TIMEOUT)
         self.selected_channel = None
@@ -236,6 +337,27 @@ class ChannelSelectStep(discord.ui.View):
             else []
         )
 
+        # Keep-current support. If the wizard passes `current_id`, resolve
+        # it to a live channel/thread; when it still exists, render a
+        # "Keep current" button on top of the picker so leadership doesn't
+        # have to rediscover their saved value. When `current_id` is set
+        # but no longer resolves (channel deleted), `is_current_stale`
+        # flips True so the caller can post a warning above the view.
+        self.current_id = current_id
+        self._current_name = current_name
+        self._current_channel: discord.abc.GuildChannel | discord.Thread | None = None
+        if current_id and guild is not None:
+            resolved = None
+            if hasattr(guild, "get_channel"):
+                resolved = guild.get_channel(current_id)
+            if resolved is None and hasattr(guild, "get_thread"):
+                try:
+                    resolved = guild.get_thread(current_id)
+                except Exception:
+                    resolved = None
+            if resolved is not None:
+                self._current_channel = resolved
+
         # Decide initial state. If we have threads to offer, start with the
         # button-driven choice. Otherwise just show the channel select
         # straight away — same as the pre-fix behavior.
@@ -244,10 +366,55 @@ class ChannelSelectStep(discord.ui.View):
         else:
             self._render_channel_select(switchable=False)
 
+    @property
+    def is_current_stale(self) -> bool:
+        """True iff `current_id` was given but no longer resolves to a live
+        channel/thread. Wizards inspect this to decide whether to send a
+        one-line warning above the picker. Treats `0` as "not set" since
+        that's the schema sentinel for an unconfigured channel."""
+        return bool(self.current_id) and self._current_channel is None
+
+    def _maybe_add_keep_current(self, *, row: int) -> bool:
+        """Prepend a 'Keep current' button when a saved channel still
+        resolves. Returns True iff the button was added — callers use this
+        to know whether to shift the next component down a row."""
+        if self._current_channel is None:
+            return False
+        ch = self._current_channel
+        if isinstance(ch, discord.Thread):
+            parent = ch.parent.name if ch.parent else "?"
+            display = f"🧵 {ch.name} (in #{parent})"
+        else:
+            display = f"#{ch.name}"
+        keep_btn = discord.ui.Button(
+            label=f"✅ Keep current: {display}"[:80],
+            style=discord.ButtonStyle.success,
+            row=row,
+        )
+
+        async def _keep_cb(inter: discord.Interaction):
+            self.selected_channel = self._current_channel
+            self.confirmed        = True
+            for item in self.children:
+                item.disabled = True
+            await wizard_registry.safe_edit_response(
+                inter,
+                content=f"✅ Keeping: **{display}**",
+                view=self,
+            )
+            self.stop()
+        keep_btn.callback = _keep_cb
+        self.add_item(keep_btn)
+        return True
+
     # ── Initial state: two buttons ─────────────────────────────────────
 
     def _render_initial_choice(self) -> None:
         self.clear_items()
+        # Keep-current sits on its own row so the Channel/Thread choice
+        # still reads as a paired decision below it.
+        keep_added = self._maybe_add_keep_current(row=0)
+        button_row = 1 if keep_added else 0
 
         async def _on_channel(inter: discord.Interaction):
             self._render_channel_select(switchable=True)
@@ -258,13 +425,13 @@ class ChannelSelectStep(discord.ui.View):
             await wizard_registry.safe_edit_response(inter, view=self)
 
         ch_btn = discord.ui.Button(
-            label="📢 Channel", style=discord.ButtonStyle.primary, row=0,
+            label="📢 Channel", style=discord.ButtonStyle.primary, row=button_row,
         )
         ch_btn.callback = _on_channel
         self.add_item(ch_btn)
 
         th_btn = discord.ui.Button(
-            label="🧵 Thread", style=discord.ButtonStyle.primary, row=0,
+            label="🧵 Thread", style=discord.ButtonStyle.primary, row=button_row,
         )
         th_btn.callback = _on_thread
         self.add_item(th_btn)
@@ -292,12 +459,15 @@ class ChannelSelectStep(discord.ui.View):
 
     def _render_channel_select(self, *, switchable: bool) -> None:
         self.clear_items()
+        keep_added = self._maybe_add_keep_current(row=0)
+        select_row    = 1 if keep_added else 0
+        secondary_row = select_row + 1
 
         types = self._channel_types_for_select()
         select = discord.ui.ChannelSelect(
             placeholder=self._placeholder,
             min_values=1, max_values=1,
-            channel_types=types, row=0,
+            channel_types=types, row=select_row,
         )
 
         async def _select_cb(inter: discord.Interaction):
@@ -317,7 +487,7 @@ class ChannelSelectStep(discord.ui.View):
         if switchable and self._pickable_threads:
             switch_btn = discord.ui.Button(
                 label="🧵 Pick a thread instead",
-                style=discord.ButtonStyle.secondary, row=1,
+                style=discord.ButtonStyle.secondary, row=secondary_row,
             )
             async def _switch(inter: discord.Interaction):
                 self._render_thread_select(switchable=True)
@@ -326,13 +496,16 @@ class ChannelSelectStep(discord.ui.View):
             self.add_item(switch_btn)
 
         if self.allow_create:
-            self._add_create_button(row=1)
+            self._add_create_button(row=secondary_row)
 
     # ── Thread-select state ────────────────────────────────────────────
 
     def _render_thread_select(self, *, switchable: bool) -> None:
         self.clear_items()
         self._thread_lookup.clear()
+        keep_added = self._maybe_add_keep_current(row=0)
+        select_row    = 1 if keep_added else 0
+        secondary_row = select_row + 1
 
         # Sort so the dropdown groups threads under their parent and is
         # alphabetised within each group — easier for the user to find.
@@ -343,7 +516,7 @@ class ChannelSelectStep(discord.ui.View):
 
         thread_select = discord.ui.Select(
             placeholder="Pick a thread...",
-            min_values=1, max_values=1, row=0,
+            min_values=1, max_values=1, row=select_row,
         )
         # Discord caps Select options at 25.
         for t in sorted_threads[:25]:
@@ -378,7 +551,7 @@ class ChannelSelectStep(discord.ui.View):
         if switchable:
             switch_btn = discord.ui.Button(
                 label="📢 Pick a channel instead",
-                style=discord.ButtonStyle.secondary, row=1,
+                style=discord.ButtonStyle.secondary, row=secondary_row,
             )
             async def _switch(inter: discord.Interaction):
                 self._render_channel_select(switchable=True)
@@ -512,11 +685,59 @@ class TextInputModal(discord.ui.Modal):
 
 
 class ModalLaunchView(discord.ui.View):
-    """Button that opens a modal — used for text input steps."""
-    def __init__(self, modal: TextInputModal):
+    """Button that opens a modal — used for text input steps.
+
+    When `current_value` is passed, a Keep-current button is rendered
+    alongside Enter Value. Clicking it sets `self.modal.value =
+    current_value` and stops the view, so callers that read
+    `modal.value` after `view.wait()` need no changes. `current_display`
+    overrides the label text (useful for truncating long Sheet IDs).
+
+    `on_keep_current` is for modals whose `value` is a read-only
+    derived property (e.g. ``ServerRangeModal`` in `/setup_shiny_tasks`
+    where the wizard reads `min_value` / `max_value` rather than a
+    single `value`). When provided, the callable is invoked with the
+    modal as its only argument *instead* of the default ``modal.value
+    = current_value``, so the caller can populate whatever attributes
+    the wizard's post-submit code actually reads.
+    """
+    def __init__(
+        self,
+        modal: TextInputModal,
+        *,
+        current_value: str | None = None,
+        current_display: str | None = None,
+        on_keep_current=None,
+    ):
         super().__init__(timeout=WIZARD_TIMEOUT)
-        self.modal     = modal
-        self.confirmed = False
+        self.modal           = modal
+        self.confirmed       = False
+        self._current_value  = current_value
+        self._current_display = current_display or current_value
+
+        if current_value:
+            keep_btn = discord.ui.Button(
+                label=f"✅ Keep current: {self._current_display}"[:80],
+                style=discord.ButtonStyle.success,
+                row=0,
+            )
+
+            async def _keep_cb(inter: discord.Interaction):
+                if on_keep_current is not None:
+                    on_keep_current(self.modal)
+                else:
+                    self.modal.value = current_value
+                self.confirmed   = True
+                for item in self.children:
+                    item.disabled = True
+                await wizard_registry.safe_edit_response(
+                    inter,
+                    content=f"✅ Keeping: **{self._current_display}**",
+                    view=self,
+                )
+                self.stop()
+            keep_btn.callback = _keep_cb
+            self.add_item(keep_btn)
 
     @discord.ui.button(label="✏️ Enter Value", style=discord.ButtonStyle.primary)
     async def open_modal(self, interaction: discord.Interaction, button: discord.ui.Button):
@@ -544,28 +765,33 @@ async def ask_keep_or_change(
     cancel_event=None,
     current: str | None = None,
 ) -> str | None:
-    """Show a `Use default / Define your own` view and return the chosen value.
+    """Show a `Keep current / Use default / Define your own` view and
+    return the chosen value.
 
-    Two-vs-three button rendering:
-      * If `current` is None or equals `default`, render the original
-        two-button layout: **✅ Use default: {default}** / **✏️ Define
-        my own**. The keep button returns `default`.
-      * If `current` is provided AND differs from `default`, render
-        three buttons: **✅ Keep current: {current}** / **↩️ Use
-        default: {default}** / **✏️ Define my own**. This stops the
-        wizard from labelling a previously-saved guild value as the
-        "default" (which is misleading — "default" should mean the
-        bot's hardcoded baseline, not whatever the guild last entered)
-        while still letting the user revert to that baseline in one
-        click instead of typing it manually.
+    Rendering depends on what's been saved before:
+      * No saved value (``current`` is None or empty): two-button
+        layout **✅ Use default: {default}** / **✏️ Define my own**.
+        The keep button returns ``default``.
+      * Saved value matches the hardcoded default: two-button layout
+        **✅ Keep current: {current}** / **✏️ Define my own**. Labels
+        as "Keep current" rather than "Use default" so leadership
+        running the wizard a second time sees what's actually saved
+        (the values are identical anyway, but the wording makes the
+        Keep-current intent obvious — fixes the
+        "is Use default going to wipe my settings?" anxiety).
+      * Saved value differs from default: three-button layout
+        **✅ Keep current: {current}** / **↩️ Use default: {default}**
+        / **✏️ Define my own**. Lets leadership revert to the
+        hardcoded baseline in one click instead of typing it manually.
 
     The button labels include the value so the prompt body never has to
     repeat it. Returns None on timeout (and posts a timeout message
     referencing `timeout_cmd` if provided), or on /cancel (silently —
     the /cancel command itself acks the user).
     """
-    has_distinct_current = bool(current) and current != default
-    pre_filled = current if has_distinct_current else default
+    has_saved            = bool(current)
+    has_distinct_current = has_saved and current != default
+    pre_filled           = current if has_saved else default
 
     class KeepOrChangeDefaultView(discord.ui.View):
         def __init__(self):
@@ -574,17 +800,17 @@ async def ask_keep_or_change(
             self.confirmed = False
 
             # Build buttons explicitly so we can vary the layout based on
-            # whether `current` differs from `default`. Decorator-based
-            # buttons can't be conditionally added.
+            # whether anything is saved and whether it matches default.
+            # Decorator-based buttons can't be conditionally added.
             keep_label = (
                 f"✅ Keep current: {current}"[:80]
-                if has_distinct_current else
+                if has_saved else
                 f"✅ Use default: {default}"[:80]
             )
             keep_btn = discord.ui.Button(label=keep_label, style=discord.ButtonStyle.success)
 
             async def _keep_cb(inter: discord.Interaction):
-                chosen         = current if has_distinct_current else default
+                chosen         = current if has_saved else default
                 self.value     = chosen
                 self.confirmed = True
                 for item in self.children: item.disabled = True
@@ -645,6 +871,163 @@ async def ask_keep_or_change(
             await channel.send(f"⏰ Timed out. Run `/{timeout_cmd}` to start again.")
         return None
     return view.value
+
+
+async def ask_proceed_with_existing_config(
+    channel,
+    *,
+    title: str,
+    description: str,
+    fields: list[tuple[str, str]],
+    cancel_event,
+    no_changes_message: str = "✅ No changes made. Your existing configuration is still active.",
+) -> bool | None:
+    """Show an existing-config summary embed with Edit / No changes buttons.
+
+    Each per-feature `/setup_*` calls this at the top so leadership sees
+    what's saved without walking the whole wizard. Returns:
+
+      * ``True``  — leadership clicked Edit. Caller should proceed into
+        the wizard's step-by-step flow.
+      * ``False`` — leadership clicked No changes. This helper has
+        already posted ``no_changes_message``; caller should return.
+      * ``None``  — `/cancel` or timeout. Caller should return silently
+        (timeout case posts no message — keep parity with the other
+        cancellable views in the wizard).
+
+    `fields` is a list of ``(label, value)`` tuples rendered as
+    embed fields, inline=False. Pass the same tuples that
+    ``/view_configuration`` would render for that feature.
+    """
+
+    class EditOrCancelView(discord.ui.View):
+        def __init__(self):
+            super().__init__(timeout=60)
+            self.proceed = None
+
+        @discord.ui.button(label="✏️ Edit settings", style=discord.ButtonStyle.primary)
+        async def edit(self, inter: discord.Interaction, button: discord.ui.Button):
+            self.proceed = True
+            for item in self.children:
+                item.disabled = True
+            await wizard_registry.safe_edit_response(inter, view=self)
+            self.stop()
+
+        @discord.ui.button(label="✅ No changes needed", style=discord.ButtonStyle.secondary)
+        async def cancel(self, inter: discord.Interaction, button: discord.ui.Button):
+            self.proceed = False
+            for item in self.children:
+                item.disabled = True
+            await wizard_registry.safe_edit_response(inter, view=self)
+            self.stop()
+
+    embed = discord.Embed(
+        title=title,
+        description=description,
+        color=discord.Color.blurple(),
+    )
+    for name, value in fields:
+        embed.add_field(name=name, value=value, inline=False)
+
+    view = EditOrCancelView()
+    await channel.send(embed=embed, view=view)
+    await wait_view_or_cancel(view, cancel_event)
+    if view.cancelled:
+        return None
+    if view.proceed is None:
+        # Timed out without an interaction.
+        return None
+    if not view.proceed:
+        await channel.send(no_changes_message)
+        return False
+    return True
+
+
+async def ask_disable_with_clear(
+    channel,
+    *,
+    feature_label: str,
+    setup_command: str,
+    had_prior_config: bool,
+    clear_fn,
+    cancel_event,
+) -> None:
+    """Post the disable confirmation after leadership picks No on an
+    enable-toggle wizard step.
+
+    When ``had_prior_config`` is True, the message tells leadership their
+    saved config is preserved and shows a Clear button that calls
+    ``clear_fn()`` to wipe it. When False (first-time disable, nothing
+    saved to lose), just posts the bare confirmation without the button.
+
+    ``feature_label`` — friendly noun for the message body
+    (e.g. "Shiny Tasks announcement").
+
+    ``setup_command`` — slash command leadership should re-run to
+    re-enable, sans the leading slash (e.g. "setup_shiny_tasks").
+
+    ``clear_fn`` — callable taking no arguments; runs synchronously
+    or via ``await`` (the helper auto-detects). Should wipe the
+    feature's saved config so a future re-enable starts clean. Each
+    wizard supplies its own — typically a ``DELETE FROM <table>
+    WHERE guild_id = ?`` since ``get_*_config`` already returns a
+    default dict when the row is absent.
+    """
+    import inspect
+
+    if not had_prior_config:
+        await channel.send(f"✅ {feature_label} disabled.")
+        return
+
+    body = (
+        f"✅ {feature_label} disabled. Your previous configuration is saved. "
+        f"Re-run `/{setup_command}` and pick Yes to restore it instantly."
+    )
+
+    class ClearConfigView(discord.ui.View):
+        def __init__(self):
+            super().__init__(timeout=300)
+            self.message: discord.Message | None = None
+            self.cleared = False
+
+        @discord.ui.button(
+            label="🗑️ Clear my saved configuration",
+            style=discord.ButtonStyle.danger,
+        )
+        async def clear(self, inter: discord.Interaction, button: discord.ui.Button):
+            try:
+                if inspect.iscoroutinefunction(clear_fn):
+                    await clear_fn()
+                else:
+                    clear_fn()
+            except Exception as e:
+                await wizard_registry.safe_edit_response(
+                    inter,
+                    content=(
+                        f"{body}\n\n⚠️ Could not clear configuration: {e}"
+                    ),
+                    view=None,
+                )
+                self.stop()
+                return
+            self.cleared = True
+            for item in self.children:
+                item.disabled = True
+            await wizard_registry.safe_edit_response(
+                inter,
+                content=f"✅ {feature_label} disabled and saved configuration cleared.",
+                view=self,
+            )
+            self.stop()
+
+        async def on_timeout(self):
+            await wizard_registry.expire_view_message(
+                self.message, command_hint=setup_command,
+            )
+
+    view = ClearConfigView()
+    view.message = await channel.send(body, view=view)
+    await wait_view_or_cancel(view, cancel_event)
 
 
 async def _manage_train_templates(
@@ -1235,11 +1618,39 @@ TIMEZONE_LABELS = {tz: label for tz, label in TIMEZONE_OPTIONS}
 
 
 class TimezoneSelectView(discord.ui.View):
-    """Single dropdown covering all supported timezones, ordered by (UTC offset."""
-    def __init__(self):
+    """Single dropdown covering all supported timezones, ordered by (UTC offset.
+
+    When `current` is passed and matches a known timezone option, the
+    view prepends a green Keep-current button above the select so
+    leadership doesn't have to re-pick their timezone on a re-run.
+    """
+    def __init__(self, *, current: str | None = None):
         super().__init__(timeout=WIZARD_TIMEOUT)
         self.selected  = None
         self.confirmed = False
+        self.current   = current
+
+        keep_added = False
+        if current and current in TIMEZONE_LABELS:
+            keep_label = TIMEZONE_LABELS[current]
+            keep_btn = discord.ui.Button(
+                label=f"✅ Keep current: {keep_label}"[:80],
+                style=discord.ButtonStyle.success,
+                row=0,
+            )
+
+            async def _keep_cb(inter: discord.Interaction):
+                self.selected  = current
+                self.confirmed = True
+                for item in self.children:
+                    item.disabled = True
+                await wizard_registry.safe_edit_response(
+                    inter, content=f"✅ Keeping timezone: **{keep_label}**", view=self,
+                )
+                self.stop()
+            keep_btn.callback = _keep_cb
+            self.add_item(keep_btn)
+            keep_added = True
 
         select = discord.ui.Select(
             placeholder="Select your timezone...",
@@ -1247,7 +1658,7 @@ class TimezoneSelectView(discord.ui.View):
                 discord.SelectOption(label=label[:100], value=tz)
                 for tz, label in TIMEZONE_OPTIONS
             ],
-            row=0,
+            row=1 if keep_added else 0,
         )
 
         async def _cb(interaction: discord.Interaction):
@@ -1506,43 +1917,24 @@ async def run_setup(interaction: discord.Interaction, bot):
     # ── If already configured, show summary and offer edit or cancel ──────────
     if cfg.setup_complete:
         tz_label = TIMEZONE_LABELS.get(cfg.timezone, cfg.timezone)
-        existing_embed = discord.Embed(
+        sheet_display = (
+            f"`{cfg.spreadsheet_id[:20]}...`" if cfg.spreadsheet_id else "Not set"
+        )
+        proceed = await ask_proceed_with_existing_config(
+            channel,
             title="⚙️ Current Core Setup",
             description="Your server is already configured. Would you like to edit these settings?",
-            color=discord.Color.blurple(),
+            fields=[
+                ("Member Role",        cfg.member_role_name),
+                ("Leadership Role",    cfg.leadership_role_name),
+                ("Leadership Channel", f"<#{cfg.leadership_channel_id}>"),
+                ("Timezone",           tz_label),
+                ("Sheet ID",           sheet_display),
+            ],
+            cancel_event=cancel_event,
+            no_changes_message="✅ No changes made. Your existing setup is still active.",
         )
-        existing_embed.add_field(name="Member Role",        value=cfg.member_role_name,              inline=False)
-        existing_embed.add_field(name="Leadership Role",    value=cfg.leadership_role_name,          inline=False)
-        existing_embed.add_field(name="Leadership Channel", value=f"<#{cfg.leadership_channel_id}>", inline=False)
-        existing_embed.add_field(name="Timezone",           value=tz_label,                          inline=False)
-        existing_embed.add_field(name="Sheet ID",           value=f"`{cfg.spreadsheet_id[:20]}...`" if cfg.spreadsheet_id else "Not set", inline=False)
-
-        class EditOrCancelView(discord.ui.View):
-            def __init__(self):
-                super().__init__(timeout=60)
-                self.proceed = None
-
-            @discord.ui.button(label="✏️ Edit settings", style=discord.ButtonStyle.primary)
-            async def edit(self, inter: discord.Interaction, button: discord.ui.Button):
-                self.proceed = True
-                for item in self.children: item.disabled = True
-                await wizard_registry.safe_edit_response(inter, view=self)
-                self.stop()
-
-            @discord.ui.button(label="✅ No changes needed", style=discord.ButtonStyle.secondary)
-            async def cancel(self, inter: discord.Interaction, button: discord.ui.Button):
-                self.proceed = False
-                for item in self.children: item.disabled = True
-                await wizard_registry.safe_edit_response(inter, view=self)
-                self.stop()
-
-        eoc_view = EditOrCancelView()
-        await channel.send(embed=existing_embed, view=eoc_view)
-        await wait_view_or_cancel(eoc_view, cancel_event)
-        if eoc_view.cancelled:
-            return
-        if not eoc_view.proceed:
-            await channel.send("✅ No changes made. Your existing setup is still active.")
+        if proceed is not True:
             return
 
     await channel.send(
@@ -1554,7 +1946,17 @@ async def run_setup(interaction: discord.Interaction, bot):
 
     # ── Step 1: Member role ────────────────────────────────────────────────────
     await channel.send("**Step 1 of 6 — Member Role**\nSelect the role that all alliance members have:")
-    v = RoleSelectStep("Select member role...")
+    v = RoleSelectStep(
+        "Select member role...",
+        current_id=cfg.member_role_id,
+        current_name=cfg.member_role_name,
+        guild=interaction.guild,
+    )
+    if v.is_current_stale:
+        await channel.send(
+            f"⚠️ Your previously configured member role **{cfg.member_role_name}** "
+            "no longer exists. Pick a new one below."
+        )
     await channel.send("\u200b", view=v)
     await wait_view_or_cancel(v, cancel_event)
     if v.cancelled:
@@ -1567,7 +1969,17 @@ async def run_setup(interaction: discord.Interaction, bot):
 
     # ── Step 2: Leadership role ────────────────────────────────────────────────
     await channel.send("**Step 2 of 6 — Leadership Role**\nSelect the elevated role for alliance leadership:")
-    v = RoleSelectStep("Select leadership role...")
+    v = RoleSelectStep(
+        "Select leadership role...",
+        current_id=cfg.leadership_role_id,
+        current_name=cfg.leadership_role_name,
+        guild=interaction.guild,
+    )
+    if v.is_current_stale:
+        await channel.send(
+            f"⚠️ Your previously configured leadership role **{cfg.leadership_role_name}** "
+            "no longer exists. Pick a new one below."
+        )
     await channel.send("\u200b", view=v)
     await wait_view_or_cancel(v, cancel_event)
     if v.cancelled:
@@ -1576,6 +1988,7 @@ async def run_setup(interaction: discord.Interaction, bot):
         await channel.send("⏰ Setup timed out. Run `/setup` to start again.")
         return
     cfg.leadership_role_name = v.selected_role.name
+    cfg.leadership_role_id   = v.selected_role.id
 
     # ── Step 3: Leadership channel ─────────────────────────────────────────────
     is_premium_flag = await premium.is_premium(guild_id, interaction=interaction)
@@ -1590,7 +2003,13 @@ async def run_setup(interaction: discord.Interaction, bot):
         suggested_name="leadership",
         include_threads=is_premium_flag,
         guild=interaction.guild,
+        current_id=cfg.leadership_channel_id,
     )
+    if v.is_current_stale:
+        await channel.send(
+            "⚠️ Your previously configured leadership channel no longer exists. "
+            "Pick a new one below."
+        )
     await channel.send("\u200b", view=v)
     await wait_view_or_cancel(v, cancel_event)
     if v.cancelled:
@@ -1601,7 +2020,7 @@ async def run_setup(interaction: discord.Interaction, bot):
     cfg.leadership_channel_id = v.selected_channel.id
 
     # ── Step 4: Timezone ───────────────────────────────────────────────────────
-    tz_view = TimezoneSelectView()
+    tz_view = TimezoneSelectView(current=cfg.timezone)
     await channel.send(
         "**Step 4 of 6 — Timezone**\n"
         "Select your alliance's timezone. This is used for displaying event times, "
@@ -1623,7 +2042,19 @@ async def run_setup(interaction: discord.Interaction, bot):
         "`https://docs.google.com/spreadsheets/d/`**`YOUR_SHEET_ID`**`/edit`"
     )
     modal   = TextInputModal("Google Sheet ID", "Sheet ID", placeholder="Paste your Sheet ID here...")
-    modal_v = ModalLaunchView(modal)
+    # Truncate long sheet ids for the Keep-current button label —
+    # full ids are ~44 chars and overflow Discord's 80-char cap once
+    # the "✅ Keep current: " prefix is added.
+    sheet_display = (
+        f"{cfg.spreadsheet_id[:25]}…"
+        if cfg.spreadsheet_id and len(cfg.spreadsheet_id) > 25
+        else cfg.spreadsheet_id
+    )
+    modal_v = ModalLaunchView(
+        modal,
+        current_value=cfg.spreadsheet_id or None,
+        current_display=sheet_display or None,
+    )
     await channel.send("\u200b", view=modal_v)
     await wait_view_or_cancel(modal_v, cancel_event)
     if modal_v.cancelled:
@@ -1742,8 +2173,12 @@ async def run_growth_setup(interaction: discord.Interaction, bot):
             return None
         return reply.content.strip()[:max_chars]
 
-    from config import get_growth_config, save_growth_config
+    from config import (
+        get_growth_config, save_growth_config,
+        has_growth_config, clear_growth_config,
+    )
     current = get_growth_config(guild_id)
+    growth_already_configured = has_growth_config(guild_id)
 
     # Hardcoded defaults — what the bot ships with. These are passed as
     # `default=` to ask_keep_or_change. The user's previously-saved value
@@ -1756,6 +2191,37 @@ async def run_growth_setup(interaction: discord.Interaction, bot):
     DEFAULT_TAB_GROWTH        = "Growth Tracking"
     DEFAULT_SNAPSHOT_DAY      = 1
     DEFAULT_SNAPSHOT_INTERVAL = 30
+
+    # ── If already enabled, show summary and offer edit or cancel ─────────────
+    if growth_already_configured and current.get("enabled"):
+        metrics_list = current.get("metrics") or []
+        freq = current.get("snapshot_frequency", "monthly")
+        if freq == "monthly":
+            sched = f"Monthly on day {current.get('snapshot_day', 1)}"
+        else:
+            sched = f"Every {current.get('snapshot_interval', 30)} days"
+        fields = [
+            ("Source Tab",        current.get("tab_source") or "*not set*"),
+            ("Name Column",       f"Column {current.get('name_col') or '*not set*'}"),
+            ("Data Start Row",    str(current.get("data_start_row") or "*not set*")),
+            ("Growth Tab",        current.get("tab_growth") or "*not set*"),
+            ("Snapshot Schedule", sched),
+            (
+                f"Metrics ({len(metrics_list)})",
+                "\n".join(f"• {m['label']} — column {m['col']}" for m in metrics_list)
+                if metrics_list else "*none*",
+            ),
+        ]
+        proceed = await ask_proceed_with_existing_config(
+            channel,
+            title="📈 Current Growth Setup",
+            description="Growth tracking is already configured. Would you like to edit these settings?",
+            fields=fields,
+            cancel_event=cancel_event,
+            no_changes_message="✅ No changes made. Growth tracking is still active.",
+        )
+        if proceed is not True:
+            return
 
     await channel.send(
         "⚙️ **Growth Tracking Setup**\n"
@@ -1789,7 +2255,14 @@ async def run_growth_setup(interaction: discord.Interaction, bot):
             snapshot_interval=current.get("snapshot_interval", 30),
             data_start_row=current.get("data_start_row", 2),
         )
-        await channel.send("✅ Growth tracking disabled.")
+        await ask_disable_with_clear(
+            channel,
+            feature_label="Growth tracking",
+            setup_command="setup_growth",
+            had_prior_config=growth_already_configured,
+            clear_fn=lambda: clear_growth_config(guild_id),
+            cancel_event=cancel_event,
+        )
         return
 
     # ── Step 2: Source tab ────────────────────────────────────────────────────
@@ -2212,6 +2685,7 @@ async def run_growth_breakdown_setup(interaction: discord.Interaction, bot):
     import wizard_registry
     from config import (
         get_growth_config, save_growth_breakdown_config,
+        has_growth_breakdown_config,
     )
     from growth import DEFAULT_THRESHOLDS, DEFAULT_BUCKET_LABELS, BUCKET_ORDER
 
@@ -2229,6 +2703,50 @@ async def run_growth_breakdown_setup(interaction: discord.Interaction, bot):
         )
         wizard_registry.unregister(user.id, cancel_event)
         return
+
+    # ── If already configured, show summary and offer edit or cancel ─────────
+    if has_growth_breakdown_config(guild_id):
+        post_ch = current.get("breakdown_post_channel_id") or 0
+        thresholds = current.get("breakdown_thresholds") or {}
+        labels     = current.get("breakdown_labels") or {}
+        bucket_filter = current.get("breakdown_bucket_filter") or []
+        fields = [
+            ("Breakdown Tab", current.get("tab_breakdown") or "Growth Breakdown"),
+            ("Auto-Post Channel", f"<#{post_ch}>" if post_ch else "❌ Off"),
+        ]
+        if post_ch and bucket_filter:
+            fields.append((
+                "Bucket Filter",
+                ", ".join(DEFAULT_BUCKET_LABELS.get(b, b) for b in bucket_filter),
+            ))
+        elif post_ch:
+            fields.append(("Bucket Filter", "All buckets"))
+        if thresholds:
+            fields.append((
+                "Custom Thresholds",
+                f"Increased ≥ {thresholds.get('increased', 0):g}%, "
+                f"Steady ≥ {thresholds.get('steady', 0):g}%, "
+                f"Low ≥ {thresholds.get('low', 0):g}%, "
+                f"None ≥ {thresholds.get('none', 0):g}%",
+            ))
+        if labels:
+            fields.append((
+                "Custom Labels",
+                ", ".join(
+                    f"{DEFAULT_BUCKET_LABELS[b]}→{labels[b]}"
+                    for b in BUCKET_ORDER if labels.get(b)
+                ) or "—",
+            ))
+        proceed = await ask_proceed_with_existing_config(
+            channel,
+            title="📊 Current Growth Breakdown Setup",
+            description="Growth breakdown is already configured. Would you like to edit these settings?",
+            fields=fields,
+            cancel_event=cancel_event,
+            no_changes_message="✅ No changes made. Your breakdown setup is still active.",
+        )
+        if proceed is not True:
+            return
 
     await channel.send(
         "📊 **Growth Breakdown Setup** (💎 Premium)\n"
@@ -2271,12 +2789,19 @@ async def run_growth_breakdown_setup(interaction: discord.Interaction, bot):
 
     post_channel_id = 0
     if autopost_view.selected:
+        saved_post_ch = current.get("breakdown_post_channel_id") or 0
         post_ch_view = ChannelSelectStep(
             "Select the auto-post channel…",
             suggested_name="growth-breakdown",
             include_threads=True,
             guild=interaction.guild,
+            current_id=saved_post_ch,
         )
+        if post_ch_view.is_current_stale:
+            await channel.send(
+                "⚠️ Your previously configured breakdown channel no longer exists. "
+                "Pick a new one below."
+            )
         await channel.send(
             "**Auto-Post Channel**\n"
             "Where should the breakdown summaries land?",
@@ -2295,10 +2820,34 @@ async def run_growth_breakdown_setup(interaction: discord.Interaction, bot):
     # the on-demand /growth button (which always shows every bucket).
     bucket_filter: list[str] = []
     if post_channel_id:
+        saved_filter = current.get("breakdown_bucket_filter") or []
+
         class BucketFilterView(discord.ui.View):
             def __init__(self):
                 super().__init__(timeout=WIZARD_TIMEOUT)
                 self.selected: list[str] | None = None
+
+                # Keep-current button on its own row when leadership
+                # previously picked a filter. Sets `self.selected` to
+                # the saved list and stops — no Select interaction
+                # needed.
+                if saved_filter:
+                    saved_disp_short = ", ".join(
+                        DEFAULT_BUCKET_LABELS.get(b, b) for b in saved_filter
+                    )
+                    keep_btn = discord.ui.Button(
+                        label=f"✅ Keep current: {saved_disp_short}"[:80],
+                        style=discord.ButtonStyle.success,
+                        row=0,
+                    )
+
+                    async def _keep_cb(inter: discord.Interaction):
+                        self.selected = list(saved_filter)
+                        for item in self.children: item.disabled = True
+                        await wizard_registry.safe_edit_response(inter, view=self)
+                        self.stop()
+                    keep_btn.callback = _keep_cb
+                    self.add_item(keep_btn)
 
                 opts = [
                     discord.SelectOption(
@@ -2313,6 +2862,7 @@ async def run_growth_breakdown_setup(interaction: discord.Interaction, bot):
                     options=opts,
                     min_values=0,
                     max_values=len(BUCKET_ORDER),
+                    row=1 if saved_filter else 0,
                 )
 
                 async def _select_cb(inter: discord.Interaction):
@@ -2327,6 +2877,7 @@ async def run_growth_breakdown_setup(interaction: discord.Interaction, bot):
                 all_btn = discord.ui.Button(
                     label="Use all buckets",
                     style=discord.ButtonStyle.secondary,
+                    row=2 if saved_filter else 1,
                 )
 
                 async def _all_cb(inter: discord.Interaction):
@@ -2339,7 +2890,6 @@ async def run_growth_breakdown_setup(interaction: discord.Interaction, bot):
                 self.add_item(all_btn)
 
         bf_view = BucketFilterView()
-        saved_filter = current.get("breakdown_bucket_filter") or []
         if saved_filter:
             saved_disp = ", ".join(
                 DEFAULT_BUCKET_LABELS.get(b, b) for b in saved_filter
@@ -2417,6 +2967,29 @@ async def run_growth_breakdown_setup(interaction: discord.Interaction, bot):
             super().__init__(timeout=WIZARD_TIMEOUT)
             self.choice = None
 
+            # Keep-current button when leadership saved custom thresholds
+            # on a previous run. Demoted "Use defaults" to a secondary
+            # revert in that case so Keep current is the visually
+            # primary action.
+            if thresholds:
+                for child in self.children:
+                    if getattr(child, "label", None) == "✅ Use defaults":
+                        child.label = "↩️ Use defaults"
+                        child.style = discord.ButtonStyle.secondary
+                        break
+                keep_btn = discord.ui.Button(
+                    label="✅ Keep current values",
+                    style=discord.ButtonStyle.success,
+                )
+
+                async def _keep_cb(inter: discord.Interaction):
+                    self.choice = "keep"
+                    for item in self.children: item.disabled = True
+                    await wizard_registry.safe_edit_response(inter, view=self)
+                    self.stop()
+                keep_btn.callback = _keep_cb
+                self.add_item(keep_btn)
+
         @discord.ui.button(label="✅ Use defaults", style=discord.ButtonStyle.success)
         async def defaults_btn(self, inter: discord.Interaction, button: discord.ui.Button):
             self.choice = "defaults"
@@ -2461,6 +3034,10 @@ async def run_growth_breakdown_setup(interaction: discord.Interaction, bot):
         return
     if t_view.choice == "defaults":
         thresholds = {}
+    elif t_view.choice == "keep":
+        # Already loaded from current at the top of this step — no
+        # action needed; the wizard saves what's there.
+        pass
     else:
         thresholds = t_view._modal_values
 
@@ -2491,6 +3068,28 @@ async def run_growth_breakdown_setup(interaction: discord.Interaction, bot):
         def __init__(self):
             super().__init__(timeout=WIZARD_TIMEOUT)
             self.choice = None
+
+            # Mirror ThresholdsChoiceView: when leadership has saved
+            # custom bucket labels, surface Keep current as the primary
+            # action and demote Use defaults to a revert.
+            if labels:
+                for child in self.children:
+                    if getattr(child, "label", None) == "✅ Use defaults":
+                        child.label = "↩️ Use defaults"
+                        child.style = discord.ButtonStyle.secondary
+                        break
+                keep_btn = discord.ui.Button(
+                    label="✅ Keep current labels",
+                    style=discord.ButtonStyle.success,
+                )
+
+                async def _keep_cb(inter: discord.Interaction):
+                    self.choice = "keep"
+                    for item in self.children: item.disabled = True
+                    await wizard_registry.safe_edit_response(inter, view=self)
+                    self.stop()
+                keep_btn.callback = _keep_cb
+                self.add_item(keep_btn)
 
         @discord.ui.button(label="✅ Use defaults", style=discord.ButtonStyle.success)
         async def defaults_btn(self, inter: discord.Interaction, button: discord.ui.Button):
@@ -2532,6 +3131,9 @@ async def run_growth_breakdown_setup(interaction: discord.Interaction, bot):
         return
     if l_view.choice == "defaults":
         labels = {}
+    elif l_view.choice == "keep":
+        # Already loaded from current at the top of this step.
+        pass
     else:
         labels = l_view._modal_values
 
@@ -2608,8 +3210,37 @@ async def run_train_setup(interaction: discord.Interaction, bot):
             return None
         return reply.content.strip()[:max_chars]
 
-    from config import get_train_config
+    from config import get_train_config, has_train_config
     current = get_train_config(guild_id)
+    train_already_configured = has_train_config(guild_id)
+
+    # ── If already configured, show summary and offer edit or cancel ──────────
+    if train_already_configured:
+        themes = current.get("themes") or []
+        tones  = current.get("tones") or []
+        fields = [
+            ("Schedule Tab", current.get("tab_name") or "*not set*"),
+            ("Blurbs",       "✅ Enabled" if current.get("blurbs_enabled") else "❌ Disabled"),
+        ]
+        if current.get("blurbs_enabled"):
+            fields.append(("Themes", ", ".join(themes) if themes else "*none*"))
+            fields.append(("Tones",  ", ".join(tones)  if tones  else "*none*"))
+            fields.append(("Default Tone", current.get("default_tone") or "*not set*"))
+        fields.append(("Reminders", "✅ Enabled" if current.get("reminders_enabled") else "❌ Disabled"))
+        if current.get("reminders_enabled"):
+            rc = current.get("reminder_channel_id", 0) or 0
+            fields.append(("Reminder Channel", f"<#{rc}>" if rc else "*not set*"))
+            fields.append(("Reminder Time",    current.get("reminder_time") or "*not set*"))
+        proceed = await ask_proceed_with_existing_config(
+            channel,
+            title="🚂 Current Train Setup",
+            description="Your train schedule is already configured. Would you like to edit these settings?",
+            fields=fields,
+            cancel_event=cancel_event,
+            no_changes_message="✅ No changes made. Your train setup is still active.",
+        )
+        if proceed is not True:
+            return
 
     await channel.send(
         "⚙️ **Train Schedule Setup**\n"
@@ -2649,10 +3280,21 @@ async def run_train_setup(interaction: discord.Interaction, bot):
         return
     blurbs_enabled = 1 if blurb_view.selected else 0
     if not blurbs_enabled:
-        await channel.send(
-            "ℹ️ *Skipping Steps 3–6 (themes, tones, default tone, prompt template) — "
-            "blurb generation is off.*"
-        )
+        # If leadership had blurbs configured previously, their themes,
+        # tones, default tone, and templates are kept in the DB so a
+        # future re-enable starts where they left off. Tell them so they
+        # don't worry about losing config.
+        had_prior_blurbs = train_already_configured and current.get("blurbs_enabled")
+        if had_prior_blurbs:
+            await channel.send(
+                "ℹ️ Blurb generation disabled. Your themes, tones, and templates "
+                "remain saved — re-enable later to restore them."
+            )
+        else:
+            await channel.send(
+                "ℹ️ *Skipping Steps 3–6 (themes, tones, default tone, prompt template) — "
+                "blurb generation is off.*"
+            )
 
     themes        = current["themes"]
     tones         = current["tones"]
@@ -2739,16 +3381,44 @@ async def run_train_setup(interaction: discord.Interaction, bot):
 
         # ── Step 5: Default tone ───────────────────────────────────────────────
         class ToneDefaultView(discord.ui.View):
-            def __init__(self, tone_list: list):
+            def __init__(self, tone_list: list, *, current: str | None = None):
                 super().__init__(timeout=120)
                 self.selected = None
+
+                # Keep-current button on row 0 when the saved default
+                # tone still appears in the current tone_list (it may
+                # have been removed in Step 4).
+                keep_added = False
+                if current and current in tone_list:
+                    keep_btn = discord.ui.Button(
+                        label=f"✅ Keep current: {current}"[:80],
+                        style=discord.ButtonStyle.success,
+                        row=0,
+                    )
+
+                    async def _keep_cb(inter: discord.Interaction):
+                        self.selected = current
+                        for item in self.children:
+                            item.disabled = True
+                        await wizard_registry.safe_edit_response(
+                            inter,
+                            content=f"✅ Keeping default tone: **{current}**",
+                            view=self,
+                        )
+                        self.stop()
+                    keep_btn.callback = _keep_cb
+                    self.add_item(keep_btn)
+                    keep_added = True
+
                 select = discord.ui.Select(
                     placeholder="Select default tone...",
                     options=[discord.SelectOption(label=t, value=t) for t in tone_list],
+                    row=1 if keep_added else 0,
                 )
                 async def _cb(inter: discord.Interaction):
                     self.selected = select.values[0]
-                    select.disabled = True
+                    for item in self.children:
+                        item.disabled = True
                     await wizard_registry.safe_edit_response(
                         inter,
                         content=f"✅ Default tone: **{self.selected}**", view=self
@@ -2757,7 +3427,7 @@ async def run_train_setup(interaction: discord.Interaction, bot):
                 select.callback = _cb
                 self.add_item(select)
 
-        tone_default_view = ToneDefaultView(tones)
+        tone_default_view = ToneDefaultView(tones, current=current.get("default_tone"))
         await channel.send(
             f"**Step 5 of 8 — Default Tone**\n"
             f"Which tone should be pre-selected by default?",
@@ -2809,18 +3479,32 @@ async def run_train_setup(interaction: discord.Interaction, bot):
     reminder_channel_id = 0
     reminder_time       = "22:00"
     if not reminders_enabled:
-        await channel.send(
-            "ℹ️ *Skipping Steps 7a–7b (reminder channel and time) — train reminders are off.*"
-        )
+        had_prior_reminders = train_already_configured and current.get("reminders_enabled")
+        if had_prior_reminders:
+            await channel.send(
+                "ℹ️ Train reminders disabled. Your saved reminder channel and time "
+                "remain saved — re-enable later to restore them."
+            )
+        else:
+            await channel.send(
+                "ℹ️ *Skipping Steps 7a–7b (reminder channel and time) — train reminders are off.*"
+            )
 
     if reminders_enabled:
         # ── Step 7a: Reminder channel ──────────────────────────────────────────
+        saved_reminder_ch = current.get("reminder_channel_id", 0) or 0
         reminder_ch_view = ChannelSelectStep(
             "Select the reminder channel...",
             suggested_name="leadership",
             include_threads=is_premium_flag,
             guild=interaction.guild,
+            current_id=saved_reminder_ch,
         )
+        if reminder_ch_view.is_current_stale:
+            await channel.send(
+                "⚠️ Your previously configured reminder channel no longer exists. "
+                "Pick a new one below."
+            )
         await channel.send(
             "**Step 7a of 8 — Reminder Channel**\n"
             "Which channel should the train reminder be posted to?",
@@ -2850,7 +3534,10 @@ async def run_train_setup(interaction: discord.Interaction, bot):
                 f"What time should the reminder fire? *(in your timezone: {tz_label})*\n"
                 f"*(e.g. `10:00pm`, `9:00am`)*",
                 default="10:00pm",
-                current=current.get("reminder_time", ""),
+                # DB stores 24h ("22:00") — render as "10:00pm" so the
+                # Keep-current and Use-default button labels don't sit
+                # side-by-side in mismatched formats.
+                current=_format_24h_to_12h(current.get("reminder_time", "")),
                 modal_title="Reminder Time",
                 modal_label="Time",
                 timeout_cmd="setup_train",
@@ -3148,19 +3835,61 @@ async def run_survey_setup(interaction: discord.Interaction, bot,
     from config import (
         get_survey_config, save_survey_config,
         get_survey, save_extra_survey,
+        has_survey_config, get_config,
     )
     from defaults import DEFAULT_SURVEY_QUESTIONS
 
     if target_survey_id is None:
         current = get_survey_config(guild_id)
         wizard_label = "Survey Setup"
+        survey_already_configured = has_survey_config(guild_id)
+        # Main survey: channel ids live on guild_configs (legacy storage),
+        # not on guild_survey_config. Load them from there.
+        guild_cfg = get_config(guild_id)
+        saved_survey_ch = (guild_cfg.survey_channel_id if guild_cfg else 0) or 0
+        saved_notify_ch = (guild_cfg.survey_notify_channel_id if guild_cfg else 0) or 0
     else:
         current = get_survey(guild_id, target_survey_id) or {}
         # Carry the existing name through so we can preserve it on save.
         if not target_survey_name:
             target_survey_name = current.get("survey_name") or target_survey_id
         wizard_label = f"Survey Setup — {target_survey_name}"
+        survey_already_configured = bool(current)
+        # Extra surveys: channel ids are stored alongside the survey row.
+        saved_survey_ch = (current.get("survey_channel_id") or 0)
+        saved_notify_ch = (current.get("notify_channel_id") or 0)
     questions = list(current.get("questions") or [])
+
+    # ── If already configured, show summary and offer edit or cancel ─────────
+    if survey_already_configured:
+        q_count = len(questions)
+        fields = [
+            (
+                "Survey Channel",
+                f"<#{saved_survey_ch}>" if saved_survey_ch else "*not set*",
+            ),
+            (
+                "Notification Channel",
+                f"<#{saved_notify_ch}>" if saved_notify_ch else "*not set*",
+            ),
+            ("Stats Tab",   current.get("tab_squad_powers") or "*not set*"),
+            ("History Tab", current.get("tab_history")      or "*not set*"),
+            ("Questions",   f"{q_count} configured" if q_count else "*none*"),
+        ]
+        title = (
+            f"📋 Current Survey Setup — {target_survey_name}"
+            if target_survey_id else "📋 Current Survey Setup"
+        )
+        proceed = await ask_proceed_with_existing_config(
+            channel,
+            title=title,
+            description="This survey is already configured. Would you like to edit these settings?",
+            fields=fields,
+            cancel_event=cancel_event,
+            no_changes_message="✅ No changes made. Your survey setup is still active.",
+        )
+        if proceed is not True:
+            return
 
     await channel.send(
         f"⚙️ **{wizard_label}**\n"
@@ -3175,7 +3904,13 @@ async def run_survey_setup(interaction: discord.Interaction, bot,
         suggested_name="squad-survey",
         include_threads=is_premium_flag,
         guild=interaction.guild,
+        current_id=saved_survey_ch,
     )
+    if survey_ch_view.is_current_stale:
+        await channel.send(
+            "⚠️ Your previously configured survey channel no longer exists. "
+            "Pick a new one below."
+        )
     await channel.send(
         "**Step 1 of 6 — Survey Channel**\n"
         "Select the channel where the survey button will be posted for members to access:",
@@ -3195,7 +3930,13 @@ async def run_survey_setup(interaction: discord.Interaction, bot,
         suggested_name="survey-responses",
         include_threads=is_premium_flag,
         guild=interaction.guild,
+        current_id=saved_notify_ch,
     )
+    if notify_ch_view.is_current_stale:
+        await channel.send(
+            "⚠️ Your previously configured notification channel no longer exists. "
+            "Pick a new one below."
+        )
     await channel.send(
         "**Step 2 of 6 — Survey Notification Channel**\n"
         "Select the channel where leadership will be notified when a member submits the survey:",
@@ -3242,25 +3983,83 @@ async def run_survey_setup(interaction: discord.Interaction, bot,
         return
 
     # ── Step 5: Intro message ──────────────────────────────────────────────────
-    await channel.send(
-        "**Step 5 of 6 — Survey Intro Message**\n"
-        "When your survey is posted, what introductory message do you want your members to see "
-        "before they take the survey?\n\n"
-        "**Example:**\n"
-        "*Please fill out this survey each week to help us track squad powers, "
-        "balance our teams, and prepare for season events!*"
-    )
-    intro_reply = await wizard_registry.wait_or_cancel(
-        bot.wait_for("message", check=check, timeout=300),
-        cancel_event,
-    )
-    if intro_reply is None:
-        if cancel_event.is_set():
-            await channel.send("❌ Cancelled.")
+    # Intro message can be long-form / multi-line, so we use a free-text
+    # reply via bot.wait_for rather than a modal. When a saved intro
+    # already exists, show it back to leadership and offer Keep current
+    # so they don't have to retype a paragraph just to tweak channels
+    # or questions.
+    saved_intro = (current.get("intro_message") or "").strip()
+    intro_message: str | None = None
+
+    if saved_intro:
+        # Preview is truncated to keep the embed readable when leadership
+        # has saved a long intro.
+        preview = saved_intro if len(saved_intro) <= 500 else saved_intro[:500] + "…"
+
+        class IntroChoiceView(discord.ui.View):
+            def __init__(self):
+                super().__init__(timeout=120)
+                # Use a distinct attribute name so this view doesn't
+                # collide with QuestionStartView's `choice` field when
+                # send-handlers in tests broadcast view overrides.
+                self.intro_choice = None
+
+            @discord.ui.button(label="✅ Keep current", style=discord.ButtonStyle.success)
+            async def keep(self, inter: discord.Interaction, button: discord.ui.Button):
+                self.intro_choice = "keep"
+                for item in self.children: item.disabled = True
+                await wizard_registry.safe_edit_response(inter, view=self)
+                self.stop()
+
+            @discord.ui.button(label="✏️ Edit", style=discord.ButtonStyle.primary)
+            async def edit(self, inter: discord.Interaction, button: discord.ui.Button):
+                self.intro_choice = "edit"
+                for item in self.children: item.disabled = True
+                await wizard_registry.safe_edit_response(inter, view=self)
+                self.stop()
+
+        intro_view = IntroChoiceView()
+        await channel.send(
+            "**Step 5 of 6 — Survey Intro Message**\n"
+            "Members see this introductory message before taking the survey.\n\n"
+            f"**Currently saved:**\n>>> {preview}",
+            view=intro_view,
+        )
+        await wait_view_or_cancel(intro_view, cancel_event)
+        if intro_view.cancelled:
+            return
+        if intro_view.intro_choice == "keep":
+            intro_message = saved_intro
+        elif intro_view.intro_choice == "edit":
+            await channel.send(
+                "Type the new intro message below. Use the example from "
+                "the previous step as a guide, or paste in your own."
+            )
         else:
             await channel.send("⏰ Timed out. Run `/setup_survey` to start again.")
-        return
-    intro_message = intro_reply.content.strip()
+            return
+
+    if intro_message is None:
+        if not saved_intro:
+            await channel.send(
+                "**Step 5 of 6 — Survey Intro Message**\n"
+                "When your survey is posted, what introductory message do you want your members to see "
+                "before they take the survey?\n\n"
+                "**Example:**\n"
+                "*Please fill out this survey each week to help us track squad powers, "
+                "balance our teams, and prepare for season events!*"
+            )
+        intro_reply = await wizard_registry.wait_or_cancel(
+            bot.wait_for("message", check=check, timeout=300),
+            cancel_event,
+        )
+        if intro_reply is None:
+            if cancel_event.is_set():
+                await channel.send("❌ Cancelled.")
+            else:
+                await channel.send("⏰ Timed out. Run `/setup_survey` to start again.")
+            return
+        intro_message = intro_reply.content.strip()
 
     # ── Step 6: Survey Questions ───────────────────────────────────────────────
     # Show default questions and ask keep/edit/scratch
@@ -3753,12 +4552,19 @@ async def run_storm_setup(interaction: discord.Interaction, bot, event_type: str
             return None
         return reply.content.strip()[:max_chars]
 
-    from config import get_storm_config, get_config
+    from config import get_storm_config, get_config, has_storm_config
     from defaults import DEFAULT_DS_TEMPLATE, DEFAULT_CS_TEMPLATE
     current   = get_storm_config(guild_id, event_type)
     guild_cfg = get_config(guild_id)
     timezone  = guild_cfg.timezone if guild_cfg and guild_cfg.timezone else "America/New_York"
     tz_label  = TIMEZONE_LABELS.get(timezone, timezone)
+    storm_already_configured = has_storm_config(guild_id, event_type)
+    saved_log_ch = (
+        guild_cfg.ds_log_channel_id if event_type == "DS"
+        else guild_cfg.cs_log_channel_id
+    ) if guild_cfg else 0
+    saved_log_ch = saved_log_ch or 0
+    saved_post_ch = current.get("post_channel_id") or 0
 
     # Default template and placeholders per event type
     if event_type == "DS":
@@ -3777,6 +4583,35 @@ async def run_storm_setup(interaction: discord.Interaction, bot, event_type: str
             "• `{subs}` — substitute members\n"
             "• `{time}` — event time (auto-filled when drafting)"
         )
+
+    # ── If already configured, show summary and offer edit or cancel ─────────
+    if storm_already_configured:
+        templates = current.get("templates") or []
+        fields = [
+            ("Sheet Tab",    current.get("tab_name") or "*not set*"),
+            ("Log Channel",  f"<#{saved_log_ch}>" if saved_log_ch else "*not set*"),
+            ("Post Channel", f"<#{saved_post_ch}>" if saved_post_ch else "*not set*"),
+            ("Timezone",     tz_label),
+            (
+                "Mail Templates",
+                ", ".join(t["name"] for t in templates) if templates else "Default",
+            ),
+            (
+                "Reminder DM",
+                "Custom" if (current.get("dm_reminder_message") or "").strip() else "Default",
+            ),
+        ]
+        emoji = "⚔️" if event_type == "DS" else "🏜️"
+        proceed = await ask_proceed_with_existing_config(
+            channel,
+            title=f"{emoji} Current {label} Setup",
+            description=f"{label} is already configured. Would you like to edit these settings?",
+            fields=fields,
+            cancel_event=cancel_event,
+            no_changes_message=f"✅ No changes made. Your {label} setup is still active.",
+        )
+        if proceed is not True:
+            return
 
     await channel.send(f"⚙️ **{label} Setup**")
 
@@ -3849,7 +4684,13 @@ async def run_storm_setup(interaction: discord.Interaction, bot, event_type: str
         suggested_name="storm-log",
         include_threads=is_premium_flag,
         guild=interaction.guild,
+        current_id=saved_log_ch,
     )
+    if log_ch_view.is_current_stale:
+        await channel.send(
+            f"⚠️ Your previously configured {label} log channel no longer exists. "
+            "Pick a new one below."
+        )
     await channel.send(
         f"**Step 3 of 7 — Storm Log Channel**\n"
         f"Select the channel where {label} participation/log summaries will be posted:",
@@ -3869,7 +4710,13 @@ async def run_storm_setup(interaction: discord.Interaction, bot, event_type: str
         suggested_name=f"{'desert' if event_type == 'DS' else 'canyon'}-storm",
         include_threads=is_premium_flag,
         guild=interaction.guild,
+        current_id=saved_post_ch,
     )
+    if post_ch_view.is_current_stale:
+        await channel.send(
+            f"⚠️ Your previously configured {label} mail post channel no longer exists. "
+            "Pick a new one below."
+        )
     await channel.send(
         f"**Step 4 of 7 — Mail Post Channel**\n"
         f"When leadership clicks **Post & Copy** at the end of `/"
@@ -4710,7 +5557,13 @@ async def run_event_setup(interaction: discord.Interaction, bot):
             suggested_name="event-drafts",
             include_threads=is_premium_flag,
             guild=interaction.guild,
+            current_id=current_draft_id,
         )
+        if draft_ch_view.is_current_stale:
+            await channel.send(
+                "⚠️ Your previously configured draft channel no longer exists. "
+                "Pick a new one below."
+            )
         await channel.send(
             "**Step 1 of 5 — Draft Channel**\n"
             "Which channel should the bot post event announcement drafts for leadership to review?\n"
@@ -4731,7 +5584,13 @@ async def run_event_setup(interaction: discord.Interaction, bot):
             suggested_name="announcements",
             include_threads=is_premium_flag,
             guild=interaction.guild,
+            current_id=current_ann_id,
         )
+        if ann_ch_view.is_current_stale:
+            await channel.send(
+                "⚠️ Your previously configured announcement channel no longer exists. "
+                "Pick a new one below."
+            )
         await channel.send(
             "**Step 2 of 5 — Announcement Channel**\n"
             "Which channel should approved announcements be posted to?\n"
@@ -5175,8 +6034,44 @@ async def run_birthday_setup(interaction: discord.Interaction, bot):
             return None
         return reply.content.strip()[:max_chars]
 
-    from config import get_birthday_config
+    from config import (
+        get_birthday_config, has_birthday_config, clear_birthday_config,
+    )
     current = get_birthday_config(guild_id)
+    birthdays_already_configured = has_birthday_config(guild_id)
+
+    # ── If already enabled, show summary and offer edit or cancel ─────────────
+    if birthdays_already_configured and current.get("enabled"):
+        rc = current.get("reminder_channel_id", 0) or 0
+        fields = [
+            ("Sheet Tab",          current.get("tab_name") or "*not set*"),
+            ("Name Column",        _col_index_to_letter(current.get("name_col", 0))),
+            ("Birthday Column",    _col_index_to_letter(current.get("birthday_col", 0))),
+            ("Train Integration",  "✅ Enabled" if current.get("train_integration") else "❌ Disabled"),
+        ]
+        if current.get("train_integration"):
+            fields.append((
+                "Placement",
+                "Flexible (±1 day)" if current.get("flexible_placement") else "Birthday only",
+            ))
+            fields.append(("Lookahead", f"{current.get('lookahead_days', 14)} days"))
+        fields.append((
+            "Reminders",
+            "✅ Enabled" if current.get("reminders_enabled") else "❌ Disabled",
+        ))
+        if current.get("reminders_enabled"):
+            fields.append(("Reminder Channel", f"<#{rc}>" if rc else "*not set*"))
+            fields.append(("Reminder Time",    current.get("reminder_time") or "*not set*"))
+        proceed = await ask_proceed_with_existing_config(
+            channel,
+            title="🎂 Current Birthday Setup",
+            description="Birthday tracking is already configured. Would you like to edit these settings?",
+            fields=fields,
+            cancel_event=cancel_event,
+            no_changes_message="✅ No changes made. Birthday tracking is still active.",
+        )
+        if proceed is not True:
+            return
 
     await channel.send(
         "⚙️ **Birthday Tracking Setup**\n"
@@ -5207,7 +6102,14 @@ async def run_birthday_setup(interaction: discord.Interaction, bot):
             **{k: v for k, v in current.items()
                if k not in ("guild_id", "enabled", "last_train_population_date")}
         )
-        await channel.send("✅ Birthday tracking disabled.")
+        await ask_disable_with_clear(
+            channel,
+            feature_label="Birthday tracking",
+            setup_command="setup_birthdays",
+            had_prior_config=birthdays_already_configured,
+            clear_fn=lambda: clear_birthday_config(guild_id),
+            cancel_event=cancel_event,
+        )
         return
 
     # ── Step 2: Sheet tab ─────────────────────────────────────────────────────
@@ -5398,12 +6300,19 @@ async def run_birthday_setup(interaction: discord.Interaction, bot):
     if reminders_enabled:
         # ── Step 8a: Reminder channel ──────────────────────────────────────────
         is_premium_flag = await premium.is_premium(guild_id, interaction=interaction)
+        saved_remind_ch = current.get("reminder_channel_id", 0) or 0
         remind_ch_view = ChannelSelectStep(
             "Select the birthday announcement channel...",
             suggested_name="birthdays",
             include_threads=is_premium_flag,
             guild=interaction.guild,
+            current_id=saved_remind_ch,
         )
+        if remind_ch_view.is_current_stale:
+            await channel.send(
+                "⚠️ Your previously configured birthday channel no longer exists. "
+                "Pick a new one below."
+            )
         await channel.send(
             "**Step 8a of 9 — Birthday Announcement Channel**\n"
             "Which channel should birthday announcements be posted in?",
@@ -5432,7 +6341,10 @@ async def run_birthday_setup(interaction: discord.Interaction, bot):
                 f"What time should birthday announcements be posted? *(in {tz_label})*\n"
                 f"*(e.g. `8:00am`, `12:00pm`)*",
                 default="8:00am",
-                current=current.get("reminder_time", ""),
+                # DB stores 24h ("08:00") — render as "8:00am" so the
+                # Keep-current and Use-default button labels don't sit
+                # side-by-side in mismatched formats.
+                current=_format_24h_to_12h(current.get("reminder_time", "")),
                 modal_title="Reminder Time",
                 modal_label="Time",
                 timeout_cmd="setup_birthdays",
@@ -5531,6 +6443,7 @@ async def run_shiny_tasks_setup(interaction: discord.Interaction, bot):
     import wizard_registry
     from config import (
         get_config, get_shiny_tasks_config, save_shiny_tasks_config,
+        has_shiny_tasks_config, clear_shiny_tasks_config,
     )
     from defaults import DEFAULT_SHINY_TASKS_MESSAGE
 
@@ -5544,6 +6457,37 @@ async def run_shiny_tasks_setup(interaction: discord.Interaction, bot):
     tz_label = TIMEZONE_LABELS.get(
         cfg.timezone if cfg else "America/New_York", "ET",
     )
+    shiny_already_configured = has_shiny_tasks_config(guild_id)
+
+    # ── If already enabled, show summary and offer edit or cancel ─────────────
+    if shiny_already_configured and current.get("enabled"):
+        ch_id = current.get("channel_id", 0) or 0
+        fields = [
+            ("Channel",       f"<#{ch_id}>" if ch_id else "*not set*"),
+            (
+                "Server Range",
+                f"{current.get('server_min') or '?'} – {current.get('server_max') or '?'}",
+            ),
+            (
+                "Post Time",
+                f"{current.get('post_time') or '*not set*'}  *({tz_label})*",
+            ),
+            (
+                "Message",
+                "Custom" if (current.get("message_template") or "").strip() else "Default",
+            ),
+        ]
+        proceed = await ask_proceed_with_existing_config(
+            channel,
+            title="🌟 Current Shiny Tasks Setup",
+            description="The daily shiny-tasks announcement is already configured. Would you like to edit these settings?",
+            fields=fields,
+            cancel_event=cancel_event,
+            no_changes_message="✅ No changes made. The daily announcement is still active.",
+        )
+        if proceed is not True:
+            wizard_registry.unregister(user.id, cancel_event)
+            return
 
     await channel.send(
         "🌟 **Daily Shiny Tasks Setup**\n"
@@ -5578,7 +6522,14 @@ async def run_shiny_tasks_setup(interaction: discord.Interaction, bot):
             server_max=current.get("server_max", 0),
             message_template=current.get("message_template", ""),
         )
-        await channel.send("✅ Shiny-tasks announcement disabled.")
+        await ask_disable_with_clear(
+            channel,
+            feature_label="Shiny tasks announcement",
+            setup_command="setup_shiny_tasks",
+            had_prior_config=shiny_already_configured,
+            clear_fn=lambda: clear_shiny_tasks_config(guild_id),
+            cancel_event=cancel_event,
+        )
         wizard_registry.unregister(user.id, cancel_event)
         return
 
@@ -5588,12 +6539,19 @@ async def run_shiny_tasks_setup(interaction: discord.Interaction, bot):
         "**Step 2 of 6 — Announcement Channel**\n"
         "Pick the channel where the daily shiny tasks post should be posted."
     )
+    saved_channel_id = current.get("channel_id", 0) or 0
     ch_view = ChannelSelectStep(
         "Select the shiny tasks channel...",
         suggested_name="shiny-tasks",
         include_threads=is_premium_flag,
         guild=interaction.guild,
+        current_id=saved_channel_id,
     )
+    if ch_view.is_current_stale:
+        await channel.send(
+            "⚠️ Your previously configured shiny tasks channel no longer exists. "
+            "Pick a new one below."
+        )
     await channel.send("​", view=ch_view)
     await wait_view_or_cancel(ch_view, cancel_event)
     if ch_view.cancelled:
@@ -5657,11 +6615,37 @@ async def run_shiny_tasks_setup(interaction: discord.Interaction, bot):
             min_default=str(saved_min) if saved_min else "",
             max_default=str(saved_max) if saved_max else "",
         )
-        range_launcher = ModalLaunchView(range_modal)
+        # ServerRangeModal's `value` is a read-only @property derived
+        # from min_value + max_value, so ModalLaunchView's default
+        # `modal.value = current_value` path won't work. Use the
+        # on_keep_current callback to populate the underlying
+        # attributes directly when leadership clicks Keep current.
+        try:
+            has_saved_range = int(saved_min) >= 1 and int(saved_max) >= int(saved_min)
+        except (TypeError, ValueError):
+            has_saved_range = False
+        if has_saved_range:
+            keep_min, keep_max = int(saved_min), int(saved_max)
+
+            def _keep_range(modal, _min=keep_min, _max=keep_max):
+                modal.min_value = str(_min)
+                modal.max_value = str(_max)
+
+            range_launcher = ModalLaunchView(
+                range_modal,
+                current_value=f"{keep_min} – {keep_max}",
+                current_display=f"{keep_min} – {keep_max}",
+                on_keep_current=_keep_range,
+            )
+        else:
+            range_launcher = ModalLaunchView(range_modal)
         # Override the generic "Enter Value" button label so leadership
-        # sees domain wording. Same per-instance mutation `/setup` does
-        # to `ConfirmView` after construction.
-        range_launcher.children[0].label = "✏️ Enter Server Numbers"
+        # sees domain wording. Find by label rather than index because
+        # the Keep-current button (when present) sits at children[0].
+        for _child in range_launcher.children:
+            if isinstance(_child, discord.ui.Button) and _child.label == "✏️ Enter Value":
+                _child.label = "✏️ Enter Server Numbers"
+                break
         await channel.send(range_prompt, view=range_launcher)
         await wait_view_or_cancel(range_launcher, cancel_event)
         if range_launcher.cancelled:

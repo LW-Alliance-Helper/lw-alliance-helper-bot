@@ -9,6 +9,14 @@ Each entry is a slim summary — heavier context (root cause, what we
 tried, design rationale) lives in the corresponding commit message
 and PR description.
 
+## [1.3.0] — 2026-05-12
+
+### Added
+- **Setup wizard re-entry UX overhaul** — re-running any `/setup_*` command (and `/setup_members`) on a configured guild now opens with a summary of saved config and offers Edit / No-changes. Channel, role, timezone, sheet ID, reminder time, default tone, intro message, and every `ask_keep_or_change` step now offer ✅ Keep current. Disable toggles on `/setup_birthdays`, `/setup_growth`, and `/setup_shiny_tasks` preserve saved config and surface a 🗑️ Clear my saved configuration button ([#80](https://github.com/LW-Alliance-Helper/lw-alliance-helper-bot/issues/80)).
+
+### Fixed
+- Shiny-tasks weekly refresh no longer re-fetches cpt-hedge on every Railway redeploy — gated on the last-seen timestamp in `shiny_task_servers` so re-deploys within the 7-day window skip the refresh ([#109](https://github.com/LW-Alliance-Helper/lw-alliance-helper-bot/issues/109)).
+
 ## [1.2.0] — 2026-05-11
 
 ### Added

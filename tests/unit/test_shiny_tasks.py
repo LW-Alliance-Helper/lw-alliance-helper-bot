@@ -20,7 +20,7 @@ from __future__ import annotations
 
 import os
 import sys
-from datetime import date, datetime, timezone
+from datetime import date, datetime, timedelta, timezone
 from unittest.mock import AsyncMock, MagicMock, patch
 from zoneinfo import ZoneInfo
 
@@ -329,6 +329,23 @@ class TestDbHelpers:
         assert count_shiny_task_servers() == 1
         assert list_shiny_enabled_guild_ids() == [TEST_GUILD_ID]
 
+    def test_get_last_shiny_refresh_at_empty(self, temp_db):
+        from config import get_last_shiny_refresh_at
+        assert get_last_shiny_refresh_at() is None
+
+    def test_get_last_shiny_refresh_at_returns_max(self, temp_db):
+        """Returns the max `last_seen_at` across all rows so the weekly
+        gate keys off the most recent successful refresh."""
+        from config import get_last_shiny_refresh_at, upsert_shiny_task_servers
+        older = datetime(2026, 5, 1, tzinfo=timezone.utc).isoformat()
+        newer = datetime(2026, 5, 10, tzinfo=timezone.utc).isoformat()
+        upsert_shiny_task_servers([(1, "2025-01-01", "")], seen_at=older)
+        upsert_shiny_task_servers([(2, "2025-01-02", "")], seen_at=newer)
+
+        got = get_last_shiny_refresh_at()
+        assert got is not None
+        assert got == datetime(2026, 5, 10, tzinfo=timezone.utc)
+
     def test_save_preserves_last_posted_date(self, temp_db):
         """Re-running the wizard mustn't reset `last_posted_date` —
         otherwise a Railway restart between save + the next post-time
@@ -548,3 +565,53 @@ class TestShinyTasksPostTask:
         # didn't actually post.
         from config import get_shiny_tasks_config
         assert get_shiny_tasks_config(TEST_GUILD_ID)["last_posted_date"] == ""
+
+
+class TestShinyTasksRefreshTask:
+    """`tasks.loop` fires the body immediately on `.start()` and the
+    interval is in-process only, so without a persistent gate every
+    Railway redeploy re-fetches cpt-hedge. The gate keys off
+    `MAX(last_seen_at)` in `shiny_task_servers`."""
+
+    @pytest.mark.asyncio
+    async def test_skips_when_last_refresh_recent(self, temp_db):
+        """A successful refresh < 7 days ago means no Hedge fetch."""
+        from config import upsert_shiny_task_servers
+        import bot as bot_module
+        import shiny_tasks
+
+        recent = datetime.now(tz=timezone.utc).isoformat()
+        upsert_shiny_task_servers([(1, "2025-01-01", "")], seen_at=recent)
+
+        mock_refresh = AsyncMock()
+        with patch.object(shiny_tasks, "refresh_servers", mock_refresh):
+            await bot_module.shiny_tasks_refresh_task.coro()
+        mock_refresh.assert_not_called()
+
+    @pytest.mark.asyncio
+    async def test_runs_when_table_empty(self, temp_db):
+        """No rows yet → no gate → refresh runs (fresh-install path)."""
+        import bot as bot_module
+        import shiny_tasks
+
+        mock_refresh = AsyncMock(return_value=42)
+        with patch.object(shiny_tasks, "refresh_servers", mock_refresh):
+            await bot_module.shiny_tasks_refresh_task.coro()
+        mock_refresh.assert_awaited_once()
+
+    @pytest.mark.asyncio
+    async def test_runs_when_last_refresh_stale(self, temp_db):
+        """Last refresh > 7 days ago → gate passes → refresh runs."""
+        from config import upsert_shiny_task_servers
+        import bot as bot_module
+        import shiny_tasks
+
+        stale = (
+            datetime.now(tz=timezone.utc) - timedelta(days=8)
+        ).isoformat()
+        upsert_shiny_task_servers([(1, "2025-01-01", "")], seen_at=stale)
+
+        mock_refresh = AsyncMock(return_value=2266)
+        with patch.object(shiny_tasks, "refresh_servers", mock_refresh):
+            await bot_module.shiny_tasks_refresh_task.coro()
+        mock_refresh.assert_awaited_once()

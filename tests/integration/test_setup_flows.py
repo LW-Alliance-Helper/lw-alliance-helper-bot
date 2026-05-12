@@ -625,6 +625,101 @@ class TestRunGrowthSetup:
         assert cfg["enabled"]            == 1
         assert cfg["snapshot_frequency"] == "monthly"
 
+    @pytest.mark.asyncio
+    async def test_existing_enabled_config_shows_summary_and_keeps_unchanged(self, seeded_db):
+        """Re-running /setup_growth on an enabled-and-configured guild
+        opens with a summary embed + Edit/No-changes; picking No keeps
+        the saved config. Regression guard for #99."""
+        import config
+        from setup_cog import run_growth_setup
+
+        config.save_growth_config(
+            TEST_GUILD_ID, enabled=1,
+            tab_source="Squad Powers", name_col="A",
+            metrics=[{"label": "1st Squad Power", "col": "E"}],
+            tab_growth="Growth Tracking",
+            snapshot_frequency="monthly", snapshot_day=15, snapshot_interval=30,
+            data_start_row=2,
+        )
+
+        interaction = make_mock_interaction()
+        bot         = AsyncMock()
+
+        make_send_handler(
+            interaction.channel,
+            view_overrides={"proceed": False, "cancelled": False},
+        )
+        await run_growth_setup(interaction, bot)
+
+        # Saved values unchanged.
+        cfg = config.get_growth_config(TEST_GUILD_ID)
+        assert cfg["enabled"]      == 1
+        assert cfg["snapshot_day"] == 15
+
+    @pytest.mark.asyncio
+    async def test_disable_with_prior_config_offers_clear_button(self, seeded_db):
+        """When leadership picks No on Step 1 AND has prior config, the
+        ask_disable_with_clear helper fires with had_prior_config=True
+        and a clear_fn that wipes the row when invoked."""
+        import config
+        from setup_cog import run_growth_setup
+
+        config.save_growth_config(
+            TEST_GUILD_ID, enabled=1,
+            tab_source="Squad Powers", name_col="A",
+            metrics=[{"label": "1st Squad Power", "col": "E"}],
+            tab_growth="Growth Tracking",
+            snapshot_frequency="monthly", snapshot_day=1, snapshot_interval=30,
+            data_start_row=2,
+        )
+
+        interaction = make_mock_interaction()
+        bot         = AsyncMock()
+        enabled_no  = MagicMock(selected=False, cancelled=False, wait=AsyncMock())
+        captured    = {}
+
+        async def fake_disable(channel, **kwargs):
+            captured.update(kwargs)
+
+        with patch("setup_cog.YesNoView",              return_value=enabled_no), \
+             patch("setup_cog.ask_disable_with_clear", side_effect=fake_disable):
+            make_send_handler(
+                interaction.channel,
+                # Summary -> proceed=True so we hit Step 1.
+                view_overrides={"proceed": True, "cancelled": False},
+            )
+            await run_growth_setup(interaction, bot)
+
+        assert captured["feature_label"]   == "Growth tracking"
+        assert captured["setup_command"]   == "setup_growth"
+        assert captured["had_prior_config"] is True
+        # clear_fn wipes the DB row when invoked.
+        captured["clear_fn"]()
+        assert config.has_growth_config(TEST_GUILD_ID) is False
+
+    @pytest.mark.asyncio
+    async def test_disable_first_run_skips_clear_button(self, seeded_db):
+        """First-time disable (no saved row yet) -> had_prior_config=False."""
+        import config
+        from setup_cog import run_growth_setup
+
+        config.clear_growth_config(TEST_GUILD_ID)
+
+        interaction = make_mock_interaction()
+        bot         = AsyncMock()
+        enabled_no  = MagicMock(selected=False, cancelled=False, wait=AsyncMock())
+        captured    = {}
+
+        async def fake_disable(channel, **kwargs):
+            captured.update(kwargs)
+
+        with patch("setup_cog.YesNoView",              return_value=enabled_no), \
+             patch("setup_cog.ask_disable_with_clear", side_effect=fake_disable):
+            make_send_handler(interaction.channel)
+            await run_growth_setup(interaction, bot)
+
+        assert captured["had_prior_config"] is False
+
 
 # ── /setup_events ─────────────────────────────────────────────────────────────
 

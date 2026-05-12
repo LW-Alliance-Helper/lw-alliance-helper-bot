@@ -173,7 +173,7 @@ HELP_CATEGORIES: dict[str, dict] = {
         "description": (
             "Periodic snapshots of member stats, written to your sheet. "
             "Each snapshot also classifies members into growth buckets — "
-            "click 📊 Breakdown on `/growth` to see who's climbing and "
+            "click **📊 See most recent Breakdown** on `/growth` to see who's climbing and "
             "who's stalled."
         ),
         "commands": [

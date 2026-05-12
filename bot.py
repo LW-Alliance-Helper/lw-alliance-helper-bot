@@ -737,7 +737,7 @@ async def growth_slash(interaction: discord.Interaction):
                 await inter.followup.send(f"⚠️ Growth snapshot failed: {e}", ephemeral=True)
             self.stop()
 
-        @discord.ui.button(label="📊 Breakdown", style=discord.ButtonStyle.secondary)
+        @discord.ui.button(label="📊 See most recent Breakdown", style=discord.ButtonStyle.secondary)
         async def breakdown(self, inter: discord.Interaction, button: discord.ui.Button):
             # Read-only render. Don't disable sibling buttons and don't
             # `self.stop()` — leadership might want to follow the no-data

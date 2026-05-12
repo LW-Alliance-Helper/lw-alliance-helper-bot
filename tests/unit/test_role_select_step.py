@@ -31,8 +31,10 @@ def _make_role(name: str, role_id: int) -> MagicMock:
 
 def _make_guild(roles: list[MagicMock] | None = None) -> MagicMock:
     guild = MagicMock(spec=discord.Guild)
-    roles_by_id = {r.id: r for r in (roles or [])}
+    role_list = roles or []
+    roles_by_id = {r.id: r for r in role_list}
     guild.get_role = lambda i: roles_by_id.get(i)
+    guild.roles = role_list
     return guild
 
 
@@ -133,3 +135,90 @@ class TestKeepCurrentRole:
                         if isinstance(c, discord.ui.Button)
                         and "Keep current" in (c.label or ""))
         assert len(keep_btn.label) <= 80
+
+
+# ── Name-based fallback (#106) ───────────────────────────────────────────────
+
+class TestNameFallback:
+    """Old guilds stored the leadership role by name only — the
+    `leadership_role_id` column defaults to 0 after migration. Without
+    a name-based fallback, re-running /setup on those guilds shows no
+    Keep-current button. The fallback resolves the saved name against
+    `guild.roles` so the button renders anyway."""
+
+    def test_zero_id_with_name_resolves_via_guild_roles(self):
+        from setup_cog import RoleSelectStep
+        leader = _make_role("Leadership", 77)
+        guild  = _make_guild([leader, _make_role("Member", 88)])
+        view = RoleSelectStep(
+            "Pick a role...",
+            current_id=0,                # migration default
+            current_name="Leadership",   # the only thing we knew
+            guild=guild,
+        )
+        labels = _labels(view)
+        assert any("Keep current" in lbl and "Leadership" in lbl for lbl in labels)
+        assert view.is_current_stale is False
+
+    def test_id_misses_but_name_hits_falls_back(self):
+        """Stale id (role recreated, new id) but name still matches —
+        prefer the name match over showing a 'deleted' warning."""
+        from setup_cog import RoleSelectStep
+        leader = _make_role("Leadership", 99)
+        guild  = _make_guild([leader])
+        view = RoleSelectStep(
+            "Pick a role...",
+            current_id=11,               # stale id
+            current_name="Leadership",
+            guild=guild,
+        )
+        labels = _labels(view)
+        assert any("Keep current" in lbl for lbl in labels)
+        assert view.is_current_stale is False
+
+    def test_id_zero_and_name_misses_flags_stale(self):
+        from setup_cog import RoleSelectStep
+        guild = _make_guild([_make_role("OtherRole", 1)])
+        view = RoleSelectStep(
+            "Pick a role...",
+            current_id=0,
+            current_name="Leadership",
+            guild=guild,
+        )
+        labels = _labels(view)
+        assert not any("Keep current" in lbl for lbl in labels)
+        assert view.is_current_stale is True
+
+    def test_id_zero_and_no_name_is_not_stale(self):
+        """Truly new guild — no saved value of any kind. Don't warn."""
+        from setup_cog import RoleSelectStep
+        guild = _make_guild([])
+        view = RoleSelectStep(
+            "Pick a role...",
+            current_id=0,
+            current_name="",
+            guild=guild,
+        )
+        assert view.is_current_stale is False
+
+    @pytest.mark.asyncio
+    async def test_name_fallback_keep_returns_resolved_role(self):
+        """Clicking the keep button from the name-fallback path still
+        gives the caller a real Role object, not a stub."""
+        from setup_cog import RoleSelectStep
+        leader = _make_role("Leadership", 77)
+        guild  = _make_guild([leader])
+        view = RoleSelectStep(
+            "Pick a role...",
+            current_id=0,
+            current_name="Leadership",
+            guild=guild,
+        )
+        keep_btn = next(c for c in view.children
+                        if isinstance(c, discord.ui.Button)
+                        and "Keep current" in (c.label or ""))
+        inter = MagicMock()
+        inter.response.edit_message = AsyncMock()
+        await keep_btn.callback(inter)
+        assert view.selected_role is leader
+        assert view.confirmed is True

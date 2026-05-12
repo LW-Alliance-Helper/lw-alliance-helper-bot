@@ -151,14 +151,32 @@ class RoleSelectStep(discord.ui.View):
             if resolved is not None:
                 self._current_role = resolved
 
+        # Name-based fallback. Two cases this matters for:
+        #   * Migration window — old guilds stored `leadership_role` by
+        #     name only, so the new `leadership_role_id` column is 0
+        #     until the wizard re-saves. Without this fallback,
+        #     re-running /setup on an old guild shows no Keep-current
+        #     button for the leadership role.
+        #   * Rename safety — if the id was wiped but the name still
+        #     matches a live role, fall back rather than show a
+        #     misleading "deleted" warning.
+        if self._current_role is None and current_name and guild is not None:
+            for role in getattr(guild, "roles", []) or []:
+                if getattr(role, "name", None) == current_name:
+                    self._current_role = role
+                    break
+
         self._render()
 
     @property
     def is_current_stale(self) -> bool:
-        """True iff `current_id` was given but no longer resolves to a
-        live role. Wizards inspect this to surface a one-line warning.
-        Treats `0` as "not set" since that's the schema sentinel."""
-        return bool(self.current_id) and self._current_role is None
+        """True iff a saved value was given (either id or name) but no
+        live role could be resolved. Wizards inspect this to surface a
+        one-line warning. `current_id = 0` is the schema sentinel for
+        "not set"; an empty `current_name` is the equivalent for the
+        name-only path."""
+        has_saved = bool(self.current_id) or bool(self._current_name)
+        return has_saved and self._current_role is None
 
     def _render(self) -> None:
         self.clear_items()
@@ -667,11 +685,47 @@ class TextInputModal(discord.ui.Modal):
 
 
 class ModalLaunchView(discord.ui.View):
-    """Button that opens a modal — used for text input steps."""
-    def __init__(self, modal: TextInputModal):
+    """Button that opens a modal — used for text input steps.
+
+    When `current_value` is passed, a Keep-current button is rendered
+    alongside Enter Value. Clicking it sets `self.modal.value =
+    current_value` and stops the view, so callers that read
+    `modal.value` after `view.wait()` need no changes. `current_display`
+    overrides the label text (useful for truncating long Sheet IDs).
+    """
+    def __init__(
+        self,
+        modal: TextInputModal,
+        *,
+        current_value: str | None = None,
+        current_display: str | None = None,
+    ):
         super().__init__(timeout=WIZARD_TIMEOUT)
-        self.modal     = modal
-        self.confirmed = False
+        self.modal           = modal
+        self.confirmed       = False
+        self._current_value  = current_value
+        self._current_display = current_display or current_value
+
+        if current_value:
+            keep_btn = discord.ui.Button(
+                label=f"✅ Keep current: {self._current_display}"[:80],
+                style=discord.ButtonStyle.success,
+                row=0,
+            )
+
+            async def _keep_cb(inter: discord.Interaction):
+                self.modal.value = current_value
+                self.confirmed   = True
+                for item in self.children:
+                    item.disabled = True
+                await wizard_registry.safe_edit_response(
+                    inter,
+                    content=f"✅ Keeping: **{self._current_display}**",
+                    view=self,
+                )
+                self.stop()
+            keep_btn.callback = _keep_cb
+            self.add_item(keep_btn)
 
     @discord.ui.button(label="✏️ Enter Value", style=discord.ButtonStyle.primary)
     async def open_modal(self, interaction: discord.Interaction, button: discord.ui.Button):
@@ -1547,11 +1601,39 @@ TIMEZONE_LABELS = {tz: label for tz, label in TIMEZONE_OPTIONS}
 
 
 class TimezoneSelectView(discord.ui.View):
-    """Single dropdown covering all supported timezones, ordered by (UTC offset."""
-    def __init__(self):
+    """Single dropdown covering all supported timezones, ordered by (UTC offset.
+
+    When `current` is passed and matches a known timezone option, the
+    view prepends a green Keep-current button above the select so
+    leadership doesn't have to re-pick their timezone on a re-run.
+    """
+    def __init__(self, *, current: str | None = None):
         super().__init__(timeout=WIZARD_TIMEOUT)
         self.selected  = None
         self.confirmed = False
+        self.current   = current
+
+        keep_added = False
+        if current and current in TIMEZONE_LABELS:
+            keep_label = TIMEZONE_LABELS[current]
+            keep_btn = discord.ui.Button(
+                label=f"✅ Keep current: {keep_label}"[:80],
+                style=discord.ButtonStyle.success,
+                row=0,
+            )
+
+            async def _keep_cb(inter: discord.Interaction):
+                self.selected  = current
+                self.confirmed = True
+                for item in self.children:
+                    item.disabled = True
+                await wizard_registry.safe_edit_response(
+                    inter, content=f"✅ Keeping timezone: **{keep_label}**", view=self,
+                )
+                self.stop()
+            keep_btn.callback = _keep_cb
+            self.add_item(keep_btn)
+            keep_added = True
 
         select = discord.ui.Select(
             placeholder="Select your timezone...",
@@ -1559,7 +1641,7 @@ class TimezoneSelectView(discord.ui.View):
                 discord.SelectOption(label=label[:100], value=tz)
                 for tz, label in TIMEZONE_OPTIONS
             ],
-            row=0,
+            row=1 if keep_added else 0,
         )
 
         async def _cb(interaction: discord.Interaction):
@@ -1921,7 +2003,7 @@ async def run_setup(interaction: discord.Interaction, bot):
     cfg.leadership_channel_id = v.selected_channel.id
 
     # ── Step 4: Timezone ───────────────────────────────────────────────────────
-    tz_view = TimezoneSelectView()
+    tz_view = TimezoneSelectView(current=cfg.timezone)
     await channel.send(
         "**Step 4 of 6 — Timezone**\n"
         "Select your alliance's timezone. This is used for displaying event times, "
@@ -1943,7 +2025,19 @@ async def run_setup(interaction: discord.Interaction, bot):
         "`https://docs.google.com/spreadsheets/d/`**`YOUR_SHEET_ID`**`/edit`"
     )
     modal   = TextInputModal("Google Sheet ID", "Sheet ID", placeholder="Paste your Sheet ID here...")
-    modal_v = ModalLaunchView(modal)
+    # Truncate long sheet ids for the Keep-current button label —
+    # full ids are ~44 chars and overflow Discord's 80-char cap once
+    # the "✅ Keep current: " prefix is added.
+    sheet_display = (
+        f"{cfg.spreadsheet_id[:25]}…"
+        if cfg.spreadsheet_id and len(cfg.spreadsheet_id) > 25
+        else cfg.spreadsheet_id
+    )
+    modal_v = ModalLaunchView(
+        modal,
+        current_value=cfg.spreadsheet_id or None,
+        current_display=sheet_display or None,
+    )
     await channel.send("\u200b", view=modal_v)
     await wait_view_or_cancel(modal_v, cancel_event)
     if modal_v.cancelled:

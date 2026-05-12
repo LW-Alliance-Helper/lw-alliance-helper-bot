@@ -171,13 +171,54 @@ HELP_CATEGORIES: dict[str, dict] = {
         "emoji": "📈",
         "label": "Growth Tracking",
         "description": (
-            "Periodic snapshots of member stats, written to your sheet."
+            "Periodic snapshots of member stats, written to your sheet. "
+            "Each snapshot also classifies members into growth buckets — "
+            "click **📊 See most recent Breakdown** on `/growth` to see who's climbing and "
+            "who's stalled."
         ),
         "commands": [
             ("/setup_growth",
              "Configure source tab, metrics, and snapshot schedule."),
+            ("/setup_growth_breakdown",
+             "💎 Configure the breakdown auto-post, bucket thresholds, "
+             "and bucket labels."),
             ("/growth",
-             "Show status with options to snapshot or edit config."),
+             "Show status with options to snapshot, view the breakdown, "
+             "or edit config."),
+        ],
+    },
+    "shiny_tasks": {
+        "emoji": "🌟",
+        "label": "Shiny Tasks",
+        "description": (
+            "Daily auto-post of the Last War servers in your transfer range "
+            "that have shiny tasks today."
+        ),
+        "commands": [
+            ("/setup_shiny_tasks",
+             "Configure the announcement channel, server range, post "
+             "time, and message body."),
+        ],
+    },
+    "data_portability": {
+        "emoji": "📦",
+        "label": "Data Portability",
+        "description": (
+            "Move your alliance's bot config to a new Discord server, or "
+            "snapshot it as a backup you can restore later. Your alliance "
+            "data lives in your Google Sheet either way — these commands "
+            "carry the bot's wizard answers (templates, channels, schedules) "
+            "alongside it."
+        ),
+        "commands": [
+            ("/export_config",
+             "DMs you a JSON file with the categories you select "
+             "(core setup, events, DS, CS, train, birthday, growth, "
+             "surveys, shiny tasks, member roster)."),
+            ("/import_config <file>",
+             "Apply a /export_config JSON to this server. The bot walks "
+             "you through remapping each old channel and role to its new "
+             "equivalent, then writes the imported config to your tables."),
         ],
     },
     "premium": {

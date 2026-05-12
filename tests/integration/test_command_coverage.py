@@ -45,9 +45,10 @@ from tests.conftest import (
 EXPECTED_COG_COMMANDS = {
     "SetupCog": {
         "setup", "view_configuration", "setup_reset",
-        "setup_train", "setup_growth", "setup_birthdays",
+        "setup_train", "setup_growth", "setup_growth_breakdown",
+        "setup_birthdays",
         "setup_desertstorm", "setup_canyonstorm",
-        "setup_events", "setup_survey",
+        "setup_events", "setup_survey", "setup_shiny_tasks",
     },
     "StormCog": {
         "desertstorm_draft", "canyonstorm_draft",
@@ -71,6 +72,9 @@ EXPECTED_COG_COMMANDS = {
     "DonateCog": {
         "donate", "upgrade",
         "premium_assign", "premium_status", "premium_unassign",
+    },
+    "ExportImportCog": {
+        "export_config", "import_config",
     },
 }
 
@@ -162,6 +166,11 @@ class TestCogRegistration:
         cog = _make_cog(DonateCog)
         assert _commands_on(cog) == EXPECTED_COG_COMMANDS["DonateCog"]
 
+    def test_export_import_cog_registers_expected_commands(self, seeded_db):
+        from export_import_cog import ExportImportCog
+        cog = _make_cog(ExportImportCog)
+        assert _commands_on(cog) == EXPECTED_COG_COMMANDS["ExportImportCog"]
+
     def test_module_level_commands_registered_on_bot_tree(self, seeded_db):
         """bot.py defines a handful of commands directly on `bot.tree`
         rather than via a cog. Walk the registered command tree and
@@ -189,9 +198,10 @@ class TestCogRegistration:
         from train_cog import TrainCog
         from member_roster import MemberRosterCog
         from donate import DonateCog
+        from export_import_cog import ExportImportCog
 
         for cog_class in (SetupCog, StormCog, LogCog, SurveyCog,
-                          TrainCog, MemberRosterCog, DonateCog):
+                          TrainCog, MemberRosterCog, DonateCog, ExportImportCog):
             cog = _make_cog(cog_class)
             expected = EXPECTED_COG_COMMANDS[cog_class.__name__]
             actual   = _commands_on(cog)
@@ -249,7 +259,7 @@ class TestSetupStarCommandsGateNonAdmins:
     @pytest.mark.parametrize("command_name", [
         "setup_train", "setup_growth", "setup_birthdays",
         "setup_desertstorm", "setup_canyonstorm",
-        "setup_events", "setup_survey",
+        "setup_events", "setup_survey", "setup_shiny_tasks",
     ])
     async def test_rejects_non_privileged_caller(self, seeded_db, command_name):
         from setup_cog import SetupCog

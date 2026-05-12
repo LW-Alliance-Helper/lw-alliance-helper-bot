@@ -45,6 +45,58 @@ DEFAULTS = {
 }
 
 
+# ── Canonical DS zone structure ────────────────────────────────────────────────
+# Desert Storm zones are game-defined and identical across every alliance.
+# This is the single source of truth for build_ds_template, parse_ds_template,
+# and build_ds_mail — any zone name not in this list is treated as a typo
+# (parser rejects it, builder doesn't render it).
+DS_ZONE_STRUCTURE: list[str] = [
+    "Nuclear Silo",
+    "Oil Refinery I",
+    "Oil Refinery II",
+    "Science Hub",
+    "Info Center",
+    "Field Hospital I",
+    "Field Hospital II",
+    "Field Hospital III",
+    "Field Hospital IV",
+    "Arsenal",
+    "Mercenary Factory",
+]
+
+
+def _non_canonical_ds_zones(zones: dict) -> dict:
+    """Return {zone_name: members} entries from `zones` that aren't in
+    DS_ZONE_STRUCTURE and have a non-empty value. Used by the draft flow to
+    warn leadership when saved sheet data contains typo zone names that will
+    be dropped on next save."""
+    canonical = set(DS_ZONE_STRUCTURE)
+    return {k: v for k, v in zones.items() if k not in canonical and v}
+
+
+def _non_canonical_cs_zones(zones: dict) -> dict:
+    """CS analogue of _non_canonical_ds_zones. Skips the subs key (renders
+    via {subs}, not as a zone)."""
+    canonical = {k for _, k, _ in CS_ZONE_STRUCTURE} | {CS_SUBS_KEY}
+    return {k: v for k, v in zones.items() if k not in canonical and v}
+
+
+def _split_legacy_subs(value: str) -> list[str]:
+    """Flatten a legacy inline subs string into a list of names.
+
+    Pre-#37 DS data was `Starter - Sub` tuples (we keep only the sub) and
+    pre-#37 CS data was a single cell with names joined by commas,
+    ampersands, or dashes. Both shapes flatten through this helper.
+    """
+    import re
+    parts: list[str] = []
+    for chunk in re.split(r"\s*[,\-&]\s*", str(value)):
+        name = chunk.strip()
+        if name:
+            parts.append(name)
+    return parts
+
+
 
 # ── Google Sheets persistence ──────────────────────────────────────────────────
 
@@ -95,11 +147,20 @@ def load_ds_assignments(team: str, guild_id: int = None) -> tuple[dict, list]:
 
             if section == "zones" and len(row) >= 2:
                 zones[key] = row[1].strip()
-            elif section == "subs" and len(row) >= 2:
-                subs.append((row[0].strip(), row[1].strip()))
+            elif section == "subs":
+                # Sheet rows under DS_*_SUBS are one column post-#37 (just
+                # the sub name). Legacy two-column rows carried a starter
+                # in col A and the sub in col B — keep col B only since
+                # the starter wasn't the sub. Fall through to col A when
+                # col B is empty (single-column row from the new shape).
+                col_a = row[0].strip() if row else ""
+                col_b = row[1].strip() if len(row) >= 2 else ""
+                name = col_b or col_a
+                if name:
+                    subs.append(name)
 
         if zones:
-            print(f"[STORM] Loaded Team {team} assignments ({len(zones)} zones, {len(subs)} sub pairs)")
+            print(f"[STORM] Loaded Team {team} assignments ({len(zones)} zones, {len(subs)} subs)")
             return zones, subs
         else:
             print(f"[STORM] No saved Team {team} assignments — using defaults")
@@ -155,8 +216,15 @@ def save_ds_assignments(team: str, zones: dict, subs: list,
                 rows.append([zone, members])
             rows.append(["", ""])
             rows.append([f"DS_{t}_SUBS", ""])
-            for starter, sub in t_subs:
-                rows.append([starter, sub])
+            for sub in t_subs:
+                # Flatten any transitional `(starter, sub)` tuple to the
+                # sub name only; otherwise emit the sub string as-is.
+                if isinstance(sub, tuple) and len(sub) >= 2:
+                    name = str(sub[1])
+                else:
+                    name = str(sub)
+                if name:
+                    rows.append([name])
             rows.append(["", ""])  # blank separator between teams
 
         ws.clear()
@@ -174,22 +242,50 @@ def save_ds_assignments(team: str, zones: dict, subs: list,
 # ── Template builder & parser ──────────────────────────────────────────────────
 
 def build_ds_template(zones: dict, subs: list) -> str:
+    """Render the editable template for DS draft.
+
+    Walks DS_ZONE_STRUCTURE in canonical order so leadership always sees a
+    labeled grid — every zone renders, with `Zone: ` blank when unassigned.
+    Non-canonical zone keys in `zones` are silently skipped (they'll be
+    dropped on the next save; the draft flow surfaces them separately).
+
+    Subs render as a flat list, one name per line. Legacy `(starter, sub)`
+    tuples flatten to just the sub on emit so transitional in-memory data
+    doesn't surface the deprecated pair shape to leadership.
+    """
     lines = ["ZONE ASSIGNMENTS"]
-    for zone, members in zones.items():
-        lines.append(f"{zone}: {members}")
+    for zone in DS_ZONE_STRUCTURE:
+        lines.append(f"{zone}: {zones.get(zone, '')}")
     lines.append("")
-    lines.append("SUB PAIRS (Starter - Sub)")
-    for starter, sub in subs:
-        lines.append(f"{starter} - {sub}")
+    lines.append("SUBS")
+    for sub in subs:
+        if isinstance(sub, tuple) and len(sub) >= 2:
+            lines.append(str(sub[1]))
+        elif sub:
+            lines.append(str(sub))
     return "\n".join(lines)
 
 
 def parse_ds_template(text: str) -> tuple[dict, list, list]:
-    """Parse the edited template. Returns (zones, subs, errors)."""
-    zones   = {}
-    subs    = []
-    errors  = []
+    """Parse the edited DS template. Returns (zones, subs, errors).
+
+    Zone names must match DS_ZONE_STRUCTURE — non-canonical names go to
+    `errors` and are NOT added to the zones dict. Matching is
+    case-insensitive against the canonical list to forgive minor casing
+    differences without permitting typos.
+
+    Subs return as a flat ``list[str]``. The `SUBS` header (post-#37) is the
+    canonical form; the legacy `SUB PAIRS (Starter - Sub)` header is still
+    accepted for backward compatibility — each pair line keeps only the sub
+    side (right of ` - `), since the starter was never the actual sub.
+    """
+    canonical_by_lower = {z.lower(): z for z in DS_ZONE_STRUCTURE}
+    canonical_list     = ", ".join(DS_ZONE_STRUCTURE)
+    zones: dict = {}
+    subs: list[str] = []
+    errors: list[str] = []
     section = None
+    subs_legacy_paired = False
 
     for line in text.strip().splitlines():
         line = line.strip()
@@ -198,22 +294,37 @@ def parse_ds_template(text: str) -> tuple[dict, list, list]:
         if line.upper() == "ZONE ASSIGNMENTS":
             section = "zones"
             continue
+        if line.upper() == "SUBS":
+            section = "subs"
+            subs_legacy_paired = False
+            continue
         if line.upper().startswith("SUB PAIRS"):
             section = "subs"
+            subs_legacy_paired = True
             continue
 
         if section == "zones":
             if ":" in line:
                 zone, _, members = line.partition(":")
-                zones[zone.strip()] = members.strip()
+                zone_stripped = zone.strip()
+                canonical = canonical_by_lower.get(zone_stripped.lower())
+                if canonical is None:
+                    errors.append(
+                        f"Unknown zone `{zone_stripped}` — must be one of: "
+                        f"{canonical_list}"
+                    )
+                else:
+                    zones[canonical] = members.strip()
             else:
                 errors.append(f"Could not parse zone line: {line}")
         elif section == "subs":
-            if " - " in line:
-                parts = line.split(" - ", 1)
-                subs.append((parts[0].strip(), parts[1].strip()))
+            if subs_legacy_paired and " - " in line:
+                _, _, sub_name = line.partition(" - ")
+                sub_name = sub_name.strip()
+                if sub_name:
+                    subs.append(sub_name)
             else:
-                errors.append(f"Could not parse sub pair: {line}")
+                subs.append(line)
 
     return zones, subs, errors
 
@@ -242,18 +353,47 @@ def build_ds_mail(team: str, zones: dict, subs: list, time_key: str,
     else:
         time_str = time_key
 
-    zone_lines = []
-    for zone, members in zones.items():
-        zone_lines.append(f"**{zone}**")
+    # Walk DS_ZONE_STRUCTURE in canonical order so the mail reads consistently
+    # for every alliance. Skip zones with no members. Any non-canonical keys
+    # left in `zones` (legacy fixtures, in-memory test data) emit at the end
+    # with the raw key as a fallback label, so nothing silently disappears.
+    zone_lines: list[str] = []
+    rendered: set[str] = set()
+
+    def _emit_members(members):
         if isinstance(members, list):
             zone_lines.append("\n".join(str(m) for m in members))
         else:
             zone_lines.append(str(members))
         zone_lines.append("")
+
+    for zone in DS_ZONE_STRUCTURE:
+        members = zones.get(zone)
+        if not members or members == "(open)":
+            rendered.add(zone)
+            continue
+        zone_lines.append(f"**{zone}**")
+        _emit_members(members)
+        rendered.add(zone)
+
+    extra = [(k, v) for k, v in zones.items() if k not in rendered and v and v != "(open)"]
+    for key, members in extra:
+        zone_lines.append(f"**{key}**")
+        _emit_members(members)
+
     zones_block = "\n".join(zone_lines).strip()
 
     if isinstance(subs, list) and subs:
-        subs_block = "\n".join(str(s) for s in subs)
+        # Subs are list[str] post-#37. Legacy in-memory list[tuple] data
+        # flattens to just the sub side (right of the pair) so the mail
+        # never surfaces the deprecated paired shape.
+        names = []
+        for s in subs:
+            if isinstance(s, tuple) and len(s) >= 2:
+                names.append(str(s[1]))
+            elif s:
+                names.append(str(s))
+        subs_block = "\n".join(names) if names else "(none)"
     elif subs:
         subs_block = str(subs)
     else:
@@ -501,6 +641,17 @@ async def run_ds_draft_flow(bot, channel, user, team: str,
     time_key = time_view.selected
 
     # ── Step 3: Mail Template — Use as-is or Edit ─────────────────────────────
+    stale = _non_canonical_ds_zones(current_zones)
+    if stale:
+        stale_lines = "\n".join(f"• `{k}` — {v}" for k, v in stale.items())
+        await channel.send(
+            "ℹ️ Your saved data has zones that aren't on the canonical "
+            "Desert Storm list — they'll be dropped on the next save:\n"
+            f"{stale_lines}\n"
+            "Re-enter assignments under the correct zone name in the "
+            "template below."
+        )
+
     template = build_ds_template(current_zones, current_subs)
     use_view = TemplateUseEditView()
     await channel.send(
@@ -842,7 +993,15 @@ def load_cs_assignments(team: str, guild_id: int = None) -> dict:
                     section = None
                     continue
             if section == "zones" and len(row) >= 2:
-                zones[key] = row[1].strip()
+                raw = row[1].strip()
+                if key == CS_SUBS_KEY:
+                    # CS subs flatten to a list[str] in memory. Legacy
+                    # inline strings (commas / dashes / ampersands) split
+                    # via the shared helper so older saved data round-trips
+                    # cleanly with the new multi-line `Subs` template.
+                    zones[key] = _split_legacy_subs(raw) if raw else []
+                else:
+                    zones[key] = raw
         if zones:
             print(f"[STORM] Loaded CS Team {team} assignments ({len(zones)} zones)")
             return zones
@@ -880,14 +1039,21 @@ def save_cs_assignments(team: str, zones: dict, guild_id: int = None):
                 rows.append([z, m])
             rows.append(["", ""])
             rows.append([f"DS_{t}_SUBS", ""])
-            for starter, sub in t_subs:
-                rows.append([starter, sub])
+            for sub in t_subs:
+                if isinstance(sub, tuple) and len(sub) >= 2:
+                    name = str(sub[1])
+                else:
+                    name = str(sub)
+                if name:
+                    rows.append([name])
             rows.append(["", ""])
 
         for t, t_zones in [("A", zones if team == "A" else other_cs_zones),
                             ("B", zones if team == "B" else other_cs_zones)]:
             rows.append([f"CS_{t}_ZONES", ""])
             for z, m in t_zones.items():
+                if isinstance(m, list):
+                    m = ", ".join(str(x) for x in m if x)
                 rows.append([z, m])
             rows.append(["", ""])
 
@@ -933,11 +1099,26 @@ CS_ZONE_STRUCTURE: list[tuple[int, str, str]] = [
 ]
 
 # Key used as the {subs} placeholder rather than rendered as a zone.
+# The sheet storage key stays `s3_pop_pair1` for backward compatibility with
+# existing alliance sheets; only the human-facing label was renamed to `Subs`
+# in #37 (the prior `Pop Pairs (last 30 sec)` wasn't game terminology — that
+# was a label one alliance carried over to their mail templates).
 CS_SUBS_KEY = "s3_pop_pair1"
-CS_SUBS_LABEL = "Pop Pairs (last 30 sec)"
+CS_SUBS_LABEL = "Subs"
+# Legacy label retained as a parser alias so older saved templates still
+# round-trip without manual reformatting.
+CS_SUBS_LEGACY_LABELS = {"pop pairs (last 30 sec)", "pop pairs"}
 
 
 def build_cs_template(z: dict) -> str:
+    """Render the editable CS template.
+
+    Zones render per-stage with `Label: members` lines. Subs render as a
+    multi-line section below the `Subs` header (one name per line),
+    matching the DS template's `SUBS` shape post-#37. Legacy in-memory
+    string values flatten via `_split_legacy_subs` so older saved data
+    still renders cleanly without manual reformatting.
+    """
     lines: list[str] = []
     last_stage: int | None = None
     for stage, key, label in CS_ZONE_STRUCTURE:
@@ -947,43 +1128,81 @@ def build_cs_template(z: dict) -> str:
             lines.append(f"STAGE {stage}")
             last_stage = stage
         lines.append(f"{label}: {z.get(key, '')}")
-    # Subs go at the end of Stage 3 (matches the in-game flow).
-    lines.append(f"{CS_SUBS_LABEL}: {z.get(CS_SUBS_KEY, '')}")
+    # Subs as a multi-line section after the stages.
+    lines.append("")
+    lines.append(CS_SUBS_LABEL)
+    subs_value = z.get(CS_SUBS_KEY, "")
+    if isinstance(subs_value, list):
+        for name in subs_value:
+            if name:
+                lines.append(str(name))
+    elif subs_value:
+        for name in _split_legacy_subs(str(subs_value)):
+            lines.append(name)
     return "\n".join(lines)
 
 
 def parse_cs_template(text: str) -> tuple[dict, list]:
-    zones  = {}
-    errors = []
-    stage  = None
+    """Parse the edited CS template. Returns (zones, errors).
+
+    Zones are returned keyed by canonical CS_ZONE_STRUCTURE keys. Subs come
+    back at ``zones[CS_SUBS_KEY]`` as a ``list[str]``. The `Subs` section
+    header (no colon, multi-line below) is the canonical form; legacy
+    headers `Pop Pairs (last 30 sec)` and `Pop Pairs` are still accepted,
+    as is the legacy inline form `<header>: <names>` which flattens via
+    `_split_legacy_subs` (commas, dashes, ampersands all split).
+    """
+    zones: dict = {}
+    errors: list[str] = []
+    stage = None
+    section = None  # None | "subs"
+    subs_list: list[str] = []
 
     # Build the (label_lower, stage) → key lookup from the canonical structure
-    # plus the subs key so the parser stays in sync with the builder.
+    # so the parser stays in sync with the builder.
     key_map: dict[str, dict[int, str]] = {}
     for st, key, label in CS_ZONE_STRUCTURE:
         key_map.setdefault(label.lower(), {})[st] = key
-    key_map.setdefault(CS_SUBS_LABEL.lower(), {})[3] = CS_SUBS_KEY
+
+    subs_header_labels = {CS_SUBS_LABEL.lower()} | CS_SUBS_LEGACY_LABELS
 
     for line in text.strip().splitlines():
         line = line.strip()
         if not line:
             continue
         if line.upper() == "STAGE 1":
-            stage = 1; continue
+            stage = 1; section = None; continue
         if line.upper() == "STAGE 2":
-            stage = 2; continue
+            stage = 2; section = None; continue
         if line.upper() == "STAGE 3":
-            stage = 3; continue
+            stage = 3; section = None; continue
+
+        # Subs section header (no colon): `Subs` or legacy `Pop Pairs …`.
+        if line.lower() in subs_header_labels:
+            section = "subs"
+            stage = None
+            continue
+
         if ":" in line:
             label, _, value = line.partition(":")
             label_lower = label.strip().lower()
+            # Legacy inline subs (e.g. `Pop Pairs (last 30 sec): Alice & Bob`).
+            if label_lower in subs_header_labels:
+                subs_list.extend(_split_legacy_subs(value))
+                section = None
+                stage = None
+                continue
             if label_lower in key_map and stage in key_map[label_lower]:
                 field = key_map[label_lower][stage]
                 zones[field] = value.strip()
             else:
                 errors.append(f"Unrecognized line in Stage {stage}: {line}")
+        elif section == "subs":
+            subs_list.append(line)
         else:
             errors.append(f"Could not parse: {line}")
+
+    zones[CS_SUBS_KEY] = subs_list
     return zones, errors
 
 
@@ -1137,6 +1356,17 @@ async def run_cs_draft_flow(bot, channel, user, team: str, current_zones: dict):
     time_key = time_view.selected
 
     # ── Step 3: Mail Template — Use as-is or Edit ─────────────────────────────
+    stale = _non_canonical_cs_zones(current_zones)
+    if stale:
+        stale_lines = "\n".join(f"• `{k}` — {v}" for k, v in stale.items())
+        await channel.send(
+            "ℹ️ Your saved data has zones that aren't on the canonical "
+            "Canyon Storm list — they'll be dropped on the next save:\n"
+            f"{stale_lines}\n"
+            "Re-enter assignments under the correct zone name in the "
+            "template below."
+        )
+
     template = build_cs_template(current_zones)
     use_view = TemplateUseEditView()
     await channel.send(

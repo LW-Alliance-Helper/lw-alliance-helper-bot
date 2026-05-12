@@ -9,6 +9,24 @@ Each entry is a slim summary — heavier context (root cause, what we
 tried, design rationale) lives in the corresponding commit message
 and PR description.
 
+## [1.2.0] — 2026-05-11
+
+### Added
+- **Growth Breakdown** — every snapshot classifies each member's percent change since the previous snapshot into Increased / Steady / Low / None / Decline, written to a configurable `Growth Breakdown` tab. New 📊 See most recent Breakdown button on `/growth` renders an ephemeral embed grouped by metric and bucket. Premium `/setup_growth_breakdown` adds auto-post after every snapshot, bucket filter, custom thresholds, and custom bucket labels ([#34](https://github.com/LW-Alliance-Helper/lw-alliance-helper-bot/issues/34)).
+- **Daily Shiny Tasks announcement** — new free-tier `/setup_shiny_tasks` configures a once-a-day post listing every Last War server in the alliance's transfer range that has shiny tasks today; data refreshed weekly from cpt-hedge ([#72](https://github.com/LW-Alliance-Helper/lw-alliance-helper-bot/issues/72)).
+- **Data portability** — `/export_config` dumps the categories you pick (core setup, events, DS, CS, train, birthday, growth, surveys, shiny tasks, member roster) to a JSON file; `/import_config` walks a channel + role remap wizard on the destination server and applies per category ([#42](https://github.com/LW-Alliance-Helper/lw-alliance-helper-bot/issues/42)).
+
+### Changed
+- DS and CS zones lock to the canonical game-defined list; typo zone names are rejected at parse time and dropped on save, with a one-shot info notice in the draft flow listing what's about to be migrated ([#35](https://github.com/LW-Alliance-Helper/lw-alliance-helper-bot/issues/35)).
+- DS and CS subs flatten to a plain name list: `SUB PAIRS (Starter - Sub)` → `SUBS`, `Pop Pairs (last 30 sec)` → `Subs`. Legacy headers still parse for backward compat ([#37](https://github.com/LW-Alliance-Helper/lw-alliance-helper-bot/issues/37)).
+
+### Fixed
+- 📊 See most recent Breakdown no longer disables the other `/growth` buttons on the no-data path, so leadership can follow the on-screen advice and click Run Snapshot Now without re-opening `/growth` ([#84](https://github.com/LW-Alliance-Helper/lw-alliance-helper-bot/issues/84)).
+- Growth Breakdown writes when "Run Snapshot Now" is clicked on a guild whose current period already has growth-tab columns — the duplicate-period guard no longer short-circuits the breakdown writer ([#85](https://github.com/LW-Alliance-Helper/lw-alliance-helper-bot/issues/85)).
+- Growth Breakdown auto-post no longer crashes on `bot.loop` access from the thread-pool worker that runs the scheduled snapshot; the loop reference now lives in a new `bot_state.py` module that's import-stable across the `__main__` vs `bot` module double-load ([#87](https://github.com/LW-Alliance-Helper/lw-alliance-helper-bot/issues/87)).
+- Birthday → train auto-population posts a single combined Discord message when multiple members hit the conflict path, and survives Railway restarts via a persisted dedup field on `guild_birthday_config` instead of an in-memory set that got wiped on every redeploy ([#89](https://github.com/LW-Alliance-Helper/lw-alliance-helper-bot/issues/89)).
+- Survey scheduled-DM tests no longer flake at minute boundaries — wall-clock is frozen via injected `now()` per test ([#79](https://github.com/LW-Alliance-Helper/lw-alliance-helper-bot/issues/79)).
+
 ## [1.1.7] — 2026-05-11
 
 ### Fixed

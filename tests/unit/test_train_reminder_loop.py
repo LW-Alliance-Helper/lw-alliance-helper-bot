@@ -54,16 +54,19 @@ PATCHED_TODAY_ISO = "2026-05-15"
 
 def _make_cog():
     """A real TrainCog instance with a mocked bot. Subsequent tests
-    overwrite `cog.bot.guilds` and patch the config loaders."""
+    overwrite `cog.bot.guilds` and patch the config loaders. The
+    birthday auto-pop dedup lives in SQLite (`guild_birthday_config
+    .last_train_population_date`) post-#89, so tests that exercise the
+    dedup path patch the SQLite helpers instead of poking at a cog
+    attribute."""
     import train_cog
     bot = MagicMock()
     bot.guilds      = []
     bot.get_channel = MagicMock(return_value=None)
     cog = train_cog.TrainCog.__new__(train_cog.TrainCog)
-    cog.bot                       = bot
-    cog.last_reminder_date        = None
-    cog.reminders_fired           = set()
-    cog.birthday_population_fired = set()
+    cog.bot                 = bot
+    cog.last_reminder_date  = None
+    cog.reminders_fired     = set()
     return cog
 
 
@@ -372,14 +375,17 @@ class TestBirthdayAutoPopulationGate:
     async def test_fires_at_22_00_ET(self):
         cog = _make_cog()
         with patch("train_cog.check_and_add_birthdays", return_value=({}, [])) as mock_pop, \
-             patch("train_cog.save_schedule"):
+             patch("train_cog.save_schedule"), \
+             patch("config.get_birthday_population_last_fired", return_value=""), \
+             patch("config.mark_birthday_population_fired") as mock_mark:
             await _run_loop(
                 cog,
                 now_in_guild_tz=datetime(2026, 5, 15, 22, 0, tzinfo=ET),
                 bday_cfg=self._bday_on(),
             )
         mock_pop.assert_called_once()
-        assert GUILD_ID in cog.birthday_population_fired
+        # After firing, the SQLite stamp should land with today's ISO date.
+        mock_mark.assert_called_once_with(GUILD_ID, "2026-05-15")
 
     @pytest.mark.asyncio
     async def test_does_not_fire_at_deploy_time(self):
@@ -388,14 +394,15 @@ class TestBirthdayAutoPopulationGate:
         the 'fires on every push' bug."""
         cog = _make_cog()
         with patch("train_cog.check_and_add_birthdays", return_value=({}, [])) as mock_pop, \
-             patch("train_cog.save_schedule"):
+             patch("train_cog.save_schedule"), \
+             patch("config.mark_birthday_population_fired") as mock_mark:
             await _run_loop(
                 cog,
                 now_in_guild_tz=datetime(2026, 5, 15, 10, 23, tzinfo=ET),
                 bday_cfg=self._bday_on(),
             )
         mock_pop.assert_not_called()
-        assert GUILD_ID not in cog.birthday_population_fired
+        mock_mark.assert_not_called()
 
     @pytest.mark.asyncio
     async def test_does_not_fire_one_minute_off(self):
@@ -412,19 +419,23 @@ class TestBirthdayAutoPopulationGate:
 
     @pytest.mark.asyncio
     async def test_does_not_fire_twice_in_one_day(self):
-        """`birthday_population_fired` is a per-day set; same-minute
-        retick (or any retick before midnight ET) must not re-run."""
+        """Dedup persists in `guild_birthday_config.last_train_population_date`
+        so Railway restarts at 22:00 don't re-fire the conflict alerts.
+        Same-minute retick (or any retick before midnight ET) with the
+        SQLite stamp present must not re-run. Regression for #89."""
         cog = _make_cog()
-        cog.birthday_population_fired = {GUILD_ID}
-        cog.last_reminder_date        = date_cls(2026, 5, 15)
         with patch("train_cog.check_and_add_birthdays", return_value=({}, [])) as mock_pop, \
-             patch("train_cog.save_schedule"):
+             patch("train_cog.save_schedule"), \
+             patch("config.get_birthday_population_last_fired", return_value="2026-05-15"), \
+             patch("config.mark_birthday_population_fired") as mock_mark:
             await _run_loop(
                 cog,
                 now_in_guild_tz=datetime(2026, 5, 15, 22, 0, tzinfo=ET),
                 bday_cfg=self._bday_on(),
             )
         mock_pop.assert_not_called()
+        # Already-fired path must not re-stamp either.
+        mock_mark.assert_not_called()
 
     @pytest.mark.asyncio
     async def test_train_integration_off_skips(self):

@@ -1438,6 +1438,22 @@ def save_growth_breakdown_config(
         return cur.rowcount > 0
 
 
+def has_survey_config(guild_id: int) -> bool:
+    """True iff the guild has a row in `guild_survey_config` — i.e. they
+    have run `/setup_survey` for the main survey at least once. The
+    fallback dict from `get_survey_config` doesn't distinguish that
+    case from "never configured"; this helper exists for the
+    setup-wizard summary embed gate (#102). Extra named surveys live
+    in a different table and aren't covered here — callers pass an
+    `or {}` over `get_survey()` and check the result directly."""
+    with _get_conn() as conn:
+        row = conn.execute(
+            "SELECT 1 FROM guild_survey_config WHERE guild_id = ?",
+            (guild_id,),
+        ).fetchone()
+    return row is not None
+
+
 def get_survey_config(guild_id: int) -> dict:
     """Return survey config for a guild."""
     import json

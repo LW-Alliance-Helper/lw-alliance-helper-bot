@@ -5198,7 +5198,15 @@ async def run_birthday_setup(interaction: discord.Interaction, bot):
         return
     if not enabled_view.selected:
         from config import save_birthday_config
-        save_birthday_config(guild_id, enabled=0, **{k: v for k, v in current.items() if k not in ('guild_id', 'enabled')})
+        # `last_train_population_date` is operational state owned by the
+        # train-auto-pop scheduler (see #89) — not a `save_birthday_config`
+        # parameter. Strip it from the splat so the disable path still
+        # works when the column exists on the loaded row.
+        save_birthday_config(
+            guild_id, enabled=0,
+            **{k: v for k, v in current.items()
+               if k not in ("guild_id", "enabled", "last_train_population_date")}
+        )
         await channel.send("✅ Birthday tracking disabled.")
         return
 

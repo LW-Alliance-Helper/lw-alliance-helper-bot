@@ -279,6 +279,73 @@ class TestCheckAndAddBirthdays:
         assert len(alerts) == 1
         assert "Alice" in alerts[0]
 
+    def test_multiple_conflicts_collapse_into_one_alert(self, seeded_db):
+        """#89: two members hitting the same conflict signature should
+        produce ONE Discord message, not one per member. The combined
+        message lists every affected member and ends in a sentence that
+        addresses leadership as the recipient."""
+        from train import check_and_add_birthdays
+        from config import save_birthday_config
+
+        today  = date.today()
+        target = today + timedelta(days=7)
+
+        save_birthday_config(
+            TEST_GUILD_ID, "Members", 0, 1, 2, 1, 1, 1, 14
+        )
+
+        # All three slots taken; two members share the conflict.
+        existing = {
+            (target - timedelta(days=1)).isoformat(): {"name": "X"},
+            target.isoformat():                       {"name": "Y"},
+            (target + timedelta(days=1)).isoformat(): {"name": "Z"},
+        }
+        members = [
+            {"name": "ShadowHunter", "month": target.month, "day": target.day},
+            {"name": "Phoenix99",    "month": target.month, "day": target.day},
+        ]
+
+        with patch("train_birthdays.load_birthdays", return_value=members):
+            _, alerts = check_and_add_birthdays(existing, guild_id=TEST_GUILD_ID)
+
+        assert len(alerts) == 1, (
+            f"Expected one combined alert, got {len(alerts)}: {alerts}"
+        )
+        msg = alerts[0]
+        assert "ShadowHunter" in msg
+        assert "Phoenix99"    in msg
+        # Header only renders once at the top, not per member.
+        assert msg.count("🚨 **Birthday scheduling conflict") == 1
+        # Plural copy when more than one member is affected.
+        assert "these members" in msg
+
+    def test_single_conflict_uses_singular_copy(self, seeded_db):
+        """When only one member conflicts, the trailing instruction
+        reads 'this member', not 'these members'."""
+        from train import check_and_add_birthdays
+        from config import save_birthday_config
+
+        today  = date.today()
+        target = today + timedelta(days=7)
+
+        save_birthday_config(
+            TEST_GUILD_ID, "Members", 0, 1, 2, 1, 1, 1, 14
+        )
+
+        existing = {
+            (target - timedelta(days=1)).isoformat(): {"name": "X"},
+            target.isoformat():                       {"name": "Y"},
+            (target + timedelta(days=1)).isoformat(): {"name": "Z"},
+        }
+        members = [{"name": "Alice", "month": target.month, "day": target.day}]
+
+        with patch("train_birthdays.load_birthdays", return_value=members):
+            _, alerts = check_and_add_birthdays(existing, guild_id=TEST_GUILD_ID)
+
+        assert len(alerts) == 1
+        assert "this member" in alerts[0]
+        assert "these members" not in alerts[0]
+
     def test_birthday_outside_lookahead_not_added(self, seeded_db):
         from train import check_and_add_birthdays
         from config import save_birthday_config

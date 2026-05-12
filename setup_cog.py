@@ -2668,6 +2668,7 @@ async def run_growth_breakdown_setup(interaction: discord.Interaction, bot):
     import wizard_registry
     from config import (
         get_growth_config, save_growth_breakdown_config,
+        has_growth_breakdown_config,
     )
     from growth import DEFAULT_THRESHOLDS, DEFAULT_BUCKET_LABELS, BUCKET_ORDER
 
@@ -2685,6 +2686,50 @@ async def run_growth_breakdown_setup(interaction: discord.Interaction, bot):
         )
         wizard_registry.unregister(user.id, cancel_event)
         return
+
+    # ── If already configured, show summary and offer edit or cancel ─────────
+    if has_growth_breakdown_config(guild_id):
+        post_ch = current.get("breakdown_post_channel_id") or 0
+        thresholds = current.get("breakdown_thresholds") or {}
+        labels     = current.get("breakdown_labels") or {}
+        bucket_filter = current.get("breakdown_bucket_filter") or []
+        fields = [
+            ("Breakdown Tab", current.get("tab_breakdown") or "Growth Breakdown"),
+            ("Auto-Post Channel", f"<#{post_ch}>" if post_ch else "❌ Off"),
+        ]
+        if post_ch and bucket_filter:
+            fields.append((
+                "Bucket Filter",
+                ", ".join(DEFAULT_BUCKET_LABELS.get(b, b) for b in bucket_filter),
+            ))
+        elif post_ch:
+            fields.append(("Bucket Filter", "All buckets"))
+        if thresholds:
+            fields.append((
+                "Custom Thresholds",
+                f"Increased ≥ {thresholds.get('increased', 0):g}%, "
+                f"Steady ≥ {thresholds.get('steady', 0):g}%, "
+                f"Low ≥ {thresholds.get('low', 0):g}%, "
+                f"None ≥ {thresholds.get('none', 0):g}%",
+            ))
+        if labels:
+            fields.append((
+                "Custom Labels",
+                ", ".join(
+                    f"{DEFAULT_BUCKET_LABELS[b]}→{labels[b]}"
+                    for b in BUCKET_ORDER if labels.get(b)
+                ) or "—",
+            ))
+        proceed = await ask_proceed_with_existing_config(
+            channel,
+            title="📊 Current Growth Breakdown Setup",
+            description="Growth breakdown is already configured. Would you like to edit these settings?",
+            fields=fields,
+            cancel_event=cancel_event,
+            no_changes_message="✅ No changes made. Your breakdown setup is still active.",
+        )
+        if proceed is not True:
+            return
 
     await channel.send(
         "📊 **Growth Breakdown Setup** (💎 Premium)\n"
@@ -2727,12 +2772,19 @@ async def run_growth_breakdown_setup(interaction: discord.Interaction, bot):
 
     post_channel_id = 0
     if autopost_view.selected:
+        saved_post_ch = current.get("breakdown_post_channel_id") or 0
         post_ch_view = ChannelSelectStep(
             "Select the auto-post channel…",
             suggested_name="growth-breakdown",
             include_threads=True,
             guild=interaction.guild,
+            current_id=saved_post_ch,
         )
+        if post_ch_view.is_current_stale:
+            await channel.send(
+                "⚠️ Your previously configured breakdown channel no longer exists. "
+                "Pick a new one below."
+            )
         await channel.send(
             "**Auto-Post Channel**\n"
             "Where should the breakdown summaries land?",

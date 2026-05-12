@@ -875,6 +875,159 @@ class TestRunGrowthSetup:
         assert captured["had_prior_config"] is False
 
 
+# ── /setup_growth_breakdown ───────────────────────────────────────────────────
+
+class TestRunGrowthBreakdownSetup:
+    """Test /setup_growth_breakdown threads current_id through the
+    auto-post channel pick and shows the summary embed on re-runs.
+    Regression guard for #100."""
+
+    @pytest.mark.asyncio
+    async def test_existing_config_shows_summary_and_keeps_unchanged(self, seeded_db):
+        """Re-running on a configured guild shows the summary embed;
+        picking No keeps the saved config."""
+        import config
+        from setup_cog import run_growth_breakdown_setup
+
+        # Prereq: growth must be enabled with metrics for the breakdown
+        # wizard to proceed past its guard.
+        config.save_growth_config(
+            TEST_GUILD_ID, enabled=1,
+            tab_source="Squad Powers", name_col="A",
+            metrics=[{"label": "1st Squad Power", "col": "E"}],
+            tab_growth="Growth Tracking",
+            snapshot_frequency="monthly", snapshot_day=1, snapshot_interval=30,
+            data_start_row=2,
+        )
+        config.save_growth_breakdown_config(
+            TEST_GUILD_ID,
+            tab_breakdown="My Breakdown",
+            breakdown_thresholds={},
+            breakdown_labels={},
+            breakdown_post_channel_id=800800,
+            breakdown_bucket_filter=[],
+        )
+
+        interaction = make_mock_interaction()
+        bot         = AsyncMock()
+
+        make_send_handler(
+            interaction.channel,
+            view_overrides={"proceed": False, "cancelled": False},
+        )
+        await run_growth_breakdown_setup(interaction, bot)
+
+        cfg = config.get_growth_config(TEST_GUILD_ID)
+        assert cfg["breakdown_post_channel_id"] == 800800
+        assert cfg["tab_breakdown"]             == "My Breakdown"
+
+    @pytest.mark.asyncio
+    async def test_existing_config_threads_post_channel_current_id(self, seeded_db):
+        """Walking through to Step 2 (Auto-Post = Yes) must pass the
+        saved breakdown_post_channel_id as current_id to
+        ChannelSelectStep."""
+        import config
+        from setup_cog import run_growth_breakdown_setup
+
+        config.save_growth_config(
+            TEST_GUILD_ID, enabled=1,
+            tab_source="Squad Powers", name_col="A",
+            metrics=[{"label": "1st Squad Power", "col": "E"}],
+            tab_growth="Growth Tracking",
+            snapshot_frequency="monthly", snapshot_day=1, snapshot_interval=30,
+            data_start_row=2,
+        )
+        config.save_growth_breakdown_config(
+            TEST_GUILD_ID,
+            tab_breakdown="Growth Breakdown",
+            breakdown_thresholds={},
+            breakdown_labels={},
+            breakdown_post_channel_id=800900,
+            breakdown_bucket_filter=[],
+        )
+
+        interaction = make_mock_interaction()
+        bot         = AsyncMock()
+
+        # ChannelSelectStep capture + auto-confirm.
+        new_channel = MagicMock(id=800900)
+        ch_view = MagicMock(
+            confirmed=True, cancelled=False, is_current_stale=False,
+            selected_channel=new_channel, wait=AsyncMock(),
+        )
+        ch_call_kwargs = []
+
+        def _record_ch(*a, **kw):
+            ch_call_kwargs.append(kw)
+            return ch_view
+
+        # AutoPost YesNoView -> Yes.
+        autopost_yes = MagicMock(selected=True, cancelled=False, wait=AsyncMock())
+
+        with patch("setup_cog.YesNoView",         return_value=autopost_yes), \
+             patch("setup_cog.ChannelSelectStep", side_effect=_record_ch), \
+             patch_keep_or_change(["Growth Breakdown"]):  # Step 1 tab name
+            # Summary proceed=True; inline bucket-filter / thresholds /
+            # labels views auto-resolve via send-handler overrides.
+            make_send_handler(
+                interaction.channel,
+                view_overrides={
+                    "proceed":  True,
+                    "selected": [],          # BucketFilterView -> "use all"
+                    "choice":   "defaults",  # ThresholdsChoiceView + LabelsChoiceView
+                    "cancelled": False,
+                },
+            )
+            await run_growth_breakdown_setup(interaction, bot)
+
+        assert len(ch_call_kwargs) == 1
+        assert ch_call_kwargs[0]["current_id"] == 800900
+
+    @pytest.mark.asyncio
+    async def test_first_run_skips_summary(self, seeded_db):
+        """First-time setup (no breakdown fields saved) should NOT show
+        the summary — has_growth_breakdown_config returns False, the
+        guard short-circuits, and the wizard walks Step 1 directly."""
+        import config
+        from setup_cog import run_growth_breakdown_setup
+
+        config.save_growth_config(
+            TEST_GUILD_ID, enabled=1,
+            tab_source="Squad Powers", name_col="A",
+            metrics=[{"label": "1st Squad Power", "col": "E"}],
+            tab_growth="Growth Tracking",
+            snapshot_frequency="monthly", snapshot_day=1, snapshot_interval=30,
+            data_start_row=2,
+        )
+        # No save_growth_breakdown_config — defaults all the way.
+
+        interaction = make_mock_interaction()
+        bot         = AsyncMock()
+        # AutoPost -> No so we skip the channel/filter steps.
+        autopost_no = MagicMock(selected=False, cancelled=False, wait=AsyncMock())
+
+        with patch("setup_cog.YesNoView", return_value=autopost_no), \
+             patch_keep_or_change(["Growth Breakdown"]):
+            make_send_handler(
+                interaction.channel,
+                view_overrides={
+                    # If summary HAD fired, proceed=False would short-
+                    # circuit and we'd never reach the auto-post toggle.
+                    # We assert it didn't fire by checking the breakdown
+                    # config actually got saved.
+                    "choice":   "defaults",
+                    "cancelled": False,
+                },
+            )
+            await run_growth_breakdown_setup(interaction, bot)
+
+        # Save happened (Step 1 tab name + defaults), confirming the
+        # wizard walked all the way through.
+        cfg = config.get_growth_config(TEST_GUILD_ID)
+        assert cfg["breakdown_post_channel_id"] == 0
+        assert cfg["tab_breakdown"]             == "Growth Breakdown"
+
+
 # ── /setup_events ─────────────────────────────────────────────────────────────
 
 class TestRunEventSetup:

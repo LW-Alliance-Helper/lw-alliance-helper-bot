@@ -1367,6 +1367,28 @@ def save_growth_config(guild_id: int, enabled: int, tab_source: str,
         conn.commit()
 
 
+def has_growth_breakdown_config(guild_id: int) -> bool:
+    """True iff the guild has saved any non-default breakdown field —
+    i.e. they have walked `/setup_growth_breakdown` at least once and
+    changed something. Breakdown shares a row with growth, so the row
+    existing isn't a useful signal on its own; instead this checks the
+    breakdown-specific fields (post channel, thresholds, labels, bucket
+    filter, custom tab name) for any non-default value. Used by the
+    setup-wizard summary embed gate (#100)."""
+    cfg = get_growth_config(guild_id)
+    if (cfg.get("breakdown_post_channel_id") or 0) != 0:
+        return True
+    if cfg.get("breakdown_thresholds"):
+        return True
+    if cfg.get("breakdown_labels"):
+        return True
+    if cfg.get("breakdown_bucket_filter"):
+        return True
+    if cfg.get("tab_breakdown") not in ("", "Growth Breakdown"):
+        return True
+    return False
+
+
 def save_growth_breakdown_config(
     guild_id: int, *,
     tab_breakdown: str             = "Growth Breakdown",

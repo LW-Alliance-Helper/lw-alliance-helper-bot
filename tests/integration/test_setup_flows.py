@@ -1063,6 +1063,161 @@ class TestRunGrowthSetup:
         assert captured["had_prior_config"] is False
 
 
+# ── /setup_shiny_tasks ────────────────────────────────────────────────────────
+
+class TestRunShinyTasksSetup:
+    """Test /setup_shiny_tasks re-entry: summary embed, current_id
+    threading on the channel pick, and ask_disable_with_clear gating.
+    Regression guard for #101 — the wizard that originally triggered
+    the whole #80 effort."""
+
+    @pytest.mark.asyncio
+    async def test_existing_enabled_config_shows_summary_and_keeps_unchanged(self, seeded_db):
+        """Re-running on an enabled-and-configured guild opens with the
+        summary; picking No-changes keeps state intact."""
+        import config
+        from setup_cog import run_shiny_tasks_setup
+
+        config.save_shiny_tasks_config(
+            TEST_GUILD_ID,
+            enabled=1,
+            channel_id=900000,
+            post_time="09:00",
+            server_min=677, server_max=804,
+            message_template="",
+        )
+
+        interaction = make_mock_interaction()
+        bot         = AsyncMock()
+
+        make_send_handler(
+            interaction.channel,
+            view_overrides={"proceed": False, "cancelled": False},
+        )
+        await run_shiny_tasks_setup(interaction, bot)
+
+        cfg = config.get_shiny_tasks_config(TEST_GUILD_ID)
+        assert cfg["enabled"]    == 1
+        assert cfg["channel_id"] == 900000
+
+    @pytest.mark.asyncio
+    async def test_existing_config_threads_channel_current_id(self, seeded_db):
+        """Re-running and walking past the summary into Step 2 must pass
+        the saved channel_id as current_id."""
+        import config
+        from setup_cog import run_shiny_tasks_setup
+
+        config.save_shiny_tasks_config(
+            TEST_GUILD_ID,
+            enabled=1,
+            channel_id=900100,
+            post_time="09:00",
+            server_min=677, server_max=804,
+            message_template="",
+        )
+
+        interaction = make_mock_interaction()
+        bot         = AsyncMock()
+
+        new_channel = MagicMock(id=900100)
+        ch_view = MagicMock(
+            confirmed=True, cancelled=False, is_current_stale=False,
+            selected_channel=new_channel, wait=AsyncMock(),
+        )
+        # Step 1 -> Yes; final ConfirmView -> Yes.
+        enable_yes = MagicMock(selected=True, cancelled=False, wait=AsyncMock())
+        confirm    = MagicMock(confirmed=True, cancelled=False, wait=AsyncMock())
+        # ModalLaunchView (Step 3 server-range) auto-confirmed; its modal
+        # has min_value / max_value pre-filled.
+        range_modal = MagicMock(min_value="677", max_value="804", value="677 – 804")
+        range_launcher = MagicMock(
+            confirmed=True, cancelled=False, wait=AsyncMock(),
+            modal=range_modal,
+            children=[MagicMock()],  # touched by `range_launcher.children[0].label = ...`
+        )
+
+        ch_call_kwargs = []
+        def _record_ch(*a, **kw):
+            ch_call_kwargs.append(kw)
+            return ch_view
+
+        with patch("setup_cog.ChannelSelectStep", side_effect=_record_ch), \
+             patch("setup_cog.YesNoView",         return_value=enable_yes), \
+             patch("setup_cog.ConfirmView",       return_value=confirm), \
+             patch("setup_cog.ModalLaunchView",   return_value=range_launcher), \
+             patch_keep_or_change(["9:00am", ""]):  # Step 4 time + Step 5 template
+            make_send_handler(
+                interaction.channel,
+                view_overrides={"proceed": True, "cancelled": False},
+            )
+            await run_shiny_tasks_setup(interaction, bot)
+
+        assert len(ch_call_kwargs) == 1
+        assert ch_call_kwargs[0]["current_id"] == 900100
+
+    @pytest.mark.asyncio
+    async def test_disable_with_prior_config_offers_clear_button(self, seeded_db):
+        """When leadership picks No on Step 1 AND has prior config, the
+        ask_disable_with_clear helper fires with had_prior_config=True
+        and clear_fn that wipes the row."""
+        import config
+        from setup_cog import run_shiny_tasks_setup
+
+        config.save_shiny_tasks_config(
+            TEST_GUILD_ID,
+            enabled=1,
+            channel_id=900200,
+            post_time="09:00",
+            server_min=1, server_max=1000,
+            message_template="",
+        )
+
+        interaction = make_mock_interaction()
+        bot         = AsyncMock()
+        enabled_no  = MagicMock(selected=False, cancelled=False, wait=AsyncMock())
+        captured    = {}
+
+        async def fake_disable(channel, **kwargs):
+            captured.update(kwargs)
+
+        with patch("setup_cog.YesNoView",              return_value=enabled_no), \
+             patch("setup_cog.ask_disable_with_clear", side_effect=fake_disable):
+            make_send_handler(
+                interaction.channel,
+                view_overrides={"proceed": True, "cancelled": False},
+            )
+            await run_shiny_tasks_setup(interaction, bot)
+
+        assert captured["feature_label"]    == "Shiny tasks announcement"
+        assert captured["setup_command"]    == "setup_shiny_tasks"
+        assert captured["had_prior_config"] is True
+        captured["clear_fn"]()
+        assert config.has_shiny_tasks_config(TEST_GUILD_ID) is False
+
+    @pytest.mark.asyncio
+    async def test_disable_first_run_skips_clear_button(self, seeded_db):
+        """First-time disable (no saved row) -> had_prior_config=False."""
+        import config
+        from setup_cog import run_shiny_tasks_setup
+
+        config.clear_shiny_tasks_config(TEST_GUILD_ID)
+
+        interaction = make_mock_interaction()
+        bot         = AsyncMock()
+        enabled_no  = MagicMock(selected=False, cancelled=False, wait=AsyncMock())
+        captured    = {}
+
+        async def fake_disable(channel, **kwargs):
+            captured.update(kwargs)
+
+        with patch("setup_cog.YesNoView",              return_value=enabled_no), \
+             patch("setup_cog.ask_disable_with_clear", side_effect=fake_disable):
+            make_send_handler(interaction.channel)
+            await run_shiny_tasks_setup(interaction, bot)
+
+        assert captured["had_prior_config"] is False
+
+
 # ── /setup_growth_breakdown ───────────────────────────────────────────────────
 
 class TestRunGrowthBreakdownSetup:

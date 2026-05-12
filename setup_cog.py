@@ -6285,6 +6285,7 @@ async def run_shiny_tasks_setup(interaction: discord.Interaction, bot):
     import wizard_registry
     from config import (
         get_config, get_shiny_tasks_config, save_shiny_tasks_config,
+        has_shiny_tasks_config, clear_shiny_tasks_config,
     )
     from defaults import DEFAULT_SHINY_TASKS_MESSAGE
 
@@ -6298,6 +6299,37 @@ async def run_shiny_tasks_setup(interaction: discord.Interaction, bot):
     tz_label = TIMEZONE_LABELS.get(
         cfg.timezone if cfg else "America/New_York", "ET",
     )
+    shiny_already_configured = has_shiny_tasks_config(guild_id)
+
+    # ── If already enabled, show summary and offer edit or cancel ─────────────
+    if shiny_already_configured and current.get("enabled"):
+        ch_id = current.get("channel_id", 0) or 0
+        fields = [
+            ("Channel",       f"<#{ch_id}>" if ch_id else "*not set*"),
+            (
+                "Server Range",
+                f"{current.get('server_min') or '?'} – {current.get('server_max') or '?'}",
+            ),
+            (
+                "Post Time",
+                f"{current.get('post_time') or '*not set*'}  *({tz_label})*",
+            ),
+            (
+                "Message",
+                "Custom" if (current.get("message_template") or "").strip() else "Default",
+            ),
+        ]
+        proceed = await ask_proceed_with_existing_config(
+            channel,
+            title="🌟 Current Shiny Tasks Setup",
+            description="The daily shiny-tasks announcement is already configured. Would you like to edit these settings?",
+            fields=fields,
+            cancel_event=cancel_event,
+            no_changes_message="✅ No changes made. The daily announcement is still active.",
+        )
+        if proceed is not True:
+            wizard_registry.unregister(user.id, cancel_event)
+            return
 
     await channel.send(
         "🌟 **Daily Shiny Tasks Setup**\n"
@@ -6332,7 +6364,14 @@ async def run_shiny_tasks_setup(interaction: discord.Interaction, bot):
             server_max=current.get("server_max", 0),
             message_template=current.get("message_template", ""),
         )
-        await channel.send("✅ Shiny-tasks announcement disabled.")
+        await ask_disable_with_clear(
+            channel,
+            feature_label="Shiny tasks announcement",
+            setup_command="setup_shiny_tasks",
+            had_prior_config=shiny_already_configured,
+            clear_fn=lambda: clear_shiny_tasks_config(guild_id),
+            cancel_event=cancel_event,
+        )
         wizard_registry.unregister(user.id, cancel_event)
         return
 
@@ -6342,12 +6381,19 @@ async def run_shiny_tasks_setup(interaction: discord.Interaction, bot):
         "**Step 2 of 6 — Announcement Channel**\n"
         "Pick the channel where the daily shiny tasks post should be posted."
     )
+    saved_channel_id = current.get("channel_id", 0) or 0
     ch_view = ChannelSelectStep(
         "Select the shiny tasks channel...",
         suggested_name="shiny-tasks",
         include_threads=is_premium_flag,
         guild=interaction.guild,
+        current_id=saved_channel_id,
     )
+    if ch_view.is_current_stale:
+        await channel.send(
+            "⚠️ Your previously configured shiny tasks channel no longer exists. "
+            "Pick a new one below."
+        )
     await channel.send("​", view=ch_view)
     await wait_view_or_cancel(ch_view, cancel_event)
     if ch_view.cancelled:

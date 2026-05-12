@@ -2115,6 +2115,35 @@ def save_train_config(guild_id: int, tab_name: str, themes: list,
 
 # ── Shiny Tasks (free-tier daily announcement of shiny servers) ───────────────
 
+def has_shiny_tasks_config(guild_id: int) -> bool:
+    """True iff the guild has a row in `guild_shiny_tasks_config` — i.e.
+    they have run `/setup_shiny_tasks` at least once.
+    `get_shiny_tasks_config` returns a fallback dict on miss, so it
+    can't distinguish "saved with all defaults" from "never configured";
+    this helper exists for the setup-wizard summary embed and the
+    disable-with-clear gate (#101)."""
+    with _get_conn() as conn:
+        row = conn.execute(
+            "SELECT 1 FROM guild_shiny_tasks_config WHERE guild_id = ?",
+            (guild_id,),
+        ).fetchone()
+    return row is not None
+
+
+def clear_shiny_tasks_config(guild_id: int) -> None:
+    """Delete the guild's shiny-tasks config row entirely. Called by the
+    `ask_disable_with_clear` Clear button after the user disables the
+    daily announcement. `get_shiny_tasks_config` already returns a
+    default dict when the row is absent, so deletion is the cleanest
+    reset."""
+    with _get_conn() as conn:
+        conn.execute(
+            "DELETE FROM guild_shiny_tasks_config WHERE guild_id = ?",
+            (guild_id,),
+        )
+        conn.commit()
+
+
 def get_shiny_tasks_config(guild_id: int) -> dict:
     """Return shiny-tasks config for a guild, or a default dict if absent."""
     with _get_conn() as conn:

@@ -2156,8 +2156,12 @@ async def run_growth_setup(interaction: discord.Interaction, bot):
             return None
         return reply.content.strip()[:max_chars]
 
-    from config import get_growth_config, save_growth_config
+    from config import (
+        get_growth_config, save_growth_config,
+        has_growth_config, clear_growth_config,
+    )
     current = get_growth_config(guild_id)
+    growth_already_configured = has_growth_config(guild_id)
 
     # Hardcoded defaults — what the bot ships with. These are passed as
     # `default=` to ask_keep_or_change. The user's previously-saved value
@@ -2170,6 +2174,37 @@ async def run_growth_setup(interaction: discord.Interaction, bot):
     DEFAULT_TAB_GROWTH        = "Growth Tracking"
     DEFAULT_SNAPSHOT_DAY      = 1
     DEFAULT_SNAPSHOT_INTERVAL = 30
+
+    # ── If already enabled, show summary and offer edit or cancel ─────────────
+    if growth_already_configured and current.get("enabled"):
+        metrics_list = current.get("metrics") or []
+        freq = current.get("snapshot_frequency", "monthly")
+        if freq == "monthly":
+            sched = f"Monthly on day {current.get('snapshot_day', 1)}"
+        else:
+            sched = f"Every {current.get('snapshot_interval', 30)} days"
+        fields = [
+            ("Source Tab",        current.get("tab_source") or "*not set*"),
+            ("Name Column",       f"Column {current.get('name_col') or '*not set*'}"),
+            ("Data Start Row",    str(current.get("data_start_row") or "*not set*")),
+            ("Growth Tab",        current.get("tab_growth") or "*not set*"),
+            ("Snapshot Schedule", sched),
+            (
+                f"Metrics ({len(metrics_list)})",
+                "\n".join(f"• {m['label']} — column {m['col']}" for m in metrics_list)
+                if metrics_list else "*none*",
+            ),
+        ]
+        proceed = await ask_proceed_with_existing_config(
+            channel,
+            title="📈 Current Growth Setup",
+            description="Growth tracking is already configured. Would you like to edit these settings?",
+            fields=fields,
+            cancel_event=cancel_event,
+            no_changes_message="✅ No changes made. Growth tracking is still active.",
+        )
+        if proceed is not True:
+            return
 
     await channel.send(
         "⚙️ **Growth Tracking Setup**\n"
@@ -2203,7 +2238,14 @@ async def run_growth_setup(interaction: discord.Interaction, bot):
             snapshot_interval=current.get("snapshot_interval", 30),
             data_start_row=current.get("data_start_row", 2),
         )
-        await channel.send("✅ Growth tracking disabled.")
+        await ask_disable_with_clear(
+            channel,
+            feature_label="Growth tracking",
+            setup_command="setup_growth",
+            had_prior_config=growth_already_configured,
+            clear_fn=lambda: clear_growth_config(guild_id),
+            cancel_event=cancel_event,
+        )
         return
 
     # ── Step 2: Source tab ────────────────────────────────────────────────────

@@ -1265,6 +1265,35 @@ def save_participation_config(
 # DEFAULT_SURVEY_INTRO are imported at the top of this module.
 
 
+def has_growth_config(guild_id: int) -> bool:
+    """True iff the guild has a row in `guild_growth_config` — i.e. they
+    have run `/setup_growth` at least once. `get_growth_config` returns
+    a fallback dict on miss, so it can't distinguish "saved with all
+    defaults" from "never configured"; this helper exists for the
+    setup-wizard summary embed and the disable-with-clear gate (#99)."""
+    with _get_conn() as conn:
+        row = conn.execute(
+            "SELECT 1 FROM guild_growth_config WHERE guild_id = ?",
+            (guild_id,),
+        ).fetchone()
+    return row is not None
+
+
+def clear_growth_config(guild_id: int) -> None:
+    """Delete the guild's growth config row entirely. Called by the
+    `ask_disable_with_clear` Clear button after the user disables growth
+    tracking. Wipes both the snapshot config and the breakdown config
+    (which lives on the same row) — breakdown isn't functional without
+    growth metrics anyway, and `/setup_growth_breakdown` blocks when
+    growth is disabled or has no metrics."""
+    with _get_conn() as conn:
+        conn.execute(
+            "DELETE FROM guild_growth_config WHERE guild_id = ?",
+            (guild_id,),
+        )
+        conn.commit()
+
+
 def get_growth_config(guild_id: int) -> dict:
     """Return growth config for a guild. Breakdown JSON fields
     (`breakdown_thresholds`, `breakdown_labels`, `breakdown_bucket_filter`)

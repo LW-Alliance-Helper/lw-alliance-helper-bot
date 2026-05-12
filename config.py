@@ -1095,6 +1095,22 @@ def _normalize_storm_templates(d: dict, event_type: str) -> dict:
     return d
 
 
+def has_storm_config(guild_id: int, event_type: str) -> bool:
+    """True iff the guild has a row in `guild_storm_config` for this
+    event_type — i.e. they have run `/setup_desertstorm` or
+    `/setup_canyonstorm` at least once. The fallback dict from
+    `get_storm_config` doesn't distinguish "saved with all defaults"
+    from "never configured"; this helper exists for the setup-wizard
+    summary embed gate (#103)."""
+    with _get_conn() as conn:
+        row = conn.execute(
+            "SELECT 1 FROM guild_storm_config "
+            "WHERE guild_id = ? AND event_type = ?",
+            (guild_id, event_type),
+        ).fetchone()
+    return row is not None
+
+
 def get_storm_config(guild_id: int, event_type: str) -> dict:
     """Return storm config for a guild and event type (DS or CS)."""
     with _get_conn() as conn:
@@ -1367,6 +1383,28 @@ def save_growth_config(guild_id: int, enabled: int, tab_source: str,
         conn.commit()
 
 
+def has_growth_breakdown_config(guild_id: int) -> bool:
+    """True iff the guild has saved any non-default breakdown field —
+    i.e. they have walked `/setup_growth_breakdown` at least once and
+    changed something. Breakdown shares a row with growth, so the row
+    existing isn't a useful signal on its own; instead this checks the
+    breakdown-specific fields (post channel, thresholds, labels, bucket
+    filter, custom tab name) for any non-default value. Used by the
+    setup-wizard summary embed gate (#100)."""
+    cfg = get_growth_config(guild_id)
+    if (cfg.get("breakdown_post_channel_id") or 0) != 0:
+        return True
+    if cfg.get("breakdown_thresholds"):
+        return True
+    if cfg.get("breakdown_labels"):
+        return True
+    if cfg.get("breakdown_bucket_filter"):
+        return True
+    if cfg.get("tab_breakdown") not in ("", "Growth Breakdown"):
+        return True
+    return False
+
+
 def save_growth_breakdown_config(
     guild_id: int, *,
     tab_breakdown: str             = "Growth Breakdown",
@@ -1414,6 +1452,22 @@ def save_growth_breakdown_config(
         )
         conn.commit()
         return cur.rowcount > 0
+
+
+def has_survey_config(guild_id: int) -> bool:
+    """True iff the guild has a row in `guild_survey_config` — i.e. they
+    have run `/setup_survey` for the main survey at least once. The
+    fallback dict from `get_survey_config` doesn't distinguish that
+    case from "never configured"; this helper exists for the
+    setup-wizard summary embed gate (#102). Extra named surveys live
+    in a different table and aren't covered here — callers pass an
+    `or {}` over `get_survey()` and check the result directly."""
+    with _get_conn() as conn:
+        row = conn.execute(
+            "SELECT 1 FROM guild_survey_config WHERE guild_id = ?",
+            (guild_id,),
+        ).fetchone()
+    return row is not None
 
 
 def get_survey_config(guild_id: int) -> dict:

@@ -2668,6 +2668,7 @@ async def run_growth_breakdown_setup(interaction: discord.Interaction, bot):
     import wizard_registry
     from config import (
         get_growth_config, save_growth_breakdown_config,
+        has_growth_breakdown_config,
     )
     from growth import DEFAULT_THRESHOLDS, DEFAULT_BUCKET_LABELS, BUCKET_ORDER
 
@@ -2685,6 +2686,50 @@ async def run_growth_breakdown_setup(interaction: discord.Interaction, bot):
         )
         wizard_registry.unregister(user.id, cancel_event)
         return
+
+    # ── If already configured, show summary and offer edit or cancel ─────────
+    if has_growth_breakdown_config(guild_id):
+        post_ch = current.get("breakdown_post_channel_id") or 0
+        thresholds = current.get("breakdown_thresholds") or {}
+        labels     = current.get("breakdown_labels") or {}
+        bucket_filter = current.get("breakdown_bucket_filter") or []
+        fields = [
+            ("Breakdown Tab", current.get("tab_breakdown") or "Growth Breakdown"),
+            ("Auto-Post Channel", f"<#{post_ch}>" if post_ch else "❌ Off"),
+        ]
+        if post_ch and bucket_filter:
+            fields.append((
+                "Bucket Filter",
+                ", ".join(DEFAULT_BUCKET_LABELS.get(b, b) for b in bucket_filter),
+            ))
+        elif post_ch:
+            fields.append(("Bucket Filter", "All buckets"))
+        if thresholds:
+            fields.append((
+                "Custom Thresholds",
+                f"Increased ≥ {thresholds.get('increased', 0):g}%, "
+                f"Steady ≥ {thresholds.get('steady', 0):g}%, "
+                f"Low ≥ {thresholds.get('low', 0):g}%, "
+                f"None ≥ {thresholds.get('none', 0):g}%",
+            ))
+        if labels:
+            fields.append((
+                "Custom Labels",
+                ", ".join(
+                    f"{DEFAULT_BUCKET_LABELS[b]}→{labels[b]}"
+                    for b in BUCKET_ORDER if labels.get(b)
+                ) or "—",
+            ))
+        proceed = await ask_proceed_with_existing_config(
+            channel,
+            title="📊 Current Growth Breakdown Setup",
+            description="Growth breakdown is already configured. Would you like to edit these settings?",
+            fields=fields,
+            cancel_event=cancel_event,
+            no_changes_message="✅ No changes made. Your breakdown setup is still active.",
+        )
+        if proceed is not True:
+            return
 
     await channel.send(
         "📊 **Growth Breakdown Setup** (💎 Premium)\n"
@@ -2727,12 +2772,19 @@ async def run_growth_breakdown_setup(interaction: discord.Interaction, bot):
 
     post_channel_id = 0
     if autopost_view.selected:
+        saved_post_ch = current.get("breakdown_post_channel_id") or 0
         post_ch_view = ChannelSelectStep(
             "Select the auto-post channel…",
             suggested_name="growth-breakdown",
             include_threads=True,
             guild=interaction.guild,
+            current_id=saved_post_ch,
         )
+        if post_ch_view.is_current_stale:
+            await channel.send(
+                "⚠️ Your previously configured breakdown channel no longer exists. "
+                "Pick a new one below."
+            )
         await channel.send(
             "**Auto-Post Channel**\n"
             "Where should the breakdown summaries land?",
@@ -3686,19 +3738,61 @@ async def run_survey_setup(interaction: discord.Interaction, bot,
     from config import (
         get_survey_config, save_survey_config,
         get_survey, save_extra_survey,
+        has_survey_config, get_config,
     )
     from defaults import DEFAULT_SURVEY_QUESTIONS
 
     if target_survey_id is None:
         current = get_survey_config(guild_id)
         wizard_label = "Survey Setup"
+        survey_already_configured = has_survey_config(guild_id)
+        # Main survey: channel ids live on guild_configs (legacy storage),
+        # not on guild_survey_config. Load them from there.
+        guild_cfg = get_config(guild_id)
+        saved_survey_ch = (guild_cfg.survey_channel_id if guild_cfg else 0) or 0
+        saved_notify_ch = (guild_cfg.survey_notify_channel_id if guild_cfg else 0) or 0
     else:
         current = get_survey(guild_id, target_survey_id) or {}
         # Carry the existing name through so we can preserve it on save.
         if not target_survey_name:
             target_survey_name = current.get("survey_name") or target_survey_id
         wizard_label = f"Survey Setup — {target_survey_name}"
+        survey_already_configured = bool(current)
+        # Extra surveys: channel ids are stored alongside the survey row.
+        saved_survey_ch = (current.get("survey_channel_id") or 0)
+        saved_notify_ch = (current.get("notify_channel_id") or 0)
     questions = list(current.get("questions") or [])
+
+    # ── If already configured, show summary and offer edit or cancel ─────────
+    if survey_already_configured:
+        q_count = len(questions)
+        fields = [
+            (
+                "Survey Channel",
+                f"<#{saved_survey_ch}>" if saved_survey_ch else "*not set*",
+            ),
+            (
+                "Notification Channel",
+                f"<#{saved_notify_ch}>" if saved_notify_ch else "*not set*",
+            ),
+            ("Stats Tab",   current.get("tab_squad_powers") or "*not set*"),
+            ("History Tab", current.get("tab_history")      or "*not set*"),
+            ("Questions",   f"{q_count} configured" if q_count else "*none*"),
+        ]
+        title = (
+            f"📋 Current Survey Setup — {target_survey_name}"
+            if target_survey_id else "📋 Current Survey Setup"
+        )
+        proceed = await ask_proceed_with_existing_config(
+            channel,
+            title=title,
+            description="This survey is already configured. Would you like to edit these settings?",
+            fields=fields,
+            cancel_event=cancel_event,
+            no_changes_message="✅ No changes made. Your survey setup is still active.",
+        )
+        if proceed is not True:
+            return
 
     await channel.send(
         f"⚙️ **{wizard_label}**\n"
@@ -3713,7 +3807,13 @@ async def run_survey_setup(interaction: discord.Interaction, bot,
         suggested_name="squad-survey",
         include_threads=is_premium_flag,
         guild=interaction.guild,
+        current_id=saved_survey_ch,
     )
+    if survey_ch_view.is_current_stale:
+        await channel.send(
+            "⚠️ Your previously configured survey channel no longer exists. "
+            "Pick a new one below."
+        )
     await channel.send(
         "**Step 1 of 6 — Survey Channel**\n"
         "Select the channel where the survey button will be posted for members to access:",
@@ -3733,7 +3833,13 @@ async def run_survey_setup(interaction: discord.Interaction, bot,
         suggested_name="survey-responses",
         include_threads=is_premium_flag,
         guild=interaction.guild,
+        current_id=saved_notify_ch,
     )
+    if notify_ch_view.is_current_stale:
+        await channel.send(
+            "⚠️ Your previously configured notification channel no longer exists. "
+            "Pick a new one below."
+        )
     await channel.send(
         "**Step 2 of 6 — Survey Notification Channel**\n"
         "Select the channel where leadership will be notified when a member submits the survey:",
@@ -4291,12 +4397,19 @@ async def run_storm_setup(interaction: discord.Interaction, bot, event_type: str
             return None
         return reply.content.strip()[:max_chars]
 
-    from config import get_storm_config, get_config
+    from config import get_storm_config, get_config, has_storm_config
     from defaults import DEFAULT_DS_TEMPLATE, DEFAULT_CS_TEMPLATE
     current   = get_storm_config(guild_id, event_type)
     guild_cfg = get_config(guild_id)
     timezone  = guild_cfg.timezone if guild_cfg and guild_cfg.timezone else "America/New_York"
     tz_label  = TIMEZONE_LABELS.get(timezone, timezone)
+    storm_already_configured = has_storm_config(guild_id, event_type)
+    saved_log_ch = (
+        guild_cfg.ds_log_channel_id if event_type == "DS"
+        else guild_cfg.cs_log_channel_id
+    ) if guild_cfg else 0
+    saved_log_ch = saved_log_ch or 0
+    saved_post_ch = current.get("post_channel_id") or 0
 
     # Default template and placeholders per event type
     if event_type == "DS":
@@ -4315,6 +4428,35 @@ async def run_storm_setup(interaction: discord.Interaction, bot, event_type: str
             "• `{subs}` — substitute members\n"
             "• `{time}` — event time (auto-filled when drafting)"
         )
+
+    # ── If already configured, show summary and offer edit or cancel ─────────
+    if storm_already_configured:
+        templates = current.get("templates") or []
+        fields = [
+            ("Sheet Tab",    current.get("tab_name") or "*not set*"),
+            ("Log Channel",  f"<#{saved_log_ch}>" if saved_log_ch else "*not set*"),
+            ("Post Channel", f"<#{saved_post_ch}>" if saved_post_ch else "*not set*"),
+            ("Timezone",     tz_label),
+            (
+                "Mail Templates",
+                ", ".join(t["name"] for t in templates) if templates else "Default",
+            ),
+            (
+                "Reminder DM",
+                "Custom" if (current.get("dm_reminder_message") or "").strip() else "Default",
+            ),
+        ]
+        emoji = "⚔️" if event_type == "DS" else "🏜️"
+        proceed = await ask_proceed_with_existing_config(
+            channel,
+            title=f"{emoji} Current {label} Setup",
+            description=f"{label} is already configured. Would you like to edit these settings?",
+            fields=fields,
+            cancel_event=cancel_event,
+            no_changes_message=f"✅ No changes made. Your {label} setup is still active.",
+        )
+        if proceed is not True:
+            return
 
     await channel.send(f"⚙️ **{label} Setup**")
 
@@ -4387,7 +4529,13 @@ async def run_storm_setup(interaction: discord.Interaction, bot, event_type: str
         suggested_name="storm-log",
         include_threads=is_premium_flag,
         guild=interaction.guild,
+        current_id=saved_log_ch,
     )
+    if log_ch_view.is_current_stale:
+        await channel.send(
+            f"⚠️ Your previously configured {label} log channel no longer exists. "
+            "Pick a new one below."
+        )
     await channel.send(
         f"**Step 3 of 7 — Storm Log Channel**\n"
         f"Select the channel where {label} participation/log summaries will be posted:",
@@ -4407,7 +4555,13 @@ async def run_storm_setup(interaction: discord.Interaction, bot, event_type: str
         suggested_name=f"{'desert' if event_type == 'DS' else 'canyon'}-storm",
         include_threads=is_premium_flag,
         guild=interaction.guild,
+        current_id=saved_post_ch,
     )
+    if post_ch_view.is_current_stale:
+        await channel.send(
+            f"⚠️ Your previously configured {label} mail post channel no longer exists. "
+            "Pick a new one below."
+        )
     await channel.send(
         f"**Step 4 of 7 — Mail Post Channel**\n"
         f"When leadership clicks **Post & Copy** at the end of `/"

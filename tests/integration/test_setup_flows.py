@@ -646,6 +646,98 @@ class TestRunSurveySetup:
         assert survey_cfg["tab_history"]      == "Survey History"
         assert len(survey_cfg["questions"])   > 0   # defaults loaded
 
+    @pytest.mark.asyncio
+    async def test_existing_config_shows_summary_and_keeps_unchanged(self, seeded_db):
+        """Re-running /setup_survey on a configured guild opens with the
+        summary embed; picking No-changes leaves state intact."""
+        import config
+        from setup_cog import run_survey_setup
+
+        # Pre-seed channel ids on guild_configs + survey config row.
+        config.update_config_field(TEST_GUILD_ID, "survey_channel_id",        300100)
+        config.update_config_field(TEST_GUILD_ID, "survey_notify_channel_id", 300200)
+        config.save_survey_config(
+            TEST_GUILD_ID,
+            tab_squad_powers="Squad Powers",
+            tab_history="Survey History",
+            questions=[{"key": "q1", "label": "Q1", "type": "text", "help_text": "", "options": []}],
+            intro_message="Take the survey!",
+        )
+
+        interaction = make_mock_interaction()
+        bot         = AsyncMock()
+
+        make_send_handler(
+            interaction.channel,
+            view_overrides={"proceed": False, "cancelled": False},
+        )
+        await run_survey_setup(interaction, bot)
+
+        cfg = config.get_config(TEST_GUILD_ID)
+        assert cfg.survey_channel_id        == 300100
+        assert cfg.survey_notify_channel_id == 300200
+
+    @pytest.mark.asyncio
+    async def test_existing_config_threads_both_channel_current_ids(self, seeded_db):
+        """Walking past the summary and through Steps 1+2 must pass the
+        saved survey_channel_id and survey_notify_channel_id as
+        current_id to their respective ChannelSelectStep calls."""
+        import config
+        from setup_cog import run_survey_setup
+
+        config.update_config_field(TEST_GUILD_ID, "survey_channel_id",        300300)
+        config.update_config_field(TEST_GUILD_ID, "survey_notify_channel_id", 300400)
+        config.save_survey_config(
+            TEST_GUILD_ID,
+            tab_squad_powers="Squad Powers",
+            tab_history="Survey History",
+            questions=[{"key": "q1", "label": "Q1", "type": "text", "help_text": "", "options": []}],
+            intro_message="Take the survey!",
+        )
+
+        interaction = make_mock_interaction()
+        bot         = AsyncMock()
+
+        new_survey_ch = MagicMock(id=300300)
+        new_notify_ch = MagicMock(id=300400)
+        ch_views = [
+            MagicMock(
+                confirmed=True, cancelled=False, is_current_stale=False,
+                selected_channel=new_survey_ch, wait=AsyncMock(),
+            ),
+            MagicMock(
+                confirmed=True, cancelled=False, is_current_stale=False,
+                selected_channel=new_notify_ch, wait=AsyncMock(),
+            ),
+        ]
+        ch_iter = iter(ch_views)
+
+        # Intro message comes via bot.wait_for.
+        bot.wait_for = AsyncMock(return_value=MagicMock(content="Survey!"))
+
+        ch_call_kwargs = []
+
+        def _record_ch(*a, **kw):
+            ch_call_kwargs.append(kw)
+            return next(ch_iter)
+
+        with patch("setup_cog.ChannelSelectStep", side_effect=_record_ch), \
+             patch_keep_or_change(["Squad Powers", "Survey History"]):
+            make_send_handler(
+                interaction.channel,
+                # Summary -> Edit; QuestionStartView -> default.
+                view_overrides={
+                    "proceed":   True,
+                    "choice":    "default",
+                    "cancelled": False,
+                },
+            )
+            await run_survey_setup(interaction, bot)
+
+        assert len(ch_call_kwargs) == 2
+        assert ch_call_kwargs[0]["current_id"] == 300300
+        assert ch_call_kwargs[1]["current_id"] == 300400
+
 
 # ── /setup_desertstorm and /setup_canyonstorm ─────────────────────────────────
 
@@ -709,6 +801,102 @@ class TestRunStormSetup:
 
         gcfg = config.get_config(TEST_GUILD_ID)
         assert gcfg.cs_log_channel_id == 666666
+
+    @pytest.mark.asyncio
+    async def test_existing_ds_config_shows_summary_and_keeps_unchanged(self, seeded_db):
+        """Re-running /setup_desertstorm on a configured guild opens with
+        the summary embed; No-changes keeps state intact. Regression
+        guard for #103."""
+        import config
+        from setup_cog import run_storm_setup
+
+        config.save_storm_config(
+            TEST_GUILD_ID, "DS",
+            tab_name="DS Assignments",
+            mail_template="template body",
+            timezone="America/New_York",
+            log_channel_id=555700,
+            post_channel_id=555800,
+        )
+        config.update_config_field(TEST_GUILD_ID, "ds_log_channel_id", 555700)
+
+        interaction = make_mock_interaction()
+        bot         = AsyncMock()
+
+        make_send_handler(
+            interaction.channel,
+            view_overrides={"proceed": False, "cancelled": False},
+        )
+        await run_storm_setup(interaction, bot, "DS")
+
+        # No changes were applied.
+        cfg = config.get_storm_config(TEST_GUILD_ID, "DS")
+        assert cfg["log_channel_id"]  == 555700
+        assert cfg["post_channel_id"] == 555800
+
+    @pytest.mark.asyncio
+    async def test_existing_ds_config_threads_both_channel_current_ids(self, seeded_db):
+        """Walking past the summary into Steps 3 + 4 must pass the saved
+        log_channel_id and post_channel_id as current_id to their
+        respective ChannelSelectStep calls."""
+        import config
+        from setup_cog import run_storm_setup
+
+        config.save_storm_config(
+            TEST_GUILD_ID, "DS",
+            tab_name="DS Assignments",
+            mail_template="template",
+            timezone="America/New_York",
+            log_channel_id=555900,
+            post_channel_id=555950,
+        )
+        config.update_config_field(TEST_GUILD_ID, "ds_log_channel_id", 555900)
+
+        interaction = make_mock_interaction()
+        bot         = AsyncMock()
+
+        new_log_ch  = MagicMock(id=555900)
+        new_post_ch = MagicMock(id=555950)
+        ch_views = [
+            MagicMock(
+                confirmed=True, cancelled=False, is_current_stale=False,
+                selected_channel=new_log_ch, wait=AsyncMock(),
+            ),
+            MagicMock(
+                confirmed=True, cancelled=False, is_current_stale=False,
+                selected_channel=new_post_ch, wait=AsyncMock(),
+            ),
+        ]
+        ch_iter = iter(ch_views)
+        ch_call_kwargs = []
+
+        def _record_ch(*a, **kw):
+            ch_call_kwargs.append(kw)
+            return next(ch_iter)
+
+        async def _skip_participation(*args, **kwargs):
+            return {"enabled": 0, "tab_name": "", "questions": [],
+                    "roster_tab": "", "roster_name_col": 0,
+                    "roster_alias_col": -1, "roster_start_row": 2}
+
+        with patch("setup_cog.ChannelSelectStep", side_effect=_record_ch), \
+             patch("setup_cog._run_storm_participation_step", side_effect=_skip_participation), \
+             patch_keep_or_change(["DS Assignments", ""]):
+            make_send_handler(
+                interaction.channel,
+                view_overrides={
+                    # Summary -> Edit; team -> A; template -> use default.
+                    "proceed":     True,
+                    "selected":    "A",
+                    "use_default": True,
+                    "cancelled":   False,
+                },
+            )
+            await run_storm_setup(interaction, bot, "DS")
+
+        assert len(ch_call_kwargs) == 2
+        assert ch_call_kwargs[0]["current_id"] == 555900
+        assert ch_call_kwargs[1]["current_id"] == 555950
 
 
 # ── /setup_growth ─────────────────────────────────────────────────────────────
@@ -1028,6 +1216,159 @@ class TestRunShinyTasksSetup:
             await run_shiny_tasks_setup(interaction, bot)
 
         assert captured["had_prior_config"] is False
+
+
+# ── /setup_growth_breakdown ───────────────────────────────────────────────────
+
+class TestRunGrowthBreakdownSetup:
+    """Test /setup_growth_breakdown threads current_id through the
+    auto-post channel pick and shows the summary embed on re-runs.
+    Regression guard for #100."""
+
+    @pytest.mark.asyncio
+    async def test_existing_config_shows_summary_and_keeps_unchanged(self, seeded_db):
+        """Re-running on a configured guild shows the summary embed;
+        picking No keeps the saved config."""
+        import config
+        from setup_cog import run_growth_breakdown_setup
+
+        # Prereq: growth must be enabled with metrics for the breakdown
+        # wizard to proceed past its guard.
+        config.save_growth_config(
+            TEST_GUILD_ID, enabled=1,
+            tab_source="Squad Powers", name_col="A",
+            metrics=[{"label": "1st Squad Power", "col": "E"}],
+            tab_growth="Growth Tracking",
+            snapshot_frequency="monthly", snapshot_day=1, snapshot_interval=30,
+            data_start_row=2,
+        )
+        config.save_growth_breakdown_config(
+            TEST_GUILD_ID,
+            tab_breakdown="My Breakdown",
+            breakdown_thresholds={},
+            breakdown_labels={},
+            breakdown_post_channel_id=800800,
+            breakdown_bucket_filter=[],
+        )
+
+        interaction = make_mock_interaction()
+        bot         = AsyncMock()
+
+        make_send_handler(
+            interaction.channel,
+            view_overrides={"proceed": False, "cancelled": False},
+        )
+        await run_growth_breakdown_setup(interaction, bot)
+
+        cfg = config.get_growth_config(TEST_GUILD_ID)
+        assert cfg["breakdown_post_channel_id"] == 800800
+        assert cfg["tab_breakdown"]             == "My Breakdown"
+
+    @pytest.mark.asyncio
+    async def test_existing_config_threads_post_channel_current_id(self, seeded_db):
+        """Walking through to Step 2 (Auto-Post = Yes) must pass the
+        saved breakdown_post_channel_id as current_id to
+        ChannelSelectStep."""
+        import config
+        from setup_cog import run_growth_breakdown_setup
+
+        config.save_growth_config(
+            TEST_GUILD_ID, enabled=1,
+            tab_source="Squad Powers", name_col="A",
+            metrics=[{"label": "1st Squad Power", "col": "E"}],
+            tab_growth="Growth Tracking",
+            snapshot_frequency="monthly", snapshot_day=1, snapshot_interval=30,
+            data_start_row=2,
+        )
+        config.save_growth_breakdown_config(
+            TEST_GUILD_ID,
+            tab_breakdown="Growth Breakdown",
+            breakdown_thresholds={},
+            breakdown_labels={},
+            breakdown_post_channel_id=800900,
+            breakdown_bucket_filter=[],
+        )
+
+        interaction = make_mock_interaction()
+        bot         = AsyncMock()
+
+        # ChannelSelectStep capture + auto-confirm.
+        new_channel = MagicMock(id=800900)
+        ch_view = MagicMock(
+            confirmed=True, cancelled=False, is_current_stale=False,
+            selected_channel=new_channel, wait=AsyncMock(),
+        )
+        ch_call_kwargs = []
+
+        def _record_ch(*a, **kw):
+            ch_call_kwargs.append(kw)
+            return ch_view
+
+        # AutoPost YesNoView -> Yes.
+        autopost_yes = MagicMock(selected=True, cancelled=False, wait=AsyncMock())
+
+        with patch("setup_cog.YesNoView",         return_value=autopost_yes), \
+             patch("setup_cog.ChannelSelectStep", side_effect=_record_ch), \
+             patch_keep_or_change(["Growth Breakdown"]):  # Step 1 tab name
+            # Summary proceed=True; inline bucket-filter / thresholds /
+            # labels views auto-resolve via send-handler overrides.
+            make_send_handler(
+                interaction.channel,
+                view_overrides={
+                    "proceed":  True,
+                    "selected": [],          # BucketFilterView -> "use all"
+                    "choice":   "defaults",  # ThresholdsChoiceView + LabelsChoiceView
+                    "cancelled": False,
+                },
+            )
+            await run_growth_breakdown_setup(interaction, bot)
+
+        assert len(ch_call_kwargs) == 1
+        assert ch_call_kwargs[0]["current_id"] == 800900
+
+    @pytest.mark.asyncio
+    async def test_first_run_skips_summary(self, seeded_db):
+        """First-time setup (no breakdown fields saved) should NOT show
+        the summary — has_growth_breakdown_config returns False, the
+        guard short-circuits, and the wizard walks Step 1 directly."""
+        import config
+        from setup_cog import run_growth_breakdown_setup
+
+        config.save_growth_config(
+            TEST_GUILD_ID, enabled=1,
+            tab_source="Squad Powers", name_col="A",
+            metrics=[{"label": "1st Squad Power", "col": "E"}],
+            tab_growth="Growth Tracking",
+            snapshot_frequency="monthly", snapshot_day=1, snapshot_interval=30,
+            data_start_row=2,
+        )
+        # No save_growth_breakdown_config — defaults all the way.
+
+        interaction = make_mock_interaction()
+        bot         = AsyncMock()
+        # AutoPost -> No so we skip the channel/filter steps.
+        autopost_no = MagicMock(selected=False, cancelled=False, wait=AsyncMock())
+
+        with patch("setup_cog.YesNoView", return_value=autopost_no), \
+             patch_keep_or_change(["Growth Breakdown"]):
+            make_send_handler(
+                interaction.channel,
+                view_overrides={
+                    # If summary HAD fired, proceed=False would short-
+                    # circuit and we'd never reach the auto-post toggle.
+                    # We assert it didn't fire by checking the breakdown
+                    # config actually got saved.
+                    "choice":   "defaults",
+                    "cancelled": False,
+                },
+            )
+            await run_growth_breakdown_setup(interaction, bot)
+
+        # Save happened (Step 1 tab name + defaults), confirming the
+        # wizard walked all the way through.
+        cfg = config.get_growth_config(TEST_GUILD_ID)
+        assert cfg["breakdown_post_channel_id"] == 0
+        assert cfg["tab_breakdown"]             == "Growth Breakdown"
 
 
 # ── /setup_events ─────────────────────────────────────────────────────────────

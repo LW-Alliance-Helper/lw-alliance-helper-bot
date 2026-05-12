@@ -4397,12 +4397,19 @@ async def run_storm_setup(interaction: discord.Interaction, bot, event_type: str
             return None
         return reply.content.strip()[:max_chars]
 
-    from config import get_storm_config, get_config
+    from config import get_storm_config, get_config, has_storm_config
     from defaults import DEFAULT_DS_TEMPLATE, DEFAULT_CS_TEMPLATE
     current   = get_storm_config(guild_id, event_type)
     guild_cfg = get_config(guild_id)
     timezone  = guild_cfg.timezone if guild_cfg and guild_cfg.timezone else "America/New_York"
     tz_label  = TIMEZONE_LABELS.get(timezone, timezone)
+    storm_already_configured = has_storm_config(guild_id, event_type)
+    saved_log_ch = (
+        guild_cfg.ds_log_channel_id if event_type == "DS"
+        else guild_cfg.cs_log_channel_id
+    ) if guild_cfg else 0
+    saved_log_ch = saved_log_ch or 0
+    saved_post_ch = current.get("post_channel_id") or 0
 
     # Default template and placeholders per event type
     if event_type == "DS":
@@ -4421,6 +4428,35 @@ async def run_storm_setup(interaction: discord.Interaction, bot, event_type: str
             "• `{subs}` — substitute members\n"
             "• `{time}` — event time (auto-filled when drafting)"
         )
+
+    # ── If already configured, show summary and offer edit or cancel ─────────
+    if storm_already_configured:
+        templates = current.get("templates") or []
+        fields = [
+            ("Sheet Tab",    current.get("tab_name") or "*not set*"),
+            ("Log Channel",  f"<#{saved_log_ch}>" if saved_log_ch else "*not set*"),
+            ("Post Channel", f"<#{saved_post_ch}>" if saved_post_ch else "*not set*"),
+            ("Timezone",     tz_label),
+            (
+                "Mail Templates",
+                ", ".join(t["name"] for t in templates) if templates else "Default",
+            ),
+            (
+                "Reminder DM",
+                "Custom" if (current.get("dm_reminder_message") or "").strip() else "Default",
+            ),
+        ]
+        emoji = "⚔️" if event_type == "DS" else "🏜️"
+        proceed = await ask_proceed_with_existing_config(
+            channel,
+            title=f"{emoji} Current {label} Setup",
+            description=f"{label} is already configured. Would you like to edit these settings?",
+            fields=fields,
+            cancel_event=cancel_event,
+            no_changes_message=f"✅ No changes made. Your {label} setup is still active.",
+        )
+        if proceed is not True:
+            return
 
     await channel.send(f"⚙️ **{label} Setup**")
 
@@ -4493,7 +4529,13 @@ async def run_storm_setup(interaction: discord.Interaction, bot, event_type: str
         suggested_name="storm-log",
         include_threads=is_premium_flag,
         guild=interaction.guild,
+        current_id=saved_log_ch,
     )
+    if log_ch_view.is_current_stale:
+        await channel.send(
+            f"⚠️ Your previously configured {label} log channel no longer exists. "
+            "Pick a new one below."
+        )
     await channel.send(
         f"**Step 3 of 7 — Storm Log Channel**\n"
         f"Select the channel where {label} participation/log summaries will be posted:",
@@ -4513,7 +4555,13 @@ async def run_storm_setup(interaction: discord.Interaction, bot, event_type: str
         suggested_name=f"{'desert' if event_type == 'DS' else 'canyon'}-storm",
         include_threads=is_premium_flag,
         guild=interaction.guild,
+        current_id=saved_post_ch,
     )
+    if post_ch_view.is_current_stale:
+        await channel.send(
+            f"⚠️ Your previously configured {label} mail post channel no longer exists. "
+            "Pick a new one below."
+        )
     await channel.send(
         f"**Step 4 of 7 — Mail Post Channel**\n"
         f"When leadership clicks **Post & Copy** at the end of `/"

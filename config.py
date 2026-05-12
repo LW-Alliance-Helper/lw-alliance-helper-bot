@@ -1095,6 +1095,22 @@ def _normalize_storm_templates(d: dict, event_type: str) -> dict:
     return d
 
 
+def has_storm_config(guild_id: int, event_type: str) -> bool:
+    """True iff the guild has a row in `guild_storm_config` for this
+    event_type — i.e. they have run `/setup_desertstorm` or
+    `/setup_canyonstorm` at least once. The fallback dict from
+    `get_storm_config` doesn't distinguish "saved with all defaults"
+    from "never configured"; this helper exists for the setup-wizard
+    summary embed gate (#103)."""
+    with _get_conn() as conn:
+        row = conn.execute(
+            "SELECT 1 FROM guild_storm_config "
+            "WHERE guild_id = ? AND event_type = ?",
+            (guild_id, event_type),
+        ).fetchone()
+    return row is not None
+
+
 def get_storm_config(guild_id: int, event_type: str) -> dict:
     """Return storm config for a guild and event type (DS or CS)."""
     with _get_conn() as conn:

@@ -170,6 +170,89 @@ class TestRunSetup:
         cfg = config.get_config(TEST_GUILD_ID)
         assert cfg.timezone == original_tz
 
+    @pytest.mark.asyncio
+    async def test_existing_config_threads_current_id_through_pickers(self, seeded_db):
+        """Re-running /setup on a configured guild must pass the saved
+        role and channel ids through to the pickers so leadership sees
+        Keep-current buttons. Regression guard for #95."""
+        import config
+        from setup_cog import run_setup
+
+        cfg = config.get_config(TEST_GUILD_ID)
+        cfg.setup_complete       = True
+        cfg.member_role_id       = 4001
+        cfg.member_role_name     = "Member"
+        cfg.leadership_role_id   = 4002
+        cfg.leadership_role_name = "R4/R5"
+        cfg.leadership_channel_id = 4003
+        config.save_config(cfg)
+
+        interaction = make_mock_interaction()
+        bot         = AsyncMock()
+
+        new_member  = MagicMock(name="member_role",  id=4001)
+        new_member.name = "Member"
+        new_lead    = MagicMock(name="lead_role",    id=4002)
+        new_lead.name   = "R4/R5"
+        new_channel = MagicMock(name="lead_channel", id=4003)
+        new_channel.category_id = None
+
+        role_step_1 = MagicMock(
+            confirmed=True, selected_role=new_member,
+            is_current_stale=False, cancelled=False,
+            wait=AsyncMock(),
+        )
+        role_step_2 = MagicMock(
+            confirmed=True, selected_role=new_lead,
+            is_current_stale=False, cancelled=False,
+            wait=AsyncMock(),
+        )
+        ch_step     = MagicMock(
+            confirmed=True, selected_channel=new_channel,
+            is_current_stale=False, cancelled=False,
+            wait=AsyncMock(),
+        )
+        tz_view     = MagicMock(confirmed=True, selected="America/New_York", wait=AsyncMock())
+        sheet_modal = MagicMock(value="sheet_xyz")
+        modal_view  = MagicMock(confirmed=True, wait=AsyncMock())
+        share_done  = MagicMock(confirmed=True, wait=AsyncMock())
+        confirm     = MagicMock(confirmed=True, wait=AsyncMock())
+
+        role_iter         = iter([role_step_1, role_step_2])
+        role_call_kwargs  = []
+        ch_call_kwargs    = []
+
+        def _record_role(*a, **kw):
+            role_call_kwargs.append(kw)
+            return next(role_iter)
+
+        def _record_ch(*a, **kw):
+            ch_call_kwargs.append(kw)
+            return ch_step
+
+        with patch("setup_cog.RoleSelectStep",     side_effect=_record_role), \
+             patch("setup_cog.ChannelSelectStep",  side_effect=_record_ch), \
+             patch("setup_cog.TimezoneSelectView", return_value=tz_view), \
+             patch("setup_cog.TextInputModal",     return_value=sheet_modal), \
+             patch("setup_cog.ModalLaunchView",    return_value=modal_view), \
+             patch("setup_cog.ConfirmView",        side_effect=[share_done, confirm]):
+            # The pre-wizard summary's EditOrCancelView (inline inside
+            # ask_proceed_with_existing_config) is the first view through
+            # send; route it to proceed=True so we enter the steps.
+            make_send_handler(
+                interaction.channel,
+                view_overrides={"proceed": True, "cancelled": False},
+            )
+            await run_setup(interaction, bot)
+
+        # Both role picks received the saved ids/names.
+        assert role_call_kwargs[0]["current_id"]   == 4001
+        assert role_call_kwargs[0]["current_name"] == "Member"
+        assert role_call_kwargs[1]["current_id"]   == 4002
+        assert role_call_kwargs[1]["current_name"] == "R4/R5"
+        # Channel pick received the saved id.
+        assert ch_call_kwargs[0]["current_id"] == 4003
+
 
 # ── /setup_train ──────────────────────────────────────────────────────────────
 

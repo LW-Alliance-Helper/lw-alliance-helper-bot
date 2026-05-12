@@ -203,7 +203,10 @@ def check_and_add_birthdays(schedule: dict, guild_id: int = None) -> tuple[dict,
     today       = date.today()
     check_year  = today.year
     added_count = 0
-    alerts      = []
+    # Per-member conflict records collected during the loop; folded into
+    # a single combined Discord message at the end so leadership gets
+    # one post listing every affected member, not one post per member.
+    conflicts: list[dict] = []
 
     for member in members:
         month = member["month"]
@@ -251,19 +254,19 @@ def check_and_add_birthdays(schedule: dict, guild_id: int = None) -> tuple[dict,
                 break
 
         if placed_date is None:
-            # All three dates occupied — alert leadership and leave schedule untouched
-            bday_fmt  = f"{bday:%A, %B} {bday.day}"
+            # All three dates occupied — record the conflict, leave the
+            # schedule untouched, and continue collecting any other
+            # conflicts so we can post a single combined alert at the
+            # bottom of the loop.
             taken = []
             for candidate in (bday, bday - timedelta(days=1), bday + timedelta(days=1)):
                 occupant = schedule[candidate.isoformat()].get("name", "someone")
                 taken.append(f"{candidate:%b} {candidate.day} ({occupant})")
-            alert = (
-                f"🚨 **Birthday scheduling conflict — manual action needed!**\n"
-                f"**{name}'s** birthday is **{bday_fmt}** but all three surrounding dates are taken:\n"
-                + "\n".join(f"• {t}" for t in taken)
-                + f"\nPlease manually add {name} to the schedule."
-            )
-            alerts.append(alert)
+            conflicts.append({
+                "name":     name,
+                "bday_fmt": f"{bday:%A, %B} {bday.day}",
+                "taken":    taken,
+            })
             print(f"[BIRTHDAY] CONFLICT — could not place {name} around {bday.isoformat()}")
             continue
 
@@ -288,4 +291,24 @@ def check_and_add_birthdays(schedule: dict, guild_id: int = None) -> tuple[dict,
     if added_count:
         print(f"[BIRTHDAY] Added {added_count} birthday entr{'y' if added_count == 1 else 'ies'} to schedule")
 
-    return schedule, alerts
+    # Fold every conflict into a single combined alert message. The list
+    # is always 0 or 1 entries — callers that iterate `alerts` end up
+    # sending at most one Discord message per check_and_add_birthdays
+    # invocation, no matter how many members hit the conflict path.
+    if not conflicts:
+        return schedule, []
+    sections = [
+        f"**{c['name']}'s** birthday is **{c['bday_fmt']}** but all three "
+        f"surrounding dates are taken:\n"
+        + "\n".join(f"• {t}" for t in c["taken"])
+        for c in conflicts
+    ]
+    combined = (
+        "🚨 **Birthday scheduling conflict — manual action needed!**\n\n"
+        + "\n\n".join(sections)
+        + "\n\nPlease manually add "
+        + ("this member" if len(conflicts) == 1
+           else "these members")
+        + " to the schedule."
+    )
+    return schedule, [combined]

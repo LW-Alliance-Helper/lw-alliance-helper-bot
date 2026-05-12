@@ -221,20 +221,21 @@ def init_db():
         # hardcoded default in train_cog.py". Supports `{name}` placeholder.
         conn.execute("""
             CREATE TABLE IF NOT EXISTS guild_birthday_config (
-                guild_id             INTEGER PRIMARY KEY,
-                tab_name             TEXT    DEFAULT 'Birthdays',
-                name_col             INTEGER DEFAULT 0,
-                birthday_col         INTEGER DEFAULT 1,
-                discord_id_col       INTEGER DEFAULT -1,
-                data_start_row       INTEGER DEFAULT 2,
-                enabled              INTEGER DEFAULT 1,
-                train_integration    INTEGER DEFAULT 0,
-                flexible_placement   INTEGER DEFAULT 1,
-                lookahead_days       INTEGER DEFAULT 14,
-                reminders_enabled    INTEGER DEFAULT 0,
-                reminder_channel_id  INTEGER DEFAULT 0,
-                reminder_time        TEXT    DEFAULT '08:00',
-                dm_message           TEXT    DEFAULT ''
+                guild_id                   INTEGER PRIMARY KEY,
+                tab_name                   TEXT    DEFAULT 'Birthdays',
+                name_col                   INTEGER DEFAULT 0,
+                birthday_col               INTEGER DEFAULT 1,
+                discord_id_col             INTEGER DEFAULT -1,
+                data_start_row             INTEGER DEFAULT 2,
+                enabled                    INTEGER DEFAULT 1,
+                train_integration          INTEGER DEFAULT 0,
+                flexible_placement         INTEGER DEFAULT 1,
+                lookahead_days             INTEGER DEFAULT 14,
+                reminders_enabled          INTEGER DEFAULT 0,
+                reminder_channel_id        INTEGER DEFAULT 0,
+                reminder_time              TEXT    DEFAULT '08:00',
+                dm_message                 TEXT    DEFAULT '',
+                last_train_population_date TEXT    DEFAULT ''
             )
         """)
         conn.commit()
@@ -495,6 +496,13 @@ def init_db():
             ("reminder_time",       "TEXT DEFAULT '08:00'"),
             # Premium birthday DM body (empty → hardcoded default in train_cog.py)
             ("dm_message",          "TEXT DEFAULT ''"),
+            # SQLite-backed dedup for the 22:00 ET train-population fire.
+            # ISO date of the last successful auto-pop. Survives bot
+            # restarts and discord.py reconnects, which the prior
+            # in-memory `birthday_population_fired` set on the cog did
+            # not (Railway redeploys at 22:00 were re-firing the
+            # conflict alerts). See #89.
+            ("last_train_population_date", "TEXT DEFAULT ''"),
         ]:
             try:
                 conn.execute(f"ALTER TABLE guild_birthday_config ADD COLUMN {col} {definition}")
@@ -1644,20 +1652,21 @@ def get_birthday_config(guild_id: int) -> dict:
     if row:
         return dict(row)
     return {
-        "guild_id":            guild_id,
-        "tab_name":            "Birthdays",
-        "name_col":            0,
-        "birthday_col":        1,
-        "discord_id_col":      -1,
-        "data_start_row":      2,
-        "enabled":             0,
-        "train_integration":   0,
-        "flexible_placement":  1,
-        "lookahead_days":      14,
-        "reminders_enabled":   0,
-        "reminder_channel_id": 0,
-        "reminder_time":       "08:00",
-        "dm_message":          "",
+        "guild_id":                   guild_id,
+        "tab_name":                   "Birthdays",
+        "name_col":                   0,
+        "birthday_col":               1,
+        "discord_id_col":             -1,
+        "data_start_row":             2,
+        "enabled":                    0,
+        "train_integration":          0,
+        "flexible_placement":         1,
+        "lookahead_days":             14,
+        "reminders_enabled":          0,
+        "reminder_channel_id":        0,
+        "reminder_time":              "08:00",
+        "dm_message":                 "",
+        "last_train_population_date": "",
     }
 
 
@@ -1690,6 +1699,39 @@ def save_birthday_config(guild_id: int, tab_name: str, name_col: int,
             (guild_id, tab_name, name_col, birthday_col, discord_id_col, data_start_row,
              enabled, train_integration, flexible_placement, lookahead_days,
              reminders_enabled, reminder_channel_id, reminder_time, dm_message)
+        )
+        conn.commit()
+
+
+def get_birthday_population_last_fired(guild_id: int) -> str:
+    """Return the ISO date the birthday auto-population last fired for
+    this guild, or `""` when it hasn't fired yet (or the guild has no
+    birthday config row). Used by the train cog's 22:00 ET scheduler to
+    dedup across bot restarts — the previous in-memory set on the cog
+    instance got wiped on every Railway redeploy. See #89."""
+    with _get_conn() as conn:
+        row = conn.execute(
+            "SELECT last_train_population_date FROM guild_birthday_config "
+            "WHERE guild_id = ?",
+            (guild_id,),
+        ).fetchone()
+    if row is None:
+        return ""
+    return (dict(row).get("last_train_population_date") or "")
+
+
+def mark_birthday_population_fired(guild_id: int, date_iso: str) -> None:
+    """Stamp `last_train_population_date` so subsequent ticks (including
+    fresh-process ticks after a Railway redeploy) skip the auto-pop for
+    the rest of the day. UPDATE-only — the guild has to have run
+    `/setup_birthdays` first for the row to exist, in which case the
+    caller's `bcfg.get("train_integration")` check has already passed
+    so we know the row is present."""
+    with _get_conn() as conn:
+        conn.execute(
+            "UPDATE guild_birthday_config SET last_train_population_date = ? "
+            "WHERE guild_id = ?",
+            (date_iso, guild_id),
         )
         conn.commit()
 

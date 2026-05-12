@@ -63,13 +63,31 @@ def _make_thread(name: str, parent_name: str, parent_id: int, *,
     return thread
 
 
-def _make_guild(threads: list[MagicMock], guild_id: int = 999) -> MagicMock:
-    """Build a Guild-like mock with .threads, .me, and .id."""
+def _make_guild(
+    threads: list[MagicMock],
+    guild_id: int = 999,
+    channels: list[MagicMock] | None = None,
+) -> MagicMock:
+    """Build a Guild-like mock with .threads, .me, .id, and lookup
+    methods (get_channel / get_thread) for the Keep-current path."""
     guild = MagicMock(spec=discord.Guild)
     guild.id      = guild_id
     guild.threads = threads
     guild.me      = MagicMock()
+
+    channels_by_id = {c.id: c for c in (channels or [])}
+    threads_by_id  = {t.id: t for t in threads}
+    guild.get_channel = lambda i: channels_by_id.get(i)
+    guild.get_thread  = lambda i: threads_by_id.get(i)
     return guild
+
+
+def _make_channel(name: str, channel_id: int) -> MagicMock:
+    """Build a TextChannel-like mock for Keep-current resolution."""
+    ch = MagicMock(spec=discord.TextChannel)
+    ch.id   = channel_id
+    ch.name = name
+    return ch
 
 
 def _labels(view) -> list[str]:
@@ -357,3 +375,125 @@ class TestCreateButtonAlwaysVisible:
             "placeholder", include_threads=False, allow_create=False,
         )
         assert "➕ Create a new channel" not in _labels(view)
+
+
+# ── Keep-current button (#80 / #94) ──────────────────────────────────────────
+
+class TestKeepCurrentChannel:
+    """When the wizard passes a `current_id` that still resolves to a
+    live channel, the view should render a green "Keep current" button
+    above the picker so leadership doesn't have to rediscover the saved
+    value. When the channel was deleted, the view should expose
+    `is_current_stale=True` so the caller can post a warning."""
+
+    def test_current_id_resolves_renders_keep_button(self):
+        from setup_cog import ChannelSelectStep
+        leadership = _make_channel("leadership", 555)
+        guild = _make_guild([], channels=[leadership])
+        view = ChannelSelectStep(
+            "placeholder", guild=guild, current_id=555,
+        )
+        labels = _labels(view)
+        assert any("Keep current" in lbl and "leadership" in lbl for lbl in labels)
+        assert view.is_current_stale is False
+
+    def test_current_id_none_does_not_render_keep_button(self):
+        from setup_cog import ChannelSelectStep
+        guild = _make_guild([], channels=[_make_channel("leadership", 555)])
+        view = ChannelSelectStep("placeholder", guild=guild)  # current_id default None
+        labels = _labels(view)
+        assert not any("Keep current" in lbl for lbl in labels)
+        assert view.is_current_stale is False
+
+    def test_current_id_zero_treated_as_unset(self):
+        """The schema stores 0 for "not configured". The keep button
+        must not appear in that case — there's nothing to keep."""
+        from setup_cog import ChannelSelectStep
+        guild = _make_guild([], channels=[_make_channel("leadership", 555)])
+        view = ChannelSelectStep("placeholder", guild=guild, current_id=0)
+        labels = _labels(view)
+        assert not any("Keep current" in lbl for lbl in labels)
+        assert view.is_current_stale is False
+
+    def test_stale_current_id_flags_is_current_stale(self):
+        """current_id is set but the channel was deleted — guild lookup
+        returns None. View should still render its normal picker, and
+        `is_current_stale` should flip True for the caller."""
+        from setup_cog import ChannelSelectStep
+        guild = _make_guild([], channels=[])  # no channels registered
+        view = ChannelSelectStep(
+            "placeholder",
+            guild=guild,
+            current_id=999,
+            current_name="leadership",
+        )
+        labels = _labels(view)
+        assert not any("Keep current" in lbl for lbl in labels)
+        assert view.is_current_stale is True
+        # Picker still rendered.
+        assert any(isinstance(c, discord.ui.ChannelSelect) for c in view.children)
+
+    @pytest.mark.asyncio
+    async def test_clicking_keep_sets_selected_channel_and_stops(self):
+        from setup_cog import ChannelSelectStep
+        leadership = _make_channel("leadership", 555)
+        guild = _make_guild([], channels=[leadership])
+        view = ChannelSelectStep("placeholder", guild=guild, current_id=555)
+
+        keep_btn = next(c for c in view.children
+                        if isinstance(c, discord.ui.Button)
+                        and "Keep current" in (c.label or ""))
+        inter = MagicMock()
+        inter.response.edit_message = AsyncMock()
+        await keep_btn.callback(inter)
+
+        assert view.selected_channel is leadership
+        assert view.confirmed is True
+        assert view.is_finished()
+
+    def test_current_id_resolves_to_thread_renders_keep_button(self):
+        """When the saved id matches a thread (because the guild used a
+        thread-as-destination originally), the keep button still shows."""
+        from setup_cog import ChannelSelectStep
+        thread = _make_thread("dt-mail", "r4-chat", 100, thread_id=777)
+        guild = _make_guild([thread])
+        view = ChannelSelectStep(
+            "placeholder",
+            include_threads=True,
+            guild=guild,
+            current_id=777,
+        )
+        labels = _labels(view)
+        assert any("Keep current" in lbl and "dt-mail" in lbl for lbl in labels)
+        assert view.is_current_stale is False
+
+    def test_keep_button_appears_in_thread_button_flow(self):
+        """A guild with pickable threads enters the button-driven flow
+        (📢 Channel / 🧵 Thread). The keep button must coexist with
+        those buttons, not get clobbered when the user clicks Channel."""
+        from setup_cog import ChannelSelectStep
+        leadership = _make_channel("leadership", 555)
+        thread = _make_thread("dt-mail", "r4-chat", 100)
+        guild = _make_guild([thread], channels=[leadership])
+        view = ChannelSelectStep(
+            "placeholder",
+            include_threads=True,
+            guild=guild,
+            current_id=555,
+        )
+        labels = _labels(view)
+        # Three buttons in the initial state: keep + channel + thread.
+        assert any("Keep current" in lbl for lbl in labels)
+        assert "📢 Channel" in labels
+        assert "🧵 Thread" in labels
+
+    def test_long_channel_name_clipped_to_80_chars(self):
+        from setup_cog import ChannelSelectStep
+        long_name = "x" * 200
+        long_ch   = _make_channel(long_name, 555)
+        guild     = _make_guild([], channels=[long_ch])
+        view = ChannelSelectStep("placeholder", guild=guild, current_id=555)
+        keep_btn = next(c for c in view.children
+                        if isinstance(c, discord.ui.Button)
+                        and "Keep current" in (c.label or ""))
+        assert len(keep_btn.label) <= 80

@@ -119,7 +119,7 @@ repo `../lw-alliance-helper.github.io` (the website) has its own
 | `stats_publisher.py` | Daily alliance-count publisher to website. | ~155 |
 | `shiny_tasks.py` | Daily Shiny Tasks announcement (cpt-hedge fetch + 3-day cycle math + render). Per-minute post loop and weekly refresh loop live in `bot.py`. Free for all tiers. See `docs/hedge_data_source.md`. | ~250 |
 
-Tests: `tests/unit/` and `tests/integration/`. 610 collected, 18 skip
+Tests: `tests/unit/` and `tests/integration/`. 851 collected, 18 skip
 (intentional — `free_tier_only` markers under the `FORCE_PREMIUM=1` CI
 lane).
 
@@ -231,6 +231,8 @@ the long form on each.
 
 | Version | What |
 |---|---|
+| `1.3.0` | Setup wizard re-entry UX overhaul ([#80](https://github.com/LW-Alliance-Helper/lw-alliance-helper-bot/issues/80)): every `/setup_*` command (plus `/setup_members`) opens with a saved-config summary on re-entry; Keep current buttons across every channel, role, timezone, sheet ID, time, default tone, intro message, and `ask_keep_or_change` step; enable-toggle wizards (`/setup_birthdays`, `/setup_growth`, `/setup_shiny_tasks`) preserve config on disable with an optional 🗑️ Clear my saved configuration button. Shiny-tasks weekly refresh no longer thrashes cpt-hedge on every Railway redeploy — gated on the last-seen timestamp in `shiny_task_servers` ([#109](https://github.com/LW-Alliance-Helper/lw-alliance-helper-bot/issues/109)). |
+| `1.2.0` | Growth Breakdown classifies snapshot deltas into Increased / Steady / Low / None / Decline buckets, with optional Premium auto-post + bucket filter + custom thresholds/labels ([#34](https://github.com/LW-Alliance-Helper/lw-alliance-helper-bot/issues/34)). Daily Shiny Tasks free-tier announcement posts every LW server in the alliance's transfer range that has shiny tasks today, refreshed weekly from cpt-hedge ([#72](https://github.com/LW-Alliance-Helper/lw-alliance-helper-bot/issues/72)). `/export_config` + `/import_config` move config across guilds via JSON with a channel/role remap wizard ([#42](https://github.com/LW-Alliance-Helper/lw-alliance-helper-bot/issues/42)). DS/CS zones lock to canonical game-defined names ([#35](https://github.com/LW-Alliance-Helper/lw-alliance-helper-bot/issues/35)); DS/CS subs flatten to plain name lists ([#37](https://github.com/LW-Alliance-Helper/lw-alliance-helper-bot/issues/37)). Multiple breakdown auto-post fixes ([#84](https://github.com/LW-Alliance-Helper/lw-alliance-helper-bot/issues/84), [#85](https://github.com/LW-Alliance-Helper/lw-alliance-helper-bot/issues/85), [#87](https://github.com/LW-Alliance-Helper/lw-alliance-helper-bot/issues/87)) and birthday→train conflict spam consolidated with restart-survival via persisted dedup ([#89](https://github.com/LW-Alliance-Helper/lw-alliance-helper-bot/issues/89)). |
 | `1.1.7` | Hotfix: `/train` Add Entry and Update Entry modals now defer the interaction before their Google Sheets round-trip, so a slow gspread call no longer expires the 3-second initial-response token and crashes the submit with `NotFound 10062 Unknown interaction` ([#76](https://github.com/LW-Alliance-Helper/lw-alliance-helper-bot/issues/76)). Direct-to-main per the hotfix exception. |
 | `1.1.6` | Operational record of bot installs ([#67](https://github.com/LW-Alliance-Helper/lw-alliance-helper-bot/issues/67)): new `guild_install_metadata` SQLite table captures guild name, owner ID, audit-log inviter, and install / last-seen timestamps per server, so logged `guild_id`s can be matched to an alliance for support. Owner-only `/admin_guild_info` and `/admin_forget_guild` slash commands scoped via the new `BOT_ADMIN_GUILD_IDS` env var, plus a `data_removal.yml` issue template and updated privacy/terms/README disclosures. |
 | `1.1.5` | Numeric survey question type promoted from Premium to Free ([#64](https://github.com/LW-Alliance-Helper/lw-alliance-helper-bot/issues/64)) — min/max bounds remain the Premium differentiator. Numeric questions now require a magnitude (Exact / K / M / B), and `survey.ask_numeric` parses members' shorthand (`301` → 301M, `300m`, `1.2b`, `304,743,912`) into the stored full integer. Default LW survey questions ship as numeric with the right magnitude; a one-shot `init_db` backfill upgrades existing saved configs idempotently. Submission embed comma-formats numeric responses. |
@@ -260,8 +262,8 @@ the long form on each.
 | `1.0.1` | Audit Round 1 — fixed `survey._run_schedule_wizard` broken import + dead `train_ui` line, deleted `sheets.py` and ~250 LOC of dead code (12 items) |
 | `1.0.0` | Initial public release (2026-04-28) |
 
-Test suite: **610 collected**, 18 skipped on the free-tier lane and
-35 skipped under `FORCE_PREMIUM=1`. Total LOC: ~17K.
+Test suite: **851 collected**, 18 skipped on the free-tier lane and
+35 skipped under `FORCE_PREMIUM=1`. Total LOC: ~24K.
 
 ---
 
@@ -313,14 +315,12 @@ These have been thought through. Reopening them needs a real reason:
 
 ## Status snapshot
 
-- 1.0.0 launched 2026-04-28. Currently on `1.1.7` — hotfix that
-  defers the `/train` Add Entry / Update Entry modal interactions
-  before their Google Sheets round-trip, so a slow gspread call no
-  longer expires the 3-second response token and crashes the modal
-  submit with `NotFound 10062 Unknown interaction`
-  ([#76](https://github.com/LW-Alliance-Helper/lw-alliance-helper-bot/issues/76)).
+- 1.0.0 launched 2026-04-28. Currently on `1.3.0` — setup wizard
+  re-entry UX overhaul ([#80](https://github.com/LW-Alliance-Helper/lw-alliance-helper-bot/issues/80))
+  plus a shiny-tasks weekly-refresh persistence fix
+  ([#109](https://github.com/LW-Alliance-Helper/lw-alliance-helper-bot/issues/109)).
   See `CHANGELOG.md` for per-version detail.
-- 610 tests collected; 18 skipped on the free-tier lane.
+- 851 tests collected; 18 skipped on the free-tier lane.
 - Pre-launch audit fully shipped (Rounds 1–4 → 1.0.1–1.0.4; schema
   drops → 1.0.5 + 1.0.8). No outstanding cleanup from that audit.
 - Transfer management feature designed, not built (see

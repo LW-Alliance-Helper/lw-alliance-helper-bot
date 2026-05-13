@@ -253,6 +253,16 @@ async def on_ready():
             sentry_sdk.capture_exception(e)
     print(f"[GUILD] Refreshed install metadata for {len(bot.guilds)} guild(s)")
 
+    # Re-register persistent storm sign-up Views so their buttons keep
+    # working after a restart. Fed from `storm_registration_posts`; safely
+    # a no-op until #124 starts writing to that table. See storm_signup_view.
+    try:
+        from storm_signup_view import register_persistent_signup_views
+        register_persistent_signup_views(bot)
+    except Exception as e:
+        print(f"[STORM SIGNUP] Failed to re-register sign-up views: {e}")
+        sentry_sdk.capture_exception(e)
+
     # Only start background tasks once — they persist across reconnects
     if not hasattr(bot, "_tasks_started"):
         bot._tasks_started = True

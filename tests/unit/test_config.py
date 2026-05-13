@@ -329,6 +329,110 @@ class TestStructuredStormConfig:
         assert config.default_structured_tab("DS", "unknown_field") == ""
 
 
+class TestStormSignups:
+    """Test the #123 storm_signups + storm_registration_posts tables."""
+
+    def test_record_vote_round_trip(self, temp_db):
+        import config
+        ok = config.record_storm_vote(
+            TEST_GUILD_ID, "DS", "2026-05-18",
+            voter_user_id=111, target_member_id="111", vote="a",
+            channel_id=222, message_id=333,
+        )
+        assert ok is True
+        row = config.get_member_vote(TEST_GUILD_ID, "DS", "2026-05-18", "111")
+        assert row is not None
+        assert row["vote"]            == "a"
+        assert row["voter_user_id"]   == 111
+        assert row["is_on_behalf"]    is False
+        assert row["channel_id"]      == 222
+        assert row["message_id"]      == 333
+
+    def test_revote_replaces_prior(self, temp_db):
+        import config
+        config.record_storm_vote(
+            TEST_GUILD_ID, "DS", "2026-05-18",
+            voter_user_id=111, target_member_id="111", vote="a",
+        )
+        config.record_storm_vote(
+            TEST_GUILD_ID, "DS", "2026-05-18",
+            voter_user_id=111, target_member_id="111", vote="cannot",
+        )
+        rows = config.get_storm_signups(TEST_GUILD_ID, "DS", "2026-05-18")
+        assert len(rows) == 1
+        assert rows[0]["vote"] == "cannot"
+
+    def test_on_behalf_flag_persists(self, temp_db):
+        import config
+        config.record_storm_vote(
+            TEST_GUILD_ID, "DS", "2026-05-18",
+            voter_user_id=999,  # officer ID
+            target_member_id="Alice",  # roster row, not on Discord
+            vote="b",
+            is_on_behalf=True,
+        )
+        row = config.get_member_vote(TEST_GUILD_ID, "DS", "2026-05-18", "Alice")
+        assert row["is_on_behalf"]    is True
+        assert row["voter_user_id"]   == 999
+        assert row["target_member_id"] == "Alice"
+
+    def test_invalid_vote_rejected(self, temp_db):
+        import config
+        ok = config.record_storm_vote(
+            TEST_GUILD_ID, "DS", "2026-05-18",
+            voter_user_id=111, target_member_id="111", vote="bogus",
+        )
+        assert ok is False
+        assert config.get_storm_signups(TEST_GUILD_ID, "DS", "2026-05-18") == []
+
+    def test_get_signups_isolates_events(self, temp_db):
+        import config
+        # DS event
+        config.record_storm_vote(
+            TEST_GUILD_ID, "DS", "2026-05-18",
+            voter_user_id=1, target_member_id="1", vote="a",
+        )
+        # CS event same date — should not bleed
+        config.record_storm_vote(
+            TEST_GUILD_ID, "CS", "2026-05-18",
+            voter_user_id=1, target_member_id="1", vote="b",
+        )
+        ds = config.get_storm_signups(TEST_GUILD_ID, "DS", "2026-05-18")
+        cs = config.get_storm_signups(TEST_GUILD_ID, "CS", "2026-05-18")
+        assert len(ds) == 1 and ds[0]["vote"] == "a"
+        assert len(cs) == 1 and cs[0]["vote"] == "b"
+
+    def test_record_registration_post_idempotent(self, temp_db):
+        import config
+        first = config.record_storm_registration_post(
+            TEST_GUILD_ID, "DS", "2026-05-18",
+            channel_id=200, message_id=4001,
+            time_a_label="9pm ET", time_b_label="4pm ET",
+        )
+        second = config.record_storm_registration_post(
+            TEST_GUILD_ID, "DS", "2026-05-18",
+            channel_id=200, message_id=9999,
+        )
+        assert first is True
+        assert second is False
+        assert config.has_registration_post(TEST_GUILD_ID, "DS", "2026-05-18") is True
+
+    def test_recent_posts_window(self, temp_db):
+        import config
+        import datetime as _dt
+        today  = _dt.date.today().isoformat()
+        recent = (_dt.date.today() - _dt.timedelta(days=5)).isoformat()
+        old    = (_dt.date.today() - _dt.timedelta(days=30)).isoformat()
+        config.record_storm_registration_post(TEST_GUILD_ID, "DS", today,  100, 1)
+        config.record_storm_registration_post(TEST_GUILD_ID, "DS", recent, 100, 2)
+        config.record_storm_registration_post(TEST_GUILD_ID, "DS", old,    100, 3)
+        recents = config.get_recent_storm_registration_posts(within_days=14)
+        dates = {p["event_date"] for p in recents}
+        assert today  in dates
+        assert recent in dates
+        assert old    not in dates
+
+
 class TestSurveyConfig:
     """Test guild_survey_config save/load."""
 

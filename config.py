@@ -357,6 +357,59 @@ def init_db():
             )
         """)
 
+        # storm_signups — one row per member per event. Captures who voted
+        # what, when, and (for on-behalf votes) which officer cast it.
+        # `target_member_id` is a free-form string:
+        #   * Discord self-vote: str(discord_user_id)
+        #   * On-behalf for a non-Discord member: roster row identifier
+        #     (canonical member name from the alliance roster Sheet)
+        # `vote` is one of: a, b, either, cannot. Re-votes UPSERT this row
+        # (the unique constraint on (guild_id, event_type, event_date,
+        # target_member_id) enforces one row per member per event).
+        # Each row also remembers `message_id` / `channel_id` so the
+        # startup hook can re-register the SignupView and so officer
+        # views can link back to the source post.
+        # See #38 + #123 + #124.
+        conn.execute("""
+            CREATE TABLE IF NOT EXISTS storm_signups (
+                id                INTEGER PRIMARY KEY AUTOINCREMENT,
+                guild_id          INTEGER NOT NULL,
+                event_type        TEXT    NOT NULL,
+                event_date        TEXT    NOT NULL,
+                target_member_id  TEXT    NOT NULL,
+                voter_user_id     INTEGER NOT NULL,
+                vote              TEXT    NOT NULL,
+                is_on_behalf      INTEGER NOT NULL DEFAULT 0,
+                channel_id        INTEGER NOT NULL DEFAULT 0,
+                message_id        INTEGER NOT NULL DEFAULT 0,
+                voted_at          TEXT    NOT NULL,
+                UNIQUE (guild_id, event_type, event_date, target_member_id)
+            )
+        """)
+
+        # storm_registration_posts — table-of-record for "this message
+        # exists and is a sign-up post." Written by the scheduler in
+        # #124 when it posts a fresh registration message; read by the
+        # bot startup hook (#123) to re-register the SignupView so
+        # buttons survive restarts. Also lets the scheduler enforce
+        # idempotence (one post per guild per event_type per event_date)
+        # so a Railway restart during the configured minute can't
+        # double-post.
+        conn.execute("""
+            CREATE TABLE IF NOT EXISTS storm_registration_posts (
+                guild_id     INTEGER NOT NULL,
+                event_type   TEXT    NOT NULL,
+                event_date   TEXT    NOT NULL,
+                channel_id   INTEGER NOT NULL,
+                message_id   INTEGER NOT NULL,
+                time_a_label TEXT    DEFAULT '',
+                time_b_label TEXT    DEFAULT '',
+                posted_at    TEXT    NOT NULL,
+                PRIMARY KEY (guild_id, event_type, event_date)
+            )
+        """)
+        conn.commit()
+
         # shiny_task_servers — global table of every Last War server
         # known to cpt-hedge, refreshed weekly. The 3-day shiny-task
         # cycle is fully derivable from `creation_date` (no phase
@@ -1329,6 +1382,157 @@ def save_structured_storm_config(
         )
         conn.commit()
         return cur.rowcount > 0
+
+
+# ── Storm sign-up votes (#123) ───────────────────────────────────────────────
+#
+# Votes captured from the SignupView buttons (and from the `/storm_signups`
+# on-behalf path) UPSERT into `storm_signups`. The View itself imports these
+# helpers from the click handler; the officer view also reads from here.
+
+_VALID_STORM_VOTES = {"a", "b", "either", "cannot"}
+
+
+def record_storm_vote(
+    guild_id: int,
+    event_type: str,
+    event_date: str,
+    voter_user_id: int,
+    target_member_id: str,
+    vote: str,
+    *,
+    is_on_behalf: bool = False,
+    channel_id: int = 0,
+    message_id: int = 0,
+) -> bool:
+    """UPSERT a vote into storm_signups. Re-votes on the same (guild_id,
+    event_type, event_date, target_member_id) replace the prior row and
+    bump `voted_at`. Returns True if recorded, False if the vote value
+    is invalid."""
+    import datetime as _dt
+    if vote not in _VALID_STORM_VOTES:
+        return False
+    voted_at = _dt.datetime.utcnow().isoformat(timespec="seconds")
+    with _get_conn() as conn:
+        conn.execute(
+            "INSERT INTO storm_signups "
+            "(guild_id, event_type, event_date, target_member_id, "
+            " voter_user_id, vote, is_on_behalf, channel_id, message_id, voted_at) "
+            "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?) "
+            "ON CONFLICT (guild_id, event_type, event_date, target_member_id) "
+            "DO UPDATE SET "
+            "  voter_user_id = excluded.voter_user_id, "
+            "  vote          = excluded.vote, "
+            "  is_on_behalf  = excluded.is_on_behalf, "
+            "  channel_id    = excluded.channel_id, "
+            "  message_id    = excluded.message_id, "
+            "  voted_at      = excluded.voted_at",
+            (
+                int(guild_id), event_type, event_date, target_member_id,
+                int(voter_user_id), vote, 1 if is_on_behalf else 0,
+                int(channel_id or 0), int(message_id or 0), voted_at,
+            ),
+        )
+        conn.commit()
+    return True
+
+
+def get_storm_signups(guild_id: int, event_type: str, event_date: str) -> list[dict]:
+    """Return all vote rows for a given event."""
+    with _get_conn() as conn:
+        rows = conn.execute(
+            "SELECT guild_id, event_type, event_date, target_member_id, "
+            "       voter_user_id, vote, is_on_behalf, channel_id, message_id, voted_at "
+            "FROM storm_signups "
+            "WHERE guild_id = ? AND event_type = ? AND event_date = ?",
+            (int(guild_id), event_type, event_date),
+        ).fetchall()
+    out = []
+    for r in rows:
+        d = dict(r)
+        d["is_on_behalf"] = bool(d.get("is_on_behalf"))
+        out.append(d)
+    return out
+
+
+def get_member_vote(
+    guild_id: int, event_type: str, event_date: str, target_member_id: str,
+) -> dict | None:
+    """Return a single member's vote row, or None if they haven't voted."""
+    with _get_conn() as conn:
+        row = conn.execute(
+            "SELECT guild_id, event_type, event_date, target_member_id, "
+            "       voter_user_id, vote, is_on_behalf, channel_id, message_id, voted_at "
+            "FROM storm_signups "
+            "WHERE guild_id = ? AND event_type = ? AND event_date = ? "
+            "  AND target_member_id = ?",
+            (int(guild_id), event_type, event_date, target_member_id),
+        ).fetchone()
+    if not row:
+        return None
+    d = dict(row)
+    d["is_on_behalf"] = bool(d.get("is_on_behalf"))
+    return d
+
+
+# ── Storm registration posts (#123, written by #124) ─────────────────────────
+
+
+def record_storm_registration_post(
+    guild_id: int, event_type: str, event_date: str,
+    channel_id: int, message_id: int,
+    *,
+    time_a_label: str = "",
+    time_b_label: str = "",
+) -> bool:
+    """Record a freshly-posted sign-up message. Idempotent on
+    (guild_id, event_type, event_date) — re-running for the same event
+    is a no-op. Returns True if a new row was inserted, False if the
+    event date already has a post."""
+    import datetime as _dt
+    posted_at = _dt.datetime.utcnow().isoformat(timespec="seconds")
+    with _get_conn() as conn:
+        cur = conn.execute(
+            "INSERT OR IGNORE INTO storm_registration_posts "
+            "(guild_id, event_type, event_date, channel_id, message_id, "
+            " time_a_label, time_b_label, posted_at) "
+            "VALUES (?, ?, ?, ?, ?, ?, ?, ?)",
+            (
+                int(guild_id), event_type, event_date,
+                int(channel_id), int(message_id),
+                time_a_label, time_b_label, posted_at,
+            ),
+        )
+        conn.commit()
+        return cur.rowcount > 0
+
+
+def has_registration_post(guild_id: int, event_type: str, event_date: str) -> bool:
+    """Whether a registration message has already been posted for this event."""
+    with _get_conn() as conn:
+        row = conn.execute(
+            "SELECT 1 FROM storm_registration_posts "
+            "WHERE guild_id = ? AND event_type = ? AND event_date = ?",
+            (int(guild_id), event_type, event_date),
+        ).fetchone()
+    return row is not None
+
+
+def get_recent_storm_registration_posts(within_days: int = 14) -> list[dict]:
+    """Return all registration posts whose event_date is within the last
+    `within_days` days. Used by the bot startup hook to re-register the
+    SignupView for messages that are still "live"."""
+    import datetime as _dt
+    cutoff = (_dt.date.today() - _dt.timedelta(days=within_days)).isoformat()
+    with _get_conn() as conn:
+        rows = conn.execute(
+            "SELECT guild_id, event_type, event_date, channel_id, message_id, "
+            "       time_a_label, time_b_label, posted_at "
+            "FROM storm_registration_posts "
+            "WHERE event_date >= ?",
+            (cutoff,),
+        ).fetchall()
+    return [dict(r) for r in rows]
 
 
 def get_storm_template(guild_id: int, event_type: str, template_name: str | None = None) -> str:

@@ -5455,23 +5455,35 @@ async def _ask_signup_schedule(
         lead = 14
 
     # ── Step 3: sign-up time ──
+    # Empty string is a meaningful value here: "auto-schedule is set up
+    # but no auto-fire" — leadership uses /storm_post_signup manually
+    # for posting. Leave the time empty to express that.
     time_default = current_time or "12:00"
     time_picked = await ask_keep_or_change(
         channel,
         f"**Auto-Schedule — Sign-Up Post Time**\n"
         f"What local time should the bot fire the sign-up post? "
         f"Use 24-hour format (HH:MM). The bot interprets this in your "
-        f"alliance's configured timezone.",
+        f"alliance's configured timezone.\n"
+        f"Leave blank for manual posting only (you still get the rest "
+        f"of the schedule config but the bot won't auto-post).",
         default="12:00",
         current=time_default if time_default != "12:00" else "",
         modal_title="Sign-Up Time",
-        modal_label="HH:MM (24-hour, guild tz)",
+        modal_label="HH:MM (24-hour, guild tz) — blank for manual",
         timeout_cmd=cmd_name,
         cancel_event=cancel_event,
     )
     if time_picked is None:
         return None
-    time_clean = _normalise_hhmm(time_picked) or "12:00"
+    # Preserve an explicit empty input as "manual posting only" — don't
+    # silently coerce it to the default "12:00". Garbage input still
+    # falls back to the default because the modal label promises HH:MM.
+    raw = str(time_picked).strip()
+    if not raw:
+        time_clean = ""
+    else:
+        time_clean = _normalise_hhmm(raw) or "12:00"
 
     return {
         "dow":  dow_view.selected,
@@ -5481,36 +5493,12 @@ async def _ask_signup_schedule(
 
 
 def _normalise_hhmm(raw: str) -> str | None:
-    """Accept '14:00', '14', '2:00pm', '2pm' → 'HH:MM' 24-hour. Returns
-    None on garbage."""
-    if not raw:
-        return None
-    s = str(raw).strip().lower().replace(" ", "")
-    # Strip am/pm and remember which one was given.
-    period = None
-    if s.endswith("am"):
-        period = "am"
-        s = s[:-2]
-    elif s.endswith("pm"):
-        period = "pm"
-        s = s[:-2]
-    if ":" in s:
-        try:
-            hour, minute = (int(p) for p in s.split(":", 1))
-        except ValueError:
-            return None
-    else:
-        try:
-            hour, minute = int(s), 0
-        except ValueError:
-            return None
-    if period == "am" and hour == 12:
-        hour = 0
-    elif period == "pm" and hour < 12:
-        hour += 12
-    if not (0 <= hour <= 23) or not (0 <= minute <= 59):
-        return None
-    return f"{hour:02d}:{minute:02d}"
+    """Thin wrapper around `config.parse_storm_signup_time` kept under
+    the wizard's old name so existing tests / imports keep working.
+    The canonical implementation lives in `config.py` so the scheduler
+    and the wizard can't drift on parsing rules."""
+    from config import parse_storm_signup_time
+    return parse_storm_signup_time(raw)
 
 
 # ── Structured storm flow setup sub-flow (#38 + #54) ─────────────────────────

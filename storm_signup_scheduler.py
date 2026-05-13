@@ -51,20 +51,25 @@ def _next_event_date(today: _dt.date, event_dow: int) -> _dt.date:
 
 
 def _parse_hhmm(value: str) -> Optional[_dt.time]:
-    """'HH:MM' → time, or None on garbage."""
-    if not value:
+    """Parse a stored signup_time string into a `datetime.time`.
+
+    Delegates to the canonical `config.parse_storm_signup_time` so the
+    wizard's permissive parser and the scheduler agree on what counts
+    as a valid time. Returns `None` for empty / garbage.
+    """
+    from config import parse_storm_signup_time
+    normalised = parse_storm_signup_time(value)
+    if normalised is None:
         return None
-    parts = str(value).split(":", 1)
-    if len(parts) != 2:
-        return None
-    try:
-        hour = int(parts[0])
-        minute = int(parts[1])
-    except ValueError:
-        return None
-    if not (0 <= hour <= 23) or not (0 <= minute <= 59):
-        return None
-    return _dt.time(hour, minute)
+    h, _, m = normalised.partition(":")
+    return _dt.time(int(h), int(m))
+
+
+# Track skipped-this-week warnings per (guild, event_type, target_event)
+# so the minute-loop doesn't spam the log every tick for the same skip.
+# Cleared naturally — entries are tagged with the target_event date, so
+# next week's event gets its own slot.
+_skip_warned: set[tuple[int, str, str]] = set()
 
 
 def _should_fire_now(
@@ -74,11 +79,16 @@ def _should_fire_now(
     event_dow: int,
     lead_days: int,
     signup_time: _dt.time,
-) -> tuple[bool, Optional[_dt.date]]:
+) -> tuple[bool, Optional[_dt.date], bool]:
     """Decide whether the scheduler should fire for this guild right
-    now. Returns `(should_fire, event_date)`. `event_date` is the
-    upcoming event the post would be for — populated whether we fire
-    or not so the caller can log.
+    now. Returns `(should_fire, event_date, week_skipped)`.
+
+    `event_date` is the upcoming event the post would be for — populated
+    whether we fire or not so the caller can log.
+    `week_skipped` is True iff lead_days is large enough that this
+    week's event already passed its fire window, and the bot is now
+    targeting next week's event. Lets the caller surface a one-shot
+    warning so leadership knows they missed an auto-fire.
 
     Fires when:
       * today + lead_days == event_date
@@ -89,50 +99,42 @@ def _should_fire_now(
     risk double-fires).
     """
     if event_dow < 0 or event_dow > 6:
-        return False, None
+        return False, None, False
     if lead_days < 0:
-        return False, None
+        return False, None, False
 
     # Pick the upcoming event so leadership's choice of "post 5 days
     # ahead of Sunday" works whether today is Tuesday-of-this-week or
     # Tuesday-of-next-week.
     target_event = _next_event_date(today, event_dow)
+    week_skipped = False
     # If lead_days is large enough that today+lead_days > target event
     # (i.e. we've already passed the fire window for this week's event),
     # bump to the NEXT week's event.
     while target_event - today < _dt.timedelta(days=lead_days):
         target_event = target_event + _dt.timedelta(days=7)
+        week_skipped = True
 
     fire_date = target_event - _dt.timedelta(days=lead_days)
     if fire_date != today:
-        return False, target_event
+        return False, target_event, week_skipped
     if now.hour != signup_time.hour or now.minute != signup_time.minute:
-        return False, target_event
-    return True, target_event
+        return False, target_event, week_skipped
+    return True, target_event, week_skipped
 
 
 def _scheduled_storm_rows() -> list[dict]:
-    """Read every (guild, event_type) row with structured flow enabled
-    AND a configured schedule. Returns a list of dicts ready for the
-    scheduler to iterate."""
-    from config import _get_conn  # internal but stable
-    rows = []
-    with _get_conn() as conn:
-        for row in conn.execute(
-            "SELECT guild_id, event_type, event_day_of_week, "
-            "       signup_lead_days, signup_time "
-            "FROM guild_storm_config "
-            "WHERE structured_flow_enabled = 1 "
-            "  AND event_day_of_week >= 0 "
-            "  AND signup_time != ''",
-        ).fetchall():
-            rows.append(dict(row))
-    return rows
+    """Internal alias kept for test patching — delegates to
+    `config.get_scheduled_storm_rows()` so the SQL lives next to the
+    schema, not next to the consumer."""
+    from config import get_scheduled_storm_rows
+    return get_scheduled_storm_rows()
 
 
 async def _run_one_tick(bot: discord.Client) -> int:
     """Single pass of the scheduler. Returns count of registration posts
     actually fired this tick. Exposed for tests."""
+    import premium
     from config import get_config, get_structured_storm_config
     from storm_signup_post import post_registration
 
@@ -153,12 +155,34 @@ async def _run_one_tick(bot: discord.Client) -> int:
         if signup_time is None:
             continue
 
-        should, event_date = _should_fire_now(
+        should, event_date, week_skipped = _should_fire_now(
             today=today, now=now,
             event_dow=int(row["event_day_of_week"]),
             lead_days=int(row.get("signup_lead_days") or 0),
             signup_time=signup_time,
         )
+        if event_date is not None and week_skipped:
+            # The configured lead is longer than days-remaining to this
+            # week's event — the fire window already passed. Warn once
+            # per (guild, event_type, skipped_event_date) so leadership
+            # has a signal in logs that an auto-post didn't go out.
+            # The skipped event is today + (event_date - today) - 7 days,
+            # i.e. the THIS-week occurrence we just bypassed.
+            skipped_event = event_date - _dt.timedelta(days=7)
+            skip_key = (guild_id, event_type, skipped_event.isoformat())
+            if skip_key not in _skip_warned:
+                _skip_warned.add(skip_key)
+                logger.warning(
+                    "[STORM SCHEDULER] guild=%s event=%s/%s — auto-post "
+                    "window for this week's event already passed "
+                    "(lead=%s days, days-remaining=%s); next auto-post "
+                    "targets %s. Run /storm_post_signup manually if you "
+                    "need to post for the skipped event.",
+                    guild_id, event_type, skipped_event.isoformat(),
+                    row.get("signup_lead_days"),
+                    (skipped_event - today).days,
+                    event_date.isoformat(),
+                )
         if not should or event_date is None:
             continue
 
@@ -173,6 +197,19 @@ async def _run_one_tick(bot: discord.Client) -> int:
         # Premium opt-in might have been disabled between setup and
         # firing; skip rather than post for a downgraded guild.
         if not structured.get("structured_flow_enabled"):
+            continue
+        # Defense-in-depth premium re-check at fire time. A guild whose
+        # subscription lapsed (or whose Premium assignment was moved to
+        # a different guild) between setup and fire still has
+        # `structured_flow_enabled=1` on disk; without this check the
+        # scheduler would keep auto-posting for downgraded guilds.
+        if not await premium.is_premium(guild_id, bot=bot):
+            logger.info(
+                "[STORM SCHEDULER] guild=%s event=%s/%s — skipping auto-post "
+                "because guild is no longer Premium (structured_flow_enabled "
+                "still on disk).",
+                guild_id, event_type, event_date.isoformat(),
+            )
             continue
 
         result = await post_registration(

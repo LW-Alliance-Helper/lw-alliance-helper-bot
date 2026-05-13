@@ -1417,9 +1417,77 @@ def get_structured_storm_config(guild_id: int, event_type: str) -> dict:
         "strategies_tab":          _tab("strategies_tab"),
         "member_rules_tab":        _tab("member_rules_tab"),
         "event_day_of_week":       int(raw_dow),
-        "signup_lead_days":        int(cfg.get("signup_lead_days") or 5),
+        # `cfg.get(...) or 5` would falsy-coerce a legitimate `0` to `5`.
+        # Distinguish "column NULL / missing" from "stored zero" so a
+        # lead_days=0 (post on event day) round-trips correctly.
+        "signup_lead_days":        (
+            int(cfg["signup_lead_days"])
+            if cfg.get("signup_lead_days") is not None
+            else 5
+        ),
         "signup_time":             cfg.get("signup_time") or "",
     }
+
+
+def parse_storm_signup_time(value: str) -> Optional[str]:
+    """Parse a user-entered signup time into canonical `HH:MM` (24-hour),
+    or `None` if the input is unparseable.
+
+    Permissive on input — accepts `"14:00"`, `"14"`, `"2pm"`, `"2:00pm"`,
+    `"2:30 PM"`, etc. Returns `None` for empty / garbage so the wizard
+    can distinguish "user gave us nothing → leave existing value alone"
+    from "user gave us nonsense → re-prompt." Both wizards and the
+    scheduler use this single helper so the two paths can't drift.
+    """
+    if value is None:
+        return None
+    raw = str(value).strip().lower()
+    if not raw:
+        return None
+    # Strip am/pm suffix if present, remembering for hour fixup.
+    is_pm = False
+    is_am = False
+    for suffix in ("am", "pm", "a.m.", "p.m."):
+        if raw.endswith(suffix):
+            is_pm = suffix.startswith("p")
+            is_am = suffix.startswith("a")
+            raw = raw[: -len(suffix)].strip()
+            break
+    if ":" in raw:
+        h, _, m = raw.partition(":")
+    else:
+        h, m = raw, "0"
+    try:
+        hour = int(h)
+        minute = int(m)
+    except ValueError:
+        return None
+    if is_pm and hour < 12:
+        hour += 12
+    elif is_am and hour == 12:
+        hour = 0
+    if not (0 <= hour <= 23) or not (0 <= minute <= 59):
+        return None
+    return f"{hour:02d}:{minute:02d}"
+
+
+def get_scheduled_storm_rows() -> list[dict]:
+    """Return every (guild, event_type) row eligible for the auto-signup
+    scheduler — structured flow on, day-of-week set, and a non-empty
+    signup_time. Public wrapper around the schema so callers (the
+    minute-loop scheduler) don't reach into `_get_conn` directly."""
+    rows = []
+    with _get_conn() as conn:
+        for row in conn.execute(
+            "SELECT guild_id, event_type, event_day_of_week, "
+            "       signup_lead_days, signup_time "
+            "FROM guild_storm_config "
+            "WHERE structured_flow_enabled = 1 "
+            "  AND event_day_of_week >= 0 "
+            "  AND signup_time != ''",
+        ).fetchall():
+            rows.append(dict(row))
+    return rows
 
 
 def save_structured_storm_config(
@@ -1470,6 +1538,12 @@ def save_structured_storm_config(
         lead = 5
     if lead < 0:
         lead = 0
+    if lead > 14:
+        # Mirror the wizard's upper clamp at the storage layer so a
+        # malformed direct call can't smuggle in lead=50 (which would
+        # cause the scheduler to skip events forever — fire date never
+        # equals today).
+        lead = 14
     with _get_conn() as conn:
         cur = conn.execute(
             "UPDATE guild_storm_config SET "

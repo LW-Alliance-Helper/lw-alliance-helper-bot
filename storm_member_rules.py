@@ -33,9 +33,16 @@ import discord
 from discord import app_commands
 from discord.ext import commands
 
-from storm_strategy import parse_power, format_power, canonical_zones_for
-
 logger = logging.getLogger(__name__)
+
+
+def _strategy_helpers():
+    """Late-bind storm_strategy helpers so storm_member_rules can load
+    even if `storm_strategy` happens to be loaded later (or fails to
+    load). The cost is a few function-call lookups per command; the
+    benefit is no cog-import-order coupling between the two modules."""
+    from storm_strategy import parse_power, format_power, canonical_zones_for
+    return parse_power, format_power, canonical_zones_for
 
 
 _HEADER = ["Rule Type", "Subject", "Sub-Type", "Value", "Notes"]
@@ -93,6 +100,7 @@ class Rule:
         """Human-readable single-line summary for embed listings."""
         if self.rule_type == _RULE_TYPE_POWER_BAND:
             try:
+                _parse_power, format_power, _zones = _strategy_helpers()
                 threshold = format_power(int(self.subject))
             except (TypeError, ValueError):
                 threshold = self.subject
@@ -109,27 +117,59 @@ class Rule:
 
 def list_rules(guild_id: int, event_type: str) -> list[Rule]:
     """Read every rule for this guild + event type. Order matches Sheet
-    row order (top-down) so clear-by-index is stable across reads."""
+    row order (top-down) so clear-by-index is stable across reads.
+
+    Uses `get_all_values` + manual header indexing rather than
+    `get_all_records`. The latter raises on duplicate header values and
+    squashes empty header cells, both of which can happen if an officer
+    accidentally pastes a row into the header. With `get_all_values`,
+    a header typo causes that one column to be skipped instead of
+    silently emptying the rule list.
+    """
     ws = _get_or_create_rules_worksheet(guild_id, event_type)
     if ws is None:
         return []
     try:
-        records = ws.get_all_records()
+        values = ws.get_all_values()
     except Exception as e:
         logger.warning("[STORM RULES] list_rules failed for guild=%s event=%s: %s",
                        guild_id, event_type, e)
         return []
+    if not values:
+        return []
+
+    header = [c.strip() for c in values[0]]
+
+    def _col(name: str) -> int:
+        try:
+            return header.index(name)
+        except ValueError:
+            return -1
+
+    type_col    = _col("Rule Type")
+    subject_col = _col("Subject")
+    subtype_col = _col("Sub-Type")
+    value_col   = _col("Value")
+    notes_col   = _col("Notes")
+
+    def _cell(row: list[str], idx: int) -> str:
+        if idx < 0 or idx >= len(row):
+            return ""
+        return str(row[idx]).strip()
+
     rules: list[Rule] = []
-    for r in records:
-        rule_type = str(r.get("Rule Type", "")).strip().lower()
+    for row in values[1:]:
+        if not row or not any(c.strip() for c in row):
+            continue
+        rule_type = _cell(row, type_col).lower()
         if rule_type not in (_RULE_TYPE_POWER_BAND, _RULE_TYPE_PER_MEMBER):
             continue
         rules.append(Rule(
             rule_type=rule_type,
-            subject=str(r.get("Subject", "")).strip(),
-            sub_type=str(r.get("Sub-Type", "")).strip().lower(),
-            value=str(r.get("Value", "")).strip(),
-            notes=str(r.get("Notes", "")).strip(),
+            subject=_cell(row, subject_col),
+            sub_type=_cell(row, subtype_col).lower(),
+            value=_cell(row, value_col),
+            notes=_cell(row, notes_col),
         ))
     return rules
 
@@ -173,7 +213,16 @@ def save_rule(guild_id: int, event_type: str, rule: Rule) -> tuple[bool, str]:
 
 def delete_rule_at(guild_id: int, event_type: str, index: int) -> bool:
     """Remove the rule at the given list_rules index (0-based). Returns
-    True on success."""
+    True on success.
+
+    Uses gspread's atomic `delete_rows` instead of clear-and-rewrite —
+    the latter is non-atomic (read → clear → write) and two officers
+    deleting different rules at the same time can clobber each other's
+    work via the standard last-write-wins race.
+
+    Re-checks the rule list and the Sheet row count immediately before
+    issuing the delete so a stale view doesn't drop the wrong row.
+    """
     ws = _get_or_create_rules_worksheet(guild_id, event_type)
     if ws is None:
         return False
@@ -182,21 +231,20 @@ def delete_rule_at(guild_id: int, event_type: str, index: int) -> bool:
         return False
 
     try:
-        all_values = ws.get_all_values()
+        row_count = len(ws.get_all_values())
     except Exception as e:
-        logger.warning("[STORM RULES] delete read failed for guild=%s event=%s: %s",
+        logger.warning("[STORM RULES] delete row-count read failed for guild=%s event=%s: %s",
                        guild_id, event_type, e)
         return False
 
-    # all_values: header row + N data rows; data rows align 1:1 with `rules`.
-    if len(all_values) < 2 + index:
+    # Sheet is 1-indexed; row 1 is the header, row (2 + index) is the
+    # target data row.
+    target_row = 2 + index
+    if target_row > row_count:
         return False
-    # Sheet row to drop = index 1 + index (because all_values[0] is header).
-    target_row = 1 + index
-    kept = [all_values[0]] + [r for i, r in enumerate(all_values[1:], start=1) if i != target_row]
+
     try:
-        ws.clear()
-        ws.update("A1", kept, value_input_option="RAW")
+        ws.delete_rows(target_row)
     except Exception as e:
         logger.warning("[STORM RULES] delete write failed for guild=%s event=%s: %s",
                        guild_id, event_type, e)
@@ -349,8 +397,11 @@ class _MemberRuleGroup(app_commands.Group):
                               threshold: str, zone: str, notes: str = ""):
         if not await _deny_if_not_leader(interaction):
             return
+        parse_power, format_power, canonical_zones_for = _strategy_helpers()
         n = parse_power(threshold)
-        if n is None or n <= 0:
+        # Allow ≥ 0 — "≥ 0M → Power Tower" is a legitimate way to declare
+        # "no floor for this zone." Only refuse unparseable or negative.
+        if n is None or n < 0:
             await interaction.response.send_message(
                 f"⚠️ Couldn't parse `{threshold}` as a power value. "
                 "Try formats like `250M`, `1.2B`, or `300,000,000`.",
@@ -423,6 +474,7 @@ class _MemberRuleGroup(app_commands.Group):
                 "⚠️ Both `member` and `zone` are required.", ephemeral=True,
             )
             return
+        _parse, _format, canonical_zones_for = _strategy_helpers()
         canonical = {z.lower() for z in canonical_zones_for(self.event_type)}
         zone_warning = "" if zone_clean.lower() in canonical else (
             f"\n⚠️ `{zone_clean}` isn't in the canonical zone list — "

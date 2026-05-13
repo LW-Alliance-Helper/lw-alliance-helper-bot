@@ -35,6 +35,13 @@ class _FakeWorksheet:
     def update(self, range_, values, value_input_option=None):
         self._rows = [list(r) for r in values]
 
+    def delete_rows(self, index, end_index=None):
+        """gspread's atomic row delete (1-indexed)."""
+        if end_index is None:
+            end_index = index
+        # Convert 1-indexed inclusive range to 0-indexed slice.
+        del self._rows[index - 1:end_index]
+
 
 class _FakeSpreadsheet:
     def __init__(self):

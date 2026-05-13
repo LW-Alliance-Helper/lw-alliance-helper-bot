@@ -49,6 +49,65 @@ class TestPowerParsing:
         assert ss.format_power(0) == "0"
 
 
+class TestParsePowerCell:
+    """`_parse_power_cell` is the new helper that distinguishes "blank"
+    from "garbage" so the loader doesn't silently turn a typo'd Sheet
+    cell into a `0` floor (which would pass the eligibility filter for
+    everyone — directly contradicting the design's "exclude unknown
+    power" rule)."""
+
+    def test_blank_is_not_garbage(self):
+        value, bad = ss._parse_power_cell("")
+        assert value == 0
+        assert bad is False
+
+    def test_none_is_not_garbage(self):
+        value, bad = ss._parse_power_cell(None)
+        assert value == 0
+        assert bad is False
+
+    def test_valid_power_string_parses(self):
+        value, bad = ss._parse_power_cell("250M")
+        assert value == 250_000_000
+        assert bad is False
+
+    def test_garbage_string_flags_as_bad(self):
+        value, bad = ss._parse_power_cell("tbd")
+        assert value == 0
+        assert bad is True
+
+    def test_na_value_flags_as_bad(self):
+        # "n/a" / "tbd" are common alliance shorthand for "not set yet"
+        # — they were silently becoming `0` (= no floor) before this fix.
+        for token in ("n/a", "tbd", "?", "later"):
+            value, bad = ss._parse_power_cell(token)
+            assert value == 0, f"{token!r} should not parse to a number"
+            assert bad is True, f"{token!r} should flag as bad"
+
+
+class TestSafeInt:
+    """`_safe_int` replaces the `int(value or 0)` idiom that raised
+    ValueError on truthy garbage strings ("abc" is truthy, falls
+    through to int())."""
+
+    def test_int_passthrough(self):
+        assert ss._safe_int(5) == 5
+
+    def test_blank_returns_default(self):
+        assert ss._safe_int("") == 0
+        assert ss._safe_int(None) == 0
+
+    def test_numeric_string_parses(self):
+        assert ss._safe_int("42") == 42
+
+    def test_float_string_truncates(self):
+        assert ss._safe_int("3.7") == 3
+
+    def test_garbage_returns_default_not_raises(self):
+        assert ss._safe_int("abc") == 0
+        assert ss._safe_int("abc", default=-1) == -1
+
+
 class TestPresetBuffer:
     def test_upsert_new_zone(self):
         buf = ss.PresetBuffer(name="P", event_type="DS")

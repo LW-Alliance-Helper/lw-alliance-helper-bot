@@ -80,6 +80,51 @@ def format_power(value: int) -> str:
     return str(value)
 
 
+def _safe_int(value, default: int = 0) -> int:
+    """Coerce a Sheet cell (str / int / float / None / blank) to int.
+
+    Returns `default` for None, empty string, and garbage strings —
+    instead of raising ValueError. The previous `int(value or 0)` idiom
+    raised on garbage strings ("abc" is truthy, falls through to int()).
+    """
+    if value is None or value == "":
+        return default
+    try:
+        return int(value)
+    except (TypeError, ValueError):
+        try:
+            return int(float(value))
+        except (TypeError, ValueError):
+            return default
+
+
+def _parse_power_cell(value, *, source: str = "") -> tuple[int, bool]:
+    """Parse a Sheet cell into (power, was_garbage).
+
+    Blank → (0, False) — alliance hasn't set a floor; not an error.
+    "250M" → (250_000_000, False) — happy path.
+    "tbd"  → (0, True) — couldn't parse; caller decides whether to
+              warn the user or refuse the save.
+
+    The previous `parse_power(...) or 0` idiom in load/save paths
+    couldn't distinguish "blank" from "unparseable," so a typo'd
+    Sheet cell silently became a `0` floor — directly contradicting
+    the design's "exclude unknown power, don't coerce to zero" rule.
+    """
+    if value is None or value == "":
+        return 0, False
+    parsed = parse_power(value)
+    if parsed is None:
+        if source:
+            logger.warning(
+                "[STORM STRATEGY] couldn't parse power cell %r at %s — "
+                "treating as 0; alliance should fix the Sheet entry.",
+                value, source,
+            )
+        return 0, True
+    return parsed, False
+
+
 # ── Preset data model ────────────────────────────────────────────────────────
 #
 # A preset is a list of ZoneRow entries plus a name + (CS only) faction.
@@ -96,10 +141,10 @@ class ZoneRow:
                  min_power_a: int = 0, min_power_b: int = 0,
                  priority: int = 0):
         self.zone        = zone
-        self.max_players = int(max_players or 0)
-        self.min_power_a = int(min_power_a or 0)
-        self.min_power_b = int(min_power_b or 0)
-        self.priority    = int(priority or 0)
+        self.max_players = _safe_int(max_players)
+        self.min_power_a = _safe_int(min_power_a)
+        self.min_power_b = _safe_int(min_power_b)
+        self.priority    = _safe_int(priority)
 
     def render_line(self, event_type: str) -> str:
         """One-line summary for the editor embed."""
@@ -182,6 +227,14 @@ _DS_HEADER = ["Preset Name", "Zone", "Max Players",
 _CS_HEADER = ["Preset Name", "Zone", "Max Players",
               "Min Power", "Priority", "Faction"]
 
+# Canonical team size used by the editor's capacity gauge and the
+# Save-time over-capacity guard. DS and CS both run 30-slot teams in
+# the current game version; making this a single constant means
+# alliances who run smaller sub-teams won't be blocked by mistake.
+# (If/when teams move to alliance-configurable sizing, swap this for
+# a per-guild config field — same callsites.)
+_TEAM_SIZE_HINT = 30
+
 
 def _strategies_tab_name(guild_id: int, event_type: str) -> str:
     import config
@@ -193,9 +246,20 @@ def _strategies_tab_name(guild_id: int, event_type: str) -> str:
 
 def _get_or_create_strategies_worksheet(guild_id: int, event_type: str):
     """Returns the worksheet, creating it (with header row) if missing.
-    Returns None if the guild has no Sheet configured."""
+    Returns None if the guild has no Sheet configured (or `gspread`
+    raised opening it — unconfigured / bad creds / deleted spreadsheet)."""
     import config
-    sh = config.get_spreadsheet(guild_id)
+    # `config.get_spreadsheet` raises rather than returning None for
+    # unconfigured guilds. Catch broadly so /ds_strategy commands don't
+    # die with an unhandled traceback on a guild that hasn't run setup.
+    try:
+        sh = config.get_spreadsheet(guild_id)
+    except Exception as e:
+        logger.warning(
+            "[STORM STRATEGY] get_spreadsheet failed for guild=%s: %s",
+            guild_id, e,
+        )
+        return None
     if sh is None:
         return None
     tab_name = _strategies_tab_name(guild_id, event_type)
@@ -228,21 +292,26 @@ def load_preset(guild_id: int, event_type: str, name: str) -> PresetBuffer | Non
     zones: list[ZoneRow] = []
     faction = "Either"
     for r in rows:
+        zone_name = str(r.get("Zone", "")).strip()
+        src = f"preset={name!r} zone={zone_name!r} event={event_type}"
         if event_type == "DS":
+            min_a, _ = _parse_power_cell(r.get("Min Power A", ""), source=src + " col=Min Power A")
+            min_b, _ = _parse_power_cell(r.get("Min Power B", ""), source=src + " col=Min Power B")
             zones.append(ZoneRow(
-                zone=str(r.get("Zone", "")).strip(),
-                max_players=int(r.get("Max Players", 0) or 0),
-                min_power_a=parse_power(r.get("Min Power A", "")) or 0,
-                min_power_b=parse_power(r.get("Min Power B", "")) or 0,
-                priority=int(r.get("Priority", 0) or 0),
+                zone=zone_name,
+                max_players=_safe_int(r.get("Max Players", 0)),
+                min_power_a=min_a,
+                min_power_b=min_b,
+                priority=_safe_int(r.get("Priority", 0)),
             ))
         else:
+            min_p, _ = _parse_power_cell(r.get("Min Power", ""), source=src + " col=Min Power")
             zones.append(ZoneRow(
-                zone=str(r.get("Zone", "")).strip(),
-                max_players=int(r.get("Max Players", 0) or 0),
-                min_power_a=parse_power(r.get("Min Power", "")) or 0,
+                zone=zone_name,
+                max_players=_safe_int(r.get("Max Players", 0)),
+                min_power_a=min_p,
                 min_power_b=0,
-                priority=int(r.get("Priority", 0) or 0),
+                priority=_safe_int(r.get("Priority", 0)),
             ))
             row_faction = str(r.get("Faction", "")).strip()
             if row_faction:
@@ -356,7 +425,7 @@ def delete_preset(guild_id: int, event_type: str, name: str) -> bool:
 # ── In-Discord editor ────────────────────────────────────────────────────────
 
 
-def _build_editor_embed(buf: PresetBuffer, team_size_hint: int = 30) -> discord.Embed:
+def _build_editor_embed(buf: PresetBuffer, team_size_hint: int = _TEAM_SIZE_HINT) -> discord.Embed:
     label = "Desert Storm" if buf.event_type == "DS" else "Canyon Storm"
     title = f"🛡️ Editing Preset: {buf.name}"
     desc_lines = [f"🗺️ Event: {label}"]
@@ -451,19 +520,48 @@ class _ZoneEditModal(discord.ui.Modal):
         try:
             max_players = int((self.max_input.value or "0").strip() or 0)
         except ValueError:
-            max_players = 0
+            await interaction.response.send_message(
+                f"⚠️ Max Players must be a number — got `{self.max_input.value}`. "
+                f"Try again.",
+                ephemeral=True,
+            )
+            return
 
+        # Refuse garbage in the power fields rather than silently zeroing —
+        # a typo would otherwise persist as a "no floor" entry and the
+        # eligibility filter would pass below-floor members through it.
         if self._view.buf.event_type == "DS":
-            min_a = parse_power(self.power_a_input.value or "0") or 0
-            min_b = parse_power(self.power_b_input.value or "0") or 0
+            min_a, bad_a = _parse_power_cell(self.power_a_input.value or "")
+            min_b, bad_b = _parse_power_cell(self.power_b_input.value or "")
+            if bad_a or bad_b:
+                await interaction.response.send_message(
+                    "⚠️ One of the power values didn't parse. "
+                    "Use formats like `300M`, `1.2B`, or `300000000`. "
+                    "Leave blank for no floor.",
+                    ephemeral=True,
+                )
+                return
         else:
-            min_a = parse_power(self.power_input.value or "0") or 0
+            min_a, bad = _parse_power_cell(self.power_input.value or "")
             min_b = 0
+            if bad:
+                await interaction.response.send_message(
+                    f"⚠️ Couldn't parse `{self.power_input.value}` as a power "
+                    f"value. Try `250M`, `1.2B`, or `300000000`. Leave blank "
+                    f"for no floor.",
+                    ephemeral=True,
+                )
+                return
 
         try:
             priority = int((self.priority_input.value or "0").strip() or 0)
         except ValueError:
-            priority = 0
+            await interaction.response.send_message(
+                f"⚠️ Priority must be a number — got `{self.priority_input.value}`. "
+                f"Try again.",
+                ephemeral=True,
+            )
+            return
 
         self._view.buf.upsert_zone(ZoneRow(
             zone=self._zone_name,
@@ -495,7 +593,10 @@ class _AddZoneModal(discord.ui.Modal, title="Add Zone to Preset"):
     async def on_submit(self, interaction: discord.Interaction):
         name = (self.zone_input.value or "").strip()
         if not name:
-            await interaction.response.defer()
+            await interaction.response.send_message(
+                "⚠️ Zone name is required.",
+                ephemeral=True,
+            )
             return
         if self._view.buf.find_zone(name):
             await interaction.response.send_message(
@@ -521,7 +622,10 @@ class _RenameModal(discord.ui.Modal, title="Rename Preset"):
     async def on_submit(self, interaction: discord.Interaction):
         new = (self.new_name.value or "").strip()
         if not new:
-            await interaction.response.defer()
+            await interaction.response.send_message(
+                "⚠️ A preset name is required.",
+                ephemeral=True,
+            )
             return
         # Uniqueness check excluding the current name.
         existing = [
@@ -604,6 +708,15 @@ class _PresetEditorView(discord.ui.View):
         async def _save(inter):
             if inter.user.id != self.user_id:
                 await inter.response.send_message("⛔ Only the editor's owner can save this preset.", ephemeral=True); return
+            cap = self.buf.total_capacity()
+            if cap > _TEAM_SIZE_HINT:
+                await inter.response.send_message(
+                    f"⚠️ Total capacity is **{cap}**, which exceeds the "
+                    f"team size of **{_TEAM_SIZE_HINT}**. Trim a zone "
+                    f"or two before saving.",
+                    ephemeral=True,
+                )
+                return
             await inter.response.defer()
             ok = save_preset(self.guild_id, self.buf.event_type, self.buf)
             if ok:

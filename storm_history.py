@@ -85,8 +85,16 @@ def list_event_dates(
         if date_col >= len(row):
             continue
         d = row[date_col].strip()
-        if d and d not in seen:
-            seen[d] = None
+        if not d or d in seen:
+            continue
+        # Filter out malformed dates so a typo in the Sheet (e.g.
+        # "2026-13-50") doesn't surface a button that crashes the
+        # date-detail renderer downstream.
+        try:
+            _dt.date.fromisoformat(d)
+        except ValueError:
+            continue
+        seen[d] = None
     dates = sorted(seen.keys(), reverse=True)[:limit]
     return dates, []
 
@@ -120,6 +128,11 @@ def load_event_roster(
     id_col     = _col("Discord ID")
     ovr_col    = _col("Override Below Floor")
 
+    # Truthy values for the override column. Officers may hand-edit
+    # the Sheet — accept the same set the bot would write plus the
+    # standard yes-aliases.
+    truthy = {"yes", "y", "1", "true", "x"}
+
     slots: list[dict] = []
     for row in rows[1:]:
         def _cell(idx: int) -> str:
@@ -133,16 +146,37 @@ def load_event_roster(
             "role":     _cell(role_col) or "primary",
             "power":    _cell(power_col),
             "discord_id": _cell(id_col),
-            "override_below_floor": _cell(ovr_col).lower() == "yes",
+            "override_below_floor": _cell(ovr_col).lower() in truthy,
         })
     return slots, errors
+
+
+def _attendance_join_key(team: str, zone: str, member: str) -> tuple[str, str, str]:
+    """Normalize the (team, zone, member) join key so a stray
+    whitespace or case difference between rosters_tab and
+    attendance_tab doesn't silently kill the attendance overlay.
+
+    Member names are case-folded too — officers occasionally hand-edit
+    one tab without updating the other, and "alice" / "Alice" should
+    not be treated as two different members for the join.
+    """
+    return (
+        (team or "").strip(),
+        (zone or "").strip(),
+        (member or "").strip().casefold(),
+    )
 
 
 def load_event_attendance(
     guild_id: int, event_type: str, event_date: str,
 ) -> tuple[dict[tuple[str, str, str], str], list[str]]:
-    """Return `{(team, zone, member): status}` for this event's
-    attendance rows. Missing tab → empty dict (no errors)."""
+    """Return `{normalized_key: status}` for this event's attendance
+    rows. Missing tab → empty dict (no errors).
+
+    Keys use `_attendance_join_key` so the join with rosters_tab is
+    whitespace/case-tolerant; callers that look up by member must
+    normalize the same way.
+    """
     tab = _attendance_tab_name(guild_id, event_type)
     rows, errors = _read_tab_values(guild_id, tab) if tab else ([], [])
     if not rows:
@@ -168,7 +202,9 @@ def load_event_attendance(
             return row[idx].strip() if 0 <= idx < len(row) else ""
         if _cell(date_col) != event_date:
             continue
-        key = (_cell(team_col), _cell(zone_col), _cell(member_col))
+        key = _attendance_join_key(
+            _cell(team_col), _cell(zone_col), _cell(member_col),
+        )
         out[key] = _cell(status_col)
     return out, errors
 
@@ -182,6 +218,21 @@ _STATUS_GLYPH = {
     "sub_activated": "🔄",
     "":              "—",
 }
+
+
+def _format_power_display(raw: str) -> str:
+    """Render a stored power string (`"412000000"` / `"unknown"` /
+    `""`) for human display. Numeric values get the canonical
+    250M / 1.2B shape via `storm_strategy.format_power`; the sentinel
+    `"unknown"` and blanks are dropped so the embed line stays clean."""
+    if not raw or raw == "unknown":
+        return ""
+    try:
+        n = int(raw)
+    except (TypeError, ValueError):
+        return f" — {raw}"
+    from storm_strategy import format_power
+    return f" — {format_power(n)}"
 
 
 def render_event_embed(
@@ -206,31 +257,39 @@ def render_event_embed(
 
     if not slots:
         embed.description = (
-            "_No structured roster found for this date. Either nothing was "
-            "posted via `/storm_signups`, or attendance was tracked under a "
-            "different event type._"
+            "_No structured roster found for this date. Check the date "
+            "format or run `/storm_signups` + Approve & Post to build a "
+            "roster for this event._"
         )
         return embed
 
-    # Group by team → zone → list of members.
+    # Group by team → zone → list of members. Iterate teams + zones in
+    # sorted order so the embed renders the same regardless of how
+    # rosters_tab rows happen to be ordered.
     teams: dict[str, dict[str, list[dict]]] = {}
     for slot in slots:
         team = slot["team"] or "(no team)"
         zone = slot["zone"] or "(sub pool)"
         teams.setdefault(team, {}).setdefault(zone, []).append(slot)
 
-    lines: list[str] = []
     total_recorded = 0
     total_attended = 0
     total_no_show = 0
     total_sub_activated = 0
 
-    for team, zones in teams.items():
-        lines.append(f"\n**Team {team}**" if team and team != "(no team)" else "\n**Roster**")
-        for zone, members in zones.items():
-            lines.append(f"__{zone}__")
+    # Per-team `add_field` (each capped at 1024 chars) instead of one
+    # giant `embed.description` — a 30+ slot roster with status + power
+    # markers can blow Discord's 4096-char description limit.
+    for team in sorted(teams.keys()):
+        zones = teams[team]
+        team_lines: list[str] = []
+        for zone in sorted(zones.keys()):
+            members = zones[zone]
+            team_lines.append(f"__{zone}__")
             for slot in members:
-                key = (slot["team"], slot["zone"], slot["member"])
+                key = _attendance_join_key(
+                    slot["team"], slot["zone"], slot["member"],
+                )
                 status = attendance.get(key, "")
                 glyph = _STATUS_GLYPH.get(status, "—")
                 if status:
@@ -241,12 +300,20 @@ def render_event_embed(
                         total_no_show += 1
                     elif status == "sub_activated":
                         total_sub_activated += 1
-                power_part = f" — {slot['power']}" if slot.get("power") and slot["power"] != "unknown" else ""
+                power_part = _format_power_display(slot.get("power", ""))
                 override = " ⚠️ override" if slot.get("override_below_floor") else ""
                 role_marker = " (sub)" if slot.get("role") == "sub" else ""
-                lines.append(f"{glyph} {slot['member']}{role_marker}{power_part}{override}")
+                team_lines.append(
+                    f"{glyph} {slot['member']}{role_marker}{power_part}{override}"
+                )
 
-    embed.description = "\n".join(lines)
+        team_name = "Roster" if (team in ("", "(no team)")) else f"Team {team}"
+        body = "\n".join(team_lines)
+        # Field value cap is 1024 chars. Truncate with a trailing marker
+        # so leadership knows to look in the Sheet for the rest.
+        if len(body) > 1020:
+            body = body[:980].rsplit("\n", 1)[0] + "\n_…trimmed; see Sheet for full list_"
+        embed.add_field(name=team_name, value=body, inline=False)
 
     if total_recorded > 0:
         embed.set_footer(
@@ -259,7 +326,7 @@ def render_event_embed(
         )
     else:
         embed.set_footer(
-            text=f"Attendance not yet recorded. Run /storm_attendance to add it."
+            text="Attendance not yet recorded. Run /storm_attendance to add it."
         )
     return embed
 
@@ -279,8 +346,7 @@ def render_history_list_embed(
             "a roster + Approve & Post, and it'll show up here._"
         )
         return embed
-    lines = ["Click a date below to view the roster + attendance."]
-    embed.description = "\n".join(lines)
+    embed.description = "Click a date below to view the roster + attendance."
     return embed
 
 
@@ -318,7 +384,11 @@ class _HistoryListView(discord.ui.View):
                     ephemeral=True,
                 )
                 return
-            await inter.response.defer(thinking=True)
+            # Send the event-detail embed as an ephemeral followup but
+            # KEEP the date buttons active so the officer can hop between
+            # dates. The prior implementation disabled every button on
+            # the first click, making the list view effectively one-shot.
+            await inter.response.defer(ephemeral=True, thinking=True)
             slots, _slot_errs = load_event_roster(
                 self.guild_id, self.event_type, date_str,
             )
@@ -331,14 +401,7 @@ class _HistoryListView(discord.ui.View):
                 slots=slots,
                 attendance=attendance,
             )
-            for item in self.children:
-                item.disabled = True
             await inter.followup.send(embed=embed, ephemeral=True)
-            if self.message:
-                try:
-                    await self.message.edit(view=self)
-                except discord.HTTPException:
-                    pass
         return _cb
 
     async def on_timeout(self):
@@ -377,8 +440,11 @@ async def open_history(
     if not ok:
         return
 
-    # Defer once we've cleared the permission/premium checks.
-    await interaction.response.defer(thinking=True)
+    # Defer once we've cleared the permission/premium checks. All three
+    # render paths (direct-date, list, date-button click) send their
+    # embeds ephemerally so the entire roster-history surface stays
+    # officer-only — the prior implementation was inconsistent.
+    await interaction.response.defer(ephemeral=True, thinking=True)
 
     if event_date:
         date_clean = event_date.strip()
@@ -409,19 +475,29 @@ async def open_history(
                 "[STORM HISTORY] roster read errors guild=%s date=%s: %s",
                 interaction.guild_id, date_clean, "; ".join(slot_errors),
             )
-        await interaction.followup.send(content=content, embed=embed)
+        await interaction.followup.send(
+            content=content, embed=embed, ephemeral=True,
+        )
         return
 
     # No date → list view.
-    dates, list_errors = list_event_dates(
+    dates, _list_errors = list_event_dates(
         interaction.guild_id, event_type, limit=8,
     )
     embed = render_history_list_embed(event_type, dates)
-    view = _HistoryListView(
-        guild_id=interaction.guild_id,
-        user_id=interaction.user.id,
-        event_type=event_type,
-        dates=dates,
-    )
-    msg = await interaction.followup.send(embed=embed, view=view if dates else None)
-    view.message = msg
+    if dates:
+        view = _HistoryListView(
+            guild_id=interaction.guild_id,
+            user_id=interaction.user.id,
+            event_type=event_type,
+            dates=dates,
+        )
+        msg = await interaction.followup.send(
+            embed=embed, view=view, ephemeral=True,
+        )
+        view.message = msg
+    else:
+        # Skip constructing a view when there are no buttons to render
+        # — the empty embed is enough and avoids a phantom timeout
+        # registration with no children.
+        await interaction.followup.send(embed=embed, ephemeral=True)

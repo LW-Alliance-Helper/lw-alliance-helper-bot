@@ -966,7 +966,7 @@ def _build_ds_group() -> _StrategyGroup:
     @app_commands.describe(
         date="Optional — show a specific date (YYYY-MM-DD). Omit to list recent events.",
     )
-    async def history(interaction: discord.Interaction, date: str | None = None):
+    async def ds_history(interaction: discord.Interaction, date: str | None = None):
         from storm_history import open_history
         await open_history(interaction, "DS", date)
 
@@ -1011,7 +1011,7 @@ def _build_cs_group() -> _StrategyGroup:
     @app_commands.describe(
         date="Optional — show a specific date (YYYY-MM-DD). Omit to list recent events.",
     )
-    async def history(interaction: discord.Interaction, date: str | None = None):
+    async def cs_history(interaction: discord.Interaction, date: str | None = None):
         from storm_history import open_history
         await open_history(interaction, "CS", date)
 

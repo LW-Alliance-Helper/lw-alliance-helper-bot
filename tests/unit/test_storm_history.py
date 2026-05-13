@@ -39,17 +39,21 @@ def fake_env(seeded_db):
     fake = _FakeSpreadsheet()
 
     # Two events on the rosters tab.
+    # Header order mirrors storm_roster_builder._ROSTERS_HEADER from
+    # production: `Override Below Floor` comes BEFORE `Posted At (UTC)`,
+    # not after. The prior fixture order was column-index-fragile.
     rosters = _FakeWorksheet("DS Rosters", [
         ["Event Date", "Team", "Zone", "Member", "Role",
-         "Power at Assignment", "Discord ID", "Posted At (UTC)",
-         "Override Below Floor"],
-        ["2026-05-18", "A", "Power Tower",  "Alice", "primary", "412000000", "1001", "", ""],
-        ["2026-05-18", "A", "Power Tower",  "Bob",   "primary", "350000000", "1002", "", ""],
-        ["2026-05-18", "A", "Nuclear Silo", "Carol", "primary", "280000000", "1003", "", ""],
-        ["2026-05-18", "A", "",             "Dan",   "sub",     "220000000", "1004", "", ""],
-        ["2026-05-11", "A", "Power Tower",  "Alice", "primary", "400000000", "1001", "", ""],
-        ["2026-05-11", "A", "Power Tower",  "Erin",  "primary", "190000000", "1005", "",
-         "yes"],  # below-floor override
+         "Power at Assignment", "Discord ID", "Override Below Floor",
+         "Posted At (UTC)"],
+        ["2026-05-18", "A", "Power Tower",  "Alice", "primary", "412000000", "1001", "",    ""],
+        ["2026-05-18", "A", "Power Tower",  "Bob",   "primary", "350000000", "1002", "",    ""],
+        ["2026-05-18", "A", "Nuclear Silo", "Carol", "primary", "280000000", "1003", "",    ""],
+        ["2026-05-18", "A", "",             "Dan",   "sub",     "220000000", "1004", "",    ""],
+        ["2026-05-11", "A", "Power Tower",  "Alice", "primary", "400000000", "1001", "",    ""],
+        ["2026-05-11", "A", "Power Tower",  "Erin",  "primary", "190000000", "1005", "yes", ""],
+        # Bad date — should be filtered out of list_event_dates.
+        ["2026-13-50", "A", "Power Tower",  "Z",     "primary", "1",         "9",    "",    ""],
     ])
     fake._tabs["DS Rosters"] = rosters
 
@@ -134,9 +138,22 @@ class TestLoadEventAttendance:
         fake, gid = fake_env
         att, errors = sh.load_event_attendance(gid, "DS", "2026-05-18")
         assert errors == []
-        assert att[("A", "Power Tower",  "Alice")] == "attended"
-        assert att[("A", "Power Tower",  "Bob")]   == "no_show"
-        assert att[("A", "Nuclear Silo", "Carol")] == "sub_activated"
+        # Keys are normalized: member name case-folded so a stray case
+        # difference between rosters_tab and attendance_tab doesn't
+        # silently break the overlay.
+        assert att[sh._attendance_join_key("A", "Power Tower",  "Alice")] == "attended"
+        assert att[sh._attendance_join_key("A", "Power Tower",  "Bob")]   == "no_show"
+        assert att[sh._attendance_join_key("A", "Nuclear Silo", "Carol")] == "sub_activated"
+
+    def test_join_key_is_whitespace_and_case_tolerant(self, fake_env):
+        """A stray case/whitespace difference between the two Sheet tabs
+        used to silently kill the overlay. The normalized join key
+        bridges the gap."""
+        fake, gid = fake_env
+        att, _ = sh.load_event_attendance(gid, "DS", "2026-05-18")
+        # Roster row might have "alice" while attendance has "Alice" —
+        # the join key normalizes both to the same form.
+        assert att[sh._attendance_join_key("A", "Power Tower", "  ALICE  ")] == "attended"
 
     def test_missing_attendance_returns_empty(self, fake_env):
         fake, gid = fake_env
@@ -149,6 +166,18 @@ class TestLoadEventAttendance:
 # ── Renderers ────────────────────────────────────────────────────────────────
 
 
+def _embed_body(embed) -> str:
+    """Concatenate description + all field values into one string for
+    `in` assertions. The renderer now splits per-team into add_field
+    calls (each capped at 1024 chars) instead of one giant description,
+    so tests can't just look at embed.description."""
+    parts = [embed.description or ""]
+    for f in embed.fields:
+        parts.append(f.name or "")
+        parts.append(f.value or "")
+    return "\n".join(parts)
+
+
 class TestRenderEventEmbed:
     def test_renders_attendance_glyphs(self):
         slots = [
@@ -156,13 +185,16 @@ class TestRenderEventEmbed:
              "role": "primary", "power": "412000000",
              "discord_id": "1", "override_below_floor": False},
         ]
-        attendance = {("A", "Power Tower", "Alice"): "attended"}
+        attendance = {
+            sh._attendance_join_key("A", "Power Tower", "Alice"): "attended",
+        }
         embed = sh.render_event_embed(
             event_type="DS", event_date="2026-05-18",
             slots=slots, attendance=attendance,
         )
-        assert "Alice" in (embed.description or "")
-        assert "✅" in (embed.description or "")
+        body = _embed_body(embed)
+        assert "Alice" in body
+        assert "✅" in body
 
     def test_no_attendance_falls_through(self):
         slots = [
@@ -175,7 +207,7 @@ class TestRenderEventEmbed:
             slots=slots, attendance={},
         )
         # Renders an unrecorded marker, not crash.
-        assert "—" in (embed.description or "")
+        assert "—" in _embed_body(embed)
         # Footer hints how to record.
         assert "/storm_attendance" in (embed.footer.text or "")
 
@@ -189,7 +221,7 @@ class TestRenderEventEmbed:
             event_type="DS", event_date="2026-05-11",
             slots=slots, attendance={},
         )
-        assert "override" in (embed.description or "").lower()
+        assert "override" in _embed_body(embed).lower()
 
     def test_empty_slots_message(self):
         embed = sh.render_event_embed(
@@ -209,11 +241,62 @@ class TestRenderEventEmbed:
             event_type="DS", event_date="2026-05-18",
             slots=slots, attendance={},
         )
-        body = embed.description or ""
-        assert "Team A" in body
-        # Zone headers present.
-        assert "Power Tower"  in body
+        # Team renders as a separate field, not in the description.
+        field_names = [f.name for f in embed.fields]
+        assert "Team A" in field_names
+        body = _embed_body(embed)
+        assert "Power Tower" in body
         assert "Nuclear Silo" in body
+
+    def test_teams_render_in_sorted_order(self):
+        """Iteration was previously dict-insertion-order dependent —
+        Team B could render before Team A if the Sheet rows happened to
+        be in that order. New behaviour sorts teams alphabetically."""
+        slots = [
+            # B first in the input → A should still render first.
+            {"team": "B", "zone": "Power Tower", "member": "Bob",
+             "role": "primary", "power": "", "discord_id": "2", "override_below_floor": False},
+            {"team": "A", "zone": "Power Tower", "member": "Alice",
+             "role": "primary", "power": "", "discord_id": "1", "override_below_floor": False},
+        ]
+        embed = sh.render_event_embed(
+            event_type="DS", event_date="2026-05-18",
+            slots=slots, attendance={},
+        )
+        field_names = [f.name for f in embed.fields]
+        assert field_names == ["Team A", "Team B"]
+
+    def test_power_rendered_via_format_power(self):
+        """Raw `"412000000"` should display as `"412M"` for the human
+        readers — the prior renderer showed the digits verbatim."""
+        slots = [
+            {"team": "A", "zone": "Power Tower", "member": "Alice",
+             "role": "primary", "power": "412000000",
+             "discord_id": "1", "override_below_floor": False},
+        ]
+        embed = sh.render_event_embed(
+            event_type="DS", event_date="2026-05-18",
+            slots=slots, attendance={},
+        )
+        body = _embed_body(embed)
+        assert "412M" in body
+        # No raw 9-digit pile.
+        assert "412000000" not in body
+
+    def test_power_unknown_sentinel_dropped(self):
+        slots = [
+            {"team": "A", "zone": "Power Tower", "member": "Erin",
+             "role": "primary", "power": "unknown",
+             "discord_id": "5", "override_below_floor": False},
+        ]
+        embed = sh.render_event_embed(
+            event_type="DS", event_date="2026-05-18",
+            slots=slots, attendance={},
+        )
+        body = _embed_body(embed)
+        # The sentinel itself isn't surfaced — just no power readout.
+        assert "unknown" not in body
+        assert "Erin" in body
 
     def test_footer_summary_counts(self):
         slots = [
@@ -222,9 +305,9 @@ class TestRenderEventEmbed:
             for i in range(3)
         ]
         attendance = {
-            ("A", "Z", "M0"): "attended",
-            ("A", "Z", "M1"): "no_show",
-            ("A", "Z", "M2"): "sub_activated",
+            sh._attendance_join_key("A", "Z", "M0"): "attended",
+            sh._attendance_join_key("A", "Z", "M1"): "no_show",
+            sh._attendance_join_key("A", "Z", "M2"): "sub_activated",
         }
         embed = sh.render_event_embed(
             event_type="DS", event_date="2026-05-18",
@@ -247,3 +330,99 @@ class TestRenderHistoryListEmbed:
         # The actual buttons are on the View, not the embed; the embed
         # just sets up context.
         assert "Click" in (embed.description or "")
+
+
+class TestListEventDatesFiltersMalformed:
+    def test_malformed_date_dropped_from_list(self, fake_env):
+        fake, gid = fake_env
+        dates, _ = sh.list_event_dates(gid, "DS", limit=8)
+        # "2026-13-50" is malformed and must not surface as a button —
+        # rendering it would crash the date-detail renderer downstream.
+        assert "2026-13-50" not in dates
+        # Valid dates are still present.
+        assert "2026-05-18" in dates
+
+
+class TestDateButtonStaysActive:
+    """Audit fix M1: the date-list buttons used to disable on the first
+    click, blocking the officer from hopping between dates. They now
+    stay active so multiple dates can be opened in sequence."""
+
+    @pytest.mark.asyncio
+    async def test_button_callback_does_not_disable_other_buttons(self, fake_env):
+        from unittest.mock import AsyncMock, MagicMock
+        fake, gid = fake_env
+        view = sh._HistoryListView(
+            guild_id=gid, user_id=42, event_type="DS",
+            dates=["2026-05-18", "2026-05-11"],
+        )
+        # Capture pre-state of the buttons.
+        pre_disabled = [b.disabled for b in view.children]
+        assert pre_disabled == [False, False]
+
+        # Drive the first button's callback.
+        inter = MagicMock()
+        inter.user = MagicMock(); inter.user.id = 42
+        inter.response = MagicMock()
+        inter.response.defer = AsyncMock()
+        inter.followup = MagicMock()
+        inter.followup.send = AsyncMock()
+        await view.children[0].callback(inter)
+
+        # After the click, the buttons are STILL active — officer can
+        # click another date next.
+        post_disabled = [b.disabled for b in view.children]
+        assert post_disabled == [False, False]
+        # The detail followup went out ephemerally.
+        inter.followup.send.assert_awaited_once()
+        sent_kwargs = inter.followup.send.await_args.kwargs
+        assert sent_kwargs.get("ephemeral") is True
+
+
+class TestOpenHistoryEphemeralConsistency:
+    """Audit fix M2: all three render paths (direct-date, list,
+    date-button) must post ephemerally so the entire history surface
+    stays officer-only and consistent.
+
+    Driving the full `open_history` through discord.py's permission
+    plumbing in a unit test is awkward (it isinstance-checks
+    `discord.Member`). Instead we cover the contract by inspecting the
+    call sites directly via grep at test-write time, plus the
+    date-button-callback ephemeral test below (which IS unit-testable).
+    """
+
+    @pytest.mark.asyncio
+    async def test_date_button_callback_is_ephemeral(self, fake_env):
+        """The third render path (date-button click) sends ephemerally."""
+        from unittest.mock import AsyncMock, MagicMock
+        fake, gid = fake_env
+        view = sh._HistoryListView(
+            guild_id=gid, user_id=42, event_type="DS",
+            dates=["2026-05-18"],
+        )
+        inter = MagicMock()
+        inter.user = MagicMock(); inter.user.id = 42
+        inter.response = MagicMock()
+        inter.response.defer = AsyncMock()
+        inter.followup = MagicMock()
+        inter.followup.send = AsyncMock()
+        await view.children[0].callback(inter)
+        inter.response.defer.assert_awaited_once()
+        defer_kwargs = inter.response.defer.await_args.kwargs
+        assert defer_kwargs.get("ephemeral") is True
+        followup_kwargs = inter.followup.send.await_args.kwargs
+        assert followup_kwargs.get("ephemeral") is True
+
+    def test_direct_date_path_uses_ephemeral_followup(self):
+        """Grep guard: the direct-date render path in `open_history`
+        must use `ephemeral=True` on its followup.send. The audit
+        flagged this as inconsistent across the three paths."""
+        import inspect
+        src = inspect.getsource(sh.open_history)
+        # All three followup.send calls in open_history must have
+        # ephemeral=True. Count the substring occurrences as a tripwire.
+        assert src.count("ephemeral=True") >= 3, (
+            "Expected every followup.send in open_history to carry "
+            "ephemeral=True; the audit fix is to keep all three render "
+            "paths officer-only."
+        )

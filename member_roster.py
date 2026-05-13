@@ -51,6 +51,20 @@ def _eligible(member: discord.Member, role_filter_id: int) -> bool:
     return any(r.id == role_filter_id for r in member.roles)
 
 
+def _bot_managed_cols(cfg: dict) -> dict[int, tuple[str, callable]]:
+    """The column indices the bot owns and overwrites on every sync,
+    keyed by index. Anything outside this set on the Sheet is alliance-
+    owned data (custom power columns, the `not_on_discord` flag, etc.)
+    and must be preserved across sync calls."""
+    return {
+        cfg["discord_id_col"]: ("Discord ID",   lambda m: str(m.id)),
+        cfg["name_col"]:       ("Name",         lambda m: m.name),
+        cfg["display_col"]:    ("Display Name", lambda m: m.display_name),
+        cfg["joined_col"]:     ("Joined",       _format_joined),
+        cfg["roles_col"]:      ("Roles",        lambda m: _format_roles(m)),
+    }
+
+
 def _build_roster_rows(guild: discord.Guild, cfg: dict) -> list[list[str]]:
     """
     Build the rows that will be written to the sheet, including a header row.
@@ -58,13 +72,7 @@ def _build_roster_rows(guild: discord.Guild, cfg: dict) -> list[list[str]]:
     strings so each row is at least max(col_index)+1 cells wide.
     """
     role_filter = cfg.get("role_filter_id", 0)
-    cols = {
-        cfg["discord_id_col"]: ("Discord ID",   lambda m: str(m.id)),
-        cfg["name_col"]:       ("Name",         lambda m: m.name),
-        cfg["display_col"]:    ("Display Name", lambda m: m.display_name),
-        cfg["joined_col"]:     ("Joined",       _format_joined),
-        cfg["roles_col"]:      ("Roles",        lambda m: _format_roles(m)),
-    }
+    cols = _bot_managed_cols(cfg)
     width = max(cols.keys()) + 1
 
     header_row = [""] * width
@@ -85,9 +93,77 @@ def _build_roster_rows(guild: discord.Guild, cfg: dict) -> list[list[str]]:
     return [header_row, *member_rows]
 
 
+def _merge_with_existing(
+    new_rows: list[list[str]], existing: list[list[str]], cfg: dict,
+) -> list[list[str]]:
+    """Merge bot-managed columns from `new_rows` with alliance-owned
+    columns preserved from `existing`.
+
+    Strategy:
+      * The bot writes the columns named in `_bot_managed_cols`. Every
+        OTHER column is alliance data (custom Power column, the
+        `not_on_discord` flag, an annotation column, etc.) and is
+        preserved as-is per Discord-ID match.
+      * The header row keeps the bot's labels for managed columns and
+        the alliance's labels for everything else.
+      * Members who left the alliance — and whose data therefore drops
+        out of `new_rows` — also lose their custom-column data. That's
+        the correct behaviour: leaving the alliance means their row
+        is gone.
+      * New members joining get blank cells in custom columns; the
+        alliance can fill them in.
+    """
+    if not new_rows:
+        return new_rows
+
+    bot_cols = set(_bot_managed_cols(cfg).keys())
+    id_col   = cfg["discord_id_col"]
+
+    new_header = new_rows[0]
+    existing_header = existing[0] if existing else []
+    width = max(len(new_header), len(existing_header))
+
+    # Header — bot owns its columns, alliance keeps theirs.
+    header = list(new_header) + [""] * (width - len(new_header))
+    for i in range(width):
+        if i in bot_cols:
+            continue
+        if i < len(existing_header) and existing_header[i]:
+            header[i] = existing_header[i]
+
+    # Index existing rows by Discord ID so we can copy per-member custom
+    # columns over to the new data.
+    existing_by_id: dict[str, list[str]] = {}
+    for row in existing[1:] if existing else []:
+        did = row[id_col] if id_col < len(row) else ""
+        did = did.strip()
+        if did:
+            existing_by_id[did] = row
+
+    merged_rows = [header]
+    for new_row in new_rows[1:]:
+        merged = list(new_row)
+        if len(merged) < width:
+            merged.extend([""] * (width - len(merged)))
+        did = merged[id_col] if id_col < len(merged) else ""
+        old = existing_by_id.get(did.strip())
+        if old:
+            for i in range(width):
+                if i in bot_cols:
+                    continue
+                if i < len(old):
+                    merged[i] = old[i]
+        merged_rows.append(merged)
+
+    return merged_rows
+
+
 def write_roster(guild: discord.Guild, cfg: dict) -> int:
     """
-    Replace the contents of the configured tab with a fresh roster.
+    Rebuild the configured tab with a fresh roster while preserving
+    alliance-owned columns (custom Power column, `not_on_discord`,
+    etc.) per Discord-ID match.
+
     Returns the number of member rows written (excluding header).
 
     The caller is responsible for ensuring the guild's member cache is
@@ -99,13 +175,18 @@ def write_roster(guild: discord.Guild, cfg: dict) -> int:
     catches missing-intent and missing-chunk cases at runtime.
     """
     _warn_if_cache_looks_thin(guild)
-    rows = _build_roster_rows(guild, cfg)
+    new_rows = _build_roster_rows(guild, cfg)
     ws = get_member_roster_sheet(guild.id, cfg["tab_name"])
+    try:
+        existing = ws.get_all_values()
+    except Exception:
+        existing = []
+    merged = _merge_with_existing(new_rows, existing, cfg)
     ws.clear()
-    if rows:
-        ws.update("A1", rows, value_input_option="USER_ENTERED")
+    if merged:
+        ws.update("A1", merged, value_input_option="USER_ENTERED")
     update_roster_last_synced(guild.id, datetime.now(timezone.utc).isoformat())
-    return max(0, len(rows) - 1)
+    return max(0, len(merged) - 1)
 
 
 def _warn_if_cache_looks_thin(guild: discord.Guild) -> None:

@@ -767,6 +767,7 @@ class RosterBuilderView(discord.ui.View):
                 embed=_render_builder_embed(s),
                 view=self,
             )
+            self._release_session_lock()
             self.stop()
 
         done_btn.callback = _done
@@ -786,6 +787,43 @@ class RosterBuilderView(discord.ui.View):
         await inter.response.edit_message(
             embed=_render_builder_embed(self.session), view=self,
         )
+
+    def _release_session_lock(self) -> None:
+        """Drop the structured-mode build lock. Safe in free-tier mode
+        (the helper is a no-op when no lock was claimed). Called from
+        Cancel/Done, Approve, and on_timeout."""
+        s = self.session
+        if not s.is_structured:
+            return
+        try:
+            import config
+            config.release_storm_session(
+                s.guild_id, s.event_type, s.event_date or "", s.team or "",
+            )
+        except Exception as e:
+            logger.warning(
+                "[STORM BUILDER] release_storm_session failed for "
+                "guild=%s event=%s/%s team=%s: %s",
+                s.guild_id, s.event_type, s.event_date, s.team, e,
+            )
+
+    async def on_timeout(self) -> None:
+        """Strip the view + release the session lock when the builder
+        times out. Without this:
+          - Buttons silently 404 with "Interaction failed" — same
+            CLAUDE.md auto-post-view contract that other auto-posted
+            views in this project respect.
+          - The session lock would stick until process restart, which
+            blocks legitimate re-opens for the same event indefinitely.
+        """
+        for item in self.children:
+            item.disabled = True
+        if self.message is not None:
+            try:
+                await self.message.edit(view=self)
+            except discord.HTTPException:
+                pass
+        self._release_session_lock()
 
 
 class _SaveAsPresetModal(discord.ui.Modal, title="Save as preset"):
@@ -1010,6 +1048,7 @@ async def _finalize_structured_roster(
         preview = mail if len(mail) <= 1800 else mail[:1780] + "\n…(truncated)"
         detail += f"\n\n```\n{preview}\n```"
     await interaction.followup.send(detail, ephemeral=True)
+    view._release_session_lock()
     view.stop()
 
 
@@ -1236,6 +1275,25 @@ async def open_roster_builder(
     per_member = [r for r in rules if r.rule_type == "per_member"]
     power_band = [r for r in rules if r.rule_type == "power_band"]
 
+    # Structured mode: claim the per-(guild, event_type, event_date,
+    # team) build slot so a second officer can't independently build
+    # the same team for the same event in parallel.
+    if is_structured:
+        import config
+        ok, holder = config.claim_storm_session(
+            interaction.guild_id, event_type, event_date, team,
+            interaction.user.id,
+        )
+        if not ok:
+            await interaction.followup.send(
+                f"⚠️ Another officer (<@{holder}>) is already building "
+                f"**Team {team or 'roster'}** for event **{event_date}**. "
+                f"Wait for them to finish, or coordinate before re-opening.",
+                ephemeral=True,
+                allowed_mentions=discord.AllowedMentions.none(),
+            )
+            return
+
     session = RosterBuilderSession(
         guild_id=interaction.guild_id,
         user_id=interaction.user.id,
@@ -1255,8 +1313,18 @@ async def open_roster_builder(
 
     view = RosterBuilderView(session)
     embed = _render_builder_embed(session)
-    msg = await interaction.followup.send(embed=embed, view=view)
-    view.message = msg
+    try:
+        msg = await interaction.followup.send(embed=embed, view=view)
+        view.message = msg
+    except discord.HTTPException as e:
+        # If the followup send fails after claiming the session lock,
+        # release the lock so the next attempt isn't blocked.
+        logger.warning(
+            "[STORM BUILDER] failed to send builder view (guild=%s event=%s): %s",
+            interaction.guild_id, event_date, e,
+        )
+        view._release_session_lock()
+        raise
 
 
 class _TeamPickerView(discord.ui.View):

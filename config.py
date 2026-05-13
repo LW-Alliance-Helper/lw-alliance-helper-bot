@@ -451,6 +451,24 @@ def init_db():
             "CREATE INDEX IF NOT EXISTS idx_storm_signup_history_event "
             "ON storm_signup_history (guild_id, event_type, event_date)"
         )
+
+        # storm_session_state — per-(guild, event_type, event_date, team)
+        # lock that the structured-flow roster builder takes when an
+        # officer opens it. Prevents two officers from independently
+        # building the same team for the same event and each posting
+        # their own mail + writing their own rosters_tab rows. Released
+        # on Approve, Cancel/Done, or builder timeout.
+        conn.execute("""
+            CREATE TABLE IF NOT EXISTS storm_session_state (
+                guild_id    INTEGER NOT NULL,
+                event_type  TEXT    NOT NULL,
+                event_date  TEXT    NOT NULL,
+                team        TEXT    NOT NULL DEFAULT '',
+                user_id     INTEGER NOT NULL,
+                opened_at   TEXT    NOT NULL,
+                PRIMARY KEY (guild_id, event_type, event_date, team)
+            )
+        """)
         conn.commit()
 
         # shiny_task_servers — global table of every Last War server
@@ -1669,6 +1687,74 @@ def dismiss_walkthrough(
             (int(guild_id), int(user_id), walkthrough_key, _utcnow_iso()),
         )
         conn.commit()
+
+
+# ── Structured roster-build session lock (#129 follow-up) ────────────────────
+#
+# Used by `storm_roster_builder` to make sure two officers can't
+# independently build the same team for the same event and both Approve
+# (which would post two mails + write two sets of rosters_tab rows).
+# The session row is keyed on (guild_id, event_type, event_date, team).
+# `team` is `""` for CS (one roster per faction per event).
+
+
+def claim_storm_session(
+    guild_id: int, event_type: str, event_date: str, team: str,
+    user_id: int,
+) -> tuple[bool, Optional[int]]:
+    """Try to claim the build slot for this (guild, event_type, event_date,
+    team). Returns `(True, None)` on a fresh claim, `(False, owner_user_id)`
+    if another officer already holds it.
+
+    Re-claiming as the same `user_id` succeeds (returns `(True, None)`) so
+    an officer who opens the builder twice in a row from a stale view
+    doesn't get locked out by their own prior claim.
+    """
+    with _get_conn() as conn:
+        # Check existing holder first.
+        row = conn.execute(
+            "SELECT user_id FROM storm_session_state "
+            "WHERE guild_id = ? AND event_type = ? AND event_date = ? "
+            "  AND team = ?",
+            (int(guild_id), event_type, event_date, team),
+        ).fetchone()
+        if row is not None:
+            existing = int(row["user_id"])
+            if existing == int(user_id):
+                # Reclaim by the same officer — refresh opened_at and ok.
+                conn.execute(
+                    "UPDATE storm_session_state SET opened_at = ? "
+                    "WHERE guild_id = ? AND event_type = ? AND event_date = ? "
+                    "  AND team = ?",
+                    (_utcnow_iso(), int(guild_id), event_type, event_date, team),
+                )
+                conn.commit()
+                return True, None
+            return False, existing
+        conn.execute(
+            "INSERT INTO storm_session_state "
+            "(guild_id, event_type, event_date, team, user_id, opened_at) "
+            "VALUES (?, ?, ?, ?, ?, ?)",
+            (int(guild_id), event_type, event_date, team, int(user_id), _utcnow_iso()),
+        )
+        conn.commit()
+    return True, None
+
+
+def release_storm_session(
+    guild_id: int, event_type: str, event_date: str, team: str,
+) -> bool:
+    """Drop the session lock. Safe to call on Done / Cancel / Approve /
+    timeout — re-releasing is a no-op."""
+    with _get_conn() as conn:
+        cur = conn.execute(
+            "DELETE FROM storm_session_state "
+            "WHERE guild_id = ? AND event_type = ? AND event_date = ? "
+            "  AND team = ?",
+            (int(guild_id), event_type, event_date, team),
+        )
+        conn.commit()
+    return cur.rowcount > 0
 
 
 def get_storm_template(guild_id: int, event_type: str, template_name: str | None = None) -> str:

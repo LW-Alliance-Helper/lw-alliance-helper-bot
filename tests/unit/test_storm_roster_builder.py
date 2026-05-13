@@ -734,3 +734,136 @@ class TestStructuredBuilderView:
         labels = [getattr(c, "label", "") for c in view.children]
         assert any("Generate mail" in lab for lab in labels)
         assert not any("Approve" in lab for lab in labels)
+
+
+class TestSessionStateLock:
+    """Two officers building the same team for the same event used to
+    each get their own session, each Approve, each post a mail and write
+    duplicate rosters_tab rows. The lock prevents that."""
+
+    def test_claim_succeeds_for_fresh_slot(self, seeded_db):
+        import config
+        ok, holder = config.claim_storm_session(
+            TEST_GUILD_ID, "DS", "2026-05-18", "A", user_id=42,
+        )
+        assert ok is True
+        assert holder is None
+
+    def test_second_officer_claim_rejected(self, seeded_db):
+        import config
+        ok, _ = config.claim_storm_session(
+            TEST_GUILD_ID, "DS", "2026-05-18", "A", user_id=42,
+        )
+        assert ok is True
+        ok2, holder = config.claim_storm_session(
+            TEST_GUILD_ID, "DS", "2026-05-18", "A", user_id=99,
+        )
+        assert ok2 is False
+        assert holder == 42
+
+    def test_same_officer_can_reclaim(self, seeded_db):
+        # An officer who re-opens the builder for a team they already
+        # hold doesn't get locked out by their own prior claim.
+        import config
+        config.claim_storm_session(
+            TEST_GUILD_ID, "DS", "2026-05-18", "A", user_id=42,
+        )
+        ok, holder = config.claim_storm_session(
+            TEST_GUILD_ID, "DS", "2026-05-18", "A", user_id=42,
+        )
+        assert ok is True
+        assert holder is None
+
+    def test_release_frees_slot(self, seeded_db):
+        import config
+        config.claim_storm_session(
+            TEST_GUILD_ID, "DS", "2026-05-18", "A", user_id=42,
+        )
+        released = config.release_storm_session(
+            TEST_GUILD_ID, "DS", "2026-05-18", "A",
+        )
+        assert released is True
+        # Now a different officer can claim it.
+        ok, holder = config.claim_storm_session(
+            TEST_GUILD_ID, "DS", "2026-05-18", "A", user_id=99,
+        )
+        assert ok is True
+        assert holder is None
+
+    def test_release_unclaimed_slot_is_safe(self, seeded_db):
+        import config
+        released = config.release_storm_session(
+            TEST_GUILD_ID, "DS", "2026-05-18", "A",
+        )
+        assert released is False  # nothing to release, no exception
+
+    def test_teams_are_independent(self, seeded_db):
+        # Team A and Team B for the same event are separate slots; one
+        # officer can hold A while another holds B.
+        import config
+        ok_a, _ = config.claim_storm_session(
+            TEST_GUILD_ID, "DS", "2026-05-18", "A", user_id=42,
+        )
+        ok_b, _ = config.claim_storm_session(
+            TEST_GUILD_ID, "DS", "2026-05-18", "B", user_id=99,
+        )
+        assert ok_a is True
+        assert ok_b is True
+
+    def test_events_are_independent(self, seeded_db):
+        # Holding Team A for one event date doesn't block the same
+        # team for a different event date.
+        import config
+        ok_1, _ = config.claim_storm_session(
+            TEST_GUILD_ID, "DS", "2026-05-18", "A", user_id=42,
+        )
+        ok_2, _ = config.claim_storm_session(
+            TEST_GUILD_ID, "DS", "2026-05-25", "A", user_id=42,
+        )
+        assert ok_1 is True
+        assert ok_2 is True
+
+    def test_cs_uses_empty_team_field(self, seeded_db):
+        # CS has one roster per faction per event; team field is "".
+        import config
+        ok_1, _ = config.claim_storm_session(
+            TEST_GUILD_ID, "CS", "2026-05-18", "", user_id=42,
+        )
+        ok_2, holder = config.claim_storm_session(
+            TEST_GUILD_ID, "CS", "2026-05-18", "", user_id=99,
+        )
+        assert ok_1 is True
+        assert ok_2 is False
+        assert holder == 42
+
+
+class TestBuilderViewTimeoutCleanup:
+    @pytest.mark.asyncio
+    async def test_on_timeout_releases_structured_lock(self, seeded_db):
+        import config
+        # Claim the lock under user 42 to simulate a session being open.
+        config.claim_storm_session(
+            TEST_GUILD_ID, "DS", "2026-05-18", "A", user_id=42,
+        )
+        session = _make_session(team="A")
+        session.guild_id = TEST_GUILD_ID
+        session.user_id = 42
+        session.event_date = "2026-05-18"
+        view = srb.RosterBuilderView(session)
+        view.message = None  # no edit to perform; on_timeout still runs cleanly
+        await view.on_timeout()
+        # Lock is released.
+        ok, _ = config.claim_storm_session(
+            TEST_GUILD_ID, "DS", "2026-05-18", "A", user_id=99,
+        )
+        assert ok is True
+
+    @pytest.mark.asyncio
+    async def test_on_timeout_manual_mode_is_a_noop(self, seeded_db):
+        # Free-tier (event_date=None) shouldn't try to release a
+        # structured-mode lock that was never claimed.
+        session = _make_session(team="A")  # no event_date
+        view = srb.RosterBuilderView(session)
+        view.message = None
+        # Should not raise even though no lock was claimed.
+        await view.on_timeout()

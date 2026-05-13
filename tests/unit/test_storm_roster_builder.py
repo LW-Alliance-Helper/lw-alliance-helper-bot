@@ -867,3 +867,166 @@ class TestBuilderViewTimeoutCleanup:
         view.message = None
         # Should not raise even though no lock was claimed.
         await view.on_timeout()
+
+
+class TestFinalizePostOutcomes:
+    """The summary copy shown to the officer must distinguish four
+    post-channel outcomes: posted_ok / no_channel / channel_gone /
+    send_failed. The prior implementation collapsed channel_gone and
+    send_failed into "no post channel is configured," which is
+    factually wrong and confusing — leadership has no way to know
+    whether the channel was deleted, the bot was kicked, or something
+    else went wrong."""
+
+    def _make_interaction(self, guild=None):
+        from unittest.mock import AsyncMock, MagicMock
+        inter = MagicMock()
+        inter.guild = guild
+        inter.response = MagicMock()
+        inter.response.defer = AsyncMock()
+        inter.followup = MagicMock()
+        inter.followup.send = AsyncMock()
+        return inter
+
+    def _make_fake_channel(self, channel_id: int, mention: str = "#storm",
+                           send_raises: Exception | None = None):
+        from unittest.mock import AsyncMock, MagicMock
+        ch = MagicMock()
+        ch.id = channel_id
+        ch.mention = mention
+        if send_raises is not None:
+            ch.send = AsyncMock(side_effect=send_raises)
+        else:
+            ch.send = AsyncMock()
+        return ch
+
+    def _make_structured_view(self, fake_env, *, channel=None, channel_id=0):
+        fake, gid = fake_env
+        import config
+        # Wire post_channel_id into the storm config so the finalize
+        # path knows where to look.
+        if channel_id:
+            cfg = config.get_storm_config(gid, "DS")
+            cfg["post_channel_id"] = channel_id
+            config.save_storm_config(gid, "DS", **{
+                k: v for k, v in cfg.items()
+                if k in {"tab_name", "mail_template", "timezone",
+                         "log_channel_id", "post_channel_id"}
+            })
+
+        session = _make_session(team="A", members={
+            "1001": {"key": "1001", "name": "Alice", "discord_id": "1001",
+                     "power": 412_000_000, "not_on_discord": False},
+        })
+        session.guild_id = gid
+        session.event_date = "2026-05-18"
+        session.assignments["Power Tower"].append("1001")
+        view = srb.RosterBuilderView(session)
+        view.message = None
+        # Claim the lock so on_timeout/release have something to release.
+        config.claim_storm_session(gid, "DS", "2026-05-18", "A", user_id=42)
+
+        from unittest.mock import MagicMock
+        guild = MagicMock()
+        guild.get_channel = MagicMock(return_value=channel)
+        inter = self._make_interaction(guild=guild)
+        return inter, view, session
+
+    @pytest.mark.asyncio
+    async def test_no_channel_configured_says_no_channel(self, fake_env):
+        inter, view, _ = self._make_structured_view(fake_env, channel=None, channel_id=0)
+        await srb._finalize_structured_roster(inter, view)
+        sent = inter.followup.send.await_args.args[0]
+        assert "No post channel is configured" in sent
+
+    @pytest.mark.asyncio
+    async def test_channel_deleted_says_channel_gone(self, fake_env):
+        inter, view, _ = self._make_structured_view(
+            fake_env, channel=None, channel_id=12345,
+        )
+        await srb._finalize_structured_roster(inter, view)
+        sent = inter.followup.send.await_args.args[0]
+        # Channel-gone message should mention the channel ID, NOT the
+        # generic "no post channel is configured" line.
+        assert "deleted" in sent.lower() or "can't see it" in sent.lower()
+        assert "<#12345>" in sent
+
+    @pytest.mark.asyncio
+    async def test_send_failure_distinguishes_from_no_channel(self, fake_env):
+        # A bare Exception is enough — the finalize path catches the
+        # broad `Exception` and surfaces the message verbatim.
+        ch = self._make_fake_channel(
+            12345, send_raises=Exception("Missing Permissions"),
+        )
+        inter, view, _ = self._make_structured_view(
+            fake_env, channel=ch, channel_id=12345,
+        )
+        await srb._finalize_structured_roster(inter, view)
+        sent = inter.followup.send.await_args.args[0]
+        # Officer must see that the channel rejected the send — not the
+        # misleading "no post channel is configured" line.
+        assert "rejected the send" in sent
+        assert "<#12345>" in sent
+        assert "No post channel is configured" not in sent
+
+    @pytest.mark.asyncio
+    async def test_happy_path_renders_posted_to_mention(self, fake_env):
+        ch = self._make_fake_channel(12345, mention="<#12345>")
+        inter, view, _ = self._make_structured_view(
+            fake_env, channel=ch, channel_id=12345,
+        )
+        await srb._finalize_structured_roster(inter, view)
+        ch.send.assert_awaited_once()
+        sent = inter.followup.send.await_args.args[0]
+        assert "Roster posted." in sent
+        assert "<#12345>" in sent
+
+
+class TestPowerSnapshotAtFinalize:
+    @pytest.mark.asyncio
+    async def test_finalize_refreshes_power_before_writing(self, fake_env):
+        """The commit message for #129 said 'power_at_assignment is
+        snapshotted at write time' but the code was actually reading the
+        builder-open snapshot. Verify that a power change between open
+        and Approve flows into the rosters_tab write."""
+        import config
+        from unittest.mock import AsyncMock, MagicMock
+        fake, gid = fake_env
+
+        # Open the session with stale power for Alice.
+        session = _make_session(team="A", members={
+            "1001": {"key": "1001", "name": "Alice", "discord_id": "1001",
+                     "power": 100_000_000, "not_on_discord": False},
+        })
+        session.guild_id = gid
+        session.event_date = "2026-05-18"
+        session.assignments["Power Tower"].append("1001")
+        view = srb.RosterBuilderView(session)
+        view.message = None
+        config.claim_storm_session(gid, "DS", "2026-05-18", "A", user_id=42)
+
+        # Simulate the alliance updating Alice's power on the Sheet
+        # between Open and Approve — bump her row's power column.
+        ws = fake.worksheet("Member Roster")
+        for row in ws._rows[1:]:
+            if row[1] == "alice":
+                row[5] = "500M"
+                break
+
+        guild = MagicMock()
+        guild.get_channel = MagicMock(return_value=None)
+        inter = MagicMock()
+        inter.guild = guild
+        inter.response = MagicMock()
+        inter.response.defer = AsyncMock()
+        inter.followup = MagicMock()
+        inter.followup.send = AsyncMock()
+
+        await srb._finalize_structured_roster(inter, view)
+
+        # The rosters_tab row for Alice should carry her FRESH power.
+        roster_ws = fake.worksheet("DS Rosters")
+        rows = roster_ws.get_all_values()
+        col = srb._ROSTERS_HEADER.index("Power at Assignment")
+        alice_row = next(r for r in rows[1:] if r[3] == "Alice")
+        assert alice_row[col] == str(500_000_000)

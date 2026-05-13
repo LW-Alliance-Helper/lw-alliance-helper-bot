@@ -968,6 +968,27 @@ async def _finalize_structured_roster(
     s = view.session
     await interaction.response.defer(ephemeral=True, thinking=True)
 
+    # Refresh powers from the roster Sheet at finalise time so
+    # `power_at_assignment` in the rosters_tab write reflects the value
+    # at the moment of approval, not the (potentially 15-minute-stale)
+    # value captured when the builder was opened. Powers for members
+    # whose row is gone are left as None — better than reading the
+    # builder-open snapshot, which is what the audit flagged.
+    try:
+        fresh_members, _refresh_errors = _read_roster_powers(
+            s.guild_id, s.event_type,
+        )
+        for key, m in s.members.items():
+            fresh = fresh_members.get(key)
+            if fresh is not None:
+                m["power"] = fresh.get("power")
+    except Exception as e:
+        logger.warning(
+            "[STORM STRUCTURED] roster re-read for power snapshot failed "
+            "(guild=%s event=%s): %s",
+            s.guild_id, s.event_date, e,
+        )
+
     # Build mail.
     zones_for_mail: dict[str, list[str]] = {}
     for zone_name, keys in s.assignments.items():
@@ -1004,12 +1025,28 @@ async def _finalize_structured_roster(
     if post_channel_id and interaction.guild:
         post_channel = interaction.guild.get_channel(post_channel_id)
 
-    posted_to_mention = None
-    if post_channel is not None:
+    # Distinguish three outcomes for the officer-facing summary:
+    #   no_channel    — alliance never configured a post channel
+    #   channel_gone  — channel_id is set but the channel was deleted /
+    #                   the bot can't see it
+    #   send_failed   — channel resolved but the API rejected the send
+    #                   (perms, rate limit, etc.)
+    #   posted_ok     — happy path
+    post_status: str
+    post_error: Optional[str] = None
+    posted_to_mention: Optional[str] = None
+    if not post_channel_id:
+        post_status = "no_channel"
+    elif post_channel is None:
+        post_status = "channel_gone"
+    else:
         try:
             await post_channel.send(mail)
             posted_to_mention = post_channel.mention
+            post_status = "posted_ok"
         except Exception as e:
+            post_status = "send_failed"
+            post_error = str(e)
             logger.warning(
                 "[STORM STRUCTURED] failed to post mail to channel=%s guild=%s: %s",
                 post_channel_id, s.guild_id, e,
@@ -1022,17 +1059,36 @@ async def _finalize_structured_roster(
     # Close out the view.
     for item in view.children:
         item.disabled = True
-    summary_lines = ["✅ Roster posted."]
-    if posted_to_mention:
-        summary_lines.append(f"📬 Mail sent to {posted_to_mention}.")
-    else:
-        summary_lines.append(
-            "⚠️ No post channel is configured — mail was built but not sent. "
-            "Run setup to pick one, or copy the mail manually below."
-        )
+
+    # Build the officer-facing summary based on the post outcome.
+    if post_status == "posted_ok":
+        summary_lines = ["✅ Roster posted.",
+                         f"📬 Mail sent to {posted_to_mention}."]
+    elif post_status == "no_channel":
+        summary_lines = [
+            "✅ Roster recorded.",
+            "⚠️ No post channel is configured — mail was built but not "
+            "sent. Run `/setup_desertstorm` (or `/setup_canyonstorm`) to "
+            "pick one, or copy the mail manually below.",
+        ]
+    elif post_status == "channel_gone":
+        summary_lines = [
+            "✅ Roster recorded.",
+            f"⚠️ The configured post channel (<#{post_channel_id}>) is "
+            f"deleted or the bot can't see it. Re-run setup to pick a new "
+            f"channel — mail preview below.",
+        ]
+    else:  # send_failed
+        summary_lines = [
+            "✅ Roster recorded.",
+            f"⚠️ The configured post channel <#{post_channel_id}> rejected "
+            f"the send: `{(post_error or 'unknown error')[:120]}`. Check "
+            f"the bot's permissions in that channel — mail preview below.",
+        ]
     if write_errors:
         summary_lines.append("⚠️ " + write_errors[0])
-    # Slim public ack in the channel.
+
+    # Slim public ack on the original builder message.
     try:
         if view.message:
             await view.message.edit(
@@ -1042,9 +1098,11 @@ async def _finalize_structured_roster(
             )
     except discord.HTTPException:
         pass
-    # Officer-facing details (ephemeral).
+
+    # Officer-facing details (ephemeral). Include the mail preview when
+    # we didn't auto-post (so the officer can copy it manually).
     detail = "\n".join(summary_lines)
-    if not posted_to_mention:
+    if post_status != "posted_ok":
         preview = mail if len(mail) <= 1800 else mail[:1780] + "\n…(truncated)"
         detail += f"\n\n```\n{preview}\n```"
     await interaction.followup.send(detail, ephemeral=True)

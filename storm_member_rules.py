@@ -55,6 +55,53 @@ _SPECIAL_ROLES        = ("commander", "judicator")
 _TEAMS                = ("A", "B")
 
 
+# ── Subject resolution (#136) ────────────────────────────────────────────────
+#
+# Slash commands accept EITHER a `discord.Member` picker (the common
+# case — alliance member who's on the server) OR a free-text
+# `member_name` (the escape hatch — non-Discord member, or one the bot
+# can't see). Storage convention:
+#
+#   * Discord-resolvable subject → str(discord_id)
+#   * non-Discord subject        → name verbatim
+#
+# Loader (Rule.render_label + auto-fill resolution in storm_roster_builder)
+# interprets the subject by looking at the string itself — numeric → Discord
+# ID lookup against the live guild; otherwise → name match.
+#
+# Existing rules with name subjects keep working unchanged — render_label
+# falls back to the raw subject when it isn't numeric, and the
+# auto-fill / apply paths already accept both forms.
+
+_SUBJECT_REQUIRED_MSG = (
+    "⚠️ Provide a member. Pick from the typeahead (server member) OR "
+    "type a roster name (non-Discord member) — exactly one, not both."
+)
+
+
+def _resolve_subject(
+    member_user: discord.Member | None,
+    member_name: str | None,
+) -> tuple[str | None, str]:
+    """Return `(subject_for_storage, display_name)` from the wizard's
+    two-input shape.
+
+    Returns `(None, "")` if neither / both were provided — caller should
+    reject. `member_user` is preferred when supplied; the free-text
+    `member_name` is the escape hatch for non-Discord roster rows.
+    """
+    has_user = member_user is not None
+    has_name = bool((member_name or "").strip())
+    if has_user and has_name:
+        return None, ""
+    if has_user:
+        return str(member_user.id), member_user.display_name
+    if has_name:
+        cleaned = member_name.strip()
+        return cleaned, cleaned
+    return None, ""
+
+
 # ── Sheet I/O ────────────────────────────────────────────────────────────────
 
 
@@ -96,8 +143,16 @@ class Rule:
         self.value     = value
         self.notes     = notes or ""
 
-    def render_label(self) -> str:
-        """Human-readable single-line summary for embed listings."""
+    def render_label(self, *, guild=None) -> str:
+        """Human-readable single-line summary for embed listings.
+
+        For per_member rules with a Discord-ID subject (#136), the
+        guild is consulted to resolve the CURRENT display name. A
+        rename between rule creation and rendering naturally surfaces
+        the new name. Falls back to the raw subject when the guild is
+        None or the member can't be resolved — the rule remains
+        recognizable rather than crashing.
+        """
         if self.rule_type == _RULE_TYPE_POWER_BAND:
             try:
                 _parse_power, format_power, _zones = _strategy_helpers()
@@ -106,13 +161,35 @@ class Rule:
                 threshold = self.subject
             return f"⚖️  ≥ {threshold} → eligible for **{self.value}**"
         # per_member
+        display = self._resolve_display_name(guild)
         if self.sub_type == "team":
-            return f"👤  **{self.subject}** → plays **Team {self.value}**"
+            return f"👤  **{display}** → plays **Team {self.value}**"
         if self.sub_type == "zone":
-            return f"👤  **{self.subject}** → always at **{self.value}**"
+            return f"👤  **{display}** → always at **{self.value}**"
         if self.sub_type == "special_role":
-            return f"🎖️  **{self.subject}** → **{self.value.title()}** candidate"
-        return f"👤  **{self.subject}** → {self.sub_type}={self.value}"
+            return f"🎖️  **{display}** → **{self.value.title()}** candidate"
+        return f"👤  **{display}** → {self.sub_type}={self.value}"
+
+    def _resolve_display_name(self, guild) -> str:
+        """If `subject` is a numeric string (Discord ID), look up the
+        current display name in the guild. Otherwise return the raw
+        subject (non-Discord member name).
+
+        Defensive — `guild=None` and missing-member both fall back to
+        the raw subject so a renamed/left member's rule still renders.
+        """
+        s = (self.subject or "").strip()
+        if not s or not s.isdigit():
+            return s
+        if guild is None:
+            return s
+        try:
+            member = guild.get_member(int(s))
+        except (TypeError, ValueError):
+            return s
+        if member is None:
+            return s
+        return member.display_name
 
 
 def list_rules(guild_id: int, event_type: str) -> list[Rule]:
@@ -271,7 +348,8 @@ class _RulesListView(discord.ui.View):
     rows of 5 clear buttons)."""
 
     def __init__(self, guild_id: int, user_id: int, event_type: str,
-                 rules: list[Rule], page: int = 0, per_page: int = 20):
+                 rules: list[Rule], page: int = 0, per_page: int = 20,
+                 *, guild: discord.Guild | None = None):
         super().__init__(timeout=300)
         self.guild_id = guild_id
         self.user_id  = user_id
@@ -279,6 +357,10 @@ class _RulesListView(discord.ui.View):
         self.rules    = rules
         self.page     = page
         self.per_page = per_page
+        # Live Guild handle so Rule.render_label can resolve Discord-ID
+        # subjects to their current display name. Falls back gracefully
+        # to the raw subject when None.
+        self.guild    = guild
         self._build_buttons()
 
     @property
@@ -298,7 +380,7 @@ class _RulesListView(discord.ui.View):
             lines.append("*No member rules saved yet.*")
         else:
             for i, r in self.page_slice():
-                lines.append(f"`{i + 1:>2}` · {r.render_label()}")
+                lines.append(f"`{i + 1:>2}` · {r.render_label(guild=self.guild)}")
                 if r.notes:
                     lines.append(f"     ↳ _{r.notes}_")
         embed = discord.Embed(
@@ -432,8 +514,12 @@ class _MemberRuleGroup(app_commands.Group):
             await interaction.response.send_message(f"⚠️ {msg}", ephemeral=True)
 
     # ── set_member_team (DS only — `team` doesn't exist for CS) ──────
-    async def _set_member_team(self, interaction: discord.Interaction,
-                               member: str, team: str, notes: str = ""):
+    async def _set_member_team(
+        self, interaction: discord.Interaction,
+        member_user: discord.Member | None,
+        member_name: str | None,
+        team: str, notes: str = "",
+    ):
         if not await _deny_if_not_leader(interaction):
             return
         if self.event_type == "CS":
@@ -441,6 +527,12 @@ class _MemberRuleGroup(app_commands.Group):
                 "⚠️ `team` rules only apply to Desert Storm. Use the zone or special_role "
                 "commands for Canyon Storm.",
                 ephemeral=True,
+            )
+            return
+        subject, display = _resolve_subject(member_user, member_name)
+        if subject is None:
+            await interaction.response.send_message(
+                _SUBJECT_REQUIRED_MSG, ephemeral=True,
             )
             return
         team_clean = (team or "").strip().upper()
@@ -452,26 +544,35 @@ class _MemberRuleGroup(app_commands.Group):
         ok, msg = save_rule(
             interaction.guild_id, self.event_type,
             Rule(rule_type=_RULE_TYPE_PER_MEMBER,
-                 subject=member.strip(), sub_type="team",
+                 subject=subject, sub_type="team",
                  value=team_clean, notes=notes),
         )
         if ok:
             await interaction.response.send_message(
-                f"✅ Saved: **{member.strip()}** → plays **Team {team_clean}**.",
+                f"✅ Saved: **{display}** → plays **Team {team_clean}**.",
             )
         else:
             await interaction.response.send_message(f"⚠️ {msg}", ephemeral=True)
 
     # ── set_member_zone ──────────────────────────────────────────────
-    async def _set_member_zone(self, interaction: discord.Interaction,
-                               member: str, zone: str, notes: str = ""):
+    async def _set_member_zone(
+        self, interaction: discord.Interaction,
+        member_user: discord.Member | None,
+        member_name: str | None,
+        zone: str, notes: str = "",
+    ):
         if not await _deny_if_not_leader(interaction):
             return
-        member_clean = (member or "").strip()
-        zone_clean = (zone or "").strip()
-        if not member_clean or not zone_clean:
+        subject, display = _resolve_subject(member_user, member_name)
+        if subject is None:
             await interaction.response.send_message(
-                "⚠️ Both `member` and `zone` are required.", ephemeral=True,
+                _SUBJECT_REQUIRED_MSG, ephemeral=True,
+            )
+            return
+        zone_clean = (zone or "").strip()
+        if not zone_clean:
+            await interaction.response.send_message(
+                "⚠️ `zone` is required.", ephemeral=True,
             )
             return
         _parse, _format, canonical_zones_for = _strategy_helpers()
@@ -483,20 +584,30 @@ class _MemberRuleGroup(app_commands.Group):
         ok, msg = save_rule(
             interaction.guild_id, self.event_type,
             Rule(rule_type=_RULE_TYPE_PER_MEMBER,
-                 subject=member_clean, sub_type="zone",
+                 subject=subject, sub_type="zone",
                  value=zone_clean, notes=notes),
         )
         if ok:
             await interaction.response.send_message(
-                f"✅ Saved: **{member_clean}** → always at **{zone_clean}**.{zone_warning}",
+                f"✅ Saved: **{display}** → always at **{zone_clean}**.{zone_warning}",
             )
         else:
             await interaction.response.send_message(f"⚠️ {msg}", ephemeral=True)
 
     # ── set_member_role ──────────────────────────────────────────────
-    async def _set_member_role(self, interaction: discord.Interaction,
-                               member: str, role: str, notes: str = ""):
+    async def _set_member_role(
+        self, interaction: discord.Interaction,
+        member_user: discord.Member | None,
+        member_name: str | None,
+        role: str, notes: str = "",
+    ):
         if not await _deny_if_not_leader(interaction):
+            return
+        subject, display = _resolve_subject(member_user, member_name)
+        if subject is None:
+            await interaction.response.send_message(
+                _SUBJECT_REQUIRED_MSG, ephemeral=True,
+            )
             return
         role_clean = (role or "").strip().lower()
         if role_clean not in _SPECIAL_ROLES:
@@ -508,12 +619,12 @@ class _MemberRuleGroup(app_commands.Group):
         ok, msg = save_rule(
             interaction.guild_id, self.event_type,
             Rule(rule_type=_RULE_TYPE_PER_MEMBER,
-                 subject=member.strip(), sub_type="special_role",
+                 subject=subject, sub_type="special_role",
                  value=role_clean, notes=notes),
         )
         if ok:
             await interaction.response.send_message(
-                f"✅ Saved: **{member.strip()}** → **{role_clean.title()}** candidate.",
+                f"✅ Saved: **{display}** → **{role_clean.title()}** candidate.",
             )
         else:
             await interaction.response.send_message(f"⚠️ {msg}", ephemeral=True)
@@ -524,11 +635,26 @@ class _MemberRuleGroup(app_commands.Group):
             return
         rules = list_rules(interaction.guild_id, self.event_type)
         if member:
+            # Filter matches either the raw subject (works for non-Discord
+            # name subjects) OR the resolved display name (works for
+            # Discord-ID-keyed rules whose member has since been renamed).
             mlow = member.strip().lower()
-            rules = [r for r in rules
-                     if r.rule_type == _RULE_TYPE_PER_MEMBER and r.subject.lower() == mlow]
-        view = _RulesListView(interaction.guild_id, interaction.user.id,
-                              self.event_type, rules)
+            filtered = []
+            for r in rules:
+                if r.rule_type != _RULE_TYPE_PER_MEMBER:
+                    continue
+                if r.subject.strip().lower() == mlow:
+                    filtered.append(r)
+                    continue
+                display = r._resolve_display_name(interaction.guild)
+                if display.strip().lower() == mlow:
+                    filtered.append(r)
+            rules = filtered
+        view = _RulesListView(
+            interaction.guild_id, interaction.user.id,
+            self.event_type, rules,
+            guild=interaction.guild,
+        )
         await interaction.response.send_message(embed=view.render_embed(), view=view)
 
 
@@ -552,7 +678,8 @@ def _build_ds_group() -> _MemberRuleGroup:
     @grp.command(name="set_member_team",
                  description="Lock a specific member to Team A or B")
     @app_commands.describe(
-        member="Roster member name (must match the Sheet)",
+        member_user="Pick from the server (preferred — keys by Discord ID, survives renames)",
+        member_name="OR a roster name if the member isn't on Discord",
         team="Team A or Team B",
         notes="Optional free-text notes",
     )
@@ -560,25 +687,41 @@ def _build_ds_group() -> _MemberRuleGroup:
         app_commands.Choice(name="Team A", value="A"),
         app_commands.Choice(name="Team B", value="B"),
     ])
-    async def set_team(interaction: discord.Interaction, member: str,
-                       team: app_commands.Choice[str], notes: str = ""):
-        await grp._set_member_team(interaction, member, team.value, notes)
+    async def set_team(
+        interaction: discord.Interaction,
+        team: app_commands.Choice[str],
+        member_user: discord.Member | None = None,
+        member_name: str | None = None,
+        notes: str = "",
+    ):
+        await grp._set_member_team(
+            interaction, member_user, member_name, team.value, notes,
+        )
 
     @grp.command(name="set_member_zone",
                  description="Lock a specific member to a zone")
     @app_commands.describe(
-        member="Roster member name",
+        member_user="Pick from the server (preferred)",
+        member_name="OR a roster name if the member isn't on Discord",
         zone="Zone they always play",
         notes="Optional free-text notes",
     )
-    async def set_zone(interaction: discord.Interaction, member: str,
-                       zone: str, notes: str = ""):
-        await grp._set_member_zone(interaction, member, zone, notes)
+    async def set_zone(
+        interaction: discord.Interaction,
+        zone: str,
+        member_user: discord.Member | None = None,
+        member_name: str | None = None,
+        notes: str = "",
+    ):
+        await grp._set_member_zone(
+            interaction, member_user, member_name, zone, notes,
+        )
 
     @grp.command(name="set_member_role",
                  description="Tag a member as a Commander or Judicator candidate")
     @app_commands.describe(
-        member="Roster member name",
+        member_user="Pick from the server (preferred)",
+        member_name="OR a roster name if the member isn't on Discord",
         role="Commander or Judicator",
         notes="Optional free-text notes",
     )
@@ -586,9 +729,16 @@ def _build_ds_group() -> _MemberRuleGroup:
         app_commands.Choice(name="Commander", value="commander"),
         app_commands.Choice(name="Judicator", value="judicator"),
     ])
-    async def set_role(interaction: discord.Interaction, member: str,
-                       role: app_commands.Choice[str], notes: str = ""):
-        await grp._set_member_role(interaction, member, role.value, notes)
+    async def set_role(
+        interaction: discord.Interaction,
+        role: app_commands.Choice[str],
+        member_user: discord.Member | None = None,
+        member_name: str | None = None,
+        notes: str = "",
+    ):
+        await grp._set_member_role(
+            interaction, member_user, member_name, role.value, notes,
+        )
 
     @grp.command(name="list",
                  description="Show all saved DS member rules (with Clear buttons)")
@@ -619,18 +769,27 @@ def _build_cs_group() -> _MemberRuleGroup:
     @grp.command(name="set_member_zone",
                  description="Lock a specific member to a zone")
     @app_commands.describe(
-        member="Roster member name",
+        member_user="Pick from the server (preferred)",
+        member_name="OR a roster name if the member isn't on Discord",
         zone="Zone they always play",
         notes="Optional free-text notes",
     )
-    async def set_zone(interaction: discord.Interaction, member: str,
-                       zone: str, notes: str = ""):
-        await grp._set_member_zone(interaction, member, zone, notes)
+    async def set_zone(
+        interaction: discord.Interaction,
+        zone: str,
+        member_user: discord.Member | None = None,
+        member_name: str | None = None,
+        notes: str = "",
+    ):
+        await grp._set_member_zone(
+            interaction, member_user, member_name, zone, notes,
+        )
 
     @grp.command(name="set_member_role",
                  description="Tag a member as a Commander or Judicator candidate")
     @app_commands.describe(
-        member="Roster member name",
+        member_user="Pick from the server (preferred)",
+        member_name="OR a roster name if the member isn't on Discord",
         role="Commander or Judicator",
         notes="Optional free-text notes",
     )
@@ -638,9 +797,16 @@ def _build_cs_group() -> _MemberRuleGroup:
         app_commands.Choice(name="Commander", value="commander"),
         app_commands.Choice(name="Judicator", value="judicator"),
     ])
-    async def set_role(interaction: discord.Interaction, member: str,
-                       role: app_commands.Choice[str], notes: str = ""):
-        await grp._set_member_role(interaction, member, role.value, notes)
+    async def set_role(
+        interaction: discord.Interaction,
+        role: app_commands.Choice[str],
+        member_user: discord.Member | None = None,
+        member_name: str | None = None,
+        notes: str = "",
+    ):
+        await grp._set_member_role(
+            interaction, member_user, member_name, role.value, notes,
+        )
 
     @grp.command(name="list",
                  description="Show all saved CS member rules (with Clear buttons)")

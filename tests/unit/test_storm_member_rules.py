@@ -200,6 +200,111 @@ class TestDeleteAtIndex:
         assert len(smr.list_rules(gid, "DS")) == 1
 
 
+class TestSubjectResolution:
+    """#136 — slash commands accept either a `discord.Member` picker or
+    a free-text name. `_resolve_subject` enforces exactly one and
+    returns (subject_for_storage, display_name)."""
+
+    def test_member_user_returns_discord_id_string(self):
+        from unittest.mock import MagicMock
+        m = MagicMock()
+        m.id = 12345
+        m.display_name = "Alice"
+        subject, display = smr._resolve_subject(m, None)
+        assert subject == "12345"
+        assert display == "Alice"
+
+    def test_name_only_returns_verbatim(self):
+        subject, display = smr._resolve_subject(None, "Carol")
+        assert subject == "Carol"
+        assert display == "Carol"
+
+    def test_name_with_whitespace_stripped(self):
+        subject, display = smr._resolve_subject(None, "  Bob  ")
+        assert subject == "Bob"
+        assert display == "Bob"
+
+    def test_neither_returns_none(self):
+        subject, display = smr._resolve_subject(None, None)
+        assert subject is None
+        assert display == ""
+
+    def test_neither_empty_name_returns_none(self):
+        subject, display = smr._resolve_subject(None, "   ")
+        assert subject is None
+        assert display == ""
+
+    def test_both_provided_rejected(self):
+        from unittest.mock import MagicMock
+        m = MagicMock()
+        m.id = 12345
+        m.display_name = "Alice"
+        subject, display = smr._resolve_subject(m, "Bob")
+        assert subject is None
+        assert display == ""
+
+
+class TestDisplayNameResolution:
+    """Discord-ID subjects resolve to the current display name when a
+    Guild is available — survives renames between rule creation and
+    rendering. Falls back to the raw subject otherwise."""
+
+    def test_resolves_discord_id_to_current_name(self):
+        from unittest.mock import MagicMock
+        m = MagicMock()
+        m.display_name = "Alice (renamed)"
+        guild = MagicMock()
+        guild.get_member.return_value = m
+        rule = smr.Rule(
+            rule_type="per_member", subject="12345",
+            sub_type="team", value="A",
+        )
+        label = rule.render_label(guild=guild)
+        assert "Alice (renamed)" in label
+
+    def test_falls_back_when_member_not_in_guild(self):
+        from unittest.mock import MagicMock
+        guild = MagicMock()
+        guild.get_member.return_value = None
+        rule = smr.Rule(
+            rule_type="per_member", subject="12345",
+            sub_type="team", value="A",
+        )
+        label = rule.render_label(guild=guild)
+        # The raw ID surfaces — better than a missing-name crash.
+        assert "12345" in label
+
+    def test_non_numeric_subject_left_alone(self):
+        from unittest.mock import MagicMock
+        guild = MagicMock()
+        rule = smr.Rule(
+            rule_type="per_member", subject="Carol",
+            sub_type="zone", value="Power Tower",
+        )
+        label = rule.render_label(guild=guild)
+        assert "Carol" in label
+        # Defensive: guild.get_member should NOT be hit for a name (non-
+        # digit) subject — keeps the lookup cheap for non-Discord members.
+        guild.get_member.assert_not_called()
+
+    def test_no_guild_falls_back_to_raw_subject(self):
+        rule = smr.Rule(
+            rule_type="per_member", subject="12345",
+            sub_type="team", value="A",
+        )
+        label = rule.render_label()
+        assert "12345" in label
+
+    def test_render_label_back_compat_no_kwarg(self):
+        """Existing callsites that pass no guild kwarg keep working."""
+        rule = smr.Rule(
+            rule_type="per_member", subject="Carol",
+            sub_type="team", value="A",
+        )
+        label = rule.render_label()
+        assert "Carol" in label
+
+
 class TestRenderLabel:
     def test_power_band_label_formats_magnitude(self):
         r = smr.Rule(rule_type="power_band", subject="250000000", value="Power Tower")

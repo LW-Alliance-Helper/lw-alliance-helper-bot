@@ -293,6 +293,9 @@ def init_db():
                 attendance_tab           TEXT    DEFAULT '',
                 strategies_tab           TEXT    DEFAULT '',
                 member_rules_tab         TEXT    DEFAULT '',
+                event_day_of_week        INTEGER DEFAULT -1,
+                signup_lead_days         INTEGER DEFAULT 5,
+                signup_time              TEXT    DEFAULT '',
                 PRIMARY KEY (guild_id, event_type)
             )
         """)
@@ -551,6 +554,14 @@ def init_db():
             ("attendance_tab",          "TEXT    DEFAULT ''"),
             ("strategies_tab",          "TEXT    DEFAULT ''"),
             ("member_rules_tab",        "TEXT    DEFAULT ''"),
+            # Auto-scheduler (#131). Day-of-week the event runs on
+            # (0=Monday..6=Sunday); lead time in days; time-of-day to
+            # fire the sign-up post (HH:MM in guild's local timezone).
+            # event_day_of_week = -1 means "scheduling not configured;
+            # use manual /storm_post_signup."
+            ("event_day_of_week",       "INTEGER DEFAULT -1"),
+            ("signup_lead_days",        "INTEGER DEFAULT 5"),
+            ("signup_time",             "TEXT    DEFAULT ''"),
         ]:
             try:
                 conn.execute(f"ALTER TABLE guild_storm_config ADD COLUMN {col} {definition}")
@@ -1286,6 +1297,9 @@ def get_storm_config(guild_id: int, event_type: str) -> dict:
         "attendance_tab":          "",
         "strategies_tab":          "",
         "member_rules_tab":        "",
+        "event_day_of_week":       -1,
+        "signup_lead_days":        5,
+        "signup_time":             "",
     }
     return _normalize_storm_templates(fallback, event_type)
 
@@ -1385,6 +1399,12 @@ def get_structured_storm_config(guild_id: int, event_type: str) -> dict:
     cfg = get_storm_config(guild_id, event_type)
     def _tab(key: str) -> str:
         return cfg.get(key) or default_structured_tab(event_type, key)
+    # event_day_of_week stored as -1 (or None on a fallback dict) when
+    # scheduling hasn't been configured. Normalise to -1 so callers can
+    # check `< 0` without worrying about Python's truthy-0 trap.
+    raw_dow = cfg.get("event_day_of_week")
+    if raw_dow is None:
+        raw_dow = -1
     return {
         "structured_flow_enabled": bool(cfg.get("structured_flow_enabled")),
         "power_column_name":       cfg.get("power_column_name") or "",
@@ -1396,6 +1416,9 @@ def get_structured_storm_config(guild_id: int, event_type: str) -> dict:
         "attendance_tab":          _tab("attendance_tab"),
         "strategies_tab":          _tab("strategies_tab"),
         "member_rules_tab":        _tab("member_rules_tab"),
+        "event_day_of_week":       int(raw_dow),
+        "signup_lead_days":        int(cfg.get("signup_lead_days") or 5),
+        "signup_time":             cfg.get("signup_time") or "",
     }
 
 
@@ -1411,13 +1434,42 @@ def save_structured_storm_config(
     attendance_tab: str             = "",
     strategies_tab: str             = "",
     member_rules_tab: str           = "",
+    event_day_of_week: int          = -1,
+    signup_lead_days: int           = 5,
+    signup_time: str                = "",
 ) -> bool:
     """UPDATE the structured-flow fields on an existing (guild_id, event_type)
     row. The row must already exist (created by save_storm_config); this does
     not insert. Returns True if a row was updated. Tab name fields are stored
-    verbatim — pass '' to fall back to the event-type-aware default at read."""
+    verbatim — pass '' to fall back to the event-type-aware default at read.
+
+    Auto-scheduler fields (#131):
+      * event_day_of_week — 0=Monday..6=Sunday in the guild's tz.
+        Pass -1 (default) when scheduling is intentionally not
+        configured; the loop treats `< 0` as "skip this guild."
+      * signup_lead_days  — number of days before the event to fire
+        the sign-up post. Defaults to 5 if not set.
+      * signup_time       — HH:MM in the guild's tz when to fire.
+        Empty string disables auto-fire (manual /storm_post_signup
+        remains usable).
+    """
     if sub_mode not in ("pool", "paired"):
         sub_mode = "pool"
+    # Day-of-week is either 0-6 or "not configured" (-1). Reject
+    # anything else rather than silently clipping — the wizard should
+    # catch bad input first.
+    try:
+        dow = int(event_day_of_week)
+    except (TypeError, ValueError):
+        dow = -1
+    if not (-1 <= dow <= 6):
+        dow = -1
+    try:
+        lead = int(signup_lead_days)
+    except (TypeError, ValueError):
+        lead = 5
+    if lead < 0:
+        lead = 0
     with _get_conn() as conn:
         cur = conn.execute(
             "UPDATE guild_storm_config SET "
@@ -1430,7 +1482,10 @@ def save_structured_storm_config(
             "  rosters_tab = ?, "
             "  attendance_tab = ?, "
             "  strategies_tab = ?, "
-            "  member_rules_tab = ? "
+            "  member_rules_tab = ?, "
+            "  event_day_of_week = ?, "
+            "  signup_lead_days = ?, "
+            "  signup_time = ? "
             "WHERE guild_id = ? AND event_type = ?",
             (
                 1 if structured_flow_enabled else 0,
@@ -1438,6 +1493,7 @@ def save_structured_storm_config(
                 int(signup_channel_id or 0), signup_schedule_cron,
                 signups_tab, rosters_tab, attendance_tab,
                 strategies_tab, member_rules_tab,
+                dow, lead, signup_time,
                 guild_id, event_type,
             ),
         )

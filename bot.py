@@ -288,6 +288,13 @@ async def on_ready():
         print(f"[INFO] Shiny tasks weekly refresh started")
         shiny_tasks_post_task.start()
         print(f"[INFO] Shiny tasks per-minute post loop started")
+        try:
+            from storm_signup_scheduler import start_storm_signup_scheduler
+            start_storm_signup_scheduler(bot)
+            print(f"[INFO] Storm sign-up scheduler started")
+        except Exception as e:
+            print(f"[STORM SCHEDULER] Failed to start: {e}")
+            sentry_sdk.capture_exception(e)
 
 
 @bot.event

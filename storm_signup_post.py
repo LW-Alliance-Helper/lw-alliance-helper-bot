@@ -90,6 +90,102 @@ def _build_registration_embed(event_type: str, event_date_iso: str,
     return embed
 
 
+# ── Reusable post helper ─────────────────────────────────────────────────────
+
+
+async def post_registration(
+    bot: discord.Client,
+    guild: discord.Guild,
+    event_type: str,
+    event_date: str,
+    *,
+    structured: dict | None = None,
+) -> dict:
+    """Build and post a structured-flow sign-up message for one event.
+
+    Idempotent on `(guild_id, event_type, event_date)` — if a post
+    already exists, returns status `already_posted` without sending
+    again. Used by both the leadership-triggered `/storm_post_signup`
+    slash command (which shapes the response into user-facing copy)
+    and the auto-scheduler loop (#131) (which logs status).
+
+    Returns a dict carrying at minimum a `status` key. Possible values:
+      * `ok`               — message sent + recorded; `message_id` and
+                             `channel_id` populated.
+      * `already_posted`   — registration post for this event already
+                             exists; `channel_id` populated.
+      * `no_channel`       — `signup_channel_id` isn't configured.
+      * `channel_gone`     — channel_id set but the channel was deleted
+                             or the bot can't see it.
+      * `missing_slot_labels` — alliance hasn't set the time-option labels;
+                                posting would surface buttons with empty labels.
+      * `forbidden`        — channel.send raised Forbidden.
+      * `send_failed`      — other Discord error during send; `error`
+                             populated with str(exception).
+    """
+    import config
+    from storm_signup_view import SignupView
+
+    if structured is None:
+        structured = config.get_structured_storm_config(guild.id, event_type)
+
+    channel_id = int(structured.get("signup_channel_id") or 0)
+    if not channel_id:
+        return {"status": "no_channel"}
+
+    channel = guild.get_channel(channel_id) if guild else None
+    if channel is None:
+        return {"status": "channel_gone", "channel_id": channel_id}
+
+    if config.has_registration_post(guild.id, event_type, event_date):
+        return {"status": "already_posted", "channel_id": channel_id}
+
+    time_a, time_b = _slot_labels(event_type, guild.id)
+    if event_type == "DS" and not (time_a and time_b):
+        return {"status": "missing_slot_labels", "channel_id": channel_id}
+    if event_type == "CS" and not time_a:
+        return {"status": "missing_slot_labels", "channel_id": channel_id}
+
+    view = SignupView(
+        guild.id, event_type, event_date,
+        time_a_label=(time_a or "Team A"),
+        time_b_label=(time_b or "Team B"),
+    )
+    embed = _build_registration_embed(event_type, event_date, time_a, time_b)
+    try:
+        posted = await channel.send(embed=embed, view=view)
+    except discord.Forbidden:
+        return {"status": "forbidden", "channel_id": channel_id}
+    except discord.HTTPException as e:
+        logger.warning(
+            "[STORM SIGNUP POST] Discord send failed for guild=%s event=%s/%s: %s",
+            guild.id, event_type, event_date, e,
+        )
+        return {"status": "send_failed", "channel_id": channel_id, "error": str(e)}
+
+    config.record_storm_registration_post(
+        guild.id, event_type, event_date,
+        channel_id=channel.id,
+        message_id=posted.id,
+        time_a_label=(time_a or "Team A"),
+        time_b_label=(time_b or "Team B"),
+    )
+
+    try:
+        bot.add_view(view, message_id=posted.id)
+    except Exception as e:
+        logger.warning(
+            "[STORM SIGNUP POST] add_view failed for message=%s: %s",
+            posted.id, e,
+        )
+
+    return {
+        "status":     "ok",
+        "channel_id": channel.id,
+        "message_id": posted.id,
+    }
+
+
 # ── Slash command ────────────────────────────────────────────────────────────
 
 
@@ -159,119 +255,78 @@ class StormSignupPostCog(commands.Cog):
         if not ok:
             return
 
-        import config
-
-        channel_id = structured.get("signup_channel_id") or 0
-        if not channel_id:
-            cmd = "/setup_desertstorm" if et == "DS" else "/setup_canyonstorm"
-            await interaction.response.send_message(
-                f"⚠️ No sign-up channel configured. Run `{cmd}` and pick a "
-                f"sign-up channel during the structured-flow setup.",
-                ephemeral=True,
-            )
-            return
-
-        target_channel = interaction.guild.get_channel(channel_id) if interaction.guild else None
-        if target_channel is None:
-            await interaction.response.send_message(
-                f"⚠️ The configured sign-up channel (<#{channel_id}>) no longer "
-                f"exists or the bot can't see it. Re-run setup to pick a new channel.",
-                ephemeral=True,
-            )
-            return
-
-        # Idempotence: re-running for the same event date short-circuits.
-        if config.has_registration_post(interaction.guild_id, et, date_clean):
-            await interaction.response.send_message(
-                f"ℹ️ A sign-up post already exists for {date_clean} ({et}). "
-                f"Check {target_channel.mention} for the existing post — members "
-                f"can keep voting on it. If you need to re-post, delete the prior "
-                f"message first.",
-                ephemeral=True,
-            )
-            return
-
-        # Build time labels from the canonical slot helper.
-        time_a, time_b = _slot_labels(et, interaction.guild_id)
-
-        # Refuse to post if the configured slot labels are empty — members
-        # would otherwise see a sign-up with buttons that lie about which
-        # time they're voting for.
-        if et == "DS" and not (time_a and time_b):
-            cmd = "/setup_desertstorm"
-            await interaction.response.send_message(
-                f"⚠️ Both Desert Storm time slots need to be configured before "
-                f"posting a sign-up. Run `{cmd}` and pick the two times first.",
-                ephemeral=True,
-            )
-            return
-        if et == "CS" and not time_a:
-            cmd = "/setup_canyonstorm"
-            await interaction.response.send_message(
-                f"⚠️ The Canyon Storm time slot needs to be configured before "
-                f"posting a sign-up. Run `{cmd}` and pick the time first.",
-                ephemeral=True,
-            )
-            return
-
-        # Defer the interaction so we can do a Sheet/Discord call without
-        # blowing the 3-second initial response window.
+        # Defer so the post helper has headroom over the 3-second window.
         await interaction.response.defer(ephemeral=True)
 
-        # Post the message + View.
-        from storm_signup_view import SignupView
-        view = SignupView(
-            interaction.guild_id, et, date_clean,
-            time_a_label=(time_a or "Team A"),
-            time_b_label=(time_b or "Team B"),
+        result = await post_registration(
+            self.bot, interaction.guild, et, date_clean,
+            structured=structured,
         )
-        embed = _build_registration_embed(et, date_clean, time_a, time_b)
-        try:
-            posted = await target_channel.send(embed=embed, view=view)
-        except discord.Forbidden:
-            await interaction.followup.send(
-                f"⚠️ I don't have permission to send messages in "
-                f"{target_channel.mention}. Check the channel permissions and try again.",
-                ephemeral=True,
-            )
-            return
-        except discord.HTTPException as e:
-            logger.warning("[STORM SIGNUP POST] Discord send failed: %s", e)
-            await interaction.followup.send(
-                "⚠️ Discord refused the message. See logs for details.",
-                ephemeral=True,
-            )
-            return
-
-        # Record the post so the startup hook can re-register the View
-        # after a restart, and so re-running the command short-circuits.
-        config.record_storm_registration_post(
-            interaction.guild_id, et, date_clean,
-            channel_id=target_channel.id,
-            message_id=posted.id,
-            time_a_label=(time_a or "Team A"),
-            time_b_label=(time_b or "Team B"),
-        )
-
-        # Make sure the View is also registered against this exact
-        # message_id immediately, so the persistence layer knows about it
-        # before any vote click. (add_view is idempotent for the same
-        # message_id + View.)
-        try:
-            self.bot.add_view(view, message_id=posted.id)
-        except Exception as e:
-            logger.warning(
-                "[STORM SIGNUP POST] add_view failed for message=%s: %s",
-                posted.id, e,
-            )
-
-        label = "Desert Storm" if et == "DS" else "Canyon Storm"
         await interaction.followup.send(
-            f"✅ Sign-up post for {label} on **{date_clean}** is live in "
-            f"{target_channel.mention}. Members can vote any time before the event. "
-            f"Open `/storm_signups` to review who's voted.",
+            _format_post_result_message(et, date_clean, result),
             ephemeral=True,
         )
+
+
+def _format_post_result_message(
+    event_type: str, event_date: str, result: dict,
+) -> str:
+    """Render `post_registration`'s result dict into officer-facing copy.
+
+    Used by the slash command. The scheduler logs against the same
+    status codes but doesn't surface a user message.
+    """
+    status = result.get("status")
+    label = "Desert Storm" if event_type == "DS" else "Canyon Storm"
+    setup_cmd = "/setup_desertstorm" if event_type == "DS" else "/setup_canyonstorm"
+
+    if status == "ok":
+        cid = result.get("channel_id")
+        return (
+            f"✅ Sign-up post for {label} on **{event_date}** is live in "
+            f"<#{cid}>. Members can vote any time before the event. "
+            f"Open `/storm_signups` to review who's voted."
+        )
+    if status == "already_posted":
+        cid = result.get("channel_id")
+        return (
+            f"ℹ️ A sign-up post already exists for {event_date} ({event_type}). "
+            f"Check <#{cid}> for the existing post — members can keep voting on "
+            f"it. If you need to re-post, delete the prior message first."
+        )
+    if status == "no_channel":
+        return (
+            f"⚠️ No sign-up channel configured. Run `{setup_cmd}` and pick a "
+            f"sign-up channel during the structured-flow setup."
+        )
+    if status == "channel_gone":
+        cid = result.get("channel_id")
+        return (
+            f"⚠️ The configured sign-up channel (<#{cid}>) no longer exists or "
+            f"the bot can't see it. Re-run `{setup_cmd}` to pick a new channel."
+        )
+    if status == "missing_slot_labels":
+        if event_type == "DS":
+            return (
+                f"⚠️ Both Desert Storm time slots need to be configured before "
+                f"posting a sign-up. Run `{setup_cmd}` and pick the two times first."
+            )
+        return (
+            f"⚠️ The Canyon Storm time slot needs to be configured before "
+            f"posting a sign-up. Run `{setup_cmd}` and pick the time first."
+        )
+    if status == "forbidden":
+        cid = result.get("channel_id")
+        return (
+            f"⚠️ I don't have permission to send messages in <#{cid}>. Check the "
+            f"channel permissions and try again."
+        )
+    if status == "send_failed":
+        err = (result.get("error") or "unknown error")[:120]
+        return (
+            f"⚠️ Discord refused the sign-up message: `{err}`. See bot logs for details."
+        )
+    return f"⚠️ Sign-up post returned unexpected status `{status}`."
 
 
 async def setup(bot: commands.Bot):

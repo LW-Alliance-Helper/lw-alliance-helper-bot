@@ -4962,6 +4962,9 @@ async def run_storm_setup(interaction: discord.Interaction, bot, event_type: str
         attendance_tab         =structured_cfg["attendance_tab"],
         strategies_tab         =structured_cfg["strategies_tab"],
         member_rules_tab       =structured_cfg["member_rules_tab"],
+        event_day_of_week      =structured_cfg.get("event_day_of_week", -1),
+        signup_lead_days       =structured_cfg.get("signup_lead_days", 5),
+        signup_time            =structured_cfg.get("signup_time", ""),
     )
 
     embed = discord.Embed(title=f"✅ {label} Configured", color=discord.Color.green())
@@ -5338,6 +5341,178 @@ async def _run_storm_participation_step(
     }
 
 
+# ── Auto-schedule sub-flow (#131) ────────────────────────────────────────────
+
+
+_DOW_NAMES = ["Monday", "Tuesday", "Wednesday", "Thursday",
+              "Friday", "Saturday", "Sunday"]
+
+
+async def _ask_signup_schedule(
+    channel, bot, user, cancel_event, *,
+    label: str, cmd_name: str,
+    current_dow: int, current_lead: int, current_time: str,
+) -> dict | None:
+    """Three-step Premium sub-flow for the auto-scheduler config:
+        * Event day-of-week (dropdown; or "Skip auto-scheduling")
+        * Lead days (modal; defaults to 5)
+        * Sign-up post time (HH:MM in guild timezone; modal)
+
+    Returns `{"dow": int, "lead": int, "time": str}`. `dow = -1`
+    indicates the alliance explicitly opted out of auto-scheduling
+    (manual `/storm_post_signup` remains usable). Returns None on
+    cancel or timeout — callers should propagate the None.
+    """
+    import wizard_registry
+
+    # ── Step 1: day of week ──
+    class _DowView(discord.ui.View):
+        def __init__(self, current: int):
+            super().__init__(timeout=300)
+            self.selected: int | None = None
+            self.cancelled = False
+            options = [
+                discord.SelectOption(
+                    label=name, value=str(i),
+                    default=(i == current),
+                )
+                for i, name in enumerate(_DOW_NAMES)
+            ]
+            options.append(discord.SelectOption(
+                label="Skip auto-scheduling (use /storm_post_signup manually)",
+                value="-1",
+                default=(current < 0),
+            ))
+            sel = discord.ui.Select(
+                placeholder="Which day of the week does this storm event run?",
+                min_values=1, max_values=1,
+                options=options,
+            )
+
+            async def _on_pick(inter: discord.Interaction):
+                try:
+                    self.selected = int(sel.values[0])
+                except ValueError:
+                    self.selected = -1
+                for item in self.children: item.disabled = True
+                if self.selected < 0:
+                    await wizard_registry.safe_edit_response(
+                        inter,
+                        content="✅ Auto-scheduling skipped — `/storm_post_signup` will still work manually.",
+                        view=self,
+                    )
+                else:
+                    await wizard_registry.safe_edit_response(
+                        inter,
+                        content=f"✅ Event day: **{_DOW_NAMES[self.selected]}**.",
+                        view=self,
+                    )
+                self.stop()
+
+            sel.callback = _on_pick
+            self.add_item(sel)
+
+    dow_view = _DowView(int(current_dow if current_dow is not None else -1))
+    await channel.send(
+        f"**Auto-Schedule — Event Day (💎 Premium)**\n"
+        f"On which day of the week does **{label}** run for your alliance? "
+        f"The bot will fire the sign-up post `lead days` before that.",
+        view=dow_view,
+    )
+    await wait_view_or_cancel(dow_view, cancel_event)
+    if dow_view.cancelled:
+        return None
+    if dow_view.selected is None:
+        await channel.send(f"⏰ Timed out. Run `/{cmd_name}` to start again.")
+        return None
+    if dow_view.selected < 0:
+        # Skipped — return defaults / cleared schedule.
+        return {"dow": -1, "lead": int(current_lead or 5), "time": ""}
+
+    # ── Step 2: lead days ──
+    lead_default = str(int(current_lead) if current_lead else 5)
+    lead_picked = await ask_keep_or_change(
+        channel,
+        f"**Auto-Schedule — Lead Days**\n"
+        f"How many days **before** the event should the sign-up post fire? "
+        f"5 is a common default (post Tuesday for a Sunday event).",
+        default="5",
+        current=lead_default if lead_default != "5" else "",
+        modal_title="Lead Days",
+        modal_label="Days (integer, 0–14)",
+        timeout_cmd=cmd_name,
+        cancel_event=cancel_event,
+    )
+    if lead_picked is None:
+        return None
+    try:
+        lead = int(str(lead_picked).strip())
+    except ValueError:
+        lead = 5
+    if lead < 0:
+        lead = 0
+    if lead > 14:
+        lead = 14
+
+    # ── Step 3: sign-up time ──
+    time_default = current_time or "12:00"
+    time_picked = await ask_keep_or_change(
+        channel,
+        f"**Auto-Schedule — Sign-Up Post Time**\n"
+        f"What local time should the bot fire the sign-up post? "
+        f"Use 24-hour format (HH:MM). The bot interprets this in your "
+        f"alliance's configured timezone.",
+        default="12:00",
+        current=time_default if time_default != "12:00" else "",
+        modal_title="Sign-Up Time",
+        modal_label="HH:MM (24-hour, guild tz)",
+        timeout_cmd=cmd_name,
+        cancel_event=cancel_event,
+    )
+    if time_picked is None:
+        return None
+    time_clean = _normalise_hhmm(time_picked) or "12:00"
+
+    return {
+        "dow":  dow_view.selected,
+        "lead": lead,
+        "time": time_clean,
+    }
+
+
+def _normalise_hhmm(raw: str) -> str | None:
+    """Accept '14:00', '14', '2:00pm', '2pm' → 'HH:MM' 24-hour. Returns
+    None on garbage."""
+    if not raw:
+        return None
+    s = str(raw).strip().lower().replace(" ", "")
+    # Strip am/pm and remember which one was given.
+    period = None
+    if s.endswith("am"):
+        period = "am"
+        s = s[:-2]
+    elif s.endswith("pm"):
+        period = "pm"
+        s = s[:-2]
+    if ":" in s:
+        try:
+            hour, minute = (int(p) for p in s.split(":", 1))
+        except ValueError:
+            return None
+    else:
+        try:
+            hour, minute = int(s), 0
+        except ValueError:
+            return None
+    if period == "am" and hour == 12:
+        hour = 0
+    elif period == "pm" and hour < 12:
+        hour += 12
+    if not (0 <= hour <= 23) or not (0 <= minute <= 59):
+        return None
+    return f"{hour:02d}:{minute:02d}"
+
+
 # ── Structured storm flow setup sub-flow (#38 + #54) ─────────────────────────
 
 async def _run_structured_flow_setup_step(
@@ -5380,6 +5555,9 @@ async def _run_structured_flow_setup_step(
     for tab in ("signups_tab", "rosters_tab", "attendance_tab",
                 "strategies_tab", "member_rules_tab"):
         result.setdefault(tab, "")
+    result.setdefault("event_day_of_week", -1)
+    result.setdefault("signup_lead_days", 5)
+    result.setdefault("signup_time", "")
 
     cmd_short = cmd_name.replace("setup_", "")
 
@@ -5518,6 +5696,23 @@ async def _run_structured_flow_setup_step(
             await channel.send(f"⏰ Timed out. Run `/{cmd_name}` to start again.")
             return None
         result["signup_channel_id"] = signup_ch_view.selected_channel.id
+
+        # Auto-schedule (#131) — Day-of-week + lead days + time-of-day.
+        # All three together drive the storm_signup_scheduler loop. The
+        # alliance can skip all three (leave defaults) and continue
+        # running `/storm_post_signup` manually.
+        sched_result = await _ask_signup_schedule(
+            channel, bot, user, cancel_event,
+            label=label, cmd_name=cmd_name,
+            current_dow=result.get("event_day_of_week", -1),
+            current_lead=result.get("signup_lead_days", 5),
+            current_time=result.get("signup_time", ""),
+        )
+        if sched_result is None:
+            return None
+        result["event_day_of_week"] = sched_result["dow"]
+        result["signup_lead_days"]  = sched_result["lead"]
+        result["signup_time"]       = sched_result["time"]
 
         # Sign-ups / rosters / attendance tab names — Premium only
         for tab_key, label_text in (

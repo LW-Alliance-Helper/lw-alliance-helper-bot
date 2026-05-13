@@ -1221,6 +1221,149 @@ class TestFindJudicatorCandidates:
         assert srb._find_judicator_candidates(sess) == ["1001"]
 
 
+class TestFactionRolesPermsPreflight:
+    """Audit Major for #137: applying the Judicator role with the bot
+    missing Manage Roles, or sitting below the target role in the
+    hierarchy, produced N identical Forbidden rows. Now caught up-front
+    with a single explanatory ephemeral."""
+
+    def _make_view(self, *, manage_roles: bool, bot_top_pos: int,
+                   role_pos: int):
+        from unittest.mock import AsyncMock, MagicMock
+        members = {
+            "1001": {"key": "1001", "name": "Alice", "discord_id": "1001",
+                     "power": 412_000_000, "not_on_discord": False},
+        }
+        preset = ss.PresetBuffer(
+            name="P", event_type="CS", faction="Rulebringers",
+            zones=[ss.ZoneRow(zone="Z", max_players=4)],
+        )
+        sess = srb.RosterBuilderSession(
+            guild_id=1, user_id=42, event_type="CS", team="",
+            preset=preset, members=members,
+            per_member_rules=[], power_band_rules=[],
+            event_date="2026-05-18",
+        )
+        sess.assignments["Z"].append("1001")
+        view = srb._FactionRolesView(
+            session=sess, judicator_role_id=12345, candidate_keys=["1001"],
+        )
+
+        # Fake guild that returns a role with `role_pos`, and a `me`
+        # with the given top-role position + perms.
+        role = MagicMock()
+        role.id = 12345
+        role.position = role_pos
+
+        me = MagicMock()
+        me.guild_permissions.manage_roles = manage_roles
+        me.top_role.position = bot_top_pos
+
+        guild = MagicMock()
+        guild.get_role.return_value = role
+        guild.me = me
+
+        inter = MagicMock()
+        inter.guild = guild
+        inter.user = MagicMock()
+        inter.user.id = 42  # match session.user_id so the owner-lock passes
+        inter.message = MagicMock()
+        inter.message.edit = AsyncMock()
+        inter.response = MagicMock()
+        inter.response.defer = AsyncMock()
+        inter.response.send_message = AsyncMock()
+        inter.followup = MagicMock()
+        inter.followup.send = AsyncMock()
+        return view, inter
+
+    @pytest.mark.asyncio
+    async def test_missing_manage_roles_aborts_before_loop(self):
+        view, inter = self._make_view(
+            manage_roles=False, bot_top_pos=100, role_pos=50,
+        )
+        await view.children[0].callback(inter)  # Rulebringers button
+        sent = inter.followup.send.await_args.args[0]
+        assert "Manage Roles" in sent
+        # We surface ONE clear message, not N per-member errors.
+        assert inter.followup.send.await_count == 1
+
+    @pytest.mark.asyncio
+    async def test_role_above_bot_aborts_before_loop(self):
+        view, inter = self._make_view(
+            manage_roles=True, bot_top_pos=50, role_pos=100,
+        )
+        await view.children[0].callback(inter)
+        sent = inter.followup.send.await_args.args[0]
+        assert "above my own role" in sent
+        assert inter.followup.send.await_count == 1
+
+    @pytest.mark.asyncio
+    async def test_role_at_same_position_aborts(self):
+        # Discord requires STRICTLY above — equal positions still fail.
+        view, inter = self._make_view(
+            manage_roles=True, bot_top_pos=50, role_pos=50,
+        )
+        await view.children[0].callback(inter)
+        sent = inter.followup.send.await_args.args[0]
+        assert "above my own role" in sent
+
+    @pytest.mark.asyncio
+    async def test_apply_summary_says_nothing_to_apply_when_zero_applied(self):
+        """The summary header lied — it said '✅ Judicator role applied:'
+        even when every candidate was already-had / off-Discord. Now
+        gated on `applied` being non-empty."""
+        from unittest.mock import AsyncMock, MagicMock
+        members = {
+            "1001": {"key": "1001", "name": "Alice", "discord_id": "1001",
+                     "power": 412_000_000, "not_on_discord": False},
+        }
+        preset = ss.PresetBuffer(
+            name="P", event_type="CS", faction="Rulebringers",
+            zones=[ss.ZoneRow(zone="Z", max_players=4)],
+        )
+        sess = srb.RosterBuilderSession(
+            guild_id=1, user_id=42, event_type="CS", team="",
+            preset=preset, members=members,
+            per_member_rules=[], power_band_rules=[],
+            event_date="2026-05-18",
+        )
+        sess.assignments["Z"].append("1001")
+        view = srb._FactionRolesView(
+            session=sess, judicator_role_id=12345, candidate_keys=["1001"],
+        )
+
+        role = MagicMock(); role.id = 12345; role.position = 1
+        target_member = MagicMock()
+        target_member.roles = [role]  # already has it
+
+        me = MagicMock()
+        me.guild_permissions.manage_roles = True
+        me.top_role.position = 100
+
+        guild = MagicMock()
+        guild.get_role.return_value = role
+        guild.get_member.return_value = target_member
+        guild.me = me
+
+        inter = MagicMock()
+        inter.guild = guild
+        inter.message = MagicMock()
+        inter.message.edit = AsyncMock()
+        inter.response = MagicMock()
+        inter.response.defer = AsyncMock()
+        inter.followup = MagicMock()
+        inter.followup.send = AsyncMock()
+        inter.user = MagicMock(); inter.user.id = 42  # owner
+
+        await view.children[0].callback(inter)
+        sent = inter.followup.send.await_args.args[0]
+        # The misleading "✅ applied" header is gone when nothing applied.
+        assert "✅ Judicator role applied:" not in sent
+        assert "nothing to apply" in sent
+        # The "already had" line still surfaces for context.
+        assert "Already had the role" in sent
+
+
 class TestPairedSubMode:
     """#132 — paired sub mode keeps each primary partnered with a
     specific sub. Auto-fill pairs greedy-style after primary placement;
@@ -1743,6 +1886,60 @@ class TestRostersTabHeaderMigration:
         assert new_header == srb._ROSTERS_HEADER
         # Prior data row preserved (header migration only touches row 1).
         assert old_rosters._rows[1][3] == "Old"
+
+
+class TestFactionRolesSchemaAndApply:
+    """Audit Critical for #137: `CREATE TABLE guild_storm_config` was
+    missing the `judicator_role_id` column — only the ALTER TABLE
+    migration block added it. Fresh installs would fail on the first
+    save. Audit Major: no up-front Manage Roles / hierarchy check.
+    """
+
+    def test_create_table_has_judicator_column(self, seeded_db):
+        import config
+        # Fresh seeded_db went through init_db's CREATE TABLE. The
+        # column must be present even without the ALTER fallback firing.
+        # (Fresh installs only hit CREATE TABLE.)
+        with config._get_conn() as conn:
+            cols = [
+                row[1] for row in conn.execute(
+                    "PRAGMA table_info(guild_storm_config)"
+                ).fetchall()
+            ]
+        assert "judicator_role_id" in cols
+        # Defense in depth — the #138 column too, since it had the
+        # same gap and was added in the same CREATE TABLE fix.
+        assert "power_refresh_dm_enabled" in cols
+
+    def test_judicator_round_trip(self, seeded_db):
+        import config
+        config.save_storm_config(
+            TEST_GUILD_ID, "CS",
+            tab_name="CS Tab", mail_template="",
+            timezone="America/New_York", log_channel_id=0,
+        )
+        config.save_structured_storm_config(
+            TEST_GUILD_ID, "CS",
+            structured_flow_enabled=True,
+            judicator_role_id=99887766,
+        )
+        cfg = config.get_structured_storm_config(TEST_GUILD_ID, "CS")
+        assert cfg["judicator_role_id"] == 99887766
+
+    def test_negative_judicator_role_id_clamped(self, seeded_db):
+        import config
+        config.save_storm_config(
+            TEST_GUILD_ID, "CS",
+            tab_name="CS Tab", mail_template="",
+            timezone="America/New_York", log_channel_id=0,
+        )
+        config.save_structured_storm_config(
+            TEST_GUILD_ID, "CS",
+            structured_flow_enabled=True,
+            judicator_role_id=-1,
+        )
+        cfg = config.get_structured_storm_config(TEST_GUILD_ID, "CS")
+        assert cfg["judicator_role_id"] == 0
 
 
 class TestAutoFillSummarySplitsPairedFromPrimary:

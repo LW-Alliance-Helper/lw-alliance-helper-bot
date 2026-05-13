@@ -5530,7 +5530,12 @@ async def _ask_judicator_role(
         r for r in (interaction_guild.roles if interaction_guild else [])
         if not r.is_default() and not r.managed
     ]
-    # Sort newest-first (created roles tend to be the relevant ones).
+    # Sort by hierarchy position (top of the role list first). Admins
+    # tend to place storm-relevant roles toward the top of the role
+    # picker in Server Settings → Roles, so the top of the hierarchy
+    # surfaces the most likely Judicator-role candidates first. NOT
+    # creation-date order despite the prior comment — `r.position` is
+    # the hierarchy index, not created_at.
     roles.sort(key=lambda r: r.position, reverse=True)
     roles = roles[:24]
 

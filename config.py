@@ -296,6 +296,8 @@ def init_db():
                 event_day_of_week        INTEGER DEFAULT -1,
                 signup_lead_days         INTEGER DEFAULT 5,
                 signup_time              TEXT    DEFAULT '',
+                judicator_role_id        INTEGER DEFAULT 0,
+                power_refresh_dm_enabled INTEGER DEFAULT 0,
                 PRIMARY KEY (guild_id, event_type)
             )
         """)

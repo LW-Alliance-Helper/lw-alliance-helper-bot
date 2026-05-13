@@ -2028,6 +2028,38 @@ class _FactionRolesView(discord.ui.View):
                 )
                 return
 
+            # Up-front preflight: bot needs Manage Roles AND its top
+            # role must sit above the Judicator role in the hierarchy.
+            # Without this preflight, every per-member `add_roles` call
+            # would raise Forbidden and the officer would see N
+            # identical error rows. One clear "fix your bot perms"
+            # message before the loop is more actionable.
+            me = guild.me
+            if me is None:
+                await inter.followup.send(
+                    "⚠️ Couldn't resolve the bot's own member in this guild.",
+                    ephemeral=True,
+                )
+                return
+            if not me.guild_permissions.manage_roles:
+                await inter.followup.send(
+                    "⛔ I don't have **Manage Roles** in this server, so I "
+                    "can't apply the Judicator role. Grant the permission "
+                    "to my role and try again.",
+                    ephemeral=True,
+                )
+                return
+            if role.position >= me.top_role.position:
+                await inter.followup.send(
+                    f"⛔ The Judicator role (<@&{role.id}>) sits at or above "
+                    f"my own role in the hierarchy, so Discord won't let me "
+                    f"assign it. In **Server Settings → Roles**, move my "
+                    f"role above the Judicator role and try again.",
+                    ephemeral=True,
+                    allowed_mentions=discord.AllowedMentions.none(),
+                )
+                return
+
             applied: list[str] = []
             skipped_no_member: list[str] = []
             skipped_already: list[str] = []
@@ -2072,9 +2104,14 @@ class _FactionRolesView(discord.ui.View):
             except discord.HTTPException:
                 pass
 
-            summary_lines = ["✅ Judicator role applied:"]
+            # Header reflects whether any roles actually applied vs. all
+            # candidates were already-had / off-Discord — "✅ Judicator
+            # role applied" lies when zero applied.
             if applied:
+                summary_lines = ["✅ Judicator role applied:"]
                 summary_lines.append(f"  • Applied to: {', '.join(applied)}")
+            else:
+                summary_lines = ["ℹ️ Judicator role apply — nothing to apply:"]
             if skipped_already:
                 summary_lines.append(
                     f"  • Already had the role: {', '.join(skipped_already)}"

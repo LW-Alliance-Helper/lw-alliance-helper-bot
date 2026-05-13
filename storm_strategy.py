@@ -505,8 +505,8 @@ class _ZoneEditModal(discord.ui.Modal):
         self.add_item(self.priority_input)
 
         self.remove_input = discord.ui.TextInput(
-            label="Type 'remove' to drop this zone (else leave blank)",
-            placeholder="leave blank to keep",
+            label="Type 'remove' to drop this zone",
+            placeholder="leave blank to keep this zone",
             required=False, max_length=10,
         )
         self.add_item(self.remove_input)

@@ -2191,18 +2191,21 @@ async def _maybe_offer_faction_roles(
 
 
 def _find_judicator_candidates(session: RosterBuilderSession) -> list[str]:
-    """Return member keys for assigned members flagged as Judicator
+    """Return member keys for roster members flagged as Judicator
     candidates via per_member.special_role=judicator rules.
 
-    Matches subjects against both Discord ID (numeric subject) and
-    display name (non-Discord subject) — the same two-form resolution
-    auto-fill uses. Returns assigned keys only (subs not included for
-    v1)."""
+    Matches subjects against display name, internal key, and Discord ID
+    — the three-way resolution auto-fill uses. Includes both primaries
+    AND paired subs: paired subs are real participants the moment a
+    primary no-shows, and the officer clicks Apply Faction Roles
+    after matchmaking reveals Rulebringers — at which point the actual
+    line-up is known and a paired sub who took the slot is a
+    legitimate candidate. Flat sub-pool members are still excluded;
+    they're a bench, not a designated replacement."""
     assigned: set[str] = set()
     for zone_members in session.assignments.values():
         assigned.update(zone_members)
-    # Paired subs are NOT applied — the spec says primary candidates
-    # only; the sub didn't end up in the active slot.
+    assigned.update(session.paired_subs.values())
     candidates: list[str] = []
     for rule in session.per_member_rules:
         if rule.sub_type != "special_role" or rule.value.strip().lower() != "judicator":

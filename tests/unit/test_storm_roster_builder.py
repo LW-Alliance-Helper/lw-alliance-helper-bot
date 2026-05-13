@@ -1171,8 +1171,12 @@ class TestFindJudicatorCandidates:
         # Alice is on the roster but NOT assigned anywhere.
         assert srb._find_judicator_candidates(sess) == []
 
-    def test_paired_subs_not_included(self):
-        """v1 spec: only primaries are applied, not paired subs."""
+    def test_paired_subs_included(self):
+        """Paired subs are designated participants the moment the
+        primary no-shows. Apply Faction Roles fires AFTER matchmaking
+        reveals the faction, so a paired sub who's a Judicator
+        candidate is a legitimate target — the officer wouldn't click
+        the button if the sub hadn't actually taken the slot."""
         members = {
             "1001": {"key": "1001", "name": "Alice", "discord_id": "1001",
                      "power": 412_000_000, "not_on_discord": False},
@@ -1188,7 +1192,27 @@ class TestFindJudicatorCandidates:
         )
         sess.assignments["Power Tower"].append("1001")
         sess.paired_subs["1001"] = "1002"
-        # Bob is paired in but not in assignments → excluded.
+        # Bob is the paired sub → included as a candidate.
+        assert srb._find_judicator_candidates(sess) == ["1002"]
+
+    def test_flat_sub_pool_excluded(self):
+        """Flat sub pool ≠ paired sub. Members in session.subs are
+        the bench; they're not designated to take any specific slot,
+        so they're not Judicator candidates by virtue of being subs."""
+        members = {
+            "1001": {"key": "1001", "name": "Alice", "discord_id": "1001",
+                     "power": 412_000_000, "not_on_discord": False},
+            "1002": {"key": "1002", "name": "Bob",   "discord_id": "1002",
+                     "power": 350_000_000, "not_on_discord": False},
+        }
+        rules = [
+            smr.Rule(rule_type="per_member", subject="Bob",
+                     sub_type="special_role", value="judicator"),
+        ]
+        sess = _make_session(team="A", members=members, per_member_rules=rules)
+        sess.assignments["Power Tower"].append("1001")
+        sess.subs.append("1002")
+        # Bob is in the bench pool only, not a designated paired sub.
         assert srb._find_judicator_candidates(sess) == []
 
     def test_commander_rule_does_not_match(self):

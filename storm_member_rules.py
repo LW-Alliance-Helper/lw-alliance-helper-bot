@@ -86,15 +86,22 @@ def _resolve_subject(
     """Return `(subject_for_storage, display_name)` from the wizard's
     two-input shape.
 
-    Returns `(None, "")` if neither / both were provided — caller should
-    reject. `member_user` is preferred when supplied; the free-text
+    Returns `(None, "")` if neither / both were provided OR the picker
+    selected a bot — caller should reject with `_SUBJECT_REQUIRED_MSG`.
+    `member_user` is preferred when supplied; the free-text
     `member_name` is the escape hatch for non-Discord roster rows.
+
+    The bot-reject branch was added by the audit pass — Discord's
+    Member picker can include bot accounts, and a rule saved against a
+    bot ID silently never resolves at apply time.
     """
     has_user = member_user is not None
     has_name = bool((member_name or "").strip())
     if has_user and has_name:
         return None, ""
     if has_user:
+        if member_user.bot:
+            return None, ""
         return str(member_user.id), member_user.display_name
     if has_name:
         cleaned = member_name.strip()
@@ -171,25 +178,38 @@ class Rule:
         return f"👤  **{display}** → {self.sub_type}={self.value}"
 
     def _resolve_display_name(self, guild) -> str:
-        """If `subject` is a numeric string (Discord ID), look up the
-        current display name in the guild. Otherwise return the raw
-        subject (non-Discord member name).
+        """Back-compat shim — delegates to the module-level helper so
+        existing callers using `rule._resolve_display_name(guild)` keep
+        working. New callers should prefer `resolve_subject_display`."""
+        return resolve_subject_display(self.subject, guild)
 
-        Defensive — `guild=None` and missing-member both fall back to
-        the raw subject so a renamed/left member's rule still renders.
-        """
-        s = (self.subject or "").strip()
-        if not s or not s.isdigit():
-            return s
-        if guild is None:
-            return s
-        try:
-            member = guild.get_member(int(s))
-        except (TypeError, ValueError):
-            return s
-        if member is None:
-            return s
-        return member.display_name
+
+def resolve_subject_display(subject: str, guild) -> str:
+    """If `subject` is a numeric string (Discord ID), look up the
+    current display name in the guild. Otherwise return the raw
+    subject (non-Discord member name).
+
+    Defensive — `guild=None`, non-digit subject, and missing-member
+    all fall back to the raw subject so a renamed/left member's rule
+    still renders. Three falsy paths, all explicit per the CLAUDE.md
+    pattern.
+
+    Module-level so `_list`'s member filter and any future caller can
+    use it without reaching into a private `_resolve_display_name`
+    method on a Rule instance.
+    """
+    s = (subject or "").strip()
+    if not s or not s.isdigit():
+        return s
+    if guild is None:
+        return s
+    try:
+        member = guild.get_member(int(s))
+    except (TypeError, ValueError):
+        return s
+    if member is None:
+        return s
+    return member.display_name
 
 
 def list_rules(guild_id: int, event_type: str) -> list[Rule]:
@@ -468,10 +488,20 @@ def _make_clear_callback(view: "_RulesListView", idx: int):
 
 
 class _MemberRuleGroup(app_commands.Group):
-    """Shared shape for DS and CS member-rule slash command groups."""
+    """Shared shape for DS and CS member-rule slash command groups.
+
+    Guild-only: every subcommand reads `interaction.guild_id` / accepts
+    a `discord.Member` picker, both of which require a guild context.
+    Matches the rest of the storm command surface (signup_post,
+    officer_view, strategy) which the prior audit pass added the
+    decorator to.
+    """
 
     def __init__(self, *, name: str, description: str, event_type: str):
-        super().__init__(name=name, description=description)
+        super().__init__(
+            name=name, description=description,
+            guild_only=True,
+        )
         self.event_type = event_type
 
     # ── set_power_band ────────────────────────────────────────────────
@@ -646,7 +676,7 @@ class _MemberRuleGroup(app_commands.Group):
                 if r.subject.strip().lower() == mlow:
                     filtered.append(r)
                     continue
-                display = r._resolve_display_name(interaction.guild)
+                display = resolve_subject_display(r.subject, interaction.guild)
                 if display.strip().lower() == mlow:
                     filtered.append(r)
             rules = filtered

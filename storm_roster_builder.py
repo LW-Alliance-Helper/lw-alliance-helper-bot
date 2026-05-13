@@ -376,6 +376,39 @@ class RosterBuilderSession:
         self.below_floor_overrides &= currently_in_zones
 
 
+def _resolve_per_member_subject(
+    members: dict[str, dict], subject: str,
+) -> str | None:
+    """Three-way subject resolution for per_member rules.
+
+    Per the #134 audit + #136 Discord-ID-keying refactor, a rule's
+    subject can be:
+      * a roster display name ("Alice") — match `m["name"]`
+      * a roster key (Discord ID or roster name acting as key)
+      * a Discord ID stored as the `discord_id` field on a member dict
+        whose key is the roster name (non-Discord rows with numeric
+        handles, or pre-#136 rows where key != discord_id)
+
+    Returns the matching member key, or None if no path resolves. Single
+    canonical helper so `_apply_rules_to_session` and `_auto_fill_session`
+    can't drift on the lookup logic — the original audit found
+    `_apply_rules_to_session` only did the name match, which silently
+    dropped every Discord-ID-keyed rule at session open (and falsely
+    surfaced them in `session.roster_errors` as "stale rules").
+    """
+    if not subject:
+        return None
+    target = subject.lower()
+    for k, m in members.items():
+        if m["name"].strip().lower() == target:
+            return k
+        if k == subject:
+            return k
+        if m.get("discord_id") == subject:
+            return k
+    return None
+
+
 def _apply_rules_to_session(session: RosterBuilderSession) -> None:
     """Pre-assign members based on Member Rules before the officer
     starts manual work. Only fires at session open.
@@ -393,13 +426,8 @@ def _apply_rules_to_session(session: RosterBuilderSession) -> None:
     for rule in session.per_member_rules:
         if rule.sub_type != "zone":
             continue
-        # Resolve subject (member name) → roster key
         subject = rule.subject.strip()
-        match_key = None
-        for k, m in session.members.items():
-            if m["name"].strip().lower() == subject.lower():
-                match_key = k
-                break
+        match_key = _resolve_per_member_subject(session.members, subject)
         if match_key is None:
             if subject and subject not in unmatched_subjects:
                 unmatched_subjects.append(subject)
@@ -481,16 +509,9 @@ def _auto_fill_session(session: RosterBuilderSession) -> dict:
             continue
         subject = rule.subject.strip()
         zone = rule.value.strip()
-        # Resolve subject (display name OR Discord ID string) → roster key.
-        match_key = None
-        for k, m in session.members.items():
-            if (
-                m["name"].strip().lower() == subject.lower()
-                or k == subject
-                or m.get("discord_id") == subject
-            ):
-                match_key = k
-                break
+        # Same three-way resolution `_apply_rules_to_session` uses, so
+        # this consumer and the session-open pre-application can't drift.
+        match_key = _resolve_per_member_subject(session.members, subject)
         if match_key is None:
             # The opener pass (`_apply_rules_to_session`) already warned
             # via `session.roster_errors`, but auto-fill is the consumer

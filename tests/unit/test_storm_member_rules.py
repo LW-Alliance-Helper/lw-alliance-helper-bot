@@ -210,6 +210,7 @@ class TestSubjectResolution:
         m = MagicMock()
         m.id = 12345
         m.display_name = "Alice"
+        m.bot = False
         subject, display = smr._resolve_subject(m, None)
         assert subject == "12345"
         assert display == "Alice"
@@ -239,7 +240,21 @@ class TestSubjectResolution:
         m = MagicMock()
         m.id = 12345
         m.display_name = "Alice"
+        m.bot = False
         subject, display = smr._resolve_subject(m, "Bob")
+        assert subject is None
+        assert display == ""
+
+    def test_bot_member_rejected(self):
+        """Discord's Member picker can include bot accounts; a rule
+        saved against a bot ID would silently never resolve at apply
+        time. Reject the bot at the input layer."""
+        from unittest.mock import MagicMock
+        m = MagicMock()
+        m.id = 12345
+        m.display_name = "GoodBot"
+        m.bot = True
+        subject, display = smr._resolve_subject(m, None)
         assert subject is None
         assert display == ""
 
@@ -303,6 +318,147 @@ class TestDisplayNameResolution:
         )
         label = rule.render_label()
         assert "Carol" in label
+
+
+class TestModuleLevelResolveSubjectDisplay:
+    """`resolve_subject_display` is the module-level helper that the
+    `_list` member filter calls. The audit fix promoted it from
+    `Rule._resolve_display_name` so callers don't reach into private
+    method names."""
+
+    def test_module_helper_matches_back_compat_method(self):
+        from unittest.mock import MagicMock
+        member = MagicMock()
+        member.display_name = "AliceCurrent"
+        guild = MagicMock()
+        guild.get_member.return_value = member
+
+        # Both should yield identical results.
+        via_method = smr.Rule(
+            rule_type="per_member", subject="12345",
+            sub_type="team", value="A",
+        )._resolve_display_name(guild)
+        via_helper = smr.resolve_subject_display("12345", guild)
+        assert via_method == via_helper == "AliceCurrent"
+
+    def test_module_helper_blank_subject(self):
+        assert smr.resolve_subject_display("", None) == ""
+        assert smr.resolve_subject_display(None, None) == ""
+
+    def test_module_helper_non_digit_subject(self):
+        from unittest.mock import MagicMock
+        guild = MagicMock()
+        assert smr.resolve_subject_display("Dave", guild) == "Dave"
+        guild.get_member.assert_not_called()
+
+
+class TestRenameThenFilterEndToEnd:
+    """The most novel behaviour from #136: a Discord-ID-keyed rule's
+    member renames, and `_list`'s filter should find the rule when
+    the officer searches by the NEW name. Audit found no test for
+    this end-to-end path."""
+
+    def test_filter_finds_renamed_member_by_current_display_name(
+        self, fake_sheet,
+    ):
+        # The fake_sheet fixture is in this test module — uses gspread
+        # mocks to land rules on the Sheet.
+        from unittest.mock import MagicMock
+        _fake, gid = fake_sheet
+
+        # Save a rule keyed by Discord ID (post-#136 storage convention).
+        ok, _ = smr.save_rule(gid, "DS", smr.Rule(
+            rule_type="per_member", subject="12345",
+            sub_type="team", value="A",
+        ))
+        assert ok
+
+        # Simulate a rename: the guild's get_member returns a Member
+        # whose display_name is "AliceRenamed".
+        renamed = MagicMock()
+        renamed.display_name = "AliceRenamed"
+        guild = MagicMock()
+        guild.get_member.return_value = renamed
+
+        # The filter looks up the resolved display name when the raw
+        # subject doesn't match. "AliceRenamed" should find the rule.
+        rules = smr.list_rules(gid, "DS")
+        target = "alicerenamed"
+        matched = [
+            r for r in rules
+            if r.rule_type == smr._RULE_TYPE_PER_MEMBER
+            and (
+                r.subject.strip().lower() == target
+                or smr.resolve_subject_display(r.subject, guild).strip().lower() == target
+            )
+        ]
+        assert len(matched) == 1
+        assert matched[0].subject == "12345"
+
+
+class TestThreeWayResolutionInLoader:
+    """`_apply_rules_to_session` previously only matched on display
+    name, so every Discord-ID-keyed rule silently failed to pre-assign
+    AND falsely warned 'stale rule' in the embed. Now it uses the same
+    three-way resolution as `_auto_fill_session`."""
+
+    def test_discord_id_subject_resolves_in_session_open(self):
+        """Pre-application via the loader path matches the auto-fill
+        path on Discord-ID-keyed rules — no false-positive stale warning."""
+        import storm_roster_builder as srb
+        import storm_strategy as ss
+
+        members = {
+            "1001": {"key": "1001", "name": "Alice", "discord_id": "1001",
+                     "power": 412_000_000, "not_on_discord": False},
+        }
+        preset = ss.PresetBuffer(
+            name="Standard", event_type="DS",
+            zones=[ss.ZoneRow(zone="Power Tower", max_players=4)],
+        )
+        rule = smr.Rule(
+            rule_type="per_member", subject="1001",  # Discord ID, not name
+            sub_type="zone", value="Power Tower",
+        )
+        session = srb.RosterBuilderSession(
+            guild_id=1, user_id=42, event_type="DS",
+            team="A", preset=preset, members=members,
+            per_member_rules=[rule], power_band_rules=[],
+        )
+        srb._apply_rules_to_session(session)
+        # The rule pre-assigned Alice — and no false-positive stale warning.
+        assert "1001" in session.assignments["Power Tower"]
+        assert not any(
+            "rename or remove" in e or "1001" in e
+            for e in session.roster_errors
+        )
+
+    def test_discord_id_field_path_resolves(self):
+        """Member key is the roster name (non-Discord-style row), but
+        the explicit `discord_id` field holds the ID — the rule subject
+        matches that field."""
+        import storm_roster_builder as srb
+        import storm_strategy as ss
+
+        members = {
+            "Alice": {"key": "Alice", "name": "Alice", "discord_id": "9999",
+                      "power": 412_000_000, "not_on_discord": False},
+        }
+        preset = ss.PresetBuffer(
+            name="Standard", event_type="DS",
+            zones=[ss.ZoneRow(zone="Power Tower", max_players=4)],
+        )
+        rule = smr.Rule(
+            rule_type="per_member", subject="9999",
+            sub_type="zone", value="Power Tower",
+        )
+        session = srb.RosterBuilderSession(
+            guild_id=1, user_id=42, event_type="DS",
+            team="A", preset=preset, members=members,
+            per_member_rules=[rule], power_band_rules=[],
+        )
+        srb._apply_rules_to_session(session)
+        assert "Alice" in session.assignments["Power Tower"]
 
 
 class TestRenderLabel:

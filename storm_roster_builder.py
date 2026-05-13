@@ -190,7 +190,15 @@ def _read_roster_powers(
 class RosterBuilderSession:
     """In-memory state for one officer's roster build. Lives on the
     View; not persisted (Discord interaction tokens expire in 15 min
-    anyway — resuming would mean reloading from scratch)."""
+    anyway — resuming would mean reloading from scratch).
+
+    `event_date` is None in free-tier "manual apply" mode (the officer
+    is building a roster for whatever event they're prepping; they
+    copy the mail themselves). When set, the session is in structured
+    mode (#129) — the member pool is already pre-filtered to signed-up
+    members for this team, and finalisation posts the mail to the
+    configured channel AND writes a row per slot to `rosters_tab`.
+    """
 
     def __init__(
         self,
@@ -202,6 +210,8 @@ class RosterBuilderSession:
         members: dict[str, dict],
         per_member_rules: list,
         power_band_rules: list,
+        *,
+        event_date: Optional[str] = None,
     ):
         self.guild_id = guild_id
         self.user_id  = user_id
@@ -209,6 +219,7 @@ class RosterBuilderSession:
         self.team     = team
         self.preset   = preset
         self.members  = members
+        self.event_date = event_date
         # Per-zone assignments: {zone_name: [member_key, ...]}
         self.assignments: dict[str, list[str]] = {z.zone: [] for z in preset.zones}
         # Flat sub pool (sub_mode=pool; paired UI deferred).
@@ -223,6 +234,10 @@ class RosterBuilderSession:
         # Errors surfaced from the roster read; the builder shows a
         # one-line warning when any are present.
         self.roster_errors: list[str] = []
+
+    @property
+    def is_structured(self) -> bool:
+        return bool(self.event_date)
 
     def floor_for_zone(self, zone_name: str) -> int:
         """Per-team min_power for this zone. DS uses min_power_a/b; CS
@@ -586,33 +601,62 @@ class RosterBuilderView(discord.ui.View):
         move_to_subs_btn.callback = _move_to_subs
         self.add_item(move_to_subs_btn)
 
-        # Row 3 — finalisation
-        mail_btn = discord.ui.Button(
-            label="📄 Generate mail", style=discord.ButtonStyle.primary, row=3,
-        )
+        # Row 3 — finalisation. Structured-mode adds an Approve & Post
+        # button that fires the rosters_tab write + auto-post; free
+        # tier gets Generate-mail-only (officer copies manually).
+        if s.is_structured:
+            approve_btn = discord.ui.Button(
+                label="✅ Approve & Post",
+                style=discord.ButtonStyle.success, row=3,
+            )
 
-        async def _gen_mail(inter: discord.Interaction):
-            if not await self._guard_owner(inter):
-                return
-            await _send_mail_preview(inter, s)
+            async def _approve(inter: discord.Interaction):
+                if not await self._guard_owner(inter):
+                    return
+                await _finalize_structured_roster(inter, self)
 
-        mail_btn.callback = _gen_mail
-        self.add_item(mail_btn)
+            approve_btn.callback = _approve
+            self.add_item(approve_btn)
 
-        save_preset_btn = discord.ui.Button(
-            label="💾 Save as preset", style=discord.ButtonStyle.success, row=3,
-        )
+            preview_btn = discord.ui.Button(
+                label="📄 Preview mail", style=discord.ButtonStyle.secondary, row=3,
+            )
 
-        async def _save_preset(inter: discord.Interaction):
-            if not await self._guard_owner(inter):
-                return
-            await inter.response.send_modal(_SaveAsPresetModal(self))
+            async def _preview(inter: discord.Interaction):
+                if not await self._guard_owner(inter):
+                    return
+                await _send_mail_preview(inter, s)
 
-        save_preset_btn.callback = _save_preset
-        self.add_item(save_preset_btn)
+            preview_btn.callback = _preview
+            self.add_item(preview_btn)
+        else:
+            mail_btn = discord.ui.Button(
+                label="📄 Generate mail", style=discord.ButtonStyle.primary, row=3,
+            )
 
+            async def _gen_mail(inter: discord.Interaction):
+                if not await self._guard_owner(inter):
+                    return
+                await _send_mail_preview(inter, s)
+
+            mail_btn.callback = _gen_mail
+            self.add_item(mail_btn)
+
+            save_preset_btn = discord.ui.Button(
+                label="💾 Save as preset", style=discord.ButtonStyle.success, row=3,
+            )
+
+            async def _save_preset(inter: discord.Interaction):
+                if not await self._guard_owner(inter):
+                    return
+                await inter.response.send_modal(_SaveAsPresetModal(self))
+
+            save_preset_btn.callback = _save_preset
+            self.add_item(save_preset_btn)
+
+        cancel_label = "❌ Cancel" if s.is_structured else "✅ Done"
         done_btn = discord.ui.Button(
-            label="✅ Done", style=discord.ButtonStyle.danger, row=3,
+            label=cancel_label, style=discord.ButtonStyle.danger, row=3,
         )
 
         async def _done(inter: discord.Interaction):
@@ -621,7 +665,8 @@ class RosterBuilderView(discord.ui.View):
             for item in self.children:
                 item.disabled = True
             await inter.response.edit_message(
-                content="Roster builder closed.",
+                content=("Roster builder cancelled — nothing posted."
+                         if s.is_structured else "Roster builder closed."),
                 embed=_render_builder_embed(s),
                 view=self,
             )
@@ -749,19 +794,236 @@ async def _send_mail_preview(
 # ── Slash command wiring ─────────────────────────────────────────────────────
 
 
+def _signup_filter_keys(
+    guild_id: int, event_type: str, event_date: str, team: str,
+) -> set[str]:
+    """Return the set of target_member_id values that voted in a way
+    compatible with the target team. DS team A pool = voted A or
+    Either; team B pool = voted B or Either. CS pool = voted A or
+    Either (CS has one slot per faction).
+
+    The on-behalf path stores votes against the roster member name as
+    target_member_id, while self-votes store the Discord ID. Both are
+    string keys that match `members` in `_read_roster_powers`.
+    """
+    import config
+    rows = config.get_storm_signups(guild_id, event_type, event_date)
+    accept_a = team in ("A", "")
+    accept_b = team == "B"
+    out: set[str] = set()
+    for r in rows:
+        vote = r.get("vote", "")
+        if vote == "either":
+            out.add(r["target_member_id"])
+        elif accept_a and vote == "a":
+            out.add(r["target_member_id"])
+        elif accept_b and vote == "b":
+            out.add(r["target_member_id"])
+    return out
+
+
+async def _finalize_structured_roster(
+    interaction: discord.Interaction, view: RosterBuilderView,
+) -> None:
+    """Approve & Post: posts the structured mail to the configured
+    post channel and writes one row per slot to rosters_tab."""
+    import config
+    import storm
+
+    s = view.session
+    await interaction.response.defer(ephemeral=True, thinking=True)
+
+    # Build mail.
+    zones_for_mail: dict[str, list[str]] = {}
+    for zone_name, keys in s.assignments.items():
+        names = [s.members[k]["name"] for k in keys if k in s.members]
+        if names:
+            zones_for_mail[zone_name] = names
+    sub_names = [s.members[k]["name"] for k in s.subs if k in s.members]
+
+    if s.event_type == "DS":
+        mail = storm.build_ds_mail(
+            team=s.team or "A",
+            zones=zones_for_mail,
+            subs=sub_names,
+            time_key="1",
+            guild_id=s.guild_id,
+        )
+    else:
+        cs_zones = dict(zones_for_mail)
+        if sub_names:
+            try:
+                cs_zones[storm.CS_SUBS_KEY] = sub_names
+            except AttributeError:
+                pass
+        mail = storm.build_cs_mail(
+            team=s.team or "A",
+            z=cs_zones,
+            time_key="1",
+            guild_id=s.guild_id,
+        )
+
+    cfg = config.get_storm_config(s.guild_id, s.event_type)
+    post_channel_id = int(cfg.get("post_channel_id") or 0)
+    post_channel = None
+    if post_channel_id and interaction.guild:
+        post_channel = interaction.guild.get_channel(post_channel_id)
+
+    posted_to_mention = None
+    if post_channel is not None:
+        try:
+            await post_channel.send(mail)
+            posted_to_mention = post_channel.mention
+        except Exception as e:
+            logger.warning(
+                "[STORM STRUCTURED] failed to post mail to channel=%s guild=%s: %s",
+                post_channel_id, s.guild_id, e,
+            )
+
+    # Sheet write — one row per slot. Best-effort; failures log but
+    # don't roll back the Discord post.
+    write_errors = _write_rosters_tab(s)
+
+    # Close out the view.
+    for item in view.children:
+        item.disabled = True
+    summary_lines = ["✅ Roster posted."]
+    if posted_to_mention:
+        summary_lines.append(f"📬 Mail sent to {posted_to_mention}.")
+    else:
+        summary_lines.append(
+            "⚠️ No post channel is configured — mail was built but not sent. "
+            "Run setup to pick one, or copy the mail manually below."
+        )
+    if write_errors:
+        summary_lines.append("⚠️ " + write_errors[0])
+    # Slim public ack in the channel.
+    try:
+        if view.message:
+            await view.message.edit(
+                content="✅ Structured roster approved and posted.",
+                embed=_render_builder_embed(s),
+                view=view,
+            )
+    except discord.HTTPException:
+        pass
+    # Officer-facing details (ephemeral).
+    detail = "\n".join(summary_lines)
+    if not posted_to_mention:
+        preview = mail if len(mail) <= 1800 else mail[:1780] + "\n…(truncated)"
+        detail += f"\n\n```\n{preview}\n```"
+    await interaction.followup.send(detail, ephemeral=True)
+    view.stop()
+
+
+_ROSTERS_HEADER = [
+    "Event Date", "Team", "Zone", "Member", "Role",
+    "Power at Assignment", "Discord ID", "Posted At (UTC)",
+]
+
+
+def _write_rosters_tab(session: RosterBuilderSession) -> list[str]:
+    """Append one row per slot to the alliance's configured rosters_tab.
+    Returns a list of soft error strings (empty on success)."""
+    import datetime as _dt
+    import config
+
+    errors: list[str] = []
+    structured = config.get_structured_storm_config(session.guild_id, session.event_type)
+    tab = structured.get("rosters_tab") or config.default_structured_tab(
+        session.event_type, "rosters_tab"
+    )
+    if not tab:
+        return ["No rosters tab configured — Sheet write skipped."]
+
+    try:
+        sh = config.get_spreadsheet(session.guild_id)
+    except Exception as e:
+        return [f"spreadsheet open failed: {e}"]
+    if sh is None:
+        return ["spreadsheet not configured — Sheet write skipped."]
+
+    try:
+        ws = sh.worksheet(tab)
+    except Exception:
+        try:
+            ws = sh.add_worksheet(title=tab, rows=2000, cols=len(_ROSTERS_HEADER))
+            ws.append_row(_ROSTERS_HEADER, value_input_option="RAW")
+        except Exception as e:
+            return [f"rosters tab create failed: {e}"]
+
+    posted_at = _dt.datetime.now(_dt.timezone.utc).isoformat(timespec="seconds")
+    rows: list[list[str]] = []
+    for z in session.preset.zones:
+        for key in session.assignments.get(z.zone, []):
+            m = session.members.get(key)
+            if not m:
+                continue
+            power = m.get("power")
+            rows.append([
+                session.event_date or "",
+                session.team or "",
+                z.zone,
+                m["name"],
+                "primary",
+                str(power) if power is not None else "unknown",
+                m.get("discord_id") or "",
+                posted_at,
+            ])
+    for key in session.subs:
+        m = session.members.get(key)
+        if not m:
+            continue
+        power = m.get("power")
+        rows.append([
+            session.event_date or "",
+            session.team or "",
+            "",
+            m["name"],
+            "sub",
+            str(power) if power is not None else "unknown",
+            m.get("discord_id") or "",
+            posted_at,
+        ])
+
+    if not rows:
+        return errors  # Nothing to write; treat as success.
+
+    try:
+        ws.append_rows(rows, value_input_option="RAW")
+    except Exception as e:
+        errors.append(f"rosters tab append failed: {e}")
+    return errors
+
+
 async def open_roster_builder(
     interaction: discord.Interaction,
     event_type: str,
     preset_name: str,
+    *,
+    event_date: Optional[str] = None,
+    team_override: Optional[str] = None,
 ) -> None:
-    """Open the roster builder for a named preset. Called from the
-    `apply` subcommand of the strategy groups in storm_strategy.
+    """Open the roster builder for a named preset.
 
-    Free-tier feature, so no Premium gate here — but leadership-or-admin
-    is enforced. Routes everything through the audit-instance's
-    permission helpers in storm_permissions.
+    Free-tier "apply" mode (event_date=None): officer builds a roster
+    from the full alliance roster and copies the mail manually. Routed
+    through storm_strategy's apply subcommand.
+
+    Structured mode (event_date set): Premium-only. The member pool is
+    pre-filtered to members who signed up matching this team. The
+    builder gets `[Approve & Post]` which writes rosters_tab and
+    auto-posts the mail. Routed through the officer view's
+    `[Set up Team A/B]` buttons.
+
+    `team_override` skips the team picker (used by structured mode
+    when the officer already picked a team in the officer view).
     """
-    from storm_permissions import is_leader_or_admin, deny_non_leader
+    from storm_permissions import (
+        is_leader_or_admin,
+        deny_non_leader,
+        ensure_premium_structured,
+    )
     import storm_strategy as ss
     import storm_member_rules as smr
 
@@ -775,36 +1037,47 @@ async def open_roster_builder(
         )
         return
 
+    is_structured = bool(event_date)
+    if is_structured:
+        ok, _structured = await ensure_premium_structured(
+            interaction, event_type,
+            feature_label="The structured roster builder",
+        )
+        if not ok:
+            return
+
     preset = ss.load_preset(interaction.guild_id, event_type, preset_name)
     if preset is None:
-        await interaction.response.send_message(
-            f"⚠️ No preset named **{preset_name}**. Use the list command to see "
-            f"saved presets.",
-            ephemeral=True,
-        )
+        msg = (f"⚠️ No preset named **{preset_name}**. Use the list command "
+               f"to see saved presets.")
+        if interaction.response.is_done():
+            await interaction.followup.send(msg, ephemeral=True)
+        else:
+            await interaction.response.send_message(msg, ephemeral=True)
         return
 
     if not preset.zones:
-        await interaction.response.send_message(
-            f"⚠️ Preset **{preset_name}** has no zones yet. Edit it first to "
-            f"add zones before applying.",
-            ephemeral=True,
-        )
+        msg = (f"⚠️ Preset **{preset_name}** has no zones yet. Edit it first "
+               f"to add zones before applying.")
+        if interaction.response.is_done():
+            await interaction.followup.send(msg, ephemeral=True)
+        else:
+            await interaction.response.send_message(msg, ephemeral=True)
         return
 
-    # Defer — roster Sheet read + member-rules read can take several
-    # seconds on a cold Sheets API and blow the 3-second token.
-    await interaction.response.defer(thinking=True)
+    # Defer (if we haven't already via ensure_premium_structured) so the
+    # roster Sheet read + member-rules read have headroom.
+    if not interaction.response.is_done():
+        await interaction.response.defer(thinking=True)
 
-    # DS asks for team first; CS uses the preset's faction directly.
-    team = ""
-    if event_type == "DS":
+    # Team picker for DS — skip if caller already passed team_override.
+    team = team_override or ""
+    if event_type == "DS" and not team:
         team_view = _TeamPickerView(interaction.user.id)
-        team_msg = await interaction.followup.send(
+        await interaction.followup.send(
             f"Build roster for **Team A** or **Team B** with preset "
             f"**{preset_name}**?",
-            view=team_view,
-            ephemeral=True,
+            view=team_view, ephemeral=True,
         )
         await team_view.wait()
         if team_view.selected is None:
@@ -816,6 +1089,37 @@ async def open_roster_builder(
 
     # Load powers + rules.
     members, roster_errors = _read_roster_powers(interaction.guild_id, event_type)
+
+    # Structured-mode pool filter: keep only members who signed up
+    # compatible with this team. Unknown signups (not on roster) are
+    # surfaced as a soft warning but don't gate the builder.
+    if is_structured:
+        signup_keys = _signup_filter_keys(
+            interaction.guild_id, event_type, event_date, team,
+        )
+        before_count = len(members)
+        members = {k: v for k, v in members.items() if k in signup_keys}
+        # Surface members who voted but aren't on the roster (likely
+        # spelling drift between roster and on-behalf vote).
+        missing = signup_keys - set(members.keys())
+        if missing:
+            roster_errors.append(
+                f"{len(missing)} signed-up member(s) couldn't be matched to a "
+                f"roster row: {', '.join(sorted(missing))[:200]}"
+            )
+        if not members:
+            await interaction.followup.send(
+                f"⚠️ No signed-up members match team **{team or 'A'}** for "
+                f"event **{event_date}**. Check `/storm_signups` to see who's "
+                f"voted, or run the apply flow without an event date to use "
+                f"the full roster.",
+                ephemeral=True,
+            )
+            return
+        if before_count and before_count == len(members):
+            # Defensive — everyone on roster voted; not really an error.
+            pass
+
     rules = smr.list_rules(interaction.guild_id, event_type)
     per_member = [r for r in rules if r.rule_type == "per_member"]
     power_band = [r for r in rules if r.rule_type == "power_band"]
@@ -829,6 +1133,7 @@ async def open_roster_builder(
         members=members,
         per_member_rules=per_member,
         power_band_rules=power_band,
+        event_date=event_date,
     )
     session.roster_errors = roster_errors
     _apply_rules_to_session(session)

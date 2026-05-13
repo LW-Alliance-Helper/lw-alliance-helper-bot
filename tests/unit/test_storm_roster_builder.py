@@ -30,6 +30,10 @@ class _FakeWorksheet:
     def append_row(self, row, value_input_option=None):
         self._rows.append([str(c) for c in row])
 
+    def append_rows(self, rows, value_input_option=None):
+        for r in rows:
+            self._rows.append([str(c) for c in r])
+
     def clear(self):
         self._rows = []
 
@@ -358,3 +362,150 @@ class TestEmbedRendering:
         session.roster_errors = ["power column not found"]
         embed = srb._render_builder_embed(session)
         assert "power column not found" in embed.description
+
+
+# ── Structured mode (#129) ───────────────────────────────────────────────────
+
+
+class TestSignupFilterKeys:
+    def test_ds_team_a_includes_a_and_either(self, seeded_db):
+        import config
+        gid = TEST_GUILD_ID
+        config.record_storm_vote(gid, "DS", "2026-05-18",
+                                 voter_user_id=1, target_member_id="1", vote="a")
+        config.record_storm_vote(gid, "DS", "2026-05-18",
+                                 voter_user_id=2, target_member_id="2", vote="b")
+        config.record_storm_vote(gid, "DS", "2026-05-18",
+                                 voter_user_id=3, target_member_id="3", vote="either")
+        config.record_storm_vote(gid, "DS", "2026-05-18",
+                                 voter_user_id=4, target_member_id="4", vote="cannot")
+        keys = srb._signup_filter_keys(gid, "DS", "2026-05-18", "A")
+        assert keys == {"1", "3"}
+
+    def test_ds_team_b_includes_b_and_either(self, seeded_db):
+        import config
+        gid = TEST_GUILD_ID
+        config.record_storm_vote(gid, "DS", "2026-05-18",
+                                 voter_user_id=1, target_member_id="1", vote="a")
+        config.record_storm_vote(gid, "DS", "2026-05-18",
+                                 voter_user_id=2, target_member_id="2", vote="b")
+        config.record_storm_vote(gid, "DS", "2026-05-18",
+                                 voter_user_id=3, target_member_id="3", vote="either")
+        keys = srb._signup_filter_keys(gid, "DS", "2026-05-18", "B")
+        assert keys == {"2", "3"}
+
+    def test_cs_pool_treats_a_and_either(self, seeded_db):
+        import config
+        gid = TEST_GUILD_ID
+        config.record_storm_vote(gid, "CS", "2026-05-18",
+                                 voter_user_id=10, target_member_id="10", vote="a")
+        config.record_storm_vote(gid, "CS", "2026-05-18",
+                                 voter_user_id=11, target_member_id="11", vote="either")
+        config.record_storm_vote(gid, "CS", "2026-05-18",
+                                 voter_user_id=12, target_member_id="12", vote="cannot")
+        # CS team is "" — accept_a True, accept_b False, but either always.
+        keys = srb._signup_filter_keys(gid, "CS", "2026-05-18", "")
+        assert keys == {"10", "11"}
+
+    def test_cannot_never_appears(self, seeded_db):
+        import config
+        gid = TEST_GUILD_ID
+        config.record_storm_vote(gid, "DS", "2026-05-18",
+                                 voter_user_id=1, target_member_id="1", vote="cannot")
+        for team in ("A", "B", ""):
+            keys = srb._signup_filter_keys(gid, "DS", "2026-05-18", team)
+            assert "1" not in keys
+
+
+class TestSessionStructuredMode:
+    def test_event_date_marks_structured(self):
+        session = _make_session()
+        assert session.is_structured is False
+        session.event_date = "2026-05-18"
+        assert session.is_structured is True
+
+    def test_manual_mode_has_no_event_date(self):
+        session = _make_session()
+        assert session.event_date is None
+
+
+class TestWriteRostersTab:
+    def test_writes_primary_and_sub_rows(self, fake_env):
+        fake, gid = fake_env
+        session = _make_session(team="A", members={
+            "1001": {"key": "1001", "name": "Alice", "discord_id": "1001",
+                     "power": 412_000_000, "not_on_discord": False},
+            "1002": {"key": "1002", "name": "Bob",   "discord_id": "1002",
+                     "power": 350_000_000, "not_on_discord": False},
+            "1003": {"key": "1003", "name": "Carol", "discord_id": "1003",
+                     "power": 280_000_000, "not_on_discord": False},
+        })
+        session.guild_id = gid
+        session.event_date = "2026-05-18"
+        # Assign Alice + Bob primaries; Carol as sub.
+        session.assignments["Power Tower"].append("1001")
+        session.assignments["Power Tower"].append("1002")
+        session.subs.append("1003")
+
+        errors = srb._write_rosters_tab(session)
+        assert errors == []
+
+        ws = fake.worksheet("DS Rosters")
+        rows = ws.get_all_values()
+        # Header + 3 data rows.
+        assert rows[0] == srb._ROSTERS_HEADER
+        # Pull just the (member, role, power) for assertion stability.
+        data = [(r[3], r[4], r[5]) for r in rows[1:]]
+        assert ("Alice", "primary", "412000000") in data
+        assert ("Bob",   "primary", "350000000") in data
+        assert ("Carol", "sub",     "280000000") in data
+
+    def test_power_unknown_renders_as_unknown(self, fake_env):
+        fake, gid = fake_env
+        session = _make_session(team="A", members={
+            "1004": {"key": "1004", "name": "Erin", "discord_id": "1004",
+                     "power": None, "not_on_discord": False},
+        })
+        session.guild_id = gid
+        session.event_date = "2026-05-18"
+        session.assignments["Power Tower"].append("1004")
+        errors = srb._write_rosters_tab(session)
+        assert errors == []
+        ws = fake.worksheet("DS Rosters")
+        rows = ws.get_all_values()
+        data_rows = [r for r in rows[1:] if r and r[3] == "Erin"]
+        assert data_rows[0][5] == "unknown"
+
+    def test_event_date_and_team_in_each_row(self, fake_env):
+        fake, gid = fake_env
+        session = _make_session(team="B", members={
+            "1001": {"key": "1001", "name": "Alice", "discord_id": "1001",
+                     "power": 200_000_000, "not_on_discord": False},
+        })
+        session.guild_id = gid
+        session.event_date = "2026-05-25"
+        session.assignments["Power Tower"].append("1001")
+        srb._write_rosters_tab(session)
+        ws = fake.worksheet("DS Rosters")
+        rows = ws.get_all_values()
+        row = rows[1]
+        assert row[0] == "2026-05-25"
+        assert row[1] == "B"
+
+
+class TestStructuredBuilderView:
+    def test_structured_mode_shows_approve_button(self):
+        session = _make_session(team="A")
+        session.event_date = "2026-05-18"
+        view = srb.RosterBuilderView(session)
+        labels = [getattr(c, "label", "") for c in view.children]
+        assert any("Approve" in lab for lab in labels)
+        # Free-tier "Generate mail" button should NOT appear in structured mode.
+        assert not any(lab == "📄 Generate mail" for lab in labels)
+
+    def test_manual_mode_shows_generate_mail_button(self):
+        session = _make_session(team="A")  # event_date None
+        view = srb.RosterBuilderView(session)
+        labels = [getattr(c, "label", "") for c in view.children]
+        assert any("Generate mail" in lab for lab in labels)
+        assert not any("Approve" in lab for lab in labels)

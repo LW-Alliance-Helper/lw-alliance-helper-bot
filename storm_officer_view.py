@@ -554,6 +554,125 @@ class OfficerView(discord.ui.View):
         refresh_btn.callback = _refresh
         self.add_item(refresh_btn)
 
+        # Team setup buttons (#129) — opens the structured roster builder
+        # filtered to signed-up members for this team. DS gets two buttons;
+        # CS has a single "Set up Roster" since the faction is implicit
+        # in the preset.
+        if self.event_type == "DS":
+            a_btn = discord.ui.Button(
+                label="🅰️ Set up Team A", style=discord.ButtonStyle.success, row=2,
+            )
+            b_btn = discord.ui.Button(
+                label="🅱️ Set up Team B", style=discord.ButtonStyle.success, row=2,
+            )
+
+            async def _setup_a(inter: discord.Interaction):
+                await _open_team_setup(inter, self, team="A")
+
+            async def _setup_b(inter: discord.Interaction):
+                await _open_team_setup(inter, self, team="B")
+
+            a_btn.callback = _setup_a
+            b_btn.callback = _setup_b
+            self.add_item(a_btn)
+            self.add_item(b_btn)
+        else:
+            cs_btn = discord.ui.Button(
+                label="🏜️ Set up Roster", style=discord.ButtonStyle.success, row=2,
+            )
+
+            async def _setup_cs(inter: discord.Interaction):
+                await _open_team_setup(inter, self, team="")
+
+            cs_btn.callback = _setup_cs
+            self.add_item(cs_btn)
+
+
+async def _open_team_setup(
+    inter: discord.Interaction, officer_view: "OfficerView", *, team: str,
+) -> None:
+    """Pick a preset, then hand off to the structured roster builder.
+    Called from the Set-up-Team buttons on the officer view."""
+    if inter.user.id != officer_view.owner_user_id:
+        await inter.response.send_message(
+            "⛔ Only the officer who opened this view can start team setup.",
+            ephemeral=True,
+        )
+        return
+
+    import storm_strategy as ss
+    preset_names = ss.list_presets(officer_view.guild_id, officer_view.event_type)
+    if not preset_names:
+        await inter.response.send_message(
+            f"⚠️ No strategy presets defined yet for "
+            f"{'Desert Storm' if officer_view.event_type == 'DS' else 'Canyon Storm'}. "
+            f"Run `/ds_strategy create` (or `/cs_strategy create`) first.",
+            ephemeral=True,
+        )
+        return
+
+    picker = _PresetPickerView(
+        owner_id=inter.user.id, preset_names=preset_names,
+    )
+    team_label = (
+        "Team A" if team == "A" else "Team B" if team == "B" else "this roster"
+    )
+    await inter.response.send_message(
+        f"Pick a strategy preset to apply for **{team_label}**:",
+        view=picker, ephemeral=True,
+    )
+    await picker.wait()
+    if not picker.selected_preset:
+        return  # user dismissed or timed out
+
+    # Hand off to the roster builder. It manages its own defer/followup
+    # cycle; we're already responded to so the next message comes via
+    # interaction.followup. (The roster builder calls
+    # `interaction.followup.send` on a deferred interaction by default.)
+    from storm_roster_builder import open_roster_builder
+    await open_roster_builder(
+        inter, officer_view.event_type, picker.selected_preset,
+        event_date=officer_view.event_date,
+        team_override=team or None,
+    )
+
+
+class _PresetPickerView(discord.ui.View):
+    """Single-select dropdown for picking a saved preset."""
+
+    def __init__(self, *, owner_id: int, preset_names: list[str]):
+        super().__init__(timeout=180)
+        self.owner_id = owner_id
+        self.selected_preset: Optional[str] = None
+        options = [
+            discord.SelectOption(label=n[:100], value=n[:100])
+            for n in preset_names[:25]
+        ]
+        select = discord.ui.Select(
+            placeholder="Pick a preset…",
+            min_values=1, max_values=1,
+            options=options,
+        )
+
+        async def _on_pick(inter: discord.Interaction):
+            if inter.user.id != self.owner_id:
+                await inter.response.send_message(
+                    "⛔ Only the user who started team setup can pick.",
+                    ephemeral=True,
+                )
+                return
+            self.selected_preset = select.values[0]
+            for item in self.children: item.disabled = True
+            await inter.response.edit_message(
+                content=f"✅ Preset **{self.selected_preset}** selected — "
+                        f"opening the roster builder…",
+                view=self,
+            )
+            self.stop()
+
+        select.callback = _on_pick
+        self.add_item(select)
+
 
 # ── Cog ──────────────────────────────────────────────────────────────────────
 

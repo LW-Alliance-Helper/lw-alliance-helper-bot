@@ -123,6 +123,12 @@ def load_rostered_slots(
     member_col = _col("Member")
     role_col = _col("Role")
     id_col = _col("Discord ID")
+    override_col = _col("Override Below Floor")
+
+    # Truthy values for the override column. Officers occasionally edit
+    # the Sheet by hand — accept the usual yes-set rather than only the
+    # literal "yes" that the bot writes.
+    truthy = {"yes", "y", "1", "true", "x"}
 
     slots: list[dict] = []
     for row in values[1:]:
@@ -139,6 +145,7 @@ def load_rostered_slots(
             "member":     member,
             "discord_id": _cell(id_col),
             "role":       _cell(role_col) or "primary",
+            "override_below_floor": _cell(override_col).lower() in truthy,
         })
     return slots, errors
 
@@ -210,15 +217,39 @@ def save_attendance(
     *,
     statuses: dict[tuple[str, str, str], str],
     officer_id: int,
+    prior_existing: Optional[dict[tuple[str, str, str], dict]] = None,
 ) -> list[str]:
     """Replace this event's attendance rows on the Sheet with the
     officer's current state. Returns soft errors (empty on success).
 
-    Replace strategy avoids tracking per-row indexes — read all values,
-    keep rows that don't match this event, append the new ones. Cheap
-    for a few hundred rows of attendance history.
+    Write strategy is write-then-blank-trailing (atomic-ish), NOT
+    clear-then-write. The prior implementation called `ws.clear()`
+    before `ws.update(...)`; if the update raised (rate limit, 5xx,
+    token expiry), the alliance lost their ENTIRE attendance history.
+
+    Write order now:
+      1. Read existing values (already done above).
+      2. Compose the new full payload in memory.
+      3. `ws.update("A1", kept, ...)` — overwrites in place.
+      4. If the new payload is shorter than the old, blank the trailing
+         rows.
+    A failure between (3) and (4) leaves stale data in trailing rows but
+    the alliance's primary attendance history is intact.
+
+    `prior_existing` (if provided) is the snapshot of attendance rows
+    loaded at view-open time. Slots that were recorded then but are no
+    longer in `statuses` (because the underlying roster changed) are
+    CARRIED FORWARD so a roster edit between attendance sessions doesn't
+    silently drop prior recorded attendance.
+
+    `recorded_by` semantics: preserved from `prior_existing` when the
+    status is unchanged (so officer B saving without editing doesn't
+    overwrite officer A's audit row); current officer when the status
+    was edited or is new.
     """
     import config
+    from config import _utcnow_iso
+
     errors: list[str] = []
     try:
         sh = config.get_spreadsheet(guild_id)
@@ -242,27 +273,87 @@ def save_attendance(
     date_idx = 0  # Always col 0 by convention; check header for safety
     if header and "Event Date" in header:
         date_idx = header.index("Event Date")
+    team_idx   = header.index("Team")   if "Team"   in header else 1
+    zone_idx   = header.index("Zone")   if "Zone"   in header else 2
+    member_idx = header.index("Member") if "Member" in header else 3
 
+    old_row_count = len(all_values)
     kept = [header]
     for row in all_values[1:] if all_values else []:
         if row and len(row) > date_idx and str(row[date_idx]).strip() == event_date:
             continue
         kept.append(row)
 
-    recorded_at = _dt.datetime.now(_dt.timezone.utc).isoformat(timespec="seconds")
+    # Carry forward any prior attendance rows whose slot isn't in the
+    # current `statuses` — that's a roster-edit-after-attendance case.
+    # Without this, removing a slot in the roster silently drops the
+    # recorded attendance for that slot.
+    prior = prior_existing or {}
+    carried_forward = 0
+    for prior_key, prior_row in prior.items():
+        if prior_key in statuses:
+            continue
+        if not prior_row.get("status"):
+            continue
+        team, zone, member = prior_key
+        kept.append([
+            event_date, team, zone, member,
+            prior_row["status"],
+            prior_row.get("recorded_by") or "",
+            prior_row.get("recorded_at") or "",
+        ])
+        carried_forward += 1
+
+    recorded_at = _utcnow_iso()
     for (team, zone, member), status in statuses.items():
         if not status:
             continue  # Skip unrecorded slots.
+        # Preserve recorded_by + recorded_at when the status is unchanged
+        # so a second officer's save doesn't silently rewrite the first
+        # officer's audit row.
+        prior_row = prior.get((team, zone, member))
+        if prior_row and prior_row.get("status") == status:
+            row_recorded_by = prior_row.get("recorded_by") or str(officer_id)
+            row_recorded_at = prior_row.get("recorded_at") or recorded_at
+        else:
+            row_recorded_by = str(officer_id)
+            row_recorded_at = recorded_at
         kept.append([
             event_date, team, zone, member, status,
-            str(officer_id), recorded_at,
+            row_recorded_by, row_recorded_at,
         ])
 
+    # Atomic-ish write: overwrite in place, then blank the trailing rows
+    # that the new payload didn't reach.
     try:
-        ws.clear()
         ws.update("A1", kept, value_input_option="RAW")
     except Exception as e:
-        errors.append(f"attendance write failed: {e}")
+        # The Sheet is untouched if the update raised before any write
+        # — prior history is intact.
+        errors.append(f"attendance write failed (prior data intact): {e}")
+        return errors
+
+    new_row_count = len(kept)
+    if new_row_count < old_row_count:
+        try:
+            blanks = [[""] * len(header) for _ in range(old_row_count - new_row_count)]
+            ws.update(
+                f"A{new_row_count + 1}", blanks, value_input_option="RAW",
+            )
+        except Exception as e:
+            # Soft error — the new data is written; only stale trailing
+            # rows remain, which is recoverable on the next save.
+            errors.append(
+                f"attendance trailing-blank failed (new data written, "
+                f"stale rows {new_row_count + 1}..{old_row_count} may remain): {e}"
+            )
+
+    if carried_forward:
+        logger.info(
+            "[STORM ATTENDANCE] carried forward %d attendance row(s) for "
+            "slots removed from current roster (guild=%s event=%s/%s)",
+            carried_forward, guild_id, event_type, event_date,
+        )
     return errors
 
 
@@ -293,6 +384,12 @@ class _AttendanceSession:
             key = (slot["team"], slot["zone"], slot["member"])
             prior = existing.get(key)
             self.statuses[key] = prior.get("status") if prior else STATUS_UNRECORDED
+        # Snapshot of attendance rows present when this session opened.
+        # Used by save_attendance to (a) preserve recorded_by/recorded_at
+        # for rows the officer didn't actually edit and (b) carry forward
+        # any prior rows whose slot is no longer in `slots` (roster edit
+        # between attendance sessions).
+        self.existing  = dict(existing)
         self.page      = 0
         self.per_page  = 25  # Discord Select option limit.
 
@@ -332,20 +429,32 @@ def _render_embed(session: _AttendanceSession) -> discord.Embed:
         )
         return embed
 
-    # Group by team for readability.
+    # Group by team for readability. Sort teams alphabetically so CS
+    # (single "" key) and DS (A, B) render predictably across runs.
     teams: dict[str, list[dict]] = {}
     for slot in session.slots:
         teams.setdefault(slot["team"] or "(no team)", []).append(slot)
 
+    has_overrides = any(slot.get("override_below_floor") for slot in session.slots)
+
     lines: list[str] = []
-    for team, team_slots in teams.items():
+    for team in sorted(teams.keys()):
+        team_slots = teams[team]
         lines.append(f"\n**Team {team}**" if team and team != "(no team)" else "\n**Roster**")
         for slot in team_slots:
             status = session.statuses.get(session.slot_key(slot), STATUS_UNRECORDED)
             label_status = _STATUS_LABELS.get(status, "?")
             zone_part = f" ({slot['zone']})" if slot.get("zone") else " (sub)"
             role_marker = " 🪑" if slot.get("role") == "sub" else ""
-            lines.append(f"{label_status} {slot['member']}{zone_part}{role_marker}")
+            # Surface the audit-trail flag from the rosters_tab so
+            # leadership sees which assignments were below-floor at the
+            # build time when recording who showed.
+            override_marker = " ⚠️" if slot.get("override_below_floor") else ""
+            lines.append(
+                f"{label_status} {slot['member']}{zone_part}{role_marker}{override_marker}"
+            )
+    if has_overrides:
+        lines.append("\n_⚠️ Assigned below the zone floor at build time._")
 
     counts = session.counts()
     summary = (
@@ -477,6 +586,7 @@ class _AttendanceView(discord.ui.View):
                 s.guild_id, s.event_type, s.event_date,
                 statuses=s.statuses,
                 officer_id=inter.user.id,
+                prior_existing=s.existing,
             )
             counts = s.counts()
             if errors:

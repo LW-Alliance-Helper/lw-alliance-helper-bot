@@ -409,6 +409,23 @@ def init_db():
             )
         """)
 
+        # walkthrough_dismissals — per-officer-per-guild record of which
+        # guided micro-tours an officer has already seen (or actively
+        # declined). The bot offers the tour exactly once per
+        # (guild_id, user_id, walkthrough_key); a single key bump
+        # (e.g. `storm_signups_v1` → `storm_signups_v2`) re-offers the
+        # tour after a major UI rewrite without losing per-officer
+        # dismissal records.
+        conn.execute("""
+            CREATE TABLE IF NOT EXISTS walkthrough_dismissals (
+                guild_id         INTEGER NOT NULL,
+                user_id          INTEGER NOT NULL,
+                walkthrough_key  TEXT    NOT NULL,
+                dismissed_at     TEXT    NOT NULL,
+                PRIMARY KEY (guild_id, user_id, walkthrough_key)
+            )
+        """)
+
         # storm_signup_history — append-only audit log for storm sign-up
         # votes. `storm_signups` UPSERTs on (guild_id, event_type,
         # event_date, target_member_id) so the prior vote, the prior
@@ -1618,6 +1635,40 @@ def get_recent_storm_registration_posts(within_days: int = 14) -> list[dict]:
             (cutoff,),
         ).fetchall()
     return [dict(r) for r in rows]
+
+
+# ── Walkthrough dismissals (#130) ────────────────────────────────────────────
+
+
+def is_walkthrough_dismissed(
+    guild_id: int, user_id: int, walkthrough_key: str,
+) -> bool:
+    """True if this officer has already seen (or declined) the named
+    walkthrough in this guild. Walkthrough keys carry a version suffix
+    (e.g. `storm_signups_v1`) so a major UI rewrite can re-offer the
+    tour without losing per-officer dismissal records."""
+    with _get_conn() as conn:
+        row = conn.execute(
+            "SELECT 1 FROM walkthrough_dismissals "
+            "WHERE guild_id = ? AND user_id = ? AND walkthrough_key = ?",
+            (int(guild_id), int(user_id), walkthrough_key),
+        ).fetchone()
+    return row is not None
+
+
+def dismiss_walkthrough(
+    guild_id: int, user_id: int, walkthrough_key: str,
+) -> None:
+    """Record that an officer has seen or declined a walkthrough.
+    Idempotent — re-recording is a no-op."""
+    with _get_conn() as conn:
+        conn.execute(
+            "INSERT OR IGNORE INTO walkthrough_dismissals "
+            "(guild_id, user_id, walkthrough_key, dismissed_at) "
+            "VALUES (?, ?, ?, ?)",
+            (int(guild_id), int(user_id), walkthrough_key, _utcnow_iso()),
+        )
+        conn.commit()
 
 
 def get_storm_template(guild_id: int, event_type: str, template_name: str | None = None) -> str:

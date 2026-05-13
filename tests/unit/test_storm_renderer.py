@@ -102,6 +102,69 @@ def test_render_includes_special_roles():
     assert png[:8] == b"\x89PNG\r\n\x1a\n"
 
 
+def test_wrap_text_short_string_returns_single_line():
+    font = _default_font(14)
+    lines = sr._wrap_text("Short title", font, max_width=1000)
+    assert lines == ["Short title"]
+
+
+def test_wrap_text_wraps_on_word_boundary():
+    font = _default_font(14)
+    # A narrow max_width forces splitting between words. The contract
+    # is "every returned line fits in max_width and the join recovers
+    # the input modulo whitespace."
+    text = "alpha beta gamma delta epsilon zeta"
+    lines = sr._wrap_text(text, font, max_width=60)
+    assert len(lines) > 1
+    for line in lines:
+        assert sr._text_width(font, line) <= 60
+    joined = " ".join(lines)
+    assert set(joined.split()) == set(text.split())
+
+
+def test_wrap_text_breaks_overlong_token_by_chars():
+    font = _default_font(14)
+    # One word much wider than the max width gets char-split rather
+    # than silently truncated.
+    lines = sr._wrap_text("aaaaaaaaaaaaaaaaaaaaaa", font, max_width=20)
+    assert len(lines) > 1
+    for line in lines:
+        assert sr._text_width(font, line) <= 20
+
+
+def test_wrap_text_empty_string_returns_single_empty_line():
+    font = _default_font(14)
+    assert sr._wrap_text("", font, max_width=100) == [""]
+
+
+def test_render_long_title_wraps_and_grows_canvas():
+    # Compare a 1-line title to a wrapped one by counting how many
+    # title lines `_wrap_text` produces — the empty-roster height
+    # floor would otherwise mask the growth.
+    title_font = _default_font(18)
+    short_lines = sr._wrap_text(
+        "DS", title_font, sr._WIDTH - 2 * sr._PADDING_X,
+    )
+    long_title = (
+        "Desert Storm — Standard Preset With Lots Of Words Past Edge — "
+        "Team A — 2026-05-18 — extra words that force a wrap"
+    )
+    long_lines = sr._wrap_text(
+        long_title, title_font, sr._WIDTH - 2 * sr._PADDING_X,
+    )
+    assert len(short_lines) == 1
+    assert len(long_lines) > 1, (
+        f"long title must wrap to multiple lines, got {long_lines}"
+    )
+    # And the render path still produces a valid PNG for the long one.
+    long_roster = sr.RosterData(
+        title=long_title,
+        zones=[sr.RosterZone(name="Z", max_players=1, members=["A"])],
+    )
+    png = sr.render(long_roster)
+    assert png[:8] == b"\x89PNG\r\n\x1a\n"
+
+
 def _default_font(size: int):
     """Mirror the renderer's font-load logic so test sizing aligns
     exactly with the real path."""

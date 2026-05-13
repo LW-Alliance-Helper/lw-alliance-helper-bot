@@ -115,11 +115,19 @@ def render(roster: RosterData) -> bytes:
 
     y = _PADDING_Y
 
-    # Title
-    draw.text(
-        (_PADDING_X, y), roster.title, fill=_TITLE_COLOR, font=title_font,
+    # Title — word-wrapped to the canvas width so long preset names /
+    # paired-mode labels don't overflow the right edge. Without this,
+    # "Desert Storm — <Long Preset Name> — Team A — 2026-05-18" got
+    # truncated visually in the rendered PNG.
+    title_lines = _wrap_text(
+        roster.title, title_font, _WIDTH - 2 * _PADDING_X,
     )
-    y += _line_height(title_font) + _TITLE_GAP
+    for line in title_lines:
+        draw.text(
+            (_PADDING_X, y), line, fill=_TITLE_COLOR, font=title_font,
+        )
+        y += _line_height(title_font)
+    y += _TITLE_GAP
 
     # Zones
     for zone in roster.zones:
@@ -271,6 +279,56 @@ def _line_height(font) -> int:
         return 14
 
 
+def _text_width(font, text: str) -> int:
+    """Pixel width of `text` rendered in `font`. Approximates 8 px per
+    character on very old Pillow that lacks `getbbox`."""
+    if not text:
+        return 0
+    try:
+        bbox = font.getbbox(text)
+        return bbox[2] - bbox[0]
+    except AttributeError:
+        return len(text) * 8
+
+
+def _wrap_text(text: str, font, max_width: int) -> list[str]:
+    """Word-wrap `text` so every line fits within `max_width` pixels.
+    A token wider than `max_width` on its own (extremely long member
+    name or one-word title) is broken character by character — never
+    silently truncated. Always returns at least one line."""
+    if not text:
+        return [""]
+    if _text_width(font, text) <= max_width:
+        return [text]
+    words = text.split(" ")
+    lines: list[str] = []
+    current = ""
+    for word in words:
+        candidate = f"{current} {word}" if current else word
+        if _text_width(font, candidate) <= max_width:
+            current = candidate
+            continue
+        if current:
+            lines.append(current)
+            current = ""
+        if _text_width(font, word) <= max_width:
+            current = word
+            continue
+        # Token alone overflows — char-wrap it.
+        buf = ""
+        for ch in word:
+            if _text_width(font, buf + ch) <= max_width:
+                buf += ch
+            else:
+                if buf:
+                    lines.append(buf)
+                buf = ch
+        current = buf
+    if current:
+        lines.append(current)
+    return lines or [text]
+
+
 def _measure_height(
     roster: RosterData,
     title_font, heading_font, body_font,
@@ -278,7 +336,14 @@ def _measure_height(
     """Walk the same layout the renderer will, summing y-extent so the
     canvas is sized correctly. Returns at least 200 px for the empty
     case so the resulting PNG is never visually weird."""
-    y = _PADDING_Y + _line_height(title_font) + _TITLE_GAP
+    title_lines = _wrap_text(
+        roster.title, title_font, _WIDTH - 2 * _PADDING_X,
+    )
+    y = (
+        _PADDING_Y
+        + len(title_lines) * _line_height(title_font)
+        + _TITLE_GAP
+    )
     for zone in roster.zones:
         y += _line_height(heading_font) + _LINE_GAP
         if not zone.members:

@@ -4,4 +4,4 @@ google-auth>=2.0.0
 python-dotenv>=1.0.0
 tzdata>=2024.1
 sentry-sdk>=2.0
-Pillow>=10.0.0
+Pillow>=10.0.0,<12

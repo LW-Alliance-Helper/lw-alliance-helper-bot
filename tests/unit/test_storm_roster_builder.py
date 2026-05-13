@@ -1464,6 +1464,46 @@ class TestPairedSubMode:
         assert "⚠️" in embed.description
         assert "Unpaired primaries" in embed.description
 
+    def test_render_embed_paired_mode_surfaces_overflow_subs(self):
+        """Paired mode's flat sub list (overflow pool) used to be
+        invisible from the embed — only primaries with their inline
+        subs rendered. The fix adds an Overflow subs line so the
+        officer knows extra subs exist."""
+        members = self._three_members()
+        sess = _make_session(team="A", members=members, sub_mode="paired")
+        sess.assignments["Power Tower"].append("1001")
+        sess.paired_subs["1001"] = "1002"
+        # Carol ends up in the overflow pool (every primary already
+        # has a paired sub, no zone seat left).
+        sess.subs.append("1003")
+        embed = srb._render_builder_embed(sess)
+        assert "Overflow subs" in embed.description
+        assert "Carol" in embed.description
+
+    def test_render_embed_paired_mode_no_overflow_line_when_empty(self):
+        """Embed must not render the Overflow subs line when there
+        aren't any — keeps the embed compact in the typical case."""
+        members = self._three_members()
+        sess = _make_session(team="A", members=members, sub_mode="paired")
+        sess.assignments["Power Tower"].append("1001")
+        sess.paired_subs["1001"] = "1002"
+        # No overflow.
+        embed = srb._render_builder_embed(sess)
+        assert "Overflow subs" not in embed.description
+
+    def test_zone_of_primary_returns_zone_for_assigned(self):
+        members = self._three_members()
+        sess = _make_session(team="A", members=members, sub_mode="paired")
+        sess.assignments["Power Tower"].append("1001")
+        assert srb._zone_of_primary(sess, "1001") == "Power Tower"
+
+    def test_zone_of_primary_falls_back_to_selected(self):
+        members = self._three_members()
+        sess = _make_session(team="A", members=members, sub_mode="paired")
+        sess.selected_zone = "Nuclear Silo"
+        # Member not assigned anywhere → falls back to selected_zone.
+        assert srb._zone_of_primary(sess, "9999") == "Nuclear Silo"
+
 
 class TestStructuredBuilderView:
     def test_structured_mode_shows_approve_button(self):

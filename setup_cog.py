@@ -5506,6 +5506,122 @@ def _normalise_hhmm(raw: str) -> str | None:
 # ── Judicator role picker (#137) ─────────────────────────────────────────────
 
 
+class _KeepOrFlipYesNoGate(discord.ui.View):
+    """Re-entry gate for a yes/no wizard step that already has a saved
+    value. Two buttons: Keep current (success) / Flip (secondary).
+    Sets `self.value` to the resolved bool, or None on timeout."""
+
+    def __init__(
+        self, *,
+        current_value: bool,
+        keep_label_yes: str = "✅ Keep current: Yes",
+        keep_label_no: str = "✅ Keep current: No",
+        flip_label_yes: str = "↩️ Switch to: Yes",
+        flip_label_no: str = "↩️ Switch to: No",
+    ):
+        super().__init__(timeout=WIZARD_TIMEOUT)
+        self.value: bool | None = None
+        self.cancelled = False
+
+        keep_label = keep_label_yes if current_value else keep_label_no
+        flip_label = flip_label_no if current_value else flip_label_yes
+
+        keep_btn = discord.ui.Button(
+            label=keep_label[:80], style=discord.ButtonStyle.success,
+        )
+
+        async def _keep_cb(inter: discord.Interaction):
+            self.value = bool(current_value)
+            for item in self.children: item.disabled = True
+            await wizard_registry.safe_edit_response(
+                inter,
+                content=f"✅ Keeping **{'Yes' if self.value else 'No'}**",
+                view=self,
+            )
+            self.stop()
+
+        keep_btn.callback = _keep_cb
+        self.add_item(keep_btn)
+
+        flip_btn = discord.ui.Button(
+            label=flip_label[:80], style=discord.ButtonStyle.secondary,
+        )
+
+        async def _flip_cb(inter: discord.Interaction):
+            self.value = not bool(current_value)
+            for item in self.children: item.disabled = True
+            await wizard_registry.safe_edit_response(
+                inter,
+                content=f"✅ Switched to **{'Yes' if self.value else 'No'}**",
+                view=self,
+            )
+            self.stop()
+
+        flip_btn.callback = _flip_cb
+        self.add_item(flip_btn)
+
+
+class _KeepOrChangeRoleGate(discord.ui.View):
+    """Re-entry gate for `_ask_judicator_role`. Three buttons:
+    Keep current / Skip (no role) / Change (descend to picker).
+    Returns its decision via `self.decision` in {"keep", "skip",
+    "change"} or None on timeout. Mirrors `ask_keep_or_change`'s
+    three-button shape for the role flavour."""
+
+    def __init__(self, *, current_label: str):
+        super().__init__(timeout=WIZARD_TIMEOUT)
+        self.decision: str | None = None
+        self.cancelled = False
+
+        keep_btn = discord.ui.Button(
+            label=f"✅ Keep current: {current_label}"[:80],
+            style=discord.ButtonStyle.success,
+        )
+
+        async def _keep_cb(inter: discord.Interaction):
+            self.decision = "keep"
+            for item in self.children: item.disabled = True
+            await wizard_registry.safe_edit_response(
+                inter, content=f"✅ Keeping **{current_label}**", view=self,
+            )
+            self.stop()
+
+        keep_btn.callback = _keep_cb
+        self.add_item(keep_btn)
+
+        skip_btn = discord.ui.Button(
+            label="↩️ Skip — no role to apply",
+            style=discord.ButtonStyle.secondary,
+        )
+
+        async def _skip_cb(inter: discord.Interaction):
+            self.decision = "skip"
+            for item in self.children: item.disabled = True
+            await wizard_registry.safe_edit_response(
+                inter, content="✅ Judicator role cleared.", view=self,
+            )
+            self.stop()
+
+        skip_btn.callback = _skip_cb
+        self.add_item(skip_btn)
+
+        change_btn = discord.ui.Button(
+            label="✏️ Change role",
+            style=discord.ButtonStyle.secondary,
+        )
+
+        async def _change_cb(inter: discord.Interaction):
+            self.decision = "change"
+            for item in self.children: item.disabled = True
+            await wizard_registry.safe_edit_response(
+                inter, content="✏️ Pick a new role below…", view=self,
+            )
+            self.stop()
+
+        change_btn.callback = _change_cb
+        self.add_item(change_btn)
+
+
 async def _ask_judicator_role(
     channel, bot, user, cancel_event, *,
     cmd_name: str,
@@ -5519,6 +5635,41 @@ async def _ask_judicator_role(
     Returns the role ID, 0 for "skip / no role configured," or None
     on timeout / cancel."""
     import wizard_registry
+
+    # Keep-or-change branch — re-runs of the setup wizard shouldn't
+    # force leadership through the full role-picker every time. If a
+    # role is already configured, show a quick confirm-or-change view
+    # and only descend into the full picker on "Change". The bare
+    # picker still fires on first run (current_role_id == 0).
+    if current_role_id:
+        current_role = (
+            interaction_guild.get_role(int(current_role_id))
+            if interaction_guild else None
+        )
+        current_label = (
+            current_role.name if current_role else f"role id {current_role_id}"
+        )
+        gate_view = _KeepOrChangeRoleGate(current_label=current_label)
+        await channel.send(
+            "**Judicator Role (💎 Premium — CS only)**\n"
+            f"Currently set to **{current_label}**. Keep it, switch to "
+            f"no role, or pick a different role.",
+            view=gate_view,
+            allowed_mentions=discord.AllowedMentions.none(),
+        )
+        await wait_view_or_cancel(gate_view, cancel_event)
+        if getattr(gate_view, "cancelled", False):
+            return None
+        if gate_view.decision is None:
+            await channel.send(
+                f"⏰ Timed out. Run `/{cmd_name}` to start again."
+            )
+            return None
+        if gate_view.decision == "keep":
+            return int(current_role_id)
+        if gate_view.decision == "skip":
+            return 0
+        # Otherwise: fall through to the full picker.
 
     # Build a Select of guild roles. Discord caps Select options at
     # 25, so pre-filter to non-managed, non-default roles by name
@@ -5847,23 +5998,59 @@ async def _run_structured_flow_setup_step(
         # signup-button handler DMs the voter if their power column
         # value isn't readable. Cooldown is one nudge per event_date
         # so members aren't pinged repeatedly.
-        nudge_view = YesNoView()
-        await channel.send(
-            f"**Power-Refresh DM (💎 Premium)**\n"
-            f"When a member clicks a sign-up button for **{label}** and "
-            f"their **{result.get('power_column_name') or 'power column'}** "
-            f"cell is blank or unparseable, should the bot DM them a "
-            f"one-line nudge to update it? At most one DM per member per "
-            f"event date.",
-            view=nudge_view,
-        )
-        await wait_view_or_cancel(nudge_view, cancel_event)
-        if getattr(nudge_view, "cancelled", False):
-            return None
-        if nudge_view.selected is None:
-            await channel.send(f"⏰ Timed out. Run `/{cmd_name}` to start again.")
-            return None
-        result["power_refresh_dm_enabled"] = bool(nudge_view.selected)
+        #
+        # Keep-or-change branch on re-entry. If the alliance had the
+        # structured flow enabled previously, the saved Yes/No is
+        # surfaced as "Keep current" so the wizard doesn't force the
+        # officer to re-pick on every re-run. First-time setup
+        # (structured flow not previously enabled) still shows the
+        # standard Yes/No view so the question is asked explicitly.
+        prior_enabled = bool(current_structured.get("structured_flow_enabled"))
+        if prior_enabled:
+            current_yn = bool(current_structured.get("power_refresh_dm_enabled"))
+            gate = _KeepOrFlipYesNoGate(
+                current_value=current_yn,
+                keep_label_yes="✅ Keep current: Yes",
+                keep_label_no="✅ Keep current: No",
+                flip_label_yes="↩️ Switch to: Yes",
+                flip_label_no="↩️ Switch to: No",
+            )
+            await channel.send(
+                f"**Power-Refresh DM (💎 Premium)**\n"
+                f"When a member clicks a sign-up button for **{label}** and "
+                f"their **{result.get('power_column_name') or 'power column'}** "
+                f"cell is blank or unparseable, the bot can DM them a "
+                f"one-line nudge to update it. Currently "
+                f"**{'on' if current_yn else 'off'}** — keep it or flip.",
+                view=gate,
+            )
+            await wait_view_or_cancel(gate, cancel_event)
+            if getattr(gate, "cancelled", False):
+                return None
+            if gate.value is None:
+                await channel.send(
+                    f"⏰ Timed out. Run `/{cmd_name}` to start again."
+                )
+                return None
+            result["power_refresh_dm_enabled"] = bool(gate.value)
+        else:
+            nudge_view = YesNoView()
+            await channel.send(
+                f"**Power-Refresh DM (💎 Premium)**\n"
+                f"When a member clicks a sign-up button for **{label}** and "
+                f"their **{result.get('power_column_name') or 'power column'}** "
+                f"cell is blank or unparseable, should the bot DM them a "
+                f"one-line nudge to update it? At most one DM per member per "
+                f"event date.",
+                view=nudge_view,
+            )
+            await wait_view_or_cancel(nudge_view, cancel_event)
+            if getattr(nudge_view, "cancelled", False):
+                return None
+            if nudge_view.selected is None:
+                await channel.send(f"⏰ Timed out. Run `/{cmd_name}` to start again.")
+                return None
+            result["power_refresh_dm_enabled"] = bool(nudge_view.selected)
 
     # ── Always-ask: preset library + member rules tab names (free + Premium) ──
     from config import default_structured_tab

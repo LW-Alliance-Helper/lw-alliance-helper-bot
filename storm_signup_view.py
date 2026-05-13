@@ -321,8 +321,22 @@ async def _maybe_send_power_refresh_dm(
         return
 
     power_column = structured.get("power_column_name") or "your power column"
+    # The alliance's column header often already includes a leading
+    # possessive ("Your Power", "My Squad Power") — without trimming it
+    # the rendered body reads "your **Your Power** on the alliance
+    # roster Sheet…", which the audit flagged as awkward. Drop the
+    # leading possessive on the column label and let the body prefix
+    # supply it instead.
+    column_label = power_column.strip()
+    lowered = column_label.lower()
+    if lowered.startswith("your "):
+        column_label = column_label[5:].strip()
+    elif lowered.startswith("my "):
+        column_label = column_label[3:].strip()
+    if not column_label:
+        column_label = power_column
     body = (
-        f"Heads up — your **{power_column}** on the alliance roster "
+        f"Heads up — your **{column_label}** on the alliance roster "
         f"Sheet isn't readable. Could you update it before the next "
         f"storm so leadership has accurate numbers for zone assignments?"
     )

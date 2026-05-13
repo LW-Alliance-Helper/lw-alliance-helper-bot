@@ -314,6 +314,51 @@ class TestPowerRefreshDmNudge:
         )
 
     @pytest.mark.asyncio
+    async def test_dm_body_strips_leading_your_to_avoid_double_possessive(
+        self, env,
+    ):
+        """If the alliance named their power column 'Your Power', the
+        rendered body must not read 'your **Your Power** on the alliance
+        roster Sheet…'. The strip-leading-your fix drops the duplicate."""
+        import config
+        config.save_structured_storm_config(
+            env, "DS",
+            structured_flow_enabled=True,
+            power_column_name="Your Squad Power",
+            power_refresh_dm_enabled=True,
+        )
+        inter = self._fake_interaction()
+        with self._patch_roster(voter_power=None):
+            await sv._maybe_send_power_refresh_dm(
+                inter, env, "DS", "2026-05-18", 42,
+            )
+        body = inter.user.send.await_args.args[0]
+        # Column header rendered without its leading "Your "
+        assert "**Squad Power**" in body
+        assert "your **Your" not in body.lower()
+
+    @pytest.mark.asyncio
+    async def test_dm_body_keeps_column_name_when_no_leading_possessive(
+        self, env,
+    ):
+        """A column header without a leading 'your'/'my' renders
+        verbatim — the strip only kicks in when needed."""
+        import config
+        config.save_structured_storm_config(
+            env, "DS",
+            structured_flow_enabled=True,
+            power_column_name="Squad Power",
+            power_refresh_dm_enabled=True,
+        )
+        inter = self._fake_interaction()
+        with self._patch_roster(voter_power=None):
+            await sv._maybe_send_power_refresh_dm(
+                inter, env, "DS", "2026-05-18", 42,
+            )
+        body = inter.user.send.await_args.args[0]
+        assert "**Squad Power**" in body
+
+    @pytest.mark.asyncio
     async def test_cooldown_prevents_double_dm_on_revote(self, env):
         inter1 = self._fake_interaction()
         with self._patch_roster(voter_power=None):

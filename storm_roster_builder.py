@@ -738,6 +738,20 @@ def _render_builder_embed(session: RosterBuilderSession) -> discord.Embed:
             )
         else:
             lines.append("🪑 **Sub pairings**: complete for every primary.")
+        # Surface the overflow-sub pool too — paired subs live inline
+        # against each primary, but auto-fill or manual add can leave
+        # extra subs in `session.subs` that don't belong to any
+        # primary. Without this line the officer can't tell those
+        # exist from the embed.
+        overflow_sub_names = [
+            session.members[k]["name"] for k in session.subs if k in session.members
+        ]
+        if overflow_sub_names:
+            lines.append(
+                f"🪑 **Overflow subs ({len(overflow_sub_names)})**: "
+                f"{', '.join(overflow_sub_names)} — pair via the picker "
+                f"or send as bench."
+            )
     else:
         sub_names = [
             session.members[k]["name"] for k in session.subs if k in session.members
@@ -977,6 +991,12 @@ class RosterBuilderView(discord.ui.View):
                 if eligible or s.show_below_floor else
                 "No eligible members — toggle below-floor override"
             )
+            # Surface overflow so the officer knows the dropdown is
+            # truncated — Discord caps Select options at 25 and a
+            # silent drop hides the rest of the eligible pool.
+            overflow = len(pool) - len(options)
+            if overflow > 0:
+                placeholder = f"{placeholder} (+{overflow} more)"
             member_select = discord.ui.Select(
                 placeholder=placeholder[:150],
                 min_values=1, max_values=1,
@@ -1092,6 +1112,25 @@ class RosterBuilderView(discord.ui.View):
 
         move_to_subs_btn.callback = _move_to_subs
         self.add_item(move_to_subs_btn)
+
+        # Re-pair button (paired mode only). Without it, the officer
+        # has to unassign + re-add a primary to change its sub —
+        # which loses the primary assignment + below-floor override
+        # and surfaces a transient ⚠️ unpaired-primary state in the
+        # embed. The button opens an ephemeral primary-picker that
+        # reuses `_open_paired_sub_picker` for the actual swap.
+        if s.is_paired:
+            repair_btn = discord.ui.Button(
+                label="🔁 Re-pair sub", style=discord.ButtonStyle.secondary, row=2,
+            )
+
+            async def _repair(inter: discord.Interaction):
+                if not await self._guard_owner(inter):
+                    return
+                await _open_repair_primary_picker(inter, self)
+
+            repair_btn.callback = _repair
+            self.add_item(repair_btn)
 
         # Row 3 — finalisation. Structured-mode adds an Approve & Post
         # button that fires the rosters_tab write + auto-post; free
@@ -1251,6 +1290,17 @@ class RosterBuilderView(discord.ui.View):
         self._release_session_lock()
 
 
+def _zone_of_primary(session: RosterBuilderSession, primary_key: str) -> str:
+    """Return the zone a primary is currently assigned to, or the
+    session's selected_zone as a fallback. The re-pair flow needs
+    the primary's actual zone (not whatever the officer last
+    clicked on) so the sub-eligibility check enforces the right floor."""
+    for zone_name, keys in session.assignments.items():
+        if primary_key in keys:
+            return zone_name
+    return session.selected_zone or ""
+
+
 async def _open_paired_sub_picker(
     interaction: discord.Interaction,
     main_view: "RosterBuilderView",
@@ -1264,27 +1314,42 @@ async def _open_paired_sub_picker(
     primary = s.members.get(primary_key)
     primary_label = primary["name"] if primary else f"<{primary_key}>"
 
+    # Resolve the primary's actual zone — re-pair flow may invoke this
+    # picker for a primary in a zone the officer isn't currently
+    # editing. Falling back to selected_zone keeps the original
+    # post-primary-assignment callsite working unchanged.
+    picker_zone = _zone_of_primary(s, primary_key) or s.selected_zone
+
     # Eligibility for the paired sub matches the primary's zone:
     # subs cover the no-show, so they must meet the same per-team
-    # floor for that zone.
-    eligible, below = _eligible_member_keys_for_zone(s, s.selected_zone)
+    # floor for that zone. `_eligible_member_keys_for_zone` already
+    # filters out every assigned primary + paired sub, so the pool
+    # is the set of unassigned members who clear the floor.
+    eligible, below = _eligible_member_keys_for_zone(s, picker_zone)
     pool = list(eligible)
     if s.show_below_floor:
         pool.extend(below)
     # Cap at the 25-option Discord limit. If the alliance has more
-    # eligible candidates, officer can either toggle the below-floor
-    # override OR skip + pair later via the main view (deferred TODO).
+    # eligible candidates, the count is surfaced in the message body
+    # so the officer knows the picker is truncated — they can toggle
+    # the below-floor override or skip + pair later from the main view.
+    overflow = max(0, len(pool) - _MAX_DROPDOWN_OPTIONS)
     pool = pool[:_MAX_DROPDOWN_OPTIONS]
 
     picker = _PairedSubPickerView(
         main_view=main_view,
         primary_key=primary_key,
         pool=pool,
-        zone_name=s.selected_zone,
+        zone_name=picker_zone,
+    )
+    overflow_note = (
+        f" *(+{overflow} more eligible — not shown; Discord limits the "
+        f"picker to 25)*"
+        if overflow > 0 else ""
     )
     content = (
         f"🪑 Pick a sub for **{primary_label}** at **{s.selected_zone}**, "
-        f"or skip and pair them later."
+        f"or skip and pair them later.{overflow_note}"
     )
     if not pool:
         content = (
@@ -1477,6 +1542,174 @@ class _PairedSubPickerView(discord.ui.View):
                 pass
 
 
+async def _open_repair_primary_picker(
+    interaction: discord.Interaction,
+    main_view: "RosterBuilderView",
+) -> None:
+    """Open the ephemeral primary-picker for the Re-pair Sub button.
+    Lists every primary currently assigned to a zone (regardless of the
+    builder's selected_zone) with its current sub annotation, so the
+    officer can swap a sub without unassigning + re-adding the primary.
+
+    Once a primary is picked, `_open_paired_sub_picker` fires for that
+    primary; that picker resolves the primary's actual zone so the
+    sub-eligibility floor is correct."""
+    s = main_view.session
+    primary_keys: list[tuple[str, str]] = []  # [(primary_key, zone_name)]
+    for z in s.preset.zones:
+        for key in s.assignments.get(z.zone, []):
+            primary_keys.append((key, z.zone))
+    if not primary_keys:
+        try:
+            await interaction.response.send_message(
+                "⚠️ No primaries assigned yet — assign a primary to a zone "
+                "before re-pairing a sub.",
+                ephemeral=True,
+            )
+        except discord.HTTPException:
+            pass
+        return
+
+    overflow = max(0, len(primary_keys) - _MAX_DROPDOWN_OPTIONS)
+    primary_keys = primary_keys[:_MAX_DROPDOWN_OPTIONS]
+
+    view = _RepairPrimaryPickerView(main_view=main_view, primary_keys=primary_keys)
+    overflow_note = (
+        f" *(+{overflow} more primaries — not shown; Discord limits the "
+        f"picker to 25)*"
+        if overflow > 0 else ""
+    )
+    content = (
+        "🔁 Pick a primary to re-pair their sub. The current pairing "
+        "(if any) is shown next to each name.{0}"
+    ).format(overflow_note)
+    try:
+        await interaction.response.send_message(
+            content=content, view=view, ephemeral=True,
+        )
+        view.message = await interaction.original_response()
+    except discord.HTTPException as e:
+        logger.warning(
+            "[STORM BUILDER] repair primary picker failed to send "
+            "(guild=%s): %s",
+            s.guild_id, e,
+        )
+
+
+class _RepairPrimaryPickerView(discord.ui.View):
+    """Ephemeral picker for the Re-pair Sub button. Picking a primary
+    fires `_open_paired_sub_picker` for that primary, which writes the
+    new pairing on selection (or skips on cancel)."""
+
+    def __init__(
+        self,
+        *,
+        main_view: "RosterBuilderView",
+        primary_keys: list[tuple[str, str]],
+    ):
+        super().__init__(timeout=300)
+        self.main_view = main_view
+        self.message: Optional[discord.Message] = None
+
+        s = main_view.session
+        options: list[discord.SelectOption] = []
+        for primary_key, zone_name in primary_keys:
+            m = s.members.get(primary_key)
+            if not m:
+                continue
+            primary_name = m.get("name") or primary_key
+            sub_key = s.paired_subs.get(primary_key)
+            if sub_key:
+                sub_m = s.members.get(sub_key)
+                sub_name = sub_m.get("name") if sub_m else sub_key
+                desc = f"{zone_name} · sub: {sub_name}"
+            else:
+                desc = f"{zone_name} · no sub paired"
+            options.append(discord.SelectOption(
+                label=primary_name[:100],
+                value=primary_key[:100],
+                description=desc[:100],
+            ))
+        if options:
+            sel = discord.ui.Select(
+                placeholder="Pick a primary to re-pair…",
+                min_values=1, max_values=1,
+                options=options,
+            )
+            sel.callback = self._make_callback()
+            self.add_item(sel)
+
+        cancel_btn = discord.ui.Button(
+            label="↩️ Cancel", style=discord.ButtonStyle.secondary,
+        )
+        cancel_btn.callback = self._make_cancel_callback()
+        self.add_item(cancel_btn)
+
+    def _make_callback(self):
+        async def _cb(inter: discord.Interaction):
+            if inter.user.id != self.main_view.session.user_id:
+                await inter.response.send_message(
+                    "⛔ Only the builder's owner can re-pair subs.",
+                    ephemeral=True,
+                )
+                return
+            if self.is_finished():
+                return
+            primary_key = None
+            for child in self.children:
+                if isinstance(child, discord.ui.Select):
+                    primary_key = child.values[0] if child.values else None
+                    break
+            if not primary_key:
+                await inter.response.send_message(
+                    "⚠️ Couldn't read the picked primary. Try again.",
+                    ephemeral=True,
+                )
+                return
+            self.stop()
+            for item in self.children:
+                item.disabled = True
+            # `_open_paired_sub_picker` uses `interaction.response.send_message`,
+            # so don't consume the interaction response here. The
+            # original primary picker view is stopped; the sub picker
+            # opens as a fresh ephemeral. Officer can still see the
+            # stopped primary picker message but its buttons are inert.
+            await _open_paired_sub_picker(
+                inter, self.main_view, primary_key=primary_key,
+            )
+        return _cb
+
+    def _make_cancel_callback(self):
+        async def _cb(inter: discord.Interaction):
+            if inter.user.id != self.main_view.session.user_id:
+                await inter.response.send_message(
+                    "⛔ Only the builder's owner can cancel.",
+                    ephemeral=True,
+                )
+                return
+            if self.is_finished():
+                return
+            self.stop()
+            for item in self.children:
+                item.disabled = True
+            try:
+                await inter.response.edit_message(
+                    content="↩️ Re-pair cancelled.", view=self,
+                )
+            except discord.HTTPException:
+                pass
+        return _cb
+
+    async def on_timeout(self):
+        for item in self.children:
+            item.disabled = True
+        if self.message is not None:
+            try:
+                await self.message.edit(view=self)
+            except discord.HTTPException:
+                pass
+
+
 class _SaveAsPresetModal(discord.ui.Modal, title="Save as preset"):
     def __init__(self, view: RosterBuilderView):
         super().__init__()
@@ -1586,6 +1819,26 @@ async def _render_and_attach(
         )
         await inter.followup.send(
             "⚠️ Couldn't render the roster image — see bot logs.",
+            ephemeral=True,
+        )
+        return
+
+    # Discord refuses attachments > 25 MB on the default boost tier
+    # with a 40005 / 413 response that surfaces to the user as a
+    # generic "interaction failed". A degenerate roster (huge Unicode
+    # name set with a TTF fallback that ballooned the canvas) could
+    # in principle cross that line; bail with a readable message
+    # instead of letting Discord eat the upload silently.
+    _MAX_ATTACHMENT_BYTES = 25 * 1024 * 1024
+    if len(png_bytes) > _MAX_ATTACHMENT_BYTES:
+        logger.warning(
+            "[STORM RENDER] PNG exceeded 25MB (size=%d guild=%s event=%s)",
+            len(png_bytes), session.guild_id, session.event_type,
+        )
+        await inter.followup.send(
+            "⚠️ Rendered roster image is too large to attach "
+            f"({len(png_bytes) // (1024 * 1024)} MB > 25 MB Discord limit). "
+            "Use the text-template mail instead.",
             ephemeral=True,
         )
         return

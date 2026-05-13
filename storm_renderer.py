@@ -46,6 +46,21 @@ class RosterData:
     # Optional paired-sub mapping: {primary_name: sub_name}. Rendered
     # alongside the primary line when present.
     paired_subs: dict[str, str] = field(default_factory=dict)
+    # Per-member metadata for rich rendering. Map keyed on `name` so
+    # the renderer doesn't have to plumb a richer data structure
+    # through every layout helper.
+    #
+    # `powers[name]` → human-readable power string ("412M") or "" /
+    # missing to omit. The audit found the screenshot artifact dropped
+    # the power readout the embed shows, so officers couldn't
+    # cross-check power-by-zone from the image.
+    #
+    # `overrides` → set of member names assigned below the zone floor.
+    # The rosters_tab `Override Below Floor` column captures the same
+    # data; without surfacing it in the PNG, post-event review loses a
+    # decision an officer made at build time.
+    powers: dict[str, str] = field(default_factory=dict)
+    overrides: set[str] = field(default_factory=set)
 
 
 # Layout constants — kept readable + isolated so a future redesign
@@ -79,12 +94,19 @@ def render(roster: RosterData) -> bytes:
             "Add `Pillow>=10.0.0` to requirements.txt."
         ) from e
 
-    # Default font; Pillow ships a tiny bitmap font that's enough for
-    # readable English text. Truetype lookups are explicitly avoided —
-    # Railway containers might not have any system fonts installed.
-    title_font = ImageFont.load_default(size=18) if _supports_size() else ImageFont.load_default()
-    heading_font = ImageFont.load_default(size=14) if _supports_size() else ImageFont.load_default()
-    body_font = ImageFont.load_default(size=12) if _supports_size() else ImageFont.load_default()
+    # Font lookup tiers:
+    #   1. DejaVuSans TTF if available on the host (covers Latin-1
+    #      Supplement, Greek, Cyrillic, Korean, CJK depending on the
+    #      installed variant) — common on Linux/Railway containers.
+    #   2. Pillow's bundled default with size= (Pillow >= 10).
+    #   3. Pillow's bundled default at native (tiny ASCII bitmap).
+    # The bundled default is 1bpp ASCII — member names with emoji or
+    # CJK characters render as `?` boxes through that path, so the
+    # TTF lookup is what makes the PNG actually usable for non-English
+    # alliances.
+    title_font   = _best_font(ImageFont, size=18)
+    heading_font = _best_font(ImageFont, size=14)
+    body_font    = _best_font(ImageFont, size=12)
 
     # First pass: compute height by walking the layout dry.
     height = _measure_height(roster, title_font, heading_font, body_font)
@@ -116,7 +138,15 @@ def render(roster: RosterData) -> bytes:
         else:
             for name in zone.members:
                 sub = roster.paired_subs.get(name)
-                line = f"• {name}" + (f"   ↳ sub: {sub}" if sub else "")
+                power_str = roster.powers.get(name) or ""
+                is_override = name in roster.overrides
+                line = f"• {name}"
+                if power_str:
+                    line += f" ({power_str})"
+                if is_override:
+                    line += "  ⚠ override"
+                if sub:
+                    line += f"   ↳ sub: {sub}"
                 draw.text(
                     (_PADDING_X + 16, y), line,
                     fill=_TEXT_COLOR, font=body_font,
@@ -160,16 +190,73 @@ def render(roster: RosterData) -> bytes:
 # ── Layout helpers ───────────────────────────────────────────────────────────
 
 
+# Cached at first-render time so the probe doesn't run on every click.
+# Lazy (not module-import) so the renderer module still loads without
+# Pillow installed — the actual `render()` call raises the helpful
+# RuntimeError.
+_SUPPORTS_SIZE: Optional[bool] = None
+_TTF_PATH: Optional[str] = None
+_TTF_LOOKED_UP: bool = False
+
+# TTF candidates probed once. Order matters — pick the most likely to
+# be present on the host. DejaVu ships with most Linux distros and is
+# what Pillow's default load_default falls back to on a fresh container.
+_TTF_CANDIDATES = (
+    "DejaVuSans.ttf",
+    "DejaVuSans-Bold.ttf",
+    "/usr/share/fonts/truetype/dejavu/DejaVuSans.ttf",
+    "/usr/share/fonts/dejavu/DejaVuSans.ttf",
+    "/Library/Fonts/Arial Unicode.ttf",
+    "C:/Windows/Fonts/arial.ttf",
+)
+
+
 def _supports_size() -> bool:
     """Pillow 10+ supports `size=` on `load_default()`. Older versions
-    raise TypeError. Probing once at module init keeps the render path
-    fast."""
+    raise TypeError. Cached after first call so the render path doesn't
+    re-probe every click."""
+    global _SUPPORTS_SIZE
+    if _SUPPORTS_SIZE is not None:
+        return _SUPPORTS_SIZE
     try:
         from PIL import ImageFont
         ImageFont.load_default(size=10)
-        return True
+        _SUPPORTS_SIZE = True
     except (TypeError, ImportError):
-        return False
+        _SUPPORTS_SIZE = False
+    return _SUPPORTS_SIZE
+
+
+def _best_font(image_font_module, *, size: int):
+    """Return the best font Pillow can resolve at `size`:
+      1. TTF (one of `_TTF_CANDIDATES`) — covers Unicode for non-English
+         alliances and emoji-in-member-names.
+      2. `load_default(size=size)` — Pillow's tiny ASCII bitmap, scaled.
+      3. `load_default()` — the same bitmap at native size (very old
+         Pillow).
+
+    The TTF path is cached after first call. If no TTF resolves on the
+    host, every render still works (degraded), so we don't hard-fail.
+    """
+    global _TTF_LOOKED_UP, _TTF_PATH
+    if not _TTF_LOOKED_UP:
+        _TTF_LOOKED_UP = True
+        for candidate in _TTF_CANDIDATES:
+            try:
+                image_font_module.truetype(candidate, size=size)
+                _TTF_PATH = candidate
+                break
+            except (OSError, IOError):
+                continue
+    if _TTF_PATH:
+        try:
+            return image_font_module.truetype(_TTF_PATH, size=size)
+        except (OSError, IOError):
+            # Race: TTF disappeared between probe and use. Fall through.
+            pass
+    if _supports_size():
+        return image_font_module.load_default(size=size)
+    return image_font_module.load_default()
 
 
 def _line_height(font) -> int:
@@ -232,6 +319,18 @@ def roster_from_session(session) -> RosterData:
 
     zones: list[RosterZone] = []
     paired_subs: dict[str, str] = {}
+    powers: dict[str, str] = {}
+    overrides: set[str] = set()
+
+    def _format_power(p) -> str:
+        if p is None:
+            return "power unknown"
+        try:
+            from storm_strategy import format_power
+            return format_power(int(p))
+        except (TypeError, ValueError, ImportError):
+            return str(p)
+
     for z in session.preset.zones:
         names: list[str] = []
         for key in session.assignments.get(z.zone, []):
@@ -240,12 +339,21 @@ def roster_from_session(session) -> RosterData:
                 continue
             primary_name = m["name"]
             names.append(primary_name)
+            powers[primary_name] = _format_power(m.get("power"))
+            if key in session.below_floor_overrides:
+                overrides.add(primary_name)
             if session.is_paired:
                 sub_key = session.paired_subs.get(key)
                 if sub_key:
                     sub_m = session.members.get(sub_key)
                     if sub_m:
-                        paired_subs[primary_name] = sub_m["name"]
+                        sub_name = sub_m["name"]
+                        paired_subs[primary_name] = sub_name
+                        powers[sub_name] = _format_power(sub_m.get("power"))
+                        # Override flag on the sub too — paired subs
+                        # captured via the picker can carry it.
+                        if sub_key in session.below_floor_overrides:
+                            overrides.add(sub_name)
         zones.append(RosterZone(
             name=z.zone, max_players=int(z.max_players), members=names,
         ))
@@ -254,8 +362,15 @@ def roster_from_session(session) -> RosterData:
         session.members[k]["name"] for k in session.subs
         if k in session.members
     ]
+    # Power readout for overflow subs too — leadership reading the
+    # image can see why these members are in the sub block.
+    for k in session.subs:
+        m = session.members.get(k)
+        if m is not None:
+            powers[m["name"]] = _format_power(m.get("power"))
 
     return RosterData(
         title=f"{event_label} — {session.preset.name}{team_suffix}{date_suffix}",
         zones=zones, subs=subs, paired_subs=paired_subs,
+        powers=powers, overrides=overrides,
     )

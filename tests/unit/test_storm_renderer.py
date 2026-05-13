@@ -205,3 +205,122 @@ class TestRosterFromSession:
         )
         data = sr.roster_from_session(sess)
         assert "Rulebringers" in data.title
+
+
+class TestRendererPillowMissing:
+    """Audit asked for explicit coverage of the `RuntimeError` path.
+    Pillow is installed in CI so the test mocks the import failure."""
+
+    def test_render_raises_runtime_error_when_pillow_missing(self):
+        import sys
+        from unittest.mock import patch
+        # Map PIL + every submodule we import inside render to None.
+        # Pillow's submodules are imported lazily in `render()`; patching
+        # `PIL` alone is insufficient because `from PIL import X` resolves
+        # via `sys.modules["PIL"].X`. Patch the parent + the leaves.
+        broken = {
+            "PIL": None,
+            "PIL.Image": None,
+            "PIL.ImageDraw": None,
+            "PIL.ImageFont": None,
+        }
+        with patch.dict(sys.modules, broken):
+            roster = sr.RosterData(title="t", zones=[])
+            with pytest.raises(RuntimeError, match="Pillow isn't installed"):
+                sr.render(roster)
+
+
+class TestRendererSurfacesPowerAndOverride:
+    """Audit Majors M6 + M7: the screenshot artifact lost the override
+    marker the embed surfaces AND dropped the power readout entirely.
+    `roster_from_session` now populates `powers` and `overrides`."""
+
+    def test_powers_populated_for_assigned_members(self):
+        import storm_roster_builder as srb
+        members = {
+            "1001": {"key": "1001", "name": "Alice", "discord_id": "1001",
+                     "power": 412_000_000, "not_on_discord": False},
+        }
+        preset = ss.PresetBuffer(
+            name="P", event_type="DS",
+            zones=[ss.ZoneRow(zone="Power Tower", max_players=4)],
+        )
+        sess = srb.RosterBuilderSession(
+            guild_id=1, user_id=42, event_type="DS", team="A",
+            preset=preset, members=members,
+            per_member_rules=[], power_band_rules=[],
+        )
+        sess.assignments["Power Tower"].append("1001")
+        data = sr.roster_from_session(sess)
+        # Power formatted via storm_strategy.format_power.
+        assert data.powers["Alice"] == "412M"
+
+    def test_overrides_populated_from_session(self):
+        import storm_roster_builder as srb
+        members = {
+            "1001": {"key": "1001", "name": "Alice", "discord_id": "1001",
+                     "power": 180_000_000, "not_on_discord": False},
+        }
+        preset = ss.PresetBuffer(
+            name="P", event_type="DS",
+            zones=[ss.ZoneRow(zone="Power Tower", max_players=4,
+                              min_power_a=300_000_000)],
+        )
+        sess = srb.RosterBuilderSession(
+            guild_id=1, user_id=42, event_type="DS", team="A",
+            preset=preset, members=members,
+            per_member_rules=[], power_band_rules=[],
+        )
+        sess.assignments["Power Tower"].append("1001")
+        sess.below_floor_overrides.add("1001")
+        data = sr.roster_from_session(sess)
+        assert "Alice" in data.overrides
+
+    def test_power_unknown_renders_as_unknown_label(self):
+        import storm_roster_builder as srb
+        members = {
+            "1001": {"key": "1001", "name": "Erin", "discord_id": "1001",
+                     "power": None, "not_on_discord": False},
+        }
+        preset = ss.PresetBuffer(
+            name="P", event_type="DS",
+            zones=[ss.ZoneRow(zone="Power Tower", max_players=4)],
+        )
+        sess = srb.RosterBuilderSession(
+            guild_id=1, user_id=42, event_type="DS", team="A",
+            preset=preset, members=members,
+            per_member_rules=[], power_band_rules=[],
+        )
+        sess.assignments["Power Tower"].append("1001")
+        data = sr.roster_from_session(sess)
+        # The sentinel makes it clear in the image, vs. dropping the
+        # readout entirely (which would let officers misread the slot
+        # as a known-power member).
+        assert data.powers["Erin"] == "power unknown"
+
+    def test_render_with_power_and_override_doesnt_crash(self):
+        roster = sr.RosterData(
+            title="t",
+            zones=[sr.RosterZone(
+                name="Power Tower", max_players=4,
+                members=["Alice", "Bob"],
+            )],
+            powers={"Alice": "412M", "Bob": "180M"},
+            overrides={"Bob"},
+        )
+        png = sr.render(roster)
+        assert png[:8] == b"\x89PNG\r\n\x1a\n"
+
+
+class TestSupportsSizeCached:
+    """Audit minor: `_supports_size` was called per-render. Now cached
+    so the probe doesn't fire on every click."""
+
+    def test_supports_size_cached_after_first_call(self):
+        # Reset the cache so the test isn't dependent on order.
+        sr._SUPPORTS_SIZE = None
+        first = sr._supports_size()
+        # After the first call the cache holds a bool.
+        assert sr._SUPPORTS_SIZE is not None
+        second = sr._supports_size()
+        assert first is second

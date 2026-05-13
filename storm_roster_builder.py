@@ -1531,22 +1531,44 @@ async def _render_and_attach(
     Pillow import lives inside the handler so the builder module
     doesn't pay the import cost unless render is actually invoked.
 
+    Defers immediately and runs the CPU-bound Pillow render in a
+    thread executor — without this, a 30-slot PNG encode would blow
+    the 3-second interaction token AND stall the gateway heartbeat
+    for every other guild while it runs. Same pattern the rest of
+    the storm flow uses for slow I/O (1.1.7 hotfix for /train).
+
     Failure modes:
-      * Pillow not installed → renderer raises; surface a one-line
-        ephemeral and a log warning. Officer continues with text-only.
+      * Pillow not installed → renderer raises `RuntimeError`; surface
+        a one-line ephemeral. Officer continues with text-only mail.
       * Other Pillow error → log + ephemeral "could not render."
     """
+    import asyncio
+
+    # Defer first so the encode + upload have time. `thinking=False`
+    # because the followup carries the file directly (no spinner UX).
+    try:
+        await inter.response.defer(ephemeral=True, thinking=False)
+    except discord.HTTPException as e:
+        logger.warning(
+            "[STORM RENDER] defer failed (guild=%s): %s",
+            session.guild_id, e,
+        )
+        # Interaction is probably dead — bail. No followup is reachable.
+        return
+
     try:
         import storm_renderer
         roster_data = storm_renderer.roster_from_session(session)
-        png_bytes = storm_renderer.render(roster_data)
+        # Pillow encode is CPU-bound; off the event loop so other
+        # guilds' heartbeat doesn't stall on a multi-second render.
+        png_bytes = await asyncio.to_thread(storm_renderer.render, roster_data)
     except RuntimeError as e:
         # Pillow missing — degrade gracefully.
         logger.warning(
             "[STORM RENDER] Pillow not available (guild=%s event=%s): %s",
             session.guild_id, session.event_type, e,
         )
-        await inter.response.send_message(
+        await inter.followup.send(
             "⚠️ Image render isn't available — the host is missing Pillow. "
             "Use the text-template mail in the meantime.",
             ephemeral=True,
@@ -1557,7 +1579,7 @@ async def _render_and_attach(
             "[STORM RENDER] failed for guild=%s event=%s: %s",
             session.guild_id, session.event_type, e,
         )
-        await inter.response.send_message(
+        await inter.followup.send(
             "⚠️ Couldn't render the roster image — see bot logs.",
             ephemeral=True,
         )
@@ -1570,7 +1592,7 @@ async def _render_and_attach(
         + ".png"
     )
     file = discord.File(io.BytesIO(png_bytes), filename=filename)
-    await inter.response.send_message(
+    await inter.followup.send(
         content="🖼️ Roster image attached:",
         file=file,
         ephemeral=True,

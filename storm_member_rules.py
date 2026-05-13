@@ -82,6 +82,8 @@ _SUBJECT_REQUIRED_MSG = (
 def _resolve_subject(
     member_user: discord.Member | None,
     member_name: str | None,
+    *,
+    guild: discord.Guild | None = None,
 ) -> tuple[str | None, str]:
     """Return `(subject_for_storage, display_name)` from the wizard's
     two-input shape.
@@ -90,6 +92,13 @@ def _resolve_subject(
     selected a bot — caller should reject with `_SUBJECT_REQUIRED_MSG`.
     `member_user` is preferred when supplied; the free-text
     `member_name` is the escape hatch for non-Discord roster rows.
+
+    Dedupe normalisation: if a free-text name matches a Discord member's
+    display name in `guild` (case-insensitive, bots excluded), the
+    subject is stored as that member's Discord ID instead of the typed
+    name. Without this, an officer could create two rules for the same
+    person — one via the picker (Discord ID) and one via the name —
+    that would both fire at apply time and double-effect.
 
     The bot-reject branch was added by the audit pass — Discord's
     Member picker can include bot accounts, and a rule saved against a
@@ -105,8 +114,34 @@ def _resolve_subject(
         return str(member_user.id), member_user.display_name
     if has_name:
         cleaned = member_name.strip()
+        if guild is not None:
+            match = _match_member_by_display_name(guild, cleaned)
+            if match is not None:
+                return str(match.id), match.display_name
         return cleaned, cleaned
     return None, ""
+
+
+def _match_member_by_display_name(
+    guild: discord.Guild, name: str,
+) -> discord.Member | None:
+    """Case-insensitive single-match lookup against `guild.members`.
+    Bots are excluded. Returns None when zero matches OR more than one
+    match — ambiguity stays in the typed-name form so the officer can
+    re-enter via the picker."""
+    target = name.strip().lower()
+    if not target:
+        return None
+    matches: list[discord.Member] = []
+    for m in getattr(guild, "members", []) or []:
+        if getattr(m, "bot", False):
+            continue
+        display = getattr(m, "display_name", "") or ""
+        if display.strip().lower() == target:
+            matches.append(m)
+            if len(matches) > 1:
+                return None  # ambiguous — don't normalize
+    return matches[0] if matches else None
 
 
 # ── Sheet I/O ────────────────────────────────────────────────────────────────
@@ -559,7 +594,9 @@ class _MemberRuleGroup(app_commands.Group):
                 ephemeral=True,
             )
             return
-        subject, display = _resolve_subject(member_user, member_name)
+        subject, display = _resolve_subject(
+            member_user, member_name, guild=interaction.guild,
+        )
         if subject is None:
             await interaction.response.send_message(
                 _SUBJECT_REQUIRED_MSG, ephemeral=True,
@@ -593,7 +630,9 @@ class _MemberRuleGroup(app_commands.Group):
     ):
         if not await _deny_if_not_leader(interaction):
             return
-        subject, display = _resolve_subject(member_user, member_name)
+        subject, display = _resolve_subject(
+            member_user, member_name, guild=interaction.guild,
+        )
         if subject is None:
             await interaction.response.send_message(
                 _SUBJECT_REQUIRED_MSG, ephemeral=True,
@@ -633,7 +672,9 @@ class _MemberRuleGroup(app_commands.Group):
     ):
         if not await _deny_if_not_leader(interaction):
             return
-        subject, display = _resolve_subject(member_user, member_name)
+        subject, display = _resolve_subject(
+            member_user, member_name, guild=interaction.guild,
+        )
         if subject is None:
             await interaction.response.send_message(
                 _SUBJECT_REQUIRED_MSG, ephemeral=True,

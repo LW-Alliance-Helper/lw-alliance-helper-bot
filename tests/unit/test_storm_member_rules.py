@@ -258,6 +258,74 @@ class TestSubjectResolution:
         assert subject is None
         assert display == ""
 
+    def test_typed_name_matches_discord_member_normalizes_to_id(self):
+        """If the officer types a name that matches a Discord member's
+        display name (case-insensitive), the subject is normalized to
+        the Discord ID. Without this, the same person can be referenced
+        by both forms — one rule via picker, one via name typo — and
+        both fire at apply time."""
+        from unittest.mock import MagicMock
+        m = MagicMock()
+        m.id = 12345
+        m.display_name = "Alice"
+        m.bot = False
+        guild = MagicMock()
+        guild.members = [m]
+        subject, display = smr._resolve_subject(None, "alice", guild=guild)
+        # Normalized to the Discord ID; display surfaces the canonical name.
+        assert subject == "12345"
+        assert display == "Alice"
+
+    def test_typed_name_no_guild_keeps_verbatim(self):
+        """Without a guild reference, the normalization is skipped —
+        sub-test paths that don't have access to the guild still work."""
+        subject, display = smr._resolve_subject(None, "Alice")
+        assert subject == "Alice"
+        assert display == "Alice"
+
+    def test_typed_name_no_match_keeps_verbatim(self):
+        """A name that doesn't match any Discord member stays as a
+        free-text non-Discord subject."""
+        from unittest.mock import MagicMock
+        m = MagicMock()
+        m.id = 12345
+        m.display_name = "Bob"
+        m.bot = False
+        guild = MagicMock()
+        guild.members = [m]
+        subject, display = smr._resolve_subject(None, "Carol", guild=guild)
+        assert subject == "Carol"
+        assert display == "Carol"
+
+    def test_typed_name_bot_match_keeps_verbatim(self):
+        """A name match against a bot is ignored — bots aren't real
+        alliance members."""
+        from unittest.mock import MagicMock
+        bot = MagicMock()
+        bot.id = 99
+        bot.display_name = "Alice"
+        bot.bot = True
+        guild = MagicMock()
+        guild.members = [bot]
+        subject, display = smr._resolve_subject(None, "Alice", guild=guild)
+        # Keeps the verbatim name; the bot doesn't claim the subject.
+        assert subject == "Alice"
+        assert display == "Alice"
+
+    def test_typed_name_ambiguous_match_keeps_verbatim(self):
+        """Two Discord members with the same display name → ambiguous;
+        leave as free-text so the officer can re-enter via the picker."""
+        from unittest.mock import MagicMock
+        m1, m2 = MagicMock(), MagicMock()
+        m1.id, m2.id = 1, 2
+        m1.display_name = m2.display_name = "Alice"
+        m1.bot = m2.bot = False
+        guild = MagicMock()
+        guild.members = [m1, m2]
+        subject, display = smr._resolve_subject(None, "Alice", guild=guild)
+        assert subject == "Alice"
+        assert display == "Alice"
+
 
 class TestDisplayNameResolution:
     """Discord-ID subjects resolve to the current display name when a

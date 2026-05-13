@@ -216,6 +216,9 @@ async def on_ready():
     if "storm_member_rules" not in bot.extensions:
         await bot.load_extension("storm_member_rules")
         print(f"[INFO] Storm Member Rules cog loaded")
+    if "storm_signup_post" not in bot.extensions:
+        await bot.load_extension("storm_signup_post")
+        print(f"[INFO] Storm Sign-Up Post cog loaded")
 
     # Sync slash commands globally so they work in any server. Commands
     # decorated with `guilds=[...]` are excluded from the global sync;

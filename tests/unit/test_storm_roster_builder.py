@@ -330,6 +330,140 @@ class TestRulePreApplication:
         # No zone assignments from a team rule.
         assert all(not v for v in session.assignments.values())
 
+    def test_unmatched_per_member_rule_surfaces_warning(self):
+        """A rule whose subject doesn't match any roster member used to
+        silently no-op — leadership had no signal their rule wasn't
+        firing. Now it surfaces a soft warning into roster_errors."""
+        rule_active = smr.Rule(
+            rule_type="per_member", subject="Alice",
+            sub_type="zone", value="Power Tower",
+        )
+        rule_stale = smr.Rule(
+            rule_type="per_member", subject="OldName",
+            sub_type="zone", value="Nuclear Silo",
+        )
+        session = _make_session(team="A", members={
+            "1001": {"key": "1001", "name": "Alice", "discord_id": "1001",
+                     "power": 412_000_000, "not_on_discord": False},
+        }, per_member_rules=[rule_active, rule_stale])
+        srb._apply_rules_to_session(session)
+        # Active rule still applies.
+        assert "1001" in session.assignments["Power Tower"]
+        # Stale rule surfaces a warning naming the unmatched subject.
+        assert any("OldName" in e for e in session.roster_errors)
+
+
+class TestPowerBandRuleConsumption:
+    """`power_band` Member Rules from #127 are now consumed in the
+    eligibility filter. Without this they were loaded onto the session
+    but never gated picker contents — entirely dead metadata."""
+
+    def test_band_lowers_effective_floor_for_named_zone(self):
+        # Preset floor for Power Tower (team A) = 300M. A band rule of
+        # "≥ 200M → Power Tower" should let Bob (230M) qualify.
+        band = smr.Rule(
+            rule_type="power_band", subject="200000000",
+            value="Power Tower", sub_type="",
+        )
+        session = _make_session(team="A", members={
+            "1001": {"key": "1001", "name": "Alice", "discord_id": "1001",
+                     "power": 412_000_000, "not_on_discord": False},
+            "1002": {"key": "1002", "name": "Bob",   "discord_id": "1002",
+                     "power": 230_000_000, "not_on_discord": False},
+        }, power_band_rules=[band])
+        eligible, below = srb._eligible_member_keys_for_zone(session, "Power Tower")
+        assert set(eligible) == {"1001", "1002"}
+        assert below == []
+
+    def test_band_does_not_affect_other_zones(self):
+        # Band targets Power Tower only — Nuclear Silo's floor unchanged.
+        band = smr.Rule(
+            rule_type="power_band", subject="100000000",
+            value="Power Tower", sub_type="",
+        )
+        session = _make_session(team="A", members={
+            "1003": {"key": "1003", "name": "Carol", "discord_id": "1003",
+                     "power": 180_000_000, "not_on_discord": False},
+        }, power_band_rules=[band])
+        # Carol (180M) is eligible for Power Tower (band lowered to 100M)…
+        eligible_pt, _ = srb._eligible_member_keys_for_zone(session, "Power Tower")
+        assert "1003" in eligible_pt
+        # …but NOT for Nuclear Silo (250M floor unchanged).
+        eligible_ns, below_ns = srb._eligible_member_keys_for_zone(session, "Nuclear Silo")
+        assert "1003" not in eligible_ns
+        assert "1003" in below_ns
+
+    def test_stricter_band_does_not_raise_floor(self):
+        # Preset floor 300M; band "≥ 400M → Power Tower" is stricter
+        # than preset. Effective floor is min(preset, band) = 300M,
+        # because bands are meant to GRANT eligibility, not deny it.
+        band = smr.Rule(
+            rule_type="power_band", subject="400000000",
+            value="Power Tower", sub_type="",
+        )
+        session = _make_session(team="A", members={
+            "1001": {"key": "1001", "name": "Alice", "discord_id": "1001",
+                     "power": 350_000_000, "not_on_discord": False},
+        }, power_band_rules=[band])
+        eligible, below = srb._eligible_member_keys_for_zone(session, "Power Tower")
+        # Alice (350M, above preset 300M) stays eligible.
+        assert eligible == ["1001"]
+        assert below == []
+
+    def test_multiple_bands_use_lowest_threshold(self):
+        # Two bands target the same zone; the LOWEST threshold wins.
+        bands = [
+            smr.Rule(rule_type="power_band", subject="250000000",
+                     value="Power Tower", sub_type=""),
+            smr.Rule(rule_type="power_band", subject="150000000",
+                     value="Power Tower", sub_type=""),
+        ]
+        session = _make_session(team="A", members={
+            "1003": {"key": "1003", "name": "Carol", "discord_id": "1003",
+                     "power": 180_000_000, "not_on_discord": False},
+        }, power_band_rules=bands)
+        eligible, _ = srb._eligible_member_keys_for_zone(session, "Power Tower")
+        # 180M >= 150M (lower band) → eligible.
+        assert "1003" in eligible
+
+    def test_band_zone_match_is_case_insensitive(self):
+        band = smr.Rule(
+            rule_type="power_band", subject="100000000",
+            value="POWER TOWER", sub_type="",
+        )
+        session = _make_session(team="A", members={
+            "1003": {"key": "1003", "name": "Carol", "discord_id": "1003",
+                     "power": 150_000_000, "not_on_discord": False},
+        }, power_band_rules=[band])
+        eligible, _ = srb._eligible_member_keys_for_zone(session, "Power Tower")
+        assert "1003" in eligible
+
+    def test_garbage_band_threshold_ignored(self):
+        # A power_band row with a non-integer Subject must not crash;
+        # `_effective_floor_for_zone` skips it.
+        band = smr.Rule(
+            rule_type="power_band", subject="not_a_number",
+            value="Power Tower", sub_type="",
+        )
+        session = _make_session(team="A", members={
+            "1003": {"key": "1003", "name": "Carol", "discord_id": "1003",
+                     "power": 180_000_000, "not_on_discord": False},
+        }, power_band_rules=[band])
+        eligible, below = srb._eligible_member_keys_for_zone(session, "Power Tower")
+        # Carol at 180M still below the 300M preset floor — band ignored.
+        assert "1003" not in eligible
+        assert "1003" in below
+
+    def test_band_relaxation_surfaced_in_embed(self):
+        band = smr.Rule(
+            rule_type="power_band", subject="200000000",
+            value="Power Tower", sub_type="",
+        )
+        session = _make_session(team="A", power_band_rules=[band])
+        session.selected_zone = "Power Tower"
+        embed = srb._render_builder_embed(session)
+        assert "relaxed by power_band rule" in embed.description
+
 
 class TestEmbedRendering:
     def test_renders_team_label_for_ds(self):

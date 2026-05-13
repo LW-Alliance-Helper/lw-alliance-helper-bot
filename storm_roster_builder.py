@@ -268,7 +268,16 @@ class RosterBuilderSession:
 
 def _apply_rules_to_session(session: RosterBuilderSession) -> None:
     """Pre-assign members based on Member Rules before the officer
-    starts manual work. Only fires at session open."""
+    starts manual work. Only fires at session open.
+
+    Surfaces a soft warning into `session.roster_errors` for per_member
+    rules whose subject doesn't match any roster row — usually a member
+    rename between rule creation and apply. Without this warning the
+    rule silently no-ops and leadership has no idea why their rule isn't
+    firing.
+    """
+    unmatched_subjects: list[str] = []
+
     # per_member zone rules — pin a specific member to a specific zone
     # if they exist on the roster.
     for rule in session.per_member_rules:
@@ -282,6 +291,8 @@ def _apply_rules_to_session(session: RosterBuilderSession) -> None:
                 match_key = k
                 break
         if match_key is None:
+            if subject and subject not in unmatched_subjects:
+                unmatched_subjects.append(subject)
             continue
         zone = rule.value.strip()
         if not session.preset.find_zone(zone):
@@ -292,6 +303,16 @@ def _apply_rules_to_session(session: RosterBuilderSession) -> None:
         if match_key in session.assigned_member_keys():
             continue
         session.assignments[zone].append(match_key)
+
+    # Surface unmatched per_member rules so leadership knows to clean
+    # them up. Cap the list to keep the embed legible.
+    if unmatched_subjects:
+        preview = ", ".join(unmatched_subjects[:5])
+        extra = f" (+{len(unmatched_subjects) - 5} more)" if len(unmatched_subjects) > 5 else ""
+        session.roster_errors.append(
+            f"per_member rule(s) reference roster names that aren't in the "
+            f"current roster — rename or remove them: {preview}{extra}"
+        )
 
 
 # ── Embed rendering ──────────────────────────────────────────────────────────
@@ -372,12 +393,23 @@ def _render_builder_embed(session: RosterBuilderSession) -> discord.Embed:
 
     selected = session.selected_zone
     if selected:
-        floor = session.floor_for_zone(selected)
+        preset_floor = session.floor_for_zone(selected)
+        effective_floor = _effective_floor_for_zone(session, selected)
         from storm_strategy import format_power
-        lines.append(
-            f"🎯 **Active zone:** **{selected}** — floor "
-            f"**{format_power(floor) if floor else '(none)'}**"
-        )
+        if effective_floor != preset_floor:
+            # A power_band Member Rule lowered the effective floor for
+            # this zone — surface both so leadership can tell at a
+            # glance which rule is in play.
+            lines.append(
+                f"🎯 **Active zone:** **{selected}** — floor "
+                f"**{format_power(effective_floor) if effective_floor else '(none)'}** "
+                f"_(preset floor {format_power(preset_floor)} relaxed by power_band rule)_"
+            )
+        else:
+            lines.append(
+                f"🎯 **Active zone:** **{selected}** — floor "
+                f"**{format_power(effective_floor) if effective_floor else '(none)'}**"
+            )
         if session.show_below_floor:
             lines.append("👁️ Below-floor members visible in the picker.")
     has_unknown = any(m.get("power") is None for m in session.members.values())
@@ -404,14 +436,53 @@ def _render_builder_embed(session: RosterBuilderSession) -> discord.Embed:
 # ── Eligibility helpers ──────────────────────────────────────────────────────
 
 
+def _effective_floor_for_zone(
+    session: RosterBuilderSession, zone_name: str,
+) -> int:
+    """The power threshold a member must meet to be eligible for this
+    zone, accounting for both the preset's per-team floor AND any
+    `power_band` Member Rules that apply.
+
+    Semantics: a `power_band` rule of "≥ X → Zone Y" *grants*
+    eligibility to members at or above X for Zone Y. If multiple bands
+    apply to the same zone, the LOWEST threshold wins (most permissive
+    is what leadership intended when adding it). If any band's
+    threshold is lower than the preset's floor, the band effectively
+    lowers the floor for that zone. The reverse — a band stricter than
+    the preset — has no effect, because the preset floor is already
+    the gate.
+    """
+    preset_floor = session.floor_for_zone(zone_name)
+    band_floor: Optional[int] = None
+    target = zone_name.strip().lower()
+    for band in session.power_band_rules:
+        if band.value.strip().lower() != target:
+            continue
+        try:
+            threshold = int(band.subject)
+        except (TypeError, ValueError):
+            continue
+        if band_floor is None or threshold < band_floor:
+            band_floor = threshold
+    if band_floor is None:
+        return preset_floor
+    return min(preset_floor, band_floor)
+
+
 def _eligible_member_keys_for_zone(
     session: RosterBuilderSession, zone_name: str,
 ) -> tuple[list[str], list[str]]:
     """Return (eligible_keys, below_floor_keys). Both exclude already-
     assigned members. `eligible` excludes power-unknown unless
     `show_below_floor` is on; below-floor is included only when the
-    override toggle is on."""
-    floor = session.floor_for_zone(zone_name)
+    override toggle is on.
+
+    The effective floor is the lower of (preset floor, lowest matching
+    power_band rule threshold) — so power_band rules can grant
+    eligibility paths that the preset alone wouldn't permit. See
+    `_effective_floor_for_zone` for the rationale.
+    """
+    floor = _effective_floor_for_zone(session, zone_name)
     assigned = session.assigned_member_keys()
     eligible: list[str] = []
     below: list[str] = []
@@ -1135,7 +1206,10 @@ async def open_roster_builder(
         power_band_rules=power_band,
         event_date=event_date,
     )
-    session.roster_errors = roster_errors
+    # Seed errors from the roster read FIRST so _apply_rules_to_session
+    # can append its own (e.g. unmatched per_member subjects) without
+    # being clobbered.
+    session.roster_errors = list(roster_errors)
     _apply_rules_to_session(session)
 
     view = RosterBuilderView(session)

@@ -408,6 +408,32 @@ def init_db():
                 PRIMARY KEY (guild_id, event_type, event_date)
             )
         """)
+
+        # storm_signup_history — append-only audit log for storm sign-up
+        # votes. `storm_signups` UPSERTs on (guild_id, event_type,
+        # event_date, target_member_id) so the prior vote, the prior
+        # voter (officer for on-behalf, self otherwise), and the prior
+        # timestamp are overwritten. The audit-trail requirement in #38
+        # ("on-behalf vote logs the casting officer's Discord ID") means
+        # the bot must be able to reconstruct who recorded what and when
+        # — keep every recorded vote here, not just the current one.
+        conn.execute("""
+            CREATE TABLE IF NOT EXISTS storm_signup_history (
+                id                INTEGER PRIMARY KEY AUTOINCREMENT,
+                guild_id          INTEGER NOT NULL,
+                event_type        TEXT    NOT NULL,
+                event_date        TEXT    NOT NULL,
+                target_member_id  TEXT    NOT NULL,
+                voter_user_id     INTEGER NOT NULL,
+                vote              TEXT    NOT NULL,
+                is_on_behalf      INTEGER NOT NULL DEFAULT 0,
+                voted_at          TEXT    NOT NULL
+            )
+        """)
+        conn.execute(
+            "CREATE INDEX IF NOT EXISTS idx_storm_signup_history_event "
+            "ON storm_signup_history (guild_id, event_type, event_date)"
+        )
         conn.commit()
 
         # shiny_task_servers — global table of every Last War server
@@ -1393,6 +1419,14 @@ def save_structured_storm_config(
 _VALID_STORM_VOTES = {"a", "b", "either", "cannot"}
 
 
+def _utcnow_iso() -> str:
+    """Tz-aware UTC timestamp, ISO 8601 seconds precision, with `+00:00`
+    suffix. Replaces the deprecated naive `datetime.utcnow()` so consumers
+    can't accidentally interpret stored timestamps as local time."""
+    import datetime as _dt
+    return _dt.datetime.now(_dt.timezone.utc).isoformat(timespec="seconds")
+
+
 def record_storm_vote(
     guild_id: int,
     event_type: str,
@@ -1405,14 +1439,15 @@ def record_storm_vote(
     channel_id: int = 0,
     message_id: int = 0,
 ) -> bool:
-    """UPSERT a vote into storm_signups. Re-votes on the same (guild_id,
-    event_type, event_date, target_member_id) replace the prior row and
-    bump `voted_at`. Returns True if recorded, False if the vote value
-    is invalid."""
-    import datetime as _dt
+    """UPSERT a vote into storm_signups and append the same vote to the
+    append-only `storm_signup_history` table for audit. Re-votes on the
+    same (guild_id, event_type, event_date, target_member_id) replace
+    the prior row in `storm_signups` but preserve every prior vote in
+    `storm_signup_history`. Returns True if recorded, False if the vote
+    value is invalid."""
     if vote not in _VALID_STORM_VOTES:
         return False
-    voted_at = _dt.datetime.utcnow().isoformat(timespec="seconds")
+    voted_at = _utcnow_iso()
     with _get_conn() as conn:
         conn.execute(
             "INSERT INTO storm_signups "
@@ -1433,8 +1468,54 @@ def record_storm_vote(
                 int(channel_id or 0), int(message_id or 0), voted_at,
             ),
         )
+        conn.execute(
+            "INSERT INTO storm_signup_history "
+            "(guild_id, event_type, event_date, target_member_id, "
+            " voter_user_id, vote, is_on_behalf, voted_at) "
+            "VALUES (?, ?, ?, ?, ?, ?, ?, ?)",
+            (
+                int(guild_id), event_type, event_date, target_member_id,
+                int(voter_user_id), vote, 1 if is_on_behalf else 0,
+                voted_at,
+            ),
+        )
         conn.commit()
     return True
+
+
+def get_storm_signup_history(
+    guild_id: int, event_type: str, event_date: str,
+    target_member_id: str | None = None,
+) -> list[dict]:
+    """Return every recorded vote for an event (or a single target),
+    newest first. Lets the officer view surface "Alice voted A at T1,
+    then officer X overrode to B at T2" so re-votes don't lose context."""
+    with _get_conn() as conn:
+        if target_member_id is None:
+            rows = conn.execute(
+                "SELECT id, guild_id, event_type, event_date, target_member_id, "
+                "       voter_user_id, vote, is_on_behalf, voted_at "
+                "FROM storm_signup_history "
+                "WHERE guild_id = ? AND event_type = ? AND event_date = ? "
+                "ORDER BY id DESC",
+                (int(guild_id), event_type, event_date),
+            ).fetchall()
+        else:
+            rows = conn.execute(
+                "SELECT id, guild_id, event_type, event_date, target_member_id, "
+                "       voter_user_id, vote, is_on_behalf, voted_at "
+                "FROM storm_signup_history "
+                "WHERE guild_id = ? AND event_type = ? AND event_date = ? "
+                "  AND target_member_id = ? "
+                "ORDER BY id DESC",
+                (int(guild_id), event_type, event_date, target_member_id),
+            ).fetchall()
+    out = []
+    for r in rows:
+        d = dict(r)
+        d["is_on_behalf"] = bool(d.get("is_on_behalf"))
+        out.append(d)
+    return out
 
 
 def get_storm_signups(guild_id: int, event_type: str, event_date: str) -> list[dict]:
@@ -1489,8 +1570,7 @@ def record_storm_registration_post(
     (guild_id, event_type, event_date) — re-running for the same event
     is a no-op. Returns True if a new row was inserted, False if the
     event date already has a post."""
-    import datetime as _dt
-    posted_at = _dt.datetime.utcnow().isoformat(timespec="seconds")
+    posted_at = _utcnow_iso()
     with _get_conn() as conn:
         cur = conn.execute(
             "INSERT OR IGNORE INTO storm_registration_posts "
@@ -1521,9 +1601,14 @@ def has_registration_post(guild_id: int, event_type: str, event_date: str) -> bo
 def get_recent_storm_registration_posts(within_days: int = 14) -> list[dict]:
     """Return all registration posts whose event_date is within the last
     `within_days` days. Used by the bot startup hook to re-register the
-    SignupView for messages that are still "live"."""
+    SignupView for messages that are still "live".
+
+    Bounded against UTC today so the Railway host's local clock can't
+    drift the cutoff out from under non-UTC alliances.
+    """
     import datetime as _dt
-    cutoff = (_dt.date.today() - _dt.timedelta(days=within_days)).isoformat()
+    today_utc = _dt.datetime.now(_dt.timezone.utc).date()
+    cutoff = (today_utc - _dt.timedelta(days=within_days)).isoformat()
     with _get_conn() as conn:
         rows = conn.execute(
             "SELECT guild_id, event_type, event_date, channel_id, message_id, "

@@ -118,8 +118,14 @@ async def _handle_signup_click(interaction: discord.Interaction, vote_code: str)
     """Shared click handler — records the vote in SQLite, mirrors to the
     alliance's `signups_tab`, and acks the user ephemerally. Robust to
     Sheet failures: SQLite is canonical; Sheet failure logs but does not
-    roll back."""
+    roll back.
+
+    Defers before any storage I/O so a slow SQLite write or Sheets API
+    call can't blow the 3-second initial-response token. Same pattern
+    landed in 1.1.7 for the /train modal hotfix.
+    """
     import config
+    import premium
 
     parsed = parse_custom_id(interaction.data.get("custom_id", ""))
     if not parsed:
@@ -162,6 +168,34 @@ async def _handle_signup_click(interaction: discord.Interaction, vote_code: str)
             pass
         return
 
+    # Defer first — every storage hop below is slower than the 3-second
+    # interaction token allows under Railway disk contention or Sheets
+    # rate limiting.
+    try:
+        await interaction.response.defer(ephemeral=True, thinking=False)
+    except discord.HTTPException as e:
+        logger.warning(
+            "[STORM SIGNUP] defer failed (guild=%s vote=%s): %s",
+            guild_id, vote, e,
+        )
+        # If defer fails the interaction is probably already dead;
+        # press on anyway so the vote at least lands in SQLite.
+
+    # Defense-in-depth premium gate. The post-creation path (#124) already
+    # checks Premium + structured_flow_enabled, but a stale persistent
+    # custom_id from a guild that has since downgraded would otherwise
+    # silently keep recording votes here.
+    if not await premium.is_premium(guild_id, bot=interaction.client):
+        try:
+            await interaction.followup.send(
+                "⚠️ This sign-up post is no longer active because the "
+                "structured roster flow has been disabled for this server.",
+                ephemeral=True,
+            )
+        except discord.HTTPException:
+            pass
+        return
+
     voter_id      = interaction.user.id
     target_id     = str(voter_id)  # self-vote
     channel_id    = interaction.channel_id or 0
@@ -181,7 +215,7 @@ async def _handle_signup_click(interaction: discord.Interaction, vote_code: str)
     # even if Sheets is rate-limited or slow.
     label = _VOTE_CONFIRMATIONS.get(vote, vote)
     try:
-        await interaction.response.send_message(
+        await interaction.followup.send(
             f"✅ Vote recorded: **{label}**. You can change your vote any time before the event.",
             ephemeral=True,
         )
@@ -206,7 +240,7 @@ async def _handle_signup_click(interaction: discord.Interaction, vote_code: str)
         logger.warning(
             "[STORM SIGNUP] Sheet mirror failed for guild=%s event=%s/%s voter=%s: %s",
             guild_id, event_type, event_date, voter_id,
-            config.describe_sheet_error(e) if hasattr(config, "describe_sheet_error") else e,
+            config.describe_sheet_error(e),
         )
 
 
@@ -243,14 +277,14 @@ def _mirror_vote_to_sheet(
     except Exception:
         # Tab missing → create it with a header row. Alliance can rename
         # the tab later via setup; the bot will follow the renamed config.
-        ws = sh.add_worksheet(title=tab_name, rows=1000, cols=8)
+        ws = sh.add_worksheet(title=tab_name, rows=1000, cols=6)
         ws.append_row(
             ["Event Date", "Member", "Vote", "Voter Discord ID",
-             "On Behalf?", "Voted At (UTC)", "", ""],
+             "On Behalf?", "Voted At (UTC)"],
             value_input_option="RAW",
         )
 
-    voted_at = _dt.datetime.utcnow().isoformat(timespec="seconds")
+    voted_at = _dt.datetime.now(_dt.timezone.utc).isoformat(timespec="seconds")
     ws.append_row(
         [
             event_date,

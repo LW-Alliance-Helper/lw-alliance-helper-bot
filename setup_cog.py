@@ -4552,9 +4552,13 @@ async def run_storm_setup(interaction: discord.Interaction, bot, event_type: str
             return None
         return reply.content.strip()[:max_chars]
 
-    from config import get_storm_config, get_config, has_storm_config
+    from config import (
+        get_storm_config, get_config, has_storm_config,
+        get_structured_storm_config,
+    )
     from defaults import DEFAULT_DS_TEMPLATE, DEFAULT_CS_TEMPLATE
-    current   = get_storm_config(guild_id, event_type)
+    current            = get_storm_config(guild_id, event_type)
+    current_structured = get_structured_storm_config(guild_id, event_type)
     guild_cfg = get_config(guild_id)
     timezone  = guild_cfg.timezone if guild_cfg and guild_cfg.timezone else "America/New_York"
     tz_label  = TIMEZONE_LABELS.get(timezone, timezone)
@@ -4587,6 +4591,10 @@ async def run_storm_setup(interaction: discord.Interaction, bot, event_type: str
     # ── If already configured, show summary and offer edit or cancel ─────────
     if storm_already_configured:
         templates = current.get("templates") or []
+        structured_status = (
+            "✅ Enabled" if current_structured.get("structured_flow_enabled")
+            else "❌ Off (preset tabs available on free tier)"
+        )
         fields = [
             ("Sheet Tab",    current.get("tab_name") or "*not set*"),
             ("Log Channel",  f"<#{saved_log_ch}>" if saved_log_ch else "*not set*"),
@@ -4600,6 +4608,7 @@ async def run_storm_setup(interaction: discord.Interaction, bot, event_type: str
                 "Reminder DM",
                 "Custom" if (current.get("dm_reminder_message") or "").strip() else "Default",
             ),
+            ("Structured Roster Flow", structured_status),
         ]
         emoji = "⚔️" if event_type == "DS" else "🏜️"
         proceed = await ask_proceed_with_existing_config(
@@ -4860,6 +4869,17 @@ async def run_storm_setup(interaction: discord.Interaction, bot, event_type: str
     if participation_cfg is None:
         return  # cancelled / timed out
 
+    # ── Structured roster flow (#38 + #54) — Premium opt-in + preset tabs ────
+    structured_cfg = await _run_structured_flow_setup_step(
+        channel, bot, user, cancel_event,
+        guild_id=guild_id, event_type=event_type, label=label, cmd_name=cmd_name,
+        is_premium_flag=is_premium_flag,
+        current=current, current_structured=current_structured,
+        interaction_guild=interaction.guild,
+    )
+    if structured_cfg is None:
+        return  # cancelled / timed out
+
     # ── Step 7: Reminder DM body (💎 Premium) ─────────────────────────────────
     # The body of the DM that fires when leadership runs
     # /[event]_remind. Stored per (guild_id, event_type) so DS and CS
@@ -4890,7 +4910,10 @@ async def run_storm_setup(interaction: discord.Interaction, bot, event_type: str
     dm_reminder_message = "" if remind_dm == default_remind_dm else remind_dm
 
     # ── Save ───────────────────────────────────────────────────────────────────
-    from config import save_storm_config, save_participation_config, update_config_field
+    from config import (
+        save_storm_config, save_participation_config, update_config_field,
+        save_structured_storm_config,
+    )
     if template_a:
         save_storm_config(guild_id, f"{event_type}_A", tab_name, template_a,
                           timezone, log_channel_id,
@@ -4924,6 +4947,23 @@ async def run_storm_setup(interaction: discord.Interaction, bot, event_type: str
     else:
         update_config_field(guild_id, "cs_log_channel_id", log_channel_id)
 
+    # Persist the structured-flow config (#38 + #54) against the (guild,
+    # event_type) row save_storm_config just created/updated above. The
+    # registration-post schedule is set in #124; left blank here.
+    save_structured_storm_config(
+        guild_id, event_type,
+        structured_flow_enabled=structured_cfg["structured_flow_enabled"],
+        power_column_name      =structured_cfg["power_column_name"],
+        sub_mode               =structured_cfg["sub_mode"],
+        signup_channel_id      =structured_cfg["signup_channel_id"],
+        signup_schedule_cron   =structured_cfg.get("signup_schedule_cron", ""),
+        signups_tab            =structured_cfg["signups_tab"],
+        rosters_tab            =structured_cfg["rosters_tab"],
+        attendance_tab         =structured_cfg["attendance_tab"],
+        strategies_tab         =structured_cfg["strategies_tab"],
+        member_rules_tab       =structured_cfg["member_rules_tab"],
+    )
+
     embed = discord.Embed(title=f"✅ {label} Configured", color=discord.Color.green())
     embed.add_field(name="Sheet Tab",    value=tab_name, inline=True)
     embed.add_field(name="Teams",        value={"both": "A & B", "A": "A only", "B": "B only"}[teams], inline=True)
@@ -4940,6 +4980,25 @@ async def run_storm_setup(interaction: discord.Interaction, bot, event_type: str
         )
     else:
         embed.add_field(name="Participation Tracking", value="❌ Disabled", inline=False)
+    if structured_cfg["structured_flow_enabled"]:
+        embed.add_field(
+            name="Structured Roster Flow",
+            value=(
+                f"✅ Enabled · Power column: `{structured_cfg['power_column_name'] or '*not set*'}` · "
+                f"Sub mode: `{structured_cfg['sub_mode']}` · "
+                f"Sign-up channel: <#{structured_cfg['signup_channel_id']}>"
+                if structured_cfg["signup_channel_id"] else
+                f"✅ Enabled · Power column: `{structured_cfg['power_column_name'] or '*not set*'}` · "
+                f"Sub mode: `{structured_cfg['sub_mode']}`"
+            ),
+            inline=False,
+        )
+    else:
+        embed.add_field(
+            name="Structured Roster Flow",
+            value=f"❌ Disabled · Preset tabs: `{structured_cfg['strategies_tab']}` / `{structured_cfg['member_rules_tab']}`",
+            inline=False,
+        )
     if template_a:
         embed.add_field(name="Template A Preview",
                         value=f"```{template_a[:150]}{'...' if len(template_a) > 150 else ''}```",
@@ -5277,6 +5336,239 @@ async def _run_storm_participation_step(
         "roster_alias_col": roster_alias_col,
         "roster_start_row": roster_start_row,
     }
+
+
+# ── Structured storm flow setup sub-flow (#38 + #54) ─────────────────────────
+
+async def _run_structured_flow_setup_step(
+    channel, bot, user, cancel_event, *,
+    guild_id: int, event_type: str, label: str, cmd_name: str,
+    is_premium_flag: bool, current: dict, current_structured: dict,
+    interaction_guild,
+) -> dict | None:
+    """
+    Final block of /setup_desertstorm and /setup_canyonstorm. Walks
+    leadership through enabling the structured roster flow (Premium, #38)
+    and / or configuring the strategy preset + member rules tabs (free,
+    #54). Returns a dict shaped like save_structured_storm_config's
+    kwargs, or None if the user cancelled or timed out.
+
+    Branching:
+      * Premium + opted-in: full config (power column, sub mode, signup
+        channel, all 5 tab names).
+      * Premium without opt-in / free tier: preset library tab names only
+        (strategies_tab + member_rules_tab). Other fields keep their
+        current values so nothing gets cleared by accident.
+
+    The registration-post schedule UI is deferred to the registration
+    post sub-issue — this sub-flow leaves `signup_schedule_cron`
+    untouched.
+    """
+    import wizard_registry
+
+    # Build the result on top of the current saved values so that
+    # opting *out* of the structured flow doesn't clear previously
+    # configured fields (e.g. an alliance that opted out for one week
+    # shouldn't lose its preset tab names).
+    result = dict(current_structured)
+    # Force-coerce to the keys save_structured_storm_config expects.
+    result.setdefault("structured_flow_enabled", False)
+    result.setdefault("power_column_name", "")
+    result.setdefault("sub_mode", "pool")
+    result.setdefault("signup_channel_id", 0)
+    result.setdefault("signup_schedule_cron", "")
+    for tab in ("signups_tab", "rosters_tab", "attendance_tab",
+                "strategies_tab", "member_rules_tab"):
+        result.setdefault(tab, "")
+
+    cmd_short = cmd_name.replace("setup_", "")
+
+    # ── Premium opt-in question ────────────────────────────────────────────
+    structured_opted_in = False
+    if is_premium_flag:
+        await channel.send(
+            f"**Structured Roster Flow (💎 Premium)**\n"
+            f"The structured flow auto-posts a Discord sign-up poll, captures "
+            f"votes per member, and gives leadership a roster builder that "
+            f"filters members by power for each zone. Replaces the text-template "
+            f"draft for {label} when enabled. You can leave this off and still "
+            f"use the strategy preset library on the free tier."
+        )
+        enable_view = YesNoView()
+        await channel.send(
+            f"Turn on the structured flow for {label}?",
+            view=enable_view,
+        )
+        await wait_view_or_cancel(enable_view, cancel_event)
+        if getattr(enable_view, "cancelled", False):
+            return None
+        if enable_view.selected is None:
+            await channel.send(f"⏰ Timed out. Run `/{cmd_name}` to start again.")
+            return None
+        structured_opted_in = bool(enable_view.selected)
+    result["structured_flow_enabled"] = structured_opted_in
+
+    # ── Premium + opted-in: full config ────────────────────────────────────
+    if structured_opted_in:
+        # Power metric column
+        await channel.send(
+            "**Power Metric Column**\n"
+            "Which column header on your roster Sheet stores the power value "
+            f"the bot should use to gate {label} zone eligibility? "
+            "Examples: `1st Squad Power`, `Total Power`, `FC Power`.\n\n"
+            "Type the exact header text from your Sheet."
+        )
+        def _check(m):
+            return m.author == user and m.channel == channel
+        try:
+            reply = await wizard_registry.wait_or_cancel(
+                bot.wait_for("message", check=_check, timeout=300),
+                cancel_event,
+            )
+        except Exception:
+            reply = None
+        if reply is None:
+            if cancel_event.is_set():
+                return None
+            await channel.send(f"⏰ Timed out. Run `/{cmd_name}` to start again.")
+            return None
+        result["power_column_name"] = reply.content.strip()[:80]
+
+        # Sub mode
+        class SubModeView(discord.ui.View):
+            def __init__(self, current_mode: str):
+                super().__init__(timeout=120)
+                self.selected = None
+                self.cancelled = False
+                pool_style = (
+                    discord.ButtonStyle.success if current_mode == "pool"
+                    else discord.ButtonStyle.primary
+                )
+                paired_style = (
+                    discord.ButtonStyle.success if current_mode == "paired"
+                    else discord.ButtonStyle.secondary
+                )
+                pool_label = "✅ Pool" if current_mode == "pool" else "Pool — flat sub list"
+                paired_label = "✅ Paired" if current_mode == "paired" else "Paired — primary↔sub pairs"
+
+                pool_btn = discord.ui.Button(label=pool_label, style=pool_style)
+                paired_btn = discord.ui.Button(label=paired_label, style=paired_style)
+
+                async def _pool(inter):
+                    self.selected = "pool"
+                    for item in self.children: item.disabled = True
+                    await wizard_registry.safe_edit_response(
+                        inter, content="✅ Sub mode: **Pool**", view=self
+                    )
+                    self.stop()
+
+                async def _paired(inter):
+                    self.selected = "paired"
+                    for item in self.children: item.disabled = True
+                    await wizard_registry.safe_edit_response(
+                        inter, content="✅ Sub mode: **Paired**", view=self
+                    )
+                    self.stop()
+
+                pool_btn.callback = _pool
+                paired_btn.callback = _paired
+                self.add_item(pool_btn)
+                self.add_item(paired_btn)
+
+        sub_view = SubModeView(result.get("sub_mode") or "pool")
+        await channel.send(
+            "**Sub Mode**\n"
+            "How should subs be tracked when leadership builds a roster?\n"
+            "• **Pool** — flat list of subs; any sub can cover any primary no-show.\n"
+            "• **Paired** — each primary has a specific sub assigned in advance.",
+            view=sub_view,
+        )
+        await wait_view_or_cancel(sub_view, cancel_event)
+        if sub_view.cancelled:
+            return None
+        if sub_view.selected is None:
+            await channel.send(f"⏰ Timed out. Run `/{cmd_name}` to start again.")
+            return None
+        result["sub_mode"] = sub_view.selected
+
+        # Registration post channel
+        signup_ch_view = ChannelSelectStep(
+            f"Select the channel where {label} sign-up polls post...",
+            suggested_name=f"{cmd_short.replace('_', '-')}-signups",
+            include_threads=True,
+            guild=interaction_guild,
+            current_id=result.get("signup_channel_id") or 0,
+        )
+        if signup_ch_view.is_current_stale:
+            await channel.send(
+                f"⚠️ Your previously configured {label} sign-up channel no longer "
+                "exists. Pick a new one below."
+            )
+        await channel.send(
+            f"**{label} Sign-Up Channel**\n"
+            "The bot will auto-post a sign-up poll here each week. Members click "
+            "buttons to register their availability; leadership opens the officer "
+            f"view via `/storm_signups`.",
+            view=signup_ch_view,
+        )
+        await wait_view_or_cancel(signup_ch_view, cancel_event)
+        if signup_ch_view.cancelled:
+            return None
+        if not signup_ch_view.confirmed:
+            await channel.send(f"⏰ Timed out. Run `/{cmd_name}` to start again.")
+            return None
+        result["signup_channel_id"] = signup_ch_view.selected_channel.id
+
+        # Sign-ups / rosters / attendance tab names — Premium only
+        for tab_key, label_text in (
+            ("signups_tab",    "Sign-Ups"),
+            ("rosters_tab",    "Rosters"),
+            ("attendance_tab", "Attendance"),
+        ):
+            from config import default_structured_tab
+            tab_default = default_structured_tab(event_type, tab_key)
+            picked = await ask_keep_or_change(
+                channel,
+                f"**{label_text} Tab**\n"
+                f"Which Google Sheet tab should the bot use for {label} "
+                f"{label_text.lower()}? The bot manages the structure — "
+                f"just make sure the tab exists.",
+                default=tab_default,
+                current=result.get(tab_key, ""),
+                modal_title=f"{label_text} Tab Name",
+                modal_label="Tab name",
+                timeout_cmd=cmd_name,
+                cancel_event=cancel_event,
+            )
+            if picked is None:
+                return None
+            result[tab_key] = picked
+
+    # ── Always-ask: preset library + member rules tab names (free + Premium) ──
+    from config import default_structured_tab
+    for tab_key, label_text in (
+        ("strategies_tab",   "Strategy Presets"),
+        ("member_rules_tab", "Member Rules"),
+    ):
+        tab_default = default_structured_tab(event_type, tab_key)
+        picked = await ask_keep_or_change(
+            channel,
+            f"**{label_text} Tab**\n"
+            f"Which Google Sheet tab should store {label} {label_text.lower()}? "
+            f"The bot creates and maintains this tab — leave the default if you "
+            f"don't have a preference.",
+            default=tab_default,
+            current=result.get(tab_key, ""),
+            modal_title=f"{label_text} Tab Name",
+            modal_label="Tab name",
+            timeout_cmd=cmd_name,
+            cancel_event=cancel_event,
+        )
+        if picked is None:
+            return None
+        result[tab_key] = picked
+
+    return result
 
 
 def _col_letter_to_index(letter: str) -> int:

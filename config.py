@@ -272,16 +272,27 @@ def init_db():
         # Supports `{name}` placeholder.
         conn.execute("""
             CREATE TABLE IF NOT EXISTS guild_storm_config (
-                guild_id             INTEGER NOT NULL,
-                event_type           TEXT    NOT NULL,
-                tab_name             TEXT    DEFAULT 'DS Assignments',
-                mail_template        TEXT    DEFAULT '',
-                templates_json       TEXT    DEFAULT '[]',
-                default_template     TEXT    DEFAULT 'Default',
-                timezone             TEXT    DEFAULT 'America/New_York',
-                log_channel_id       INTEGER DEFAULT 0,
-                post_channel_id      INTEGER DEFAULT 0,
-                dm_reminder_message  TEXT    DEFAULT '',
+                guild_id                 INTEGER NOT NULL,
+                event_type               TEXT    NOT NULL,
+                tab_name                 TEXT    DEFAULT 'DS Assignments',
+                mail_template            TEXT    DEFAULT '',
+                templates_json           TEXT    DEFAULT '[]',
+                default_template         TEXT    DEFAULT 'Default',
+                timezone                 TEXT    DEFAULT 'America/New_York',
+                log_channel_id           INTEGER DEFAULT 0,
+                post_channel_id          INTEGER DEFAULT 0,
+                dm_reminder_message      TEXT    DEFAULT '',
+                -- Structured storm flow (#38 + #54)
+                structured_flow_enabled  INTEGER DEFAULT 0,
+                power_column_name        TEXT    DEFAULT '',
+                sub_mode                 TEXT    DEFAULT 'pool',
+                signup_channel_id        INTEGER DEFAULT 0,
+                signup_schedule_cron     TEXT    DEFAULT '',
+                signups_tab              TEXT    DEFAULT '',
+                rosters_tab              TEXT    DEFAULT '',
+                attendance_tab           TEXT    DEFAULT '',
+                strategies_tab           TEXT    DEFAULT '',
+                member_rules_tab         TEXT    DEFAULT '',
                 PRIMARY KEY (guild_id, event_type)
             )
         """)
@@ -408,6 +419,24 @@ def init_db():
             # Premium /desertstorm_remind / /canyonstorm_remind DM body
             # (empty → hardcoded default in storm_log.py).
             ("dm_reminder_message",           "TEXT    DEFAULT ''"),
+            # ── Structured storm flow (#38 + #54) ────────────────────────────────
+            # Premium opt-in structured roster builder. `structured_flow_enabled`
+            # gates the registration post, on-behalf voting, eligibility-gated
+            # roster builder, and structured mail post. `power_column_name` is
+            # which header on the roster Sheet to read for eligibility checks
+            # (e.g. "1st Squad Power"). `sub_mode` is `pool` (flat sub list) or
+            # `paired` (primary→sub pairs). Tab names default to empty and are
+            # resolved to event-type-aware defaults at read time.
+            ("structured_flow_enabled", "INTEGER DEFAULT 0"),
+            ("power_column_name",       "TEXT    DEFAULT ''"),
+            ("sub_mode",                "TEXT    DEFAULT 'pool'"),
+            ("signup_channel_id",       "INTEGER DEFAULT 0"),
+            ("signup_schedule_cron",    "TEXT    DEFAULT ''"),
+            ("signups_tab",             "TEXT    DEFAULT ''"),
+            ("rosters_tab",             "TEXT    DEFAULT ''"),
+            ("attendance_tab",          "TEXT    DEFAULT ''"),
+            ("strategies_tab",          "TEXT    DEFAULT ''"),
+            ("member_rules_tab",        "TEXT    DEFAULT ''"),
         ]:
             try:
                 conn.execute(f"ALTER TABLE guild_storm_config ADD COLUMN {col} {definition}")
@@ -1130,6 +1159,19 @@ def get_storm_config(guild_id: int, event_type: str) -> dict:
         "timezone":             "America/New_York",
         "post_channel_id":      0,
         "dm_reminder_message":  "",
+        # Structured storm flow (#38 + #54) — never-configured guilds get
+        # all-off; tab fields resolve to event-type defaults via
+        # default_structured_tab() / get_structured_storm_config().
+        "structured_flow_enabled": 0,
+        "power_column_name":       "",
+        "sub_mode":                "pool",
+        "signup_channel_id":       0,
+        "signup_schedule_cron":    "",
+        "signups_tab":             "",
+        "rosters_tab":             "",
+        "attendance_tab":          "",
+        "strategies_tab":          "",
+        "member_rules_tab":        "",
     }
     return _normalize_storm_templates(fallback, event_type)
 
@@ -1185,6 +1227,108 @@ def save_storm_config(guild_id: int, event_type: str, tab_name: str,
              timezone, log_channel_id, post_channel_id, dm_reminder_message)
         )
         conn.commit()
+
+
+# ── Structured storm flow config (#38 + #54) ─────────────────────────────────
+#
+# Shape of the structured flow config kept separate from the main storm config
+# helpers so the existing `save_storm_config` signature doesn't balloon. This
+# matches the `save_participation_config` pattern — UPDATE-only against an
+# existing (guild_id, event_type) row.
+
+# Defaults are resolved at read time (not at SQL-default time) because the
+# default differs by event_type and the SQL layer can't see which row is DS
+# vs CS.
+_STRUCTURED_TAB_DEFAULTS = {
+    "DS": {
+        "signups_tab":      "DS Signups",
+        "rosters_tab":      "DS Rosters",
+        "attendance_tab":   "DS Attendance",
+        "strategies_tab":   "DS Strategies",
+        "member_rules_tab": "DS Member Rules",
+    },
+    "CS": {
+        "signups_tab":      "CS Signups",
+        "rosters_tab":      "CS Rosters",
+        "attendance_tab":   "CS Attendance",
+        "strategies_tab":   "CS Strategies",
+        "member_rules_tab": "CS Member Rules",
+    },
+}
+
+
+def default_structured_tab(event_type: str, field: str) -> str:
+    """Resolve the event-type-aware default for a tab field. Returns '' if
+    `event_type` isn't DS / CS or `field` isn't recognised — callers should
+    treat that as "no default available."""
+    return _STRUCTURED_TAB_DEFAULTS.get(event_type, {}).get(field, "")
+
+
+def get_structured_storm_config(guild_id: int, event_type: str) -> dict:
+    """Return the structured-flow config subset for a guild + event type.
+    Unset tab fields fall back to event-type-aware defaults (e.g. DS row
+    with empty `signups_tab` reads as 'DS Signups')."""
+    cfg = get_storm_config(guild_id, event_type)
+    def _tab(key: str) -> str:
+        return cfg.get(key) or default_structured_tab(event_type, key)
+    return {
+        "structured_flow_enabled": bool(cfg.get("structured_flow_enabled")),
+        "power_column_name":       cfg.get("power_column_name") or "",
+        "sub_mode":                cfg.get("sub_mode") or "pool",
+        "signup_channel_id":       int(cfg.get("signup_channel_id") or 0),
+        "signup_schedule_cron":    cfg.get("signup_schedule_cron") or "",
+        "signups_tab":             _tab("signups_tab"),
+        "rosters_tab":             _tab("rosters_tab"),
+        "attendance_tab":          _tab("attendance_tab"),
+        "strategies_tab":          _tab("strategies_tab"),
+        "member_rules_tab":        _tab("member_rules_tab"),
+    }
+
+
+def save_structured_storm_config(
+    guild_id: int, event_type: str, *,
+    structured_flow_enabled: bool = False,
+    power_column_name: str          = "",
+    sub_mode: str                   = "pool",
+    signup_channel_id: int          = 0,
+    signup_schedule_cron: str       = "",
+    signups_tab: str                = "",
+    rosters_tab: str                = "",
+    attendance_tab: str             = "",
+    strategies_tab: str             = "",
+    member_rules_tab: str           = "",
+) -> bool:
+    """UPDATE the structured-flow fields on an existing (guild_id, event_type)
+    row. The row must already exist (created by save_storm_config); this does
+    not insert. Returns True if a row was updated. Tab name fields are stored
+    verbatim — pass '' to fall back to the event-type-aware default at read."""
+    if sub_mode not in ("pool", "paired"):
+        sub_mode = "pool"
+    with _get_conn() as conn:
+        cur = conn.execute(
+            "UPDATE guild_storm_config SET "
+            "  structured_flow_enabled = ?, "
+            "  power_column_name = ?, "
+            "  sub_mode = ?, "
+            "  signup_channel_id = ?, "
+            "  signup_schedule_cron = ?, "
+            "  signups_tab = ?, "
+            "  rosters_tab = ?, "
+            "  attendance_tab = ?, "
+            "  strategies_tab = ?, "
+            "  member_rules_tab = ? "
+            "WHERE guild_id = ? AND event_type = ?",
+            (
+                1 if structured_flow_enabled else 0,
+                power_column_name, sub_mode,
+                int(signup_channel_id or 0), signup_schedule_cron,
+                signups_tab, rosters_tab, attendance_tab,
+                strategies_tab, member_rules_tab,
+                guild_id, event_type,
+            ),
+        )
+        conn.commit()
+        return cur.rowcount > 0
 
 
 def get_storm_template(guild_id: int, event_type: str, template_name: str | None = None) -> str:

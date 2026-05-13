@@ -752,6 +752,20 @@ class StormSignupsViewCog(commands.Cog):
             )
         await interaction.followup.send(**followup_args)
 
+        # First-run walkthrough offer (#130). Fires after the main view
+        # lands so the officer sees the actual command output even if
+        # they decline the tour. No-op if already dismissed. Failures
+        # here must not crash the main flow — the officer view is the
+        # critical path; the tour is a nice-to-have.
+        try:
+            from storm_walkthrough import maybe_offer_storm_signups_tour
+            await maybe_offer_storm_signups_tour(interaction)
+        except Exception as e:
+            logger.warning(
+                "[STORM OFFICER VIEW] walkthrough offer failed for guild=%s: %s",
+                interaction.guild_id, e,
+            )
+
 
 async def setup(bot: commands.Bot):
     await bot.add_cog(StormSignupsViewCog(bot))

@@ -93,6 +93,78 @@ class TestFormat24hTo12h:
         assert self.fmt("garbage") == "garbage"
 
 
+class TestFormatTimeWithTz:
+    """`_format_time_with_tz` renders a stored 24h 'HH:MM' time with
+    the guild's timezone abbreviation appended, e.g.
+    '08:00' + 'America/New_York' → '8:00am EDT' (or EST in winter).
+    Used everywhere a wizard summary or `/view_configuration` shows a
+    saved reminder/draft/post time back to leadership — bare '08:00'
+    leaves them guessing which timezone the reminder fires in."""
+
+    def setup_method(self):
+        from setup_cog import _format_time_with_tz
+        self.fmt = _format_time_with_tz
+
+    def test_et_time_carries_et_abbreviation(self):
+        """ET tz always renders the abbreviation token (EDT or EST
+        depending on DST for today's date)."""
+        result = self.fmt("08:00", "America/New_York")
+        assert result.startswith("8:00am ")
+        # Either EDT (summer) or EST (winter) is acceptable.
+        assert result.endswith("EDT") or result.endswith("EST")
+
+    def test_pacific_time_carries_pt_abbreviation(self):
+        result = self.fmt("14:30", "America/Los_Angeles")
+        assert result.startswith("2:30pm ")
+        assert result.endswith("PDT") or result.endswith("PST")
+
+    def test_seoul_carries_kst(self):
+        """Non-US tz works the same — pulled from dt.tzname()."""
+        result = self.fmt("09:00", "Asia/Seoul")
+        assert result == "9:00am KST"
+
+    def test_london_carries_bst_or_gmt(self):
+        result = self.fmt("12:00", "Europe/London")
+        assert result.startswith("12:00pm ")
+        assert result.endswith("BST") or result.endswith("GMT")
+
+    def test_no_tz_falls_back_to_bare_12h(self):
+        """Caller passing None tz still gets a 12h formatted time."""
+        assert self.fmt("08:00", None) == "8:00am"
+
+    def test_unknown_tz_falls_back_to_bare_12h(self):
+        """Bad ZoneInfo lookup should never crash the embed render."""
+        assert self.fmt("08:00", "Not/A/Real_Zone") == "8:00am"
+
+    def test_empty_string_passthrough(self):
+        """`*not set*` sentinels and empty strings pipe through
+        unchanged so callers don't need a separate guard."""
+        assert self.fmt("", "America/New_York") == ""
+
+    def test_none_passthrough(self):
+        assert self.fmt(None, "America/New_York") == ""
+
+    def test_not_set_sentinel_passthrough(self):
+        """Wizard surfaces show `*not set*` for unconfigured times —
+        running it through the formatter must leave it alone."""
+        assert self.fmt("*not set*", "America/New_York") == "*not set*"
+
+    def test_unparseable_passthrough(self):
+        """Don't mangle garbage — surface it so the bug is visible."""
+        assert self.fmt("garbage", "America/New_York") == "garbage"
+
+    def test_out_of_range_passthrough(self):
+        assert self.fmt("25:99", "America/New_York") == "25:99"
+
+    def test_midnight_renders_12am(self):
+        result = self.fmt("00:00", "America/New_York")
+        assert result.startswith("12:00am ")
+
+    def test_noon_renders_12pm(self):
+        result = self.fmt("12:00", "America/New_York")
+        assert result.startswith("12:00pm ")
+
+
 class TestServerTimeToLocal:
     """server_time_to_local converts a (hour, minute, guild_id) triple from
     Server Time (UTC-2) to the guild's local clock string. e.g. (18, 0)

@@ -66,6 +66,50 @@ def _format_24h_to_12h(raw: str) -> str:
     return f"{hour12}:{minute:02d}{period}"
 
 
+def _format_time_with_tz(time_str: str, tz_name: str | None) -> str:
+    """Render a stored 'HH:MM' 24-hour time as e.g. '8:00am EDT' using
+    the guild's configured timezone. Used everywhere a wizard summary
+    or `/view_configuration` shows a saved time back to leadership —
+    bare '08:00' leaves them guessing which timezone the reminder
+    fires in.
+
+    The tz abbreviation comes from `dt.tzname()` anchored on today's
+    date, so the suffix reflects DST for the current date ('EST' in
+    winter vs. 'EDT' in summer).
+
+    Falls back gracefully:
+      * empty / `*not set*` / non-time strings → returned unchanged,
+        so callers can pipe sentinels through without a separate guard;
+      * unparseable HH:MM → returned unchanged;
+      * unknown tz_name → bare 12-hour form without a tz suffix.
+    """
+    if not time_str or ":" not in str(time_str):
+        return time_str or ""
+    try:
+        h_str, m_str = str(time_str).split(":", 1)
+        hour, minute = int(h_str), int(m_str)
+    except (ValueError, AttributeError):
+        return time_str
+    if not (0 <= hour <= 23 and 0 <= minute <= 59):
+        return time_str
+    period = "am" if hour < 12 else "pm"
+    hour12 = hour % 12 or 12
+    base   = f"{hour12}:{minute:02d}{period}"
+    if not tz_name:
+        return base
+    try:
+        from datetime import datetime
+        from zoneinfo import ZoneInfo
+        tz    = ZoneInfo(tz_name)
+        today = datetime.now(tz=tz).date()
+        dt    = datetime(today.year, today.month, today.day,
+                         hour, minute, tzinfo=tz)
+    except Exception:
+        return base
+    abbr = dt.tzname()
+    return f"{base} {abbr}" if abbr else base
+
+
 def _parse_month_day(raw: str) -> str:
     """
     Parse 'Month Day' into YYYY-MM-DD using the most recent occurrence.
@@ -1785,7 +1829,7 @@ async def _send_view_configuration(interaction: discord.Interaction, cfg) -> Non
     ev_lines = [
         f"**Draft Channel:** {_channel(cfg.event_draft_channel_id)}",
         f"**Announcement Channel:** {_channel(cfg.event_announce_channel_id)}",
-        f"**Draft Time:** {cfg.event_draft_time}",
+        f"**Draft Time:** {_format_time_with_tz(cfg.event_draft_time, cfg.timezone)}",
         f"**5-Min Warning:** {_enabled(cfg.event_five_min_warning)}",
     ]
     if events:
@@ -1813,7 +1857,7 @@ async def _send_view_configuration(interaction: discord.Interaction, cfg) -> Non
     train_lines.append(f"**Reminders:** {_enabled(train.get('reminders_enabled'))}")
     if train.get("reminders_enabled"):
         train_lines.append(f"**Reminder Channel:** {_channel(train.get('reminder_channel_id'))}")
-        train_lines.append(f"**Reminder Time:** {train.get('reminder_time', '*not set*')}")
+        train_lines.append(f"**Reminder Time:** {_format_time_with_tz(train.get('reminder_time'), cfg.timezone) or '*not set*'}")
     embed.add_field(name="🚂 Train", value="\n".join(train_lines)[:1024], inline=False)
 
     b_lines = [
@@ -1831,7 +1875,7 @@ async def _send_view_configuration(interaction: discord.Interaction, cfg) -> Non
     ]
     if birthday.get("reminders_enabled"):
         b_lines.append(f"**Reminder Channel:** {_channel(birthday.get('reminder_channel_id'))}")
-        b_lines.append(f"**Reminder Time:** {birthday.get('reminder_time', '*not set*')}")
+        b_lines.append(f"**Reminder Time:** {_format_time_with_tz(birthday.get('reminder_time'), cfg.timezone) or '*not set*'}")
     embed.add_field(name="🎂 Birthdays", value="\n".join(b_lines)[:1024], inline=False)
 
     from config import get_storm_slot_labels
@@ -1890,7 +1934,7 @@ async def _send_view_configuration(interaction: discord.Interaction, cfg) -> Non
     if shiny.get("enabled"):
         st_lines += [
             f"**Channel:** {_channel(shiny.get('channel_id'))}",
-            f"**Post Time:** {shiny.get('post_time', '*not set*')}",
+            f"**Post Time:** {_format_time_with_tz(shiny.get('post_time'), cfg.timezone) or '*not set*'}",
             f"**Server Range:** "
             f"{shiny.get('server_min') or '?'} – {shiny.get('server_max') or '?'}",
             f"**Custom Message:** {_yn(shiny.get('message_template'))}",
@@ -3210,9 +3254,11 @@ async def run_train_setup(interaction: discord.Interaction, bot):
             return None
         return reply.content.strip()[:max_chars]
 
-    from config import get_train_config, has_train_config
+    from config import get_train_config, has_train_config, get_config
     current = get_train_config(guild_id)
     train_already_configured = has_train_config(guild_id)
+    guild_cfg = get_config(guild_id)
+    guild_tz  = guild_cfg.timezone if guild_cfg else "America/New_York"
 
     # ── If already configured, show summary and offer edit or cancel ──────────
     if train_already_configured:
@@ -3230,7 +3276,7 @@ async def run_train_setup(interaction: discord.Interaction, bot):
         if current.get("reminders_enabled"):
             rc = current.get("reminder_channel_id", 0) or 0
             fields.append(("Reminder Channel", f"<#{rc}>" if rc else "*not set*"))
-            fields.append(("Reminder Time",    current.get("reminder_time") or "*not set*"))
+            fields.append(("Reminder Time",    _format_time_with_tz(current.get("reminder_time"), guild_tz) or "*not set*"))
         proceed = await ask_proceed_with_existing_config(
             channel,
             title="🚂 Current Train Setup",
@@ -3618,7 +3664,7 @@ async def run_train_setup(interaction: discord.Interaction, bot):
     embed.add_field(name="Reminders",       value="Enabled" if reminders_enabled else "Disabled", inline=True)
     if reminders_enabled:
         embed.add_field(name="Reminder Channel", value=f"<#{reminder_channel_id}>", inline=True)
-        embed.add_field(name="Reminder Time",    value=reminder_time,               inline=True)
+        embed.add_field(name="Reminder Time",    value=_format_time_with_tz(reminder_time, guild_tz), inline=True)
     if blurbs_enabled:
         embed.add_field(name="Default Tone", value=default_tone,          inline=True)
         embed.add_field(name="Themes",       value=", ".join(themes),     inline=False)
@@ -5455,7 +5501,6 @@ async def run_event_setup(interaction: discord.Interaction, bot):
 
     guild_cfg = get_config(guild_id) or get_or_create_config(guild_id)
     timezone  = guild_cfg.timezone if guild_cfg.timezone else "America/New_York"
-    tz_label  = TIMEZONE_LABELS.get(timezone, timezone)
     events    = get_guild_events(guild_id, active_only=True)
 
     draft_channel_id    = guild_cfg.event_draft_channel_id or 0
@@ -5472,9 +5517,12 @@ async def run_event_setup(interaction: discord.Interaction, bot):
         )
         summary_embed.add_field(name="Draft Channel",        value=f"<#{draft_channel_id}>",    inline=False)
         summary_embed.add_field(name="Announcement Channel", value=f"<#{announce_channel_id}>", inline=False)
-        summary_embed.add_field(name="Draft Time",           value=draft_time,                  inline=False)
+        summary_embed.add_field(name="Draft Time",           value=_format_time_with_tz(draft_time, timezone), inline=False)
         summary_embed.add_field(name="5-min Warning",        value="Yes" if five_min_warning else "No", inline=False)
-        ev_list = "\n".join(f"• **{e['name']}** — {e['default_time']} {tz_label}" for e in events)
+        ev_list = "\n".join(
+            f"• **{e['name']}** — {_format_time_with_tz(e['default_time'], e.get('timezone') or timezone)}"
+            for e in events
+        )
         summary_embed.add_field(name="Events", value=ev_list, inline=False)
 
         class EventActionView(discord.ui.View):
@@ -5993,16 +6041,18 @@ async def run_event_setup(interaction: discord.Interaction, bot):
         return
 
     # ── Summary ────────────────────────────────────────────────────────────────
-    events   = get_guild_events(guild_id, active_only=True)
-    tz_label = TIMEZONE_LABELS.get(timezone, timezone)
+    events = get_guild_events(guild_id, active_only=True)
 
     embed = discord.Embed(title="✅ Events Configured", color=discord.Color.green())
     embed.add_field(name="Draft Channel",        value=f"<#{draft_channel_id}>",    inline=False)
     embed.add_field(name="Announcement Channel", value=f"<#{announce_channel_id}>", inline=False)
-    embed.add_field(name="Draft Time",           value=draft_time,                  inline=False)
+    embed.add_field(name="Draft Time",           value=_format_time_with_tz(draft_time, timezone), inline=False)
     embed.add_field(name="5-min Warning",        value="Yes" if five_min_warning else "No", inline=False)
     if events:
-        ev_list = "\n".join(f"• **{e['name']}** — {e['default_time']} {tz_label}" for e in events)
+        ev_list = "\n".join(
+            f"• **{e['name']}** — {_format_time_with_tz(e['default_time'], e.get('timezone') or timezone)}"
+            for e in events
+        )
         embed.add_field(name="Events", value=ev_list, inline=False)
     embed.set_footer(text="Run /setup_events again to add or edit events.")
     await channel.send(embed=embed)
@@ -6036,9 +6086,12 @@ async def run_birthday_setup(interaction: discord.Interaction, bot):
 
     from config import (
         get_birthday_config, has_birthday_config, clear_birthday_config,
+        get_config,
     )
     current = get_birthday_config(guild_id)
     birthdays_already_configured = has_birthday_config(guild_id)
+    guild_cfg = get_config(guild_id)
+    guild_tz  = guild_cfg.timezone if guild_cfg else "America/New_York"
 
     # ── If already enabled, show summary and offer edit or cancel ─────────────
     if birthdays_already_configured and current.get("enabled"):
@@ -6061,7 +6114,7 @@ async def run_birthday_setup(interaction: discord.Interaction, bot):
         ))
         if current.get("reminders_enabled"):
             fields.append(("Reminder Channel", f"<#{rc}>" if rc else "*not set*"))
-            fields.append(("Reminder Time",    current.get("reminder_time") or "*not set*"))
+            fields.append(("Reminder Time",    _format_time_with_tz(current.get("reminder_time"), guild_tz) or "*not set*"))
         proceed = await ask_proceed_with_existing_config(
             channel,
             title="🎂 Current Birthday Setup",
@@ -6430,7 +6483,7 @@ async def run_birthday_setup(interaction: discord.Interaction, bot):
     embed.add_field(name="Reminders",           value="Enabled" if reminders_enabled else "Disabled", inline=True)
     if reminders_enabled:
         embed.add_field(name="Reminder Channel", value=f"<#{reminder_channel_id}>",       inline=True)
-        embed.add_field(name="Reminder Time",    value=reminder_time,                     inline=True)
+        embed.add_field(name="Reminder Time",    value=_format_time_with_tz(reminder_time, guild_tz), inline=True)
     embed.set_footer(text="Run /setup_birthdays again to update these settings.")
     await channel.send(embed=embed)
     wizard_registry.unregister(user.id, cancel_event)
@@ -6454,9 +6507,8 @@ async def run_shiny_tasks_setup(interaction: discord.Interaction, bot):
 
     current  = get_shiny_tasks_config(guild_id)
     cfg      = get_config(guild_id)
-    tz_label = TIMEZONE_LABELS.get(
-        cfg.timezone if cfg else "America/New_York", "ET",
-    )
+    guild_tz = cfg.timezone if cfg else "America/New_York"
+    tz_label = TIMEZONE_LABELS.get(guild_tz, "ET")
     shiny_already_configured = has_shiny_tasks_config(guild_id)
 
     # ── If already enabled, show summary and offer edit or cancel ─────────────
@@ -6470,7 +6522,7 @@ async def run_shiny_tasks_setup(interaction: discord.Interaction, bot):
             ),
             (
                 "Post Time",
-                f"{current.get('post_time') or '*not set*'}  *({tz_label})*",
+                _format_time_with_tz(current.get("post_time"), guild_tz) or "*not set*",
             ),
             (
                 "Message",
@@ -6772,7 +6824,7 @@ async def run_shiny_tasks_setup(interaction: discord.Interaction, bot):
     embed.add_field(name="Status",         value="✅ Enabled",                       inline=True)
     embed.add_field(name="Channel",        value=f"<#{channel_id}>",                inline=True)
     embed.add_field(name="Server Range",   value=f"{server_min} – {server_max}",    inline=True)
-    embed.add_field(name="Post Time",      value=f"{post_time}  *({tz_label})*",    inline=True)
+    embed.add_field(name="Post Time",      value=_format_time_with_tz(post_time, guild_tz), inline=True)
     embed.add_field(
         name="Message",
         value=(message_template or DEFAULT_SHINY_TASKS_MESSAGE)[:1024],
@@ -6799,19 +6851,7 @@ async def run_shiny_tasks_setup(interaction: discord.Interaction, bot):
         message_template=message_template,
     )
 
-    # Render the post time with the events-style `5:00pm EDT` suffix
-    # rather than a bare `09:00` — anchored on today's date so DST
-    # gives the right tz abbreviation (EDT vs EST).
-    from datetime import datetime as _dt
-    from zoneinfo import ZoneInfo as _ZI
-    from scheduler import format_et as _format_et
-    try:
-        _hh, _mm = (int(p) for p in post_time.split(":"))
-        _tz      = _ZI(cfg.timezone if cfg else "America/New_York")
-        _today   = _dt.now(tz=_tz).date()
-        _human   = _format_et(_dt(_today.year, _today.month, _today.day, _hh, _mm, tzinfo=_tz))
-    except Exception:
-        _human = post_time  # never block the success path on a format hiccup
+    _human = _format_time_with_tz(post_time, guild_tz) or post_time
 
     await channel.send(
         f"✅ Shiny-tasks announcement saved! The first post will fire at {_human}."

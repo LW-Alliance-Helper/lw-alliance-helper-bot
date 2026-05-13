@@ -1461,7 +1461,8 @@ class _DayPickView(discord.ui.View):
 
 async def _run_schedule_wizard(interaction: discord.Interaction, bot, is_premium_flag: bool):
     """Walk leadership through configuring a survey's scheduled reminder."""
-    from config import save_survey_reminder
+    from config import save_survey_reminder, get_config
+    from setup_cog import _format_time_with_tz
     # Pick which survey
     survey = await _pick_survey(
         interaction,
@@ -1476,6 +1477,9 @@ async def _run_schedule_wizard(interaction: discord.Interaction, bot, is_premium
     survey_id   = survey.get("survey_id") or "default"
     survey_name = survey.get("survey_name") or "Default"
 
+    guild_cfg   = get_config(interaction.guild_id)
+    guild_tz    = guild_cfg.timezone if guild_cfg else "America/New_York"
+
     # Show current settings as context
     cur_freq    = survey.get("reminder_frequency") or "off"
     cur_day     = int(survey.get("reminder_day_of_week") or 1)
@@ -1488,10 +1492,11 @@ async def _run_schedule_wizard(interaction: discord.Interaction, bot, is_premium
         "DM via Member Roster" if cur_use_dm
         else (f"<#{cur_ch}>" if cur_ch else "*(not set)*")
     )
+    cur_time_label = _format_time_with_tz(cur_time, guild_tz) or cur_time
     cur_when = (
         "Off" if cur_freq == "off"
-        else f"Daily at {cur_time}" if cur_freq == "daily"
-        else f"Weekly on {DAYS_OF_WEEK[cur_day]} at {cur_time}"
+        else f"Daily at {cur_time_label}" if cur_freq == "daily"
+        else f"Weekly on {DAYS_OF_WEEK[cur_day]} at {cur_time_label}"
     )
 
     await interaction.followup.send(
@@ -1546,7 +1551,10 @@ async def _run_schedule_wizard(interaction: discord.Interaction, bot, is_premium
         new_day = day_view.day
 
     # ── Step 3: Time of day ───────────────────────────────────────────────────
-    new_time, ok = await _ask_time(interaction, default=cur_time, step_label="Step 3 — Time of day")
+    new_time, ok = await _ask_time(
+        interaction, default=cur_time, step_label="Step 3 — Time of day",
+        tz_name=guild_tz,
+    )
     if not ok:
         return
 
@@ -1593,14 +1601,15 @@ async def _run_schedule_wizard(interaction: discord.Interaction, bot, is_premium
         message=new_msg,
     )
 
+    new_time_label = _format_time_with_tz(new_time, guild_tz) or new_time
     when = (
-        f"Daily at {new_time}" if new_freq == "daily"
-        else f"Weekly on {DAYS_OF_WEEK[new_day]} at {new_time}"
+        f"Daily at {new_time_label}" if new_freq == "daily"
+        else f"Weekly on {DAYS_OF_WEEK[new_day]} at {new_time_label}"
     )
     where = "DMs to every roster member" if new_use_dm else f"<#{new_channel}>"
     await interaction.followup.send(
         f"✅ **{survey_name} reminders scheduled.**\n"
-        f"**When:** {when} *(in your guild's timezone)*\n"
+        f"**When:** {when}\n"
         f"**Where:** {where}\n"
         f"**Message:** {('*custom*' if new_msg else '*default*')}\n\n"
         f"Run `/survey_remind` again any time to update or disable.",
@@ -1609,12 +1618,15 @@ async def _run_schedule_wizard(interaction: discord.Interaction, bot, is_premium
 
 
 async def _ask_time(interaction: discord.Interaction, *, default: str,
-                    step_label: str) -> tuple[str, bool]:
+                    step_label: str, tz_name: str | None = None) -> tuple[str, bool]:
     """
     Ask leadership for a HH:MM time via a one-field modal. Re-prompts up to
-    3 times on unparseable input. Returns (time_str_24h, ok).
+    3 times on unparseable input. Returns (time_str_24h, ok). `tz_name`
+    is used only to render the "current:" hint in the button label as
+    e.g. `8:00am EDT` — saved values are still HH:MM 24h.
     """
-    from setup_cog import _parse_12h_time
+    from setup_cog import _parse_12h_time, _format_time_with_tz
+    current_label = _format_time_with_tz(default, tz_name) or default
 
     class _TimeModal(discord.ui.Modal, title="Reminder time"):
         time_in = discord.ui.TextInput(
@@ -1635,7 +1647,7 @@ async def _ask_time(interaction: discord.Interaction, *, default: str,
         def __init__(self):
             super().__init__(timeout=180)
             self.modal: _TimeModal | None = None
-        @discord.ui.button(label=f"⏰ Set time (current: {default})", style=discord.ButtonStyle.primary)
+        @discord.ui.button(label=f"⏰ Set time (current: {current_label})", style=discord.ButtonStyle.primary)
         async def open_modal(self, inter: discord.Interaction, button: discord.ui.Button):
             self.modal = _TimeModal()
             await inter.response.send_modal(self.modal)

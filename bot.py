@@ -210,6 +210,9 @@ async def on_ready():
     if "export_import_cog" not in bot.extensions:
         await bot.load_extension("export_import_cog")
         print(f"[INFO] Export/Import cog loaded")
+    if "storm_strategy" not in bot.extensions:
+        await bot.load_extension("storm_strategy")
+        print(f"[INFO] Storm Strategy cog loaded")
 
     # Sync slash commands globally so they work in any server. Commands
     # decorated with `guilds=[...]` are excluded from the global sync;

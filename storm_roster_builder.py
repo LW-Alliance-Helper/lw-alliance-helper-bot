@@ -234,6 +234,11 @@ class RosterBuilderSession:
         # Errors surfaced from the roster read; the builder shows a
         # one-line warning when any are present.
         self.roster_errors: list[str] = []
+        # Member keys that were assigned via the below-floor override
+        # toggle (i.e. their power was below the zone's effective floor,
+        # or their power was unknown). Captured at assign time so the
+        # rosters_tab write can flag the slot for post-event review.
+        self.below_floor_overrides: set[str] = set()
 
     @property
     def is_structured(self) -> bool:
@@ -264,6 +269,20 @@ class RosterBuilderSession:
     def zone_capacity(self, zone_name: str) -> int:
         z = self.preset.find_zone(zone_name)
         return int(z.max_players) if z else 0
+
+    def prune_stale_overrides(self) -> None:
+        """Drop override entries for members no longer in any zone.
+
+        The override flag captures "officer assigned this member below
+        the floor" at the moment of assignment. If they're later
+        unassigned (zone cleared) or moved to subs (subs don't carry
+        the flag), the entry shouldn't survive — otherwise a later
+        re-assignment without the toggle would still mark the slot.
+        """
+        currently_in_zones: set[str] = set()
+        for zone_members in self.assignments.values():
+            currently_in_zones.update(zone_members)
+        self.below_floor_overrides &= currently_in_zones
 
 
 def _apply_rules_to_session(session: RosterBuilderSession) -> None:
@@ -612,6 +631,11 @@ class RosterBuilderView(discord.ui.View):
                         ephemeral=True,
                     )
                     return
+                # Record the override for the audit trail — anyone in
+                # `below` at assign time was assigned despite being
+                # below the effective floor (or having unknown power).
+                if key in below:
+                    s.below_floor_overrides.add(key)
                 s.assignments[s.selected_zone].append(key)
                 await self._refresh(inter)
 
@@ -647,6 +671,7 @@ class RosterBuilderView(discord.ui.View):
                 await inter.response.send_message("⚠️ Pick a zone first.", ephemeral=True)
                 return
             s.assignments[s.selected_zone] = []
+            s.prune_stale_overrides()
             await self._refresh(inter)
 
         unassign_btn.callback = _unassign
@@ -667,6 +692,7 @@ class RosterBuilderView(discord.ui.View):
                 return
             moved = members_in_zone.pop()
             s.subs.append(moved)
+            s.prune_stale_overrides()
             await self._refresh(inter)
 
         move_to_subs_btn.callback = _move_to_subs
@@ -989,13 +1015,23 @@ async def _finalize_structured_roster(
 
 _ROSTERS_HEADER = [
     "Event Date", "Team", "Zone", "Member", "Role",
-    "Power at Assignment", "Discord ID", "Posted At (UTC)",
+    "Power at Assignment", "Discord ID", "Override Below Floor",
+    "Posted At (UTC)",
 ]
 
 
 def _write_rosters_tab(session: RosterBuilderSession) -> list[str]:
     """Append one row per slot to the alliance's configured rosters_tab.
-    Returns a list of soft error strings (empty on success)."""
+    Returns a list of soft error strings (empty on success).
+
+    The `Override Below Floor` column captures whether the officer
+    explicitly assigned the member below the effective zone floor —
+    so post-event review (attendance, no-show tagging) can flag the
+    decision. Subs don't carry the flag (the eligibility gate is
+    primary-only). If a previously-flagged member was later unassigned
+    and never re-assigned, no row is written for them, so stale flags
+    can't survive.
+    """
     import datetime as _dt
     import config
 
@@ -1031,6 +1067,7 @@ def _write_rosters_tab(session: RosterBuilderSession) -> list[str]:
             if not m:
                 continue
             power = m.get("power")
+            override = "yes" if key in session.below_floor_overrides else ""
             rows.append([
                 session.event_date or "",
                 session.team or "",
@@ -1039,6 +1076,7 @@ def _write_rosters_tab(session: RosterBuilderSession) -> list[str]:
                 "primary",
                 str(power) if power is not None else "unknown",
                 m.get("discord_id") or "",
+                override,
                 posted_at,
             ])
     for key in session.subs:
@@ -1046,6 +1084,8 @@ def _write_rosters_tab(session: RosterBuilderSession) -> list[str]:
         if not m:
             continue
         power = m.get("power")
+        # Subs aren't subject to the per-zone floor; don't propagate the
+        # override flag to the sub slot.
         rows.append([
             session.event_date or "",
             session.team or "",
@@ -1054,6 +1094,7 @@ def _write_rosters_tab(session: RosterBuilderSession) -> list[str]:
             "sub",
             str(power) if power is not None else "unknown",
             m.get("discord_id") or "",
+            "",
             posted_at,
         ])
 

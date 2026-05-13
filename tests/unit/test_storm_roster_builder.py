@@ -627,6 +627,97 @@ class TestWriteRostersTab:
         assert row[1] == "B"
 
 
+class TestOverrideBelowFloorCapture:
+    """Below-floor overrides are captured per slot so post-event review
+    can flag the decision. Subs don't carry the flag (the eligibility
+    gate is primary-only)."""
+
+    def _override_col(self) -> int:
+        return srb._ROSTERS_HEADER.index("Override Below Floor")
+
+    def test_assigned_below_floor_member_flagged_yes(self, fake_env):
+        fake, gid = fake_env
+        session = _make_session(team="A", members={
+            "1003": {"key": "1003", "name": "Carol", "discord_id": "1003",
+                     "power": 180_000_000, "not_on_discord": False},
+        })
+        session.guild_id = gid
+        session.event_date = "2026-05-18"
+        # Carol's 180M is below the 300M Power Tower floor; officer
+        # explicitly toggled below-floor and assigned anyway.
+        session.assignments["Power Tower"].append("1003")
+        session.below_floor_overrides.add("1003")
+        srb._write_rosters_tab(session)
+        ws = fake.worksheet("DS Rosters")
+        rows = ws.get_all_values()
+        col = self._override_col()
+        carol_row = next(r for r in rows[1:] if r[3] == "Carol")
+        assert carol_row[col] == "yes"
+
+    def test_at_floor_member_flag_blank(self, fake_env):
+        fake, gid = fake_env
+        session = _make_session(team="A", members={
+            "1001": {"key": "1001", "name": "Alice", "discord_id": "1001",
+                     "power": 412_000_000, "not_on_discord": False},
+        })
+        session.guild_id = gid
+        session.event_date = "2026-05-18"
+        session.assignments["Power Tower"].append("1001")
+        srb._write_rosters_tab(session)
+        ws = fake.worksheet("DS Rosters")
+        rows = ws.get_all_values()
+        col = self._override_col()
+        alice_row = next(r for r in rows[1:] if r[3] == "Alice")
+        assert alice_row[col] == ""
+
+    def test_sub_role_never_carries_override(self, fake_env):
+        # Even if a sub was flagged at some earlier assignment, subs
+        # aren't subject to the per-zone floor — clear the flag.
+        fake, gid = fake_env
+        session = _make_session(team="A", members={
+            "1003": {"key": "1003", "name": "Carol", "discord_id": "1003",
+                     "power": 180_000_000, "not_on_discord": False},
+        })
+        session.guild_id = gid
+        session.event_date = "2026-05-18"
+        session.subs.append("1003")
+        session.below_floor_overrides.add("1003")  # stale-ish
+        srb._write_rosters_tab(session)
+        ws = fake.worksheet("DS Rosters")
+        rows = ws.get_all_values()
+        col = self._override_col()
+        carol_row = next(r for r in rows[1:] if r[3] == "Carol")
+        assert carol_row[col] == ""
+
+    def test_prune_clears_unassigned_overrides(self):
+        # Unassign-then-reassign-without-toggle must not leave a stale
+        # flag on the new slot.
+        session = _make_session(team="A", members={
+            "1003": {"key": "1003", "name": "Carol", "discord_id": "1003",
+                     "power": 180_000_000, "not_on_discord": False},
+        })
+        session.assignments["Power Tower"].append("1003")
+        session.below_floor_overrides.add("1003")
+        # Officer hits Unassign on the zone.
+        session.assignments["Power Tower"] = []
+        session.prune_stale_overrides()
+        assert "1003" not in session.below_floor_overrides
+
+    def test_prune_keeps_currently_assigned_overrides(self):
+        # A member still in a zone keeps their override flag.
+        session = _make_session(team="A", members={
+            "1003": {"key": "1003", "name": "Carol", "discord_id": "1003",
+                     "power": 180_000_000, "not_on_discord": False},
+        })
+        session.assignments["Power Tower"].append("1003")
+        session.below_floor_overrides.add("1003")
+        session.prune_stale_overrides()
+        assert "1003" in session.below_floor_overrides
+
+    def test_header_includes_override_column(self):
+        assert "Override Below Floor" in srb._ROSTERS_HEADER
+
+
 class TestStructuredBuilderView:
     def test_structured_mode_shows_approve_button(self):
         session = _make_session(team="A")

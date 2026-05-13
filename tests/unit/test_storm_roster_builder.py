@@ -38,7 +38,21 @@ class _FakeWorksheet:
         self._rows = []
 
     def update(self, range_, values, value_input_option=None):
-        self._rows = [list(r) for r in values]
+        """Mimic gspread's range-anchored update so callers that overwrite
+        a single row (header migration, blank-trailing) don't wipe the
+        whole tab. Only parses the column-A anchor, sufficient here."""
+        import re
+        m = re.match(r"^A(\d+)", str(range_))
+        start_row = int(m.group(1)) - 1 if m else 0
+        new_payload = [list(r) for r in values]
+        while len(self._rows) < start_row:
+            self._rows.append([""] * (len(self._rows[0]) if self._rows else 0))
+        for i, row in enumerate(new_payload):
+            target = start_row + i
+            if target < len(self._rows):
+                self._rows[target] = list(row)
+            else:
+                self._rows.append(list(row))
 
     def delete_rows(self, idx: int) -> None:
         # Sheet rows are 1-indexed.
@@ -1620,3 +1634,145 @@ class TestPowerSnapshotAtFinalize:
         col = srb._ROSTERS_HEADER.index("Power at Assignment")
         alice_row = next(r for r in rows[1:] if r[3] == "Alice")
         assert alice_row[col] == str(500_000_000)
+
+
+class TestPairedSubMailRendering:
+    """Audit Critical C2: paired subs were invisible in the mail. The
+    mail builders only saw `session.subs` (the overflow pool); paired
+    subs lived in `session.paired_subs` and never reached the template.
+    Fix: `_mail_zone_and_sub_lists` renders "Alice + sub Bob" inline."""
+
+    def test_pool_mode_unchanged(self):
+        members = {
+            "1001": {"key": "1001", "name": "Alice", "discord_id": "1001",
+                     "power": 412_000_000, "not_on_discord": False},
+            "1002": {"key": "1002", "name": "Bob",   "discord_id": "1002",
+                     "power": 280_000_000, "not_on_discord": False},
+        }
+        session = _make_session(team="A", members=members, sub_mode="pool")
+        session.assignments["Power Tower"].append("1001")
+        session.subs.append("1002")
+        zones, subs = srb._mail_zone_and_sub_lists(session)
+        # Pool mode: primary line is just the name; sub list is flat.
+        assert zones == {"Power Tower": ["Alice"]}
+        assert subs == ["Bob"]
+
+    def test_paired_mode_renders_sub_inline(self):
+        members = {
+            "1001": {"key": "1001", "name": "Alice", "discord_id": "1001",
+                     "power": 412_000_000, "not_on_discord": False},
+            "1002": {"key": "1002", "name": "Bob",   "discord_id": "1002",
+                     "power": 280_000_000, "not_on_discord": False},
+        }
+        session = _make_session(team="A", members=members, sub_mode="paired")
+        session.assignments["Power Tower"].append("1001")
+        session.paired_subs["1001"] = "1002"
+        zones, subs = srb._mail_zone_and_sub_lists(session)
+        # The paired sub renders INLINE on the primary's line. Mail
+        # builders previously never saw "Bob" at all in this state.
+        assert zones == {"Power Tower": ["Alice + sub Bob"]}
+        # Flat sub list is empty (Bob is paired inline, not in overflow).
+        assert subs == []
+
+    def test_paired_mode_unpaired_primary_renders_plain(self):
+        members = {
+            "1001": {"key": "1001", "name": "Alice", "discord_id": "1001",
+                     "power": 412_000_000, "not_on_discord": False},
+        }
+        session = _make_session(team="A", members=members, sub_mode="paired")
+        session.assignments["Power Tower"].append("1001")
+        # No pairing recorded — primary still renders, no "+ sub" suffix.
+        zones, subs = srb._mail_zone_and_sub_lists(session)
+        assert zones == {"Power Tower": ["Alice"]}
+        assert subs == []
+
+    def test_paired_mode_overflow_in_flat_sub_list(self):
+        """When `session.subs` is non-empty in paired mode (auto-fill's
+        overflow pool), those names still appear in the mail's sub block."""
+        members = {
+            "1001": {"key": "1001", "name": "Alice", "discord_id": "1001",
+                     "power": 412_000_000, "not_on_discord": False},
+            "1002": {"key": "1002", "name": "Bob",   "discord_id": "1002",
+                     "power": 280_000_000, "not_on_discord": False},
+            "1003": {"key": "1003", "name": "Carol", "discord_id": "1003",
+                     "power": 220_000_000, "not_on_discord": False},
+        }
+        session = _make_session(team="A", members=members, sub_mode="paired")
+        session.assignments["Power Tower"].append("1001")
+        session.paired_subs["1001"] = "1002"
+        session.subs.append("1003")
+        zones, subs = srb._mail_zone_and_sub_lists(session)
+        assert zones == {"Power Tower": ["Alice + sub Bob"]}
+        # Carol is overflow → still surfaces in the flat sub block.
+        assert subs == ["Carol"]
+
+
+class TestRostersTabHeaderMigration:
+    """Audit Major M3: existing alliances' rosters_tab kept the 9-column
+    header (no `Paired With`); the new writer appends 10-cell rows so
+    paired data lands under an unlabeled column and `storm_history`
+    can't read it back. Header migration rewrites the row in place."""
+
+    def test_old_header_rewritten_in_place(self, fake_env):
+        fake, gid = fake_env
+        # Seed an old-shape rosters_tab — the pre-#132 9-column header.
+        old_rosters = fake.add_worksheet("DS Rosters")
+        old_rosters._rows = [
+            ["Event Date", "Team", "Zone", "Member", "Role",
+             "Power at Assignment", "Discord ID", "Override Below Floor",
+             "Posted At (UTC)"],
+            ["2026-05-11", "A", "Power Tower", "Old", "primary",
+             "300000000", "1", "", ""],
+        ]
+
+        # Build a session and finalise — header should migrate.
+        members = {
+            "1001": {"key": "1001", "name": "Alice", "discord_id": "1001",
+                     "power": 412_000_000, "not_on_discord": False},
+        }
+        session = _make_session(team="A", members=members)
+        session.guild_id = gid
+        session.event_date = "2026-05-18"
+        session.assignments["Power Tower"].append("1001")
+        errors = srb._write_rosters_tab(session)
+        assert errors == []
+
+        new_header = old_rosters._rows[0]
+        assert "Paired With" in new_header
+        # Migrated header matches the canonical shape.
+        assert new_header == srb._ROSTERS_HEADER
+        # Prior data row preserved (header migration only touches row 1).
+        assert old_rosters._rows[1][3] == "Old"
+
+
+class TestAutoFillSummarySplitsPairedFromPrimary:
+    """Audit Major M5: `auto_filled_by_power` merged primaries and
+    paired subs. A 4-zone build with 4 primaries + 4 paired subs would
+    read 'Auto-filled by power: 8' even though only 4 primaries were
+    auto-filled. Now `auto_paired_subs` is a separate count."""
+
+    def test_paired_mode_summary_has_separate_paired_count(self):
+        members = {
+            f"100{i}": {"key": f"100{i}", "name": f"M{i}", "discord_id": f"100{i}",
+                        "power": 400_000_000 - i * 10_000_000,
+                        "not_on_discord": False}
+            for i in range(8)
+        }
+        zones = [ss.ZoneRow(zone="Power Tower", max_players=4,
+                            min_power_a=100_000_000, priority=1)]
+        session = _make_session(team="A", members=members,
+                                preset_zones=zones, sub_mode="paired")
+        summary = srb._auto_fill_session(session)
+        # 4 primaries auto-filled + 4 paired subs.
+        assert summary["auto_filled_by_power"] == 4
+        assert summary["auto_paired_subs"] == 4
+
+    def test_pool_mode_paired_count_is_zero(self):
+        members = {
+            "1001": {"key": "1001", "name": "Alice", "discord_id": "1001",
+                     "power": 412_000_000, "not_on_discord": False},
+        }
+        session = _make_session(team="A", members=members, sub_mode="pool")
+        summary = srb._auto_fill_session(session)
+        # Pool mode never pairs.
+        assert summary["auto_paired_subs"] == 0

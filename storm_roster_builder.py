@@ -499,6 +499,7 @@ def _auto_fill_session(session: RosterBuilderSession) -> dict:
         "per_member_rules_applied": 0,
         "power_band_rules_applied": 0,
         "auto_filled_by_power":     0,
+        "auto_paired_subs":         0,
         "gaps":                     [],  # member names with no parseable power
         "conflicts":                [],  # short strings: rule application failures
     }
@@ -608,9 +609,13 @@ def _auto_fill_session(session: RosterBuilderSession) -> dict:
             )
             if not eligible_sub_keys:
                 continue
-            # Pair with the strongest eligible candidate.
+            # Pair with the strongest eligible candidate. Count this in
+            # `auto_paired_subs` (not `auto_filled_by_power`) so the
+            # summary distinguishes primaries from paired subs —
+            # otherwise the embed reads "Auto-filled by power: 8" when
+            # really 4 primaries + 4 paired subs were placed.
             session.paired_subs[primary_key] = eligible_sub_keys[0]
-            summary["auto_filled_by_power"] += 1
+            summary["auto_paired_subs"] += 1
 
         # Anything else known-power → still surface as "available subs"
         # the officer might want to swap in manually. Use the flat
@@ -787,6 +792,13 @@ def _render_builder_embed(session: RosterBuilderSession) -> discord.Embed:
         lines.append(
             f"• Auto-filled by power: **{af['auto_filled_by_power']}**"
         )
+        # Separate paired-sub count so the auto-filled total isn't
+        # inflated by the paired-sub count for paired-mode alliances.
+        # Defaults to 0 for pool mode where it's always 0 anyway.
+        if af.get("auto_paired_subs"):
+            lines.append(
+                f"• Auto-paired subs: **{af['auto_paired_subs']}**"
+            )
         if af["gaps"]:
             preview = ", ".join(af["gaps"][:5])
             extra = f" (+{len(af['gaps']) - 5} more)" if len(af["gaps"]) > 5 else ""
@@ -1432,17 +1444,32 @@ class _PairedSubPickerView(discord.ui.View):
         return _cb
 
     async def on_timeout(self):
-        """Strip the view so stale buttons don't 404 — same auto-post-view
-        contract the audit pass codified for the rest of the storm
-        flow."""
+        """Strip the view AND refresh the main builder view so the
+        primary appears with its ⚠️ "no sub paired" marker. Without the
+        main-view refresh, the officer sees the pre-assignment state
+        until they click another button — confusing UX when the
+        picker timed out silently after a primary assignment.
+
+        Same auto-post-view contract the audit pass codified for the
+        rest of the storm flow.
+        """
         for item in self.children:
             item.disabled = True
-        if self.message is None:
-            return
-        try:
-            await self.message.edit(view=self)
-        except discord.HTTPException:
-            pass
+        if self.message is not None:
+            try:
+                await self.message.edit(view=self)
+            except discord.HTTPException:
+                pass
+        # Refresh main view so the unpaired-primary state is visible.
+        if self.main_view.message is not None:
+            try:
+                self.main_view._rebuild()
+                await self.main_view.message.edit(
+                    embed=_render_builder_embed(self.main_view.session),
+                    view=self.main_view,
+                )
+            except discord.HTTPException:
+                pass
 
 
 class _SaveAsPresetModal(discord.ui.Modal, title="Save as preset"):
@@ -1550,6 +1577,55 @@ async def _render_and_attach(
     )
 
 
+def _mail_zone_and_sub_lists(
+    session: RosterBuilderSession,
+) -> tuple[dict[str, list[str]], list[str]]:
+    """Return `(zones_for_mail, sub_names)` honoring the session's
+    sub_mode.
+
+    Pool mode: primaries go under each zone; `session.subs` is the flat
+    sub list. Unchanged behaviour.
+
+    Paired mode: primaries go under each zone with "Alice + sub Bob"
+    formatting (so the mail reads the way the embed does), and the
+    flat sub list is the overflow pool (`session.subs`) only — paired
+    subs are inline, not in the global sub block. The Critical audit
+    finding was that paired subs were silently invisible in the mail
+    because `session.subs` was the only sub source the mail builder
+    saw, and `session.subs` is empty for paired-only rosters.
+    """
+    zones_for_mail: dict[str, list[str]] = {}
+    is_paired = (session.sub_mode == "paired")
+    for zone_name, keys in session.assignments.items():
+        if not keys:
+            continue
+        names: list[str] = []
+        for k in keys:
+            m = session.members.get(k)
+            if m is None:
+                continue
+            label = m["name"]
+            if is_paired:
+                sub_key = session.paired_subs.get(k)
+                if sub_key is not None:
+                    sub_m = session.members.get(sub_key)
+                    if sub_m is not None:
+                        label = f"{label} + sub {sub_m['name']}"
+            names.append(label)
+        if names:
+            zones_for_mail[zone_name] = names
+
+    # Overflow / pool subs render in the global sub block. In paired
+    # mode these are the unmatched leftovers (`session.subs`), distinct
+    # from the inline paired subs above.
+    sub_names = [
+        session.members[k]["name"]
+        for k in session.subs
+        if k in session.members
+    ]
+    return zones_for_mail, sub_names
+
+
 async def _send_mail_preview(
     inter: discord.Interaction, session: RosterBuilderSession,
 ) -> None:
@@ -1557,12 +1633,7 @@ async def _send_mail_preview(
     preview ephemerally. Officer copies it into the alliance's mail
     system manually (no auto-post in v1)."""
     import storm
-    zones_for_mail: dict[str, list[str]] = {}
-    for zone_name, keys in session.assignments.items():
-        names = [session.members[k]["name"] for k in keys if k in session.members]
-        if names:
-            zones_for_mail[zone_name] = names
-    sub_names = [session.members[k]["name"] for k in session.subs if k in session.members]
+    zones_for_mail, sub_names = _mail_zone_and_sub_lists(session)
 
     if session.event_type == "DS":
         mail = storm.build_ds_mail(
@@ -1661,13 +1732,10 @@ async def _finalize_structured_roster(
             s.guild_id, s.event_date, e,
         )
 
-    # Build mail.
-    zones_for_mail: dict[str, list[str]] = {}
-    for zone_name, keys in s.assignments.items():
-        names = [s.members[k]["name"] for k in keys if k in s.members]
-        if names:
-            zones_for_mail[zone_name] = names
-    sub_names = [s.members[k]["name"] for k in s.subs if k in s.members]
+    # Build mail — `_mail_zone_and_sub_lists` honors paired sub_mode so
+    # paired subs render inline ("Alice + sub Bob") instead of being
+    # silently dropped from the mail.
+    zones_for_mail, sub_names = _mail_zone_and_sub_lists(s)
 
     if s.event_type == "DS":
         mail = storm.build_ds_mail(
@@ -2082,6 +2150,30 @@ def _write_rosters_tab(session: RosterBuilderSession) -> list[str]:
             ws.append_row(_ROSTERS_HEADER, value_input_option="RAW")
         except Exception as e:
             return [f"rosters tab create failed: {e}"]
+    else:
+        # Header migration: alliances created their rosters_tab before
+        # `Paired With` was added in #132. New writes still produce 10
+        # cells per row, but their stored header is the old 9-column
+        # shape — so `storm_history.load_event_roster` would do
+        # `header.index("Paired With")` → ValueError → `paired_with` is
+        # silently empty. Detect the older header and rewrite it in
+        # place before appending new data. Use `get_all_values()[0]`
+        # rather than `row_values(1)` so the fake worksheet in tests
+        # doesn't need a new method.
+        try:
+            all_values = ws.get_all_values()
+            existing = all_values[0] if all_values else []
+        except Exception as e:
+            existing = []
+            errors.append(f"rosters tab header read failed: {e}")
+        if existing and "Paired With" not in existing:
+            try:
+                ws.update("A1", [_ROSTERS_HEADER], value_input_option="RAW")
+            except Exception as e:
+                errors.append(
+                    f"rosters tab header migration failed (data still "
+                    f"appended, but readers may not see Paired With): {e}"
+                )
 
     from config import _utcnow_iso
     posted_at = _utcnow_iso()

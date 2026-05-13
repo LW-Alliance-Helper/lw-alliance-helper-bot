@@ -951,6 +951,16 @@ def _build_ds_group() -> _StrategyGroup:
     async def delete(interaction: discord.Interaction, name: str):
         await grp._delete(interaction, name)
 
+    @grp.command(name="apply",
+                 description="Open the manual roster builder for a saved DS preset")
+    @app_commands.describe(name="The preset to apply (use the list command to see saved presets)")
+    async def apply(interaction: discord.Interaction, name: str):
+        # Late-bound to break load-order coupling between
+        # storm_strategy and storm_roster_builder; same pattern the
+        # audit used between storm_member_rules and storm_strategy.
+        from storm_roster_builder import open_roster_builder
+        await open_roster_builder(interaction, "DS", name.strip())
+
     return grp
 
 
@@ -979,6 +989,13 @@ def _build_cs_group() -> _StrategyGroup:
     @app_commands.describe(name="The saved preset to delete")
     async def delete(interaction: discord.Interaction, name: str):
         await grp._delete(interaction, name)
+
+    @grp.command(name="apply",
+                 description="Open the manual roster builder for a saved CS preset")
+    @app_commands.describe(name="The preset to apply (use the list command to see saved presets)")
+    async def apply(interaction: discord.Interaction, name: str):
+        from storm_roster_builder import open_roster_builder
+        await open_roster_builder(interaction, "CS", name.strip())
 
     return grp
 

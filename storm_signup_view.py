@@ -243,6 +243,99 @@ async def _handle_signup_click(interaction: discord.Interaction, vote_code: str)
             config.describe_sheet_error(e),
         )
 
+    # Power-refresh DM nudge (#138). Best-effort — log + move on if
+    # anything fails. Cooldown gated on the SQLite table so a re-vote
+    # or bot restart can't trigger a second nudge for the same event.
+    try:
+        await _maybe_send_power_refresh_dm(
+            interaction, guild_id, event_type, event_date, voter_id,
+        )
+    except Exception as e:
+        logger.warning(
+            "[STORM SIGNUP] power-refresh DM check failed for "
+            "guild=%s event=%s/%s voter=%s: %s",
+            guild_id, event_type, event_date, voter_id, e,
+        )
+
+
+async def _maybe_send_power_refresh_dm(
+    interaction: discord.Interaction,
+    guild_id: int,
+    event_type: str,
+    event_date: str,
+    voter_id: int,
+) -> None:
+    """Send the one-line power-refresh nudge to the voter if:
+      * The structured-flow config has `power_refresh_dm_enabled=1`.
+      * The voter's row on the alliance roster Sheet has a missing or
+        unparseable power value in the configured column.
+      * A nudge hasn't already been sent to this voter for this event
+        (cooldown via storm_power_refresh_dms_sent).
+
+    Idempotent — the cooldown insert is INSERT OR IGNORE, so two
+    near-simultaneous votes can't double-DM.
+    """
+    import config
+    structured = config.get_structured_storm_config(guild_id, event_type)
+    if not structured.get("power_refresh_dm_enabled"):
+        return
+
+    # Cheap cooldown check before any Sheet read.
+    if config.has_power_refresh_dm_been_sent(
+        guild_id, event_type, event_date, voter_id,
+    ):
+        return
+
+    # Read the voter's power. Importing the roster-power reader lazily
+    # to avoid pulling storm_roster_builder's full module graph into
+    # the persistent-View dispatch path on every click.
+    try:
+        from storm_roster_builder import _read_roster_powers
+    except ImportError:
+        return
+
+    guild = interaction.guild
+    members, _errors = _read_roster_powers(guild_id, event_type, guild=guild)
+    voter_key = str(voter_id)
+    voter_row = members.get(voter_key)
+    if voter_row is None:
+        # Voter isn't on the roster Sheet at all — that's a separate
+        # alliance-side cleanup item, not a power-refresh case.
+        return
+    if voter_row.get("power") is not None:
+        # Power is readable; no nudge needed.
+        return
+
+    power_column = structured.get("power_column_name") or "your power column"
+    body = (
+        f"Heads up — your **{power_column}** on the alliance roster "
+        f"Sheet isn't readable. Could you update it before the next "
+        f"storm so leadership has accurate numbers for zone assignments?"
+    )
+
+    user = interaction.user
+    try:
+        await user.send(body)
+    except discord.Forbidden:
+        logger.info(
+            "[STORM SIGNUP] power-refresh DM blocked by user %s in guild=%s "
+            "(DMs disabled). Skipping nudge.",
+            voter_id, guild_id,
+        )
+        # Still record so we don't pile on retries every re-vote.
+    except discord.HTTPException as e:
+        logger.warning(
+            "[STORM SIGNUP] power-refresh DM HTTP error for user=%s guild=%s: %s",
+            voter_id, guild_id, e,
+        )
+
+    # Always record after attempting — successful AND DM-blocked paths
+    # both count toward the cooldown so a member with DMs off doesn't
+    # keep hitting the Sheet-read path on every re-vote.
+    config.record_power_refresh_dm_sent(
+        guild_id, event_type, event_date, voter_id,
+    )
+
 
 def _mirror_vote_to_sheet(
     *,

@@ -455,6 +455,24 @@ def init_db():
             "ON storm_signup_history (guild_id, event_type, event_date)"
         )
 
+        # storm_power_refresh_dms_sent — one row per (guild, event_type,
+        # event_date, voter) recording whether the power-refresh DM
+        # nudge (#138) has been sent. Primary-key shape doubles as the
+        # cooldown — duplicate INSERT OR IGNORE is a no-op so a re-vote
+        # on the same event doesn't trigger a second nudge. Survives
+        # bot restarts (in-memory would risk double-DM after a Railway
+        # bounce).
+        conn.execute("""
+            CREATE TABLE IF NOT EXISTS storm_power_refresh_dms_sent (
+                guild_id       INTEGER NOT NULL,
+                event_type     TEXT    NOT NULL,
+                event_date     TEXT    NOT NULL,
+                voter_user_id  INTEGER NOT NULL,
+                sent_at        TEXT    NOT NULL,
+                PRIMARY KEY (guild_id, event_type, event_date, voter_user_id)
+            )
+        """)
+
         # storm_session_state — per-(guild, event_type, event_date, team)
         # lock that the structured-flow roster builder takes when an
         # officer opens it. Prevents two officers from independently
@@ -568,6 +586,12 @@ def init_db():
             # Rulebringers. DS rows leave this at 0; the wizard skips
             # the question for DS setup.
             ("judicator_role_id",       "INTEGER DEFAULT 0"),
+            # Power-refresh DM nudge (#138). Premium-only — when on,
+            # the SignupView click handler DMs the voter if their
+            # power_column_name cell on the roster Sheet is missing
+            # or unparseable. Once per (guild, event_type, event_date,
+            # voter) — see storm_power_refresh_dms_sent below.
+            ("power_refresh_dm_enabled", "INTEGER DEFAULT 0"),
         ]:
             try:
                 conn.execute(f"ALTER TABLE guild_storm_config ADD COLUMN {col} {definition}")
@@ -1307,6 +1331,7 @@ def get_storm_config(guild_id: int, event_type: str) -> dict:
         "signup_lead_days":        5,
         "signup_time":             "",
         "judicator_role_id":       0,
+        "power_refresh_dm_enabled": 0,
     }
     return _normalize_storm_templates(fallback, event_type)
 
@@ -1434,6 +1459,7 @@ def get_structured_storm_config(guild_id: int, event_type: str) -> dict:
         ),
         "signup_time":             cfg.get("signup_time") or "",
         "judicator_role_id":       int(cfg.get("judicator_role_id") or 0),
+        "power_refresh_dm_enabled": bool(cfg.get("power_refresh_dm_enabled")),
     }
 
 
@@ -1514,6 +1540,7 @@ def save_structured_storm_config(
     signup_lead_days: int           = 5,
     signup_time: str                = "",
     judicator_role_id: int          = 0,
+    power_refresh_dm_enabled: bool  = False,
 ) -> bool:
     """UPDATE the structured-flow fields on an existing (guild_id, event_type)
     row. The row must already exist (created by save_storm_config); this does
@@ -1575,7 +1602,8 @@ def save_structured_storm_config(
             "  event_day_of_week = ?, "
             "  signup_lead_days = ?, "
             "  signup_time = ?, "
-            "  judicator_role_id = ? "
+            "  judicator_role_id = ?, "
+            "  power_refresh_dm_enabled = ? "
             "WHERE guild_id = ? AND event_type = ?",
             (
                 1 if structured_flow_enabled else 0,
@@ -1584,6 +1612,7 @@ def save_structured_storm_config(
                 signups_tab, rosters_tab, attendance_tab,
                 strategies_tab, member_rules_tab,
                 dow, lead, signup_time, jud_role,
+                1 if power_refresh_dm_enabled else 0,
                 guild_id, event_type,
             ),
         )
@@ -1799,6 +1828,46 @@ def get_recent_storm_registration_posts(within_days: int = 14) -> list[dict]:
             (cutoff,),
         ).fetchall()
     return [dict(r) for r in rows]
+
+
+# ── Power-refresh DM cooldown (#138) ────────────────────────────────────────
+
+
+def has_power_refresh_dm_been_sent(
+    guild_id: int, event_type: str, event_date: str, voter_user_id: int,
+) -> bool:
+    """True if the bot has already sent the power-refresh nudge to this
+    voter for this event. Used by the SignupView click handler to
+    cap at one nudge per (member, event_date) regardless of re-votes
+    or bot restarts."""
+    with _get_conn() as conn:
+        row = conn.execute(
+            "SELECT 1 FROM storm_power_refresh_dms_sent "
+            "WHERE guild_id = ? AND event_type = ? AND event_date = ? "
+            "  AND voter_user_id = ?",
+            (int(guild_id), event_type, event_date, int(voter_user_id)),
+        ).fetchone()
+    return row is not None
+
+
+def record_power_refresh_dm_sent(
+    guild_id: int, event_type: str, event_date: str, voter_user_id: int,
+) -> bool:
+    """Idempotent record of "this voter got a power-refresh DM for
+    this event." Returns True on a fresh insert, False if already
+    recorded — caller can use either return as the cooldown gate."""
+    with _get_conn() as conn:
+        cur = conn.execute(
+            "INSERT OR IGNORE INTO storm_power_refresh_dms_sent "
+            "(guild_id, event_type, event_date, voter_user_id, sent_at) "
+            "VALUES (?, ?, ?, ?, ?)",
+            (
+                int(guild_id), event_type, event_date,
+                int(voter_user_id), _utcnow_iso(),
+            ),
+        )
+        conn.commit()
+        return cur.rowcount > 0
 
 
 # ── Walkthrough dismissals (#130) ────────────────────────────────────────────

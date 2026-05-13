@@ -4966,6 +4966,7 @@ async def run_storm_setup(interaction: discord.Interaction, bot, event_type: str
         signup_lead_days       =structured_cfg.get("signup_lead_days", 5),
         signup_time            =structured_cfg.get("signup_time", ""),
         judicator_role_id      =structured_cfg.get("judicator_role_id", 0),
+        power_refresh_dm_enabled=bool(structured_cfg.get("power_refresh_dm_enabled", False)),
     )
 
     embed = discord.Embed(title=f"✅ {label} Configured", color=discord.Color.green())
@@ -5641,6 +5642,7 @@ async def _run_structured_flow_setup_step(
     result.setdefault("signup_lead_days", 5)
     result.setdefault("signup_time", "")
     result.setdefault("judicator_role_id", 0)
+    result.setdefault("power_refresh_dm_enabled", False)
 
     cmd_short = cmd_name.replace("setup_", "")
 
@@ -5835,6 +5837,28 @@ async def _run_structured_flow_setup_step(
             if jud_pick is None:
                 return None
             result["judicator_role_id"] = jud_pick
+
+        # Power-refresh DM nudge (#138) — Premium-only. When on, the
+        # signup-button handler DMs the voter if their power column
+        # value isn't readable. Cooldown is one nudge per event_date
+        # so members aren't pinged repeatedly.
+        nudge_view = YesNoView()
+        await channel.send(
+            f"**Power-Refresh DM (💎 Premium)**\n"
+            f"When a member clicks a sign-up button for **{label}** and "
+            f"their **{result.get('power_column_name') or 'power column'}** "
+            f"cell is blank or unparseable, should the bot DM them a "
+            f"one-line nudge to update it? At most one DM per member per "
+            f"event date.",
+            view=nudge_view,
+        )
+        await wait_view_or_cancel(nudge_view, cancel_event)
+        if getattr(nudge_view, "cancelled", False):
+            return None
+        if nudge_view.selected is None:
+            await channel.send(f"⏰ Timed out. Run `/{cmd_name}` to start again.")
+            return None
+        result["power_refresh_dm_enabled"] = bool(nudge_view.selected)
 
     # ── Always-ask: preset library + member rules tab names (free + Premium) ──
     from config import default_structured_tab

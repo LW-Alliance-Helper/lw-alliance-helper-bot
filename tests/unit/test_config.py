@@ -374,6 +374,71 @@ class TestStructuredStormConfig:
         assert cfg["signup_time"]       == ""
 
 
+class TestPowerRefreshDmCooldown:
+    """#138 — `storm_power_refresh_dms_sent` is the persistent cooldown
+    that gates the power-refresh DM nudge from firing twice for the
+    same member per event."""
+
+    def test_unsent_returns_false(self, temp_db):
+        import config
+        assert config.has_power_refresh_dm_been_sent(
+            TEST_GUILD_ID, "DS", "2026-05-18", 12345,
+        ) is False
+
+    def test_record_then_check(self, temp_db):
+        import config
+        fresh = config.record_power_refresh_dm_sent(
+            TEST_GUILD_ID, "DS", "2026-05-18", 12345,
+        )
+        assert fresh is True
+        assert config.has_power_refresh_dm_been_sent(
+            TEST_GUILD_ID, "DS", "2026-05-18", 12345,
+        ) is True
+
+    def test_re_record_idempotent(self, temp_db):
+        import config
+        first = config.record_power_refresh_dm_sent(
+            TEST_GUILD_ID, "DS", "2026-05-18", 12345,
+        )
+        second = config.record_power_refresh_dm_sent(
+            TEST_GUILD_ID, "DS", "2026-05-18", 12345,
+        )
+        # First insert returns True (new row); second returns False
+        # (the cooldown blocked it). Both leave the table consistent.
+        assert first is True
+        assert second is False
+
+    def test_per_member_isolation(self, temp_db):
+        import config
+        config.record_power_refresh_dm_sent(
+            TEST_GUILD_ID, "DS", "2026-05-18", 12345,
+        )
+        # Different member same event → still firstable.
+        assert config.has_power_refresh_dm_been_sent(
+            TEST_GUILD_ID, "DS", "2026-05-18", 99999,
+        ) is False
+
+    def test_per_event_date_isolation(self, temp_db):
+        import config
+        config.record_power_refresh_dm_sent(
+            TEST_GUILD_ID, "DS", "2026-05-18", 12345,
+        )
+        # Same member, different event_date → firstable.
+        assert config.has_power_refresh_dm_been_sent(
+            TEST_GUILD_ID, "DS", "2026-05-25", 12345,
+        ) is False
+
+    def test_per_event_type_isolation(self, temp_db):
+        import config
+        config.record_power_refresh_dm_sent(
+            TEST_GUILD_ID, "DS", "2026-05-18", 12345,
+        )
+        # Same member, different event_type → firstable.
+        assert config.has_power_refresh_dm_been_sent(
+            TEST_GUILD_ID, "CS", "2026-05-18", 12345,
+        ) is False
+
+
 class TestStormSignups:
     """Test the #123 storm_signups + storm_registration_posts tables."""
 

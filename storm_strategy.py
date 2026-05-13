@@ -961,6 +961,15 @@ def _build_ds_group() -> _StrategyGroup:
         from storm_roster_builder import open_roster_builder
         await open_roster_builder(interaction, "DS", name.strip())
 
+    @grp.command(name="roster_history",
+                 description="Browse past DS rosters with attendance overlaid")
+    @app_commands.describe(
+        date="Optional — show a specific date (YYYY-MM-DD). Omit to list recent events.",
+    )
+    async def history(interaction: discord.Interaction, date: str | None = None):
+        from storm_history import open_history
+        await open_history(interaction, "DS", date)
+
     return grp
 
 
@@ -996,6 +1005,15 @@ def _build_cs_group() -> _StrategyGroup:
     async def apply(interaction: discord.Interaction, name: str):
         from storm_roster_builder import open_roster_builder
         await open_roster_builder(interaction, "CS", name.strip())
+
+    @grp.command(name="roster_history",
+                 description="Browse past CS rosters with attendance overlaid")
+    @app_commands.describe(
+        date="Optional — show a specific date (YYYY-MM-DD). Omit to list recent events.",
+    )
+    async def history(interaction: discord.Interaction, date: str | None = None):
+        from storm_history import open_history
+        await open_history(interaction, "CS", date)
 
     return grp
 

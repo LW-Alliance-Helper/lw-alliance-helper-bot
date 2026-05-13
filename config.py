@@ -1857,7 +1857,14 @@ def record_power_refresh_dm_sent(
 ) -> bool:
     """Idempotent record of "this voter got a power-refresh DM for
     this event." Returns True on a fresh insert, False if already
-    recorded — caller can use either return as the cooldown gate."""
+    recorded — caller can use either return as the cooldown gate.
+
+    `INSERT OR IGNORE` + the `rowcount > 0` return is what makes this
+    a race-tight cooldown: callers should insert FIRST, then send
+    the DM only on a True return. Two simultaneous click handlers
+    each call this; only the first sees True, the second sees False
+    and bails — so the DM fires exactly once.
+    """
     with _get_conn() as conn:
         cur = conn.execute(
             "INSERT OR IGNORE INTO storm_power_refresh_dms_sent "
@@ -1867,6 +1874,28 @@ def record_power_refresh_dm_sent(
                 int(guild_id), event_type, event_date,
                 int(voter_user_id), _utcnow_iso(),
             ),
+        )
+        conn.commit()
+        return cur.rowcount > 0
+
+
+def clear_power_refresh_dm_sent(
+    guild_id: int, event_type: str, event_date: str, voter_user_id: int,
+) -> bool:
+    """Back out a `record_power_refresh_dm_sent` row. Used by the
+    click handler when a transient `discord.HTTPException` blew up
+    the DM send AFTER the cooldown was claimed via INSERT-first —
+    without backing it out, the member would never get a retry for
+    this event because the cooldown row would persist.
+
+    Returns True if a row was removed; False if nothing matched.
+    """
+    with _get_conn() as conn:
+        cur = conn.execute(
+            "DELETE FROM storm_power_refresh_dms_sent "
+            "WHERE guild_id = ? AND event_type = ? AND event_date = ? "
+            "  AND voter_user_id = ?",
+            (int(guild_id), event_type, event_date, int(voter_user_id)),
         )
         conn.commit()
         return cur.rowcount > 0

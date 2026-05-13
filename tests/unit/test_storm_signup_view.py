@@ -209,3 +209,213 @@ class TestPersistentViewRegistration:
         # Should not raise even when add_view blows up.
         count = sv.register_persistent_signup_views(bot)
         assert count == 0
+
+
+class TestPowerRefreshDmNudge:
+    """Audit gap: `_maybe_send_power_refresh_dm` was uncovered. These
+    tests pin the new INSERT-first ordering (race-tight), the
+    HTTPException back-out (so transient errors retry), and the
+    cooldown short-circuit (no Sheet read on re-votes)."""
+
+    @pytest.fixture
+    def env(self, seeded_db):
+        """Premium-flag-on guild with the power-refresh DM toggle on,
+        plus a roster fixture where the voter (`42`) has unparseable
+        power so the nudge is in scope."""
+        import config
+        config.save_storm_config(
+            TEST_GUILD_ID, "DS",
+            tab_name="DS Tab", mail_template="",
+            timezone="America/New_York", log_channel_id=0,
+        )
+        config.save_structured_storm_config(
+            TEST_GUILD_ID, "DS",
+            structured_flow_enabled=True,
+            power_column_name="1st Squad Power",
+            power_refresh_dm_enabled=True,
+        )
+        return TEST_GUILD_ID
+
+    def _fake_interaction(self, *, send_raises=None, user_id=42):
+        from unittest.mock import AsyncMock
+        inter = MagicMock()
+        inter.guild = MagicMock()
+        inter.guild.id = TEST_GUILD_ID
+        inter.user = MagicMock()
+        inter.user.id = user_id
+        if send_raises is None:
+            inter.user.send = AsyncMock()
+        else:
+            inter.user.send = AsyncMock(side_effect=send_raises)
+        return inter
+
+    def _patch_roster(self, voter_power):
+        from unittest.mock import patch
+        return patch(
+            "storm_roster_builder._read_roster_powers",
+            return_value=(
+                {"42": {"key": "42", "name": "Alice",
+                        "discord_id": "42", "power": voter_power,
+                        "not_on_discord": False}},
+                [],
+            ),
+        )
+
+    @pytest.mark.asyncio
+    async def test_disabled_flag_short_circuits(self, env, seeded_db):
+        import config
+        config.save_structured_storm_config(
+            TEST_GUILD_ID, "DS",
+            structured_flow_enabled=True,
+            power_refresh_dm_enabled=False,
+        )
+        inter = self._fake_interaction()
+        await sv._maybe_send_power_refresh_dm(
+            inter, env, "DS", "2026-05-18", 42,
+        )
+        inter.user.send.assert_not_called()
+
+    @pytest.mark.asyncio
+    async def test_voter_not_on_roster_skipped(self, env):
+        from unittest.mock import patch
+        inter = self._fake_interaction()
+        with patch(
+            "storm_roster_builder._read_roster_powers",
+            return_value=({}, []),
+        ):
+            await sv._maybe_send_power_refresh_dm(
+                inter, env, "DS", "2026-05-18", 42,
+            )
+        inter.user.send.assert_not_called()
+
+    @pytest.mark.asyncio
+    async def test_power_parseable_no_dm(self, env):
+        inter = self._fake_interaction()
+        with self._patch_roster(voter_power=412_000_000):
+            await sv._maybe_send_power_refresh_dm(
+                inter, env, "DS", "2026-05-18", 42,
+            )
+        inter.user.send.assert_not_called()
+
+    @pytest.mark.asyncio
+    async def test_power_unparseable_sends_dm_and_records(self, env):
+        import config
+        inter = self._fake_interaction()
+        with self._patch_roster(voter_power=None):
+            await sv._maybe_send_power_refresh_dm(
+                inter, env, "DS", "2026-05-18", 42,
+            )
+        inter.user.send.assert_awaited_once()
+        body = inter.user.send.await_args.args[0]
+        assert "1st Squad Power" in body
+        # Cooldown row recorded — subsequent re-vote is silent.
+        assert config.has_power_refresh_dm_been_sent(
+            env, "DS", "2026-05-18", 42,
+        )
+
+    @pytest.mark.asyncio
+    async def test_cooldown_prevents_double_dm_on_revote(self, env):
+        inter1 = self._fake_interaction()
+        with self._patch_roster(voter_power=None):
+            await sv._maybe_send_power_refresh_dm(
+                inter1, env, "DS", "2026-05-18", 42,
+            )
+        assert inter1.user.send.await_count == 1
+        # Second re-vote → cooldown short-circuits, no second DM.
+        inter2 = self._fake_interaction()
+        with self._patch_roster(voter_power=None):
+            await sv._maybe_send_power_refresh_dm(
+                inter2, env, "DS", "2026-05-18", 42,
+            )
+        inter2.user.send.assert_not_called()
+
+    @pytest.mark.asyncio
+    async def test_forbidden_keeps_cooldown_row(self, env):
+        """DM-Forbidden = member's DMs are off; don't retry on every
+        re-vote."""
+        import config
+        import discord as _d
+        inter = self._fake_interaction(
+            send_raises=_d.Forbidden(
+                response=MagicMock(status=403), message="DMs disabled",
+            ),
+        )
+        with self._patch_roster(voter_power=None):
+            await sv._maybe_send_power_refresh_dm(
+                inter, env, "DS", "2026-05-18", 42,
+            )
+        # Cooldown is recorded so we don't hit the Sheet read again.
+        assert config.has_power_refresh_dm_been_sent(
+            env, "DS", "2026-05-18", 42,
+        )
+
+    @pytest.mark.asyncio
+    async def test_httpexception_backs_out_cooldown(self, env):
+        """Transient HTTP error = the DM didn't land; back out the
+        cooldown row so the next re-vote retries. Audit Major M1."""
+        import config
+        import discord as _d
+        inter = self._fake_interaction(
+            send_raises=_d.HTTPException(
+                response=MagicMock(status=503), message="Service unavailable",
+            ),
+        )
+        with self._patch_roster(voter_power=None):
+            await sv._maybe_send_power_refresh_dm(
+                inter, env, "DS", "2026-05-18", 42,
+            )
+        # Cooldown was backed out — next click can retry.
+        assert not config.has_power_refresh_dm_been_sent(
+            env, "DS", "2026-05-18", 42,
+        )
+
+    @pytest.mark.asyncio
+    async def test_simultaneous_clicks_only_one_dms(self, env):
+        """Audit Major M2: two clicks within the same second both pass
+        the SELECT before either INSERTs. INSERT-first ordering means
+        only the first sees a fresh row → only the first DMs."""
+        from unittest.mock import patch
+        inter_a = self._fake_interaction()
+        inter_b = self._fake_interaction()
+
+        # Drive both serially but they each see the same starting
+        # state (no cooldown row yet). The first INSERT-first wins.
+        with self._patch_roster(voter_power=None):
+            await sv._maybe_send_power_refresh_dm(
+                inter_a, env, "DS", "2026-05-18", 42,
+            )
+            await sv._maybe_send_power_refresh_dm(
+                inter_b, env, "DS", "2026-05-18", 42,
+            )
+
+        # Exactly one DM was sent.
+        assert inter_a.user.send.await_count == 1
+        assert inter_b.user.send.await_count == 0
+
+
+class TestClearPowerRefreshDmSent:
+    """The new `clear_power_refresh_dm_sent` helper backs out a row
+    after a transient HTTPException."""
+
+    def test_round_trip(self, seeded_db):
+        import config
+        config.record_power_refresh_dm_sent(
+            TEST_GUILD_ID, "DS", "2026-05-18", 42,
+        )
+        assert config.has_power_refresh_dm_been_sent(
+            TEST_GUILD_ID, "DS", "2026-05-18", 42,
+        )
+        ok = config.clear_power_refresh_dm_sent(
+            TEST_GUILD_ID, "DS", "2026-05-18", 42,
+        )
+        assert ok
+        assert not config.has_power_refresh_dm_been_sent(
+            TEST_GUILD_ID, "DS", "2026-05-18", 42,
+        )
+
+    def test_clear_nothing_is_safe(self, seeded_db):
+        import config
+        # Clearing a non-existent row is a no-op, not an exception.
+        assert not config.clear_power_refresh_dm_sent(
+            TEST_GUILD_ID, "DS", "2026-05-18", 999,
+        )

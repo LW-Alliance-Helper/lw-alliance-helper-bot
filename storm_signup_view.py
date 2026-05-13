@@ -272,15 +272,21 @@ async def _maybe_send_power_refresh_dm(
       * A nudge hasn't already been sent to this voter for this event
         (cooldown via storm_power_refresh_dms_sent).
 
-    Idempotent — the cooldown insert is INSERT OR IGNORE, so two
-    near-simultaneous votes can't double-DM.
+    Race-tight via INSERT-first cooldown: `record_power_refresh_dm_sent`
+    returns True only on a fresh insert. Two simultaneous click
+    handlers each call it; the first sees True and sends the DM, the
+    second sees False and bails — so the DM fires exactly once even
+    under a re-vote race. Without this ordering, the audit found the
+    prior SELECT → DM → INSERT order let two near-simultaneous clicks
+    both pass the SELECT and both fire `user.send`.
     """
     import config
     structured = config.get_structured_storm_config(guild_id, event_type)
     if not structured.get("power_refresh_dm_enabled"):
         return
 
-    # Cheap cooldown check before any Sheet read.
+    # Cheap cooldown check before any Sheet read — saves the Sheet
+    # roundtrip on every subsequent re-vote by the same member.
     if config.has_power_refresh_dm_been_sent(
         guild_id, event_type, event_date, voter_id,
     ):
@@ -306,6 +312,14 @@ async def _maybe_send_power_refresh_dm(
         # Power is readable; no nudge needed.
         return
 
+    # Claim the cooldown FIRST. If another concurrent click already
+    # claimed it (insert returned False), bail before the DM send.
+    inserted = config.record_power_refresh_dm_sent(
+        guild_id, event_type, event_date, voter_id,
+    )
+    if not inserted:
+        return
+
     power_column = structured.get("power_column_name") or "your power column"
     body = (
         f"Heads up — your **{power_column}** on the alliance roster "
@@ -317,24 +331,35 @@ async def _maybe_send_power_refresh_dm(
     try:
         await user.send(body)
     except discord.Forbidden:
+        # DMs disabled — keep the cooldown row so we don't keep
+        # hitting the Sheet-read path on every re-vote. This is an
+        # alliance-side / member-side preference, not a transient
+        # error to retry.
         logger.info(
             "[STORM SIGNUP] power-refresh DM blocked by user %s in guild=%s "
             "(DMs disabled). Skipping nudge.",
             voter_id, guild_id,
         )
-        # Still record so we don't pile on retries every re-vote.
     except discord.HTTPException as e:
+        # Transient API error (503/502/rate limit) — the DM didn't
+        # actually land, so back out the cooldown row so the next
+        # re-vote retries. Without this, a flake on the first vote
+        # permanently silenced the nudge for this member + event.
         logger.warning(
-            "[STORM SIGNUP] power-refresh DM HTTP error for user=%s guild=%s: %s",
+            "[STORM SIGNUP] power-refresh DM HTTP error for user=%s guild=%s: %s "
+            "(backing out cooldown so next click retries)",
             voter_id, guild_id, e,
         )
-
-    # Always record after attempting — successful AND DM-blocked paths
-    # both count toward the cooldown so a member with DMs off doesn't
-    # keep hitting the Sheet-read path on every re-vote.
-    config.record_power_refresh_dm_sent(
-        guild_id, event_type, event_date, voter_id,
-    )
+        try:
+            config.clear_power_refresh_dm_sent(
+                guild_id, event_type, event_date, voter_id,
+            )
+        except Exception as clear_err:
+            logger.warning(
+                "[STORM SIGNUP] cooldown back-out failed for user=%s "
+                "guild=%s: %s",
+                voter_id, guild_id, clear_err,
+            )
 
 
 def _mirror_vote_to_sheet(

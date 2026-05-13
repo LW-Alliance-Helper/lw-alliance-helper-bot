@@ -266,6 +266,34 @@ class TestNotOnDiscordEnumeration:
         # bot to do the right thing.
         assert "Carol" in names
 
+    def test_bot_id_inferred_non_discord(self, seeded_db):
+        """A roster row mapped to a bot ID (admin pasted the wrong ID)
+        is treated as a stale match — bots aren't real alliance members."""
+        import config
+        config.save_member_roster_config(
+            TEST_GUILD_ID, enabled=1, tab_name="Members",
+            discord_id_col=0, name_col=1, display_col=2,
+        )
+        rows = [
+            ["Discord ID", "Name", "Display Name"],
+            ["555",        "BotAccount", "BotAccount"],
+        ]
+        with patch(
+            "config.get_member_roster_sheet",
+            return_value=self._fake_roster_ws(rows),
+        ):
+            # The ID 555 maps to a bot in the guild.
+            guild = _FakeGuild(
+                TEST_GUILD_ID, [_FakeMember(555, "BotAccount", bot=True)],
+            )
+            buckets, errs = sov._build_bucket_map(guild, "DS", "2026-05-18")
+        # BotAccount is in not_voted as a non-Discord entry — the
+        # bot's "membership" in the guild doesn't make it count.
+        not_voted_labels = {e["label"] for e in buckets["not_voted"]}
+        assert "BotAccount" in not_voted_labels
+        # Soft warning so the alliance can clean up the row.
+        assert any("stale Discord IDs" in e for e in errs)
+
     def test_stale_discord_id_inferred_non_discord(self, seeded_db):
         """#139 — a row with a Discord ID that's not in the guild
         (member left) is inferred as non-Discord."""

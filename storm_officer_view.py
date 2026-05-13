@@ -178,7 +178,11 @@ def _read_roster_rows(
                     member = guild.get_member(int(discord_id))
                 except (TypeError, ValueError):
                     member = None
-                if member is None:
+                # Bots aren't real alliance members. A roster row that
+                # resolves to a bot (admin pasted the wrong ID) gets
+                # the same treatment as a stale ID — flag it for
+                # cleanup rather than counting the bot as Discord-on.
+                if member is None or member.bot:
                     inferred = True
                     stale_ids.append(f"{name or '?'} (id {discord_id})")
 
@@ -821,6 +825,23 @@ class StormSignupsViewCog(commands.Cog):
         # scan can blow past the 3-second initial-response token on a cold
         # cache or rate-limited Sheets API.
         await interaction.response.defer(thinking=True)
+
+        # Ensure the guild member cache is populated so `guild.get_member`
+        # in `_read_roster_rows` doesn't false-positive-infer members as
+        # not-on-Discord during a cold cache (cold restart, this guild
+        # not yet touched by an interaction, etc.). `_ensure_member_cache`
+        # is a no-op when the cache is already chunked and silently
+        # tolerates the SERVER MEMBERS INTENT being off (the warning
+        # path in `_read_roster_rows` still surfaces).
+        try:
+            import member_roster
+            await member_roster._ensure_member_cache(interaction.guild)
+        except Exception as e:
+            logger.warning(
+                "[STORM OFFICER VIEW] guild.chunk() pre-pass failed for "
+                "guild=%s: %s",
+                interaction.guild_id, e,
+            )
 
         view = OfficerView(interaction.guild, interaction.user.id, et, date_clean)
         followup_args = dict(

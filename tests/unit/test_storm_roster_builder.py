@@ -1116,15 +1116,37 @@ class TestNonDiscordAutoDetect:
     def test_present_guild_member_not_flagged(self, fake_env):
         from unittest.mock import MagicMock
         fake, gid = fake_env
-        # Mock a guild that returns a member for Alice but not for
-        # other IDs.
+        # Mock a guild that returns a (non-bot) member for Alice but
+        # not for other IDs. `.bot = False` is critical — MagicMock's
+        # auto-attribute would otherwise satisfy the bot-filter and
+        # mis-classify a real member as non-Discord.
         def _get_member(mid):
-            return MagicMock() if mid == 1001 else None
+            if mid == 1001:
+                m = MagicMock()
+                m.bot = False
+                return m
+            return None
         guild = MagicMock()
         guild.get_member.side_effect = _get_member
         members, _errs = srb._read_roster_powers(gid, "DS", guild=guild)
         # Alice is in the server → NOT flagged.
         assert members["1001"]["not_on_discord"] is False
+
+    def test_bot_member_inferred_non_discord(self, fake_env):
+        """A roster row mapped to a bot account (admin pasted the wrong
+        ID) is treated as a stale match — bots aren't real alliance
+        members."""
+        from unittest.mock import MagicMock
+        fake, gid = fake_env
+        bot_member = MagicMock()
+        bot_member.bot = True
+        guild = MagicMock()
+        guild.get_member.return_value = bot_member
+        members, errs = srb._read_roster_powers(gid, "DS", guild=guild)
+        # Alice's row points to a bot account → inferred non-Discord.
+        assert members["1001"]["not_on_discord"] is True
+        # And the cleanup warning surfaces with the stale ID.
+        assert any("stale Discord IDs" in e for e in errs)
 
     def test_explicit_flag_wins_over_inference(self, fake_env):
         from unittest.mock import MagicMock
@@ -1133,7 +1155,9 @@ class TestNonDiscordAutoDetect:
         # if we hand a guild that returned a member (impossible since
         # discord_id is blank, but defense), the explicit flag wins.
         guild = MagicMock()
-        guild.get_member.return_value = MagicMock()
+        m = MagicMock()
+        m.bot = False
+        guild.get_member.return_value = m
         members, _errs = srb._read_roster_powers(gid, "DS", guild=guild)
         assert members["Dave"]["not_on_discord"] is True
 

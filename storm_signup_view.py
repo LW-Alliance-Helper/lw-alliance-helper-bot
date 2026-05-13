@@ -301,6 +301,19 @@ async def _maybe_send_power_refresh_dm(
         return
 
     guild = interaction.guild
+    # Ensure the guild member cache is loaded — a stale-ID inference
+    # from a cold cache would let this nudge fire for a member who's
+    # actually in Discord but just hasn't been chunked yet.
+    if guild is not None:
+        try:
+            import member_roster
+            await member_roster._ensure_member_cache(guild)
+        except Exception as e:
+            logger.warning(
+                "[STORM SIGNUP] guild.chunk() pre-pass failed for "
+                "guild=%s: %s",
+                guild_id, e,
+            )
     members, _errors = _read_roster_powers(guild_id, event_type, guild=guild)
     voter_key = str(voter_id)
     voter_row = members.get(voter_key)

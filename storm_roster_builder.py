@@ -192,7 +192,11 @@ def _read_roster_powers(
                     member = guild.get_member(int(discord_id))
                 except (TypeError, ValueError):
                     member = None
-                if member is None:
+                # Bots aren't real alliance members. If the roster
+                # Sheet maps an ID to a bot (admin pasted the wrong
+                # ID), treat it as a stale match rather than counting
+                # the bot as a Discord member.
+                if member is None or member.bot:
                     inferred = True
                     stale_ids.append(f"{name or '?'} (id {discord_id})")
         not_on_discord = explicit_set or inferred
@@ -1998,6 +2002,18 @@ async def _finalize_structured_roster(
     # whose row is gone are left as None — better than reading the
     # builder-open snapshot, which is what the audit flagged.
     try:
+        # Cache pre-pass (see apply_preset) — keeps the non-Discord
+        # inference path inside `_read_roster_powers` honest under a
+        # cold cache.
+        try:
+            import member_roster
+            await member_roster._ensure_member_cache(interaction.guild)
+        except Exception as e:
+            logger.warning(
+                "[STORM STRUCTURED] guild.chunk() pre-pass failed for "
+                "guild=%s: %s",
+                s.guild_id, e,
+            )
         fresh_members, _refresh_errors = _read_roster_powers(
             s.guild_id, s.event_type, guild=interaction.guild,
         )
@@ -2664,6 +2680,20 @@ async def open_roster_builder(
             )
             return
         team = team_view.selected
+
+    # Ensure the guild member cache is populated so `guild.get_member`
+    # inside `_read_roster_powers` doesn't false-positive-infer real
+    # members as not-on-Discord on a cold cache. Silently tolerates
+    # the SERVER MEMBERS INTENT being off — the reader's own thin-
+    # cache warning still fires in that case.
+    try:
+        import member_roster
+        await member_roster._ensure_member_cache(interaction.guild)
+    except Exception as e:
+        logger.warning(
+            "[STORM BUILDER] guild.chunk() pre-pass failed for guild=%s: %s",
+            interaction.guild_id, e,
+        )
 
     # Load powers + rules. Passes the live guild so the reader can
     # infer non-Discord status for rows with stale or blank Discord IDs

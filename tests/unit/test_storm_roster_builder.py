@@ -1067,6 +1067,89 @@ class TestAutoFillButtonGate:
         assert not any("Auto-fill" in lab for lab in labels)
 
 
+class TestFindJudicatorCandidates:
+    """#137 — `_find_judicator_candidates` returns assigned member keys
+    whose per_member.special_role rule is `judicator`. Used by the
+    CS Apply Faction Roles button to know who gets the role."""
+
+    def test_assigned_judicator_returned(self):
+        members = {
+            "1001": {"key": "1001", "name": "Alice", "discord_id": "1001",
+                     "power": 412_000_000, "not_on_discord": False},
+            "1002": {"key": "1002", "name": "Bob",   "discord_id": "1002",
+                     "power": 350_000_000, "not_on_discord": False},
+        }
+        rules = [
+            smr.Rule(rule_type="per_member", subject="Alice",
+                     sub_type="special_role", value="judicator"),
+        ]
+        sess = _make_session(team="A", members=members, per_member_rules=rules)
+        sess.assignments["Power Tower"].append("1001")
+        assert srb._find_judicator_candidates(sess) == ["1001"]
+
+    def test_unassigned_judicator_excluded(self):
+        members = {
+            "1001": {"key": "1001", "name": "Alice", "discord_id": "1001",
+                     "power": 412_000_000, "not_on_discord": False},
+        }
+        rules = [
+            smr.Rule(rule_type="per_member", subject="Alice",
+                     sub_type="special_role", value="judicator"),
+        ]
+        sess = _make_session(team="A", members=members, per_member_rules=rules)
+        # Alice is on the roster but NOT assigned anywhere.
+        assert srb._find_judicator_candidates(sess) == []
+
+    def test_paired_subs_not_included(self):
+        """v1 spec: only primaries are applied, not paired subs."""
+        members = {
+            "1001": {"key": "1001", "name": "Alice", "discord_id": "1001",
+                     "power": 412_000_000, "not_on_discord": False},
+            "1002": {"key": "1002", "name": "Bob",   "discord_id": "1002",
+                     "power": 350_000_000, "not_on_discord": False},
+        }
+        rules = [
+            smr.Rule(rule_type="per_member", subject="Bob",
+                     sub_type="special_role", value="judicator"),
+        ]
+        sess = _make_session(
+            team="A", members=members, per_member_rules=rules, sub_mode="paired",
+        )
+        sess.assignments["Power Tower"].append("1001")
+        sess.paired_subs["1001"] = "1002"
+        # Bob is paired in but not in assignments → excluded.
+        assert srb._find_judicator_candidates(sess) == []
+
+    def test_commander_rule_does_not_match(self):
+        members = {
+            "1001": {"key": "1001", "name": "Alice", "discord_id": "1001",
+                     "power": 412_000_000, "not_on_discord": False},
+        }
+        rules = [
+            smr.Rule(rule_type="per_member", subject="Alice",
+                     sub_type="special_role", value="commander"),
+        ]
+        sess = _make_session(team="A", members=members, per_member_rules=rules)
+        sess.assignments["Power Tower"].append("1001")
+        # commander != judicator → no candidate
+        assert srb._find_judicator_candidates(sess) == []
+
+    def test_discord_id_subject_resolves(self):
+        """Per [#136](https://github.com/LW-Alliance-Helper/lw-alliance-helper-bot/issues/136), per_member subjects may be Discord IDs.
+        The candidate finder accepts either form."""
+        members = {
+            "1001": {"key": "1001", "name": "Alice", "discord_id": "1001",
+                     "power": 412_000_000, "not_on_discord": False},
+        }
+        rules = [
+            smr.Rule(rule_type="per_member", subject="1001",  # discord_id form
+                     sub_type="special_role", value="judicator"),
+        ]
+        sess = _make_session(team="A", members=members, per_member_rules=rules)
+        sess.assignments["Power Tower"].append("1001")
+        assert srb._find_judicator_candidates(sess) == ["1001"]
+
+
 class TestPairedSubMode:
     """#132 — paired sub mode keeps each primary partnered with a
     specific sub. Auto-fill pairs greedy-style after primary placement;

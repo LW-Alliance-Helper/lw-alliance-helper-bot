@@ -562,6 +562,12 @@ def init_db():
             ("event_day_of_week",       "INTEGER DEFAULT -1"),
             ("signup_lead_days",        "INTEGER DEFAULT 5"),
             ("signup_time",             "TEXT    DEFAULT ''"),
+            # Faction roles (#137). Premium-only Discord role ID
+            # applied to per_member.special_role=judicator candidates
+            # after a CS Approve & Post when matchmaking reveals
+            # Rulebringers. DS rows leave this at 0; the wizard skips
+            # the question for DS setup.
+            ("judicator_role_id",       "INTEGER DEFAULT 0"),
         ]:
             try:
                 conn.execute(f"ALTER TABLE guild_storm_config ADD COLUMN {col} {definition}")
@@ -1300,6 +1306,7 @@ def get_storm_config(guild_id: int, event_type: str) -> dict:
         "event_day_of_week":       -1,
         "signup_lead_days":        5,
         "signup_time":             "",
+        "judicator_role_id":       0,
     }
     return _normalize_storm_templates(fallback, event_type)
 
@@ -1426,6 +1433,7 @@ def get_structured_storm_config(guild_id: int, event_type: str) -> dict:
             else 5
         ),
         "signup_time":             cfg.get("signup_time") or "",
+        "judicator_role_id":       int(cfg.get("judicator_role_id") or 0),
     }
 
 
@@ -1505,6 +1513,7 @@ def save_structured_storm_config(
     event_day_of_week: int          = -1,
     signup_lead_days: int           = 5,
     signup_time: str                = "",
+    judicator_role_id: int          = 0,
 ) -> bool:
     """UPDATE the structured-flow fields on an existing (guild_id, event_type)
     row. The row must already exist (created by save_storm_config); this does
@@ -1544,6 +1553,12 @@ def save_structured_storm_config(
         # cause the scheduler to skip events forever — fire date never
         # equals today).
         lead = 14
+    try:
+        jud_role = int(judicator_role_id or 0)
+    except (TypeError, ValueError):
+        jud_role = 0
+    if jud_role < 0:
+        jud_role = 0
     with _get_conn() as conn:
         cur = conn.execute(
             "UPDATE guild_storm_config SET "
@@ -1559,7 +1574,8 @@ def save_structured_storm_config(
             "  member_rules_tab = ?, "
             "  event_day_of_week = ?, "
             "  signup_lead_days = ?, "
-            "  signup_time = ? "
+            "  signup_time = ?, "
+            "  judicator_role_id = ? "
             "WHERE guild_id = ? AND event_type = ?",
             (
                 1 if structured_flow_enabled else 0,
@@ -1567,7 +1583,7 @@ def save_structured_storm_config(
                 int(signup_channel_id or 0), signup_schedule_cron,
                 signups_tab, rosters_tab, attendance_tab,
                 strategies_tab, member_rules_tab,
-                dow, lead, signup_time,
+                dow, lead, signup_time, jud_role,
                 guild_id, event_type,
             ),
         )

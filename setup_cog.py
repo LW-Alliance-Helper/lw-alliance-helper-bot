@@ -4965,6 +4965,7 @@ async def run_storm_setup(interaction: discord.Interaction, bot, event_type: str
         event_day_of_week      =structured_cfg.get("event_day_of_week", -1),
         signup_lead_days       =structured_cfg.get("signup_lead_days", 5),
         signup_time            =structured_cfg.get("signup_time", ""),
+        judicator_role_id      =structured_cfg.get("judicator_role_id", 0),
     )
 
     embed = discord.Embed(title=f"✅ {label} Configured", color=discord.Color.green())
@@ -5501,6 +5502,99 @@ def _normalise_hhmm(raw: str) -> str | None:
     return parse_storm_signup_time(raw)
 
 
+# ── Judicator role picker (#137) ─────────────────────────────────────────────
+
+
+async def _ask_judicator_role(
+    channel, bot, user, cancel_event, *,
+    cmd_name: str,
+    interaction_guild,
+    current_role_id: int,
+) -> int | None:
+    """CS-only Premium sub-step: pick the Discord role the bot will
+    apply to per_member Judicator candidates when matchmaking reveals
+    Rulebringers. Officer can also skip (returns 0).
+
+    Returns the role ID, 0 for "skip / no role configured," or None
+    on timeout / cancel."""
+    import wizard_registry
+
+    # Build a Select of guild roles. Discord caps Select options at
+    # 25, so pre-filter to non-managed, non-default roles by name
+    # length (truncate long names) and keep the most recently created
+    # 24 — plus a "Skip" sentinel option. Alliances rarely have >25
+    # custom roles; if they do, the lower priorities tend to be the
+    # ones that don't need to be Judicator anyway.
+    roles = [
+        r for r in (interaction_guild.roles if interaction_guild else [])
+        if not r.is_default() and not r.managed
+    ]
+    # Sort newest-first (created roles tend to be the relevant ones).
+    roles.sort(key=lambda r: r.position, reverse=True)
+    roles = roles[:24]
+
+    class _RolePickerView(discord.ui.View):
+        def __init__(self):
+            super().__init__(timeout=300)
+            self.selected: int | None = None
+            self.cancelled = False
+            options = [
+                discord.SelectOption(
+                    label="Skip — no role to apply",
+                    value="0",
+                    default=(current_role_id == 0),
+                ),
+            ]
+            for r in roles:
+                options.append(discord.SelectOption(
+                    label=r.name[:100],
+                    value=str(r.id),
+                    default=(r.id == current_role_id),
+                ))
+            sel = discord.ui.Select(
+                placeholder="Pick the Judicator role (or skip)",
+                min_values=1, max_values=1,
+                options=options,
+            )
+
+            async def _on_pick(inter: discord.Interaction):
+                try:
+                    self.selected = int(sel.values[0])
+                except (TypeError, ValueError):
+                    self.selected = 0
+                for item in self.children: item.disabled = True
+                if self.selected == 0:
+                    msg = "✅ Judicator role skipped."
+                else:
+                    msg = f"✅ Judicator role: <@&{self.selected}>"
+                await wizard_registry.safe_edit_response(
+                    inter, content=msg, view=self,
+                )
+                self.stop()
+
+            sel.callback = _on_pick
+            self.add_item(sel)
+
+    view = _RolePickerView()
+    await channel.send(
+        "**Judicator Role (💎 Premium — CS only)**\n"
+        "Pick the Discord role the bot should apply to members tagged "
+        "as Judicator candidates (via `/cs_member_rule set_member_role`) "
+        "after a CS roster is approved and matchmaking reveals "
+        "**Rulebringers**. Skip if you don't use this — the bot won't "
+        "apply any role.",
+        view=view,
+        allowed_mentions=discord.AllowedMentions.none(),
+    )
+    await wait_view_or_cancel(view, cancel_event)
+    if view.cancelled:
+        return None
+    if view.selected is None:
+        await channel.send(f"⏰ Timed out. Run `/{cmd_name}` to start again.")
+        return None
+    return int(view.selected)
+
+
 # ── Structured storm flow setup sub-flow (#38 + #54) ─────────────────────────
 
 async def _run_structured_flow_setup_step(
@@ -5546,6 +5640,7 @@ async def _run_structured_flow_setup_step(
     result.setdefault("event_day_of_week", -1)
     result.setdefault("signup_lead_days", 5)
     result.setdefault("signup_time", "")
+    result.setdefault("judicator_role_id", 0)
 
     cmd_short = cmd_name.replace("setup_", "")
 
@@ -5726,6 +5821,20 @@ async def _run_structured_flow_setup_step(
             if picked is None:
                 return None
             result[tab_key] = picked
+
+        # Judicator role (#137) — CS-only. After matchmaking reveals
+        # Rulebringers, the Apply Faction Roles button assigns this
+        # Discord role to per_member.special_role=judicator candidates.
+        if event_type == "CS":
+            jud_pick = await _ask_judicator_role(
+                channel, bot, user, cancel_event,
+                cmd_name=cmd_name,
+                interaction_guild=interaction_guild,
+                current_role_id=result.get("judicator_role_id", 0),
+            )
+            if jud_pick is None:
+                return None
+            result["judicator_role_id"] = jud_pick
 
     # ── Always-ask: preset library + member rules tab names (free + Premium) ──
     from config import default_structured_tab

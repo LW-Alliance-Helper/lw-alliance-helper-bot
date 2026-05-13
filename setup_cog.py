@@ -5400,6 +5400,7 @@ async def _ask_signup_schedule(
     channel, bot, user, cancel_event, *,
     label: str, cmd_name: str,
     current_dow: int, current_lead: int, current_time: str,
+    tz_label: str = "",
 ) -> dict | None:
     """Three-step Premium sub-flow for the auto-scheduler config:
         * Event day-of-week (dropdown; or "Skip auto-scheduling")
@@ -5506,32 +5507,38 @@ async def _ask_signup_schedule(
     # Empty string is a meaningful value here: "auto-schedule is set up
     # but no auto-fire" — leadership uses /storm_post_signup manually
     # for posting. Leave the time empty to express that.
-    time_default = current_time or "12:00"
+    #
+    # Time copy follows the existing convention used by train / birthday
+    # / shiny setup: 12-hour clock for display + parsing, with the
+    # guild's local timezone surfaced inline. Storage stays 24-hour HH:MM
+    # so the scheduler doesn't have to disambiguate at fire time.
+    saved_12h = _format_24h_to_12h(current_time) if current_time else ""
+    tz_hint = f" *(in your timezone: {tz_label})*" if tz_label else ""
     time_picked = await ask_keep_or_change(
         channel,
         f"**Auto-Schedule — Sign-Up Post Time**\n"
-        f"What local time should the bot fire the sign-up post? "
-        f"Use 24-hour format (HH:MM). The bot interprets this in your "
-        f"alliance's configured timezone.\n"
-        f"Leave blank for manual posting only (you still get the rest "
-        f"of the schedule config but the bot won't auto-post).",
-        default="12:00",
-        current=time_default if time_default != "12:00" else "",
+        f"What time should the bot fire the sign-up post?{tz_hint}\n"
+        f"*(e.g. `2:00pm`, `9:00am`, or 24-hour `14:00`)*\n"
+        f"Leave blank for manual posting only (you keep the rest of the "
+        f"schedule config but the bot won't auto-post).",
+        default="12:00pm",
+        current=saved_12h,
         modal_title="Sign-Up Time",
-        modal_label="HH:MM (24-hour, guild tz) — blank for manual",
+        modal_label="e.g. 2:00pm — blank for manual",
         timeout_cmd=cmd_name,
         cancel_event=cancel_event,
     )
     if time_picked is None:
         return None
     # Preserve an explicit empty input as "manual posting only" — don't
-    # silently coerce it to the default "12:00". Garbage input still
-    # falls back to the default because the modal label promises HH:MM.
+    # silently coerce it to the default. Otherwise try the 12-hour
+    # parser first (matches the prompt's example formats), then fall
+    # back to the existing 24-hour normaliser.
     raw = str(time_picked).strip()
     if not raw:
         time_clean = ""
     else:
-        time_clean = _normalise_hhmm(raw) or "12:00"
+        time_clean = _parse_12h_time(raw) or _normalise_hhmm(raw) or "12:00"
 
     return {
         "dow":  dow_view.selected,
@@ -5988,12 +5995,24 @@ async def _run_structured_flow_setup_step(
         # All three together drive the storm_signup_scheduler loop. The
         # alliance can skip all three (leave defaults) and continue
         # running `/storm_post_signup` manually.
+        # Resolve tz_label for the time-of-day prompt so the wizard
+        # shows "in your timezone: ET (America/New_York)" alongside the
+        # 12-hour example — matches the train / birthday / shiny
+        # patterns already established in this file.
+        from config import get_config
+        guild_cfg = get_config(guild_id) if guild_id else None
+        tz_str = (
+            guild_cfg.timezone if guild_cfg and guild_cfg.timezone
+            else "America/New_York"
+        )
+        tz_label = TIMEZONE_LABELS.get(tz_str, tz_str)
         sched_result = await _ask_signup_schedule(
             channel, bot, user, cancel_event,
             label=label, cmd_name=cmd_name,
             current_dow=result.get("event_day_of_week", -1),
             current_lead=result.get("signup_lead_days", 5),
             current_time=result.get("signup_time", ""),
+            tz_label=tz_label,
         )
         if sched_result is None:
             return None

@@ -718,6 +718,150 @@ class TestOverrideBelowFloorCapture:
         assert "Override Below Floor" in srb._ROSTERS_HEADER
 
 
+class TestAutoFill:
+    """Auto-fill (#134): resets the roster, applies per_member zone
+    rules, then power-greedy fills by zone priority, spilling extras
+    to subs."""
+
+    def _three_members(self) -> dict[str, dict]:
+        return {
+            "1001": {"key": "1001", "name": "Alice", "discord_id": "1001",
+                     "power": 412_000_000, "not_on_discord": False},
+            "1002": {"key": "1002", "name": "Bob",   "discord_id": "1002",
+                     "power": 280_000_000, "not_on_discord": False},
+            "1003": {"key": "1003", "name": "Carol", "discord_id": "1003",
+                     "power": 220_000_000, "not_on_discord": False},
+        }
+
+    def test_resets_state_before_filling(self):
+        members = self._three_members()
+        session = _make_session(team="A", members=members)
+        # Pre-fill some assignments and an override flag.
+        session.assignments["Power Tower"].append("1001")
+        session.subs.append("1002")
+        session.below_floor_overrides.add("1001")
+        srb._auto_fill_session(session)
+        # below_floor_overrides reset; manual assignments wiped before
+        # the algorithm placed members.
+        assert session.below_floor_overrides == set()
+        # Algorithm placed members — assignments may not be empty, but
+        # they should reflect the algorithm, not the pre-state.
+        # (Tested in detail below.)
+
+    def test_per_member_zone_rule_pins_member(self):
+        members = self._three_members()
+        # Move Bob below all floors so greedy fill wouldn't pick him for
+        # Power Tower; pin him there via per_member rule.
+        members["1002"]["power"] = 100_000_000
+        per_member = [smr.Rule(
+            rule_type="per_member", subject="Bob",
+            sub_type="zone", value="Nuclear Silo",
+        )]
+        session = _make_session(team="A", members=members, per_member_rules=per_member)
+        summary = srb._auto_fill_session(session)
+        assert "1002" in session.assignments["Nuclear Silo"]
+        assert summary["per_member_rules_applied"] == 1
+
+    def test_greedy_fill_by_priority(self):
+        # Two zones, both with capacity for one member. Priority forces
+        # ordering: zone A is priority 1, zone B is priority 2.
+        zones = [
+            ss.ZoneRow(zone="Zone A", max_players=1, min_power_a=200_000_000, priority=1),
+            ss.ZoneRow(zone="Zone B", max_players=1, min_power_a=200_000_000, priority=2),
+        ]
+        members = self._three_members()  # Alice 412M, Bob 280M, Carol 220M
+        session = _make_session(team="A", members=members, preset_zones=zones)
+        summary = srb._auto_fill_session(session)
+        # Highest-power eligible → priority-1 zone first.
+        assert session.assignments["Zone A"] == ["1001"]
+        assert session.assignments["Zone B"] == ["1002"]
+        # Remaining members → subs.
+        assert "1003" in session.subs
+        assert summary["auto_filled_by_power"] == 2
+
+    def test_power_unknown_goes_to_gaps_not_subs(self):
+        members = self._three_members()
+        members["1003"]["power"] = None
+        session = _make_session(team="A", members=members)
+        summary = srb._auto_fill_session(session)
+        # Carol (power=None) appears in gaps and NOT in subs/zones.
+        assert "Carol" in summary["gaps"]
+        assert "1003" not in session.subs
+        for zone_members in session.assignments.values():
+            assert "1003" not in zone_members
+
+    def test_power_band_relaxation_counted(self):
+        # Preset floor for Power Tower = 300M; band lowers it to 200M.
+        members = self._three_members()  # Bob 280M, Carol 220M would now slot
+        power_band = [smr.Rule(
+            rule_type="power_band", subject="200000000",
+            value="Power Tower",
+        )]
+        session = _make_session(team="A", members=members, power_band_rules=power_band)
+        summary = srb._auto_fill_session(session)
+        # Band lowered the floor → counted.
+        assert summary["power_band_rules_applied"] == 1
+
+    def test_conflict_when_zone_full(self):
+        # Two rules pin two different members to the same zone with cap=1.
+        zones = [
+            ss.ZoneRow(zone="Power Tower", max_players=1,
+                       min_power_a=100_000_000, priority=1),
+        ]
+        members = self._three_members()
+        per_member = [
+            smr.Rule(rule_type="per_member", subject="Alice",
+                     sub_type="zone", value="Power Tower"),
+            smr.Rule(rule_type="per_member", subject="Bob",
+                     sub_type="zone", value="Power Tower"),
+        ]
+        session = _make_session(team="A", members=members,
+                                preset_zones=zones,
+                                per_member_rules=per_member)
+        summary = srb._auto_fill_session(session)
+        # First rule placed Alice; second rule conflicts (zone full).
+        assert "1001" in session.assignments["Power Tower"]
+        assert "1002" not in session.assignments["Power Tower"]
+        assert any("full" in c.lower() for c in summary["conflicts"])
+
+    def test_conflict_when_per_member_zone_unknown(self):
+        members = self._three_members()
+        per_member = [smr.Rule(
+            rule_type="per_member", subject="Alice",
+            sub_type="zone", value="Mars Base",  # not in preset
+        )]
+        session = _make_session(team="A", members=members,
+                                per_member_rules=per_member)
+        summary = srb._auto_fill_session(session)
+        assert any("Mars Base" in c for c in summary["conflicts"])
+        # Alice is not pinned and may still get auto-filled elsewhere.
+
+    def test_summary_persists_on_session(self):
+        members = self._three_members()
+        session = _make_session(team="A", members=members)
+        assert session.auto_fill_summary is None
+        srb._auto_fill_session(session)
+        assert session.auto_fill_summary is not None
+        # Re-rendering the embed surfaces it.
+        embed = srb._render_builder_embed(session)
+        assert "Auto-fill summary" in embed.description
+
+    def test_per_member_id_subject_resolves(self):
+        """A per_member rule whose Subject is the Discord ID (a string
+        of digits) should still resolve to the right member — #136
+        prep work."""
+        members = self._three_members()
+        per_member = [smr.Rule(
+            rule_type="per_member", subject="1001",  # discord_id, not name
+            sub_type="zone", value="Power Tower",
+        )]
+        session = _make_session(team="A", members=members,
+                                per_member_rules=per_member)
+        summary = srb._auto_fill_session(session)
+        assert "1001" in session.assignments["Power Tower"]
+        assert summary["per_member_rules_applied"] == 1
+
+
 class TestStructuredBuilderView:
     def test_structured_mode_shows_approve_button(self):
         session = _make_session(team="A")

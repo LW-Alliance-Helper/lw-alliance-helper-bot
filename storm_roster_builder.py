@@ -239,6 +239,12 @@ class RosterBuilderSession:
         # or their power was unknown). Captured at assign time so the
         # rosters_tab write can flag the slot for post-event review.
         self.below_floor_overrides: set[str] = set()
+        # Auto-fill summary (#134) — populated by _auto_fill_session when
+        # the officer clicks the auto-fill button. The embed renderer
+        # surfaces this in place of the empty-state hint so leadership
+        # knows what rules applied, what got filled, what gapped.
+        # None until auto-fill runs at least once.
+        self.auto_fill_summary: dict | None = None
 
     @property
     def is_structured(self) -> bool:
@@ -332,6 +338,135 @@ def _apply_rules_to_session(session: RosterBuilderSession) -> None:
             f"per_member rule(s) reference roster names that aren't in the "
             f"current roster — rename or remove them: {preview}{extra}"
         )
+
+
+# ── Auto-fill (#134) ─────────────────────────────────────────────────────────
+
+
+def _auto_fill_session(session: RosterBuilderSession) -> dict:
+    """Auto-fill the roster from member rules + power-based greedy fill.
+
+    Resets the current roster (assignments + subs + override flags)
+    before filling, so a re-click of the button is "redo from scratch"
+    rather than "stack onto current state."
+
+    Algorithm, in order:
+      1. per_member zone rules — pin members to their named zone if
+         capacity, the member is in the signed-up pool, and the zone
+         exists in the preset.
+      2. Greedy fill — for each zone in priority order (lowest int
+         first; priority=0 sorts last), fill remaining slots from the
+         eligibility-gated pool (uses `_eligible_member_keys_for_zone`,
+         which respects power_band rule relaxation).
+      3. Spillover — unassigned members with known power go into the
+         sub pool. Power-unknown members are reported as gaps so the
+         officer can decide who to override below the floor.
+
+    Returns the summary dict (also stored on `session.auto_fill_summary`).
+
+    The fill is officer-correctable — every assignment can be tweaked
+    via the picker before Approve & Post.
+    """
+    # Reset state — auto-fill is "redo from scratch".
+    for zone in list(session.assignments.keys()):
+        session.assignments[zone] = []
+    session.subs = []
+    session.below_floor_overrides.clear()
+
+    summary = {
+        "per_member_rules_applied": 0,
+        "power_band_rules_applied": 0,
+        "auto_filled_by_power":     0,
+        "gaps":                     [],  # member names with no parseable power
+        "conflicts":                [],  # short strings: rule application failures
+    }
+
+    # ── 1. per_member zone rules ──
+    for rule in session.per_member_rules:
+        if rule.sub_type != "zone":
+            continue
+        subject = rule.subject.strip()
+        zone = rule.value.strip()
+        # Resolve subject (display name OR Discord ID string) → roster key.
+        match_key = None
+        for k, m in session.members.items():
+            if (
+                m["name"].strip().lower() == subject.lower()
+                or k == subject
+                or m.get("discord_id") == subject
+            ):
+                match_key = k
+                break
+        if match_key is None:
+            # Already surfaced once by _apply_rules_to_session, so don't
+            # double-warn. Just don't count it as applied.
+            continue
+        if not session.preset.find_zone(zone):
+            summary["conflicts"].append(
+                f"per_member rule names unknown zone: {zone}"
+            )
+            continue
+        if session.zone_member_count(zone) >= session.zone_capacity(zone):
+            summary["conflicts"].append(
+                f"{zone} full when pinning {subject}"
+            )
+            continue
+        if match_key in session.assigned_member_keys():
+            summary["conflicts"].append(
+                f"{subject} pinned to multiple zones"
+            )
+            continue
+        session.assignments[zone].append(match_key)
+        summary["per_member_rules_applied"] += 1
+
+    # ── 2. Greedy fill by zone priority ──
+    # priority=0 means "no priority set" → sort to the end.
+    def _priority_key(z) -> int:
+        return z.priority if z.priority > 0 else 9999
+
+    zones_sorted = sorted(session.preset.zones, key=_priority_key)
+    for z in zones_sorted:
+        remaining = z.max_players - session.zone_member_count(z.zone)
+        if remaining <= 0:
+            continue
+        eligible_keys, _below = _eligible_member_keys_for_zone(session, z.zone)
+        if not eligible_keys:
+            continue
+        # eligible_keys is already sorted high-power-first.
+        for key in eligible_keys[:remaining]:
+            session.assignments[z.zone].append(key)
+            summary["auto_filled_by_power"] += 1
+
+    # ── 3. Count power_band rules that effectively lowered a floor ──
+    # Informational — the actual gate is in `_eligible_member_keys_for_zone`
+    # via `_effective_floor_for_zone`, which is already consulted above.
+    for band in session.power_band_rules:
+        zone = band.value.strip()
+        if not session.preset.find_zone(zone):
+            continue
+        try:
+            threshold = int(band.subject)
+        except (TypeError, ValueError):
+            continue
+        # Compare against the team-specific preset floor (not the
+        # band-relaxed effective floor).
+        preset_floor = session.floor_for_zone(zone)
+        if threshold < preset_floor:
+            summary["power_band_rules_applied"] += 1
+
+    # ── 4. Spillover ──
+    assigned = session.assigned_member_keys()
+    for key, m in session.members.items():
+        if key in assigned:
+            continue
+        if m.get("power") is None:
+            summary["gaps"].append(m["name"])
+            continue
+        # Known-power leftovers → sub pool.
+        session.subs.append(key)
+
+    session.auto_fill_summary = summary
+    return summary
 
 
 # ── Embed rendering ──────────────────────────────────────────────────────────
@@ -441,6 +576,33 @@ def _render_builder_embed(session: RosterBuilderSession) -> discord.Embed:
     if session.roster_errors:
         lines.append("")
         lines.append("⚠️ " + session.roster_errors[0])
+
+    af = session.auto_fill_summary
+    if af is not None:
+        lines.append("")
+        lines.append("🎯 **Auto-fill summary**")
+        lines.append(
+            f"• Per-member rules applied: **{af['per_member_rules_applied']}**"
+        )
+        lines.append(
+            f"• Power-band rules lowering a floor: **{af['power_band_rules_applied']}**"
+        )
+        lines.append(
+            f"• Auto-filled by power: **{af['auto_filled_by_power']}**"
+        )
+        if af["gaps"]:
+            preview = ", ".join(af["gaps"][:5])
+            extra = f" (+{len(af['gaps']) - 5} more)" if len(af["gaps"]) > 5 else ""
+            lines.append(
+                f"• Gaps (power unknown, not slotted): **{len(af['gaps'])}** — "
+                f"{preview}{extra}"
+            )
+        if af["conflicts"]:
+            preview = "; ".join(af["conflicts"][:3])
+            extra = f" (+{len(af['conflicts']) - 3} more)" if len(af["conflicts"]) > 3 else ""
+            lines.append(f"• Conflicts: **{len(af['conflicts'])}** — {preview}{extra}")
+        else:
+            lines.append("• Conflicts: **0**")
 
     embed = discord.Embed(
         title=title,
@@ -702,6 +864,20 @@ class RosterBuilderView(discord.ui.View):
         # button that fires the rosters_tab write + auto-post; free
         # tier gets Generate-mail-only (officer copies manually).
         if s.is_structured:
+            auto_fill_btn = discord.ui.Button(
+                label="🎯 Auto-fill",
+                style=discord.ButtonStyle.primary, row=2,
+            )
+
+            async def _auto_fill(inter: discord.Interaction):
+                if not await self._guard_owner(inter):
+                    return
+                _auto_fill_session(s)
+                await self._refresh(inter)
+
+            auto_fill_btn.callback = _auto_fill
+            self.add_item(auto_fill_btn)
+
             approve_btn = discord.ui.Button(
                 label="✅ Approve & Post",
                 style=discord.ButtonStyle.success, row=3,

@@ -186,7 +186,8 @@ class TestReadRosterPowers:
 
 
 def _make_session(team: str = "A", *, members=None, preset_zones=None,
-                  per_member_rules=None, power_band_rules=None):
+                  per_member_rules=None, power_band_rules=None,
+                  sub_mode: str = "pool"):
     preset_zones = preset_zones or [
         ss.ZoneRow(zone="Power Tower",    max_players=4, min_power_a=300_000_000, min_power_b=180_000_000),
         ss.ZoneRow(zone="Nuclear Silo",   max_players=4, min_power_a=250_000_000, min_power_b=150_000_000),
@@ -200,6 +201,7 @@ def _make_session(team: str = "A", *, members=None, preset_zones=None,
         members=members or {},
         per_member_rules=per_member_rules or [],
         power_band_rules=power_band_rules or [],
+        sub_mode=sub_mode,
     )
 
 
@@ -1063,6 +1065,107 @@ class TestAutoFillButtonGate:
         view = srb.RosterBuilderView(session)
         labels = [getattr(c, "label", "") for c in view.children]
         assert not any("Auto-fill" in lab for lab in labels)
+
+
+class TestPairedSubMode:
+    """#132 — paired sub mode keeps each primary partnered with a
+    specific sub. Auto-fill pairs greedy-style after primary placement;
+    UI prompts for the sub inline."""
+
+    def _three_members(self) -> dict[str, dict]:
+        return {
+            "1001": {"key": "1001", "name": "Alice", "discord_id": "1001",
+                     "power": 412_000_000, "not_on_discord": False},
+            "1002": {"key": "1002", "name": "Bob",   "discord_id": "1002",
+                     "power": 350_000_000, "not_on_discord": False},
+            "1003": {"key": "1003", "name": "Carol", "discord_id": "1003",
+                     "power": 280_000_000, "not_on_discord": False},
+        }
+
+    def test_is_paired_property(self):
+        sess = _make_session(team="A", sub_mode="paired")
+        assert sess.is_paired is True
+        sess_pool = _make_session(team="A", sub_mode="pool")
+        assert sess_pool.is_paired is False
+
+    def test_invalid_sub_mode_normalises_to_pool(self):
+        sess = _make_session(team="A", sub_mode="garbage")
+        assert sess.is_paired is False
+        assert sess.sub_mode == "pool"
+
+    def test_assigned_member_keys_includes_paired_subs(self):
+        members = self._three_members()
+        sess = _make_session(team="A", members=members, sub_mode="paired")
+        sess.assignments["Power Tower"].append("1001")
+        sess.paired_subs["1001"] = "1002"
+        keys = sess.assigned_member_keys()
+        assert "1001" in keys
+        assert "1002" in keys  # paired sub counted
+
+    def test_unpaired_primaries_in_paired_mode(self):
+        members = self._three_members()
+        sess = _make_session(team="A", members=members, sub_mode="paired")
+        sess.assignments["Power Tower"].extend(["1001", "1002"])
+        sess.paired_subs["1001"] = "1003"
+        unpaired = sess.unpaired_primaries()
+        # Bob (1002) lacks a paired sub.
+        assert unpaired == ["1002"]
+
+    def test_unpaired_primaries_empty_in_pool_mode(self):
+        sess = _make_session(team="A", sub_mode="pool")
+        sess.assignments["Power Tower"].append("1001")
+        # Pool mode has no concept of pairing; helper returns [].
+        assert sess.unpaired_primaries() == []
+
+    def test_prune_stale_pairings(self):
+        members = self._three_members()
+        sess = _make_session(team="A", members=members, sub_mode="paired")
+        sess.assignments["Power Tower"].append("1001")
+        sess.paired_subs["1001"] = "1002"
+        # Unassign the primary.
+        sess.assignments["Power Tower"] = []
+        sess.prune_stale_pairings()
+        # The orphaned pairing should be gone.
+        assert sess.paired_subs == {}
+
+    def test_auto_fill_pairs_subs_in_paired_mode(self):
+        members = self._three_members()
+        zones = [
+            ss.ZoneRow(zone="Power Tower", max_players=1,
+                       min_power_a=200_000_000, priority=1),
+        ]
+        sess = _make_session(
+            team="A", members=members, preset_zones=zones, sub_mode="paired",
+        )
+        summary = srb._auto_fill_session(sess)
+        # Alice slotted as primary; Bob is the next-best eligible →
+        # paired sub.
+        assert sess.assignments["Power Tower"] == ["1001"]
+        assert sess.paired_subs.get("1001") == "1002"
+        # Carol is the leftover; she goes into the subs pool for paired
+        # mode's "available swap" display.
+        assert "1003" in sess.subs
+
+    def test_render_embed_shows_paired_pairs(self):
+        members = self._three_members()
+        sess = _make_session(team="A", members=members, sub_mode="paired")
+        sess.assignments["Power Tower"].append("1001")
+        sess.paired_subs["1001"] = "1002"
+        embed = srb._render_builder_embed(sess)
+        # Rendered as "Alice + sub Bob"
+        assert "Alice" in embed.description
+        assert "Bob" in embed.description
+        assert "sub" in embed.description.lower()
+
+    def test_render_embed_flags_unpaired_primary(self):
+        members = self._three_members()
+        sess = _make_session(team="A", members=members, sub_mode="paired")
+        sess.assignments["Power Tower"].append("1001")
+        # No pairing yet.
+        embed = srb._render_builder_embed(sess)
+        # The ⚠️ flag surfaces in the embed for unpaired primaries.
+        assert "⚠️" in embed.description
+        assert "Unpaired primaries" in embed.description
 
 
 class TestStructuredBuilderView:

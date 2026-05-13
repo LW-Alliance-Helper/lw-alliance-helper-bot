@@ -127,6 +127,7 @@ def load_event_roster(
     power_col  = _col("Power at Assignment")
     id_col     = _col("Discord ID")
     ovr_col    = _col("Override Below Floor")
+    paired_col = _col("Paired With")
 
     # Truthy values for the override column. Officers may hand-edit
     # the Sheet — accept the same set the bot would write plus the
@@ -147,6 +148,10 @@ def load_event_roster(
             "power":    _cell(power_col),
             "discord_id": _cell(id_col),
             "override_below_floor": _cell(ovr_col).lower() in truthy,
+            # `paired_with` is the primary's name on sub rows when
+            # sub_mode=paired; blank for primary rows and pool-mode subs.
+            # Older rosters_tab data without the column reads as "".
+            "paired_with": _cell(paired_col),
         })
     return slots, errors
 
@@ -302,7 +307,14 @@ def render_event_embed(
                         total_sub_activated += 1
                 power_part = _format_power_display(slot.get("power", ""))
                 override = " ⚠️ override" if slot.get("override_below_floor") else ""
-                role_marker = " (sub)" if slot.get("role") == "sub" else ""
+                # Role marker: a sub paired with a specific primary
+                # surfaces "paired with X" so the pairing is visible
+                # in the history; a pool sub shows the generic "(sub)".
+                if slot.get("role") == "sub":
+                    paired = slot.get("paired_with") or ""
+                    role_marker = f" (sub, paired with {paired})" if paired else " (sub)"
+                else:
+                    role_marker = ""
                 team_lines.append(
                     f"{glyph} {slot['member']}{role_marker}{power_part}{override}"
                 )

@@ -26,6 +26,7 @@ Deferred to follow-ups:
 
 from __future__ import annotations
 
+import io
 import logging
 from typing import Optional
 
@@ -212,6 +213,7 @@ class RosterBuilderSession:
         power_band_rules: list,
         *,
         event_date: Optional[str] = None,
+        sub_mode: str = "pool",
     ):
         self.guild_id = guild_id
         self.user_id  = user_id
@@ -220,10 +222,24 @@ class RosterBuilderSession:
         self.preset   = preset
         self.members  = members
         self.event_date = event_date
+        # `sub_mode` reflects the alliance's per-event-type config.
+        # `pool` — flat sub list; any sub can cover any primary.
+        # `paired` — each primary is paired with a specific sub; the
+        #            builder UI prompts for the sub immediately after
+        #            primary assignment.
+        # Unknown values normalise to `pool` (defense in depth — the
+        # storage layer already validates, but a hand-edited DB row
+        # shouldn't crash the builder).
+        self.sub_mode = sub_mode if sub_mode in ("pool", "paired") else "pool"
         # Per-zone assignments: {zone_name: [member_key, ...]}
         self.assignments: dict[str, list[str]] = {z.zone: [] for z in preset.zones}
-        # Flat sub pool (sub_mode=pool; paired UI deferred).
+        # Flat sub pool. In `paired` mode, subs lives in
+        # `paired_subs` instead — this list stays empty.
         self.subs: list[str] = []
+        # Paired-mode pairings: {primary_key: sub_key}. Only populated
+        # when sub_mode == "paired"; the embed + writer branch on
+        # presence of this dict.
+        self.paired_subs: dict[str, str] = {}
         # The currently-selected zone in the UI; defaults to the first zone.
         self.selected_zone: str = preset.zones[0].zone if preset.zones else ""
         # Officer-toggled override: show below-floor members in the
@@ -250,6 +266,10 @@ class RosterBuilderSession:
     def is_structured(self) -> bool:
         return bool(self.event_date)
 
+    @property
+    def is_paired(self) -> bool:
+        return self.sub_mode == "paired"
+
     def floor_for_zone(self, zone_name: str) -> int:
         """Per-team min_power for this zone. DS uses min_power_a/b; CS
         uses min_power_a as the single floor (storm_strategy stores it
@@ -262,12 +282,28 @@ class RosterBuilderSession:
         return int(z.min_power_a or 0)
 
     def assigned_member_keys(self) -> set[str]:
-        """Every member currently slotted somewhere (any zone or subs)."""
+        """Every member currently slotted somewhere — any zone, the
+        flat sub pool, OR any paired-sub seat. The eligibility filter
+        uses this to exclude already-placed members from the picker."""
         keys: set[str] = set()
         for zone_members in self.assignments.values():
             keys.update(zone_members)
         keys.update(self.subs)
+        keys.update(self.paired_subs.values())
         return keys
+
+    def unpaired_primaries(self) -> list[str]:
+        """In paired mode, the list of zone members who don't yet have
+        a paired sub. Order matches zone-then-roster order so the UI
+        prompt is deterministic. Returns [] when sub_mode=pool."""
+        if not self.is_paired:
+            return []
+        unpaired = []
+        for zone in self.preset.zones:
+            for key in self.assignments.get(zone.zone, []):
+                if key not in self.paired_subs:
+                    unpaired.append(key)
+        return unpaired
 
     def zone_member_count(self, zone_name: str) -> int:
         return len(self.assignments.get(zone_name, []))
@@ -275,6 +311,22 @@ class RosterBuilderSession:
     def zone_capacity(self, zone_name: str) -> int:
         z = self.preset.find_zone(zone_name)
         return int(z.max_players) if z else 0
+
+    def prune_stale_pairings(self) -> None:
+        """Drop paired-sub entries whose primary is no longer in a zone.
+
+        Called after Unassign / Move-to-subs. Without this, an unassigned
+        primary's old pairing would linger and surface stale data in
+        the embed + the rosters_tab write."""
+        primaries_in_zones: set[str] = set()
+        for zone_members in self.assignments.values():
+            primaries_in_zones.update(zone_members)
+        # Filter the pairing map.
+        self.paired_subs = {
+            primary: sub
+            for primary, sub in self.paired_subs.items()
+            if primary in primaries_in_zones
+        }
 
     def prune_stale_overrides(self) -> None:
         """Drop override entries for members no longer in any zone.
@@ -379,6 +431,7 @@ def _auto_fill_session(session: RosterBuilderSession) -> dict:
     for zone in list(session.assignments.keys()):
         session.assignments[zone] = []
     session.subs = []
+    session.paired_subs = {}
     session.below_floor_overrides.clear()
 
     summary = {
@@ -474,16 +527,59 @@ def _auto_fill_session(session: RosterBuilderSession) -> dict:
             ):
                 summary["power_band_rules_applied"] += 1
 
-    # ── 3. Spillover ──
-    assigned = session.assigned_member_keys()
-    for key, m in session.members.items():
-        if key in assigned:
-            continue
-        if m.get("power") is None:
-            summary["gaps"].append(m["name"])
-            continue
-        # Known-power leftovers → sub pool.
-        session.subs.append(key)
+    # ── 3. Spillover (or pair) ──
+    # In paired mode, leftover known-power members get assigned as
+    # paired subs for unpaired primaries (in zone-priority order →
+    # highest-power-first to keep parity with the primary fill). In
+    # pool mode, leftovers go into the flat sub pool.
+    if session.is_paired:
+        unpaired = session.unpaired_primaries()
+        # Walk unpaired primaries in zone-priority order (already the
+        # order returned by unpaired_primaries since it iterates zones
+        # in preset order; auto-fill already greedy-filled in priority
+        # order, so this lines up). For each, pair with the next eligible
+        # member NOT already placed.
+        for primary_key in unpaired:
+            # Find the zone the primary is in so we can apply the right
+            # floor to the sub's eligibility.
+            primary_zone = None
+            for zone, zmembers in session.assignments.items():
+                if primary_key in zmembers:
+                    primary_zone = zone
+                    break
+            if not primary_zone:
+                continue
+            eligible_sub_keys, _below = _eligible_member_keys_for_zone(
+                session, primary_zone,
+            )
+            if not eligible_sub_keys:
+                continue
+            # Pair with the strongest eligible candidate.
+            session.paired_subs[primary_key] = eligible_sub_keys[0]
+            summary["auto_filled_by_power"] += 1
+
+        # Anything else known-power → still surface as "available subs"
+        # the officer might want to swap in manually. Use the flat
+        # `subs` list as a holding area in paired mode (rendered as a
+        # diagnostic in the embed only when non-empty).
+        assigned = session.assigned_member_keys()
+        for key, m in session.members.items():
+            if key in assigned:
+                continue
+            if m.get("power") is None:
+                summary["gaps"].append(m["name"])
+                continue
+            session.subs.append(key)
+    else:
+        assigned = session.assigned_member_keys()
+        for key, m in session.members.items():
+            if key in assigned:
+                continue
+            if m.get("power") is None:
+                summary["gaps"].append(m["name"])
+                continue
+            # Known-power leftovers → sub pool.
+            session.subs.append(key)
 
     session.auto_fill_summary = summary
     return summary
@@ -521,11 +617,19 @@ def _render_zone_line(session: RosterBuilderSession, zone_name: str) -> str:
     names = []
     for k in member_keys:
         m = session.members.get(k)
-        if m:
-            names.append(m["name"])
+        primary_label = m["name"] if m else f"<unknown:{k}>"
+        if session.is_paired:
+            sub_key = session.paired_subs.get(k)
+            if sub_key:
+                sub_m = session.members.get(sub_key)
+                sub_label = sub_m["name"] if sub_m else f"<unknown:{sub_key}>"
+                names.append(f"{primary_label} + sub {sub_label}")
+            else:
+                # Unpaired primary in paired mode — flagged so the
+                # officer can see a sub still needs to be picked.
+                names.append(f"{primary_label} ⚠️")
         else:
-            # Member was on roster at session open but isn't now (rare).
-            names.append(f"<unknown:{k}>")
+            names.append(primary_label)
     if names:
         names_part = ", ".join(names)
     else:
@@ -550,15 +654,34 @@ def _render_builder_embed(session: RosterBuilderSession) -> discord.Embed:
         floor_label = "Min A" if session.team == "A" else "Min B"
         lines.append(f"⚖️ Enforcing **{floor_label}** floors for this team")
     lines.append("")
-    lines.append("**📋 Zones**")
+    if session.is_paired:
+        lines.append("**📋 Zones** _(paired mode — each primary has a dedicated sub)_")
+    else:
+        lines.append("**📋 Zones**")
     for z in session.preset.zones:
         lines.append(_render_zone_line(session, z.zone))
     lines.append("")
-    sub_names = [session.members[k]["name"] for k in session.subs if k in session.members]
-    if sub_names:
-        lines.append(f"🪑 **Subs ({len(sub_names)})**: {', '.join(sub_names)}")
+    if session.is_paired:
+        unpaired = session.unpaired_primaries()
+        if unpaired:
+            unpaired_names = ", ".join(
+                session.members[k]["name"] for k in unpaired
+                if k in session.members
+            )
+            lines.append(
+                f"⚠️ **Unpaired primaries ({len(unpaired)})**: {unpaired_names} — "
+                f"pick a sub for each via the picker."
+            )
+        else:
+            lines.append("🪑 **Sub pairings**: complete for every primary.")
     else:
-        lines.append("🪑 **Subs**: _(none)_")
+        sub_names = [
+            session.members[k]["name"] for k in session.subs if k in session.members
+        ]
+        if sub_names:
+            lines.append(f"🪑 **Subs ({len(sub_names)})**: {', '.join(sub_names)}")
+        else:
+            lines.append("🪑 **Subs**: _(none)_")
     lines.append("")
 
     total_assigned = sum(len(v) for v in session.assignments.values())
@@ -826,6 +949,14 @@ class RosterBuilderView(discord.ui.View):
                 # the names and counts the officer is reading no longer
                 # describe what's currently on the roster.
                 s.auto_fill_summary = None
+                # In paired mode, immediately prompt for the paired sub
+                # so the pairing happens in the same step as the primary
+                # assignment. The picker fires ephemerally so it doesn't
+                # crowd the main view, and on close it re-renders the
+                # main view to surface the new pairing.
+                if s.is_paired:
+                    await _open_paired_sub_picker(inter, self, primary_key=key)
+                    return
                 await self._refresh(inter)
 
             member_select.callback = _on_member
@@ -861,6 +992,7 @@ class RosterBuilderView(discord.ui.View):
                 return
             s.assignments[s.selected_zone] = []
             s.prune_stale_overrides()
+            s.prune_stale_pairings()
             s.auto_fill_summary = None
             await self._refresh(inter)
 
@@ -883,6 +1015,7 @@ class RosterBuilderView(discord.ui.View):
             moved = members_in_zone.pop()
             s.subs.append(moved)
             s.prune_stale_overrides()
+            s.prune_stale_pairings()
             s.auto_fill_summary = None
             await self._refresh(inter)
 
@@ -955,6 +1088,22 @@ class RosterBuilderView(discord.ui.View):
 
             save_preset_btn.callback = _save_preset
             self.add_item(save_preset_btn)
+
+        # Image render — available in both modes. Posts a PNG attachment
+        # alongside the main message. Pillow import happens lazily inside
+        # the handler so the builder doesn't pay the import cost unless
+        # the button's clicked.
+        render_btn = discord.ui.Button(
+            label="🖼️ Render image", style=discord.ButtonStyle.secondary, row=3,
+        )
+
+        async def _render(inter: discord.Interaction):
+            if not await self._guard_owner(inter):
+                return
+            await _render_and_attach(inter, s)
+
+        render_btn.callback = _render
+        self.add_item(render_btn)
 
         cancel_label = "❌ Cancel" if s.is_structured else "✅ Done"
         done_btn = discord.ui.Button(
@@ -1031,6 +1180,217 @@ class RosterBuilderView(discord.ui.View):
         self._release_session_lock()
 
 
+async def _open_paired_sub_picker(
+    interaction: discord.Interaction,
+    main_view: "RosterBuilderView",
+    *,
+    primary_key: str,
+) -> None:
+    """Fire the ephemeral sub-picker after a primary assignment in
+    paired mode. Lets the officer either pair a sub immediately or
+    skip and pair later from the main view."""
+    s = main_view.session
+    primary = s.members.get(primary_key)
+    primary_label = primary["name"] if primary else f"<{primary_key}>"
+
+    # Eligibility for the paired sub matches the primary's zone:
+    # subs cover the no-show, so they must meet the same per-team
+    # floor for that zone.
+    eligible, below = _eligible_member_keys_for_zone(s, s.selected_zone)
+    pool = list(eligible)
+    if s.show_below_floor:
+        pool.extend(below)
+    # Cap at the 25-option Discord limit. If the alliance has more
+    # eligible candidates, officer can either toggle the below-floor
+    # override OR skip + pair later via the main view (deferred TODO).
+    pool = pool[:_MAX_DROPDOWN_OPTIONS]
+
+    picker = _PairedSubPickerView(
+        main_view=main_view,
+        primary_key=primary_key,
+        pool=pool,
+        zone_name=s.selected_zone,
+    )
+    content = (
+        f"🪑 Pick a sub for **{primary_label}** at **{s.selected_zone}**, "
+        f"or skip and pair them later."
+    )
+    if not pool:
+        content = (
+            f"🪑 No eligible subs found for **{primary_label}** at "
+            f"**{s.selected_zone}**. Skip and pair them later, or toggle "
+            f"the below-floor override on the main view to widen the pool."
+        )
+    try:
+        await interaction.response.send_message(
+            content=content, view=picker, ephemeral=True,
+        )
+        picker.message = await interaction.original_response()
+    except discord.HTTPException as e:
+        logger.warning(
+            "[STORM BUILDER] paired sub picker failed to send "
+            "(guild=%s primary=%s): %s",
+            s.guild_id, primary_key, e,
+        )
+        # Best-effort fallback: refresh the main view so the unpaired
+        # primary is at least visible in the embed.
+        try:
+            if main_view.message:
+                main_view._rebuild()
+                await main_view.message.edit(
+                    embed=_render_builder_embed(s), view=main_view,
+                )
+        except discord.HTTPException:
+            pass
+
+
+class _PairedSubPickerView(discord.ui.View):
+    """Ephemeral picker shown after a primary assignment in paired mode."""
+
+    def __init__(
+        self,
+        *,
+        main_view: "RosterBuilderView",
+        primary_key: str,
+        pool: list[str],
+        zone_name: str,
+    ):
+        super().__init__(timeout=300)
+        self.main_view  = main_view
+        self.primary_key = primary_key
+        self.zone_name  = zone_name
+        self.message: Optional[discord.Message] = None
+
+        if pool:
+            s = main_view.session
+            options = []
+            for k in pool:
+                m = s.members.get(k)
+                if not m:
+                    continue
+                label = _format_member_label(m)[:100]
+                options.append(discord.SelectOption(label=label, value=k[:100]))
+            if options:
+                sel = discord.ui.Select(
+                    placeholder="Pick a paired sub…",
+                    min_values=1, max_values=1,
+                    options=options,
+                )
+                sel.callback = self._make_pick_callback()
+                self.add_item(sel)
+
+        skip_btn = discord.ui.Button(
+            label="↩️ Skip — pair later",
+            style=discord.ButtonStyle.secondary,
+        )
+        skip_btn.callback = self._make_skip_callback()
+        self.add_item(skip_btn)
+
+    def _make_pick_callback(self):
+        async def _cb(inter: discord.Interaction):
+            if inter.user.id != self.main_view.session.user_id:
+                await inter.response.send_message(
+                    "⛔ Only the builder's owner can pair subs.",
+                    ephemeral=True,
+                )
+                return
+            if self.is_finished():
+                return
+            # Find the Select component to read its value.
+            sub_key = None
+            for child in self.children:
+                if isinstance(child, discord.ui.Select):
+                    sub_key = child.values[0] if child.values else None
+                    break
+            if not sub_key:
+                await inter.response.send_message(
+                    "⚠️ Couldn't read the picked sub. Try again.",
+                    ephemeral=True,
+                )
+                return
+            self.stop()
+
+            s = self.main_view.session
+            s.paired_subs[self.primary_key] = sub_key
+            # If the sub was below-floor at pick time, capture it as an
+            # override too so the rosters_tab write flags it.
+            _eligible, below = _eligible_member_keys_for_zone(s, self.zone_name)
+            if sub_key in below:
+                s.below_floor_overrides.add(sub_key)
+            # Manual edit invalidates the auto-fill summary.
+            s.auto_fill_summary = None
+
+            for item in self.children:
+                item.disabled = True
+            primary_m = s.members.get(self.primary_key)
+            sub_m = s.members.get(sub_key)
+            primary_name = primary_m["name"] if primary_m else self.primary_key
+            sub_name = sub_m["name"] if sub_m else sub_key
+            try:
+                await inter.response.edit_message(
+                    content=f"✅ Paired **{sub_name}** with **{primary_name}**.",
+                    view=self,
+                )
+            except discord.HTTPException:
+                pass
+            # Re-render the main view so the new pairing surfaces.
+            try:
+                if self.main_view.message:
+                    self.main_view._rebuild()
+                    await self.main_view.message.edit(
+                        embed=_render_builder_embed(s), view=self.main_view,
+                    )
+            except discord.HTTPException:
+                pass
+        return _cb
+
+    def _make_skip_callback(self):
+        async def _cb(inter: discord.Interaction):
+            if inter.user.id != self.main_view.session.user_id:
+                await inter.response.send_message(
+                    "⛔ Only the builder's owner can skip.",
+                    ephemeral=True,
+                )
+                return
+            if self.is_finished():
+                return
+            self.stop()
+            for item in self.children:
+                item.disabled = True
+            try:
+                await inter.response.edit_message(
+                    content="↩️ Skipped — you can pair this primary later.",
+                    view=self,
+                )
+            except discord.HTTPException:
+                pass
+            # Re-render the main view so the ⚠️ marker on the unpaired
+            # primary is visible.
+            try:
+                if self.main_view.message:
+                    self.main_view._rebuild()
+                    await self.main_view.message.edit(
+                        embed=_render_builder_embed(self.main_view.session),
+                        view=self.main_view,
+                    )
+            except discord.HTTPException:
+                pass
+        return _cb
+
+    async def on_timeout(self):
+        """Strip the view so stale buttons don't 404 — same auto-post-view
+        contract the audit pass codified for the rest of the storm
+        flow."""
+        for item in self.children:
+            item.disabled = True
+        if self.message is None:
+            return
+        try:
+            await self.message.edit(view=self)
+        except discord.HTTPException:
+            pass
+
+
 class _SaveAsPresetModal(discord.ui.Modal, title="Save as preset"):
     def __init__(self, view: RosterBuilderView):
         super().__init__()
@@ -1081,6 +1441,59 @@ class _SaveAsPresetModal(discord.ui.Modal, title="Save as preset"):
 
 
 # ── Mail generation ──────────────────────────────────────────────────────────
+
+
+async def _render_and_attach(
+    inter: discord.Interaction, session: RosterBuilderSession,
+) -> None:
+    """Render the current roster as a PNG and attach it ephemerally.
+    Pillow import lives inside the handler so the builder module
+    doesn't pay the import cost unless render is actually invoked.
+
+    Failure modes:
+      * Pillow not installed → renderer raises; surface a one-line
+        ephemeral and a log warning. Officer continues with text-only.
+      * Other Pillow error → log + ephemeral "could not render."
+    """
+    try:
+        import storm_renderer
+        roster_data = storm_renderer.roster_from_session(session)
+        png_bytes = storm_renderer.render(roster_data)
+    except RuntimeError as e:
+        # Pillow missing — degrade gracefully.
+        logger.warning(
+            "[STORM RENDER] Pillow not available (guild=%s event=%s): %s",
+            session.guild_id, session.event_type, e,
+        )
+        await inter.response.send_message(
+            "⚠️ Image render isn't available — the host is missing Pillow. "
+            "Use the text-template mail in the meantime.",
+            ephemeral=True,
+        )
+        return
+    except Exception as e:
+        logger.exception(
+            "[STORM RENDER] failed for guild=%s event=%s: %s",
+            session.guild_id, session.event_type, e,
+        )
+        await inter.response.send_message(
+            "⚠️ Couldn't render the roster image — see bot logs.",
+            ephemeral=True,
+        )
+        return
+
+    filename = (
+        f"{session.event_type.lower()}-roster"
+        + (f"-{session.event_date}" if session.event_date else "")
+        + (f"-team-{session.team}" if session.team else "")
+        + ".png"
+    )
+    file = discord.File(io.BytesIO(png_bytes), filename=filename)
+    await inter.response.send_message(
+        content="🖼️ Roster image attached:",
+        file=file,
+        ephemeral=True,
+    )
 
 
 async def _send_mail_preview(
@@ -1318,7 +1731,7 @@ async def _finalize_structured_roster(
 _ROSTERS_HEADER = [
     "Event Date", "Team", "Zone", "Member", "Role",
     "Power at Assignment", "Discord ID", "Override Below Floor",
-    "Posted At (UTC)",
+    "Paired With", "Posted At (UTC)",
 ]
 
 
@@ -1361,7 +1774,8 @@ def _write_rosters_tab(session: RosterBuilderSession) -> list[str]:
         except Exception as e:
             return [f"rosters tab create failed: {e}"]
 
-    posted_at = _dt.datetime.now(_dt.timezone.utc).isoformat(timespec="seconds")
+    from config import _utcnow_iso
+    posted_at = _utcnow_iso()
     rows: list[list[str]] = []
     for z in session.preset.zones:
         for key in session.assignments.get(z.zone, []):
@@ -1379,8 +1793,36 @@ def _write_rosters_tab(session: RosterBuilderSession) -> list[str]:
                 str(power) if power is not None else "unknown",
                 m.get("discord_id") or "",
                 override,
+                "",  # Paired With — primary rows leave blank.
                 posted_at,
             ])
+            # In paired mode, the sub partnered with this primary is
+            # written as its own row immediately after, so post-event
+            # review can see "Alice (primary) at Power Tower → Bob (sub
+            # paired)" in row order.
+            if session.is_paired:
+                sub_key = session.paired_subs.get(key)
+                if sub_key:
+                    sub_m = session.members.get(sub_key)
+                    if sub_m:
+                        sub_power = sub_m.get("power")
+                        sub_override = (
+                            "yes" if sub_key in session.below_floor_overrides else ""
+                        )
+                        rows.append([
+                            session.event_date or "",
+                            session.team or "",
+                            z.zone,
+                            sub_m["name"],
+                            "sub",
+                            str(sub_power) if sub_power is not None else "unknown",
+                            sub_m.get("discord_id") or "",
+                            sub_override,
+                            m["name"],  # Paired With → the primary
+                            posted_at,
+                        ])
+    # Pool-mode subs (or paired-mode overflow) — written without a
+    # paired-with reference.
     for key in session.subs:
         m = session.members.get(key)
         if not m:
@@ -1397,6 +1839,7 @@ def _write_rosters_tab(session: RosterBuilderSession) -> list[str]:
             str(power) if power is not None else "unknown",
             m.get("discord_id") or "",
             "",
+            "",  # Paired With — pool subs have no specific primary.
             posted_at,
         ])
 
@@ -1557,6 +2000,16 @@ async def open_roster_builder(
             )
             return
 
+    # Read the per-event-type sub_mode from structured config so the
+    # builder branches on `pool` vs `paired` correctly. Storage layer
+    # normalises unknowns to "pool"; defense in depth, the session
+    # __init__ re-normalises too.
+    import config
+    structured_cfg = config.get_structured_storm_config(
+        interaction.guild_id, event_type,
+    )
+    sub_mode = structured_cfg.get("sub_mode") or "pool"
+
     session = RosterBuilderSession(
         guild_id=interaction.guild_id,
         user_id=interaction.user.id,
@@ -1567,6 +2020,7 @@ async def open_roster_builder(
         per_member_rules=per_member,
         power_band_rules=power_band,
         event_date=event_date,
+        sub_mode=sub_mode,
     )
     # Seed errors from the roster read FIRST so _apply_rules_to_session
     # can append its own (e.g. unmatched per_member subjects) without

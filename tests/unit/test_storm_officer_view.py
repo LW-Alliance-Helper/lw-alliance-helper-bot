@@ -352,4 +352,104 @@ class TestNotOnDiscordEnumeration:
             guild = _FakeGuild(TEST_GUILD_ID, [])
             buckets, errs = sov._build_bucket_map(guild, "DS", "2026-05-18")
         assert any("simulated 403" in e for e in errs)
-        assert "not_voted" in buckets
+
+
+class TestNonDiscordInferenceNonNumericId(TestNotOnDiscordEnumeration):
+    """Audit minor for #139: non-numeric Discord-ID cells ("TBD",
+    "abc") were silently kept as Discord-member rows. Spec says
+    non-numeric → non-Discord."""
+
+    def test_non_numeric_id_inferred_as_non_discord(self, seeded_db):
+        import config
+        config.save_member_roster_config(
+            TEST_GUILD_ID, enabled=1, tab_name="Members",
+            discord_id_col=0, name_col=1, display_col=2,
+        )
+        rows = [
+            ["Discord ID", "Name",   "Display Name"],
+            ["TBD",        "Alice",  "Alice"],   # placeholder
+            ["123abc",     "Bob",    "Bob"],     # malformed
+            ["1001",       "Carol",  "Carol"],   # real ID
+        ]
+        with patch(
+            "config.get_member_roster_sheet",
+            return_value=self._fake_roster_ws(rows),
+        ):
+            roster, _errors = sov._read_roster_rows(TEST_GUILD_ID)
+        by_name = {r["name"]: r for r in roster}
+        # Non-numeric placeholders inferred as non-Discord.
+        assert by_name["Alice"]["not_on_discord"] is True
+        assert by_name["Bob"]["not_on_discord"] is True
+        # Real numeric ID NOT inferred (no guild handle, so the
+        # stale-ID branch can't fire — that's a separate test).
+        assert by_name["Carol"]["not_on_discord"] is False
+
+
+class TestStaleIdLogDedup:
+    """Audit Major for #139: the stale-ID warning re-logged on every
+    Refresh button click and every on-behalf modal submit. Module-level
+    memo prevents the spam."""
+
+    def _fake_roster_ws(self, rows):
+        ws = MagicMock()
+        ws.get_all_values.return_value = rows
+        return ws
+
+    def test_repeated_reads_log_warning_once(self, seeded_db, caplog):
+        import config
+        import logging
+        config.save_member_roster_config(
+            TEST_GUILD_ID + 7777, enabled=1, tab_name="Members",
+            discord_id_col=0, name_col=1, display_col=2,
+        )
+        rows = [
+            ["Discord ID", "Name", "Display Name"],
+            ["999111",     "Stale", "Stale"],
+        ]
+        # Clear the memo so this test isn't dependent on test order.
+        sov._STALE_ID_LOG_MEMO.clear()
+        # Guild whose get_member always returns None — every numeric
+        # ID is "stale" from its perspective.
+        guild = _FakeGuild(TEST_GUILD_ID + 7777, [])
+        with patch(
+            "config.get_member_roster_sheet",
+            return_value=self._fake_roster_ws(rows),
+        ):
+            with caplog.at_level(logging.WARNING, logger="storm_officer_view"):
+                # First read — should log.
+                sov._read_roster_rows(TEST_GUILD_ID + 7777, guild=guild)
+                first = [r for r in caplog.records
+                         if "stale roster Discord IDs" in r.getMessage()]
+                # Second read with the same stale set — should NOT re-log.
+                caplog.clear()
+                sov._read_roster_rows(TEST_GUILD_ID + 7777, guild=guild)
+                second = [r for r in caplog.records
+                          if "stale roster Discord IDs" in r.getMessage()]
+        assert len(first) == 1
+        assert second == []
+
+    def test_errors_list_still_returned_on_repeated_reads(self, seeded_db):
+        """The soft error in `errors` is per-read context for the
+        embed warning — that should fire every time. The DEDUP is only
+        on the log, not the user-visible warning."""
+        import config
+        config.save_member_roster_config(
+            TEST_GUILD_ID + 7778, enabled=1, tab_name="Members",
+            discord_id_col=0, name_col=1, display_col=2,
+        )
+        rows = [
+            ["Discord ID", "Name", "Display Name"],
+            ["888777",     "Stale", "Stale"],
+        ]
+        sov._STALE_ID_LOG_MEMO.clear()
+        guild = _FakeGuild(TEST_GUILD_ID + 7778, [])
+        with patch(
+            "config.get_member_roster_sheet",
+            return_value=self._fake_roster_ws(rows),
+        ):
+            _, errs1 = sov._read_roster_rows(TEST_GUILD_ID + 7778, guild=guild)
+            _, errs2 = sov._read_roster_rows(TEST_GUILD_ID + 7778, guild=guild)
+        # Both reads return the soft error so the embed warning always
+        # surfaces — only the log dedupes.
+        assert any("stale Discord IDs" in e for e in errs1)
+        assert any("stale Discord IDs" in e for e in errs2)

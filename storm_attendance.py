@@ -127,8 +127,11 @@ def load_rostered_slots(
 
     # Truthy values for the override column. Officers occasionally edit
     # the Sheet by hand — accept the usual yes-set rather than only the
-    # literal "yes" that the bot writes.
-    truthy = {"yes", "y", "1", "true", "x"}
+    # literal "yes" that the bot writes. Matches the set used by
+    # `storm_officer_view._read_roster_rows` + `storm_roster_builder
+    # ._read_roster_powers` so an officer who writes the same literal
+    # in either Sheet gets the same interpretation.
+    truthy = {"yes", "y", "1", "true", "t", "x"}
 
     slots: list[dict] = []
     for row in values[1:]:

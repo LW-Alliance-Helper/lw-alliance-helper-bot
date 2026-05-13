@@ -131,8 +131,12 @@ def load_event_roster(
 
     # Truthy values for the override column. Officers may hand-edit
     # the Sheet — accept the same set the bot would write plus the
-    # standard yes-aliases.
-    truthy = {"yes", "y", "1", "true", "x"}
+    # standard yes-aliases. Matches the set used by
+    # `storm_officer_view._read_roster_rows` +
+    # `storm_roster_builder._read_roster_powers` +
+    # `storm_attendance.load_rostered_slots` so a literal in any of
+    # those columns is interpreted the same way.
+    truthy = {"yes", "y", "1", "true", "t", "x"}
 
     slots: list[dict] = []
     for row in rows[1:]:

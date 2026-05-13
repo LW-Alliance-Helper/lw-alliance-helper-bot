@@ -44,6 +44,14 @@ logger = logging.getLogger(__name__)
 
 # ── Bucket layout ────────────────────────────────────────────────────────────
 
+# Per-process stale-roster-ID warning dedupe — keyed on
+# `(guild_id, frozenset(stale_ids))`. The View's refresh button and
+# the on-behalf modal both call `_read_roster_rows`; without dedup,
+# every click re-logged the same stale-ID list. The set is bounded by
+# the number of stale-ID combinations across reachable guilds.
+_STALE_ID_LOG_MEMO: set[tuple[int, frozenset]] = set()
+
+
 _BUCKET_ORDER = ("a", "b", "either", "cannot", "not_voted")
 _BUCKET_LABELS = {
     "a":         "🅰️ Voted Team A",
@@ -157,7 +165,15 @@ def _read_roster_rows(
         if not explicit_set:
             if not discord_id:
                 inferred = True
-            elif guild is not None and discord_id.isdigit():
+            elif not discord_id.isdigit():
+                # Non-numeric ID ("TBD", "abc", "n/a") — alliance has
+                # written a placeholder rather than a real Discord ID.
+                # Treat as non-Discord per the #139 spec: "non-numeric →
+                # non-Discord". The audit found this path silently
+                # escaped before, keeping such rows mis-classified as
+                # Discord members.
+                inferred = True
+            elif guild is not None:
                 try:
                     member = guild.get_member(int(discord_id))
                 except (TypeError, ValueError):
@@ -182,10 +198,18 @@ def _read_roster_rows(
             "stale Discord IDs on roster (member likely left the server): "
             f"{preview}{extra}"
         )
-        logger.warning(
-            "[STORM OFFICER VIEW] stale roster Discord IDs for guild=%s: %s",
-            guild_id, "; ".join(stale_ids),
-        )
+        # Dedup the log — refresh button + on-behalf modal re-call this
+        # function on every click. Without the memo, a 5-stale-ID
+        # roster would log 5 entries × every click. Memo key includes
+        # the stale-ID set so a roster cleanup naturally clears it
+        # (next read has fewer entries, fresh key).
+        memo_key = (int(guild_id), frozenset(stale_ids))
+        if memo_key not in _STALE_ID_LOG_MEMO:
+            _STALE_ID_LOG_MEMO.add(memo_key)
+            logger.warning(
+                "[STORM OFFICER VIEW] stale roster Discord IDs for guild=%s: %s",
+                guild_id, "; ".join(stale_ids),
+            )
 
     return rows, errors
 
@@ -804,9 +828,14 @@ class StormSignupsViewCog(commands.Cog):
             view=view,
         )
         if view.roster_errors:
+            # Surface the actual error contents — alliances need to see
+            # WHICH IDs are stale (or which read failed) so they can fix
+            # the roster Sheet. The prior generic "See bot logs" message
+            # hid the detail the audit explicitly asked to expose.
+            preview = " · ".join(view.roster_errors[:2])
             followup_args["content"] = (
                 "⚠️ Roster Sheet read had issues — non-Discord member "
-                "enumeration may be incomplete. See bot logs."
+                f"enumeration may be incomplete: {preview}"
             )
             logger.warning(
                 "[STORM OFFICER VIEW] roster errors for guild=%s: %s",

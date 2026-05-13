@@ -182,7 +182,12 @@ def _read_roster_powers(
         if not explicit_set:
             if not discord_id:
                 inferred = True
-            elif guild is not None and discord_id.isdigit():
+            elif not discord_id.isdigit():
+                # Non-numeric placeholder ("TBD", "abc"): treat as
+                # non-Discord per the #139 spec. Matches the officer
+                # view's reader so the two paths can't disagree.
+                inferred = True
+            elif guild is not None:
                 try:
                     member = guild.get_member(int(discord_id))
                 except (TypeError, ValueError):

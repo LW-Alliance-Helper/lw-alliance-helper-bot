@@ -191,6 +191,358 @@ class TestStormConfig:
         assert ds["mail_template"] != cs["mail_template"]
 
 
+class TestStructuredStormConfig:
+    """Test the #38 + #54 structured storm flow config layer."""
+
+    def test_default_structured_flow_off(self, temp_db):
+        import config
+        cfg = config.get_structured_storm_config(TEST_GUILD_ID, "DS")
+        assert cfg["structured_flow_enabled"] is False
+        assert cfg["sub_mode"]                == "pool"
+        assert cfg["power_column_name"]       == ""
+
+    def test_tab_defaults_are_event_type_aware(self, temp_db):
+        import config
+        ds = config.get_structured_storm_config(TEST_GUILD_ID, "DS")
+        cs = config.get_structured_storm_config(TEST_GUILD_ID, "CS")
+        assert ds["signups_tab"]      == "DS Signups"
+        assert ds["rosters_tab"]      == "DS Rosters"
+        assert ds["strategies_tab"]   == "DS Strategies"
+        assert ds["member_rules_tab"] == "DS Member Rules"
+        assert ds["attendance_tab"]   == "DS Attendance"
+        assert cs["signups_tab"]      == "CS Signups"
+        assert cs["rosters_tab"]      == "CS Rosters"
+        assert cs["strategies_tab"]   == "CS Strategies"
+        assert cs["member_rules_tab"] == "CS Member Rules"
+        assert cs["attendance_tab"]   == "CS Attendance"
+
+    def test_save_requires_existing_row(self, temp_db):
+        """save_structured_storm_config UPDATEs an existing row; returns
+        False when there's no row to update."""
+        import config
+        updated = config.save_structured_storm_config(
+            TEST_GUILD_ID, "DS",
+            structured_flow_enabled=True,
+        )
+        assert updated is False
+
+    def test_save_and_reload_round_trip(self, temp_db):
+        import config
+        # Create the row first via save_storm_config
+        config.save_storm_config(
+            TEST_GUILD_ID, "DS",
+            tab_name="DS Zones",
+            mail_template="x",
+            timezone="America/New_York",
+            log_channel_id=0,
+        )
+        updated = config.save_structured_storm_config(
+            TEST_GUILD_ID, "DS",
+            structured_flow_enabled=True,
+            power_column_name="1st Squad Power",
+            sub_mode="paired",
+            signup_channel_id=12345,
+            signup_schedule_cron="0 14 * * 0",
+            signups_tab="Sign Ups DS",
+            rosters_tab="Rosters DS",
+            attendance_tab="Attendance DS",
+            strategies_tab="Strategies DS",
+            member_rules_tab="Rules DS",
+        )
+        assert updated is True
+
+        cfg = config.get_structured_storm_config(TEST_GUILD_ID, "DS")
+        assert cfg["structured_flow_enabled"] is True
+        assert cfg["power_column_name"]       == "1st Squad Power"
+        assert cfg["sub_mode"]                == "paired"
+        assert cfg["signup_channel_id"]       == 12345
+        assert cfg["signup_schedule_cron"]    == "0 14 * * 0"
+        assert cfg["signups_tab"]             == "Sign Ups DS"
+        assert cfg["rosters_tab"]             == "Rosters DS"
+        assert cfg["attendance_tab"]          == "Attendance DS"
+        assert cfg["strategies_tab"]          == "Strategies DS"
+        assert cfg["member_rules_tab"]        == "Rules DS"
+
+    def test_empty_tab_falls_back_to_default(self, temp_db):
+        """Saving an empty tab name reads back as the event-type default."""
+        import config
+        config.save_storm_config(
+            TEST_GUILD_ID, "CS",
+            tab_name="CS Zones",
+            mail_template="x",
+            timezone="America/New_York",
+            log_channel_id=0,
+        )
+        config.save_structured_storm_config(
+            TEST_GUILD_ID, "CS",
+            structured_flow_enabled=True,
+            signups_tab="",  # leave blank → default
+        )
+        cfg = config.get_structured_storm_config(TEST_GUILD_ID, "CS")
+        assert cfg["signups_tab"] == "CS Signups"
+
+    def test_invalid_sub_mode_normalised_to_pool(self, temp_db):
+        import config
+        config.save_storm_config(
+            TEST_GUILD_ID, "DS",
+            tab_name="DS Zones", mail_template="x",
+            timezone="America/New_York", log_channel_id=0,
+        )
+        config.save_structured_storm_config(
+            TEST_GUILD_ID, "DS",
+            sub_mode="garbage",
+        )
+        cfg = config.get_structured_storm_config(TEST_GUILD_ID, "DS")
+        assert cfg["sub_mode"] == "pool"
+
+    def test_ds_and_cs_structured_isolated(self, temp_db):
+        import config
+        for event_type in ("DS", "CS"):
+            config.save_storm_config(
+                TEST_GUILD_ID, event_type,
+                tab_name=f"{event_type} Tab", mail_template="x",
+                timezone="America/New_York", log_channel_id=0,
+            )
+        config.save_structured_storm_config(
+            TEST_GUILD_ID, "DS",
+            structured_flow_enabled=True,
+            power_column_name="1st Squad Power",
+        )
+        config.save_structured_storm_config(
+            TEST_GUILD_ID, "CS",
+            structured_flow_enabled=False,
+            power_column_name="Total Power",
+        )
+        ds = config.get_structured_storm_config(TEST_GUILD_ID, "DS")
+        cs = config.get_structured_storm_config(TEST_GUILD_ID, "CS")
+        assert ds["structured_flow_enabled"] is True
+        assert cs["structured_flow_enabled"] is False
+        assert ds["power_column_name"] == "1st Squad Power"
+        assert cs["power_column_name"] == "Total Power"
+
+    def test_default_structured_tab_helper(self):
+        import config
+        assert config.default_structured_tab("DS", "signups_tab") == "DS Signups"
+        assert config.default_structured_tab("CS", "rosters_tab") == "CS Rosters"
+        # Unknown event_type / field returns empty string (no crash).
+        assert config.default_structured_tab("XX", "signups_tab") == ""
+        assert config.default_structured_tab("DS", "unknown_field") == ""
+
+    def test_schedule_fields_round_trip(self, temp_db):
+        """#131 auto-scheduler fields: event_day_of_week, signup_lead_days,
+        signup_time. Stored on guild_storm_config; surfaced via
+        get_structured_storm_config."""
+        import config
+        config.save_storm_config(
+            TEST_GUILD_ID, "DS",
+            tab_name="DS Zones", mail_template="x",
+            timezone="America/New_York", log_channel_id=0,
+        )
+        config.save_structured_storm_config(
+            TEST_GUILD_ID, "DS",
+            structured_flow_enabled=True,
+            event_day_of_week=6, signup_lead_days=5, signup_time="14:00",
+        )
+        cfg = config.get_structured_storm_config(TEST_GUILD_ID, "DS")
+        assert cfg["event_day_of_week"] == 6
+        assert cfg["signup_lead_days"]  == 5
+        assert cfg["signup_time"]       == "14:00"
+
+    def test_schedule_dow_out_of_range_normalises_to_negative_one(self, temp_db):
+        """Save should reject DOW > 6 or < -1 by normalising to -1 — wizard
+        validates first but defense in depth at the storage layer."""
+        import config
+        config.save_storm_config(
+            TEST_GUILD_ID, "DS",
+            tab_name="DS Zones", mail_template="x",
+            timezone="America/New_York", log_channel_id=0,
+        )
+        config.save_structured_storm_config(
+            TEST_GUILD_ID, "DS",
+            structured_flow_enabled=True,
+            event_day_of_week=42, signup_lead_days=5, signup_time="14:00",
+        )
+        cfg = config.get_structured_storm_config(TEST_GUILD_ID, "DS")
+        assert cfg["event_day_of_week"] == -1
+
+    def test_schedule_default_unconfigured(self, temp_db):
+        """Never-configured schedule reads as dow=-1, lead=5, time=''."""
+        import config
+        cfg = config.get_structured_storm_config(TEST_GUILD_ID, "DS")
+        assert cfg["event_day_of_week"] == -1
+        assert cfg["signup_lead_days"]  == 5
+        assert cfg["signup_time"]       == ""
+
+
+class TestPowerRefreshDmCooldown:
+    """#138 — `storm_power_refresh_dms_sent` is the persistent cooldown
+    that gates the power-refresh DM nudge from firing twice for the
+    same member per event."""
+
+    def test_unsent_returns_false(self, temp_db):
+        import config
+        assert config.has_power_refresh_dm_been_sent(
+            TEST_GUILD_ID, "DS", "2026-05-18", 12345,
+        ) is False
+
+    def test_record_then_check(self, temp_db):
+        import config
+        fresh = config.record_power_refresh_dm_sent(
+            TEST_GUILD_ID, "DS", "2026-05-18", 12345,
+        )
+        assert fresh is True
+        assert config.has_power_refresh_dm_been_sent(
+            TEST_GUILD_ID, "DS", "2026-05-18", 12345,
+        ) is True
+
+    def test_re_record_idempotent(self, temp_db):
+        import config
+        first = config.record_power_refresh_dm_sent(
+            TEST_GUILD_ID, "DS", "2026-05-18", 12345,
+        )
+        second = config.record_power_refresh_dm_sent(
+            TEST_GUILD_ID, "DS", "2026-05-18", 12345,
+        )
+        # First insert returns True (new row); second returns False
+        # (the cooldown blocked it). Both leave the table consistent.
+        assert first is True
+        assert second is False
+
+    def test_per_member_isolation(self, temp_db):
+        import config
+        config.record_power_refresh_dm_sent(
+            TEST_GUILD_ID, "DS", "2026-05-18", 12345,
+        )
+        # Different member same event → still firstable.
+        assert config.has_power_refresh_dm_been_sent(
+            TEST_GUILD_ID, "DS", "2026-05-18", 99999,
+        ) is False
+
+    def test_per_event_date_isolation(self, temp_db):
+        import config
+        config.record_power_refresh_dm_sent(
+            TEST_GUILD_ID, "DS", "2026-05-18", 12345,
+        )
+        # Same member, different event_date → firstable.
+        assert config.has_power_refresh_dm_been_sent(
+            TEST_GUILD_ID, "DS", "2026-05-25", 12345,
+        ) is False
+
+    def test_per_event_type_isolation(self, temp_db):
+        import config
+        config.record_power_refresh_dm_sent(
+            TEST_GUILD_ID, "DS", "2026-05-18", 12345,
+        )
+        # Same member, different event_type → firstable.
+        assert config.has_power_refresh_dm_been_sent(
+            TEST_GUILD_ID, "CS", "2026-05-18", 12345,
+        ) is False
+
+
+class TestStormSignups:
+    """Test the #123 storm_signups + storm_registration_posts tables."""
+
+    def test_record_vote_round_trip(self, temp_db):
+        import config
+        ok = config.record_storm_vote(
+            TEST_GUILD_ID, "DS", "2026-05-18",
+            voter_user_id=111, target_member_id="111", vote="a",
+            channel_id=222, message_id=333,
+        )
+        assert ok is True
+        row = config.get_member_vote(TEST_GUILD_ID, "DS", "2026-05-18", "111")
+        assert row is not None
+        assert row["vote"]            == "a"
+        assert row["voter_user_id"]   == 111
+        assert row["is_on_behalf"]    is False
+        assert row["channel_id"]      == 222
+        assert row["message_id"]      == 333
+
+    def test_revote_replaces_prior(self, temp_db):
+        import config
+        config.record_storm_vote(
+            TEST_GUILD_ID, "DS", "2026-05-18",
+            voter_user_id=111, target_member_id="111", vote="a",
+        )
+        config.record_storm_vote(
+            TEST_GUILD_ID, "DS", "2026-05-18",
+            voter_user_id=111, target_member_id="111", vote="cannot",
+        )
+        rows = config.get_storm_signups(TEST_GUILD_ID, "DS", "2026-05-18")
+        assert len(rows) == 1
+        assert rows[0]["vote"] == "cannot"
+
+    def test_on_behalf_flag_persists(self, temp_db):
+        import config
+        config.record_storm_vote(
+            TEST_GUILD_ID, "DS", "2026-05-18",
+            voter_user_id=999,  # officer ID
+            target_member_id="Alice",  # roster row, not on Discord
+            vote="b",
+            is_on_behalf=True,
+        )
+        row = config.get_member_vote(TEST_GUILD_ID, "DS", "2026-05-18", "Alice")
+        assert row["is_on_behalf"]    is True
+        assert row["voter_user_id"]   == 999
+        assert row["target_member_id"] == "Alice"
+
+    def test_invalid_vote_rejected(self, temp_db):
+        import config
+        ok = config.record_storm_vote(
+            TEST_GUILD_ID, "DS", "2026-05-18",
+            voter_user_id=111, target_member_id="111", vote="bogus",
+        )
+        assert ok is False
+        assert config.get_storm_signups(TEST_GUILD_ID, "DS", "2026-05-18") == []
+
+    def test_get_signups_isolates_events(self, temp_db):
+        import config
+        # DS event
+        config.record_storm_vote(
+            TEST_GUILD_ID, "DS", "2026-05-18",
+            voter_user_id=1, target_member_id="1", vote="a",
+        )
+        # CS event same date — should not bleed
+        config.record_storm_vote(
+            TEST_GUILD_ID, "CS", "2026-05-18",
+            voter_user_id=1, target_member_id="1", vote="b",
+        )
+        ds = config.get_storm_signups(TEST_GUILD_ID, "DS", "2026-05-18")
+        cs = config.get_storm_signups(TEST_GUILD_ID, "CS", "2026-05-18")
+        assert len(ds) == 1 and ds[0]["vote"] == "a"
+        assert len(cs) == 1 and cs[0]["vote"] == "b"
+
+    def test_record_registration_post_idempotent(self, temp_db):
+        import config
+        first = config.record_storm_registration_post(
+            TEST_GUILD_ID, "DS", "2026-05-18",
+            channel_id=200, message_id=4001,
+            time_a_label="9pm ET", time_b_label="4pm ET",
+        )
+        second = config.record_storm_registration_post(
+            TEST_GUILD_ID, "DS", "2026-05-18",
+            channel_id=200, message_id=9999,
+        )
+        assert first is True
+        assert second is False
+        assert config.has_registration_post(TEST_GUILD_ID, "DS", "2026-05-18") is True
+
+    def test_recent_posts_window(self, temp_db):
+        import config
+        import datetime as _dt
+        today  = _dt.date.today().isoformat()
+        recent = (_dt.date.today() - _dt.timedelta(days=5)).isoformat()
+        old    = (_dt.date.today() - _dt.timedelta(days=30)).isoformat()
+        config.record_storm_registration_post(TEST_GUILD_ID, "DS", today,  100, 1)
+        config.record_storm_registration_post(TEST_GUILD_ID, "DS", recent, 100, 2)
+        config.record_storm_registration_post(TEST_GUILD_ID, "DS", old,    100, 3)
+        recents = config.get_recent_storm_registration_posts(within_days=14)
+        dates = {p["event_date"] for p in recents}
+        assert today  in dates
+        assert recent in dates
+        assert old    not in dates
+
+
 class TestSurveyConfig:
     """Test guild_survey_config save/load."""
 

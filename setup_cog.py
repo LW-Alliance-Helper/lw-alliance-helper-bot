@@ -4598,9 +4598,13 @@ async def run_storm_setup(interaction: discord.Interaction, bot, event_type: str
             return None
         return reply.content.strip()[:max_chars]
 
-    from config import get_storm_config, get_config, has_storm_config
+    from config import (
+        get_storm_config, get_config, has_storm_config,
+        get_structured_storm_config,
+    )
     from defaults import DEFAULT_DS_TEMPLATE, DEFAULT_CS_TEMPLATE
-    current   = get_storm_config(guild_id, event_type)
+    current            = get_storm_config(guild_id, event_type)
+    current_structured = get_structured_storm_config(guild_id, event_type)
     guild_cfg = get_config(guild_id)
     timezone  = guild_cfg.timezone if guild_cfg and guild_cfg.timezone else "America/New_York"
     tz_label  = TIMEZONE_LABELS.get(timezone, timezone)
@@ -4633,6 +4637,10 @@ async def run_storm_setup(interaction: discord.Interaction, bot, event_type: str
     # ── If already configured, show summary and offer edit or cancel ─────────
     if storm_already_configured:
         templates = current.get("templates") or []
+        structured_status = (
+            "✅ Enabled" if current_structured.get("structured_flow_enabled")
+            else "❌ Off (preset tabs available on free tier)"
+        )
         fields = [
             ("Sheet Tab",    current.get("tab_name") or "*not set*"),
             ("Log Channel",  f"<#{saved_log_ch}>" if saved_log_ch else "*not set*"),
@@ -4646,6 +4654,7 @@ async def run_storm_setup(interaction: discord.Interaction, bot, event_type: str
                 "Reminder DM",
                 "Custom" if (current.get("dm_reminder_message") or "").strip() else "Default",
             ),
+            ("Structured Roster Flow", structured_status),
         ]
         emoji = "⚔️" if event_type == "DS" else "🏜️"
         proceed = await ask_proceed_with_existing_config(
@@ -4906,6 +4915,17 @@ async def run_storm_setup(interaction: discord.Interaction, bot, event_type: str
     if participation_cfg is None:
         return  # cancelled / timed out
 
+    # ── Structured roster flow (#38 + #54) — Premium opt-in + preset tabs ────
+    structured_cfg = await _run_structured_flow_setup_step(
+        channel, bot, user, cancel_event,
+        guild_id=guild_id, event_type=event_type, label=label, cmd_name=cmd_name,
+        is_premium_flag=is_premium_flag,
+        current=current, current_structured=current_structured,
+        interaction_guild=interaction.guild,
+    )
+    if structured_cfg is None:
+        return  # cancelled / timed out
+
     # ── Step 7: Reminder DM body (💎 Premium) ─────────────────────────────────
     # The body of the DM that fires when leadership runs
     # /[event]_remind. Stored per (guild_id, event_type) so DS and CS
@@ -4936,7 +4956,10 @@ async def run_storm_setup(interaction: discord.Interaction, bot, event_type: str
     dm_reminder_message = "" if remind_dm == default_remind_dm else remind_dm
 
     # ── Save ───────────────────────────────────────────────────────────────────
-    from config import save_storm_config, save_participation_config, update_config_field
+    from config import (
+        save_storm_config, save_participation_config, update_config_field,
+        save_structured_storm_config,
+    )
     if template_a:
         save_storm_config(guild_id, f"{event_type}_A", tab_name, template_a,
                           timezone, log_channel_id,
@@ -4970,6 +4993,28 @@ async def run_storm_setup(interaction: discord.Interaction, bot, event_type: str
     else:
         update_config_field(guild_id, "cs_log_channel_id", log_channel_id)
 
+    # Persist the structured-flow config (#38 + #54) against the (guild,
+    # event_type) row save_storm_config just created/updated above. The
+    # registration-post schedule is set in #124; left blank here.
+    save_structured_storm_config(
+        guild_id, event_type,
+        structured_flow_enabled=structured_cfg["structured_flow_enabled"],
+        power_column_name      =structured_cfg["power_column_name"],
+        sub_mode               =structured_cfg["sub_mode"],
+        signup_channel_id      =structured_cfg["signup_channel_id"],
+        signup_schedule_cron   =structured_cfg.get("signup_schedule_cron", ""),
+        signups_tab            =structured_cfg["signups_tab"],
+        rosters_tab            =structured_cfg["rosters_tab"],
+        attendance_tab         =structured_cfg["attendance_tab"],
+        strategies_tab         =structured_cfg["strategies_tab"],
+        member_rules_tab       =structured_cfg["member_rules_tab"],
+        event_day_of_week      =structured_cfg.get("event_day_of_week", -1),
+        signup_lead_days       =structured_cfg.get("signup_lead_days", 5),
+        signup_time            =structured_cfg.get("signup_time", ""),
+        judicator_role_id      =structured_cfg.get("judicator_role_id", 0),
+        power_refresh_dm_enabled=bool(structured_cfg.get("power_refresh_dm_enabled", False)),
+    )
+
     embed = discord.Embed(title=f"✅ {label} Configured", color=discord.Color.green())
     embed.add_field(name="Sheet Tab",    value=tab_name, inline=True)
     embed.add_field(name="Teams",        value={"both": "A & B", "A": "A only", "B": "B only"}[teams], inline=True)
@@ -4986,6 +5031,25 @@ async def run_storm_setup(interaction: discord.Interaction, bot, event_type: str
         )
     else:
         embed.add_field(name="Participation Tracking", value="❌ Disabled", inline=False)
+    if structured_cfg["structured_flow_enabled"]:
+        embed.add_field(
+            name="Structured Roster Flow",
+            value=(
+                f"✅ Enabled · Power column: `{structured_cfg['power_column_name'] or '*not set*'}` · "
+                f"Sub mode: `{structured_cfg['sub_mode']}` · "
+                f"Sign-up channel: <#{structured_cfg['signup_channel_id']}>"
+                if structured_cfg["signup_channel_id"] else
+                f"✅ Enabled · Power column: `{structured_cfg['power_column_name'] or '*not set*'}` · "
+                f"Sub mode: `{structured_cfg['sub_mode']}`"
+            ),
+            inline=False,
+        )
+    else:
+        embed.add_field(
+            name="Structured Roster Flow",
+            value=f"❌ Disabled · Preset tabs: `{structured_cfg['strategies_tab']}` / `{structured_cfg['member_rules_tab']}`",
+            inline=False,
+        )
     if template_a:
         embed.add_field(name="Template A Preview",
                         value=f"```{template_a[:150]}{'...' if len(template_a) > 150 else ''}```",
@@ -5323,6 +5387,742 @@ async def _run_storm_participation_step(
         "roster_alias_col": roster_alias_col,
         "roster_start_row": roster_start_row,
     }
+
+
+# ── Auto-schedule sub-flow (#131) ────────────────────────────────────────────
+
+
+_DOW_NAMES = ["Monday", "Tuesday", "Wednesday", "Thursday",
+              "Friday", "Saturday", "Sunday"]
+
+
+async def _ask_signup_schedule(
+    channel, bot, user, cancel_event, *,
+    label: str, cmd_name: str,
+    current_dow: int, current_lead: int, current_time: str,
+) -> dict | None:
+    """Three-step Premium sub-flow for the auto-scheduler config:
+        * Event day-of-week (dropdown; or "Skip auto-scheduling")
+        * Lead days (modal; defaults to 5)
+        * Sign-up post time (HH:MM in guild timezone; modal)
+
+    Returns `{"dow": int, "lead": int, "time": str}`. `dow = -1`
+    indicates the alliance explicitly opted out of auto-scheduling
+    (manual `/storm_post_signup` remains usable). Returns None on
+    cancel or timeout — callers should propagate the None.
+    """
+    import wizard_registry
+
+    # ── Step 1: day of week ──
+    class _DowView(discord.ui.View):
+        def __init__(self, current: int):
+            super().__init__(timeout=300)
+            self.selected: int | None = None
+            self.cancelled = False
+            options = [
+                discord.SelectOption(
+                    label=name, value=str(i),
+                    default=(i == current),
+                )
+                for i, name in enumerate(_DOW_NAMES)
+            ]
+            options.append(discord.SelectOption(
+                label="Skip auto-scheduling (use /storm_post_signup manually)",
+                value="-1",
+                default=(current < 0),
+            ))
+            sel = discord.ui.Select(
+                placeholder="Which day of the week does this storm event run?",
+                min_values=1, max_values=1,
+                options=options,
+            )
+
+            async def _on_pick(inter: discord.Interaction):
+                try:
+                    self.selected = int(sel.values[0])
+                except ValueError:
+                    self.selected = -1
+                for item in self.children: item.disabled = True
+                if self.selected < 0:
+                    await wizard_registry.safe_edit_response(
+                        inter,
+                        content="✅ Auto-scheduling skipped — `/storm_post_signup` will still work manually.",
+                        view=self,
+                    )
+                else:
+                    await wizard_registry.safe_edit_response(
+                        inter,
+                        content=f"✅ Event day: **{_DOW_NAMES[self.selected]}**.",
+                        view=self,
+                    )
+                self.stop()
+
+            sel.callback = _on_pick
+            self.add_item(sel)
+
+    dow_view = _DowView(int(current_dow if current_dow is not None else -1))
+    await channel.send(
+        f"**Auto-Schedule — Event Day (💎 Premium)**\n"
+        f"On which day of the week does **{label}** run for your alliance? "
+        f"The bot will fire the sign-up post `lead days` before that.",
+        view=dow_view,
+    )
+    await wait_view_or_cancel(dow_view, cancel_event)
+    if dow_view.cancelled:
+        return None
+    if dow_view.selected is None:
+        await channel.send(f"⏰ Timed out. Run `/{cmd_name}` to start again.")
+        return None
+    if dow_view.selected < 0:
+        # Skipped — return defaults / cleared schedule.
+        return {"dow": -1, "lead": int(current_lead or 5), "time": ""}
+
+    # ── Step 2: lead days ──
+    lead_default = str(int(current_lead) if current_lead else 5)
+    lead_picked = await ask_keep_or_change(
+        channel,
+        f"**Auto-Schedule — Lead Days**\n"
+        f"How many days **before** the event should the sign-up post fire? "
+        f"5 is a common default (post Tuesday for a Sunday event).",
+        default="5",
+        current=lead_default if lead_default != "5" else "",
+        modal_title="Lead Days",
+        modal_label="Days (integer, 0–14)",
+        timeout_cmd=cmd_name,
+        cancel_event=cancel_event,
+    )
+    if lead_picked is None:
+        return None
+    try:
+        lead = int(str(lead_picked).strip())
+    except ValueError:
+        lead = 5
+    if lead < 0:
+        lead = 0
+    if lead > 14:
+        lead = 14
+
+    # ── Step 3: sign-up time ──
+    # Empty string is a meaningful value here: "auto-schedule is set up
+    # but no auto-fire" — leadership uses /storm_post_signup manually
+    # for posting. Leave the time empty to express that.
+    time_default = current_time or "12:00"
+    time_picked = await ask_keep_or_change(
+        channel,
+        f"**Auto-Schedule — Sign-Up Post Time**\n"
+        f"What local time should the bot fire the sign-up post? "
+        f"Use 24-hour format (HH:MM). The bot interprets this in your "
+        f"alliance's configured timezone.\n"
+        f"Leave blank for manual posting only (you still get the rest "
+        f"of the schedule config but the bot won't auto-post).",
+        default="12:00",
+        current=time_default if time_default != "12:00" else "",
+        modal_title="Sign-Up Time",
+        modal_label="HH:MM (24-hour, guild tz) — blank for manual",
+        timeout_cmd=cmd_name,
+        cancel_event=cancel_event,
+    )
+    if time_picked is None:
+        return None
+    # Preserve an explicit empty input as "manual posting only" — don't
+    # silently coerce it to the default "12:00". Garbage input still
+    # falls back to the default because the modal label promises HH:MM.
+    raw = str(time_picked).strip()
+    if not raw:
+        time_clean = ""
+    else:
+        time_clean = _normalise_hhmm(raw) or "12:00"
+
+    return {
+        "dow":  dow_view.selected,
+        "lead": lead,
+        "time": time_clean,
+    }
+
+
+def _normalise_hhmm(raw: str) -> str | None:
+    """Thin wrapper around `config.parse_storm_signup_time` kept under
+    the wizard's old name so existing tests / imports keep working.
+    The canonical implementation lives in `config.py` so the scheduler
+    and the wizard can't drift on parsing rules."""
+    from config import parse_storm_signup_time
+    return parse_storm_signup_time(raw)
+
+
+# ── Judicator role picker (#137) ─────────────────────────────────────────────
+
+
+class _KeepOrFlipYesNoGate(discord.ui.View):
+    """Re-entry gate for a yes/no wizard step that already has a saved
+    value. Two buttons: Keep current (success) / Flip (secondary).
+    Sets `self.value` to the resolved bool, or None on timeout."""
+
+    def __init__(
+        self, *,
+        current_value: bool,
+        keep_label_yes: str = "✅ Keep current: Yes",
+        keep_label_no: str = "✅ Keep current: No",
+        flip_label_yes: str = "↩️ Switch to: Yes",
+        flip_label_no: str = "↩️ Switch to: No",
+    ):
+        super().__init__(timeout=WIZARD_TIMEOUT)
+        self.value: bool | None = None
+        self.cancelled = False
+
+        keep_label = keep_label_yes if current_value else keep_label_no
+        flip_label = flip_label_no if current_value else flip_label_yes
+
+        keep_btn = discord.ui.Button(
+            label=keep_label[:80], style=discord.ButtonStyle.success,
+        )
+
+        async def _keep_cb(inter: discord.Interaction):
+            self.value = bool(current_value)
+            for item in self.children: item.disabled = True
+            await wizard_registry.safe_edit_response(
+                inter,
+                content=f"✅ Keeping **{'Yes' if self.value else 'No'}**",
+                view=self,
+            )
+            self.stop()
+
+        keep_btn.callback = _keep_cb
+        self.add_item(keep_btn)
+
+        flip_btn = discord.ui.Button(
+            label=flip_label[:80], style=discord.ButtonStyle.secondary,
+        )
+
+        async def _flip_cb(inter: discord.Interaction):
+            self.value = not bool(current_value)
+            for item in self.children: item.disabled = True
+            await wizard_registry.safe_edit_response(
+                inter,
+                content=f"✅ Switched to **{'Yes' if self.value else 'No'}**",
+                view=self,
+            )
+            self.stop()
+
+        flip_btn.callback = _flip_cb
+        self.add_item(flip_btn)
+
+
+class _KeepOrChangeRoleGate(discord.ui.View):
+    """Re-entry gate for `_ask_judicator_role`. Three buttons:
+    Keep current / Skip (no role) / Change (descend to picker).
+    Returns its decision via `self.decision` in {"keep", "skip",
+    "change"} or None on timeout. Mirrors `ask_keep_or_change`'s
+    three-button shape for the role flavour."""
+
+    def __init__(self, *, current_label: str):
+        super().__init__(timeout=WIZARD_TIMEOUT)
+        self.decision: str | None = None
+        self.cancelled = False
+
+        keep_btn = discord.ui.Button(
+            label=f"✅ Keep current: {current_label}"[:80],
+            style=discord.ButtonStyle.success,
+        )
+
+        async def _keep_cb(inter: discord.Interaction):
+            self.decision = "keep"
+            for item in self.children: item.disabled = True
+            await wizard_registry.safe_edit_response(
+                inter, content=f"✅ Keeping **{current_label}**", view=self,
+            )
+            self.stop()
+
+        keep_btn.callback = _keep_cb
+        self.add_item(keep_btn)
+
+        skip_btn = discord.ui.Button(
+            label="↩️ Skip — no role to apply",
+            style=discord.ButtonStyle.secondary,
+        )
+
+        async def _skip_cb(inter: discord.Interaction):
+            self.decision = "skip"
+            for item in self.children: item.disabled = True
+            await wizard_registry.safe_edit_response(
+                inter, content="✅ Judicator role cleared.", view=self,
+            )
+            self.stop()
+
+        skip_btn.callback = _skip_cb
+        self.add_item(skip_btn)
+
+        change_btn = discord.ui.Button(
+            label="✏️ Change role",
+            style=discord.ButtonStyle.secondary,
+        )
+
+        async def _change_cb(inter: discord.Interaction):
+            self.decision = "change"
+            for item in self.children: item.disabled = True
+            await wizard_registry.safe_edit_response(
+                inter, content="✏️ Pick a new role below…", view=self,
+            )
+            self.stop()
+
+        change_btn.callback = _change_cb
+        self.add_item(change_btn)
+
+
+async def _ask_judicator_role(
+    channel, bot, user, cancel_event, *,
+    cmd_name: str,
+    interaction_guild,
+    current_role_id: int,
+) -> int | None:
+    """CS-only Premium sub-step: pick the Discord role the bot will
+    apply to per_member Judicator candidates when matchmaking reveals
+    Rulebringers. Officer can also skip (returns 0).
+
+    Returns the role ID, 0 for "skip / no role configured," or None
+    on timeout / cancel."""
+    import wizard_registry
+
+    # Keep-or-change branch — re-runs of the setup wizard shouldn't
+    # force leadership through the full role-picker every time. If a
+    # role is already configured, show a quick confirm-or-change view
+    # and only descend into the full picker on "Change". The bare
+    # picker still fires on first run (current_role_id == 0).
+    if current_role_id:
+        current_role = (
+            interaction_guild.get_role(int(current_role_id))
+            if interaction_guild else None
+        )
+        current_label = (
+            current_role.name if current_role else f"role id {current_role_id}"
+        )
+        gate_view = _KeepOrChangeRoleGate(current_label=current_label)
+        await channel.send(
+            "**Judicator Role (💎 Premium — CS only)**\n"
+            f"Currently set to **{current_label}**. Keep it, switch to "
+            f"no role, or pick a different role.",
+            view=gate_view,
+            allowed_mentions=discord.AllowedMentions.none(),
+        )
+        await wait_view_or_cancel(gate_view, cancel_event)
+        if getattr(gate_view, "cancelled", False):
+            return None
+        if gate_view.decision is None:
+            await channel.send(
+                f"⏰ Timed out. Run `/{cmd_name}` to start again."
+            )
+            return None
+        if gate_view.decision == "keep":
+            return int(current_role_id)
+        if gate_view.decision == "skip":
+            return 0
+        # Otherwise: fall through to the full picker.
+
+    # Build a Select of guild roles. Discord caps Select options at
+    # 25, so pre-filter to non-managed, non-default roles by name
+    # length (truncate long names) and keep the most recently created
+    # 24 — plus a "Skip" sentinel option. Alliances rarely have >25
+    # custom roles; if they do, the lower priorities tend to be the
+    # ones that don't need to be Judicator anyway.
+    roles = [
+        r for r in (interaction_guild.roles if interaction_guild else [])
+        if not r.is_default() and not r.managed
+    ]
+    # Sort by hierarchy position (top of the role list first). Admins
+    # tend to place storm-relevant roles toward the top of the role
+    # picker in Server Settings → Roles, so the top of the hierarchy
+    # surfaces the most likely Judicator-role candidates first. NOT
+    # creation-date order despite the prior comment — `r.position` is
+    # the hierarchy index, not created_at.
+    roles.sort(key=lambda r: r.position, reverse=True)
+    roles = roles[:24]
+
+    class _RolePickerView(discord.ui.View):
+        def __init__(self):
+            super().__init__(timeout=300)
+            self.selected: int | None = None
+            self.cancelled = False
+            options = [
+                discord.SelectOption(
+                    label="Skip — no role to apply",
+                    value="0",
+                    default=(current_role_id == 0),
+                ),
+            ]
+            for r in roles:
+                options.append(discord.SelectOption(
+                    label=r.name[:100],
+                    value=str(r.id),
+                    default=(r.id == current_role_id),
+                ))
+            sel = discord.ui.Select(
+                placeholder="Pick the Judicator role (or skip)",
+                min_values=1, max_values=1,
+                options=options,
+            )
+
+            async def _on_pick(inter: discord.Interaction):
+                try:
+                    self.selected = int(sel.values[0])
+                except (TypeError, ValueError):
+                    self.selected = 0
+                for item in self.children: item.disabled = True
+                if self.selected == 0:
+                    msg = "✅ Judicator role skipped."
+                else:
+                    msg = f"✅ Judicator role: <@&{self.selected}>"
+                await wizard_registry.safe_edit_response(
+                    inter, content=msg, view=self,
+                )
+                self.stop()
+
+            sel.callback = _on_pick
+            self.add_item(sel)
+
+    view = _RolePickerView()
+    await channel.send(
+        "**Judicator Role (💎 Premium — CS only)**\n"
+        "Pick the Discord role the bot should apply to members tagged "
+        "as Judicator candidates (via `/cs_member_rule set_member_role`) "
+        "after a CS roster is approved and matchmaking reveals "
+        "**Rulebringers**. Skip if you don't use this — the bot won't "
+        "apply any role.",
+        view=view,
+        allowed_mentions=discord.AllowedMentions.none(),
+    )
+    await wait_view_or_cancel(view, cancel_event)
+    if view.cancelled:
+        return None
+    if view.selected is None:
+        await channel.send(f"⏰ Timed out. Run `/{cmd_name}` to start again.")
+        return None
+    return int(view.selected)
+
+
+# ── Structured storm flow setup sub-flow (#38 + #54) ─────────────────────────
+
+async def _run_structured_flow_setup_step(
+    channel, bot, user, cancel_event, *,
+    guild_id: int, event_type: str, label: str, cmd_name: str,
+    is_premium_flag: bool, current: dict, current_structured: dict,
+    interaction_guild,
+) -> dict | None:
+    """
+    Final block of /setup_desertstorm and /setup_canyonstorm. Walks
+    leadership through enabling the structured roster flow (Premium, #38)
+    and / or configuring the strategy preset + member rules tabs (free,
+    #54). Returns a dict shaped like save_structured_storm_config's
+    kwargs, or None if the user cancelled or timed out.
+
+    Branching:
+      * Premium + opted-in: full config (power column, sub mode, signup
+        channel, all 5 tab names).
+      * Premium without opt-in / free tier: preset library tab names only
+        (strategies_tab + member_rules_tab). Other fields keep their
+        current values so nothing gets cleared by accident.
+
+    The registration-post schedule UI is deferred to the registration
+    post sub-issue — this sub-flow leaves `signup_schedule_cron`
+    untouched.
+    """
+    import wizard_registry
+
+    # Build the result on top of the current saved values so that
+    # opting *out* of the structured flow doesn't clear previously
+    # configured fields (e.g. an alliance that opted out for one week
+    # shouldn't lose its preset tab names).
+    result = dict(current_structured)
+    # Force-coerce to the keys save_structured_storm_config expects.
+    result.setdefault("structured_flow_enabled", False)
+    result.setdefault("power_column_name", "")
+    result.setdefault("sub_mode", "pool")
+    result.setdefault("signup_channel_id", 0)
+    result.setdefault("signup_schedule_cron", "")
+    for tab in ("signups_tab", "rosters_tab", "attendance_tab",
+                "strategies_tab", "member_rules_tab"):
+        result.setdefault(tab, "")
+    result.setdefault("event_day_of_week", -1)
+    result.setdefault("signup_lead_days", 5)
+    result.setdefault("signup_time", "")
+    result.setdefault("judicator_role_id", 0)
+    result.setdefault("power_refresh_dm_enabled", False)
+
+    cmd_short = cmd_name.replace("setup_", "")
+
+    # ── Premium opt-in question ────────────────────────────────────────────
+    structured_opted_in = False
+    if is_premium_flag:
+        await channel.send(
+            f"**Structured Roster Flow (💎 Premium)**\n"
+            f"The structured flow auto-posts a Discord sign-up poll, captures "
+            f"votes per member, and gives leadership a roster builder that "
+            f"filters members by power for each zone. Replaces the text-template "
+            f"draft for {label} when enabled. You can leave this off and still "
+            f"use the strategy preset library on the free tier."
+        )
+        enable_view = YesNoView()
+        await channel.send(
+            f"Turn on the structured flow for {label}?",
+            view=enable_view,
+        )
+        await wait_view_or_cancel(enable_view, cancel_event)
+        if getattr(enable_view, "cancelled", False):
+            return None
+        if enable_view.selected is None:
+            await channel.send(f"⏰ Timed out. Run `/{cmd_name}` to start again.")
+            return None
+        structured_opted_in = bool(enable_view.selected)
+    result["structured_flow_enabled"] = structured_opted_in
+
+    # ── Premium + opted-in: full config ────────────────────────────────────
+    if structured_opted_in:
+        # Power metric column
+        await channel.send(
+            "**Power Metric Column**\n"
+            "Which column header on your roster Sheet stores the power value "
+            f"the bot should use to gate {label} zone eligibility? "
+            "Examples: `1st Squad Power`, `Total Power`, `FC Power`.\n\n"
+            "Type the exact header text from your Sheet."
+        )
+        def _check(m):
+            return m.author == user and m.channel == channel
+        try:
+            reply = await wizard_registry.wait_or_cancel(
+                bot.wait_for("message", check=_check, timeout=300),
+                cancel_event,
+            )
+        except Exception:
+            reply = None
+        if reply is None:
+            if cancel_event.is_set():
+                return None
+            await channel.send(f"⏰ Timed out. Run `/{cmd_name}` to start again.")
+            return None
+        result["power_column_name"] = reply.content.strip()[:80]
+
+        # Sub mode
+        class SubModeView(discord.ui.View):
+            def __init__(self, current_mode: str):
+                super().__init__(timeout=120)
+                self.selected = None
+                self.cancelled = False
+                pool_style = (
+                    discord.ButtonStyle.success if current_mode == "pool"
+                    else discord.ButtonStyle.primary
+                )
+                paired_style = (
+                    discord.ButtonStyle.success if current_mode == "paired"
+                    else discord.ButtonStyle.secondary
+                )
+                pool_label = "✅ Pool" if current_mode == "pool" else "Pool — flat sub list"
+                paired_label = "✅ Paired" if current_mode == "paired" else "Paired — primary↔sub pairs"
+
+                pool_btn = discord.ui.Button(label=pool_label, style=pool_style)
+                paired_btn = discord.ui.Button(label=paired_label, style=paired_style)
+
+                async def _pool(inter):
+                    self.selected = "pool"
+                    for item in self.children: item.disabled = True
+                    await wizard_registry.safe_edit_response(
+                        inter, content="✅ Sub mode: **Pool**", view=self
+                    )
+                    self.stop()
+
+                async def _paired(inter):
+                    self.selected = "paired"
+                    for item in self.children: item.disabled = True
+                    await wizard_registry.safe_edit_response(
+                        inter, content="✅ Sub mode: **Paired**", view=self
+                    )
+                    self.stop()
+
+                pool_btn.callback = _pool
+                paired_btn.callback = _paired
+                self.add_item(pool_btn)
+                self.add_item(paired_btn)
+
+        sub_view = SubModeView(result.get("sub_mode") or "pool")
+        await channel.send(
+            "**Sub Mode**\n"
+            "How should subs be tracked when leadership builds a roster?\n"
+            "• **Pool** — flat list of subs; any sub can cover any primary no-show.\n"
+            "• **Paired** — each primary has a specific sub assigned in advance.",
+            view=sub_view,
+        )
+        await wait_view_or_cancel(sub_view, cancel_event)
+        if sub_view.cancelled:
+            return None
+        if sub_view.selected is None:
+            await channel.send(f"⏰ Timed out. Run `/{cmd_name}` to start again.")
+            return None
+        result["sub_mode"] = sub_view.selected
+
+        # Registration post channel
+        signup_ch_view = ChannelSelectStep(
+            f"Select the channel where {label} sign-up polls post...",
+            suggested_name=f"{cmd_short.replace('_', '-')}-signups",
+            include_threads=True,
+            guild=interaction_guild,
+            current_id=result.get("signup_channel_id") or 0,
+        )
+        if signup_ch_view.is_current_stale:
+            await channel.send(
+                f"⚠️ Your previously configured {label} sign-up channel no longer "
+                "exists. Pick a new one below."
+            )
+        await channel.send(
+            f"**{label} Sign-Up Channel**\n"
+            "The bot will auto-post a sign-up poll here each week. Members click "
+            "buttons to register their availability; leadership opens the officer "
+            f"view via `/storm_signups`.",
+            view=signup_ch_view,
+        )
+        await wait_view_or_cancel(signup_ch_view, cancel_event)
+        if signup_ch_view.cancelled:
+            return None
+        if not signup_ch_view.confirmed:
+            await channel.send(f"⏰ Timed out. Run `/{cmd_name}` to start again.")
+            return None
+        result["signup_channel_id"] = signup_ch_view.selected_channel.id
+
+        # Auto-schedule (#131) — Day-of-week + lead days + time-of-day.
+        # All three together drive the storm_signup_scheduler loop. The
+        # alliance can skip all three (leave defaults) and continue
+        # running `/storm_post_signup` manually.
+        sched_result = await _ask_signup_schedule(
+            channel, bot, user, cancel_event,
+            label=label, cmd_name=cmd_name,
+            current_dow=result.get("event_day_of_week", -1),
+            current_lead=result.get("signup_lead_days", 5),
+            current_time=result.get("signup_time", ""),
+        )
+        if sched_result is None:
+            return None
+        result["event_day_of_week"] = sched_result["dow"]
+        result["signup_lead_days"]  = sched_result["lead"]
+        result["signup_time"]       = sched_result["time"]
+
+        # Sign-ups / rosters / attendance tab names — Premium only
+        for tab_key, label_text in (
+            ("signups_tab",    "Sign-Ups"),
+            ("rosters_tab",    "Rosters"),
+            ("attendance_tab", "Attendance"),
+        ):
+            from config import default_structured_tab
+            tab_default = default_structured_tab(event_type, tab_key)
+            picked = await ask_keep_or_change(
+                channel,
+                f"**{label_text} Tab**\n"
+                f"Which Google Sheet tab should the bot use for {label} "
+                f"{label_text.lower()}? The bot manages the structure — "
+                f"just make sure the tab exists.",
+                default=tab_default,
+                current=result.get(tab_key, ""),
+                modal_title=f"{label_text} Tab Name",
+                modal_label="Tab name",
+                timeout_cmd=cmd_name,
+                cancel_event=cancel_event,
+            )
+            if picked is None:
+                return None
+            result[tab_key] = picked
+
+        # Judicator role (#137) — CS-only. After matchmaking reveals
+        # Rulebringers, the Apply Faction Roles button assigns this
+        # Discord role to per_member.special_role=judicator candidates.
+        if event_type == "CS":
+            jud_pick = await _ask_judicator_role(
+                channel, bot, user, cancel_event,
+                cmd_name=cmd_name,
+                interaction_guild=interaction_guild,
+                current_role_id=result.get("judicator_role_id", 0),
+            )
+            if jud_pick is None:
+                return None
+            result["judicator_role_id"] = jud_pick
+
+        # Power-refresh DM nudge (#138) — Premium-only. When on, the
+        # signup-button handler DMs the voter if their power column
+        # value isn't readable. Cooldown is one nudge per event_date
+        # so members aren't pinged repeatedly.
+        #
+        # Keep-or-change branch on re-entry. If the alliance had the
+        # structured flow enabled previously, the saved Yes/No is
+        # surfaced as "Keep current" so the wizard doesn't force the
+        # officer to re-pick on every re-run. First-time setup
+        # (structured flow not previously enabled) still shows the
+        # standard Yes/No view so the question is asked explicitly.
+        prior_enabled = bool(current_structured.get("structured_flow_enabled"))
+        if prior_enabled:
+            current_yn = bool(current_structured.get("power_refresh_dm_enabled"))
+            gate = _KeepOrFlipYesNoGate(
+                current_value=current_yn,
+                keep_label_yes="✅ Keep current: Yes",
+                keep_label_no="✅ Keep current: No",
+                flip_label_yes="↩️ Switch to: Yes",
+                flip_label_no="↩️ Switch to: No",
+            )
+            await channel.send(
+                f"**Power-Refresh DM (💎 Premium)**\n"
+                f"When a member clicks a sign-up button for **{label}** and "
+                f"their **{result.get('power_column_name') or 'power column'}** "
+                f"cell is blank or unparseable, the bot can DM them a "
+                f"one-line nudge to update it. Currently "
+                f"**{'on' if current_yn else 'off'}** — keep it or flip.",
+                view=gate,
+            )
+            await wait_view_or_cancel(gate, cancel_event)
+            if getattr(gate, "cancelled", False):
+                return None
+            if gate.value is None:
+                await channel.send(
+                    f"⏰ Timed out. Run `/{cmd_name}` to start again."
+                )
+                return None
+            result["power_refresh_dm_enabled"] = bool(gate.value)
+        else:
+            nudge_view = YesNoView()
+            await channel.send(
+                f"**Power-Refresh DM (💎 Premium)**\n"
+                f"When a member clicks a sign-up button for **{label}** and "
+                f"their **{result.get('power_column_name') or 'power column'}** "
+                f"cell is blank or unparseable, should the bot DM them a "
+                f"one-line nudge to update it? At most one DM per member per "
+                f"event date.",
+                view=nudge_view,
+            )
+            await wait_view_or_cancel(nudge_view, cancel_event)
+            if getattr(nudge_view, "cancelled", False):
+                return None
+            if nudge_view.selected is None:
+                await channel.send(f"⏰ Timed out. Run `/{cmd_name}` to start again.")
+                return None
+            result["power_refresh_dm_enabled"] = bool(nudge_view.selected)
+
+    # ── Always-ask: preset library + member rules tab names (free + Premium) ──
+    from config import default_structured_tab
+    for tab_key, label_text in (
+        ("strategies_tab",   "Strategy Presets"),
+        ("member_rules_tab", "Member Rules"),
+    ):
+        tab_default = default_structured_tab(event_type, tab_key)
+        picked = await ask_keep_or_change(
+            channel,
+            f"**{label_text} Tab**\n"
+            f"Which Google Sheet tab should store {label} {label_text.lower()}? "
+            f"The bot creates and maintains this tab — leave the default if you "
+            f"don't have a preference.",
+            default=tab_default,
+            current=result.get(tab_key, ""),
+            modal_title=f"{label_text} Tab Name",
+            modal_label="Tab name",
+            timeout_cmd=cmd_name,
+            cancel_event=cancel_event,
+        )
+        if picked is None:
+            return None
+        result[tab_key] = picked
+
+    return result
 
 
 def _col_letter_to_index(letter: str) -> int:

@@ -272,16 +272,32 @@ def init_db():
         # Supports `{name}` placeholder.
         conn.execute("""
             CREATE TABLE IF NOT EXISTS guild_storm_config (
-                guild_id             INTEGER NOT NULL,
-                event_type           TEXT    NOT NULL,
-                tab_name             TEXT    DEFAULT 'DS Assignments',
-                mail_template        TEXT    DEFAULT '',
-                templates_json       TEXT    DEFAULT '[]',
-                default_template     TEXT    DEFAULT 'Default',
-                timezone             TEXT    DEFAULT 'America/New_York',
-                log_channel_id       INTEGER DEFAULT 0,
-                post_channel_id      INTEGER DEFAULT 0,
-                dm_reminder_message  TEXT    DEFAULT '',
+                guild_id                 INTEGER NOT NULL,
+                event_type               TEXT    NOT NULL,
+                tab_name                 TEXT    DEFAULT 'DS Assignments',
+                mail_template            TEXT    DEFAULT '',
+                templates_json           TEXT    DEFAULT '[]',
+                default_template         TEXT    DEFAULT 'Default',
+                timezone                 TEXT    DEFAULT 'America/New_York',
+                log_channel_id           INTEGER DEFAULT 0,
+                post_channel_id          INTEGER DEFAULT 0,
+                dm_reminder_message      TEXT    DEFAULT '',
+                -- Structured storm flow (#38 + #54)
+                structured_flow_enabled  INTEGER DEFAULT 0,
+                power_column_name        TEXT    DEFAULT '',
+                sub_mode                 TEXT    DEFAULT 'pool',
+                signup_channel_id        INTEGER DEFAULT 0,
+                signup_schedule_cron     TEXT    DEFAULT '',
+                signups_tab              TEXT    DEFAULT '',
+                rosters_tab              TEXT    DEFAULT '',
+                attendance_tab           TEXT    DEFAULT '',
+                strategies_tab           TEXT    DEFAULT '',
+                member_rules_tab         TEXT    DEFAULT '',
+                event_day_of_week        INTEGER DEFAULT -1,
+                signup_lead_days         INTEGER DEFAULT 5,
+                signup_time              TEXT    DEFAULT '',
+                judicator_role_id        INTEGER DEFAULT 0,
+                power_refresh_dm_enabled INTEGER DEFAULT 0,
                 PRIMARY KEY (guild_id, event_type)
             )
         """)
@@ -346,6 +362,138 @@ def init_db():
             )
         """)
 
+        # storm_signups — one row per member per event. Captures who voted
+        # what, when, and (for on-behalf votes) which officer cast it.
+        # `target_member_id` is a free-form string:
+        #   * Discord self-vote: str(discord_user_id)
+        #   * On-behalf for a non-Discord member: roster row identifier
+        #     (canonical member name from the alliance roster Sheet)
+        # `vote` is one of: a, b, either, cannot. Re-votes UPSERT this row
+        # (the unique constraint on (guild_id, event_type, event_date,
+        # target_member_id) enforces one row per member per event).
+        # Each row also remembers `message_id` / `channel_id` so the
+        # startup hook can re-register the SignupView and so officer
+        # views can link back to the source post.
+        # See #38 + #123 + #124.
+        conn.execute("""
+            CREATE TABLE IF NOT EXISTS storm_signups (
+                id                INTEGER PRIMARY KEY AUTOINCREMENT,
+                guild_id          INTEGER NOT NULL,
+                event_type        TEXT    NOT NULL,
+                event_date        TEXT    NOT NULL,
+                target_member_id  TEXT    NOT NULL,
+                voter_user_id     INTEGER NOT NULL,
+                vote              TEXT    NOT NULL,
+                is_on_behalf      INTEGER NOT NULL DEFAULT 0,
+                channel_id        INTEGER NOT NULL DEFAULT 0,
+                message_id        INTEGER NOT NULL DEFAULT 0,
+                voted_at          TEXT    NOT NULL,
+                UNIQUE (guild_id, event_type, event_date, target_member_id)
+            )
+        """)
+
+        # storm_registration_posts — table-of-record for "this message
+        # exists and is a sign-up post." Written by the scheduler in
+        # #124 when it posts a fresh registration message; read by the
+        # bot startup hook (#123) to re-register the SignupView so
+        # buttons survive restarts. Also lets the scheduler enforce
+        # idempotence (one post per guild per event_type per event_date)
+        # so a Railway restart during the configured minute can't
+        # double-post.
+        conn.execute("""
+            CREATE TABLE IF NOT EXISTS storm_registration_posts (
+                guild_id     INTEGER NOT NULL,
+                event_type   TEXT    NOT NULL,
+                event_date   TEXT    NOT NULL,
+                channel_id   INTEGER NOT NULL,
+                message_id   INTEGER NOT NULL,
+                time_a_label TEXT    DEFAULT '',
+                time_b_label TEXT    DEFAULT '',
+                posted_at    TEXT    NOT NULL,
+                PRIMARY KEY (guild_id, event_type, event_date)
+            )
+        """)
+
+        # walkthrough_dismissals — per-officer-per-guild record of which
+        # guided micro-tours an officer has already seen (or actively
+        # declined). The bot offers the tour exactly once per
+        # (guild_id, user_id, walkthrough_key); a single key bump
+        # (e.g. `storm_signups_v1` → `storm_signups_v2`) re-offers the
+        # tour after a major UI rewrite without losing per-officer
+        # dismissal records.
+        conn.execute("""
+            CREATE TABLE IF NOT EXISTS walkthrough_dismissals (
+                guild_id         INTEGER NOT NULL,
+                user_id          INTEGER NOT NULL,
+                walkthrough_key  TEXT    NOT NULL,
+                dismissed_at     TEXT    NOT NULL,
+                PRIMARY KEY (guild_id, user_id, walkthrough_key)
+            )
+        """)
+
+        # storm_signup_history — append-only audit log for storm sign-up
+        # votes. `storm_signups` UPSERTs on (guild_id, event_type,
+        # event_date, target_member_id) so the prior vote, the prior
+        # voter (officer for on-behalf, self otherwise), and the prior
+        # timestamp are overwritten. The audit-trail requirement in #38
+        # ("on-behalf vote logs the casting officer's Discord ID") means
+        # the bot must be able to reconstruct who recorded what and when
+        # — keep every recorded vote here, not just the current one.
+        conn.execute("""
+            CREATE TABLE IF NOT EXISTS storm_signup_history (
+                id                INTEGER PRIMARY KEY AUTOINCREMENT,
+                guild_id          INTEGER NOT NULL,
+                event_type        TEXT    NOT NULL,
+                event_date        TEXT    NOT NULL,
+                target_member_id  TEXT    NOT NULL,
+                voter_user_id     INTEGER NOT NULL,
+                vote              TEXT    NOT NULL,
+                is_on_behalf      INTEGER NOT NULL DEFAULT 0,
+                voted_at          TEXT    NOT NULL
+            )
+        """)
+        conn.execute(
+            "CREATE INDEX IF NOT EXISTS idx_storm_signup_history_event "
+            "ON storm_signup_history (guild_id, event_type, event_date)"
+        )
+
+        # storm_power_refresh_dms_sent — one row per (guild, event_type,
+        # event_date, voter) recording whether the power-refresh DM
+        # nudge (#138) has been sent. Primary-key shape doubles as the
+        # cooldown — duplicate INSERT OR IGNORE is a no-op so a re-vote
+        # on the same event doesn't trigger a second nudge. Survives
+        # bot restarts (in-memory would risk double-DM after a Railway
+        # bounce).
+        conn.execute("""
+            CREATE TABLE IF NOT EXISTS storm_power_refresh_dms_sent (
+                guild_id       INTEGER NOT NULL,
+                event_type     TEXT    NOT NULL,
+                event_date     TEXT    NOT NULL,
+                voter_user_id  INTEGER NOT NULL,
+                sent_at        TEXT    NOT NULL,
+                PRIMARY KEY (guild_id, event_type, event_date, voter_user_id)
+            )
+        """)
+
+        # storm_session_state — per-(guild, event_type, event_date, team)
+        # lock that the structured-flow roster builder takes when an
+        # officer opens it. Prevents two officers from independently
+        # building the same team for the same event and each posting
+        # their own mail + writing their own rosters_tab rows. Released
+        # on Approve, Cancel/Done, or builder timeout.
+        conn.execute("""
+            CREATE TABLE IF NOT EXISTS storm_session_state (
+                guild_id    INTEGER NOT NULL,
+                event_type  TEXT    NOT NULL,
+                event_date  TEXT    NOT NULL,
+                team        TEXT    NOT NULL DEFAULT '',
+                user_id     INTEGER NOT NULL,
+                opened_at   TEXT    NOT NULL,
+                PRIMARY KEY (guild_id, event_type, event_date, team)
+            )
+        """)
+        conn.commit()
+
         # shiny_task_servers — global table of every Last War server
         # known to cpt-hedge, refreshed weekly. The 3-day shiny-task
         # cycle is fully derivable from `creation_date` (no phase
@@ -408,6 +556,44 @@ def init_db():
             # Premium /desertstorm_remind / /canyonstorm_remind DM body
             # (empty → hardcoded default in storm_log.py).
             ("dm_reminder_message",           "TEXT    DEFAULT ''"),
+            # ── Structured storm flow (#38 + #54) ────────────────────────────────
+            # Premium opt-in structured roster builder. `structured_flow_enabled`
+            # gates the registration post, on-behalf voting, eligibility-gated
+            # roster builder, and structured mail post. `power_column_name` is
+            # which header on the roster Sheet to read for eligibility checks
+            # (e.g. "1st Squad Power"). `sub_mode` is `pool` (flat sub list) or
+            # `paired` (primary→sub pairs). Tab names default to empty and are
+            # resolved to event-type-aware defaults at read time.
+            ("structured_flow_enabled", "INTEGER DEFAULT 0"),
+            ("power_column_name",       "TEXT    DEFAULT ''"),
+            ("sub_mode",                "TEXT    DEFAULT 'pool'"),
+            ("signup_channel_id",       "INTEGER DEFAULT 0"),
+            ("signup_schedule_cron",    "TEXT    DEFAULT ''"),
+            ("signups_tab",             "TEXT    DEFAULT ''"),
+            ("rosters_tab",             "TEXT    DEFAULT ''"),
+            ("attendance_tab",          "TEXT    DEFAULT ''"),
+            ("strategies_tab",          "TEXT    DEFAULT ''"),
+            ("member_rules_tab",        "TEXT    DEFAULT ''"),
+            # Auto-scheduler (#131). Day-of-week the event runs on
+            # (0=Monday..6=Sunday); lead time in days; time-of-day to
+            # fire the sign-up post (HH:MM in guild's local timezone).
+            # event_day_of_week = -1 means "scheduling not configured;
+            # use manual /storm_post_signup."
+            ("event_day_of_week",       "INTEGER DEFAULT -1"),
+            ("signup_lead_days",        "INTEGER DEFAULT 5"),
+            ("signup_time",             "TEXT    DEFAULT ''"),
+            # Faction roles (#137). Premium-only Discord role ID
+            # applied to per_member.special_role=judicator candidates
+            # after a CS Approve & Post when matchmaking reveals
+            # Rulebringers. DS rows leave this at 0; the wizard skips
+            # the question for DS setup.
+            ("judicator_role_id",       "INTEGER DEFAULT 0"),
+            # Power-refresh DM nudge (#138). Premium-only — when on,
+            # the SignupView click handler DMs the voter if their
+            # power_column_name cell on the roster Sheet is missing
+            # or unparseable. Once per (guild, event_type, event_date,
+            # voter) — see storm_power_refresh_dms_sent below.
+            ("power_refresh_dm_enabled", "INTEGER DEFAULT 0"),
         ]:
             try:
                 conn.execute(f"ALTER TABLE guild_storm_config ADD COLUMN {col} {definition}")
@@ -1130,6 +1316,24 @@ def get_storm_config(guild_id: int, event_type: str) -> dict:
         "timezone":             "America/New_York",
         "post_channel_id":      0,
         "dm_reminder_message":  "",
+        # Structured storm flow (#38 + #54) — never-configured guilds get
+        # all-off; tab fields resolve to event-type defaults via
+        # default_structured_tab() / get_structured_storm_config().
+        "structured_flow_enabled": 0,
+        "power_column_name":       "",
+        "sub_mode":                "pool",
+        "signup_channel_id":       0,
+        "signup_schedule_cron":    "",
+        "signups_tab":             "",
+        "rosters_tab":             "",
+        "attendance_tab":          "",
+        "strategies_tab":          "",
+        "member_rules_tab":        "",
+        "event_day_of_week":       -1,
+        "signup_lead_days":        5,
+        "signup_time":             "",
+        "judicator_role_id":       0,
+        "power_refresh_dm_enabled": 0,
     }
     return _normalize_storm_templates(fallback, event_type)
 
@@ -1185,6 +1389,618 @@ def save_storm_config(guild_id: int, event_type: str, tab_name: str,
              timezone, log_channel_id, post_channel_id, dm_reminder_message)
         )
         conn.commit()
+
+
+# ── Structured storm flow config (#38 + #54) ─────────────────────────────────
+#
+# Shape of the structured flow config kept separate from the main storm config
+# helpers so the existing `save_storm_config` signature doesn't balloon. This
+# matches the `save_participation_config` pattern — UPDATE-only against an
+# existing (guild_id, event_type) row.
+
+# Defaults are resolved at read time (not at SQL-default time) because the
+# default differs by event_type and the SQL layer can't see which row is DS
+# vs CS.
+_STRUCTURED_TAB_DEFAULTS = {
+    "DS": {
+        "signups_tab":      "DS Signups",
+        "rosters_tab":      "DS Rosters",
+        "attendance_tab":   "DS Attendance",
+        "strategies_tab":   "DS Strategies",
+        "member_rules_tab": "DS Member Rules",
+    },
+    "CS": {
+        "signups_tab":      "CS Signups",
+        "rosters_tab":      "CS Rosters",
+        "attendance_tab":   "CS Attendance",
+        "strategies_tab":   "CS Strategies",
+        "member_rules_tab": "CS Member Rules",
+    },
+}
+
+
+def default_structured_tab(event_type: str, field: str) -> str:
+    """Resolve the event-type-aware default for a tab field. Returns '' if
+    `event_type` isn't DS / CS or `field` isn't recognised — callers should
+    treat that as "no default available."""
+    return _STRUCTURED_TAB_DEFAULTS.get(event_type, {}).get(field, "")
+
+
+def get_structured_storm_config(guild_id: int, event_type: str) -> dict:
+    """Return the structured-flow config subset for a guild + event type.
+    Unset tab fields fall back to event-type-aware defaults (e.g. DS row
+    with empty `signups_tab` reads as 'DS Signups')."""
+    cfg = get_storm_config(guild_id, event_type)
+    def _tab(key: str) -> str:
+        return cfg.get(key) or default_structured_tab(event_type, key)
+    # event_day_of_week stored as -1 (or None on a fallback dict) when
+    # scheduling hasn't been configured. Normalise to -1 so callers can
+    # check `< 0` without worrying about Python's truthy-0 trap.
+    raw_dow = cfg.get("event_day_of_week")
+    if raw_dow is None:
+        raw_dow = -1
+    return {
+        "structured_flow_enabled": bool(cfg.get("structured_flow_enabled")),
+        "power_column_name":       cfg.get("power_column_name") or "",
+        "sub_mode":                cfg.get("sub_mode") or "pool",
+        "signup_channel_id":       int(cfg.get("signup_channel_id") or 0),
+        "signup_schedule_cron":    cfg.get("signup_schedule_cron") or "",
+        "signups_tab":             _tab("signups_tab"),
+        "rosters_tab":             _tab("rosters_tab"),
+        "attendance_tab":          _tab("attendance_tab"),
+        "strategies_tab":          _tab("strategies_tab"),
+        "member_rules_tab":        _tab("member_rules_tab"),
+        "event_day_of_week":       int(raw_dow),
+        # `cfg.get(...) or 5` would falsy-coerce a legitimate `0` to `5`.
+        # Distinguish "column NULL / missing" from "stored zero" so a
+        # lead_days=0 (post on event day) round-trips correctly.
+        "signup_lead_days":        (
+            int(cfg["signup_lead_days"])
+            if cfg.get("signup_lead_days") is not None
+            else 5
+        ),
+        "signup_time":             cfg.get("signup_time") or "",
+        "judicator_role_id":       int(cfg.get("judicator_role_id") or 0),
+        "power_refresh_dm_enabled": bool(cfg.get("power_refresh_dm_enabled")),
+    }
+
+
+def parse_storm_signup_time(value: str) -> Optional[str]:
+    """Parse a user-entered signup time into canonical `HH:MM` (24-hour),
+    or `None` if the input is unparseable.
+
+    Permissive on input — accepts `"14:00"`, `"14"`, `"2pm"`, `"2:00pm"`,
+    `"2:30 PM"`, etc. Returns `None` for empty / garbage so the wizard
+    can distinguish "user gave us nothing → leave existing value alone"
+    from "user gave us nonsense → re-prompt." Both wizards and the
+    scheduler use this single helper so the two paths can't drift.
+    """
+    if value is None:
+        return None
+    raw = str(value).strip().lower()
+    if not raw:
+        return None
+    # Strip am/pm suffix if present, remembering for hour fixup.
+    is_pm = False
+    is_am = False
+    for suffix in ("am", "pm", "a.m.", "p.m."):
+        if raw.endswith(suffix):
+            is_pm = suffix.startswith("p")
+            is_am = suffix.startswith("a")
+            raw = raw[: -len(suffix)].strip()
+            break
+    if ":" in raw:
+        h, _, m = raw.partition(":")
+    else:
+        h, m = raw, "0"
+    try:
+        hour = int(h)
+        minute = int(m)
+    except ValueError:
+        return None
+    if is_pm and hour < 12:
+        hour += 12
+    elif is_am and hour == 12:
+        hour = 0
+    if not (0 <= hour <= 23) or not (0 <= minute <= 59):
+        return None
+    return f"{hour:02d}:{minute:02d}"
+
+
+def get_scheduled_storm_rows() -> list[dict]:
+    """Return every (guild, event_type) row eligible for the auto-signup
+    scheduler — structured flow on, day-of-week set, and a non-empty
+    signup_time. Public wrapper around the schema so callers (the
+    minute-loop scheduler) don't reach into `_get_conn` directly."""
+    rows = []
+    with _get_conn() as conn:
+        for row in conn.execute(
+            "SELECT guild_id, event_type, event_day_of_week, "
+            "       signup_lead_days, signup_time "
+            "FROM guild_storm_config "
+            "WHERE structured_flow_enabled = 1 "
+            "  AND event_day_of_week >= 0 "
+            "  AND signup_time != ''",
+        ).fetchall():
+            rows.append(dict(row))
+    return rows
+
+
+def save_structured_storm_config(
+    guild_id: int, event_type: str, *,
+    structured_flow_enabled: bool = False,
+    power_column_name: str          = "",
+    sub_mode: str                   = "pool",
+    signup_channel_id: int          = 0,
+    signup_schedule_cron: str       = "",
+    signups_tab: str                = "",
+    rosters_tab: str                = "",
+    attendance_tab: str             = "",
+    strategies_tab: str             = "",
+    member_rules_tab: str           = "",
+    event_day_of_week: int          = -1,
+    signup_lead_days: int           = 5,
+    signup_time: str                = "",
+    judicator_role_id: int          = 0,
+    power_refresh_dm_enabled: bool  = False,
+) -> bool:
+    """UPDATE the structured-flow fields on an existing (guild_id, event_type)
+    row. The row must already exist (created by save_storm_config); this does
+    not insert. Returns True if a row was updated. Tab name fields are stored
+    verbatim — pass '' to fall back to the event-type-aware default at read.
+
+    Auto-scheduler fields (#131):
+      * event_day_of_week — 0=Monday..6=Sunday in the guild's tz.
+        Pass -1 (default) when scheduling is intentionally not
+        configured; the loop treats `< 0` as "skip this guild."
+      * signup_lead_days  — number of days before the event to fire
+        the sign-up post. Defaults to 5 if not set.
+      * signup_time       — HH:MM in the guild's tz when to fire.
+        Empty string disables auto-fire (manual /storm_post_signup
+        remains usable).
+    """
+    if sub_mode not in ("pool", "paired"):
+        sub_mode = "pool"
+    # Day-of-week is either 0-6 or "not configured" (-1). Reject
+    # anything else rather than silently clipping — the wizard should
+    # catch bad input first.
+    try:
+        dow = int(event_day_of_week)
+    except (TypeError, ValueError):
+        dow = -1
+    if not (-1 <= dow <= 6):
+        dow = -1
+    try:
+        lead = int(signup_lead_days)
+    except (TypeError, ValueError):
+        lead = 5
+    if lead < 0:
+        lead = 0
+    if lead > 14:
+        # Mirror the wizard's upper clamp at the storage layer so a
+        # malformed direct call can't smuggle in lead=50 (which would
+        # cause the scheduler to skip events forever — fire date never
+        # equals today).
+        lead = 14
+    try:
+        jud_role = int(judicator_role_id or 0)
+    except (TypeError, ValueError):
+        jud_role = 0
+    if jud_role < 0:
+        jud_role = 0
+    with _get_conn() as conn:
+        cur = conn.execute(
+            "UPDATE guild_storm_config SET "
+            "  structured_flow_enabled = ?, "
+            "  power_column_name = ?, "
+            "  sub_mode = ?, "
+            "  signup_channel_id = ?, "
+            "  signup_schedule_cron = ?, "
+            "  signups_tab = ?, "
+            "  rosters_tab = ?, "
+            "  attendance_tab = ?, "
+            "  strategies_tab = ?, "
+            "  member_rules_tab = ?, "
+            "  event_day_of_week = ?, "
+            "  signup_lead_days = ?, "
+            "  signup_time = ?, "
+            "  judicator_role_id = ?, "
+            "  power_refresh_dm_enabled = ? "
+            "WHERE guild_id = ? AND event_type = ?",
+            (
+                1 if structured_flow_enabled else 0,
+                power_column_name, sub_mode,
+                int(signup_channel_id or 0), signup_schedule_cron,
+                signups_tab, rosters_tab, attendance_tab,
+                strategies_tab, member_rules_tab,
+                dow, lead, signup_time, jud_role,
+                1 if power_refresh_dm_enabled else 0,
+                guild_id, event_type,
+            ),
+        )
+        conn.commit()
+        return cur.rowcount > 0
+
+
+# ── Storm sign-up votes (#123) ───────────────────────────────────────────────
+#
+# Votes captured from the SignupView buttons (and from the `/storm_signups`
+# on-behalf path) UPSERT into `storm_signups`. The View itself imports these
+# helpers from the click handler; the officer view also reads from here.
+
+_VALID_STORM_VOTES = {"a", "b", "either", "cannot"}
+
+
+def _utcnow_iso() -> str:
+    """Tz-aware UTC timestamp, ISO 8601 seconds precision, with `+00:00`
+    suffix. Replaces the deprecated naive `datetime.utcnow()` so consumers
+    can't accidentally interpret stored timestamps as local time."""
+    import datetime as _dt
+    return _dt.datetime.now(_dt.timezone.utc).isoformat(timespec="seconds")
+
+
+def record_storm_vote(
+    guild_id: int,
+    event_type: str,
+    event_date: str,
+    voter_user_id: int,
+    target_member_id: str,
+    vote: str,
+    *,
+    is_on_behalf: bool = False,
+    channel_id: int = 0,
+    message_id: int = 0,
+) -> bool:
+    """UPSERT a vote into storm_signups and append the same vote to the
+    append-only `storm_signup_history` table for audit. Re-votes on the
+    same (guild_id, event_type, event_date, target_member_id) replace
+    the prior row in `storm_signups` but preserve every prior vote in
+    `storm_signup_history`. Returns True if recorded, False if the vote
+    value is invalid."""
+    if vote not in _VALID_STORM_VOTES:
+        return False
+    voted_at = _utcnow_iso()
+    with _get_conn() as conn:
+        conn.execute(
+            "INSERT INTO storm_signups "
+            "(guild_id, event_type, event_date, target_member_id, "
+            " voter_user_id, vote, is_on_behalf, channel_id, message_id, voted_at) "
+            "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?) "
+            "ON CONFLICT (guild_id, event_type, event_date, target_member_id) "
+            "DO UPDATE SET "
+            "  voter_user_id = excluded.voter_user_id, "
+            "  vote          = excluded.vote, "
+            "  is_on_behalf  = excluded.is_on_behalf, "
+            "  channel_id    = excluded.channel_id, "
+            "  message_id    = excluded.message_id, "
+            "  voted_at      = excluded.voted_at",
+            (
+                int(guild_id), event_type, event_date, target_member_id,
+                int(voter_user_id), vote, 1 if is_on_behalf else 0,
+                int(channel_id or 0), int(message_id or 0), voted_at,
+            ),
+        )
+        conn.execute(
+            "INSERT INTO storm_signup_history "
+            "(guild_id, event_type, event_date, target_member_id, "
+            " voter_user_id, vote, is_on_behalf, voted_at) "
+            "VALUES (?, ?, ?, ?, ?, ?, ?, ?)",
+            (
+                int(guild_id), event_type, event_date, target_member_id,
+                int(voter_user_id), vote, 1 if is_on_behalf else 0,
+                voted_at,
+            ),
+        )
+        conn.commit()
+    return True
+
+
+def get_storm_signup_history(
+    guild_id: int, event_type: str, event_date: str,
+    target_member_id: str | None = None,
+) -> list[dict]:
+    """Return every recorded vote for an event (or a single target),
+    newest first. Lets the officer view surface "Alice voted A at T1,
+    then officer X overrode to B at T2" so re-votes don't lose context."""
+    with _get_conn() as conn:
+        if target_member_id is None:
+            rows = conn.execute(
+                "SELECT id, guild_id, event_type, event_date, target_member_id, "
+                "       voter_user_id, vote, is_on_behalf, voted_at "
+                "FROM storm_signup_history "
+                "WHERE guild_id = ? AND event_type = ? AND event_date = ? "
+                "ORDER BY id DESC",
+                (int(guild_id), event_type, event_date),
+            ).fetchall()
+        else:
+            rows = conn.execute(
+                "SELECT id, guild_id, event_type, event_date, target_member_id, "
+                "       voter_user_id, vote, is_on_behalf, voted_at "
+                "FROM storm_signup_history "
+                "WHERE guild_id = ? AND event_type = ? AND event_date = ? "
+                "  AND target_member_id = ? "
+                "ORDER BY id DESC",
+                (int(guild_id), event_type, event_date, target_member_id),
+            ).fetchall()
+    out = []
+    for r in rows:
+        d = dict(r)
+        d["is_on_behalf"] = bool(d.get("is_on_behalf"))
+        out.append(d)
+    return out
+
+
+def get_storm_signups(guild_id: int, event_type: str, event_date: str) -> list[dict]:
+    """Return all vote rows for a given event."""
+    with _get_conn() as conn:
+        rows = conn.execute(
+            "SELECT guild_id, event_type, event_date, target_member_id, "
+            "       voter_user_id, vote, is_on_behalf, channel_id, message_id, voted_at "
+            "FROM storm_signups "
+            "WHERE guild_id = ? AND event_type = ? AND event_date = ?",
+            (int(guild_id), event_type, event_date),
+        ).fetchall()
+    out = []
+    for r in rows:
+        d = dict(r)
+        d["is_on_behalf"] = bool(d.get("is_on_behalf"))
+        out.append(d)
+    return out
+
+
+def get_member_vote(
+    guild_id: int, event_type: str, event_date: str, target_member_id: str,
+) -> dict | None:
+    """Return a single member's vote row, or None if they haven't voted."""
+    with _get_conn() as conn:
+        row = conn.execute(
+            "SELECT guild_id, event_type, event_date, target_member_id, "
+            "       voter_user_id, vote, is_on_behalf, channel_id, message_id, voted_at "
+            "FROM storm_signups "
+            "WHERE guild_id = ? AND event_type = ? AND event_date = ? "
+            "  AND target_member_id = ?",
+            (int(guild_id), event_type, event_date, target_member_id),
+        ).fetchone()
+    if not row:
+        return None
+    d = dict(row)
+    d["is_on_behalf"] = bool(d.get("is_on_behalf"))
+    return d
+
+
+# ── Storm registration posts (#123, written by #124) ─────────────────────────
+
+
+def record_storm_registration_post(
+    guild_id: int, event_type: str, event_date: str,
+    channel_id: int, message_id: int,
+    *,
+    time_a_label: str = "",
+    time_b_label: str = "",
+) -> bool:
+    """Record a freshly-posted sign-up message. Idempotent on
+    (guild_id, event_type, event_date) — re-running for the same event
+    is a no-op. Returns True if a new row was inserted, False if the
+    event date already has a post."""
+    posted_at = _utcnow_iso()
+    with _get_conn() as conn:
+        cur = conn.execute(
+            "INSERT OR IGNORE INTO storm_registration_posts "
+            "(guild_id, event_type, event_date, channel_id, message_id, "
+            " time_a_label, time_b_label, posted_at) "
+            "VALUES (?, ?, ?, ?, ?, ?, ?, ?)",
+            (
+                int(guild_id), event_type, event_date,
+                int(channel_id), int(message_id),
+                time_a_label, time_b_label, posted_at,
+            ),
+        )
+        conn.commit()
+        return cur.rowcount > 0
+
+
+def has_registration_post(guild_id: int, event_type: str, event_date: str) -> bool:
+    """Whether a registration message has already been posted for this event."""
+    with _get_conn() as conn:
+        row = conn.execute(
+            "SELECT 1 FROM storm_registration_posts "
+            "WHERE guild_id = ? AND event_type = ? AND event_date = ?",
+            (int(guild_id), event_type, event_date),
+        ).fetchone()
+    return row is not None
+
+
+def get_recent_storm_registration_posts(within_days: int = 14) -> list[dict]:
+    """Return all registration posts whose event_date is within the last
+    `within_days` days. Used by the bot startup hook to re-register the
+    SignupView for messages that are still "live".
+
+    Bounded against UTC today so the Railway host's local clock can't
+    drift the cutoff out from under non-UTC alliances.
+    """
+    import datetime as _dt
+    today_utc = _dt.datetime.now(_dt.timezone.utc).date()
+    cutoff = (today_utc - _dt.timedelta(days=within_days)).isoformat()
+    with _get_conn() as conn:
+        rows = conn.execute(
+            "SELECT guild_id, event_type, event_date, channel_id, message_id, "
+            "       time_a_label, time_b_label, posted_at "
+            "FROM storm_registration_posts "
+            "WHERE event_date >= ?",
+            (cutoff,),
+        ).fetchall()
+    return [dict(r) for r in rows]
+
+
+# ── Power-refresh DM cooldown (#138) ────────────────────────────────────────
+
+
+def has_power_refresh_dm_been_sent(
+    guild_id: int, event_type: str, event_date: str, voter_user_id: int,
+) -> bool:
+    """True if the bot has already sent the power-refresh nudge to this
+    voter for this event. Used by the SignupView click handler to
+    cap at one nudge per (member, event_date) regardless of re-votes
+    or bot restarts."""
+    with _get_conn() as conn:
+        row = conn.execute(
+            "SELECT 1 FROM storm_power_refresh_dms_sent "
+            "WHERE guild_id = ? AND event_type = ? AND event_date = ? "
+            "  AND voter_user_id = ?",
+            (int(guild_id), event_type, event_date, int(voter_user_id)),
+        ).fetchone()
+    return row is not None
+
+
+def record_power_refresh_dm_sent(
+    guild_id: int, event_type: str, event_date: str, voter_user_id: int,
+) -> bool:
+    """Idempotent record of "this voter got a power-refresh DM for
+    this event." Returns True on a fresh insert, False if already
+    recorded — caller can use either return as the cooldown gate.
+
+    `INSERT OR IGNORE` + the `rowcount > 0` return is what makes this
+    a race-tight cooldown: callers should insert FIRST, then send
+    the DM only on a True return. Two simultaneous click handlers
+    each call this; only the first sees True, the second sees False
+    and bails — so the DM fires exactly once.
+    """
+    with _get_conn() as conn:
+        cur = conn.execute(
+            "INSERT OR IGNORE INTO storm_power_refresh_dms_sent "
+            "(guild_id, event_type, event_date, voter_user_id, sent_at) "
+            "VALUES (?, ?, ?, ?, ?)",
+            (
+                int(guild_id), event_type, event_date,
+                int(voter_user_id), _utcnow_iso(),
+            ),
+        )
+        conn.commit()
+        return cur.rowcount > 0
+
+
+def clear_power_refresh_dm_sent(
+    guild_id: int, event_type: str, event_date: str, voter_user_id: int,
+) -> bool:
+    """Back out a `record_power_refresh_dm_sent` row. Used by the
+    click handler when a transient `discord.HTTPException` blew up
+    the DM send AFTER the cooldown was claimed via INSERT-first —
+    without backing it out, the member would never get a retry for
+    this event because the cooldown row would persist.
+
+    Returns True if a row was removed; False if nothing matched.
+    """
+    with _get_conn() as conn:
+        cur = conn.execute(
+            "DELETE FROM storm_power_refresh_dms_sent "
+            "WHERE guild_id = ? AND event_type = ? AND event_date = ? "
+            "  AND voter_user_id = ?",
+            (int(guild_id), event_type, event_date, int(voter_user_id)),
+        )
+        conn.commit()
+        return cur.rowcount > 0
+
+
+# ── Walkthrough dismissals (#130) ────────────────────────────────────────────
+
+
+def is_walkthrough_dismissed(
+    guild_id: int, user_id: int, walkthrough_key: str,
+) -> bool:
+    """True if this officer has already seen (or declined) the named
+    walkthrough in this guild. Walkthrough keys carry a version suffix
+    (e.g. `storm_signups_v1`) so a major UI rewrite can re-offer the
+    tour without losing per-officer dismissal records."""
+    with _get_conn() as conn:
+        row = conn.execute(
+            "SELECT 1 FROM walkthrough_dismissals "
+            "WHERE guild_id = ? AND user_id = ? AND walkthrough_key = ?",
+            (int(guild_id), int(user_id), walkthrough_key),
+        ).fetchone()
+    return row is not None
+
+
+def dismiss_walkthrough(
+    guild_id: int, user_id: int, walkthrough_key: str,
+) -> None:
+    """Record that an officer has seen or declined a walkthrough.
+    Idempotent — re-recording is a no-op."""
+    with _get_conn() as conn:
+        conn.execute(
+            "INSERT OR IGNORE INTO walkthrough_dismissals "
+            "(guild_id, user_id, walkthrough_key, dismissed_at) "
+            "VALUES (?, ?, ?, ?)",
+            (int(guild_id), int(user_id), walkthrough_key, _utcnow_iso()),
+        )
+        conn.commit()
+
+
+# ── Structured roster-build session lock (#129 follow-up) ────────────────────
+#
+# Used by `storm_roster_builder` to make sure two officers can't
+# independently build the same team for the same event and both Approve
+# (which would post two mails + write two sets of rosters_tab rows).
+# The session row is keyed on (guild_id, event_type, event_date, team).
+# `team` is `""` for CS (one roster per faction per event).
+
+
+def claim_storm_session(
+    guild_id: int, event_type: str, event_date: str, team: str,
+    user_id: int,
+) -> tuple[bool, Optional[int]]:
+    """Try to claim the build slot for this (guild, event_type, event_date,
+    team). Returns `(True, None)` on a fresh claim, `(False, owner_user_id)`
+    if another officer already holds it.
+
+    Re-claiming as the same `user_id` succeeds (returns `(True, None)`) so
+    an officer who opens the builder twice in a row from a stale view
+    doesn't get locked out by their own prior claim.
+    """
+    with _get_conn() as conn:
+        # Check existing holder first.
+        row = conn.execute(
+            "SELECT user_id FROM storm_session_state "
+            "WHERE guild_id = ? AND event_type = ? AND event_date = ? "
+            "  AND team = ?",
+            (int(guild_id), event_type, event_date, team),
+        ).fetchone()
+        if row is not None:
+            existing = int(row["user_id"])
+            if existing == int(user_id):
+                # Reclaim by the same officer — refresh opened_at and ok.
+                conn.execute(
+                    "UPDATE storm_session_state SET opened_at = ? "
+                    "WHERE guild_id = ? AND event_type = ? AND event_date = ? "
+                    "  AND team = ?",
+                    (_utcnow_iso(), int(guild_id), event_type, event_date, team),
+                )
+                conn.commit()
+                return True, None
+            return False, existing
+        conn.execute(
+            "INSERT INTO storm_session_state "
+            "(guild_id, event_type, event_date, team, user_id, opened_at) "
+            "VALUES (?, ?, ?, ?, ?, ?)",
+            (int(guild_id), event_type, event_date, team, int(user_id), _utcnow_iso()),
+        )
+        conn.commit()
+    return True, None
+
+
+def release_storm_session(
+    guild_id: int, event_type: str, event_date: str, team: str,
+) -> bool:
+    """Drop the session lock. Safe to call on Done / Cancel / Approve /
+    timeout — re-releasing is a no-op."""
+    with _get_conn() as conn:
+        cur = conn.execute(
+            "DELETE FROM storm_session_state "
+            "WHERE guild_id = ? AND event_type = ? AND event_date = ? "
+            "  AND team = ?",
+            (int(guild_id), event_type, event_date, team),
+        )
+        conn.commit()
+    return cur.rowcount > 0
 
 
 def get_storm_template(guild_id: int, event_type: str, template_name: str | None = None) -> str:

@@ -28,6 +28,15 @@ class _FakeGuild:
         self.id = guild_id
         self.members = members
 
+    def get_member(self, member_id: int):
+        """Mirror discord.Guild.get_member — returns the member or None.
+        Needed by storm_officer_view._read_roster_rows (#139) to infer
+        non-Discord status for rows whose Discord ID isn't in the guild."""
+        for m in self.members:
+            if m.id == member_id:
+                return m
+        return None
+
 
 class TestNextEventDate:
     def test_returns_next_sunday(self):
@@ -211,20 +220,75 @@ class TestNotOnDiscordEnumeration:
         )
         rows = [
             ["Discord ID", "Name", "Display Name", "not_on_discord"],
-            ["",           "Alice", "Alice",        "yes"],
-            ["",           "Bob",   "Bob",          ""],
+            ["1001",       "Alice", "Alice",        "yes"],
+            ["1002",       "Bob",   "Bob",          ""],
+        ]
+        with patch(
+            "config.get_member_roster_sheet",
+            return_value=self._fake_roster_ws(rows),
+        ):
+            # Both have Discord IDs; bot must see Bob as a guild member
+            # so he ISN'T mis-inferred as non-Discord by #139.
+            bob_member = _FakeMember(1002, "Bob")
+            guild = _FakeGuild(TEST_GUILD_ID, [bob_member])
+            buckets, errs = sov._build_bucket_map(guild, "DS", "2026-05-18")
+        # No stale-ID warning because Bob is in the guild.
+        assert errs == []
+        names = {e["label"] for e in buckets["not_voted"]}
+        # Alice's explicit flag puts her in the not-voted bucket.
+        assert "Alice" in names
+        # Bob (Discord member, no flag, in guild) is also there because
+        # _discord_member_pool enumerates him from guild.members.
+        assert "Bob" in names
+
+    def test_blank_discord_id_inferred_non_discord(self, seeded_db):
+        """#139 — a row with blank Discord ID and no explicit flag is
+        inferred as non-Discord and surfaces in Not Voted Yet."""
+        import config
+        config.save_member_roster_config(
+            TEST_GUILD_ID, enabled=1, tab_name="Members",
+            discord_id_col=0, name_col=1, display_col=2,
+        )
+        rows = [
+            # No `not_on_discord` column at all — alliance hasn't added it.
+            ["Discord ID", "Name",  "Display Name"],
+            ["",           "Carol", "Carol"],
         ]
         with patch(
             "config.get_member_roster_sheet",
             return_value=self._fake_roster_ws(rows),
         ):
             guild = _FakeGuild(TEST_GUILD_ID, [])
-            buckets, errs = sov._build_bucket_map(guild, "DS", "2026-05-18")
-        assert errs == []
+            buckets, _errs = sov._build_bucket_map(guild, "DS", "2026-05-18")
         names = {e["label"] for e in buckets["not_voted"]}
-        assert "Alice" in names
-        # Bob has not_on_discord=blank → not enumerated as a phantom.
-        assert "Bob" not in names
+        # Carol surfaces because her blank Discord ID is inferred as
+        # non-Discord — alliance doesn't need to add the column for the
+        # bot to do the right thing.
+        assert "Carol" in names
+
+    def test_stale_discord_id_inferred_non_discord(self, seeded_db):
+        """#139 — a row with a Discord ID that's not in the guild
+        (member left) is inferred as non-Discord."""
+        import config
+        config.save_member_roster_config(
+            TEST_GUILD_ID, enabled=1, tab_name="Members",
+            discord_id_col=0, name_col=1, display_col=2,
+        )
+        rows = [
+            ["Discord ID", "Name", "Display Name"],
+            ["9999",       "Ghost", "Ghost"],
+        ]
+        with patch(
+            "config.get_member_roster_sheet",
+            return_value=self._fake_roster_ws(rows),
+        ):
+            # Ghost (id=9999) isn't in the guild — she left.
+            guild = _FakeGuild(TEST_GUILD_ID, [])
+            buckets, errs = sov._build_bucket_map(guild, "DS", "2026-05-18")
+        names = {e["label"] for e in buckets["not_voted"]}
+        assert "Ghost" in names
+        # Soft warning surfaces so leadership can clean up.
+        assert any("stale Discord IDs" in e for e in errs)
 
     def test_off_discord_flag_renders_footnote_marker(self, seeded_db):
         import config

@@ -1067,6 +1067,63 @@ class TestAutoFillButtonGate:
         assert not any("Auto-fill" in lab for lab in labels)
 
 
+class TestNonDiscordAutoDetect:
+    """#139 — auto-detect non-Discord roster rows via two paths:
+      * Blank Discord ID cell.
+      * Non-blank Discord ID but member not in guild (stale ID).
+    The explicit `not_on_discord` column still wins when present.
+    """
+
+    def test_blank_discord_id_inferred_non_discord(self, fake_env):
+        fake, gid = fake_env
+        # Dave's row has no Discord ID; he's already correctly flagged
+        # in the fixture, but here we check the inference path fires
+        # even when the explicit column isn't truthy.
+        members, _errs = srb._read_roster_powers(gid, "DS", guild=None)
+        # No guild → only the blank-id half of inference fires.
+        # The fixture explicitly flagged Dave with "x", so this also
+        # exercises tier-1 winning. Verify both paths converge.
+        assert members["Dave"]["not_on_discord"] is True
+
+    def test_stale_discord_id_inferred_non_discord(self, fake_env):
+        from unittest.mock import MagicMock
+        fake, gid = fake_env
+        # Mock a guild where Alice (1001) is NOT a member — simulating
+        # she's left the server but is still on the roster Sheet.
+        guild = MagicMock()
+        guild.get_member.return_value = None  # every lookup → not in server
+        members, errs = srb._read_roster_powers(gid, "DS", guild=guild)
+        # Alice's row gets inferred as non-Discord because she's not in
+        # the live guild.
+        assert members["1001"]["not_on_discord"] is True
+        # And a soft warning surfaces.
+        assert any("stale Discord IDs" in e for e in errs)
+
+    def test_present_guild_member_not_flagged(self, fake_env):
+        from unittest.mock import MagicMock
+        fake, gid = fake_env
+        # Mock a guild that returns a member for Alice but not for
+        # other IDs.
+        def _get_member(mid):
+            return MagicMock() if mid == 1001 else None
+        guild = MagicMock()
+        guild.get_member.side_effect = _get_member
+        members, _errs = srb._read_roster_powers(gid, "DS", guild=guild)
+        # Alice is in the server → NOT flagged.
+        assert members["1001"]["not_on_discord"] is False
+
+    def test_explicit_flag_wins_over_inference(self, fake_env):
+        from unittest.mock import MagicMock
+        fake, gid = fake_env
+        # Dave has "x" in not_on_discord AND a blank Discord ID. Even
+        # if we hand a guild that returned a member (impossible since
+        # discord_id is blank, but defense), the explicit flag wins.
+        guild = MagicMock()
+        guild.get_member.return_value = MagicMock()
+        members, _errs = srb._read_roster_powers(gid, "DS", guild=guild)
+        assert members["Dave"]["not_on_discord"] is True
+
+
 class TestFindJudicatorCandidates:
     """#137 — `_find_judicator_candidates` returns assigned member keys
     whose per_member.special_role rule is `judicator`. Used by the

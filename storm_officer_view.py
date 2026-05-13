@@ -65,7 +65,9 @@ def _next_event_date(today: _dt.date | None = None) -> str:
     return (today + _dt.timedelta(days=days_ahead)).isoformat()
 
 
-def _read_roster_rows(guild_id: int) -> tuple[list[dict], list[str]]:
+def _read_roster_rows(
+    guild_id: int, *, guild: discord.Guild | None = None,
+) -> tuple[list[dict], list[str]]:
     """Read the alliance's member-roster Sheet and return:
       (rows, errors)
     where each row is `{"discord_id": str, "name": str, "not_on_discord": bool}`.
@@ -74,9 +76,26 @@ def _read_roster_rows(guild_id: int) -> tuple[list[dict], list[str]]:
     to "Discord members only" rather than blocking on a missing Sheet or
     a roster column that hasn't been added yet. The errors list is for
     callers that want to surface a soft warning.
+
+    Non-Discord detection (#139) is tiered:
+      1. If the row has a `not_on_discord` column with a truthy value,
+         the alliance has explicitly flagged the row (current behaviour).
+      2. Otherwise, infer:
+         - Blank `discord_id` cell → non-Discord (member never had one).
+         - Non-blank `discord_id` but `guild.get_member(int(id))` is None
+           → non-Discord (member's left the server but the alliance
+           still tracks them on the roster).
+      3. The explicit column wins when present — alliance override is
+         load-bearing.
+
+    The `guild` kwarg is optional; when None, only tier 1 + the
+    blank-discord-id half of tier 2 fire. Officer view always passes
+    the live guild; the auto-fill / roster-builder path delegates here
+    too for consistency.
     """
     import config
     errors: list[str] = []
+    stale_ids: list[str] = []
     try:
         cfg = config.get_member_roster_config(guild_id)
     except Exception as e:
@@ -116,19 +135,58 @@ def _read_roster_rows(guild_id: int) -> tuple[list[dict], list[str]]:
 
     rows: list[dict] = []
     truthy = {"1", "true", "yes", "y", "x", "t"}
+    # Used for the "explicit column wins" tier-1 / tier-2 logic.
+    has_not_col = not_col >= 0
+
     for row in values[1:]:
         discord_id = row[id_col].strip() if id_col < len(row) else ""
         name       = row[name_col].strip() if name_col < len(row) else ""
-        not_flag   = ""
-        if not_col >= 0 and not_col < len(row):
-            not_flag = row[not_col].strip().lower()
         if not (discord_id or name):
             continue
+
+        explicit_flag = ""
+        if has_not_col and not_col < len(row):
+            explicit_flag = row[not_col].strip().lower()
+        explicit_set = explicit_flag in truthy
+
+        # Tier 2 inference — only fires when no explicit flag is set.
+        # (An empty cell in a present column means "no explicit flag";
+        # we still infer in that case so alliances who add the column
+        # later don't have to backfill every row to get the inference.)
+        inferred = False
+        if not explicit_set:
+            if not discord_id:
+                inferred = True
+            elif guild is not None and discord_id.isdigit():
+                try:
+                    member = guild.get_member(int(discord_id))
+                except (TypeError, ValueError):
+                    member = None
+                if member is None:
+                    inferred = True
+                    stale_ids.append(f"{name or '?'} (id {discord_id})")
+
         rows.append({
             "discord_id":     discord_id,
             "name":           name or discord_id,
-            "not_on_discord": not_flag in truthy,
+            "not_on_discord": explicit_set or inferred,
         })
+
+    if stale_ids:
+        # Soft warning so leadership can clean up the roster Sheet.
+        # The first 5 are surfaced via the embed warning surface; the
+        # full list goes to logs.
+        preview = ", ".join(stale_ids[:5])
+        extra = f" (+{len(stale_ids) - 5} more)" if len(stale_ids) > 5 else ""
+        errors.append(
+            "stale Discord IDs on roster (member likely left the server): "
+            f"{preview}{extra}"
+        )
+        logger.warning(
+            "[STORM OFFICER VIEW] stale roster Discord IDs for guild=%s: %s",
+            guild_id, "; ".join(stale_ids),
+        )
+
     return rows, errors
 
 
@@ -192,7 +250,9 @@ def _build_bucket_map(
     # Non-Discord roster rows — read the alliance's roster Sheet and
     # surface every row flagged `not_on_discord` so leadership can see
     # who still needs an on-behalf vote BEFORE casting it.
-    roster_rows, roster_errors = _read_roster_rows(guild.id) if guild else ([], [])
+    roster_rows, roster_errors = (
+        _read_roster_rows(guild.id, guild=guild) if guild else ([], [])
+    )
     for r in roster_rows:
         if not r.get("not_on_discord"):
             continue
@@ -415,7 +475,9 @@ class _OnBehalfModal(discord.ui.Modal, title="Record vote on behalf"):
         # so typos don't create phantom signup rows. If the roster doesn't
         # have a `not_on_discord` column yet (or the Sheet read failed), we
         # fall back to permissive behaviour to keep the command useful.
-        roster_rows, _errors = _read_roster_rows(self._view.guild_id)
+        roster_rows, _errors = _read_roster_rows(
+            self._view.guild_id, guild=self._view.guild,
+        )
         canonical_name = raw_member
         if roster_rows:
             match = next(

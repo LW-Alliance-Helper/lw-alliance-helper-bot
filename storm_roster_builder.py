@@ -44,7 +44,7 @@ logger = logging.getLogger(__name__)
 # "exclude unknown power, never silently coerce to zero."
 
 def _read_roster_powers(
-    guild_id: int, event_type: str,
+    guild_id: int, event_type: str, *, guild=None,
 ) -> tuple[dict[str, dict], list[str]]:
     """Read the alliance's roster Sheet and return:
 
@@ -138,7 +138,9 @@ def _read_roster_powers(
         )
 
     truthy = {"1", "true", "yes", "y", "x", "t"}
+    has_not_col = not_disc_col >= 0
     members: dict[str, dict] = {}
+    stale_ids: list[str] = []
     for row in values[1:]:
         def _cell(idx: int) -> str:
             if idx < 0 or idx >= len(row):
@@ -167,9 +169,28 @@ def _read_roster_powers(
                 else:
                     power_val = int(parsed)
 
-        not_on_discord = (
-            _cell(not_disc_col).lower() in truthy if not_disc_col >= 0 else False
+        # Non-Discord detection (#139). Explicit alliance column wins
+        # when set; inference fills the gap when the column is absent
+        # or empty:
+        #   * blank discord_id  → non-Discord
+        #   * discord_id set but not in guild → non-Discord (stale ID
+        #     — member's left the server)
+        explicit_set = (
+            _cell(not_disc_col).lower() in truthy if has_not_col else False
         )
+        inferred = False
+        if not explicit_set:
+            if not discord_id:
+                inferred = True
+            elif guild is not None and discord_id.isdigit():
+                try:
+                    member = guild.get_member(int(discord_id))
+                except (TypeError, ValueError):
+                    member = None
+                if member is None:
+                    inferred = True
+                    stale_ids.append(f"{name or '?'} (id {discord_id})")
+        not_on_discord = explicit_set or inferred
 
         key = discord_id or name
         if not key:
@@ -181,6 +202,18 @@ def _read_roster_powers(
             "power":          power_val,
             "not_on_discord": not_on_discord,
         }
+
+    if stale_ids:
+        preview = ", ".join(stale_ids[:5])
+        extra = f" (+{len(stale_ids) - 5} more)" if len(stale_ids) > 5 else ""
+        errors.append(
+            "stale Discord IDs on roster (member likely left the server): "
+            f"{preview}{extra}"
+        )
+        logger.warning(
+            "[STORM ROSTER] stale roster Discord IDs for guild=%s event=%s: %s",
+            guild_id, event_type, "; ".join(stale_ids),
+        )
 
     return members, errors
 
@@ -1594,7 +1627,7 @@ async def _finalize_structured_roster(
     # builder-open snapshot, which is what the audit flagged.
     try:
         fresh_members, _refresh_errors = _read_roster_powers(
-            s.guild_id, s.event_type,
+            s.guild_id, s.event_type, guild=interaction.guild,
         )
         for key, m in s.members.items():
             fresh = fresh_members.get(key)
@@ -2199,8 +2232,12 @@ async def open_roster_builder(
             return
         team = team_view.selected
 
-    # Load powers + rules.
-    members, roster_errors = _read_roster_powers(interaction.guild_id, event_type)
+    # Load powers + rules. Passes the live guild so the reader can
+    # infer non-Discord status for rows with stale or blank Discord IDs
+    # (#139) — explicit `not_on_discord` column still wins.
+    members, roster_errors = _read_roster_powers(
+        interaction.guild_id, event_type, guild=interaction.guild,
+    )
 
     # Structured-mode pool filter: keep only members who signed up
     # compatible with this team. Unknown signups (not on roster) are

@@ -364,6 +364,14 @@ def _auto_fill_session(session: RosterBuilderSession) -> dict:
 
     Returns the summary dict (also stored on `session.auto_fill_summary`).
 
+    Pool-source contract: this function ONLY auto-fills members present
+    in `session.members`. In structured mode, the upstream
+    `open_roster_builder` narrows that dict to signed-up members for
+    the team BEFORE constructing the session — so this function inherits
+    the signup-pool filter transitively. In free-tier mode, all roster
+    members are eligible. Tests in TestAutoFillRespectsMembersDict pin
+    this contract.
+
     The fill is officer-correctable — every assignment can be tweaked
     via the picker before Approve & Post.
     """
@@ -398,8 +406,15 @@ def _auto_fill_session(session: RosterBuilderSession) -> dict:
                 match_key = k
                 break
         if match_key is None:
-            # Already surfaced once by _apply_rules_to_session, so don't
-            # double-warn. Just don't count it as applied.
+            # The opener pass (`_apply_rules_to_session`) already warned
+            # via `session.roster_errors`, but auto-fill is the consumer
+            # actually trying to place this rule. Record a conflict so
+            # the summary's "Per-member rules applied: N" lines up
+            # against the number of rules officers see in the editor.
+            if subject:
+                summary["conflicts"].append(
+                    f"per_member subject not on roster: {subject}"
+                )
             continue
         if not session.preset.find_zone(zone):
             summary["conflicts"].append(
@@ -418,6 +433,15 @@ def _auto_fill_session(session: RosterBuilderSession) -> dict:
             continue
         session.assignments[zone].append(match_key)
         summary["per_member_rules_applied"] += 1
+        # A per_member pin of a power-unknown member is an officer
+        # decision to assign below the floor — record it in the
+        # override set so the rosters_tab `Override Below Floor`
+        # column lights up for that slot. Without this, an auto-fill
+        # decision is silently weaker than the equivalent manual
+        # assignment via the toggle.
+        member = session.members.get(match_key)
+        if member is not None and member.get("power") is None:
+            session.below_floor_overrides.add(match_key)
 
     # ── 2. Greedy fill by zone priority ──
     # priority=0 means "no priority set" → sort to the end.
@@ -432,29 +456,25 @@ def _auto_fill_session(session: RosterBuilderSession) -> dict:
         eligible_keys, _below = _eligible_member_keys_for_zone(session, z.zone)
         if not eligible_keys:
             continue
-        # eligible_keys is already sorted high-power-first.
+        # eligible_keys is already sorted high-power-first AND
+        # name-tiebroken, so the result is deterministic across reads.
         for key in eligible_keys[:remaining]:
             session.assignments[z.zone].append(key)
             summary["auto_filled_by_power"] += 1
+            # Did this member's power fall below the preset's per-team
+            # floor but pass the band-relaxed effective floor? If so,
+            # they're in via a power_band rule — count them honestly.
+            preset_floor = session.floor_for_zone(z.zone)
+            effective_floor = _effective_floor_for_zone(session, z.zone)
+            member_power = session.members[key].get("power")
+            if (
+                member_power is not None
+                and effective_floor < preset_floor
+                and member_power < preset_floor
+            ):
+                summary["power_band_rules_applied"] += 1
 
-    # ── 3. Count power_band rules that effectively lowered a floor ──
-    # Informational — the actual gate is in `_eligible_member_keys_for_zone`
-    # via `_effective_floor_for_zone`, which is already consulted above.
-    for band in session.power_band_rules:
-        zone = band.value.strip()
-        if not session.preset.find_zone(zone):
-            continue
-        try:
-            threshold = int(band.subject)
-        except (TypeError, ValueError):
-            continue
-        # Compare against the team-specific preset floor (not the
-        # band-relaxed effective floor).
-        preset_floor = session.floor_for_zone(zone)
-        if threshold < preset_floor:
-            summary["power_band_rules_applied"] += 1
-
-    # ── 4. Spillover ──
+    # ── 3. Spillover ──
     assigned = session.assigned_member_keys()
     for key, m in session.members.items():
         if key in assigned:
@@ -585,7 +605,7 @@ def _render_builder_embed(session: RosterBuilderSession) -> discord.Embed:
             f"• Per-member rules applied: **{af['per_member_rules_applied']}**"
         )
         lines.append(
-            f"• Power-band rules lowering a floor: **{af['power_band_rules_applied']}**"
+            f"• Members slotted via a band-relaxed floor: **{af['power_band_rules_applied']}**"
         )
         lines.append(
             f"• Auto-filled by power: **{af['auto_filled_by_power']}**"
@@ -678,13 +698,16 @@ def _eligible_member_keys_for_zone(
             eligible.append(key)
         else:
             below.append(key)
-    # Sort eligible high-power-first so officers see strongest options at top.
-    eligible.sort(
-        key=lambda k: -(session.members[k].get("power") or 0),
-    )
-    below.sort(
-        key=lambda k: -(session.members[k].get("power") or 0),
-    )
+    # Sort eligible high-power-first; tie-break on name so the order is
+    # content-deterministic (Python's sort is stable, so equal-power
+    # members would otherwise fall back to dict-insertion order — fine
+    # in practice but a regression trap if the upstream roster read ever
+    # reorders rows).
+    def _power_then_name(k: str) -> tuple[int, str]:
+        m = session.members[k]
+        return (-(m.get("power") or 0), m.get("name") or "")
+    eligible.sort(key=_power_then_name)
+    below.sort(key=_power_then_name)
     return eligible, below
 
 
@@ -799,6 +822,10 @@ class RosterBuilderView(discord.ui.View):
                 if key in below:
                     s.below_floor_overrides.add(key)
                 s.assignments[s.selected_zone].append(key)
+                # Any manual edit invalidates the auto-fill summary —
+                # the names and counts the officer is reading no longer
+                # describe what's currently on the roster.
+                s.auto_fill_summary = None
                 await self._refresh(inter)
 
             member_select.callback = _on_member
@@ -834,6 +861,7 @@ class RosterBuilderView(discord.ui.View):
                 return
             s.assignments[s.selected_zone] = []
             s.prune_stale_overrides()
+            s.auto_fill_summary = None
             await self._refresh(inter)
 
         unassign_btn.callback = _unassign
@@ -855,6 +883,7 @@ class RosterBuilderView(discord.ui.View):
             moved = members_in_zone.pop()
             s.subs.append(moved)
             s.prune_stale_overrides()
+            s.auto_fill_summary = None
             await self._refresh(inter)
 
         move_to_subs_btn.callback = _move_to_subs

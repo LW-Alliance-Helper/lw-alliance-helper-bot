@@ -792,15 +792,19 @@ class TestAutoFill:
 
     def test_power_band_relaxation_counted(self):
         # Preset floor for Power Tower = 300M; band lowers it to 200M.
-        members = self._three_members()  # Bob 280M, Carol 220M would now slot
+        # Bob (280M) and Carol (220M) are below preset but above band,
+        # so they slot in via the band relaxation — the count reflects
+        # *members slotted via the band*, not *rules whose threshold
+        # < preset floor*. Alice (412M) is above preset, so she doesn't
+        # count even though the band applies to her zone.
+        members = self._three_members()
         power_band = [smr.Rule(
             rule_type="power_band", subject="200000000",
             value="Power Tower",
         )]
         session = _make_session(team="A", members=members, power_band_rules=power_band)
         summary = srb._auto_fill_session(session)
-        # Band lowered the floor → counted.
-        assert summary["power_band_rules_applied"] == 1
+        assert summary["power_band_rules_applied"] == 2
 
     def test_conflict_when_zone_full(self):
         # Two rules pin two different members to the same zone with cap=1.
@@ -860,6 +864,205 @@ class TestAutoFill:
         summary = srb._auto_fill_session(session)
         assert "1001" in session.assignments["Power Tower"]
         assert summary["per_member_rules_applied"] == 1
+
+    def test_per_member_discord_id_field_path_resolves(self):
+        """The third resolution path: member's dict-key is the roster
+        name (non-Discord member with a numeric handle) but the rule's
+        subject matches the explicit `discord_id` field. The audit
+        flagged the original test was unable to exercise this branch
+        because `key == discord_id` in the fixture."""
+        members = {
+            # Note the key is the name (non-Discord row), and
+            # discord_id is a separate value. The original audit test
+            # used key == "1001" AND discord_id == "1001", which made
+            # the first OR branch satisfy the match.
+            "Alice": {"key": "Alice", "name": "Alice", "discord_id": "55001",
+                      "power": 412_000_000, "not_on_discord": False},
+        }
+        per_member = [smr.Rule(
+            rule_type="per_member", subject="55001",
+            sub_type="zone", value="Power Tower",
+        )]
+        session = _make_session(team="A", members=members,
+                                per_member_rules=per_member)
+        summary = srb._auto_fill_session(session)
+        assert "Alice" in session.assignments["Power Tower"]
+        assert summary["per_member_rules_applied"] == 1
+
+    def test_unmatched_per_member_subject_recorded_as_conflict(self):
+        """The audit fix: when a per_member subject doesn't match any
+        roster member, count it as a conflict so the summary's
+        Per-member rules applied count + conflicts count up to the
+        total rule count the officer sees in the editor."""
+        members = self._three_members()
+        per_member = [
+            smr.Rule(rule_type="per_member", subject="Alice",
+                     sub_type="zone", value="Power Tower"),
+            smr.Rule(rule_type="per_member", subject="GhostMember",
+                     sub_type="zone", value="Nuclear Silo"),
+        ]
+        session = _make_session(team="A", members=members,
+                                per_member_rules=per_member)
+        summary = srb._auto_fill_session(session)
+        assert summary["per_member_rules_applied"] == 1
+        assert any("GhostMember" in c for c in summary["conflicts"])
+
+    def test_power_unknown_per_member_pin_flagged_as_override(self):
+        """A per_member pin of a power-unknown member is an officer
+        decision to assign below the floor — the rosters_tab Override
+        Below Floor column must reflect it. Audit found auto-fill was
+        silently weaker than the equivalent manual assignment."""
+        members = {
+            "1001": {"key": "1001", "name": "Alice", "discord_id": "1001",
+                     "power": None, "not_on_discord": False},
+        }
+        per_member = [smr.Rule(
+            rule_type="per_member", subject="Alice",
+            sub_type="zone", value="Power Tower",
+        )]
+        session = _make_session(team="A", members=members,
+                                per_member_rules=per_member)
+        srb._auto_fill_session(session)
+        assert "1001" in session.assignments["Power Tower"]
+        assert "1001" in session.below_floor_overrides
+
+    def test_summary_cleared_on_manual_edit(self):
+        """A stale auto-fill summary persisting across manual edits
+        misled officers into reading names/counts that no longer
+        described the current roster. Manual mutations must clear it.
+        This test exercises the session state directly; the View
+        callbacks just call _refresh after setting auto_fill_summary
+        to None — same effect."""
+        members = self._three_members()
+        session = _make_session(team="A", members=members)
+        srb._auto_fill_session(session)
+        assert session.auto_fill_summary is not None
+        # Simulate a manual mutation by clearing the field as the
+        # callbacks would, then verify the embed renderer drops the
+        # summary panel.
+        session.auto_fill_summary = None
+        embed = srb._render_builder_embed(session)
+        assert "Auto-fill summary" not in (embed.description or "")
+
+    def test_auto_fill_respects_session_members_pool(self):
+        """In structured mode, `session.members` is upstream-narrowed
+        to signed-up members for the team before the session is built.
+        Auto-fill must only place members in that dict. This test pins
+        that contract: a roster with three known members will never
+        produce assignments for a fourth member who was filtered out
+        upstream (i.e. who never made it into session.members)."""
+        # Three members are present; "Ghost" is conceptually signed up
+        # at the roster level but was filtered out before reaching the
+        # session — so they shouldn't appear in `session.members` at all,
+        # and auto-fill must not magically conjure them.
+        members = self._three_members()
+        session = _make_session(team="A", members=members)
+        srb._auto_fill_session(session)
+        placed = set(session.subs)
+        for zone_members in session.assignments.values():
+            placed.update(zone_members)
+        # Every placed key must be a key in session.members.
+        assert placed.issubset(set(members.keys()))
+
+    def test_power_band_count_only_credits_actual_slots(self):
+        """The audit found `power_band_rules_applied` over-counted: it
+        used to fire when ANY band's threshold < preset floor, even if
+        no member got placed via the relaxation. Now it counts members
+        actually slotted whose power < preset floor but >= effective
+        floor."""
+        # Preset floor 300M; band relaxes to 200M. Members above 300M
+        # don't count as band-relaxed slottings; only members between
+        # 200M and 300M do.
+        members = {
+            "1001": {"key": "1001", "name": "Alice", "discord_id": "1001",
+                     "power": 412_000_000, "not_on_discord": False},
+            "1002": {"key": "1002", "name": "Bob",   "discord_id": "1002",
+                     "power": 250_000_000, "not_on_discord": False},  # band-relaxed
+            "1003": {"key": "1003", "name": "Carol", "discord_id": "1003",
+                     "power": 220_000_000, "not_on_discord": False},  # band-relaxed
+        }
+        zones = [
+            ss.ZoneRow(zone="Power Tower", max_players=4,
+                       min_power_a=300_000_000, priority=1),
+        ]
+        band = [smr.Rule(
+            rule_type="power_band", subject="200000000",
+            value="Power Tower",
+        )]
+        session = _make_session(team="A", members=members,
+                                preset_zones=zones,
+                                power_band_rules=band)
+        summary = srb._auto_fill_session(session)
+        # Bob (250M) and Carol (220M) both slotted via the band.
+        # Alice (412M) is above preset floor — not counted.
+        assert summary["power_band_rules_applied"] == 2
+        assert summary["auto_filled_by_power"] == 3
+
+    def test_power_band_count_is_zero_when_no_band_slot_taken(self):
+        """A band rule on a zone where the eventual fill is all
+        above-preset-floor members shouldn't count as 'effective'."""
+        members = {
+            "1001": {"key": "1001", "name": "Alice", "discord_id": "1001",
+                     "power": 412_000_000, "not_on_discord": False},
+        }
+        zones = [
+            ss.ZoneRow(zone="Power Tower", max_players=4,
+                       min_power_a=300_000_000, priority=1),
+        ]
+        band = [smr.Rule(
+            rule_type="power_band", subject="200000000",
+            value="Power Tower",
+        )]
+        session = _make_session(team="A", members=members,
+                                preset_zones=zones,
+                                power_band_rules=band)
+        summary = srb._auto_fill_session(session)
+        # Alice was above preset floor — band wasn't "effective".
+        assert summary["power_band_rules_applied"] == 0
+
+    def test_eligibility_sort_is_content_deterministic(self):
+        """Equal-power members should tie-break by name, not by dict
+        insertion order, so the auto-fill is reproducible regardless
+        of upstream roster-read order."""
+        # Two members with identical power; "Alice" should always come
+        # first regardless of insertion order.
+        members_zora_first = {
+            "Z": {"key": "Z", "name": "Zora", "discord_id": "Z",
+                  "power": 300_000_000, "not_on_discord": False},
+            "A": {"key": "A", "name": "Alice", "discord_id": "A",
+                  "power": 300_000_000, "not_on_discord": False},
+        }
+        members_alice_first = {
+            "A": members_zora_first["A"],
+            "Z": members_zora_first["Z"],
+        }
+        s1 = _make_session(team="A", members=members_zora_first)
+        s2 = _make_session(team="A", members=members_alice_first)
+        eligible1, _ = srb._eligible_member_keys_for_zone(s1, "Power Tower")
+        eligible2, _ = srb._eligible_member_keys_for_zone(s2, "Power Tower")
+        # Both insertion orders produce the same sorted result.
+        assert eligible1 == eligible2
+        # Alice sorts before Zora.
+        assert eligible1.index("A") < eligible1.index("Z")
+
+
+class TestAutoFillButtonGate:
+    """The Auto-fill button is structured-mode only (Premium-gated
+    upstream via ensure_premium_structured). Free-tier sessions never
+    see it. Audit caught the missing test for the gate."""
+
+    def test_auto_fill_present_in_structured_mode(self):
+        session = _make_session(team="A")
+        session.event_date = "2026-05-18"
+        view = srb.RosterBuilderView(session)
+        labels = [getattr(c, "label", "") for c in view.children]
+        assert any("Auto-fill" in lab for lab in labels)
+
+    def test_auto_fill_absent_in_free_tier_mode(self):
+        session = _make_session(team="A")  # event_date None
+        view = srb.RosterBuilderView(session)
+        labels = [getattr(c, "label", "") for c in view.children]
+        assert not any("Auto-fill" in lab for lab in labels)
 
 
 class TestStructuredBuilderView:

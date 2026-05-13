@@ -7,7 +7,7 @@ territory.
 """
 
 import datetime as _dt
-from unittest.mock import MagicMock
+from unittest.mock import AsyncMock, MagicMock, patch
 
 import storm_officer_view as sov
 
@@ -150,3 +150,142 @@ class TestEmbedRendering:
         buckets, _errs = sov._build_bucket_map(guild, "DS", "2026-05-18")
         embed = sov._render_embed(guild, "DS", "2026-05-18", buckets)
         assert "on behalf" in embed.description.lower()
+
+
+class TestBucketTruncationOverflow:
+    """The original "+N more" hint did `len(names) - joined.count(',') - 1`
+    which is algebraically always 0. Verify the rewrite reports an
+    accurate remainder when a bucket overflows the per-bucket budget."""
+
+    def test_long_bucket_reports_accurate_remaining_count(self):
+        entries = [{"label": f"Member_{i:03d}", "target_id": str(i),
+                    "is_on_behalf": False, "not_on_discord": False}
+                   for i in range(100)]
+        rendered = sov._format_bucket_names(entries)
+        assert "more)" in rendered
+        import re
+        m = re.search(r"\(\+(\d+) more\)", rendered)
+        assert m is not None
+        remaining = int(m.group(1))
+        assert remaining > 0
+        # The remaining count plus the names actually rendered should
+        # equal the total input count.
+        names_shown = rendered.split(", … (+")[0].count(", ") + 1
+        assert names_shown + remaining == 100
+
+    def test_short_bucket_renders_no_overflow_hint(self):
+        entries = [{"label": "Alice", "target_id": "1",
+                    "is_on_behalf": False, "not_on_discord": False},
+                   {"label": "Bob",   "target_id": "2",
+                    "is_on_behalf": False, "not_on_discord": False}]
+        rendered = sov._format_bucket_names(entries)
+        assert "more)" not in rendered
+        assert rendered == "Alice, Bob"
+
+    def test_description_caps_at_safe_budget(self):
+        # Five oversized buckets ≈ 4500 chars unguarded. The render must
+        # stay under Discord's 4096-char description limit.
+        entries = [{"label": f"M{i:04d}", "target_id": str(i),
+                    "is_on_behalf": False, "not_on_discord": False}
+                   for i in range(200)]
+        buckets = {k: list(entries) for k in sov._BUCKET_ORDER}
+        embed = sov._render_embed(None, "DS", "2026-05-18", buckets)
+        assert len(embed.description) <= 4096
+
+
+class TestNotOnDiscordEnumeration:
+    """Roster Sheet rows flagged `not_on_discord` should surface in the
+    officer view BEFORE any on-behalf vote is cast, so leadership can
+    see who still needs an on-behalf vote."""
+
+    def _fake_roster_ws(self, header_and_rows):
+        ws = MagicMock()
+        ws.get_all_values.return_value = header_and_rows
+        return ws
+
+    def test_off_discord_member_appears_in_not_voted_bucket(self, seeded_db):
+        import config
+        config.save_member_roster_config(
+            TEST_GUILD_ID, enabled=1, tab_name="Members",
+            discord_id_col=0, name_col=1, display_col=2,
+        )
+        rows = [
+            ["Discord ID", "Name", "Display Name", "not_on_discord"],
+            ["",           "Alice", "Alice",        "yes"],
+            ["",           "Bob",   "Bob",          ""],
+        ]
+        with patch(
+            "config.get_member_roster_sheet",
+            return_value=self._fake_roster_ws(rows),
+        ):
+            guild = _FakeGuild(TEST_GUILD_ID, [])
+            buckets, errs = sov._build_bucket_map(guild, "DS", "2026-05-18")
+        assert errs == []
+        names = {e["label"] for e in buckets["not_voted"]}
+        assert "Alice" in names
+        # Bob has not_on_discord=blank → not enumerated as a phantom.
+        assert "Bob" not in names
+
+    def test_off_discord_flag_renders_footnote_marker(self, seeded_db):
+        import config
+        config.save_member_roster_config(
+            TEST_GUILD_ID, enabled=1, tab_name="Members",
+            discord_id_col=0, name_col=1, display_col=2,
+        )
+        rows = [
+            ["Discord ID", "Name", "Display Name", "not_on_discord"],
+            ["",           "Alice", "Alice",        "yes"],
+        ]
+        with patch(
+            "config.get_member_roster_sheet",
+            return_value=self._fake_roster_ws(rows),
+        ):
+            guild = _FakeGuild(TEST_GUILD_ID, [])
+            buckets, _ = sov._build_bucket_map(guild, "DS", "2026-05-18")
+            embed = sov._render_embed(guild, "DS", "2026-05-18", buckets)
+        assert "¹" in embed.description
+        assert "Not on Discord" in embed.description
+
+    def test_not_voted_header_includes_off_discord_count(self, seeded_db):
+        import config
+        config.save_member_roster_config(
+            TEST_GUILD_ID, enabled=1, tab_name="Members",
+            discord_id_col=0, name_col=1, display_col=2,
+        )
+        rows = [
+            ["Discord ID", "Name", "Display Name", "not_on_discord"],
+            ["",           "Alice", "Alice",        "yes"],
+            ["",           "Carol", "Carol",        "true"],
+        ]
+        with patch(
+            "config.get_member_roster_sheet",
+            return_value=self._fake_roster_ws(rows),
+        ):
+            guild = _FakeGuild(TEST_GUILD_ID, [])
+            buckets, _ = sov._build_bucket_map(guild, "DS", "2026-05-18")
+            embed = sov._render_embed(guild, "DS", "2026-05-18", buckets)
+        assert "[2 not on Discord]" in embed.description
+
+    def test_roster_disabled_yields_empty_extras(self, seeded_db):
+        # When roster sync isn't enabled, the helper returns ([], [])
+        # and the officer view degrades to Discord-only enumeration.
+        guild = _FakeGuild(TEST_GUILD_ID, [])
+        buckets, errs = sov._build_bucket_map(guild, "DS", "2026-05-18")
+        assert errs == []
+        for entries in buckets.values():
+            assert all(not e.get("not_on_discord") for e in entries)
+
+    def test_sheet_read_failure_surfaces_in_errors(self, seeded_db):
+        import config
+        config.save_member_roster_config(
+            TEST_GUILD_ID, enabled=1, tab_name="Members",
+            discord_id_col=0, name_col=1, display_col=2,
+        )
+        with patch(
+            "config.get_member_roster_sheet",
+            side_effect=RuntimeError("simulated 403"),
+        ):
+            guild = _FakeGuild(TEST_GUILD_ID, [])
+            buckets, errs = sov._build_bucket_map(guild, "DS", "2026-05-18")
+        assert any("simulated 403" in e for e in errs)
+        assert "not_voted" in buckets

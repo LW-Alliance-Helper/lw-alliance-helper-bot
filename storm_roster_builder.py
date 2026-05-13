@@ -126,6 +126,10 @@ def _read_roster_powers(
     id_col      = int(roster_cfg.get("discord_id_col", 0))
     name_col    = int(roster_cfg.get("display_col", roster_cfg.get("name_col", 1)))
     power_col   = _find_col(power_col_name) if power_col_name else -1
+    # Prefer the bot-maintained presence column when present. Falls
+    # back to the legacy `not_on_discord` column for back-compat with
+    # alliances that haven't synced under the new bot version yet.
+    presence_col = _find_col("is this user in discord?")
     not_disc_col = _find_col("not_on_discord")
     if not_disc_col < 0:
         not_disc_col = _find_col("not on discord")
@@ -139,6 +143,7 @@ def _read_roster_powers(
 
     truthy = {"1", "true", "yes", "y", "x", "t"}
     has_not_col = not_disc_col >= 0
+    has_presence_col = presence_col >= 0
     members: dict[str, dict] = {}
     stale_ids: list[str] = []
     for row in values[1:]:
@@ -169,12 +174,36 @@ def _read_roster_powers(
                 else:
                     power_val = int(parsed)
 
-        # Non-Discord detection (#139). Explicit alliance column wins
-        # when set; inference fills the gap when the column is absent
-        # or empty:
-        #   * blank discord_id  → non-Discord
-        #   * discord_id set but not in guild → non-Discord (stale ID
-        #     — member's left the server)
+        # Non-Discord detection. Resolution order:
+        #   1. New "Is this user in Discord?" column (bot-maintained,
+        #      Yes/No values) wins when present and non-blank.
+        #   2. Legacy explicit `not_on_discord` column (alliance-
+        #      managed truthy flag) wins next, for back-compat with
+        #      alliances on older bot versions.
+        #   3. ID-diff inference fills the gap when neither column
+        #      gives a definitive answer.
+        if has_presence_col:
+            presence_cell = _cell(presence_col).lower()
+            if presence_cell == "yes":
+                members[discord_id or name] = {
+                    "key":            discord_id or name,
+                    "name":           name or discord_id,
+                    "discord_id":     discord_id,
+                    "power":          power_val,
+                    "not_on_discord": False,
+                }
+                continue
+            if presence_cell == "no":
+                key = discord_id or name
+                members[key] = {
+                    "key":            key,
+                    "name":           name or discord_id,
+                    "discord_id":     discord_id,
+                    "power":          power_val,
+                    "not_on_discord": True,
+                }
+                continue
+            # Blank / unknown value → fall through to legacy + inference.
         explicit_set = (
             _cell(not_disc_col).lower() in truthy if has_not_col else False
         )

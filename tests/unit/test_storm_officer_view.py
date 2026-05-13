@@ -266,6 +266,85 @@ class TestNotOnDiscordEnumeration:
         # bot to do the right thing.
         assert "Carol" in names
 
+    def test_presence_column_yes_overrides_inference(self, seeded_db):
+        """The bot-maintained 'Is this user in Discord?' column wins
+        over the ID-diff inference path — even if the live guild
+        doesn't have a member with that ID, a Yes in the cell keeps
+        the row classified as Discord-on."""
+        import config
+        config.save_member_roster_config(
+            TEST_GUILD_ID, enabled=1, tab_name="Members",
+            discord_id_col=0, name_col=1, display_col=2,
+        )
+        rows = [
+            ["Discord ID", "Name", "Display Name", "Is this user in Discord?"],
+            ["12345",      "Alice", "Alice",        "Yes"],
+        ]
+        with patch(
+            "config.get_member_roster_sheet",
+            return_value=self._fake_roster_ws(rows),
+        ):
+            # No matching member in the guild — without the column,
+            # the inference would flag Alice as non-Discord. The
+            # presence column with "Yes" overrides that.
+            guild = _FakeGuild(TEST_GUILD_ID, [])
+            buckets, errs = sov._build_bucket_map(guild, "DS", "2026-05-18")
+        # Alice was tagged Discord-on by the column — she gets
+        # bucketed via guild membership, not roster non-Discord
+        # fallback. The empty guild means she doesn't appear via the
+        # Discord member pool, and her column-Yes row stays out of
+        # the non-Discord enumeration too. So no stale-IDs warning.
+        assert not any("stale Discord IDs" in e for e in errs)
+
+    def test_presence_column_no_overrides_inference(self, seeded_db):
+        """A No in the presence column flags non-Discord even when the
+        Discord ID would otherwise resolve to a guild member."""
+        import config
+        config.save_member_roster_config(
+            TEST_GUILD_ID, enabled=1, tab_name="Members",
+            discord_id_col=0, name_col=1, display_col=2,
+        )
+        rows = [
+            ["Discord ID", "Name", "Display Name", "Is this user in Discord?"],
+            ["100",        "Alice", "Alice",        "No"],
+        ]
+        with patch(
+            "config.get_member_roster_sheet",
+            return_value=self._fake_roster_ws(rows),
+        ):
+            # Alice IS in the guild — but the column override flags her
+            # as non-Discord anyway (alliance signalled the alt-account
+            # case).
+            guild = _FakeGuild(TEST_GUILD_ID, [_FakeMember(100, "Alice")])
+            buckets, _errs = sov._build_bucket_map(guild, "DS", "2026-05-18")
+        # Alice's column-No flag lands her in not_voted as a non-Discord
+        # entry (in addition to her live Discord-member entry).
+        labels = {e["label"] for e in buckets["not_voted"]}
+        assert "Alice" in labels
+
+    def test_presence_column_blank_falls_back_to_legacy(self, seeded_db):
+        """A blank cell in the new column falls through to the legacy
+        not_on_discord path + inference."""
+        import config
+        config.save_member_roster_config(
+            TEST_GUILD_ID, enabled=1, tab_name="Members",
+            discord_id_col=0, name_col=1, display_col=2,
+        )
+        rows = [
+            ["Discord ID", "Name", "Display Name",
+             "Is this user in Discord?", "not_on_discord"],
+            ["",           "Carol", "Carol", "", "yes"],
+        ]
+        with patch(
+            "config.get_member_roster_sheet",
+            return_value=self._fake_roster_ws(rows),
+        ):
+            guild = _FakeGuild(TEST_GUILD_ID, [])
+            buckets, _errs = sov._build_bucket_map(guild, "DS", "2026-05-18")
+        # Blank cell → falls back to legacy not_on_discord = yes.
+        labels = {e["label"] for e in buckets["not_voted"]}
+        assert "Carol" in labels
+
     def test_bot_id_inferred_non_discord(self, seeded_db):
         """A roster row mapped to a bot ID (admin pasted the wrong ID)
         is treated as a stale match — bots aren't real alliance members."""

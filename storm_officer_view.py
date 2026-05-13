@@ -137,6 +137,9 @@ def _read_roster_rows(
 
     id_col   = int(cfg.get("discord_id_col", 0))
     name_col = int(cfg.get("display_col", cfg.get("name_col", 1)))
+    # Prefer the bot-maintained presence column when present. Falls
+    # back to the legacy `not_on_discord` column for back-compat.
+    presence_col = _find_col("is this user in discord?")
     not_col  = _find_col("not_on_discord")
     if not_col < 0:
         not_col = _find_col("not on discord")
@@ -145,12 +148,35 @@ def _read_roster_rows(
     truthy = {"1", "true", "yes", "y", "x", "t"}
     # Used for the "explicit column wins" tier-1 / tier-2 logic.
     has_not_col = not_col >= 0
+    has_presence_col = presence_col >= 0
 
     for row in values[1:]:
         discord_id = row[id_col].strip() if id_col < len(row) else ""
         name       = row[name_col].strip() if name_col < len(row) else ""
         if not (discord_id or name):
             continue
+
+        # New presence column wins — bot writes this on every sync.
+        if has_presence_col:
+            presence_cell = (
+                row[presence_col].strip().lower()
+                if presence_col < len(row) else ""
+            )
+            if presence_cell == "yes":
+                rows.append({
+                    "discord_id":     discord_id,
+                    "name":           name or discord_id,
+                    "not_on_discord": False,
+                })
+                continue
+            if presence_cell == "no":
+                rows.append({
+                    "discord_id":     discord_id,
+                    "name":           name or discord_id,
+                    "not_on_discord": True,
+                })
+                continue
+            # Blank → fall through to legacy + inference.
 
         explicit_flag = ""
         if has_not_col and not_col < len(row):

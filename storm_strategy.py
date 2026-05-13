@@ -673,17 +673,13 @@ class _PresetEditorView(discord.ui.View):
 # ── Cog + slash command groups ───────────────────────────────────────────────
 
 
-def _user_can_run(interaction: discord.Interaction) -> bool:
-    """Leadership-or-admin gate. Mirrors setup_cog._has_leadership_or_admin
-    without importing it (setup_cog is a heavy module to import here)."""
-    from config import get_config
-    member = interaction.user
-    if isinstance(member, discord.Member) and member.guild_permissions.administrator:
+async def _deny_if_not_leader(interaction: discord.Interaction) -> bool:
+    """Return True iff the caller is admin/leadership. Sends the standard
+    denial ephemeral on the False branch."""
+    from storm_permissions import is_leader_or_admin, deny_non_leader
+    if is_leader_or_admin(interaction):
         return True
-    cfg = get_config(interaction.guild_id) if interaction.guild_id else None
-    leader_role_id = getattr(cfg, "leader_role_id", 0) if cfg else 0
-    if leader_role_id and isinstance(member, discord.Member):
-        return any(r.id == leader_role_id for r in member.roles)
+    await deny_non_leader(interaction)
     return False
 
 
@@ -705,11 +701,7 @@ class _StrategyGroup(app_commands.Group):
         self.event_type = event_type
 
     async def _create(self, interaction: discord.Interaction, name: str):
-        if not _user_can_run(interaction):
-            await interaction.response.send_message(
-                "⛔ You need the leadership role (or admin) to manage strategy presets.",
-                ephemeral=True,
-            )
+        if not await _deny_if_not_leader(interaction):
             return
         name = name.strip()
         if not name:
@@ -730,11 +722,7 @@ class _StrategyGroup(app_commands.Group):
         await _open_editor(interaction, self.event_type, buf)
 
     async def _edit(self, interaction: discord.Interaction, name: str):
-        if not _user_can_run(interaction):
-            await interaction.response.send_message(
-                "⛔ You need the leadership role (or admin) to manage strategy presets.",
-                ephemeral=True,
-            )
+        if not await _deny_if_not_leader(interaction):
             return
         buf = load_preset(interaction.guild_id, self.event_type, name)
         if buf is None:
@@ -746,11 +734,7 @@ class _StrategyGroup(app_commands.Group):
         await _open_editor(interaction, self.event_type, buf)
 
     async def _list(self, interaction: discord.Interaction):
-        if not _user_can_run(interaction):
-            await interaction.response.send_message(
-                "⛔ You need the leadership role (or admin) to manage strategy presets.",
-                ephemeral=True,
-            )
+        if not await _deny_if_not_leader(interaction):
             return
         names = list_presets(interaction.guild_id, self.event_type)
         label = "Desert Storm" if self.event_type == "DS" else "Canyon Storm"
@@ -769,11 +753,7 @@ class _StrategyGroup(app_commands.Group):
         await interaction.response.send_message(embed=embed)
 
     async def _delete(self, interaction: discord.Interaction, name: str):
-        if not _user_can_run(interaction):
-            await interaction.response.send_message(
-                "⛔ You need the leadership role (or admin) to manage strategy presets.",
-                ephemeral=True,
-            )
+        if not await _deny_if_not_leader(interaction):
             return
 
         class _ConfirmDelete(discord.ui.View):

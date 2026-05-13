@@ -66,7 +66,7 @@ class TestBucketMap:
             TEST_GUILD_ID,
             [_FakeMember(1, "Alice"), _FakeMember(2, "Bob")],
         )
-        buckets = sov._build_bucket_map(guild, "DS", "2026-05-18")
+        buckets, _errs = sov._build_bucket_map(guild, "DS", "2026-05-18")
         assert {e["label"] for e in buckets["not_voted"]} == {"Alice", "Bob"}
         for k in ("a", "b", "either", "cannot"):
             assert buckets[k] == []
@@ -81,7 +81,7 @@ class TestBucketMap:
             TEST_GUILD_ID,
             [_FakeMember(1, "Alice"), _FakeMember(2, "Bob")],
         )
-        buckets = sov._build_bucket_map(guild, "DS", "2026-05-18")
+        buckets, _errs = sov._build_bucket_map(guild, "DS", "2026-05-18")
         assert {e["label"] for e in buckets["a"]}        == {"Alice"}
         assert {e["label"] for e in buckets["not_voted"]} == {"Bob"}
 
@@ -96,7 +96,7 @@ class TestBucketMap:
             TEST_GUILD_ID,
             [_FakeMember(1, "Alice")],
         )
-        buckets = sov._build_bucket_map(guild, "DS", "2026-05-18")
+        buckets, _errs = sov._build_bucket_map(guild, "DS", "2026-05-18")
         # Charlie shows up in B even though she's not in guild.members.
         names = {e["label"] for e in buckets["b"]}
         assert names == {"Charlie"}
@@ -111,14 +111,14 @@ class TestEmbedRendering:
             TEST_GUILD_ID,
             [_FakeMember(1, "Alice"), _FakeMember(2, "Bob")],
         )
-        buckets = sov._build_bucket_map(guild, "DS", "2026-05-18")
+        buckets, _errs = sov._build_bucket_map(guild, "DS", "2026-05-18")
         embed = sov._render_embed(guild, "DS", "2026-05-18", buckets)
         assert "Desert Storm" in embed.title
         assert "(2 members)" in embed.title
 
     def test_unknown_date_falls_back_safely(self, seeded_db):
         guild = _FakeGuild(TEST_GUILD_ID, [_FakeMember(1, "Alice")])
-        buckets = sov._build_bucket_map(guild, "DS", "garbage-date")
+        buckets, _errs = sov._build_bucket_map(guild, "DS", "garbage-date")
         embed = sov._render_embed(guild, "DS", "garbage-date", buckets)
         # Doesn't crash; renders the raw string in the title.
         assert "garbage-date" in embed.title
@@ -133,7 +133,7 @@ class TestEmbedRendering:
             TEST_GUILD_ID,
             [_FakeMember(1, "Alice"), _FakeMember(2, "Bob")],
         )
-        buckets = sov._build_bucket_map(guild, "DS", "2026-05-18")
+        buckets, _errs = sov._build_bucket_map(guild, "DS", "2026-05-18")
         # With filter='a' only that bucket's contents render.
         embed = sov._render_embed(guild, "DS", "2026-05-18", buckets, bucket_filter="a")
         assert "Alice" in embed.description
@@ -147,6 +147,6 @@ class TestEmbedRendering:
             is_on_behalf=True,
         )
         guild = _FakeGuild(TEST_GUILD_ID, [])
-        buckets = sov._build_bucket_map(guild, "DS", "2026-05-18")
+        buckets, _errs = sov._build_bucket_map(guild, "DS", "2026-05-18")
         embed = sov._render_embed(guild, "DS", "2026-05-18", buckets)
         assert "on behalf" in embed.description.lower()

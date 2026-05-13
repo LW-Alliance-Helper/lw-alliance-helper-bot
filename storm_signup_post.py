@@ -45,6 +45,22 @@ def _slot_labels(event_type: str, guild_id: int) -> tuple[str, str]:
     return (label_a, label_b)
 
 
+def _today_in_guild_tz(guild_id: int | None) -> _dt.date:
+    """Today's date in the alliance's configured timezone, falling back
+    to UTC if the guild has no timezone (or hasn't completed setup)."""
+    from zoneinfo import ZoneInfo
+    from config import get_config
+    tz_name = ""
+    if guild_id:
+        cfg = get_config(guild_id)
+        tz_name = (cfg.timezone if cfg else "") or ""
+    try:
+        tz = ZoneInfo(tz_name) if tz_name else _dt.timezone.utc
+    except Exception:
+        tz = _dt.timezone.utc
+    return _dt.datetime.now(tz).date()
+
+
 def _build_registration_embed(event_type: str, event_date_iso: str,
                               time_a: str, time_b: str) -> discord.Embed:
     label = "Desert Storm" if event_type == "DS" else "Canyon Storm"
@@ -70,23 +86,11 @@ def _build_registration_embed(event_type: str, event_date_iso: str,
         if time_b:
             time_lines.append(f"• **{time_b}**")
         embed.add_field(name="Available time slots", value="\n".join(time_lines), inline=False)
-    embed.set_footer(text=f"Vote recorded with timestamp — leadership uses /storm_signups to review.")
+    embed.set_footer(text="Vote recorded with timestamp — leadership uses /storm_signups to review.")
     return embed
 
 
 # ── Slash command ────────────────────────────────────────────────────────────
-
-
-def _user_can_run(interaction: discord.Interaction) -> bool:
-    from config import get_config
-    member = interaction.user
-    if isinstance(member, discord.Member) and member.guild_permissions.administrator:
-        return True
-    cfg = get_config(interaction.guild_id) if interaction.guild_id else None
-    leader_role_id = getattr(cfg, "leader_role_id", 0) if cfg else 0
-    if leader_role_id and isinstance(member, discord.Member):
-        return any(r.id == leader_role_id for r in member.roles)
-    return False
 
 
 class StormSignupPostCog(commands.Cog):
@@ -105,17 +109,21 @@ class StormSignupPostCog(commands.Cog):
         app_commands.Choice(name="Desert Storm", value="DS"),
         app_commands.Choice(name="Canyon Storm", value="CS"),
     ])
+    @app_commands.guild_only()
     async def storm_post_signup(
         self,
         interaction: discord.Interaction,
         event_type: app_commands.Choice[str],
         event_date: str,
     ):
-        if not _user_can_run(interaction):
-            await interaction.response.send_message(
-                "⛔ You need the leadership role (or admin) to post a storm sign-up.",
-                ephemeral=True,
-            )
+        from storm_permissions import (
+            is_leader_or_admin,
+            deny_non_leader,
+            ensure_premium_structured,
+        )
+
+        if not is_leader_or_admin(interaction):
+            await deny_non_leader(interaction)
             return
 
         et = event_type.value
@@ -129,7 +137,13 @@ class StormSignupPostCog(commands.Cog):
                 ephemeral=True,
             )
             return
-        if parsed_date < _dt.date.today():
+
+        # Compare against today in the alliance's configured timezone, not
+        # the host's local clock — Railway runs UTC, so an east-of-UTC
+        # alliance posting near midnight their time would otherwise see
+        # their own event date flagged "in the past".
+        today_local = _today_in_guild_tz(interaction.guild_id)
+        if parsed_date < today_local:
             await interaction.response.send_message(
                 f"⚠️ Event date `{date_clean}` is in the past. Sign-ups should be "
                 f"posted for upcoming events.",
@@ -137,17 +151,15 @@ class StormSignupPostCog(commands.Cog):
             )
             return
 
-        import config
-        structured = config.get_structured_storm_config(interaction.guild_id, et)
-        if not structured.get("structured_flow_enabled"):
-            label = "Desert Storm" if et == "DS" else "Canyon Storm"
-            cmd = "/setup_desertstorm" if et == "DS" else "/setup_canyonstorm"
-            await interaction.response.send_message(
-                f"⚠️ The structured roster flow isn't enabled for {label}. "
-                f"Run `{cmd}` and turn on **Structured Roster Flow** (Premium) first.",
-                ephemeral=True,
-            )
+        ok, structured = await ensure_premium_structured(
+            interaction, et,
+            bot=self.bot,
+            feature_label="`/storm_post_signup`",
+        )
+        if not ok:
             return
+
+        import config
 
         channel_id = structured.get("signup_channel_id") or 0
         if not channel_id:
@@ -181,6 +193,26 @@ class StormSignupPostCog(commands.Cog):
 
         # Build time labels from the canonical slot helper.
         time_a, time_b = _slot_labels(et, interaction.guild_id)
+
+        # Refuse to post if the configured slot labels are empty — members
+        # would otherwise see a sign-up with buttons that lie about which
+        # time they're voting for.
+        if et == "DS" and not (time_a and time_b):
+            cmd = "/setup_desertstorm"
+            await interaction.response.send_message(
+                f"⚠️ Both Desert Storm time slots need to be configured before "
+                f"posting a sign-up. Run `{cmd}` and pick the two times first.",
+                ephemeral=True,
+            )
+            return
+        if et == "CS" and not time_a:
+            cmd = "/setup_canyonstorm"
+            await interaction.response.send_message(
+                f"⚠️ The Canyon Storm time slot needs to be configured before "
+                f"posting a sign-up. Run `{cmd}` and pick the time first.",
+                ephemeral=True,
+            )
+            return
 
         # Defer the interaction so we can do a Sheet/Discord call without
         # blowing the 3-second initial response window.

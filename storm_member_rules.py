@@ -207,15 +207,13 @@ def delete_rule_at(guild_id: int, event_type: str, index: int) -> bool:
 # ── Slash command group + UI ─────────────────────────────────────────────────
 
 
-def _user_can_run(interaction: discord.Interaction) -> bool:
-    from config import get_config
-    member = interaction.user
-    if isinstance(member, discord.Member) and member.guild_permissions.administrator:
+async def _deny_if_not_leader(interaction: discord.Interaction) -> bool:
+    """Return True iff the caller is admin/leadership. Sends the standard
+    denial ephemeral on the False branch."""
+    from storm_permissions import is_leader_or_admin, deny_non_leader
+    if is_leader_or_admin(interaction):
         return True
-    cfg = get_config(interaction.guild_id) if interaction.guild_id else None
-    leader_role_id = getattr(cfg, "leader_role_id", 0) if cfg else 0
-    if leader_role_id and isinstance(member, discord.Member):
-        return any(r.id == leader_role_id for r in member.roles)
+    await deny_non_leader(interaction)
     return False
 
 
@@ -349,11 +347,7 @@ class _MemberRuleGroup(app_commands.Group):
     # ── set_power_band ────────────────────────────────────────────────
     async def _set_power_band(self, interaction: discord.Interaction,
                               threshold: str, zone: str, notes: str = ""):
-        if not _user_can_run(interaction):
-            await interaction.response.send_message(
-                "⛔ You need the leadership role (or admin) to manage member rules.",
-                ephemeral=True,
-            )
+        if not await _deny_if_not_leader(interaction):
             return
         n = parse_power(threshold)
         if n is None or n <= 0:
@@ -389,11 +383,7 @@ class _MemberRuleGroup(app_commands.Group):
     # ── set_member_team (DS only — `team` doesn't exist for CS) ──────
     async def _set_member_team(self, interaction: discord.Interaction,
                                member: str, team: str, notes: str = ""):
-        if not _user_can_run(interaction):
-            await interaction.response.send_message(
-                "⛔ You need the leadership role (or admin) to manage member rules.",
-                ephemeral=True,
-            )
+        if not await _deny_if_not_leader(interaction):
             return
         if self.event_type == "CS":
             await interaction.response.send_message(
@@ -424,11 +414,7 @@ class _MemberRuleGroup(app_commands.Group):
     # ── set_member_zone ──────────────────────────────────────────────
     async def _set_member_zone(self, interaction: discord.Interaction,
                                member: str, zone: str, notes: str = ""):
-        if not _user_can_run(interaction):
-            await interaction.response.send_message(
-                "⛔ You need the leadership role (or admin) to manage member rules.",
-                ephemeral=True,
-            )
+        if not await _deny_if_not_leader(interaction):
             return
         member_clean = (member or "").strip()
         zone_clean = (zone or "").strip()
@@ -458,11 +444,7 @@ class _MemberRuleGroup(app_commands.Group):
     # ── set_member_role ──────────────────────────────────────────────
     async def _set_member_role(self, interaction: discord.Interaction,
                                member: str, role: str, notes: str = ""):
-        if not _user_can_run(interaction):
-            await interaction.response.send_message(
-                "⛔ You need the leadership role (or admin) to manage member rules.",
-                ephemeral=True,
-            )
+        if not await _deny_if_not_leader(interaction):
             return
         role_clean = (role or "").strip().lower()
         if role_clean not in _SPECIAL_ROLES:
@@ -486,11 +468,7 @@ class _MemberRuleGroup(app_commands.Group):
 
     # ── list ─────────────────────────────────────────────────────────
     async def _list(self, interaction: discord.Interaction, member: str | None = None):
-        if not _user_can_run(interaction):
-            await interaction.response.send_message(
-                "⛔ You need the leadership role (or admin) to view member rules.",
-                ephemeral=True,
-            )
+        if not await _deny_if_not_leader(interaction):
             return
         rules = list_rules(interaction.guild_id, self.event_type)
         if member:

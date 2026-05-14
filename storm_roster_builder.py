@@ -614,34 +614,37 @@ def _auto_fill_session(session: RosterBuilderSession) -> dict:
     Algorithm, in order:
       1. per_member zone rules — pin members to their named zone if
          capacity, the member is in the signed-up pool, and the zone
-         exists in the preset.
-      2. Greedy fill — for each zone in priority order (lowest int
-         first; priority=0 sorts last), fill remaining slots from the
-         eligibility-gated pool (uses `_eligible_member_keys_for_zone`,
-         which respects power_band rule relaxation).
+         exists in the preset. **Applied to Phase 1 only** on phase-
+         aware presets; the rule model doesn't yet carry a phase
+         dimension (#152 v1 simplification). Phase 2 greedy fill picks
+         up the same members later if they're eligible there too.
+      2. Greedy fill — runs once per phase. For each zone in priority
+         order (lowest int first; priority=0 sorts last), fills the
+         phase's remaining slots from the eligibility-gated pool. The
+         per-phase eligibility filter (#152) lets a Phase 1-assigned
+         member still appear in the Phase 2 picker for the migration
+         case.
       3. Spillover — unassigned members with known power go into the
-         sub pool. Power-unknown members are reported as gaps so the
-         officer can decide who to override below the floor.
+         event-level sub pool. Power-unknown members are reported as
+         gaps so the officer can decide who to override below the
+         floor.
 
     Returns the summary dict (also stored on `session.auto_fill_summary`).
-
-    Pool-source contract: this function ONLY auto-fills members present
-    in `session.members`. In structured mode, the upstream
-    `open_roster_builder` narrows that dict to signed-up members for
-    the team BEFORE constructing the session — so this function inherits
-    the signup-pool filter transitively. In free-tier mode, all roster
-    members are eligible. Tests in TestAutoFillRespectsMembersDict pin
-    this contract.
 
     The fill is officer-correctable — every assignment can be tweaked
     via the picker before Approve & Post.
     """
-    # Reset state — auto-fill is "redo from scratch".
-    for zone in list(session.assignments.keys()):
-        session.assignments[zone] = []
+    # ── Reset state ── auto-fill is "redo from scratch".
+    # Phase-aware: clear both phases' dicts. Flat: only phase 1 is
+    # touched (phase 2 dict stays empty).
+    for phase in session.iter_phases():
+        for zone in list(session.assignments_for_phase(phase).keys()):
+            session.assignments_for_phase(phase)[zone] = []
     session.subs = []
-    session.paired_subs = {}
+    session.paired_subs.clear()
+    session.paired_subs_p2.clear()
     session.below_floor_overrides.clear()
+    session.below_floor_overrides_p2.clear()
 
     summary = {
         "per_member_rules_applied": 0,
@@ -652,21 +655,20 @@ def _auto_fill_session(session: RosterBuilderSession) -> dict:
         "conflicts":                [],  # short strings: rule application failures
     }
 
-    # ── 1. per_member zone rules ──
+    # Remember the officer's UI cursor; we mutate it while filling each
+    # phase so capacity / member-count helpers resolve correctly, then
+    # restore at the end.
+    original_phase = session.selected_phase
+
+    # ── 1. per_member zone rules ── (Phase 1 only on phase-aware)
+    session.selected_phase = 1
     for rule in session.per_member_rules:
         if rule.sub_type != "zone":
             continue
         subject = rule.subject.strip()
         zone = rule.value.strip()
-        # Same three-way resolution `_apply_rules_to_session` uses, so
-        # this consumer and the session-open pre-application can't drift.
         match_key = _resolve_per_member_subject(session.members, subject)
         if match_key is None:
-            # The opener pass (`_apply_rules_to_session`) already warned
-            # via `session.roster_errors`, but auto-fill is the consumer
-            # actually trying to place this rule. Record a conflict so
-            # the summary's "Per-member rules applied: N" lines up
-            # against the number of rules officers see in the editor.
             if subject:
                 summary["conflicts"].append(
                     f"per_member subject not on roster: {subject}"
@@ -682,93 +684,74 @@ def _auto_fill_session(session: RosterBuilderSession) -> dict:
                 f"{zone} full when pinning {subject}"
             )
             continue
+        # Cross-phase duplicate check: pinned member can't already be
+        # assigned in any phase or in the sub pool.
         if match_key in session.assigned_member_keys():
             summary["conflicts"].append(
                 f"{subject} pinned to multiple zones"
             )
             continue
-        session.assignments[zone].append(match_key)
+        session.assignments_for_phase(1)[zone].append(match_key)
         summary["per_member_rules_applied"] += 1
-        # A per_member pin of a power-unknown member is an officer
-        # decision to assign below the floor — record it in the
-        # override set so the rosters_tab `Override Below Floor`
-        # column lights up for that slot. Without this, an auto-fill
-        # decision is silently weaker than the equivalent manual
-        # assignment via the toggle.
         member = session.members.get(match_key)
         if member is not None and member.get("power") is None:
-            session.below_floor_overrides.add(match_key)
+            session.below_floor_overrides_for_phase(1).add(match_key)
 
-    # ── 2. Greedy fill by zone priority ──
-    # priority=0 means "no priority set" → sort to the end.
+    # ── 2. Greedy fill by zone priority, per phase ──
     def _priority_key(z) -> int:
         return z.priority if z.priority > 0 else 9999
 
     zones_sorted = sorted(session.preset.zones, key=_priority_key)
-    for z in zones_sorted:
-        remaining = z.max_players - session.zone_member_count(z.zone)
-        if remaining <= 0:
-            continue
-        eligible_keys, _below = _eligible_member_keys_for_zone(session, z.zone)
-        if not eligible_keys:
-            continue
-        # eligible_keys is already sorted high-power-first AND
-        # name-tiebroken, so the result is deterministic across reads.
-        for key in eligible_keys[:remaining]:
-            session.assignments[z.zone].append(key)
-            summary["auto_filled_by_power"] += 1
-            # Did this member's power fall below the preset's per-team
-            # floor but pass the band-relaxed effective floor? If so,
-            # they're in via a power_band rule — count them honestly.
-            preset_floor = session.floor_for_zone(z.zone)
-            effective_floor = _effective_floor_for_zone(session, z.zone)
-            member_power = session.members[key].get("power")
-            if (
-                member_power is not None
-                and effective_floor < preset_floor
-                and member_power < preset_floor
-            ):
-                summary["power_band_rules_applied"] += 1
+    for phase in session.iter_phases():
+        session.selected_phase = phase
+        phase_assignments = session.assignments_for_phase(phase)
+        for z in zones_sorted:
+            remaining = session.zone_capacity(z.zone) - session.zone_member_count(z.zone)
+            if remaining <= 0:
+                continue
+            eligible_keys, _below = _eligible_member_keys_for_zone(session, z.zone)
+            if not eligible_keys:
+                continue
+            for key in eligible_keys[:remaining]:
+                phase_assignments[z.zone].append(key)
+                summary["auto_filled_by_power"] += 1
+                preset_floor = session.floor_for_zone(z.zone)
+                effective_floor = _effective_floor_for_zone(session, z.zone)
+                member_power = session.members[key].get("power")
+                if (
+                    member_power is not None
+                    and effective_floor < preset_floor
+                    and member_power < preset_floor
+                ):
+                    summary["power_band_rules_applied"] += 1
 
     # ── 3. Spillover (or pair) ──
-    # In paired mode, leftover known-power members get assigned as
-    # paired subs for unpaired primaries (in zone-priority order →
-    # highest-power-first to keep parity with the primary fill). In
-    # pool mode, leftovers go into the flat sub pool.
+    # Paired-sub pairing runs per phase: each phase's unpaired primaries
+    # get the strongest remaining sub for that phase. Subs are
+    # event-level so a member paired in phase 1 isn't pickable for
+    # phase 2 pairing (avoids double-booking the same sub seat).
     if session.is_paired:
-        unpaired = session.unpaired_primaries()
-        # Walk unpaired primaries in zone-priority order (already the
-        # order returned by unpaired_primaries since it iterates zones
-        # in preset order; auto-fill already greedy-filled in priority
-        # order, so this lines up). For each, pair with the next eligible
-        # member NOT already placed.
-        for primary_key in unpaired:
-            # Find the zone the primary is in so we can apply the right
-            # floor to the sub's eligibility.
-            primary_zone = None
-            for zone, zmembers in session.assignments.items():
-                if primary_key in zmembers:
-                    primary_zone = zone
-                    break
-            if not primary_zone:
-                continue
-            eligible_sub_keys, _below = _eligible_member_keys_for_zone(
-                session, primary_zone,
-            )
-            if not eligible_sub_keys:
-                continue
-            # Pair with the strongest eligible candidate. Count this in
-            # `auto_paired_subs` (not `auto_filled_by_power`) so the
-            # summary distinguishes primaries from paired subs —
-            # otherwise the embed reads "Auto-filled by power: 8" when
-            # really 4 primaries + 4 paired subs were placed.
-            session.paired_subs[primary_key] = eligible_sub_keys[0]
-            summary["auto_paired_subs"] += 1
+        for phase in session.iter_phases():
+            session.selected_phase = phase
+            phase_assignments = session.assignments_for_phase(phase)
+            phase_pairings = session.paired_subs_for_phase(phase)
+            unpaired = session.unpaired_primaries()
+            for primary_key in unpaired:
+                primary_zone = None
+                for zone, zmembers in phase_assignments.items():
+                    if primary_key in zmembers:
+                        primary_zone = zone
+                        break
+                if not primary_zone:
+                    continue
+                eligible_sub_keys, _below = _eligible_member_keys_for_zone(
+                    session, primary_zone,
+                )
+                if not eligible_sub_keys:
+                    continue
+                phase_pairings[primary_key] = eligible_sub_keys[0]
+                summary["auto_paired_subs"] += 1
 
-        # Anything else known-power → still surface as "available subs"
-        # the officer might want to swap in manually. Use the flat
-        # `subs` list as a holding area in paired mode (rendered as a
-        # diagnostic in the embed only when non-empty).
         assigned = session.assigned_member_keys()
         for key, m in session.members.items():
             if key in assigned:
@@ -785,9 +768,9 @@ def _auto_fill_session(session: RosterBuilderSession) -> dict:
             if m.get("power") is None:
                 summary["gaps"].append(m["name"])
                 continue
-            # Known-power leftovers → sub pool.
             session.subs.append(key)
 
+    session.selected_phase = original_phase
     session.auto_fill_summary = summary
     return summary
 

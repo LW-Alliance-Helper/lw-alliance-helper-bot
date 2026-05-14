@@ -2250,3 +2250,80 @@ class TestPhaseAwareEligibility:
             s.selected_phase = phase
             eligible, _below = srb._eligible_member_keys_for_zone(s, "Info Center")
             assert "1" not in eligible
+
+
+class TestAutoFillPhaseAware:
+    """Auto-fill must respect per-phase capacities and the migration
+    semantics (a member placed in Phase 1 stays pickable for Phase 2)."""
+
+    def _bigger_session(self):
+        zones = [
+            ss.ZoneRow(zone="Info Center", max_players=0,
+                       max_phase1=2, max_phase2=1,
+                       min_power_a=100_000_000, min_power_b=50_000_000),
+            ss.ZoneRow(zone="Arsenal", max_players=0,
+                       max_phase1=0, max_phase2=3,
+                       min_power_a=0, min_power_b=0),
+        ]
+        preset = ss.PresetBuffer(name="Phased", event_type="DS",
+                                 zones=zones, uses_phases=True)
+        members = {
+            str(i): {"key": str(i), "name": f"M{i}", "discord_id": str(i),
+                     "power": 500_000_000 - i * 10_000_000,
+                     "not_on_discord": False}
+            for i in range(1, 8)
+        }
+        return srb.RosterBuilderSession(
+            guild_id=1, user_id=42, event_type="DS",
+            team="A", preset=preset, members=members,
+            per_member_rules=[], power_band_rules=[],
+            sub_mode="pool",
+        )
+
+    def test_auto_fill_respects_per_phase_capacities(self):
+        s = self._bigger_session()
+        srb._auto_fill_session(s)
+        # Phase 1 caps: Info Center=2, Arsenal=0.
+        assert len(s.assignments["Info Center"]) == 2
+        assert len(s.assignments["Arsenal"]) == 0
+        # Phase 2 caps: Info Center=1, Arsenal=3.
+        assert len(s.assignments_p2["Info Center"]) == 1
+        assert len(s.assignments_p2["Arsenal"]) == 3
+
+    def test_auto_fill_allows_phase_1_member_to_also_appear_in_phase_2(self):
+        s = self._bigger_session()
+        srb._auto_fill_session(s)
+        # Phase 1 should have grabbed the top 2 power members for IC.
+        p1_ic = set(s.assignments["Info Center"])
+        # Phase 2 has 4 slots total (1 IC + 3 Arsenal). With 7 members
+        # and Phase 1 already using 2, Phase 2 should also see the
+        # top-power members — including overlap with Phase 1 since
+        # they're allowed to migrate.
+        p2_all = (set(s.assignments_p2["Info Center"]) |
+                  set(s.assignments_p2["Arsenal"]))
+        # The two strongest members (M1, M2) should appear in both
+        # phases — they're top-power so they get drafted into Phase 1
+        # and stay eligible for Phase 2.
+        assert p1_ic & p2_all, (
+            "expected at least one member to play in both phases "
+            "(migration use case)"
+        )
+
+    def test_auto_fill_summary_counts_both_phases(self):
+        s = self._bigger_session()
+        summary = srb._auto_fill_session(s)
+        # 2 P1 IC + 1 P2 IC + 3 P2 Arsenal = 6 power-based fills.
+        assert summary["auto_filled_by_power"] == 6
+
+    def test_auto_fill_on_flat_preset_unchanged(self):
+        # Sanity: flat presets don't get phase 2 fills.
+        s = _make_session(team="A", members={
+            "1": {"key": "1", "name": "Alice", "discord_id": "1",
+                  "power": 500_000_000, "not_on_discord": False},
+            "2": {"key": "2", "name": "Bob", "discord_id": "2",
+                  "power": 400_000_000, "not_on_discord": False},
+        })
+        srb._auto_fill_session(s)
+        # Phase 2 dict stays empty for flat presets even with members
+        # available.
+        assert all(len(v) == 0 for v in s.assignments_p2.values())

@@ -326,22 +326,25 @@ class RosterBuilderSession:
         self.sub_mode = sub_mode if sub_mode in ("pool", "paired") else "pool"
         # Per-zone assignments: {zone_name: [member_key, ...]}.
         # For phase-aware presets (#152), this is the Phase 1 dict;
-        # Phase 2 lives in `assignments_p2`. For flat presets, only
-        # `assignments` is used and `assignments_p2` stays empty.
+        # Phase 2 lives in `assignments_p2`, Phase 3 (CS / 3-phase
+        # presets) in `assignments_p3`. For flat presets, only
+        # `assignments` is used and the other phases stay empty.
         self.assignments: dict[str, list[str]] = {z.zone: [] for z in preset.zones}
         self.assignments_p2: dict[str, list[str]] = {z.zone: [] for z in preset.zones}
-        # The currently-selected phase in the UI (1 or 2). Flat presets
-        # pin to 1.
+        self.assignments_p3: dict[str, list[str]] = {z.zone: [] for z in preset.zones}
+        # The currently-selected phase in the UI (1, 2, or 3). Flat
+        # presets pin to 1.
         self.selected_phase: int = 1
         # Flat sub pool. In `paired` mode, subs lives in
         # `paired_subs` instead — this list stays empty.
         self.subs: list[str] = []
         # Paired-mode pairings: {primary_key: sub_key}. Only populated
         # when sub_mode == "paired"; the embed + writer branch on
-        # presence of this dict. Phase 2 has its own pairing map so a
-        # member can have a different sub per phase.
+        # presence of this dict. Each phase carries its own pairing map
+        # so a member can have a different sub per phase.
         self.paired_subs: dict[str, str] = {}
         self.paired_subs_p2: dict[str, str] = {}
+        self.paired_subs_p3: dict[str, str] = {}
         # The currently-selected zone in the UI; defaults to the first zone.
         self.selected_zone: str = preset.zones[0].zone if preset.zones else ""
         # Officer-toggled override: show below-floor members in the
@@ -356,9 +359,10 @@ class RosterBuilderSession:
         # toggle (i.e. their power was below the zone's effective floor,
         # or their power was unknown). Captured at assign time so the
         # rosters_tab write can flag the slot for post-event review.
-        # Phase 2 has its own override set.
+        # Each phase has its own override set.
         self.below_floor_overrides: set[str] = set()
         self.below_floor_overrides_p2: set[str] = set()
+        self.below_floor_overrides_p3: set[str] = set()
         # Auto-fill summary (#134) — populated by _auto_fill_session when
         # the officer clicks the auto-fill button. The embed renderer
         # surfaces this in place of the empty-state hint so leadership
@@ -376,34 +380,52 @@ class RosterBuilderSession:
 
     @property
     def is_phase_aware(self) -> bool:
-        """True iff the loaded preset has `uses_phases` set. Phase-aware
-        sessions surface Phase 1 / Phase 2 sub-slots per zone in the
-        builder and write phase-grouped mail. Flat presets ignore the
-        phase-2 attributes entirely."""
-        return bool(getattr(self.preset, "uses_phases", False))
+        """True iff the loaded preset has 2+ phases. Phase-aware
+        sessions surface per-phase sub-slots per zone in the builder
+        and write phase-grouped mail. Flat presets ignore the phase-2
+        and phase-3 attributes entirely."""
+        return self.phase_count >= 2
+
+    @property
+    def phase_count(self) -> int:
+        """How many phases the loaded preset declares. 0 means flat;
+        2 or 3 means phase-aware. Reads through to
+        `preset.phase_count` (with `getattr` for backward compat with
+        older PresetBuffer instances that pre-date the field)."""
+        return int(getattr(self.preset, "phase_count", 0))
 
     def assignments_for_phase(self, phase: int) -> dict[str, list[str]]:
         """Return the assignment dict for a given phase. Centralised so
-        downstream code that's been taught about phases doesn't have to
-        branch on the `_p2` attribute name."""
+        downstream code doesn't branch on the `_p2` / `_p3` attribute
+        names."""
         if phase == 2:
             return self.assignments_p2
+        if phase == 3:
+            return self.assignments_p3
         return self.assignments
 
     def paired_subs_for_phase(self, phase: int) -> dict[str, str]:
         if phase == 2:
             return self.paired_subs_p2
+        if phase == 3:
+            return self.paired_subs_p3
         return self.paired_subs
 
     def below_floor_overrides_for_phase(self, phase: int) -> set[str]:
         if phase == 2:
             return self.below_floor_overrides_p2
+        if phase == 3:
+            return self.below_floor_overrides_p3
         return self.below_floor_overrides
 
     def iter_phases(self) -> list[int]:
         """Phases this session iterates over. Flat presets yield [1];
-        phase-aware presets yield [1, 2]."""
-        return [1, 2] if self.is_phase_aware else [1]
+        2-phase presets yield [1, 2]; 3-phase presets yield [1, 2, 3]."""
+        if self.phase_count >= 3:
+            return [1, 2, 3]
+        if self.phase_count >= 2:
+            return [1, 2]
+        return [1]
 
     def floor_for_zone(self, zone_name: str) -> int:
         """Per-team min_power for this zone. DS uses min_power_a/b; CS
@@ -482,7 +504,7 @@ class RosterBuilderSession:
         if not self.is_phase_aware:
             return int(z.max_players)
         phase = phase if phase is not None else self.selected_phase
-        return int(z.max_phase2 if phase == 2 else z.max_phase1)
+        return z.max_for_phase(phase)
 
     def prune_stale_pairings(self) -> None:
         """Drop paired-sub entries whose primary is no longer in a zone.
@@ -518,7 +540,9 @@ class RosterBuilderSession:
             overrides &= currently_in_zones
             # Replace contents in place — same set object so external
             # references stay valid.
-            if phase == 2:
+            if phase == 3:
+                self.below_floor_overrides_p3 = overrides
+            elif phase == 2:
                 self.below_floor_overrides_p2 = overrides
             else:
                 self.below_floor_overrides = overrides
@@ -635,16 +659,18 @@ def _auto_fill_session(session: RosterBuilderSession) -> dict:
     via the picker before Approve & Post.
     """
     # ── Reset state ── auto-fill is "redo from scratch".
-    # Phase-aware: clear both phases' dicts. Flat: only phase 1 is
-    # touched (phase 2 dict stays empty).
+    # Phase-aware: clear every phase's dicts. Flat: only phase 1 is
+    # touched.
     for phase in session.iter_phases():
         for zone in list(session.assignments_for_phase(phase).keys()):
             session.assignments_for_phase(phase)[zone] = []
     session.subs = []
     session.paired_subs.clear()
     session.paired_subs_p2.clear()
+    session.paired_subs_p3.clear()
     session.below_floor_overrides.clear()
     session.below_floor_overrides_p2.clear()
+    session.below_floor_overrides_p3.clear()
 
     summary = {
         "per_member_rules_applied": 0,
@@ -698,13 +724,20 @@ def _auto_fill_session(session: RosterBuilderSession) -> dict:
             session.below_floor_overrides_for_phase(1).add(match_key)
 
     # ── 2. Greedy fill by zone priority, per phase ──
-    def _priority_key(z) -> int:
-        return z.priority if z.priority > 0 else 9999
+    # On flat presets we order once by the single `priority` field.
+    # On phase-aware presets the order is per-phase, so a preset can
+    # prioritise Power Tower in Phase 1 and Virus Lab in Phase 3.
+    # priority=0 means "no priority set" → sorts to the end via 9999.
+    def _phase_priority_key(p):
+        def key(z):
+            prio = z.priority_for_phase(p) if session.is_phase_aware else z.priority
+            return prio if prio > 0 else 9999
+        return key
 
-    zones_sorted = sorted(session.preset.zones, key=_priority_key)
     for phase in session.iter_phases():
         session.selected_phase = phase
         phase_assignments = session.assignments_for_phase(phase)
+        zones_sorted = sorted(session.preset.zones, key=_phase_priority_key(phase))
         for z in zones_sorted:
             remaining = session.zone_capacity(z.zone) - session.zone_member_count(z.zone)
             if remaining <= 0:

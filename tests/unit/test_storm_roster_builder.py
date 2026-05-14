@@ -2178,6 +2178,73 @@ class TestSessionPhaseAware:
         assert s.below_floor_overrides_p2 == {"2"}
 
 
+def _make_three_phase_session():
+    """Build a session backed by a 3-phase CS preset for the new
+    Phase 3 attribute / iteration coverage."""
+    zones = [
+        ss.ZoneRow(zone="Power Tower", max_players=0,
+                   max_phase1=2, max_phase2=2, max_phase3=2,
+                   min_power_a=100_000_000,
+                   priority_phase1=1, priority_phase2=2, priority_phase3=3),
+        ss.ZoneRow(zone="Virus Lab", max_players=0,
+                   max_phase3=2,
+                   min_power_a=0,
+                   priority_phase3=1),
+    ]
+    preset = ss.PresetBuffer(name="ThreePhase", event_type="CS",
+                             zones=zones, phase_count=3,
+                             faction="Rulebringers")
+    members = {
+        str(i): {"key": str(i), "name": f"M{i}", "discord_id": str(i),
+                 "power": 500_000_000 - i * 10_000_000,
+                 "not_on_discord": False}
+        for i in range(1, 7)
+    }
+    return srb.RosterBuilderSession(
+        guild_id=1, user_id=42, event_type="CS",
+        team="A", preset=preset, members=members,
+        per_member_rules=[], power_band_rules=[],
+        sub_mode="pool",
+    )
+
+
+class TestSessionThreePhase:
+    def test_iter_phases_yields_one_two_three(self):
+        s = _make_three_phase_session()
+        assert s.iter_phases() == [1, 2, 3]
+        assert s.phase_count == 3
+        assert s.is_phase_aware is True
+
+    def test_assignments_for_phase_three(self):
+        s = _make_three_phase_session()
+        s.assignments_p3["Power Tower"].append("1")
+        assert s.assignments_for_phase(3)["Power Tower"] == ["1"]
+        assert s.assignments_for_phase(1)["Power Tower"] == []
+        assert s.assignments_for_phase(2)["Power Tower"] == []
+
+    def test_zone_capacity_phase_three(self):
+        s = _make_three_phase_session()
+        assert s.zone_capacity("Power Tower", phase=3) == 2
+        # Virus Lab is Phase 3 only — phases 1 and 2 cap to 0.
+        assert s.zone_capacity("Virus Lab", phase=1) == 0
+        assert s.zone_capacity("Virus Lab", phase=2) == 0
+        assert s.zone_capacity("Virus Lab", phase=3) == 2
+
+    def test_auto_fill_three_phase_uses_per_phase_priority(self):
+        s = _make_three_phase_session()
+        summary = srb._auto_fill_session(s)
+        # Phase 3 has two zones (PT + VL), both with priority 1 and 3
+        # respectively, both with capacity 2. With the per-phase
+        # priority, Virus Lab (priority 1 in P3) should fill before
+        # Power Tower (priority 3 in P3). Hard to assert order on the
+        # final list directly, but the summary's total counts should
+        # be 2 (PT P1) + 2 (PT P2) + 2 (PT P3) + 2 (VL P3) = 8.
+        assert summary["auto_filled_by_power"] == 8
+        # Phase 3 had Virus Lab and Power Tower both filled.
+        assert len(s.assignments_p3["Virus Lab"]) == 2
+        assert len(s.assignments_p3["Power Tower"]) == 2
+
+
 class TestMailBodyPhaseAware:
     def test_flat_mail_has_no_phase_headers(self):
         s = _make_session(team="A", members={

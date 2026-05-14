@@ -31,12 +31,52 @@ SQLite session table is needed for v1.
 from __future__ import annotations
 
 import logging
+import re
 
 import discord
 from discord import app_commands
 from discord.ext import commands
 
 logger = logging.getLogger(__name__)
+
+
+# ── Zone-family detection (apply-to-similar, #149) ──────────────────────────
+#
+# Strip a trailing space-separated roman or arabic numeral from a zone name
+# so "Field Hospital II" / "Sample Warehouse 3" / "Data Center 1" all resolve
+# to their building-family prefix. Used by the editor's apply-to-similar
+# follow-up to detect when an edited zone has copy-eligible siblings in the
+# same preset.
+
+_ZONE_TAIL_RE = re.compile(r"\s+(?:[IVXLCDM]+|\d+)$", re.IGNORECASE)
+
+
+def _zone_family_prefix(zone_name: str) -> str:
+    """Return the building-family prefix of a zone name, or the input
+    unchanged when there's no numeric suffix to strip. Inputs are
+    case-preserved; matches are case-insensitive on the numeric tail."""
+    if not zone_name:
+        return ""
+    return _ZONE_TAIL_RE.sub("", zone_name).strip()
+
+
+def _sibling_zone_names(zones: "list[ZoneRow]", zone_name: str) -> "list[str]":
+    """Return the names of zones in `zones` that share `zone_name`'s
+    family prefix (other than `zone_name` itself). Returns [] when the
+    zone has no numeric suffix (i.e. it's a one-of-a-kind building like
+    Arsenal or Virus Lab)."""
+    prefix = _zone_family_prefix(zone_name)
+    if not prefix or prefix.lower() == zone_name.strip().lower():
+        return []
+    siblings: list[str] = []
+    target = zone_name.strip().lower()
+    for z in zones:
+        candidate = (z.zone or "").strip()
+        if not candidate or candidate.lower() == target:
+            continue
+        if _zone_family_prefix(candidate).lower() == prefix.lower():
+            siblings.append(candidate)
+    return siblings
 
 
 # ── Power magnitude parsing ──────────────────────────────────────────────────
@@ -146,13 +186,25 @@ class ZoneRow:
         self.min_power_b = _safe_int(min_power_b)
         self.priority    = _safe_int(priority)
 
-    def render_line(self, event_type: str) -> str:
-        """One-line summary for the editor embed."""
+    def render_line(self, event_type: str, teams: str = "both") -> str:
+        """One-line summary for the editor embed. DS rendering respects
+        the alliance's configured teams (#148) so single-team alliances
+        see only their team's floor."""
         prio = f" [P{self.priority}]" if self.priority else ""
         if event_type == "CS":
             return (
                 f"• {self.zone:<20} (Max: {self.max_players})  "
                 f"Min: {format_power(self.min_power_a)}{prio}"
+            )
+        if teams == "A":
+            return (
+                f"• {self.zone:<20} (Max: {self.max_players})  "
+                f"Min: {format_power(self.min_power_a)}{prio}"
+            )
+        if teams == "B":
+            return (
+                f"• {self.zone:<20} (Max: {self.max_players})  "
+                f"Min: {format_power(self.min_power_b)}{prio}"
             )
         return (
             f"• {self.zone:<20} (Max: {self.max_players})  "
@@ -425,17 +477,36 @@ def delete_preset(guild_id: int, event_type: str, name: str) -> bool:
 # ── In-Discord editor ────────────────────────────────────────────────────────
 
 
-def _build_editor_embed(buf: PresetBuffer, team_size_hint: int = _TEAM_SIZE_HINT) -> discord.Embed:
+def _resolve_ds_teams(guild_id: int) -> str:
+    """Read the alliance's configured DS teams ('both' | 'A' | 'B') from
+    `guild_storm_config`. Falls back to 'both' on a missing row or
+    config-read failure — that's the historical behaviour, so the gate
+    is invisible to alliances that haven't run setup since #148."""
+    try:
+        import config
+        saved = (config.get_storm_config(int(guild_id), "DS") or {}).get("teams") or "both"
+    except Exception:
+        return "both"
+    return saved if saved in ("both", "A", "B") else "both"
+
+
+def _build_editor_embed(buf: PresetBuffer, team_size_hint: int = _TEAM_SIZE_HINT,
+                        *, teams: str = "both") -> discord.Embed:
     label = "Desert Storm" if buf.event_type == "DS" else "Canyon Storm"
     title = f"🛡️ Editing Preset: {buf.name}"
     desc_lines = [f"🗺️ Event: {label}"]
+    if buf.event_type == "DS" and teams in ("A", "B"):
+        # Surface the gate on the embed too — without this, an officer
+        # opening a single-team preset would see only one floor in the
+        # rows and wonder if their setup is broken.
+        desc_lines.append(f"👥 Teams: **Team {teams} only** (floors shown match)")
     if buf.event_type == "CS":
         desc_lines.append(f"⚙️ Faction: {buf.faction}")
     desc_lines.append("")
     if buf.zones:
         desc_lines.append("📋 **Zones:**")
         for z in buf.zones:
-            desc_lines.append(z.render_line(buf.event_type))
+            desc_lines.append(z.render_line(buf.event_type, teams=teams))
     else:
         desc_lines.append("*No zones in this preset yet.*")
     desc_lines.append("")
@@ -465,7 +536,9 @@ def _build_editor_embed(buf: PresetBuffer, team_size_hint: int = _TEAM_SIZE_HINT
 
 class _ZoneEditModal(discord.ui.Modal):
     """Modal for editing one zone's max/min/priority. Branches DS vs CS
-    on field count."""
+    on field count, and on DS branches further on whether the alliance
+    has both teams configured (#148) — Team A-only or Team B-only
+    alliances see only the floor that matters."""
 
     def __init__(self, view: "_PresetEditorView", zone_name: str):
         super().__init__(title=f"Edit Zone: {zone_name}"[:45])
@@ -481,21 +554,33 @@ class _ZoneEditModal(discord.ui.Modal):
         )
         self.add_item(self.max_input)
 
+        # Resolve which DS teams the alliance runs so the modal only
+        # asks for the relevant floors. The parent view snapshotted this
+        # at open time; reading from there keeps modal + embed in sync
+        # and avoids a second config read per modal open.
+        self._teams = (
+            getattr(view, "teams", "both") if view.buf.event_type == "DS" else "both"
+        )
+
         if view.buf.event_type == "DS":
-            self.power_a_input = discord.ui.TextInput(
-                label="Min Power Team A",
-                placeholder="e.g. 300M",
-                default=format_power(existing.min_power_a) if existing.min_power_a else "",
-                required=False, max_length=12,
-            )
-            self.power_b_input = discord.ui.TextInput(
-                label="Min Power Team B",
-                placeholder="e.g. 180M",
-                default=format_power(existing.min_power_b) if existing.min_power_b else "",
-                required=False, max_length=12,
-            )
-            self.add_item(self.power_a_input)
-            self.add_item(self.power_b_input)
+            self.power_a_input = None
+            self.power_b_input = None
+            if self._teams in ("both", "A"):
+                self.power_a_input = discord.ui.TextInput(
+                    label="Min Power Team A",
+                    placeholder="e.g. 300M",
+                    default=format_power(existing.min_power_a) if existing.min_power_a else "",
+                    required=False, max_length=12,
+                )
+                self.add_item(self.power_a_input)
+            if self._teams in ("both", "B"):
+                self.power_b_input = discord.ui.TextInput(
+                    label="Min Power Team B",
+                    placeholder="e.g. 180M",
+                    default=format_power(existing.min_power_b) if existing.min_power_b else "",
+                    required=False, max_length=12,
+                )
+                self.add_item(self.power_b_input)
             self.power_input = None
         else:
             self.power_input = discord.ui.TextInput(
@@ -542,9 +627,20 @@ class _ZoneEditModal(discord.ui.Modal):
         # Refuse garbage in the power fields rather than silently zeroing —
         # a typo would otherwise persist as a "no floor" entry and the
         # eligibility filter would pass below-floor members through it.
+        existing = self._view.buf.find_zone(self._zone_name) or ZoneRow(zone=self._zone_name)
         if self._view.buf.event_type == "DS":
-            min_a, bad_a = _parse_power_cell(self.power_a_input.value or "")
-            min_b, bad_b = _parse_power_cell(self.power_b_input.value or "")
+            # Hidden inputs (single-team alliances) preserve the stored
+            # value rather than overwriting to 0 — keeps the door open for
+            # an alliance to flip to two-team mode without losing prior
+            # floor values.
+            if self.power_a_input is not None:
+                min_a, bad_a = _parse_power_cell(self.power_a_input.value or "")
+            else:
+                min_a, bad_a = (existing.min_power_a or 0), False
+            if self.power_b_input is not None:
+                min_b, bad_b = _parse_power_cell(self.power_b_input.value or "")
+            else:
+                min_b, bad_b = (existing.min_power_b or 0), False
             if bad_a or bad_b:
                 await interaction.response.send_message(
                     "⚠️ One of the power values didn't parse. "
@@ -581,10 +677,172 @@ class _ZoneEditModal(discord.ui.Modal):
             min_power_a=min_a, min_power_b=min_b,
             priority=priority,
         ))
+        siblings = _sibling_zone_names(self._view.buf.zones, self._zone_name)
         await self._view.refresh(
             interaction,
             message=f"✏️ Updated **{self._zone_name}**.",
         )
+        # Apply-to-similar follow-up (#149): when the edited zone has
+        # numbered siblings in this preset, offer to copy these same
+        # values to any of them. Best-effort — a failure here must not
+        # invalidate the edit that already succeeded above.
+        if siblings:
+            try:
+                apply_view = _ApplyToSimilarView(
+                    editor_view=self._view,
+                    source_zone=self._zone_name,
+                    sibling_names=siblings,
+                    values=ZoneRow(
+                        zone=self._zone_name,
+                        max_players=max_players,
+                        min_power_a=min_a, min_power_b=min_b,
+                        priority=priority,
+                    ),
+                )
+                await interaction.followup.send(
+                    content=(
+                        f"💡 **{self._zone_name}** has similar zones in this preset: "
+                        f"{', '.join(siblings)}. Pick any to copy these same "
+                        f"Max / Min / Priority values to, or skip."
+                    ),
+                    view=apply_view,
+                    ephemeral=True,
+                )
+            except discord.HTTPException as e:
+                logger.warning(
+                    "[STORM STRATEGY] apply-to-similar follow-up couldn't be "
+                    "posted for zone=%s in preset=%s: %s",
+                    self._zone_name, self._view.buf.name, e,
+                )
+
+
+class _ApplyToSimilarView(discord.ui.View):
+    """Follow-up view shown after a zone edit when the preset contains
+    sibling zones (same building-family prefix, #149). Officer ticks
+    which siblings should receive the same Max / Min / Priority and
+    clicks Apply; values land via the parent editor's PresetBuffer
+    and the embed refreshes."""
+
+    def __init__(
+        self, *, editor_view: "_PresetEditorView", source_zone: str,
+        sibling_names: list[str], values: "ZoneRow",
+    ):
+        super().__init__(timeout=300)
+        self._editor = editor_view
+        self._source = source_zone
+        self._values = values
+        # Default to nothing selected — officers reach for apply-to-similar
+        # to opt INTO bulk copies; pre-checking every sibling would surprise
+        # the cautious case where they only want one or two.
+        self._selected: list[str] = []
+
+        select = discord.ui.Select(
+            placeholder="Choose siblings to apply to…",
+            min_values=0, max_values=min(len(sibling_names), 25),
+            options=[
+                discord.SelectOption(label=name[:100], value=name[:100])
+                for name in sibling_names[:25]
+            ],
+        )
+
+        async def _on_select(inter: discord.Interaction):
+            if inter.user.id != self._editor.user_id:
+                await inter.response.send_message(
+                    "⛔ Only the officer who opened the editor can pick siblings.",
+                    ephemeral=True,
+                )
+                return
+            self._selected = list(select.values)
+            # Defer silently — the choice is captured; the Apply button
+            # commits. No need to re-render the message.
+            try:
+                await inter.response.defer()
+            except discord.HTTPException:
+                pass
+
+        select.callback = _on_select
+        self.add_item(select)
+
+        apply_btn = discord.ui.Button(
+            label="Apply to selected", style=discord.ButtonStyle.success,
+        )
+
+        async def _apply(inter: discord.Interaction):
+            if inter.user.id != self._editor.user_id:
+                await inter.response.send_message(
+                    "⛔ Only the editor's owner can apply changes.",
+                    ephemeral=True,
+                )
+                return
+            if not self._selected:
+                await inter.response.send_message(
+                    "⚠️ Pick at least one sibling from the dropdown first, "
+                    "or use Skip to dismiss.",
+                    ephemeral=True,
+                )
+                return
+            applied: list[str] = []
+            for sibling in self._selected:
+                self._editor.buf.upsert_zone(ZoneRow(
+                    zone=sibling,
+                    max_players=self._values.max_players,
+                    min_power_a=self._values.min_power_a,
+                    min_power_b=self._values.min_power_b,
+                    priority=self._values.priority,
+                ))
+                applied.append(sibling)
+            for item in self.children:
+                item.disabled = True
+            try:
+                await inter.response.edit_message(
+                    content=(
+                        f"✅ Copied **{self._source}** settings to "
+                        f"{len(applied)} sibling(s): {', '.join(applied)}."
+                    ),
+                    view=self,
+                )
+            except discord.HTTPException:
+                pass
+            # Re-render the editor embed so the new values surface on
+            # the parent view too. Best-effort — the data is already in
+            # the buffer so a render failure doesn't lose work.
+            try:
+                if self._editor.message:
+                    await self._editor.message.edit(
+                        embed=_build_editor_embed(self._editor.buf, teams=self._editor.teams),
+                        view=self._editor,
+                    )
+            except discord.HTTPException:
+                pass
+            self.stop()
+
+        apply_btn.callback = _apply
+        self.add_item(apply_btn)
+
+        skip_btn = discord.ui.Button(
+            label="Skip", style=discord.ButtonStyle.secondary,
+        )
+
+        async def _skip(inter: discord.Interaction):
+            if inter.user.id != self._editor.user_id:
+                await inter.response.send_message(
+                    "⛔ Only the editor's owner can dismiss this prompt.",
+                    ephemeral=True,
+                )
+                return
+            for item in self.children:
+                item.disabled = True
+            try:
+                await inter.response.edit_message(
+                    content="OK — only the edited zone was changed.",
+                    view=self,
+                )
+            except discord.HTTPException:
+                pass
+            self.stop()
+
+        skip_btn.callback = _skip
+        self.add_item(skip_btn)
 
 
 class _AddZoneModal(discord.ui.Modal, title="Add Zone to Preset"):
@@ -666,6 +924,11 @@ class _PresetEditorView(discord.ui.View):
         self.buf      = buf
         self.cancelled = False
         self.message: discord.Message | None = None
+        # Snapshot the alliance's configured-teams choice (#148) at open
+        # time. Used by the embed renderer + zone modal so single-team
+        # alliances see only their team's Min Power floor. Resolved once
+        # rather than re-read on every modal open / refresh.
+        self.teams = _resolve_ds_teams(guild_id) if buf.event_type == "DS" else "both"
         self._rebuild_components()
 
     def _rebuild_components(self):
@@ -741,7 +1004,7 @@ class _PresetEditorView(discord.ui.View):
                 if self.message:
                     try:
                         await self.message.edit(
-                            embed=_build_editor_embed(self.buf),
+                            embed=_build_editor_embed(self.buf, teams=self.teams),
                             view=self,
                         )
                     except discord.HTTPException:
@@ -764,7 +1027,7 @@ class _PresetEditorView(discord.ui.View):
             try:
                 await inter.response.edit_message(
                     content="🔙 Abandoned. Changes were not saved.",
-                    embed=_build_editor_embed(self.buf),
+                    embed=_build_editor_embed(self.buf, teams=self.teams),
                     view=self,
                 )
             except discord.HTTPException:
@@ -779,7 +1042,7 @@ class _PresetEditorView(discord.ui.View):
 
     async def refresh(self, interaction: discord.Interaction, message: str | None = None):
         self._rebuild_components()
-        embed = _build_editor_embed(self.buf)
+        embed = _build_editor_embed(self.buf, teams=self.teams)
         content = message or None
         try:
             if interaction.response.is_done():
@@ -805,8 +1068,8 @@ async def _deny_if_not_leader(interaction: discord.Interaction) -> bool:
 
 
 async def _open_editor(interaction: discord.Interaction, event_type: str, buf: PresetBuffer):
-    embed = _build_editor_embed(buf)
     view = _PresetEditorView(interaction.guild_id, interaction.user.id, buf)
+    embed = _build_editor_embed(buf, teams=view.teams)
     await interaction.response.send_message(embed=embed, view=view)
     try:
         view.message = await interaction.original_response()

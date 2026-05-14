@@ -2061,3 +2061,148 @@ class TestAutoFillSummarySplitsPairedFromPrimary:
         summary = srb._auto_fill_session(session)
         # Pool mode never pairs.
         assert summary["auto_paired_subs"] == 0
+
+
+# ── #152: phase-aware roster session ────────────────────────────────────────
+
+
+def _make_phase_aware_session(*, sub_mode: str = "pool"):
+    zones = [
+        ss.ZoneRow(zone="Info Center", max_players=0,
+                   max_phase1=2, max_phase2=1,
+                   min_power_a=200_000_000, min_power_b=100_000_000),
+        ss.ZoneRow(zone="Arsenal", max_players=0,
+                   max_phase1=0, max_phase2=4,
+                   min_power_a=0, min_power_b=0),
+    ]
+    preset = ss.PresetBuffer(name="Phased", event_type="DS",
+                             zones=zones, uses_phases=True)
+    members = {
+        "1": {"key": "1", "name": "Alice", "discord_id": "1",
+              "power": 412_000_000, "not_on_discord": False},
+        "2": {"key": "2", "name": "Bob",   "discord_id": "2",
+              "power": 350_000_000, "not_on_discord": False},
+        "3": {"key": "3", "name": "Cyrus", "discord_id": "3",
+              "power": 300_000_000, "not_on_discord": False},
+    }
+    return srb.RosterBuilderSession(
+        guild_id=1, user_id=42, event_type="DS",
+        team="A", preset=preset, members=members,
+        per_member_rules=[], power_band_rules=[],
+        sub_mode=sub_mode,
+    )
+
+
+class TestSessionPhaseAware:
+    def test_flat_session_is_phase_aware_false(self):
+        s = _make_session(team="A")
+        assert s.is_phase_aware is False
+        assert s.iter_phases() == [1]
+
+    def test_phase_aware_session_iterates_both_phases(self):
+        s = _make_phase_aware_session()
+        assert s.is_phase_aware is True
+        assert s.iter_phases() == [1, 2]
+
+    def test_assignments_for_phase_returns_correct_dict(self):
+        s = _make_phase_aware_session()
+        s.assignments["Info Center"].append("1")
+        s.assignments_p2["Arsenal"].append("2")
+        assert s.assignments_for_phase(1)["Info Center"] == ["1"]
+        assert s.assignments_for_phase(2)["Arsenal"] == ["2"]
+        # Phase 1 doesn't accidentally see phase 2's Arsenal assignment.
+        assert s.assignments_for_phase(1)["Arsenal"] == []
+
+    def test_zone_capacity_phase_aware_returns_per_phase_cap(self):
+        s = _make_phase_aware_session()
+        assert s.zone_capacity("Info Center", phase=1) == 2
+        assert s.zone_capacity("Info Center", phase=2) == 1
+        assert s.zone_capacity("Arsenal", phase=2) == 4
+
+    def test_zone_capacity_flat_ignores_phase_argument(self):
+        s = _make_session(team="A")
+        # Flat preset returns max_players regardless of phase.
+        assert s.zone_capacity("Power Tower", phase=1) == 4
+        assert s.zone_capacity("Power Tower", phase=2) == 4
+
+    def test_zone_member_count_defaults_to_selected_phase(self):
+        s = _make_phase_aware_session()
+        s.assignments["Info Center"].append("1")
+        s.assignments_p2["Arsenal"].append("2")
+        s.selected_phase = 1
+        assert s.zone_member_count("Info Center") == 1
+        s.selected_phase = 2
+        assert s.zone_member_count("Arsenal") == 1
+
+    def test_assigned_member_keys_unions_both_phases(self):
+        s = _make_phase_aware_session()
+        s.assignments["Info Center"].append("1")          # Alice in P1
+        s.assignments_p2["Arsenal"].append("2")           # Bob in P2
+        s.subs.append("3")                                # Cyrus in subs
+        assert s.assigned_member_keys() == {"1", "2", "3"}
+
+    def test_prune_stale_pairings_walks_both_phases(self):
+        s = _make_phase_aware_session(sub_mode="paired")
+        s.assignments["Info Center"].append("1")
+        s.paired_subs["1"] = "2"
+        s.assignments_p2["Arsenal"].append("1")
+        s.paired_subs_p2["1"] = "3"
+        # Now drop the P2 primary — phase-2 pairing should evaporate
+        # but phase-1 stays.
+        s.assignments_p2["Arsenal"].clear()
+        s.prune_stale_pairings()
+        assert s.paired_subs == {"1": "2"}
+        assert s.paired_subs_p2 == {}
+
+    def test_prune_stale_overrides_walks_both_phases(self):
+        s = _make_phase_aware_session()
+        s.assignments["Info Center"].append("1")
+        s.below_floor_overrides.add("1")
+        s.assignments_p2["Arsenal"].append("2")
+        s.below_floor_overrides_p2.add("2")
+        # Clear phase-1 assignment — its override goes too.
+        s.assignments["Info Center"].clear()
+        s.prune_stale_overrides()
+        assert s.below_floor_overrides == set()
+        assert s.below_floor_overrides_p2 == {"2"}
+
+
+class TestMailBodyPhaseAware:
+    def test_flat_mail_has_no_phase_headers(self):
+        s = _make_session(team="A", members={
+            "1": {"key": "1", "name": "Alice", "discord_id": "1",
+                  "power": 412_000_000, "not_on_discord": False},
+        })
+        s.assignments["Power Tower"].append("1")
+        body = srb._build_mail_body(s)
+        assert "Phase 1" not in body
+        assert "Phase 2" not in body
+        assert "Alice" in body
+
+    def test_phase_aware_mail_emits_phase_headers(self):
+        s = _make_phase_aware_session()
+        s.assignments["Info Center"].append("1")          # Alice in P1
+        s.assignments_p2["Arsenal"].append("2")           # Bob in P2
+        body = srb._build_mail_body(s)
+        assert "**Phase 1**" in body
+        assert "**Phase 2**" in body
+        # Both members appear, each under its phase block.
+        p1_start = body.index("**Phase 1**")
+        p2_start = body.index("**Phase 2**")
+        assert "Alice" in body[p1_start:p2_start]
+        assert "Bob"   in body[p2_start:]
+
+    def test_phase_aware_mail_subs_only_in_phase_one_block(self):
+        s = _make_phase_aware_session()
+        s.assignments["Info Center"].append("1")
+        s.assignments_p2["Arsenal"].append("2")
+        s.subs.append("3")
+        body = srb._build_mail_body(s)
+        # Phase 1 block carries the subs line (Cyrus); phase 2 doesn't
+        # double-print them.
+        p1_start = body.index("**Phase 1**")
+        p2_start = body.index("**Phase 2**")
+        p1_block = body[p1_start:p2_start]
+        p2_block = body[p2_start:]
+        assert "Cyrus" in p1_block
+        assert "Cyrus" not in p2_block

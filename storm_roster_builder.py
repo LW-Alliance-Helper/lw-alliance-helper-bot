@@ -26,6 +26,7 @@ Deferred to follow-ups:
 
 from __future__ import annotations
 
+import asyncio
 import io
 import logging
 from typing import Optional
@@ -1838,7 +1839,9 @@ class _SaveAsPresetModal(discord.ui.Modal, title="Save as preset"):
             name=name, event_type=s.event_type, zones=new_zones,
             faction=s.preset.faction,
         )
-        ok = ss.save_preset(s.guild_id, s.event_type, buf)
+        ok = await asyncio.to_thread(
+            ss.save_preset, s.guild_id, s.event_type, buf,
+        )
         if ok:
             await inter.response.send_message(
                 f"✅ Saved roster as preset **{name}**.", ephemeral=True,
@@ -2102,7 +2105,8 @@ async def _finalize_structured_roster(
                 "guild=%s: %s",
                 s.guild_id, e,
             )
-        fresh_members, _refresh_errors = _read_roster_powers(
+        fresh_members, _refresh_errors = await asyncio.to_thread(
+            _read_roster_powers,
             s.guild_id, s.event_type, guild=interaction.guild,
         )
         for key, m in s.members.items():
@@ -2177,8 +2181,10 @@ async def _finalize_structured_roster(
             )
 
     # Sheet write — one row per slot. Best-effort; failures log but
-    # don't roll back the Discord post.
-    write_errors = _write_rosters_tab(s)
+    # don't roll back the Discord post. Off the event loop because
+    # `_write_rosters_tab` does a multi-cell gspread `update` that
+    # can block for 1-2 seconds under load.
+    write_errors = await asyncio.to_thread(_write_rosters_tab, s)
 
     # Close out the view.
     for item in view.children:
@@ -2728,7 +2734,9 @@ async def open_roster_builder(
         if not ok:
             return
 
-    preset = ss.load_preset(interaction.guild_id, event_type, preset_name)
+    preset = await asyncio.to_thread(
+        ss.load_preset, interaction.guild_id, event_type, preset_name,
+    )
     if preset is None:
         msg = (f"⚠️ No preset named **{preset_name}**. Use the list command "
                f"to see saved presets.")
@@ -2785,8 +2793,10 @@ async def open_roster_builder(
 
     # Load powers + rules. Passes the live guild so the reader can
     # infer non-Discord status for rows with stale or blank Discord IDs
-    # (#139) — explicit `not_on_discord` column still wins.
-    members, roster_errors = _read_roster_powers(
+    # (#139) — explicit `not_on_discord` column still wins. gspread off
+    # the event loop.
+    members, roster_errors = await asyncio.to_thread(
+        _read_roster_powers,
         interaction.guild_id, event_type, guild=interaction.guild,
     )
 
@@ -2821,7 +2831,9 @@ async def open_roster_builder(
             # Defensive — everyone on roster voted; not really an error.
             pass
 
-    rules = smr.list_rules(interaction.guild_id, event_type)
+    rules = await asyncio.to_thread(
+        smr.list_rules, interaction.guild_id, event_type,
+    )
     per_member = [r for r in rules if r.rule_type == "per_member"]
     power_band = [r for r in rules if r.rule_type == "power_band"]
 

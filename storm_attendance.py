@@ -14,6 +14,7 @@ Member Stats Lookup's "attended N storms" calculation.
 
 from __future__ import annotations
 
+import asyncio
 import datetime as _dt
 import logging
 from typing import Optional
@@ -592,7 +593,8 @@ class _AttendanceView(discord.ui.View):
             if inter.user.id != s.user_id:
                 await inter.response.send_message("⛔ Only the officer can save.", ephemeral=True); return
             await inter.response.defer(ephemeral=True, thinking=True)
-            errors = save_attendance(
+            errors = await asyncio.to_thread(
+                save_attendance,
                 s.guild_id, s.event_type, s.event_date,
                 statuses=s.statuses,
                 officer_id=inter.user.id,
@@ -783,11 +785,17 @@ class StormAttendanceCog(commands.Cog):
 
         await interaction.response.defer(thinking=True)
 
-        slots, slot_errors = load_rostered_slots(
-            interaction.guild_id, et, date_clean,
+        # gspread reads off the event loop. Two parallel Sheet fetches
+        # in one go via `asyncio.gather` so the user-facing wait is one
+        # round-trip, not two stacked sequentially.
+        slots_task = asyncio.to_thread(
+            load_rostered_slots, interaction.guild_id, et, date_clean,
         )
-        existing, attendance_errors = load_attendance(
-            interaction.guild_id, et, date_clean,
+        attendance_task = asyncio.to_thread(
+            load_attendance, interaction.guild_id, et, date_clean,
+        )
+        (slots, slot_errors), (existing, attendance_errors) = await asyncio.gather(
+            slots_task, attendance_task,
         )
 
         if not slots:

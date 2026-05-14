@@ -23,6 +23,7 @@ vote up to 6 chars, separators 4 chars) stays well under.
 
 from __future__ import annotations
 
+import asyncio
 import logging
 
 import discord
@@ -329,8 +330,12 @@ async def _handle_signup_click(interaction: discord.Interaction, vote_code: str)
         )
 
     # Sheet mirroring — best-effort, never rolls back SQLite.
+    # Off the event loop: gspread blocks for a network round-trip, and
+    # without `asyncio.to_thread` one slow Sheets call would stall every
+    # other guild's button clicks + scheduler ticks + heartbeats.
     try:
-        _mirror_vote_to_sheet(
+        await asyncio.to_thread(
+            _mirror_vote_to_sheet,
             guild_id=guild_id,
             event_type=event_type,
             event_date=event_date,
@@ -417,7 +422,12 @@ async def _maybe_send_power_refresh_dm(
                 "guild=%s: %s",
                 guild_id, e,
             )
-    members, _errors = _read_roster_powers(guild_id, event_type, guild=guild)
+    # `_read_roster_powers` does a gspread `get_all_values` — off the
+    # event loop to keep the click handler from stalling every other
+    # guild under Sheets rate-limit pressure.
+    members, _errors = await asyncio.to_thread(
+        _read_roster_powers, guild_id, event_type, guild=guild,
+    )
     voter_key = str(voter_id)
     voter_row = members.get(voter_key)
     if voter_row is None:

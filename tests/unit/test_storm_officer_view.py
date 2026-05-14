@@ -576,7 +576,19 @@ class TestOnBehalfNumericNameReject:
         view.guild = _FakeGuild(TEST_GUILD_ID, [])
         view.event_type = "DS"
         view.event_date = "2026-05-18"
+        view.message = None
+        # `refresh_buckets` is now async (gspread off-thread); the
+        # on-behalf modal awaits it after the vote records.
+        view.refresh_buckets = AsyncMock()
         return view
+
+    def _fake_interaction(self):
+        interaction = MagicMock()
+        interaction.response.send_message = AsyncMock()
+        interaction.response.edit_message = AsyncMock()
+        interaction.response.defer        = AsyncMock()
+        interaction.followup.send         = AsyncMock()
+        return interaction
 
     async def test_purely_numeric_name_rejected(self, seeded_db):
         modal = sov._OnBehalfModal(self._fake_view())
@@ -584,9 +596,7 @@ class TestOnBehalfNumericNameReject:
         # TextInput values directly. The handler reads from `.value`.
         modal.member_name = MagicMock(value="1234")
         modal.vote_label  = MagicMock(value="A")
-        interaction = MagicMock()
-        interaction.response.send_message = AsyncMock()
-        interaction.response.edit_message = AsyncMock()
+        interaction = self._fake_interaction()
         with patch(
             "config.record_storm_vote", new=MagicMock(return_value=True),
         ) as record:
@@ -604,9 +614,7 @@ class TestOnBehalfNumericNameReject:
         modal = sov._OnBehalfModal(self._fake_view())
         modal.member_name = MagicMock(value="Charlie #1234")
         modal.vote_label  = MagicMock(value="A")
-        interaction = MagicMock()
-        interaction.response.send_message = AsyncMock()
-        interaction.response.edit_message = AsyncMock()
+        interaction = self._fake_interaction()
         with patch(
             "storm_officer_view._read_roster_rows", return_value=([], []),
         ), patch(
@@ -616,9 +624,15 @@ class TestOnBehalfNumericNameReject:
         # `_read_roster_rows` returned empty so the validation falls
         # back to permissive — the record_storm_vote path is reached.
         # The numeric-reject branch did NOT fire (no "purely numeric"
-        # ephemeral).
+        # ephemeral). Body messages may land on either send_message or
+        # followup.send depending on whether the response was deferred,
+        # so collect from both.
         all_ephemerals = [
             c.args[0] for c in interaction.response.send_message.await_args_list
+            if c.args
+        ] + [
+            c.args[0] for c in interaction.followup.send.await_args_list
+            if c.args
         ]
         assert not any(
             "purely numeric" in (m or "") for m in all_ephemerals

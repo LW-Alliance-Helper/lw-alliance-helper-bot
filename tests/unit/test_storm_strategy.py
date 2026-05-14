@@ -551,15 +551,24 @@ class TestPhaseAwarePresets:
     def test_preset_buffer_defaults_uses_phases_false(self):
         buf = ss.PresetBuffer(name="Flat", event_type="DS")
         assert buf.uses_phases is False
+        assert buf.phase_count == 0
 
     def test_preset_buffer_accepts_uses_phases_true(self):
+        # Back-compat shim: passing uses_phases=True canonicalises to
+        # phase_count=2.
         buf = ss.PresetBuffer(name="Phases", event_type="DS", uses_phases=True)
         assert buf.uses_phases is True
+        assert buf.phase_count == 2
+
+    def test_preset_buffer_accepts_phase_count_three(self):
+        buf = ss.PresetBuffer(name="ThreePhase", event_type="CS", phase_count=3)
+        assert buf.uses_phases is True
+        assert buf.phase_count == 3
 
     def test_render_line_flat_keeps_max_label(self):
         row = ss.ZoneRow(zone="Info Center", max_players=4,
                          min_power_a=200_000_000, min_power_b=100_000_000)
-        line = row.render_line("DS", uses_phases=False)
+        line = row.render_line("DS", phase_count=0)
         assert "Max: 4" in line
         assert "P1:" not in line
         assert "P2:" not in line
@@ -568,10 +577,21 @@ class TestPhaseAwarePresets:
         row = ss.ZoneRow(zone="Info Center", max_players=4,
                          max_phase1=3, max_phase2=1,
                          min_power_a=200_000_000, min_power_b=100_000_000)
-        line = row.render_line("DS", uses_phases=True)
+        line = row.render_line("DS", phase_count=2)
         assert "Max:" not in line
         assert "P1: 3" in line
         assert "P2: 1" in line
+        assert "P3:" not in line
+
+    def test_render_line_three_phase_includes_p3(self):
+        row = ss.ZoneRow(zone="Power Tower", max_players=0,
+                         max_phase1=4, max_phase2=2, max_phase3=3,
+                         min_power_a=200_000_000)
+        line = row.render_line("CS", phase_count=3)
+        assert "Max:" not in line
+        assert "P1: 4" in line
+        assert "P2: 2" in line
+        assert "P3: 3" in line
 
     def test_total_capacity_flat_sums_max_players(self):
         buf = ss.PresetBuffer(name="Flat", event_type="DS", zones=[
@@ -655,10 +675,74 @@ class TestPhaseAwarePresets:
         loaded = ss.load_preset(gid, "DS", "Flat")
         assert loaded is not None
         assert loaded.uses_phases is False
+        assert loaded.phase_count == 0
         # Phase fields default to 0 when the preset is flat.
         ic = loaded.find_zone("Info Center")
         assert ic.max_phase1 == 0
         assert ic.max_phase2 == 0
+        assert ic.max_phase3 == 0
+
+    def test_save_then_load_three_phase_cs_preset(self, fake_sheet_factory):
+        fake, gid = fake_sheet_factory
+        buf = ss.PresetBuffer(name="ThreePhase", event_type="CS",
+                              phase_count=3, faction="Rulebringers",
+                              zones=[
+            ss.ZoneRow(zone="Power Tower", max_players=0,
+                       max_phase1=4, max_phase2=2, max_phase3=3,
+                       min_power_a=200_000_000,
+                       priority_phase1=1, priority_phase2=3, priority_phase3=2),
+            ss.ZoneRow(zone="Virus Lab", max_players=0,
+                       max_phase3=4,
+                       min_power_a=0,
+                       priority_phase3=1),
+        ])
+        assert ss.save_preset(gid, "CS", buf) is True
+        loaded = ss.load_preset(gid, "CS", "ThreePhase")
+        assert loaded is not None
+        assert loaded.phase_count == 3
+        assert loaded.faction == "Rulebringers"
+        pt = loaded.find_zone("Power Tower")
+        assert pt.max_phase1 == 4
+        assert pt.max_phase2 == 2
+        assert pt.max_phase3 == 3
+        assert pt.priority_phase1 == 1
+        assert pt.priority_phase2 == 3
+        assert pt.priority_phase3 == 2
+        vl = loaded.find_zone("Virus Lab")
+        assert vl.max_phase1 == 0
+        assert vl.max_phase2 == 0
+        assert vl.max_phase3 == 4
+        assert vl.priority_phase3 == 1
+
+    def test_legacy_use_phases_column_reads_as_two_phase(self, fake_sheet_factory):
+        """Pre-3-phase data on the sheet wrote `Use Phases = TRUE` and
+        no `Phase Count`. The loader must canonicalise that to
+        `phase_count = 2` so saved presets from earlier commits in this
+        feature branch keep working."""
+        fake, gid = fake_sheet_factory
+        # Inject legacy-shaped rows directly (header is the OLD shape
+        # without Phase Count + Max Phase 3).
+        ws = fake.add_worksheet("DS Strategies")
+        ws.append_row(
+            ["Preset Name", "Zone", "Max Players",
+             "Max Phase 1", "Max Phase 2",
+             "Min Power A", "Min Power B", "Priority", "Use Phases"],
+            value_input_option="RAW",
+        )
+        ws.append_row(
+            ["Legacy", "Info Center", "0", "4", "2",
+             "200000000", "100000000", "1", "TRUE"],
+            value_input_option="RAW",
+        )
+        # Wire the strategies_tab pointer so the loader looks at this ws.
+        import config
+        config.save_structured_storm_config(
+            gid, "DS", strategies_tab="DS Strategies",
+        )
+        loaded = ss.load_preset(gid, "DS", "Legacy")
+        assert loaded is not None
+        assert loaded.phase_count == 2
+        assert loaded.uses_phases is True
 
     def test_parse_uses_phases_truthy_strings(self):
         for raw in ("TRUE", "true", "True", "yes", "Y", "1", "on", "phases"):

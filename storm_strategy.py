@@ -176,42 +176,99 @@ class ZoneRow:
     `min_power_b` field is unused for CS (single floor stored in
     `min_power_a` for code simplicity).
 
-    `max_phase1` / `max_phase2` are only read when the parent
-    `PresetBuffer.uses_phases` is True (see #152). On flat presets they
-    default to 0 and are ignored by the renderer + mail builder.
+    Phase fields (`max_phase1..3`, `priority_phase1..3`) are only read
+    when the parent `PresetBuffer.phase_count >= 2` (see #152). On
+    flat presets they default to 0 and are ignored by the renderer +
+    mail builder. The `priority` field is the single-mode (flat)
+    priority; in phase-aware mode each phase has its own priority.
     """
 
     __slots__ = (
-        "zone", "max_players", "max_phase1", "max_phase2",
-        "min_power_a", "min_power_b", "priority",
+        "zone", "max_players",
+        "max_phase1", "max_phase2", "max_phase3",
+        "min_power_a", "min_power_b",
+        "priority",
+        "priority_phase1", "priority_phase2", "priority_phase3",
     )
 
     def __init__(self, zone: str, max_players: int = 0,
-                 max_phase1: int = 0, max_phase2: int = 0,
+                 max_phase1: int = 0, max_phase2: int = 0, max_phase3: int = 0,
                  min_power_a: int = 0, min_power_b: int = 0,
-                 priority: int = 0):
-        self.zone        = zone
-        self.max_players = _safe_int(max_players)
-        self.max_phase1  = _safe_int(max_phase1)
-        self.max_phase2  = _safe_int(max_phase2)
-        self.min_power_a = _safe_int(min_power_a)
-        self.min_power_b = _safe_int(min_power_b)
-        self.priority    = _safe_int(priority)
+                 priority: int = 0,
+                 priority_phase1: int = 0,
+                 priority_phase2: int = 0,
+                 priority_phase3: int = 0):
+        self.zone             = zone
+        self.max_players      = _safe_int(max_players)
+        self.max_phase1       = _safe_int(max_phase1)
+        self.max_phase2       = _safe_int(max_phase2)
+        self.max_phase3       = _safe_int(max_phase3)
+        self.min_power_a      = _safe_int(min_power_a)
+        self.min_power_b      = _safe_int(min_power_b)
+        self.priority         = _safe_int(priority)
+        self.priority_phase1  = _safe_int(priority_phase1)
+        self.priority_phase2  = _safe_int(priority_phase2)
+        self.priority_phase3  = _safe_int(priority_phase3)
+
+    def max_for_phase(self, phase: int) -> int:
+        """Return the max-player cap for a given phase. Phase 0 (flat)
+        returns `max_players`; phase 1/2/3 return the matching
+        `max_phase*` field."""
+        if phase == 1:
+            return int(self.max_phase1)
+        if phase == 2:
+            return int(self.max_phase2)
+        if phase == 3:
+            return int(self.max_phase3)
+        return int(self.max_players)
+
+    def priority_for_phase(self, phase: int) -> int:
+        """Return the priority for a given phase. Phase 0 (flat) returns
+        `priority`; phase 1/2/3 returns the matching
+        `priority_phase*`. Phase-aware lookup falls back to the flat
+        `priority` if the per-phase value is 0, so a preset that
+        doesn't bother filling per-phase priorities still gets a
+        coherent ordering."""
+        per_phase = 0
+        if phase == 1:
+            per_phase = self.priority_phase1
+        elif phase == 2:
+            per_phase = self.priority_phase2
+        elif phase == 3:
+            per_phase = self.priority_phase3
+        else:
+            return int(self.priority)
+        return int(per_phase) if per_phase else int(self.priority)
 
     def render_line(self, event_type: str, teams: str = "both",
-                    uses_phases: bool = False) -> str:
+                    phase_count: int = 0) -> str:
         """One-line summary for the editor embed. DS rendering respects
         the alliance's configured teams (#148) so single-team alliances
         see only their team's floor.
 
-        When `uses_phases` is True, the capacity readout is split into
-        per-phase counts (P1 / P2) instead of a single Max.
+        When `phase_count >= 2`, the capacity readout splits into
+        per-phase counts (P1: x, P2: y, optionally P3: z) instead of a
+        single Max.
         """
-        prio = f" [P{self.priority}]" if self.priority else ""
-        if uses_phases:
-            cap = f"P1: {self.max_phase1}, P2: {self.max_phase2}"
+        if phase_count >= 2:
+            parts = [f"P1: {self.max_phase1}", f"P2: {self.max_phase2}"]
+            if phase_count >= 3:
+                parts.append(f"P3: {self.max_phase3}")
+            cap = ", ".join(parts)
+            # Per-phase priorities — show as P1[1] / P2[3] etc. only
+            # when at least one phase has a non-zero priority.
+            phase_prios = [
+                self.priority_phase1, self.priority_phase2, self.priority_phase3,
+            ][:phase_count]
+            if any(phase_prios):
+                prio = " [" + ", ".join(
+                    f"P{i + 1}: {p}" for i, p in enumerate(phase_prios) if p
+                ) + "]"
+            else:
+                prio = ""
         else:
             cap = f"Max: {self.max_players}"
+            prio = f" [P{self.priority}]" if self.priority else ""
         if event_type == "CS":
             return (
                 f"• {self.zone:<20} ({cap})  "
@@ -238,33 +295,73 @@ class PresetBuffer:
     """Mutable preset state held by the editor view. Persists to Sheet on
     Save Preset.
 
-    `uses_phases` (#152): when True, the roster builder presents two
-    sub-slots per zone (Phase 1 / Phase 2), each capped by the matching
-    `ZoneRow.max_phase{1,2}` value. When False, the preset behaves
-    exactly as before — a single per-zone slot list capped by
-    `max_players` — and the phase fields on each zone are ignored.
+    `phase_count` (#152): selects the phase model for this preset.
+      - 0 → flat. Single per-zone slot capped by `max_players`. Phase
+        fields on each zone are ignored.
+      - 2 → two phases (Phase 1 / Phase 2). Each zone's slot is split
+        into two sub-slots capped by `max_phase1` / `max_phase2`.
+      - 3 → three phases. Same as 2 plus `max_phase3` + a Phase 3
+        priority. Used by CS where Stage 1 / 2 / 3 each open
+        different buildings.
 
     The flag is per-preset so the same alliance can run a phase-aware
     preset one week and a flat preset the next.
+
+    `uses_phases` is a backward-compat alias for `phase_count >= 2` —
+    keeps the older boolean check working at every callsite.
     """
+
+    # Allowed phase_count values. 1 is treated as flat for tolerance
+    # but new presets only ever write 0, 2, or 3.
+    _VALID_PHASE_COUNTS = (0, 1, 2, 3)
 
     def __init__(self, name: str, event_type: str,
                  zones: list[ZoneRow] | None = None,
                  faction: str = "Either",
-                 uses_phases: bool = False):
+                 phase_count: int = 0,
+                 uses_phases: bool | None = None):
         self.name        = name
         self.event_type  = event_type.upper()
         self.zones       = list(zones or [])
         self.faction     = faction       # CS only; ignored for DS
-        self.uses_phases = bool(uses_phases)
+        # Back-compat: pre-3-phase code passed `uses_phases=True` for
+        # 2-phase presets. Translate it if the caller didn't also pass
+        # an explicit phase_count.
+        if uses_phases and not phase_count:
+            phase_count = 2
+        self.phase_count = (
+            int(phase_count) if int(phase_count) in self._VALID_PHASE_COUNTS else 0
+        )
         self.dirty       = False         # tracks unsaved changes for the banner
 
+    @property
+    def uses_phases(self) -> bool:
+        """True when the preset has 2 or more phases. Kept for the
+        many call-sites that branch on a boolean without caring about
+        the exact phase count."""
+        return self.phase_count >= 2
+
+    @uses_phases.setter
+    def uses_phases(self, value: bool) -> None:
+        """Setting uses_phases collapses to a 2-phase preset (the most
+        common phase-aware case). Callers that want 3 phases set
+        `phase_count = 3` directly."""
+        if value and self.phase_count < 2:
+            self.phase_count = 2
+        elif not value:
+            self.phase_count = 0
+
     def total_capacity(self) -> int:
-        """Sum of per-zone capacities. Phase-aware presets sum
-        max_phase1 + max_phase2 per zone since a member can occupy a
-        slot in both phases."""
-        if self.uses_phases:
-            return sum(z.max_phase1 + z.max_phase2 for z in self.zones)
+        """Sum of per-zone capacities. Phase-aware presets sum each
+        phase's max since a member can occupy slots in multiple phases
+        (the migration case)."""
+        if self.phase_count >= 2:
+            total = 0
+            for z in self.zones:
+                total += z.max_phase1 + z.max_phase2
+                if self.phase_count >= 3:
+                    total += z.max_phase3
+            return total
         return sum(z.max_players for z in self.zones)
 
     def find_zone(self, zone_name: str) -> ZoneRow | None:
@@ -278,12 +375,16 @@ class PresetBuffer:
         if existing is None:
             self.zones.append(row)
         else:
-            existing.max_players = row.max_players
-            existing.max_phase1  = row.max_phase1
-            existing.max_phase2  = row.max_phase2
-            existing.min_power_a = row.min_power_a
-            existing.min_power_b = row.min_power_b
-            existing.priority    = row.priority
+            existing.max_players      = row.max_players
+            existing.max_phase1       = row.max_phase1
+            existing.max_phase2       = row.max_phase2
+            existing.max_phase3       = row.max_phase3
+            existing.min_power_a      = row.min_power_a
+            existing.min_power_b      = row.min_power_b
+            existing.priority         = row.priority
+            existing.priority_phase1  = row.priority_phase1
+            existing.priority_phase2  = row.priority_phase2
+            existing.priority_phase3  = row.priority_phase3
         self.dirty = True
 
     def remove_zone(self, zone_name: str) -> bool:
@@ -315,18 +416,46 @@ def seed_default_preset(name: str, event_type: str) -> PresetBuffer:
 
 
 _DS_HEADER = ["Preset Name", "Zone", "Max Players",
-              "Max Phase 1", "Max Phase 2",
-              "Min Power A", "Min Power B", "Priority", "Use Phases"]
+              "Max Phase 1", "Max Phase 2", "Max Phase 3",
+              "Min Power A", "Min Power B",
+              "Priority",
+              "Priority Phase 1", "Priority Phase 2", "Priority Phase 3",
+              "Phase Count"]
 _CS_HEADER = ["Preset Name", "Zone", "Max Players",
-              "Max Phase 1", "Max Phase 2",
-              "Min Power", "Priority", "Faction", "Use Phases"]
+              "Max Phase 1", "Max Phase 2", "Max Phase 3",
+              "Min Power",
+              "Priority",
+              "Priority Phase 1", "Priority Phase 2", "Priority Phase 3",
+              "Faction", "Phase Count"]
 
-# Truthy strings the sheet might carry for the Use Phases column.
-# Empty / missing / falsy values all read as `uses_phases=False`.
+# Truthy strings the legacy `Use Phases` column might carry. Used only
+# to read pre-3-phase preset data — new writes always use the
+# `Phase Count` int column.
 _TRUE_STRINGS = {"true", "yes", "1", "y", "on", "phases"}
 
 
+def _parse_phase_count(row: dict) -> int:
+    """Resolve a row's phase_count from the new Phase Count column,
+    falling back to the legacy Use Phases boolean if Phase Count is
+    missing. Unknown / unparseable values clamp to 0 (flat)."""
+    raw = row.get("Phase Count", "")
+    if raw not in ("", None):
+        try:
+            val = int(str(raw).strip())
+        except (TypeError, ValueError):
+            val = 0
+        if val in (2, 3):
+            return val
+        return 0
+    # Legacy fallback — old presets only ever did 2-phase.
+    legacy = str(row.get("Use Phases", "") or "").strip().lower()
+    return 2 if legacy in _TRUE_STRINGS else 0
+
+
 def _parse_uses_phases(raw: object) -> bool:
+    """Legacy helper retained for the tests that exercise the old
+    Use Phases column parsing directly. Production code reads phase
+    count via `_parse_phase_count`."""
     return str(raw or "").strip().lower() in _TRUE_STRINGS
 
 # Canonical team size used by the editor's capacity gauge and the
@@ -393,15 +522,14 @@ def load_preset(guild_id: int, event_type: str, name: str) -> PresetBuffer | Non
         return None
     zones: list[ZoneRow] = []
     faction = "Either"
-    uses_phases = False
+    phase_count = 0
     for r in rows:
         zone_name = str(r.get("Zone", "")).strip()
         src = f"preset={name!r} zone={zone_name!r} event={event_type}"
-        # `Use Phases` is denormalised across every row of a preset.
-        # Any truthy row flips the preset on (handles partial-edit
-        # states where someone toggled it on then back off mid-edit).
-        if _parse_uses_phases(r.get("Use Phases", "")):
-            uses_phases = True
+        # `Phase Count` (or legacy `Use Phases`) is denormalised across
+        # every row of a preset. Take the max seen so partial-edit
+        # states still resolve coherently.
+        phase_count = max(phase_count, _parse_phase_count(r))
         if event_type == "DS":
             min_a, _ = _parse_power_cell(r.get("Min Power A", ""), source=src + " col=Min Power A")
             min_b, _ = _parse_power_cell(r.get("Min Power B", ""), source=src + " col=Min Power B")
@@ -410,9 +538,13 @@ def load_preset(guild_id: int, event_type: str, name: str) -> PresetBuffer | Non
                 max_players=_safe_int(r.get("Max Players", 0)),
                 max_phase1=_safe_int(r.get("Max Phase 1", 0)),
                 max_phase2=_safe_int(r.get("Max Phase 2", 0)),
+                max_phase3=_safe_int(r.get("Max Phase 3", 0)),
                 min_power_a=min_a,
                 min_power_b=min_b,
                 priority=_safe_int(r.get("Priority", 0)),
+                priority_phase1=_safe_int(r.get("Priority Phase 1", 0)),
+                priority_phase2=_safe_int(r.get("Priority Phase 2", 0)),
+                priority_phase3=_safe_int(r.get("Priority Phase 3", 0)),
             ))
         else:
             min_p, _ = _parse_power_cell(r.get("Min Power", ""), source=src + " col=Min Power")
@@ -421,15 +553,19 @@ def load_preset(guild_id: int, event_type: str, name: str) -> PresetBuffer | Non
                 max_players=_safe_int(r.get("Max Players", 0)),
                 max_phase1=_safe_int(r.get("Max Phase 1", 0)),
                 max_phase2=_safe_int(r.get("Max Phase 2", 0)),
+                max_phase3=_safe_int(r.get("Max Phase 3", 0)),
                 min_power_a=min_p,
                 min_power_b=0,
                 priority=_safe_int(r.get("Priority", 0)),
+                priority_phase1=_safe_int(r.get("Priority Phase 1", 0)),
+                priority_phase2=_safe_int(r.get("Priority Phase 2", 0)),
+                priority_phase3=_safe_int(r.get("Priority Phase 3", 0)),
             ))
             row_faction = str(r.get("Faction", "")).strip()
             if row_faction:
                 faction = row_faction
     return PresetBuffer(name=name, event_type=event_type, zones=zones,
-                        faction=faction, uses_phases=uses_phases)
+                        faction=faction, phase_count=phase_count)
 
 
 def list_presets(guild_id: int, event_type: str) -> list[str]:
@@ -477,21 +613,26 @@ def save_preset(guild_id: int, event_type: str, buf: PresetBuffer) -> bool:
         if str(row[0]).strip().lower() != buf.name.lower():
             kept.append(row)
     # Append buffer rows.
-    use_phases_cell = "TRUE" if buf.uses_phases else "FALSE"
+    phase_count_cell = str(buf.phase_count)
     for z in buf.zones:
         if event_type == "DS":
             kept.append([
                 buf.name, z.zone, str(z.max_players),
-                str(z.max_phase1), str(z.max_phase2),
-                str(z.min_power_a), str(z.min_power_b), str(z.priority),
-                use_phases_cell,
+                str(z.max_phase1), str(z.max_phase2), str(z.max_phase3),
+                str(z.min_power_a), str(z.min_power_b),
+                str(z.priority),
+                str(z.priority_phase1), str(z.priority_phase2), str(z.priority_phase3),
+                phase_count_cell,
             ])
         else:
             kept.append([
                 buf.name, z.zone, str(z.max_players),
-                str(z.max_phase1), str(z.max_phase2),
-                str(z.min_power_a), str(z.priority), buf.faction,
-                use_phases_cell,
+                str(z.max_phase1), str(z.max_phase2), str(z.max_phase3),
+                str(z.min_power_a),
+                str(z.priority),
+                str(z.priority_phase1), str(z.priority_phase2), str(z.priority_phase3),
+                buf.faction,
+                phase_count_cell,
             ])
 
     try:
@@ -580,7 +721,7 @@ def _build_editor_embed(buf: PresetBuffer, team_size_hint: int = _TEAM_SIZE_HINT
         for z in buf.zones:
             desc_lines.append(z.render_line(
                 buf.event_type, teams=teams,
-                uses_phases=buf.uses_phases,
+                phase_count=buf.phase_count,
             ))
     else:
         desc_lines.append("*No zones in this preset yet.*")

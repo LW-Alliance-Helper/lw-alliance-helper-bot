@@ -568,6 +568,12 @@ def _build_editor_embed(buf: PresetBuffer, team_size_hint: int = _TEAM_SIZE_HINT
         desc_lines.append(f"👥 Teams: **Team {teams} only** (floors shown match)")
     if buf.event_type == "CS":
         desc_lines.append(f"⚙️ Faction: {buf.faction}")
+    # Phase mode line surfaces the toggle state so officers can
+    # eyeball whether the preset is phase-aware without opening the
+    # button row.
+    desc_lines.append(
+        f"🔀 Mode: **{'Phases (P1 + P2)' if buf.uses_phases else 'Flat'}**"
+    )
     desc_lines.append("")
     if buf.zones:
         desc_lines.append("📋 **Zones:**")
@@ -604,24 +610,56 @@ def _build_editor_embed(buf: PresetBuffer, team_size_hint: int = _TEAM_SIZE_HINT
 
 
 class _ZoneEditModal(discord.ui.Modal):
-    """Modal for editing one zone's max/min/priority. Branches DS vs CS
-    on field count, and on DS branches further on whether the alliance
-    has both teams configured (#148) — Team A-only or Team B-only
-    alliances see only the floor that matters."""
+    """Modal for editing one zone's capacity / floors / priority.
+
+    Branches DS vs CS on field count, and on DS branches further on
+    whether the alliance has both teams configured (#148) — Team A-only
+    or Team B-only alliances see only the floor that matters.
+
+    Phase-aware presets (#152) swap the single Max Players field for
+    two explicit fields (Max Phase 1, Max Phase 2). Discord allows up
+    to 5 components per modal so phase-aware two-team DS sits right at
+    the cap (P1, P2, Min A, Min B, Priority).
+
+    There's no "remove zone" field — clearing a zone's numeric fields
+    and saving leaves the zone in the list with zero capacity, which
+    the roster builder skips. Removal-as-a-side-effect is intentional;
+    the modal stays focused on values, not deletion.
+    """
 
     def __init__(self, view: "_PresetEditorView", zone_name: str):
         super().__init__(title=f"Edit Zone: {zone_name}"[:45])
         self._view = view
         self._zone_name = zone_name
         existing = view.buf.find_zone(zone_name) or ZoneRow(zone=zone_name)
+        self._uses_phases = bool(view.buf.uses_phases)
 
-        self.max_input = discord.ui.TextInput(
-            label="Max Players",
-            placeholder="e.g. 4",
-            default=str(existing.max_players or ""),
-            required=False, max_length=4,
-        )
-        self.add_item(self.max_input)
+        if self._uses_phases:
+            self.max_input = None
+            self.max_phase1_input = discord.ui.TextInput(
+                label="Max Phase 1",
+                placeholder="e.g. 4",
+                default=str(existing.max_phase1 or ""),
+                required=False, max_length=4,
+            )
+            self.max_phase2_input = discord.ui.TextInput(
+                label="Max Phase 2",
+                placeholder="e.g. 2",
+                default=str(existing.max_phase2 or ""),
+                required=False, max_length=4,
+            )
+            self.add_item(self.max_phase1_input)
+            self.add_item(self.max_phase2_input)
+        else:
+            self.max_phase1_input = None
+            self.max_phase2_input = None
+            self.max_input = discord.ui.TextInput(
+                label="Max Players",
+                placeholder="e.g. 4",
+                default=str(existing.max_players or ""),
+                required=False, max_length=4,
+            )
+            self.add_item(self.max_input)
 
         # Resolve which DS teams the alliance runs so the modal only
         # asks for the relevant floors. The parent view snapshotted this
@@ -670,33 +708,51 @@ class _ZoneEditModal(discord.ui.Modal):
         )
         self.add_item(self.priority_input)
 
-        self.remove_input = discord.ui.TextInput(
-            label="Type 'remove' to drop this zone",
-            placeholder="leave blank to keep this zone",
-            required=False, max_length=10,
-        )
-        self.add_item(self.remove_input)
-
     async def on_submit(self, interaction: discord.Interaction):
-        if (self.remove_input.value or "").strip().lower() == "remove":
-            self._view.buf.remove_zone(self._zone_name)
-            await self._view.refresh(interaction, message=f"🗑️ Removed **{self._zone_name}**.")
-            return
-
-        try:
-            max_players = int((self.max_input.value or "0").strip() or 0)
-        except ValueError:
-            await interaction.response.send_message(
-                f"⚠️ Max Players must be a number — got `{self.max_input.value}`. "
-                f"Try again.",
-                ephemeral=True,
-            )
-            return
+        # Preserve existing values when the relevant field is hidden in
+        # this modal (e.g. Max Players when the preset is phase-aware,
+        # or vice versa) — keeps prior settings intact through a
+        # uses_phases toggle.
+        existing = self._view.buf.find_zone(self._zone_name) or ZoneRow(zone=self._zone_name)
+        max_phase1 = existing.max_phase1
+        max_phase2 = existing.max_phase2
+        if self._uses_phases:
+            try:
+                max_phase1 = int((self.max_phase1_input.value or "0").strip() or 0)
+            except ValueError:
+                await interaction.response.send_message(
+                    f"⚠️ Max Phase 1 must be a number — got "
+                    f"`{self.max_phase1_input.value}`. Try again.",
+                    ephemeral=True,
+                )
+                return
+            try:
+                max_phase2 = int((self.max_phase2_input.value or "0").strip() or 0)
+            except ValueError:
+                await interaction.response.send_message(
+                    f"⚠️ Max Phase 2 must be a number — got "
+                    f"`{self.max_phase2_input.value}`. Try again.",
+                    ephemeral=True,
+                )
+                return
+            # max_players stays at whatever it was; ignored at render
+            # time while uses_phases is True.
+            max_players = existing.max_players
+        else:
+            try:
+                max_players = int((self.max_input.value or "0").strip() or 0)
+            except ValueError:
+                await interaction.response.send_message(
+                    f"⚠️ Max Players must be a number — got `{self.max_input.value}`. "
+                    f"Try again.",
+                    ephemeral=True,
+                )
+                return
 
         # Refuse garbage in the power fields rather than silently zeroing —
         # a typo would otherwise persist as a "no floor" entry and the
         # eligibility filter would pass below-floor members through it.
-        existing = self._view.buf.find_zone(self._zone_name) or ZoneRow(zone=self._zone_name)
+        # (`existing` resolved above already.)
         if self._view.buf.event_type == "DS":
             # Hidden inputs (single-team alliances) preserve the stored
             # value rather than overwriting to 0 — keeps the door open for
@@ -743,6 +799,7 @@ class _ZoneEditModal(discord.ui.Modal):
         self._view.buf.upsert_zone(ZoneRow(
             zone=self._zone_name,
             max_players=max_players,
+            max_phase1=max_phase1, max_phase2=max_phase2,
             min_power_a=min_a, min_power_b=min_b,
             priority=priority,
         ))
@@ -764,6 +821,7 @@ class _ZoneEditModal(discord.ui.Modal):
                     values=ZoneRow(
                         zone=self._zone_name,
                         max_players=max_players,
+                        max_phase1=max_phase1, max_phase2=max_phase2,
                         min_power_a=min_a, min_power_b=min_b,
                         priority=priority,
                     ),
@@ -772,7 +830,7 @@ class _ZoneEditModal(discord.ui.Modal):
                     content=(
                         f"💡 **{self._zone_name}** has similar zones in this preset: "
                         f"{', '.join(siblings)}. Pick any to copy these same "
-                        f"Max / Min / Priority values to, or skip."
+                        f"settings to, or skip."
                     ),
                     view=apply_view,
                     ephemeral=True,
@@ -856,6 +914,8 @@ class _ApplyToSimilarView(discord.ui.View):
                 self._editor.buf.upsert_zone(ZoneRow(
                     zone=sibling,
                     max_players=self._values.max_players,
+                    max_phase1=self._values.max_phase1,
+                    max_phase2=self._values.max_phase2,
                     min_power_a=self._values.min_power_a,
                     min_power_b=self._values.min_power_b,
                     priority=self._values.priority,
@@ -1046,6 +1106,13 @@ class _PresetEditorView(discord.ui.View):
         # Action buttons
         add_btn   = discord.ui.Button(label="➕ Add zone", style=discord.ButtonStyle.secondary)
         rename_btn = discord.ui.Button(label="✏️ Rename", style=discord.ButtonStyle.secondary)
+        phases_btn = discord.ui.Button(
+            # Surface current state on the label so officers don't have
+            # to open the embed footer to tell which mode they're in.
+            label=("🔀 Phases: ON" if self.buf.uses_phases else "🔀 Phases: OFF"),
+            style=(discord.ButtonStyle.primary if self.buf.uses_phases
+                   else discord.ButtonStyle.secondary),
+        )
         save_btn  = discord.ui.Button(
             label="💾 Save preset",
             style=discord.ButtonStyle.success,
@@ -1064,6 +1131,26 @@ class _PresetEditorView(discord.ui.View):
                 await inter.response.send_message("⛔ Only the editor's owner can change this preset.", ephemeral=True); return
             await inter.response.send_modal(_RenameModal(self))
         rename_btn.callback = _rename
+
+        async def _toggle_phases(inter):
+            if inter.user.id != self.user_id:
+                await inter.response.send_message(
+                    "⛔ Only the editor's owner can change this preset.",
+                    ephemeral=True,
+                )
+                return
+            self.buf.uses_phases = not self.buf.uses_phases
+            self.buf.dirty = True
+            mode = "Phases" if self.buf.uses_phases else "Flat"
+            await self.refresh(
+                inter,
+                message=(
+                    f"🔀 Switched to **{mode}** mode. "
+                    "Phase capacities and member assignments unchanged on the "
+                    "DB side — toggle back any time without data loss."
+                ),
+            )
+        phases_btn.callback = _toggle_phases
 
         async def _save(inter):
             if inter.user.id != self.user_id:
@@ -1124,6 +1211,7 @@ class _PresetEditorView(discord.ui.View):
 
         self.add_item(add_btn)
         self.add_item(rename_btn)
+        self.add_item(phases_btn)
         self.add_item(save_btn)
         self.add_item(cancel_btn)
 

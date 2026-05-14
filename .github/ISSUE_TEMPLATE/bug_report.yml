@@ -31,7 +31,7 @@ body:
       label: Steps to reproduce
       description: What did you click / type, in order?
       placeholder: |
-        1. Ran `/desertstorm_draft`
+        1. Ran `/desertstorm draft`
         2. Picked Team A
         3. Picked 9pm ET
         4. ...
@@ -52,6 +52,6 @@ body:
     attributes:
       label: Which command or feature?
       description: Optional — helps us route the issue faster.
-      placeholder: e.g. /desertstorm_draft, train reminder, growth snapshot
+      placeholder: e.g. /desertstorm draft, train reminder, growth snapshot
     validations:
       required: false

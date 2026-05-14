@@ -125,24 +125,24 @@ Mail drafting, participation logging, and event lookups for both DS and CS.
 
 #### Draft mail flow
 
-- [ ] Run `/desertstorm` (and/or `/canyonstorm`). Note whether the overview embed gives a clear picture of the configuration.
-- [ ] **Run `/desertstorm_draft`.** The flow has four steps: Pick Team → Pick Time → Mail Template (Use as-is or Edit) → Preview, ending with a **Post & Copy** button.
+- [ ] Run `/desertstorm overview` (and/or `/canyonstorm overview`). Note whether the overview embed gives a clear picture of the configuration.
+- [ ] **Run `/desertstorm draft`.** The flow has four steps: Pick Team → Pick Time → Mail Template (Use as-is or Edit) → Preview, ending with a **Post & Copy** button.
   - Note whether each step's instruction is clear.
   - Note whether it is unambiguous whether the mail has been *posted* yet (vs. only saved as the template for next time).
   - Review the final Post & Copy output.
-- [ ] Repeat with `/canyonstorm_draft`. The CS draft groups zones under **Stage 1 / Stage 2 / Stage 3** headers and uses full zone names — *Data Center 1*, *Sample Warehouse 2*, *Defense System 1*, *Serum Factory 2*, etc. If you see abbreviated forms (*Dc1*, *Sw2*, *Ds1*, *Sf2*) instead, please flag it.
+- [ ] Repeat with `/canyonstorm draft`. The CS draft groups zones under **Stage 1 / Stage 2 / Stage 3** headers and uses full zone names — *Data Center 1*, *Sample Warehouse 2*, *Defense System 1*, *Serum Factory 2*, etc. If you see abbreviated forms (*Dc1*, *Sw2*, *Ds1*, *Sf2*) instead, please flag it.
 
 #### Participation logging
 
-- [ ] Run `/desertstorm_participation` (or `/canyonstorm_participation`) and complete a log. The configured questions will vary by alliance — note whether each question's wording feels natural for the data being entered.
+- [ ] Run `/desertstorm participation` (or `/canyonstorm participation`) and complete a log. The configured questions will vary by alliance — note whether each question's wording feels natural for the data being entered.
 - [ ] On a numeric question, try entering an invalid value (letters instead of a number). Note whether the error and recovery feel reasonable.
 - [ ] After completion, check the configured log channel and confirm the summary post looks right.
 
 #### Looking up past logs
 
-- [ ] Run `/desertstorm_log` with no date argument (defaults to today). Review the rendered output.
-- [ ] Run `/desertstorm_log April 14` (or any past date). Note whether the entry was found and rendered cleanly.
-- [ ] Repeat with `/canyonstorm_log` — same flow, same date argument.
+- [ ] Run `/desertstorm log` with no date argument (defaults to today). Review the rendered output.
+- [ ] Run `/desertstorm log April 14` (or any past date). Note whether the entry was found and rendered cleanly.
+- [ ] Repeat with `/canyonstorm log` — same flow, same date argument.
 
 ---
 
@@ -187,7 +187,7 @@ Once setup is confirmed, the relevant tasks are:
 
 - [ ] Run `/setup_members` to walk the roster-sync wizard. The final embed reports how many members were written on the initial sync.
 - [ ] Run `/sync_members` and verify the reported member count **matches the actual size of the test server** (excluding bots). If the count is `0` or wildly low, please flag it — it usually means the bot is missing a server-level permission.
-- [ ] Run `/desertstorm_remind` and `/canyonstorm_remind` to fire DM reminders. Review the DM body for tone and clarity. **The body is alliance-customisable** — if you re-run `/setup_desertstorm` and change the **Step 7 of 7 — Reminder DM** body, the next `/desertstorm_remind` should pick up the new text. Try `{name}` as a placeholder to confirm member-name substitution works.
+- [ ] Run `/desertstorm remind` and `/canyonstorm remind` to fire DM reminders. Review the DM body for tone and clarity. **The body is alliance-customisable** — if you re-run `/setup_desertstorm` and change the **Step 7 of 7 — Reminder DM** body, the next `/desertstorm remind` should pick up the new text. Try `{name}` as a placeholder to confirm member-name substitution works.
 - [ ] In `/survey_remind`, set up a **scheduled** reminder (DM-via-roster delivery) for a time within the next several minutes. Wait for it to fire. Review the DM body.
 - [ ] **Channel/thread destinations.** When a Premium guild's wizard asks for a channel (e.g. an announcement channel), there should be a **📢 Channel** / **🧵 Thread** chooser before the actual picker. Try both paths — pick a thread, run the wizard to completion, and verify the bot posts to the chosen thread.
 

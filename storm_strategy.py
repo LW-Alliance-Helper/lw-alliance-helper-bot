@@ -36,7 +36,6 @@ import re
 
 import discord
 from discord import app_commands
-from discord.ext import commands
 
 logger = logging.getLogger(__name__)
 
@@ -481,8 +480,8 @@ def _get_or_create_strategies_worksheet(guild_id: int, event_type: str):
     raised opening it — unconfigured / bad creds / deleted spreadsheet)."""
     import config
     # `config.get_spreadsheet` raises rather than returning None for
-    # unconfigured guilds. Catch broadly so /ds_strategy commands don't
-    # die with an unhandled traceback on a guild that hasn't run setup.
+    # unconfigured guilds. Catch broadly so /desertstorm strategy commands
+    # don't die with an unhandled traceback on a guild that hasn't run setup.
     try:
         sh = config.get_spreadsheet(guild_id)
     except Exception as e:
@@ -1856,11 +1855,8 @@ class _PresetEditorView(discord.ui.View):
         window; without this hook, buttons silently 404 with
         'Interaction failed' after timeout."""
         from wizard_registry import expire_view_message
-        hint = (
-            "/ds_strategy edit" if self.buf.event_type == "DS"
-            else "/cs_strategy edit"
-        )
-        await expire_view_message(self.message, command_hint=hint)
+        parent = "desertstorm" if self.buf.event_type == "DS" else "canyonstorm"
+        await expire_view_message(self.message, command_hint=f"/{parent} strategy edit")
 
 
 # ── Cog + slash command groups ───────────────────────────────────────────────
@@ -1886,6 +1882,20 @@ async def _open_editor(interaction: discord.Interaction, event_type: str, buf: P
         view.message = None
 
 
+async def open_editor_followup(
+    interaction: discord.Interaction, event_type: str, buf: PresetBuffer,
+):
+    """Open the preset editor via the interaction's followup (rather than
+    the initial response). Used by the setup wizard's `_offer_inline_create`
+    branch — the button click already consumed `interaction.response`, so
+    the editor has to land as a followup.
+    """
+    view = _PresetEditorView(interaction.guild_id, interaction.user.id, buf)
+    embed = _build_editor_embed(buf, teams=view.teams)
+    msg = await interaction.followup.send(embed=embed, view=view)
+    view.message = msg
+
+
 class _StrategyGroup(app_commands.Group):
     """Shared shape for DS and CS strategy slash command groups."""
 
@@ -1908,9 +1918,10 @@ class _StrategyGroup(app_commands.Group):
             )
         ]
         if name.lower() in existing:
+            parent = "desertstorm" if self.event_type == "DS" else "canyonstorm"
             await interaction.response.send_message(
                 f"⚠️ A preset named **{name}** already exists. "
-                f"Use `/{self.name.replace('_', ' ')} edit name:\"{name}\"` to modify it.",
+                f"Use `/{parent} strategy edit name:\"{name}\"` to modify it.",
                 ephemeral=True,
             )
             return
@@ -2032,9 +2043,9 @@ class _StrategyGroup(app_commands.Group):
             )
 
 
-def _build_ds_group() -> _StrategyGroup:
+def build_ds_strategy_group() -> _StrategyGroup:
     grp = _StrategyGroup(
-        name="ds_strategy",
+        name="strategy",
         description="Manage Desert Storm strategy presets",
         event_type="DS",
     )
@@ -2080,9 +2091,9 @@ def _build_ds_group() -> _StrategyGroup:
     return grp
 
 
-def _build_cs_group() -> _StrategyGroup:
+def build_cs_strategy_group() -> _StrategyGroup:
     grp = _StrategyGroup(
-        name="cs_strategy",
+        name="strategy",
         description="Manage Canyon Storm strategy presets",
         event_type="CS",
     )
@@ -2125,25 +2136,7 @@ def _build_cs_group() -> _StrategyGroup:
     return grp
 
 
-class StormStrategyCog(commands.Cog):
-    """Cog wrapping the DS / CS strategy slash command groups."""
-
-    def __init__(self, bot: commands.Bot):
-        self.bot = bot
-        self.ds_group = _build_ds_group()
-        self.cs_group = _build_cs_group()
-        bot.tree.add_command(self.ds_group)
-        bot.tree.add_command(self.cs_group)
-
-    async def cog_unload(self):
-        # When the cog reloads (rare), remove the groups so re-registration
-        # doesn't double them up.
-        try:
-            self.bot.tree.remove_command(self.ds_group.name)
-            self.bot.tree.remove_command(self.cs_group.name)
-        except Exception:
-            pass
-
-
-async def setup(bot: commands.Bot):
-    await bot.add_cog(StormStrategyCog(bot))
+# The strategy groups are registered by `storm_commands_root` as subgroups
+# under the `/desertstorm` and `/canyonstorm` parents. This module exposes
+# `build_ds_strategy_group` / `build_cs_strategy_group` for that root cog
+# to call; no slash commands are registered here directly.

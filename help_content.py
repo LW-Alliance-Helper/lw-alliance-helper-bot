@@ -107,17 +107,17 @@ HELP_CATEGORIES: dict[str, dict] = {
              "Configure Team rosters, log channel, public post channel, and "
              "mail template. Enable participation tracking and define exactly "
              "what to log: vote counts, sit-outs, custom questions."),
-            ("/desertstorm",
+            ("/desertstorm overview",
              "Show current rosters and the active mail template."),
-            ("/desertstorm_draft",
+            ("/desertstorm draft",
              "Step through team → time → template, preview, and post."),
-            ("/desertstorm_participation",
+            ("/desertstorm participation",
              "Run this week's participation log using your configured "
              "questions."),
-            ("/desertstorm_log [date]",
+            ("/desertstorm log [date]",
              "View a saved log entry (free: 4 most recent / 💎 Premium: full "
              "history)."),
-            ("/desertstorm_remind",
+            ("/desertstorm remind",
              "💎 DM the roster to participate this week."),
         ],
     },
@@ -133,17 +133,17 @@ HELP_CATEGORIES: dict[str, dict] = {
              "Configure Team rosters, log channel, public post channel, and "
              "mail template. Enable participation tracking and define exactly "
              "what to log: vote counts, sit-outs, custom questions."),
-            ("/canyonstorm",
+            ("/canyonstorm overview",
              "Show current rosters and the active mail template."),
-            ("/canyonstorm_draft",
+            ("/canyonstorm draft",
              "Step through team → time → template, preview, and post."),
-            ("/canyonstorm_participation",
+            ("/canyonstorm participation",
              "Run this week's participation log using your configured "
              "questions."),
-            ("/canyonstorm_log [date]",
+            ("/canyonstorm log [date]",
              "View a saved log entry (free: 4 most recent / 💎 Premium: full "
              "history)."),
-            ("/canyonstorm_remind",
+            ("/canyonstorm remind",
              "💎 DM the roster to participate this week."),
         ],
     },
@@ -237,7 +237,7 @@ HELP_CATEGORIES: dict[str, dict] = {
             ("Multiple named surveys",
              "Manage from `/survey` directly via Add / Edit / Remove."),
             ("DM-mode reminders",
-             "`/survey_remind`, `/desertstorm_remind`, `/canyonstorm_remind` "
+             "`/survey_remind`, `/desertstorm remind`, `/canyonstorm remind` "
              "all gain DM-via-roster delivery; survey reminders can also "
              "schedule recurring DMs."),
             ("✨ More",

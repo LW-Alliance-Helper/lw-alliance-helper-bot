@@ -2,10 +2,10 @@
 storm_log.py — DS and CS event logging
 
 Slash commands:
-  /desertstorm_participation — Log Desert Storm participation data
-  /canyonstorm_participation — Log Canyon Storm participation data
-  /desertstorm_log [date]    — View a Desert Storm log entry
-  /canyonstorm_log [date]    — View a Canyon Storm log entry
+  /desertstorm participation — Log Desert Storm participation data
+  /canyonstorm participation — Log Canyon Storm participation data
+  /desertstorm log [date]    — View a Desert Storm log entry
+  /canyonstorm log [date]    — View a Canyon Storm log entry
 
 Writes to the "DS-CS Sit-outs" tab in Google Sheets and posts a
 summary to the dedicated log thread configured for this guild.
@@ -23,8 +23,6 @@ import os
 from datetime import date
 
 import discord
-from discord import app_commands
-from discord.ext import commands
 from config import get_config
 import wizard_registry
 
@@ -400,7 +398,7 @@ async def run_log_flow(bot, channel, user, event_type):
     """
     is_ds        = event_type.upper() == "DS"
     event_label  = "Desert Storm" if is_ds else "Canyon Storm"
-    log_cmd      = "/desertstorm_participation" if is_ds else "/canyonstorm_participation"
+    log_cmd      = "/desertstorm participation" if is_ds else "/canyonstorm participation"
     setup_cmd    = "/setup_desertstorm"          if is_ds else "/setup_canyonstorm"
     guild_id     = channel.guild.id if hasattr(channel, "guild") and channel.guild else None
     cancel_event = asyncio.Event()
@@ -846,73 +844,33 @@ async def _guard(interaction: discord.Interaction) -> bool:
     return True
 
 
-# ── Cog ────────────────────────────────────────────────────────────────────────
+# ── Slash command handlers ────────────────────────────────────────────────────
+#
+# Registered by `storm_commands_root` under the `/desertstorm` and
+# `/canyonstorm` parent groups. The bodies stay here so the root cog
+# is a thin dispatcher.
 
-class LogCog(commands.Cog):
-    def __init__(self, bot):
-        self.bot = bot
 
-    @app_commands.command(
-        name="desertstorm_participation",
-        description="Log Desert Storm participation data",
-    )
-    async def desertstorm_participation(self, interaction: discord.Interaction):
-        if not await _guard(interaction):
-            return
-        if interaction.user.id in active_logs:
-            await interaction.response.send_message(
-                "⚠️ You already have an active log session. Use `/cancel` to stop it first.",
-                ephemeral=True,
-            )
-            return
-        await interaction.response.send_message("📋 Starting DS log...", ephemeral=True)
-        await run_log_flow(self.bot, interaction.channel, interaction.user, "DS")
+async def handle_storm_participation(bot, interaction: discord.Interaction, event_type: str) -> None:
+    if not await _guard(interaction):
+        return
+    if interaction.user.id in active_logs:
+        await interaction.response.send_message(
+            "⚠️ You already have an active log session. Use `/cancel` to stop it first.",
+            ephemeral=True,
+        )
+        return
+    label = "DS" if event_type == "DS" else "CS"
+    await interaction.response.send_message(f"📋 Starting {label} log...", ephemeral=True)
+    await run_log_flow(bot, interaction.channel, interaction.user, event_type)
 
-    @app_commands.command(
-        name="canyonstorm_participation",
-        description="Log Canyon Storm participation data",
-    )
-    async def canyonstorm_participation(self, interaction: discord.Interaction):
-        if not await _guard(interaction):
-            return
-        if interaction.user.id in active_logs:
-            await interaction.response.send_message(
-                "⚠️ You already have an active log session. Use `/cancel` to stop it first.",
-                ephemeral=True,
-            )
-            return
-        await interaction.response.send_message("📋 Starting CS log...", ephemeral=True)
-        await run_log_flow(self.bot, interaction.channel, interaction.user, "CS")
 
-    @app_commands.command(
-        name="desertstorm_log",
-        description="View a Desert Storm log entry (defaults to today)",
-    )
-    @app_commands.describe(date="Optional date, e.g. 'April 14' or '4/14' (defaults to today)")
-    async def desertstorm_log(self, interaction: discord.Interaction, date: str = None):
-        await _show_storm_log(interaction, "DS", date)
+async def handle_storm_log(bot, interaction: discord.Interaction, event_type: str, date: str | None = None) -> None:
+    await _show_storm_log(interaction, event_type, date)
 
-    @app_commands.command(
-        name="canyonstorm_log",
-        description="View a Canyon Storm log entry (defaults to today)",
-    )
-    @app_commands.describe(date="Optional date, e.g. 'April 14' or '4/14' (defaults to today)")
-    async def canyonstorm_log(self, interaction: discord.Interaction, date: str = None):
-        await _show_storm_log(interaction, "CS", date)
 
-    @app_commands.command(
-        name="desertstorm_remind",
-        description="💎 DM every roster member to participate in this week's Desert Storm",
-    )
-    async def desertstorm_remind(self, interaction: discord.Interaction):
-        await _send_storm_reminder(self.bot, interaction, "DS")
-
-    @app_commands.command(
-        name="canyonstorm_remind",
-        description="💎 DM every roster member to participate in this week's Canyon Storm",
-    )
-    async def canyonstorm_remind(self, interaction: discord.Interaction):
-        await _send_storm_reminder(self.bot, interaction, "CS")
+async def handle_storm_remind(bot, interaction: discord.Interaction, event_type: str) -> None:
+    await _send_storm_reminder(bot, interaction, event_type)
 
 
 async def _send_storm_reminder(bot, interaction: discord.Interaction, event_type: str):
@@ -1031,7 +989,7 @@ def _render_dm_body(template: str, *, name: str = "") -> str:
 
 
 async def _show_storm_log(interaction: discord.Interaction, event: str, date: str | None):
-    """Shared handler for /desertstorm_log and /canyonstorm_log."""
+    """Shared handler for the `log` subcommand under both storm parents."""
     if not await _guard(interaction):
         return
 
@@ -1105,7 +1063,3 @@ async def _show_storm_log(interaction: discord.Interaction, event: str, date: st
         lines.append(f"**Prior Sit-Out No {action_label}:** {entry.get('prior_no_request') or 'None'}")
 
     await interaction.followup.send("\n".join(lines))
-
-
-async def setup(bot: commands.Bot):
-    await bot.add_cog(LogCog(bot))

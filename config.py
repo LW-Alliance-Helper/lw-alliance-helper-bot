@@ -267,7 +267,7 @@ def init_db():
         # `templates_json` and `default_template` support multiple named
         # templates per (guild, event_type) for premium subscribers.
         # `dm_reminder_message` is the body of the Premium DM that fires when
-        # leadership runs `/desertstorm_remind` or `/canyonstorm_remind`;
+        # leadership runs `/desertstorm remind` or `/canyonstorm remind`;
         # empty string means "use the hardcoded default in storm_log.py".
         # Supports `{name}` placeholder.
         conn.execute("""
@@ -557,7 +557,7 @@ def init_db():
             ("participation_roster_name_col", "INTEGER DEFAULT 0"),
             ("participation_roster_alias_col","INTEGER DEFAULT -1"),
             ("participation_roster_start_row","INTEGER DEFAULT 2"),
-            # Premium /desertstorm_remind / /canyonstorm_remind DM body
+            # Premium /desertstorm remind / /canyonstorm remind DM body
             # (empty → hardcoded default in storm_log.py).
             ("dm_reminder_message",           "TEXT    DEFAULT ''"),
             # Which DS teams the alliance runs (#148) — 'both' | 'A' | 'B'.
@@ -586,7 +586,7 @@ def init_db():
             # (0=Monday..6=Sunday); lead time in days; time-of-day to
             # fire the sign-up post (HH:MM in guild's local timezone).
             # event_day_of_week = -1 means "scheduling not configured;
-            # use manual /storm_post_signup."
+            # use the parent group's manual post_signup subcommand."
             ("event_day_of_week",       "INTEGER DEFAULT -1"),
             ("signup_lead_days",        "INTEGER DEFAULT 5"),
             ("signup_time",             "TEXT    DEFAULT ''"),
@@ -1369,7 +1369,7 @@ def save_storm_config(guild_id: int, event_type: str, tab_name: str,
     `timezone` is used at display time to render local clock equivalents.
 
     `dm_reminder_message` is the body of the Premium DM that fires when
-    leadership runs `/desertstorm_remind` or `/canyonstorm_remind`. Empty
+    leadership runs `/desertstorm remind` or `/canyonstorm remind`. Empty
     string means "use the hardcoded default in storm_log.py". Supports the
     `{name}` placeholder.
 
@@ -1572,8 +1572,8 @@ def save_structured_storm_config(
       * signup_lead_days  — number of days before the event to fire
         the sign-up post. Defaults to 5 if not set.
       * signup_time       — HH:MM in the guild's tz when to fire.
-        Empty string disables auto-fire (manual /storm_post_signup
-        remains usable).
+        Empty string disables auto-fire (manual post_signup under the
+        parent group remains usable).
     """
     if sub_mode not in ("pool", "paired"):
         sub_mode = "pool"
@@ -1640,8 +1640,8 @@ def save_structured_storm_config(
 
 # ── Storm sign-up votes (#123) ───────────────────────────────────────────────
 #
-# Votes captured from the SignupView buttons (and from the `/storm_signups`
-# on-behalf path) UPSERT into `storm_signups`. The View itself imports these
+# Votes captured from the SignupView buttons (and from the `signups` officer
+# view's on-behalf path) UPSERT into `storm_signups`. The View itself imports these
 # helpers from the click handler; the officer view also reads from here.
 
 _VALID_STORM_VOTES = {"a", "b", "either", "cannot"}

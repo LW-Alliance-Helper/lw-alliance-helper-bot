@@ -189,12 +189,6 @@ async def on_ready():
     if "train" not in bot.extensions:
         await bot.load_extension("train")
         print(f"[INFO] Train cog loaded")
-    if "storm" not in bot.extensions:
-        await bot.load_extension("storm")
-        print(f"[INFO] Storm cog loaded")
-    if "storm_log" not in bot.extensions:
-        await bot.load_extension("storm_log")
-        print(f"[INFO] Log cog loaded")
     if "survey" not in bot.extensions:
         await bot.load_extension("survey")
         print(f"[INFO] Survey cog loaded")
@@ -210,21 +204,12 @@ async def on_ready():
     if "export_import_cog" not in bot.extensions:
         await bot.load_extension("export_import_cog")
         print(f"[INFO] Export/Import cog loaded")
-    if "storm_strategy" not in bot.extensions:
-        await bot.load_extension("storm_strategy")
-        print(f"[INFO] Storm Strategy cog loaded")
-    if "storm_member_rules" not in bot.extensions:
-        await bot.load_extension("storm_member_rules")
-        print(f"[INFO] Storm Member Rules cog loaded")
-    if "storm_signup_post" not in bot.extensions:
-        await bot.load_extension("storm_signup_post")
-        print(f"[INFO] Storm Sign-Up Post cog loaded")
-    if "storm_officer_view" not in bot.extensions:
-        await bot.load_extension("storm_officer_view")
-        print(f"[INFO] Storm Officer View cog loaded")
-    if "storm_attendance" not in bot.extensions:
-        await bot.load_extension("storm_attendance")
-        print(f"[INFO] Storm Attendance cog loaded")
+    # Storm commands all live under `/desertstorm` and `/canyonstorm`
+    # — one root cog registers both parent groups and dispatches into
+    # the per-feature handler modules (storm.py, storm_log.py, etc.).
+    if "storm_commands_root" not in bot.extensions:
+        await bot.load_extension("storm_commands_root")
+        print(f"[INFO] Storm commands root cog loaded")
 
     # Sync slash commands globally so they work in any server. Commands
     # decorated with `guilds=[...]` are excluded from the global sync;

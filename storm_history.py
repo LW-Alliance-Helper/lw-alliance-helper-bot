@@ -1,7 +1,7 @@
 """
 Roster history browser (#135 — Step 8 of #38).
 
-`/ds_strategy roster_history [date]` and `/cs_strategy roster_history
+`/desertstorm strategy roster_history [date]` and `/canyonstorm strategy roster_history
 [date]` (registered via storm_strategy's existing app_commands.Group)
 let leadership browse past structured rosters with attendance overlaid.
 
@@ -265,11 +265,12 @@ def render_event_embed(
               else discord.Color.dark_orange(),
     )
 
+    parent = "desertstorm" if event_type == "DS" else "canyonstorm"
     if not slots:
         embed.description = (
             "_No structured roster found for this date. Check the date "
-            "format or run `/storm_signups` + Approve & Post to build a "
-            "roster for this event._"
+            f"format or run `/{parent} signups` + Approve & Post to build "
+            "a roster for this event._"
         )
         return embed
 
@@ -343,7 +344,7 @@ def render_event_embed(
         )
     else:
         embed.set_footer(
-            text="Attendance not yet recorded. Run /storm_attendance to add it."
+            text=f"Attendance not yet recorded. Run /{parent} attendance to add it."
         )
     return embed
 
@@ -357,9 +358,10 @@ def render_history_list_embed(
         color=discord.Color.dark_gold() if event_type == "DS"
               else discord.Color.dark_orange(),
     )
+    parent = "desertstorm" if event_type == "DS" else "canyonstorm"
     if not dates:
         embed.description = (
-            "_No structured rosters posted yet. Use `/storm_signups` to build "
+            f"_No structured rosters posted yet. Use `/{parent} signups` to build "
             "a roster + Approve & Post, and it'll show up here._"
         )
         return embed

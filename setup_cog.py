@@ -5097,6 +5097,44 @@ async def run_storm_setup(interaction: discord.Interaction, bot, event_type: str
                         inline=False)
     embed.set_footer(text=f"Run /{cmd_name} again to update.")
     await channel.send(embed=embed)
+
+    # ── Inline "post first sign-up" offer (#144) ─────────────────────────
+    #
+    # Fires only when the structured flow is opted in, a sign-up channel
+    # is configured, and no sign-up post has been recorded yet for this
+    # guild + event type. Whether auto-scheduling was configured or
+    # skipped, this gives the alliance one fully-live sign-up post right
+    # at the end of setup — the discovery surface #144 is closing.
+    if (
+        structured_cfg["structured_flow_enabled"]
+        and structured_cfg.get("signup_channel_id")
+    ):
+        try:
+            import config as _config
+            with _config._get_conn() as conn:
+                already_posted = conn.execute(
+                    "SELECT 1 FROM storm_registration_posts "
+                    "WHERE guild_id = ? AND event_type = ? LIMIT 1",
+                    (guild_id, event_type),
+                ).fetchone() is not None
+        except Exception:
+            already_posted = True  # err on the side of not nagging
+        if not already_posted:
+            parent = "desertstorm" if event_type == "DS" else "canyonstorm"
+            post_offer = _InlinePostFirstSignupOffer(
+                owner_id=user.id, bot=bot, guild_id=guild_id,
+                event_type=event_type, parent=parent, label=label,
+            )
+            post_offer.message = await channel.send(
+                f"📣 Want to post your first {label} sign-up now? "
+                f"It'll land in <#{structured_cfg['signup_channel_id']}> "
+                f"with vote buttons members can click. You can also wait "
+                f"for the auto-schedule to fire it (if you set one up) "
+                f"or run `/{parent} post_signup` later.",
+                view=post_offer,
+            )
+            await wait_view_or_cancel(post_offer, cancel_event)
+
     wizard_registry.unregister(user.id, cancel_event)
     print(f"[SETUP] {label} config saved for guild {guild_id}")
 
@@ -5438,6 +5476,7 @@ async def _ask_signup_schedule(
     label: str, cmd_name: str,
     current_dow: int, current_lead: int, current_time: str,
     tz_label: str = "",
+    event_type: str = "DS",
 ) -> dict | None:
     """Three-step Premium sub-flow for the auto-scheduler config:
         * Event day-of-week (dropdown; or "Skip auto-scheduling")
@@ -5446,9 +5485,10 @@ async def _ask_signup_schedule(
 
     Returns `{"dow": int, "lead": int, "time": str}`. `dow = -1`
     indicates the alliance explicitly opted out of auto-scheduling
-    (manual `/storm_post_signup` remains usable). Returns None on
+    (manual `/<parent> post_signup` remains usable). Returns None on
     cancel or timeout — callers should propagate the None.
     """
+    parent = "desertstorm" if event_type == "DS" else "canyonstorm"
     import wizard_registry
 
     # ── Step 1: day of week ──
@@ -5465,7 +5505,7 @@ async def _ask_signup_schedule(
                 for i, name in enumerate(_DOW_NAMES)
             ]
             options.append(discord.SelectOption(
-                label="Skip auto-scheduling (use /storm_post_signup manually)",
+                label=f"Skip auto-scheduling (use /{parent} post_signup manually)",
                 value="-1",
                 default=(current < 0),
             ))
@@ -5484,7 +5524,7 @@ async def _ask_signup_schedule(
                 if self.selected < 0:
                     await wizard_registry.safe_edit_response(
                         inter,
-                        content="✅ Auto-scheduling skipped — `/storm_post_signup` will still work manually.",
+                        content=f"✅ Auto-scheduling skipped — `/{parent} post_signup` will still work manually.",
                         view=self,
                     )
                 else:
@@ -5542,7 +5582,7 @@ async def _ask_signup_schedule(
 
     # ── Step 3: sign-up time ──
     # Empty string is a meaningful value here: "auto-schedule is set up
-    # but no auto-fire" — leadership uses /storm_post_signup manually
+    # but no auto-fire" — leadership uses /<parent> post_signup manually
     # for posting. Leave the time empty to express that.
     #
     # Time copy follows the existing convention used by train / birthday
@@ -5826,7 +5866,7 @@ async def _ask_judicator_role(
     await channel.send(
         "**Judicator Role (💎 Premium — CS only)**\n"
         "Pick the Discord role the bot should apply to members tagged "
-        "as Judicator candidates (via `/cs_member_rule set_member_role`) "
+        "as Judicator candidates (via `/canyonstorm member_rule set_member_role`) "
         "after a CS roster is approved and matchmaking reveals "
         "**Rulebringers**. Skip if you don't use this — the bot won't "
         "apply any role.",
@@ -5840,6 +5880,214 @@ async def _ask_judicator_role(
         await channel.send(f"⏰ Timed out. Run `/{cmd_name}` to start again.")
         return None
     return int(view.selected)
+
+
+# ── Inline-create offers for the structured-flow setup wizard (#144) ─────────
+#
+# Each offer is a Yes/No view posted after the relevant tab name is saved.
+# It only appears when the underlying table is empty — alliances running
+# setup a second time see their saved values surface as defaults but don't
+# get re-prompted to create the first row.
+
+
+class _InlineCreatePresetOffer(discord.ui.View):
+    """Posted after the Strategy Presets tab name is saved (and the
+    alliance has zero presets). 'Create now' opens the same preset
+    editor as `/<parent> strategy create`."""
+
+    def __init__(self, *, owner_id: int, event_type: str, parent: str,
+                 default_name: str = "Standard"):
+        super().__init__(timeout=300)
+        self.owner_id     = owner_id
+        self.event_type   = event_type
+        self.parent       = parent
+        self.default_name = default_name
+        self.choice: str | None = None
+        self.message: discord.Message | None = None
+
+    async def interaction_check(self, inter: discord.Interaction) -> bool:
+        if inter.user.id != self.owner_id:
+            await inter.response.send_message(
+                "Only the user running setup can pick.",
+                ephemeral=True,
+            )
+            return False
+        return True
+
+    @discord.ui.button(label="✨ Create my first preset now",
+                       style=discord.ButtonStyle.primary)
+    async def create_btn(self, inter: discord.Interaction, _btn):
+        self.choice = "create"
+        for child in self.children:
+            child.disabled = True
+        await inter.response.edit_message(view=self)
+        try:
+            from storm_strategy import seed_default_preset, open_editor_followup
+            buf = seed_default_preset(self.default_name, self.event_type)
+            buf.dirty = True
+            await open_editor_followup(inter, self.event_type, buf)
+        except Exception as e:
+            await inter.followup.send(
+                f"⚠️ Couldn't open the preset editor inline: {e}. "
+                f"Run `/{self.parent} strategy create` to retry.",
+                ephemeral=True,
+            )
+        self.stop()
+
+    @discord.ui.button(label="Skip for now", style=discord.ButtonStyle.secondary)
+    async def skip_btn(self, inter: discord.Interaction, _btn):
+        self.choice = "skip"
+        for child in self.children:
+            child.disabled = True
+        await inter.response.edit_message(view=self)
+        self.stop()
+
+    async def on_timeout(self) -> None:
+        from wizard_registry import expire_view_message
+        await expire_view_message(
+            self.message,
+            command_hint=f"/{self.parent} strategy create",
+        )
+
+
+class _InlineCreateMemberRuleOffer(discord.ui.View):
+    """Posted after the Member Rules tab name is saved (and the alliance
+    has zero rules). 'Add one now' opens a streamlined modal for a
+    power-band rule — the most-common rule type. Per-member rules (which
+    need a Discord member picker) remain available via the slash commands."""
+
+    def __init__(self, *, owner_id: int, event_type: str, parent: str):
+        super().__init__(timeout=300)
+        self.owner_id   = owner_id
+        self.event_type = event_type
+        self.parent     = parent
+        self.choice: str | None = None
+        self.message: discord.Message | None = None
+
+    async def interaction_check(self, inter: discord.Interaction) -> bool:
+        if inter.user.id != self.owner_id:
+            await inter.response.send_message(
+                "Only the user running setup can pick.",
+                ephemeral=True,
+            )
+            return False
+        return True
+
+    @discord.ui.button(label="✨ Add a power-band rule now",
+                       style=discord.ButtonStyle.primary)
+    async def create_btn(self, inter: discord.Interaction, _btn):
+        self.choice = "create"
+        for child in self.children:
+            child.disabled = True
+        # NOTE: we don't edit the message here — show_modal must be the
+        # first response to the click interaction. The offer view stays
+        # active visually until the modal returns; that's fine, the
+        # modal flow is short.
+        try:
+            from storm_member_rules import InlinePowerBandModal
+            await inter.response.send_modal(InlinePowerBandModal(self.event_type))
+        except Exception as e:
+            await inter.response.send_message(
+                f"⚠️ Couldn't open the rule modal: {e}. Run "
+                f"`/{self.parent} member_rule set_power_band` to retry.",
+                ephemeral=True,
+            )
+        self.stop()
+
+    @discord.ui.button(label="Skip for now", style=discord.ButtonStyle.secondary)
+    async def skip_btn(self, inter: discord.Interaction, _btn):
+        self.choice = "skip"
+        for child in self.children:
+            child.disabled = True
+        await inter.response.edit_message(view=self)
+        self.stop()
+
+    async def on_timeout(self) -> None:
+        from wizard_registry import expire_view_message
+        await expire_view_message(
+            self.message,
+            command_hint=f"/{self.parent} member_rule set_power_band",
+        )
+
+
+class _InlinePostFirstSignupOffer(discord.ui.View):
+    """Posted at the end of /setup_desertstorm / /setup_canyonstorm when
+    the structured flow is opted in, a sign-up channel is configured,
+    and no sign-up post has been recorded yet. 'Post now' fires
+    `post_registration` against the next configured event date."""
+
+    def __init__(self, *, owner_id: int, bot, guild_id: int,
+                 event_type: str, parent: str, label: str):
+        super().__init__(timeout=300)
+        self.owner_id   = owner_id
+        self.bot        = bot
+        self.guild_id   = guild_id
+        self.event_type = event_type
+        self.parent     = parent
+        self.label      = label
+        self.choice: str | None = None
+        self.message: discord.Message | None = None
+
+    async def interaction_check(self, inter: discord.Interaction) -> bool:
+        if inter.user.id != self.owner_id:
+            await inter.response.send_message(
+                "Only the user who ran setup can pick.",
+                ephemeral=True,
+            )
+            return False
+        return True
+
+    @discord.ui.button(label="📣 Post my first sign-up now",
+                       style=discord.ButtonStyle.primary)
+    async def post_btn(self, inter: discord.Interaction, _btn):
+        self.choice = "post"
+        for child in self.children:
+            child.disabled = True
+        await inter.response.edit_message(view=self)
+        try:
+            from storm_date_helpers import next_event_date
+            from storm_signup_post import post_registration, _format_post_result_message
+            from config import get_structured_storm_config
+            target_date = next_event_date(self.guild_id, self.event_type)
+            structured  = get_structured_storm_config(self.guild_id, self.event_type)
+            guild = self.bot.get_guild(self.guild_id)
+            if guild is None:
+                await inter.followup.send(
+                    "⚠️ The bot can't see this guild right now. Try again "
+                    f"with `/{self.parent} post_signup`.",
+                    ephemeral=True,
+                )
+                return
+            result = await post_registration(
+                self.bot, guild, self.event_type, target_date,
+                structured=structured,
+            )
+            await inter.followup.send(
+                _format_post_result_message(self.event_type, target_date, result),
+                ephemeral=True,
+            )
+        except Exception as e:
+            await inter.followup.send(
+                f"⚠️ Sign-up post failed: {e}. Run "
+                f"`/{self.parent} post_signup` to retry.",
+                ephemeral=True,
+            )
+        self.stop()
+
+    @discord.ui.button(label="Skip — I'll post later", style=discord.ButtonStyle.secondary)
+    async def skip_btn(self, inter: discord.Interaction, _btn):
+        self.choice = "skip"
+        for child in self.children:
+            child.disabled = True
+        await inter.response.edit_message(view=self)
+        self.stop()
+
+    async def on_timeout(self) -> None:
+        from wizard_registry import expire_view_message
+        await expire_view_message(
+            self.message,
+            command_hint=f"/{self.parent} post_signup",
+        )
 
 
 # ── Structured storm flow setup sub-flow (#38 + #54) ─────────────────────────
@@ -6013,11 +6261,12 @@ async def _run_structured_flow_setup_step(
                 f"⚠️ Your previously configured {label} sign-up channel no longer "
                 "exists. Pick a new one below."
             )
+        parent_cmd = "desertstorm" if event_type == "DS" else "canyonstorm"
         await channel.send(
             f"**{label} Sign-Up Channel**\n"
             "The bot will auto-post a sign-up poll here each week. Members click "
             "buttons to register their availability; leadership opens the officer "
-            f"view via `/storm_signups`.",
+            f"view via `/{parent_cmd} signups`.",
             view=signup_ch_view,
         )
         await wait_view_or_cancel(signup_ch_view, cancel_event)
@@ -6031,7 +6280,7 @@ async def _run_structured_flow_setup_step(
         # Auto-schedule (#131) — Day-of-week + lead days + time-of-day.
         # All three together drive the storm_signup_scheduler loop. The
         # alliance can skip all three (leave defaults) and continue
-        # running `/storm_post_signup` manually.
+        # running `/<parent> post_signup` manually.
         # Resolve tz_label for the time-of-day prompt so the wizard
         # shows "in your timezone: ET (America/New_York)" alongside the
         # 12-hour example — matches the train / birthday / shiny
@@ -6050,6 +6299,7 @@ async def _run_structured_flow_setup_step(
             current_lead=result.get("signup_lead_days", 5),
             current_time=result.get("signup_time", ""),
             tz_label=tz_label,
+            event_type=event_type,
         )
         if sched_result is None:
             return None
@@ -6155,28 +6405,125 @@ async def _run_structured_flow_setup_step(
             result["power_refresh_dm_enabled"] = bool(nudge_view.selected)
 
     # ── Always-ask: preset library + member rules tab names (free + Premium) ──
+    #
+    # Free-tier alliances still get strategy presets + member rules; the
+    # Premium gates above (registration post / officer view / roster builder)
+    # are what differentiate the tiers. Each block (#144):
+    #   1. Posts an explainer so officers know what the concept IS.
+    #   2. Asks for the tab name via `ask_keep_or_change`.
+    #   3. If the alliance has zero rows in that table, offers an inline
+    #      "create your first one now" branch so the new concept is
+    #      immediately reachable.
+    parent = "desertstorm" if event_type == "DS" else "canyonstorm"
     from config import default_structured_tab
-    for tab_key, label_text in (
-        ("strategies_tab",   "Strategy Presets"),
-        ("member_rules_tab", "Member Rules"),
-    ):
-        tab_default = default_structured_tab(event_type, tab_key)
-        picked = await ask_keep_or_change(
-            channel,
-            f"**{label_text} Tab**\n"
-            f"Which Google Sheet tab should store {label} {label_text.lower()}? "
-            f"The bot creates and maintains this tab — leave the default if you "
-            f"don't have a preference.",
-            default=tab_default,
-            current=result.get(tab_key, ""),
-            modal_title=f"{label_text} Tab Name",
-            modal_label="Tab name",
-            timeout_cmd=cmd_name,
-            cancel_event=cancel_event,
+
+    # ── Strategy Presets ────────────────────────────────────────────────
+    await channel.send(
+        "**Strategy Presets**\n"
+        "A strategy preset is a saved zone layout — which zones exist, "
+        "how many spots each holds, and (optionally) per-zone power floors "
+        f"for {label}. When leadership builds a roster, they pick which "
+        "preset to apply; the bot uses the preset to gate eligibility and "
+        "lay out the team. Manage presets with "
+        f"`/{parent} strategy create / edit / list / apply`."
+    )
+    picked = await ask_keep_or_change(
+        channel,
+        f"**Strategy Presets Tab**\n"
+        f"Which Google Sheet tab should store {label} strategy presets? "
+        f"The bot creates and maintains this tab — leave the default if "
+        f"you don't have a preference.",
+        default=default_structured_tab(event_type, "strategies_tab"),
+        current=result.get("strategies_tab", ""),
+        modal_title="Strategy Presets Tab Name",
+        modal_label="Tab name",
+        timeout_cmd=cmd_name,
+        cancel_event=cancel_event,
+    )
+    if picked is None:
+        return None
+    result["strategies_tab"] = picked
+
+    # Inline-create offer (only when the alliance has no presets yet).
+    # An unconfigured Sheet (or transient gspread failure) here means the
+    # offer is shown unconditionally — that's the same behaviour the
+    # `/<parent> strategy list` command falls back to, and it's the
+    # less-bad failure mode (offer one extra time vs. miss the discovery
+    # surface entirely for a guild that genuinely has no presets).
+    try:
+        import storm_strategy as ss
+        existing_presets = await asyncio.to_thread(
+            ss.list_presets, guild_id, event_type,
         )
-        if picked is None:
+    except Exception:
+        existing_presets = []
+    if not existing_presets:
+        preset_offer = _InlineCreatePresetOffer(
+            owner_id=user.id, event_type=event_type, parent=parent,
+        )
+        preset_offer.message = await channel.send(
+            f"Want to create your first {label} preset now? You can also "
+            f"do this later with `/{parent} strategy create`.",
+            view=preset_offer,
+        )
+        await wait_view_or_cancel(preset_offer, cancel_event)
+        if getattr(preset_offer, "cancelled", False):
             return None
-        result[tab_key] = picked
+        # Either choice is fine — proceed regardless. A timeout also
+        # proceeds; the on_timeout hook strips the buttons.
+
+    # ── Member Rules ────────────────────────────────────────────────────
+    await channel.send(
+        "**Member Rules**\n"
+        "Member rules tell the roster builder how to treat individual "
+        "members. Two types:\n"
+        "• **Power-band** — `members ≥ 250M are eligible for Power Tower`. "
+        "Primary rule type; reads against the power column you configured "
+        "earlier.\n"
+        "• **Per-member** — escape hatch for special cases: "
+        f"`Alice always plays Team A`, `Bob is our Judicator candidate`. "
+        f"Add rules later with `/{parent} member_rule set_power_band` "
+        "/ `set_member_team` / `set_member_zone` / `set_member_role`."
+    )
+    picked = await ask_keep_or_change(
+        channel,
+        f"**Member Rules Tab**\n"
+        f"Which Google Sheet tab should store {label} member rules? "
+        f"The bot creates and maintains this tab — leave the default if "
+        f"you don't have a preference.",
+        default=default_structured_tab(event_type, "member_rules_tab"),
+        current=result.get("member_rules_tab", ""),
+        modal_title="Member Rules Tab Name",
+        modal_label="Tab name",
+        timeout_cmd=cmd_name,
+        cancel_event=cancel_event,
+    )
+    if picked is None:
+        return None
+    result["member_rules_tab"] = picked
+
+    try:
+        import storm_member_rules as smr
+        existing_rules = await asyncio.to_thread(
+            smr.list_rules, guild_id, event_type,
+        )
+    except Exception:
+        existing_rules = []
+    if not existing_rules:
+        rule_offer = _InlineCreateMemberRuleOffer(
+            owner_id=user.id, event_type=event_type, parent=parent,
+        )
+        rule_offer.message = await channel.send(
+            f"Want to add your first {label} rule now? The button opens "
+            f"a quick modal for a power-band rule (the most common type); "
+            f"per-member rules need a Discord member picker, so add those "
+            f"later via `/{parent} member_rule set_member_team` (or "
+            f"`set_member_zone` / `set_member_role`).",
+            view=rule_offer,
+        )
+        await wait_view_or_cancel(rule_offer, cancel_event)
+        if getattr(rule_offer, "cancelled", False):
+            return None
 
     return result
 

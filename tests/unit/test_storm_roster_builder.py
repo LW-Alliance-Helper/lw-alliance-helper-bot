@@ -1957,7 +1957,8 @@ class TestRostersTabHeaderMigration:
 
     def test_old_header_rewritten_in_place(self, fake_env):
         fake, gid = fake_env
-        # Seed an old-shape rosters_tab — the pre-#132 9-column header.
+        # Seed an old-shape rosters_tab — the pre-#132 9-column header
+        # (no `Paired With`, no `Phase`).
         old_rosters = fake.add_worksheet("DS Rosters")
         old_rosters._rows = [
             ["Event Date", "Team", "Zone", "Member", "Role",
@@ -1967,7 +1968,9 @@ class TestRostersTabHeaderMigration:
              "300000000", "1", "", ""],
         ]
 
-        # Build a session and finalise — header should migrate.
+        # Build a session and finalise — header should migrate AND the
+        # existing data row should shift so each value lands under the
+        # same column name in the new header.
         members = {
             "1001": {"key": "1001", "name": "Alice", "discord_id": "1001",
                      "power": 412_000_000, "not_on_discord": False},
@@ -1981,10 +1984,22 @@ class TestRostersTabHeaderMigration:
 
         new_header = old_rosters._rows[0]
         assert "Paired With" in new_header
+        assert "Phase" in new_header
         # Migrated header matches the canonical shape.
         assert new_header == srb._ROSTERS_HEADER
-        # Prior data row preserved (header migration only touches row 1).
-        assert old_rosters._rows[1][3] == "Old"
+        # Prior data row preserved AND re-aligned to the new column
+        # order. `Member` is at index 4 in the new shape (after Phase
+        # was inserted at idx 2); without the row shift the migration
+        # would silently corrupt every column-name read.
+        member_idx = srb._ROSTERS_HEADER.index("Member")
+        zone_idx = srb._ROSTERS_HEADER.index("Zone")
+        phase_idx = srb._ROSTERS_HEADER.index("Phase")
+        prior_row = old_rosters._rows[1]
+        assert prior_row[member_idx] == "Old"
+        assert prior_row[zone_idx] == "Power Tower"
+        # Pre-#152 rows get phase "1" so loaders can join on phase
+        # without seeing blanks.
+        assert prior_row[phase_idx] == "1"
 
 
 class TestFactionRolesSchemaAndApply:

@@ -828,14 +828,17 @@ def _render_zone_line(session: RosterBuilderSession, zone_name: str) -> str:
     z = session.preset.find_zone(zone_name)
     if z is None:
         return f"• {zone_name} (?/?)"
-    # Capacity readout. Phase-aware presets show both phases' counts;
-    # flat presets show the single max_players count as before.
+    # Capacity readout. Phase-aware presets show every phase's count;
+    # flat presets show the single max_players count as before. Walks
+    # `iter_phases()` so 3-phase presets include P3 — hardcoding P1/P2
+    # left CS officers blind to Phase 3 fill state.
     if session.is_phase_aware:
-        p1_count = session.zone_member_count(zone_name, phase=1)
-        p1_cap   = int(z.max_phase1)
-        p2_count = session.zone_member_count(zone_name, phase=2)
-        p2_cap   = int(z.max_phase2)
-        cap_readout = f"P1: {p1_count}/{p1_cap}, P2: {p2_count}/{p2_cap}"
+        parts = [
+            f"P{p}: {session.zone_member_count(zone_name, phase=p)}/"
+            f"{int(z.max_for_phase(p))}"
+            for p in session.iter_phases()
+        ]
+        cap_readout = ", ".join(parts)
         # Status reflects the currently-selected phase only — toggling
         # phases re-colours the row, so officers can see "what's full
         # in the phase I'm editing right now."
@@ -953,8 +956,18 @@ def _render_builder_embed(session: RosterBuilderSession) -> discord.Embed:
             lines.append("🪑 **Subs**: _(none)_")
     lines.append("")
 
-    total_assigned = sum(len(v) for v in session.assignments.values())
-    total_capacity = sum(int(z.max_players) for z in session.preset.zones)
+    # Sum across every phase the preset declares. On flat presets this
+    # collapses to the original Phase 1 / max_players counts; on phase-
+    # aware presets the gauge sums P1+P2(+P3) assignments and the
+    # per-phase capacities so the readout matches reality (the prior
+    # code summed only Phase 1 and divided by `max_players` which is
+    # unset for phase-aware zones — produced "Filled: 2 / 0").
+    total_assigned = sum(
+        len(zone_members)
+        for phase in session.iter_phases()
+        for zone_members in session.assignments_for_phase(phase).values()
+    )
+    total_capacity = session.preset.total_capacity()
     lines.append(f"📊 **Filled:** {total_assigned} / {total_capacity}")
 
     selected = session.selected_zone
@@ -1144,9 +1157,12 @@ class RosterBuilderView(discord.ui.View):
         action_row = 3 if s.is_phase_aware else 2
         final_row = 4 if s.is_phase_aware else 3
 
-        # Row 0 — Phase navigation (phase-aware presets only).
+        # Row 0 — Phase navigation (phase-aware presets only). Walks
+        # `iter_phases()` so 3-phase presets get a Phase 3 button.
+        # Hardcoding `(1, 2)` left CS officers unable to edit Phase 3
+        # manually even though auto-fill placed members there.
         if s.is_phase_aware:
-            for phase in (1, 2):
+            for phase in s.iter_phases():
                 btn = discord.ui.Button(
                     label=f"Phase {phase}"
                           + (" •" if phase == s.selected_phase else ""),
@@ -1580,10 +1596,25 @@ def _zone_of_primary(session: RosterBuilderSession, primary_key: str) -> str:
     """Return the zone a primary is currently assigned to, or the
     session's selected_zone as a fallback. The re-pair flow needs
     the primary's actual zone (not whatever the officer last
-    clicked on) so the sub-eligibility check enforces the right floor."""
-    for zone_name, keys in session.assignments.items():
+    clicked on) so the sub-eligibility check enforces the right floor.
+
+    Searches the selected phase first (so a primary assigned in both
+    P1 and P2 returns the phase the officer is currently editing),
+    then falls back to walking every other phase — without that walk
+    the lookup misses primaries assigned only to Phase 2 or Phase 3
+    and degrades to `selected_zone`, applying the wrong eligibility
+    floor to the paired sub."""
+    selected_phase = session.selected_phase
+    selected_zones = session.assignments_for_phase(selected_phase)
+    for zone_name, keys in selected_zones.items():
         if primary_key in keys:
             return zone_name
+    for phase in session.iter_phases():
+        if phase == selected_phase:
+            continue
+        for zone_name, keys in session.assignments_for_phase(phase).items():
+            if primary_key in keys:
+                return zone_name
     return session.selected_zone or ""
 
 
@@ -2027,20 +2058,42 @@ class _SaveAsPresetModal(discord.ui.Modal, title="Save as preset"):
         s = self._view.session
         # Build a fresh PresetBuffer with zone capacities = current
         # filled counts (so re-applying the preset reproduces this roster).
+        # Preserves the session's phase shape — without phase_count +
+        # per-phase capacities, saving a phase-aware roster as a preset
+        # would silently strip it to flat and lose the phase-migration
+        # data the officer just built.
         import storm_strategy as ss
         new_zones = []
         for z in s.preset.zones:
-            cur_count = s.zone_member_count(z.zone)
+            # For each phase, prefer the live count if the officer
+            # filled any slots there, otherwise inherit the preset's
+            # capacity so re-applying produces the same shape.
+            def _cap_for(phase: int) -> int:
+                cur = s.zone_member_count(z.zone, phase=phase)
+                if cur > 0:
+                    return cur
+                return int(z.max_for_phase(phase) or 0)
+
+            flat_count = s.zone_member_count(z.zone, phase=1)
             new_zones.append(ss.ZoneRow(
                 zone=z.zone,
-                max_players=cur_count if cur_count > 0 else int(z.max_players),
+                max_players=(
+                    flat_count if flat_count > 0 else int(z.max_players)
+                ),
+                max_phase1=_cap_for(1),
+                max_phase2=_cap_for(2),
+                max_phase3=_cap_for(3),
                 min_power_a=int(z.min_power_a or 0),
                 min_power_b=int(z.min_power_b or 0),
                 priority=int(z.priority or 0),
+                priority_phase1=int(z.priority_phase1 or 0),
+                priority_phase2=int(z.priority_phase2 or 0),
+                priority_phase3=int(z.priority_phase3 or 0),
             ))
         buf = ss.PresetBuffer(
             name=name, event_type=s.event_type, zones=new_zones,
             faction=s.preset.faction,
+            phase_count=s.preset.phase_count,
         )
         ok = await asyncio.to_thread(
             ss.save_preset, s.guild_id, s.event_type, buf,
@@ -2252,20 +2305,23 @@ def _build_mail_for_phase(
 
 def _build_mail_body(session: RosterBuilderSession) -> str:
     """Top-level mail builder. Flat presets emit one block. Phase-aware
-    presets (#152) emit two blocks separated by `Phase 1` / `Phase 2`
+    presets (#152) emit one block per phase separated by `Phase N`
     headers so leadership can copy-paste the full event into one mail.
+
+    Walks `session.iter_phases()` so a 2-phase preset emits Phase 1 + 2
+    and a 3-phase preset emits Phase 1 + 2 + 3. Pre-#152-extension the
+    builder hardcoded Phase 1 + Phase 2 only; 3-phase Phase 3 was
+    silently dropped from the mailed roster while auto-fill + rosters_tab
+    still recorded those slots.
     """
     if not session.is_phase_aware:
         return _build_mail_for_phase(session, phase=1)
 
-    p1_body = _build_mail_for_phase(session, phase=1)
-    p2_body = _build_mail_for_phase(session, phase=2)
-    return (
-        "**Phase 1**\n\n"
-        f"{p1_body}\n\n"
-        "**Phase 2**\n\n"
-        f"{p2_body}"
-    )
+    blocks: list[str] = []
+    for phase in session.iter_phases():
+        body = _build_mail_for_phase(session, phase=phase)
+        blocks.append(f"**Phase {phase}**\n\n{body}")
+    return "\n\n".join(blocks)
 
 
 async def _send_mail_preview(
@@ -2531,11 +2587,19 @@ def _find_judicator_candidates(session: RosterBuilderSession) -> list[str]:
     after matchmaking reveals Rulebringers — at which point the actual
     line-up is known and a paired sub who took the slot is a
     legitimate candidate. Flat sub-pool members are still excluded;
-    they're a bench, not a designated replacement."""
+    they're a bench, not a designated replacement.
+
+    Walks `iter_phases()` so a 3-phase preset (CS, the explicit
+    motivator for phase support) catches Judicator candidates placed
+    in Phase 2 or Phase 3 — e.g. a Virus Lab pick that only opens in
+    Phase 3. The earlier implementation iterated only `assignments` /
+    `paired_subs` (Phase 1 only), silently dropping later-phase
+    candidates."""
     assigned: set[str] = set()
-    for zone_members in session.assignments.values():
-        assigned.update(zone_members)
-    assigned.update(session.paired_subs.values())
+    for phase in session.iter_phases():
+        for zone_members in session.assignments_for_phase(phase).values():
+            assigned.update(zone_members)
+        assigned.update(session.paired_subs_for_phase(phase).values())
     candidates: list[str] = []
     for rule in session.per_member_rules:
         if rule.sub_type != "special_role" or rule.value.strip().lower() != "judicator":
@@ -2818,18 +2882,43 @@ def _write_rosters_tab(session: RosterBuilderSession) -> list[str]:
             errors.append(f"rosters tab header read failed: {e}")
         # Two header migrations to handle:
         # - "Paired With" column (added in #132)
-        # - "Phase" column (added in #152)
-        # Both rewrite the full header. Existing data rows shift one
-        # column to the right under the new Phase column; readers that
-        # use the header to index look up "Zone" by name will still
-        # find it. Old code that hard-coded column indexes would break
-        # — search for `row[2]` style access in storm_history.
+        # - "Phase" column (added in #152) — inserted at position 2
+        #   between Team and Zone, so EVERY existing data row needs a
+        #   blank cell shifted in at position 2 to keep header-name
+        #   lookups (e.g. `header.index("Zone")` → row[3]) honest.
+        # Without the row-rewrite, an old row's Zone string would sit
+        # under the new "Phase" column and Zone would read as Member,
+        # corrupting every downstream read.
         needs_header_migration = existing and (
             "Paired With" not in existing or "Phase" not in existing
         )
         if needs_header_migration:
             try:
-                ws.update("A1", [_ROSTERS_HEADER], value_input_option="RAW")
+                old_header = list(existing)
+                old_idx = {c: i for i, c in enumerate(old_header)}
+                # Translate each existing data row into the new column
+                # order via name lookup, defaulting missing cells to "".
+                rewritten_rows: list[list[str]] = [list(_ROSTERS_HEADER)]
+                for row in (all_values[1:] if all_values else []):
+                    new_row: list[str] = []
+                    for col_name in _ROSTERS_HEADER:
+                        if col_name == "Phase" and "Phase" not in old_idx:
+                            # Old rows pre-date phase support — they
+                            # represent a flat (single-phase) roster.
+                            # Write "1" so loaders can join on phase
+                            # without seeing blanks across the wire.
+                            new_row.append("1")
+                            continue
+                        idx = old_idx.get(col_name, -1)
+                        if 0 <= idx < len(row):
+                            new_row.append(str(row[idx]))
+                        else:
+                            new_row.append("")
+                    rewritten_rows.append(new_row)
+                # `ws.clear()` is reliable + atomic-from-the-reader's-
+                # perspective (gspread queues both calls back-to-back).
+                ws.clear()
+                ws.update("A1", rewritten_rows, value_input_option="RAW")
             except Exception as e:
                 errors.append(
                     f"rosters tab header migration failed (data still "

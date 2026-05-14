@@ -400,32 +400,64 @@ def roster_from_session(session) -> RosterData:
         except (TypeError, ValueError, ImportError):
             return str(p)
 
-    for z in session.preset.zones:
+    # Walk every phase the preset declares. Flat presets resolve to a
+    # single Phase-1 pass with the legacy data shape. Phase-aware presets
+    # emit one zone block per (phase, zone) so the rendered PNG surfaces
+    # the full migration line-up — earlier code looked at
+    # `session.assignments` only and silently dropped Phase 2 / Phase 3.
+    is_phased = session.is_phase_aware
+
+    def _build_member_block(zone_name: str, phase: int) -> list[str]:
         names: list[str] = []
-        for key in session.assignments.get(z.zone, []):
+        assignments = session.assignments_for_phase(phase)
+        pairings = session.paired_subs_for_phase(phase)
+        overrides_set = session.below_floor_overrides_for_phase(phase)
+        for key in assignments.get(zone_name, []):
             m = session.members.get(key)
             if not m:
                 continue
             primary_name = m["name"]
             names.append(primary_name)
             powers[primary_name] = _format_power(m.get("power"))
-            if key in session.below_floor_overrides:
+            if key in overrides_set:
                 overrides.add(primary_name)
             if session.is_paired:
-                sub_key = session.paired_subs.get(key)
+                sub_key = pairings.get(key)
                 if sub_key:
                     sub_m = session.members.get(sub_key)
                     if sub_m:
                         sub_name = sub_m["name"]
+                        # Key the paired-sub map by primary name; if a
+                        # primary is paired with different subs across
+                        # phases, the latest phase wins in this dict.
+                        # The phase-tagged zone-block name surfaces the
+                        # per-phase context for the reader regardless.
                         paired_subs[primary_name] = sub_name
                         powers[sub_name] = _format_power(sub_m.get("power"))
-                        # Override flag on the sub too — paired subs
-                        # captured via the picker can carry it.
-                        if sub_key in session.below_floor_overrides:
+                        if sub_key in overrides_set:
                             overrides.add(sub_name)
-        zones.append(RosterZone(
-            name=z.zone, max_players=int(z.max_players), members=names,
-        ))
+        return names
+
+    for z in session.preset.zones:
+        if is_phased:
+            for phase in session.iter_phases():
+                cap = int(z.max_for_phase(phase))
+                names = _build_member_block(z.zone, phase)
+                # Skip zones with no capacity in this phase AND no
+                # assignments — empty Phase-1 center zones would
+                # otherwise clutter the rendered image with empty rows.
+                if cap == 0 and not names:
+                    continue
+                zones.append(RosterZone(
+                    name=f"Phase {phase} — {z.zone}",
+                    max_players=cap,
+                    members=names,
+                ))
+        else:
+            names = _build_member_block(z.zone, 1)
+            zones.append(RosterZone(
+                name=z.zone, max_players=int(z.max_players), members=names,
+            ))
 
     subs = [
         session.members[k]["name"] for k in session.subs

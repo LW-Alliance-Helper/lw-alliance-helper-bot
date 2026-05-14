@@ -605,13 +605,51 @@ def save_preset(guild_id: int, event_type: str, buf: PresetBuffer) -> bool:
         return False
 
     header = _DS_HEADER if event_type == "DS" else _CS_HEADER
-    # Filter: keep header + non-matching rows.
+    # Map sibling preset rows from their OLD header shape into the new
+    # column order. Without this remap, a tab that already had presets
+    # written under the pre-#152 header (6 columns for DS, or the
+    # interim Use-Phases shape) would silently mis-align: the new
+    # 13-col header gets written over the tab, but each sibling row
+    # keeps its old cells in their old positions — `row[3]` was
+    # `Min Power A` under the old header but is `Max Phase 1` under
+    # the new one. The next `load_preset` then reads the old power
+    # value as a phase capacity (data corruption).
+    old_header = [str(c).strip() for c in (all_values[0] if all_values else [])]
+    old_header_idx = {name: idx for idx, name in enumerate(old_header)}
+
+    def _translate(row: list) -> list[str]:
+        """Re-emit one preset row in the new column order. Cells
+        missing from the old header default to an empty string so
+        `_safe_int` / `_parse_phase_count` fall through to their
+        defaults (0 / 0). Legacy `Use Phases` (truthy → phase_count
+        = 2) is honoured here too so an interim 2-phase preset
+        round-trips into the new `Phase Count` column on the next
+        save."""
+        out: list[str] = []
+        legacy_uses_phases = (
+            _parse_uses_phases(row[old_header_idx["Use Phases"]])
+            if "Use Phases" in old_header_idx
+               and old_header_idx["Use Phases"] < len(row)
+            else False
+        )
+        for col_name in header:
+            if col_name == "Phase Count" and "Phase Count" not in old_header_idx:
+                out.append("2" if legacy_uses_phases else "0")
+                continue
+            idx = old_header_idx.get(col_name, -1)
+            if 0 <= idx < len(row):
+                out.append(str(row[idx]))
+            else:
+                out.append("")
+        return out
+
+    # Filter: keep header + non-matching rows, translated to new shape.
     kept = [header]
     for row in all_values[1:]:  # skip existing header row
         if not row:
             continue
         if str(row[0]).strip().lower() != buf.name.lower():
-            kept.append(row)
+            kept.append(_translate(row))
     # Append buffer rows.
     phase_count_cell = str(buf.phase_count)
     for z in buf.zones:
@@ -1660,15 +1698,54 @@ class _PresetEditorView(discord.ui.View):
                 except discord.HTTPException:
                     pass
                 return
+            old_count = int(self.buf.phase_count or 0)
+            # Seed newly-active phase capacities from the most recent
+            # populated phase so the officer doesn't have to walk every
+            # zone through the wizard just to enable a new phase. Goes
+            # both directions:
+            #   flat → 2:   max_phase1 ← max_players, max_phase2 ← max_phase1
+            #   flat → 3:   same as flat → 2, plus max_phase3 ← max_phase2
+            #   2 → 3:      max_phase3 ← max_phase2 (and priorities follow)
+            #   3 → 2:      no auto-clear; phase 3 data stays orphaned but
+            #               doesn't render (re-toggling restores it)
+            seeded = 0
+            for z in self.buf.zones:
+                if new_count >= 2 and int(z.max_phase1 or 0) == 0:
+                    z.max_phase1 = int(z.max_players or 0)
+                    if int(z.priority_phase1 or 0) == 0:
+                        z.priority_phase1 = int(z.priority or 0)
+                    seeded += 1
+                if new_count >= 2 and int(z.max_phase2 or 0) == 0:
+                    z.max_phase2 = int(z.max_phase1 or z.max_players or 0)
+                    if int(z.priority_phase2 or 0) == 0:
+                        z.priority_phase2 = int(
+                            z.priority_phase1 or z.priority or 0
+                        )
+                    seeded += 1
+                if new_count >= 3 and int(z.max_phase3 or 0) == 0:
+                    z.max_phase3 = int(
+                        z.max_phase2 or z.max_phase1 or z.max_players or 0
+                    )
+                    if int(z.priority_phase3 or 0) == 0:
+                        z.priority_phase3 = int(
+                            z.priority_phase2 or z.priority_phase1
+                            or z.priority or 0
+                        )
+                    seeded += 1
             self.buf.phase_count = new_count
             self.buf.dirty = True
             label = "Flat" if new_count == 0 else f"{new_count}-phase"
+            seeded_note = (
+                f" Seeded {seeded} per-zone capacity/priority value(s) "
+                f"from prior values; edit any zone to override."
+                if seeded and old_count < new_count else ""
+            )
             await self.refresh(
                 inter,
                 message=(
                     f"🔀 Switched to **{label}** mode. "
                     "Stored capacities + assignments are kept — flip back "
-                    "any time without data loss."
+                    "any time without data loss." + seeded_note
                 ),
             )
 

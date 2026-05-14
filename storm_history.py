@@ -252,12 +252,10 @@ def render_event_embed(
     slots: list[dict],
     attendance: dict[tuple[str, str, str], str],
 ) -> discord.Embed:
+    from storm_date_helpers import format_event_date
+
     label = "Desert Storm" if event_type == "DS" else "Canyon Storm"
-    try:
-        d = _dt.date.fromisoformat(event_date)
-        date_pretty = d.strftime("%A, %B %d, %Y")
-    except ValueError:
-        date_pretty = event_date
+    date_pretty = format_event_date(event_date)
 
     embed = discord.Embed(
         title=f"📜 {label} Roster — {date_pretty}",
@@ -386,9 +384,11 @@ class _HistoryListView(discord.ui.View):
         self.event_type = event_type
         self.message: Optional[discord.Message] = None
 
+        from storm_date_helpers import format_event_date_compact
         for date_str in dates:
             btn = discord.ui.Button(
-                label=date_str, style=discord.ButtonStyle.secondary,
+                label=format_event_date_compact(date_str),
+                style=discord.ButtonStyle.secondary,
             )
             btn.callback = self._make_callback(date_str)
             self.add_item(btn)
@@ -469,16 +469,18 @@ async def open_history(
     await interaction.response.defer(ephemeral=True, thinking=True)
 
     if event_date:
-        date_clean = event_date.strip()
-        try:
-            _dt.date.fromisoformat(date_clean)
-        except ValueError:
+        from storm_date_helpers import parse_event_date
+        parsed = parse_event_date(event_date.strip())
+        if parsed is None:
             await interaction.followup.send(
-                f"⚠️ `{event_date}` isn't a valid date. Use `YYYY-MM-DD`.",
+                f"⚠️ `{event_date}` isn't a date I can parse. Try `May 18`, "
+                f"`5/18`, `2026-05-18`, or `yesterday`.",
                 ephemeral=True,
             )
             return
-        # Parallel Sheet reads off the event loop.
+        date_clean = parsed.isoformat()
+        # Parallel Sheet reads off the event loop — gspread blocks for
+        # a network round-trip each.
         slots_task = asyncio.to_thread(
             load_event_roster, interaction.guild_id, event_type, date_clean,
         )

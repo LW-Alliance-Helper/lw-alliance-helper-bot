@@ -418,9 +418,11 @@ class _AttendanceSession:
 
 
 def _render_embed(session: _AttendanceSession) -> discord.Embed:
+    from storm_date_helpers import format_event_date
+
     label = "Desert Storm" if session.event_type == "DS" else "Canyon Storm"
     embed = discord.Embed(
-        title=f"📋 {label} Attendance — {session.event_date}",
+        title=f"📋 {label} Attendance — {format_event_date(session.event_date)}",
         color=discord.Color.gold() if session.event_type == "DS"
               else discord.Color.orange(),
     )
@@ -610,8 +612,9 @@ class _AttendanceView(discord.ui.View):
                 + counts.get(STATUS_NO_SHOW, 0)
                 + counts.get(STATUS_SUB_ACTIVATED, 0)
             )
+            from storm_date_helpers import format_event_date
             await inter.followup.send(
-                f"✅ Saved attendance for **{s.event_date}** — "
+                f"✅ Saved attendance for **{format_event_date(s.event_date)}** — "
                 f"{recorded} slot(s) recorded "
                 f"(✅ {counts.get(STATUS_ATTENDED, 0)}, "
                 f"❌ {counts.get(STATUS_NO_SHOW, 0)}, "
@@ -726,7 +729,7 @@ class StormAttendanceCog(commands.Cog):
     )
     @app_commands.describe(
         event_type="Which event's attendance to record",
-        event_date="Date of the event (YYYY-MM-DD)",
+        event_date="Optional — defaults to the most recent posted event. Accepts e.g. May 18, 5/18, yesterday.",
     )
     @app_commands.choices(event_type=[
         app_commands.Choice(name="Desert Storm", value="DS"),
@@ -737,25 +740,40 @@ class StormAttendanceCog(commands.Cog):
         self,
         interaction: discord.Interaction,
         event_type: app_commands.Choice[str],
-        event_date: str,
+        event_date: Optional[str] = None,
     ):
         from storm_permissions import (
             is_leader_or_admin, deny_non_leader, ensure_premium_structured,
+        )
+        from storm_date_helpers import (
+            parse_event_date, most_recent_event_date, format_event_date,
         )
         if not is_leader_or_admin(interaction):
             await deny_non_leader(interaction)
             return
 
         et = event_type.value
-        date_clean = event_date.strip()
-        try:
-            _dt.date.fromisoformat(date_clean)
-        except ValueError:
-            await interaction.response.send_message(
-                f"⚠️ `{event_date}` isn't a valid date. Use `YYYY-MM-DD`.",
-                ephemeral=True,
-            )
-            return
+        raw_input = (event_date or "").strip()
+        if not raw_input:
+            date_clean = most_recent_event_date(interaction.guild_id, et)
+            if not date_clean:
+                await interaction.response.send_message(
+                    f"⚠️ No posted {('Desert Storm' if et == 'DS' else 'Canyon Storm')} "
+                    f"events on record. Run `/storm_post_signup` and build a roster "
+                    f"before recording attendance, or pass `event_date` explicitly.",
+                    ephemeral=True,
+                )
+                return
+        else:
+            parsed = parse_event_date(raw_input)
+            if parsed is None:
+                await interaction.response.send_message(
+                    f"⚠️ `{event_date}` isn't a date I can parse. Try `May 18`, "
+                    f"`5/18`, `2026-05-18`, `yesterday`, or `today`.",
+                    ephemeral=True,
+                )
+                return
+            date_clean = parsed.isoformat()
 
         ok, _structured = await ensure_premium_structured(
             interaction, et,
@@ -782,7 +800,7 @@ class StormAttendanceCog(commands.Cog):
 
         if not slots:
             msg_lines = [
-                f"⚠️ No structured roster found for **{date_clean}** "
+                f"⚠️ No structured roster found for **{format_event_date(date_clean)}** "
                 f"({'Desert Storm' if et == 'DS' else 'Canyon Storm'})."
             ]
             if slot_errors:

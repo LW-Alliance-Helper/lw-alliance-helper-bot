@@ -64,13 +64,15 @@ _BUCKET_LABELS = {
 
 
 def _next_event_date(today: _dt.date | None = None) -> str:
-    """Default event date when leadership doesn't pass one — next Sunday
-    by convention. Alliances who run DS on a different day pass the
-    event_date param explicitly."""
+    """Back-compat shim — delegates to `storm_date_helpers.next_event_date`
+    without the guild/event-type lookup. Kept on the module surface
+    because at least one stale test patches `_next_event_date` directly.
+    New callers should reach for the helper module.
+    """
     today = today or _dt.date.today()
-    days_ahead = (6 - today.weekday()) % 7  # 6 = Sunday in Python's weekday()
+    days_ahead = (6 - today.weekday()) % 7
     if days_ahead == 0:
-        days_ahead = 7  # "today" defaults to next week, not today
+        days_ahead = 7
     return (today + _dt.timedelta(days=days_ahead)).isoformat()
 
 
@@ -402,13 +404,11 @@ def _render_embed(
     buckets: dict[str, list[dict]],
     bucket_filter: str | None = None,
 ) -> discord.Embed:
+    from storm_date_helpers import format_event_date
+
     label = "Desert Storm" if event_type == "DS" else "Canyon Storm"
     emoji = "🔥" if event_type == "DS" else "🏜️"
-    try:
-        d = _dt.date.fromisoformat(event_date)
-        date_pretty = d.strftime("%A, %B %d, %Y")
-    except ValueError:
-        date_pretty = event_date
+    date_pretty = format_event_date(event_date)
 
     total = sum(len(v) for v in buckets.values())
     title = f"{emoji} {label} Sign-Ups — {date_pretty}  ({total} members)"
@@ -903,7 +903,7 @@ class StormSignupsViewCog(commands.Cog):
     )
     @app_commands.describe(
         event_type="Which event's sign-ups to view",
-        event_date="Optional — defaults to the next upcoming event date",
+        event_date="Optional — defaults to the next configured event day. Accepts e.g. May 18, 5/18, Sunday.",
     )
     @app_commands.choices(event_type=[
         app_commands.Choice(name="Desert Storm", value="DS"),
@@ -921,23 +921,26 @@ class StormSignupsViewCog(commands.Cog):
             deny_non_leader,
             ensure_premium_structured,
         )
+        from storm_date_helpers import parse_event_date, next_event_date
 
         if not is_leader_or_admin(interaction):
             await deny_non_leader(interaction)
             return
 
         et = event_type.value
-        date_clean = (event_date or "").strip()
-        if not date_clean:
-            date_clean = _next_event_date()
-        try:
-            _dt.date.fromisoformat(date_clean)
-        except ValueError:
-            await interaction.response.send_message(
-                f"⚠️ `{date_clean}` isn't a valid date. Use the format `YYYY-MM-DD`.",
-                ephemeral=True,
-            )
-            return
+        raw_input = (event_date or "").strip()
+        if not raw_input:
+            date_clean = next_event_date(interaction.guild_id, et)
+        else:
+            parsed = parse_event_date(raw_input)
+            if parsed is None:
+                await interaction.response.send_message(
+                    f"⚠️ `{event_date}` isn't a date I can parse. Try `May 18`, "
+                    f"`5/18`, `2026-05-18`, `Sunday`, or `tomorrow`.",
+                    ephemeral=True,
+                )
+                return
+            date_clean = parsed.isoformat()
 
         ok, _structured = await ensure_premium_structured(
             interaction, et,

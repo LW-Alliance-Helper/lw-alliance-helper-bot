@@ -380,7 +380,11 @@ def roster_from_session(session) -> RosterData:
         team_suffix = f" — Team {session.team}"
     elif session.preset.faction and session.preset.faction != "Either":
         team_suffix = f" — {session.preset.faction}"
-    date_suffix = f" — {session.event_date}" if session.event_date else ""
+    if session.event_date:
+        from storm_date_helpers import format_event_date
+        date_suffix = f" — {format_event_date(session.event_date)}"
+    else:
+        date_suffix = ""
 
     zones: list[RosterZone] = []
     paired_subs: dict[str, str] = {}

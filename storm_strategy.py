@@ -1294,7 +1294,7 @@ def _build_ds_group() -> _StrategyGroup:
     @grp.command(name="roster_history",
                  description="Browse past DS rosters with attendance overlaid")
     @app_commands.describe(
-        date="Optional — show a specific date (YYYY-MM-DD). Omit to list recent events.",
+        date="Optional — show a specific date (May 18, 5/18, 2026-05-18, yesterday). Omit to list recent events.",
     )
     async def ds_history(interaction: discord.Interaction, date: str | None = None):
         from storm_history import open_history
@@ -1339,7 +1339,7 @@ def _build_cs_group() -> _StrategyGroup:
     @grp.command(name="roster_history",
                  description="Browse past CS rosters with attendance overlaid")
     @app_commands.describe(
-        date="Optional — show a specific date (YYYY-MM-DD). Omit to list recent events.",
+        date="Optional — show a specific date (May 18, 5/18, 2026-05-18, yesterday). Omit to list recent events.",
     )
     async def cs_history(interaction: discord.Interaction, date: str | None = None):
         from storm_history import open_history

@@ -140,6 +140,27 @@ def _read_roster_powers(
             f"header. Add it (or change the configured column at setup) so "
             f"the eligibility gate has something to read."
         )
+        logger.warning(
+            "[STORM ROSTER] power column %r not found in roster header for "
+            "guild=%s event=%s. Sheet header was: %s",
+            power_col_name, guild_id, event_type, header,
+        )
+
+    # Diagnostic logging — team-test feedback flagged "matching by name
+    # not Discord ID" and "power not reading even when in the sheet."
+    # Surface the exact column resolution so a single log line answers
+    # which column the bot is looking at.
+    logger.info(
+        "[STORM ROSTER] guild=%s event=%s column resolution: "
+        "id_col=%d (cfg discord_id_col=%d), name_col=%d (cfg display_col=%d), "
+        "power_col=%d (cfg power_column_name=%r), "
+        "presence_col=%d, not_disc_col=%d, header=%s",
+        guild_id, event_type,
+        id_col, int(roster_cfg.get("discord_id_col", 0)),
+        name_col, int(roster_cfg.get("display_col", roster_cfg.get("name_col", 1))),
+        power_col, power_col_name,
+        presence_col, not_disc_col, header,
+    )
 
     truthy = {"1", "true", "yes", "y", "x", "t"}
     has_not_col = not_disc_col >= 0
@@ -1177,7 +1198,45 @@ class RosterBuilderView(discord.ui.View):
             async def _auto_fill(inter: discord.Interaction):
                 if not await self._guard_owner(inter):
                     return
-                _auto_fill_session(s)
+                # Wrap the algorithm in explicit logging so when team-
+                # test reports "auto-fill skipped after the first
+                # power-unknown" we have a trail in Railway logs. The
+                # callback also surfaces any exception to the officer
+                # rather than letting discord.py's default handler
+                # eat it silently.
+                logger.info(
+                    "[STORM AUTO-FILL] start: guild=%s event=%s team=%s "
+                    "preset=%s pool_size=%d (members=%s)",
+                    s.guild_id, s.event_type, s.team,
+                    s.preset.name, len(s.members),
+                    [
+                        {"key": k, "name": m.get("name"),
+                         "discord_id": m.get("discord_id"),
+                         "power": m.get("power"),
+                         "not_on_discord": m.get("not_on_discord")}
+                        for k, m in list(s.members.items())[:20]
+                    ],
+                )
+                try:
+                    summary = _auto_fill_session(s)
+                except Exception as e:
+                    logger.exception(
+                        "[STORM AUTO-FILL] crashed for guild=%s event=%s: %s",
+                        s.guild_id, s.event_type, e,
+                    )
+                    await inter.response.send_message(
+                        f"⚠️ Auto-fill hit an unexpected error: `{type(e).__name__}: {str(e)[:120]}`. "
+                        f"Please share this message with the bot maintainer; logs have details.",
+                        ephemeral=True,
+                    )
+                    return
+                logger.info(
+                    "[STORM AUTO-FILL] done: guild=%s event=%s summary=%s "
+                    "assignments=%s subs=%d paired=%d",
+                    s.guild_id, s.event_type, summary,
+                    {z: names for z, names in s.assignments.items() if names},
+                    len(s.subs), len(s.paired_subs),
+                )
                 await self._refresh(inter)
 
             auto_fill_btn.callback = _auto_fill

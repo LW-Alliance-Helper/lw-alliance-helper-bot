@@ -439,9 +439,21 @@ def _build_editor_embed(buf: PresetBuffer, team_size_hint: int = _TEAM_SIZE_HINT
     else:
         desc_lines.append("*No zones in this preset yet.*")
     desc_lines.append("")
+    # Capacity vs. team-size is informational. Alliances often build
+    # in flex room (Mercenary + Arsenal both open when center opens,
+    # subs absorb no-shows, etc.) so over-30 is normal, not an error.
+    # Under-30 still gets the ⚠️ since under-staffing is the
+    # interesting case.
     cap = buf.total_capacity()
-    ok = "✅" if cap == team_size_hint else "⚠️"
-    desc_lines.append(f"📊 Capacity: **{cap} / {team_size_hint}** {ok}")
+    if cap < team_size_hint:
+        glyph = "⚠️"
+    elif cap == team_size_hint:
+        glyph = "✅"
+    else:
+        glyph = "ℹ️"
+    desc_lines.append(
+        f"📊 Capacity: **{cap}** (team size {team_size_hint}; flex room is fine) {glyph}"
+    )
     if buf.dirty:
         desc_lines.append("⚠️ *Unsaved changes — hit Save Preset to commit.*")
     return discord.Embed(
@@ -497,8 +509,8 @@ class _ZoneEditModal(discord.ui.Modal):
             self.power_b_input = None
 
         self.priority_input = discord.ui.TextInput(
-            label="Priority (1 = highest, blank = none)",
-            placeholder="e.g. 1",
+            label="Priority (1 = highest; ties OK)",
+            placeholder="e.g. 1 — same number across zones is fine",
             default=str(existing.priority or ""),
             required=False, max_length=3,
         )
@@ -708,15 +720,11 @@ class _PresetEditorView(discord.ui.View):
         async def _save(inter):
             if inter.user.id != self.user_id:
                 await inter.response.send_message("⛔ Only the editor's owner can save this preset.", ephemeral=True); return
-            cap = self.buf.total_capacity()
-            if cap > _TEAM_SIZE_HINT:
-                await inter.response.send_message(
-                    f"⚠️ Total capacity is **{cap}**, which exceeds the "
-                    f"team size of **{_TEAM_SIZE_HINT}**. Trim a zone "
-                    f"or two before saving.",
-                    ephemeral=True,
-                )
-                return
+            # Capacity over the team-size hint is normal — alliances
+            # build in flex room. The editor embed already shows the
+            # capacity vs. 30 line so officers can see at a glance
+            # whether they're over or under; the save path doesn't
+            # block on it.
             await inter.response.defer()
             ok = save_preset(self.guild_id, self.buf.event_type, self.buf)
             if ok:

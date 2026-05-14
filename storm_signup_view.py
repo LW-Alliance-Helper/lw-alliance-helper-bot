@@ -85,19 +85,28 @@ class SignupView(discord.ui.View):
         event_type: str,
         event_date: str,
         *,
-        time_a_label: str = "Team A",
-        time_b_label: str = "Team B",
+        time_a_label: str = "",
+        time_b_label: str = "",
     ):
         super().__init__(timeout=None)
         self.guild_id   = int(guild_id)
         self.event_type = event_type.lower()
         self.event_date = event_date
-        # Build buttons explicitly so labels are configurable. Decorator-
-        # based buttons can't have their labels parameterised.
-        self._add_vote_button("a",      f"✅ {time_a_label}",          discord.ButtonStyle.success)
-        self._add_vote_button("b",      f"✅ {time_b_label}",          discord.ButtonStyle.success)
-        self._add_vote_button("either", "✅ Either time works",        discord.ButtonStyle.success)
-        self._add_vote_button("cannot", "❌ Cannot participate",       discord.ButtonStyle.danger)
+        # Button labels prefix the TEAM so members aren't guessing
+        # which side of the poll the time corresponds to. Team-test
+        # feedback was clear: showing just the time confuses members
+        # who haven't internalised "9pm is Team A, 4pm is Team B."
+        # CS rosters only fight at one time per faction, so the B and
+        # Either buttons are DS-only (meaningless with one slot).
+        a_label = f"🅰️ Team A: {time_a_label}" if time_a_label else "🅰️ Team A"
+        self._add_vote_button("a", a_label[:80], discord.ButtonStyle.success)
+        if self.event_type == "ds":
+            b_label = f"🅱️ Team B: {time_b_label}" if time_b_label else "🅱️ Team B"
+            self._add_vote_button("b", b_label[:80], discord.ButtonStyle.success)
+            self._add_vote_button(
+                "either", "🔄 Either time works", discord.ButtonStyle.success,
+            )
+        self._add_vote_button("cannot", "❌ Cannot participate", discord.ButtonStyle.danger)
 
     def _add_vote_button(self, vote_code: str, label: str, style: discord.ButtonStyle):
         btn = discord.ui.Button(

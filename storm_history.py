@@ -122,6 +122,7 @@ def load_event_roster(
 
     date_col   = _col("Event Date")
     team_col   = _col("Team")
+    phase_col  = _col("Phase")        # #152 — empty for sub-pool rows
     zone_col   = _col("Zone")
     member_col = _col("Member")
     role_col   = _col("Role")
@@ -147,6 +148,7 @@ def load_event_roster(
             continue
         slots.append({
             "team":     _cell(team_col),
+            "phase":    _cell(phase_col),     # "1"/"2" for phased rows, "" otherwise
             "zone":     _cell(zone_col),
             "member":   _cell(member_col),
             "role":     _cell(role_col) or "primary",

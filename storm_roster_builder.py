@@ -324,15 +324,27 @@ class RosterBuilderSession:
         # storage layer already validates, but a hand-edited DB row
         # shouldn't crash the builder).
         self.sub_mode = sub_mode if sub_mode in ("pool", "paired") else "pool"
-        # Per-zone assignments: {zone_name: [member_key, ...]}
+        # Per-zone assignments: {zone_name: [member_key, ...]}.
+        # For phase-aware presets (#152), this is the Phase 1 dict;
+        # Phase 2 lives in `assignments_p2`, Phase 3 (CS / 3-phase
+        # presets) in `assignments_p3`. For flat presets, only
+        # `assignments` is used and the other phases stay empty.
         self.assignments: dict[str, list[str]] = {z.zone: [] for z in preset.zones}
+        self.assignments_p2: dict[str, list[str]] = {z.zone: [] for z in preset.zones}
+        self.assignments_p3: dict[str, list[str]] = {z.zone: [] for z in preset.zones}
+        # The currently-selected phase in the UI (1, 2, or 3). Flat
+        # presets pin to 1.
+        self.selected_phase: int = 1
         # Flat sub pool. In `paired` mode, subs lives in
         # `paired_subs` instead — this list stays empty.
         self.subs: list[str] = []
         # Paired-mode pairings: {primary_key: sub_key}. Only populated
         # when sub_mode == "paired"; the embed + writer branch on
-        # presence of this dict.
+        # presence of this dict. Each phase carries its own pairing map
+        # so a member can have a different sub per phase.
         self.paired_subs: dict[str, str] = {}
+        self.paired_subs_p2: dict[str, str] = {}
+        self.paired_subs_p3: dict[str, str] = {}
         # The currently-selected zone in the UI; defaults to the first zone.
         self.selected_zone: str = preset.zones[0].zone if preset.zones else ""
         # Officer-toggled override: show below-floor members in the
@@ -347,7 +359,10 @@ class RosterBuilderSession:
         # toggle (i.e. their power was below the zone's effective floor,
         # or their power was unknown). Captured at assign time so the
         # rosters_tab write can flag the slot for post-event review.
+        # Each phase has its own override set.
         self.below_floor_overrides: set[str] = set()
+        self.below_floor_overrides_p2: set[str] = set()
+        self.below_floor_overrides_p3: set[str] = set()
         # Auto-fill summary (#134) — populated by _auto_fill_session when
         # the officer clicks the auto-fill button. The embed renderer
         # surfaces this in place of the empty-state hint so leadership
@@ -363,6 +378,55 @@ class RosterBuilderSession:
     def is_paired(self) -> bool:
         return self.sub_mode == "paired"
 
+    @property
+    def is_phase_aware(self) -> bool:
+        """True iff the loaded preset has 2+ phases. Phase-aware
+        sessions surface per-phase sub-slots per zone in the builder
+        and write phase-grouped mail. Flat presets ignore the phase-2
+        and phase-3 attributes entirely."""
+        return self.phase_count >= 2
+
+    @property
+    def phase_count(self) -> int:
+        """How many phases the loaded preset declares. 0 means flat;
+        2 or 3 means phase-aware. Reads through to
+        `preset.phase_count` (with `getattr` for backward compat with
+        older PresetBuffer instances that pre-date the field)."""
+        return int(getattr(self.preset, "phase_count", 0))
+
+    def assignments_for_phase(self, phase: int) -> dict[str, list[str]]:
+        """Return the assignment dict for a given phase. Centralised so
+        downstream code doesn't branch on the `_p2` / `_p3` attribute
+        names."""
+        if phase == 2:
+            return self.assignments_p2
+        if phase == 3:
+            return self.assignments_p3
+        return self.assignments
+
+    def paired_subs_for_phase(self, phase: int) -> dict[str, str]:
+        if phase == 2:
+            return self.paired_subs_p2
+        if phase == 3:
+            return self.paired_subs_p3
+        return self.paired_subs
+
+    def below_floor_overrides_for_phase(self, phase: int) -> set[str]:
+        if phase == 2:
+            return self.below_floor_overrides_p2
+        if phase == 3:
+            return self.below_floor_overrides_p3
+        return self.below_floor_overrides
+
+    def iter_phases(self) -> list[int]:
+        """Phases this session iterates over. Flat presets yield [1];
+        2-phase presets yield [1, 2]; 3-phase presets yield [1, 2, 3]."""
+        if self.phase_count >= 3:
+            return [1, 2, 3]
+        if self.phase_count >= 2:
+            return [1, 2]
+        return [1]
+
     def floor_for_zone(self, zone_name: str) -> int:
         """Per-team min_power for this zone. DS uses min_power_a/b; CS
         uses min_power_a as the single floor (storm_strategy stores it
@@ -375,51 +439,88 @@ class RosterBuilderSession:
         return int(z.min_power_a or 0)
 
     def assigned_member_keys(self) -> set[str]:
-        """Every member currently slotted somewhere — any zone, the
-        flat sub pool, OR any paired-sub seat. The eligibility filter
-        uses this to exclude already-placed members from the picker."""
+        """Every member currently slotted somewhere — any phase, any
+        zone, the flat sub pool, OR any paired-sub seat. Used by
+        callsites that want a global "anywhere on the roster" check.
+
+        For phase-aware presets this unions both phases, which is the
+        conservative default (won't double-assign within either phase).
+        Per-phase eligibility filtering uses
+        `assigned_member_keys_in_phase` instead — that's what lets a
+        member assigned to Phase 1 at zone A be picked for Phase 2 at
+        zone B (the migration use case)."""
         keys: set[str] = set()
-        for zone_members in self.assignments.values():
-            keys.update(zone_members)
+        for phase in self.iter_phases():
+            for zone_members in self.assignments_for_phase(phase).values():
+                keys.update(zone_members)
+            keys.update(self.paired_subs_for_phase(phase).values())
         keys.update(self.subs)
-        keys.update(self.paired_subs.values())
+        return keys
+
+    def assigned_member_keys_in_phase(self, phase: int) -> set[str]:
+        """Members slotted in the given phase only. The picker uses this
+        so a Phase 1 assignment doesn't lock a member out of a Phase 2
+        slot in a phase-aware preset.
+
+        Sub pool is event-level (not phase-scoped) so it's always
+        excluded — a member sitting in the global sub pool is unavailable
+        for primary assignment in either phase."""
+        keys: set[str] = set()
+        for zone_members in self.assignments_for_phase(phase).values():
+            keys.update(zone_members)
+        keys.update(self.paired_subs_for_phase(phase).values())
+        keys.update(self.subs)
         return keys
 
     def unpaired_primaries(self) -> list[str]:
         """In paired mode, the list of zone members who don't yet have
-        a paired sub. Order matches zone-then-roster order so the UI
-        prompt is deterministic. Returns [] when sub_mode=pool."""
+        a paired sub for the *currently selected phase*. Order matches
+        zone-then-roster order so the UI prompt is deterministic.
+        Returns [] when sub_mode=pool."""
         if not self.is_paired:
             return []
+        assignments = self.assignments_for_phase(self.selected_phase)
+        pairings = self.paired_subs_for_phase(self.selected_phase)
         unpaired = []
         for zone in self.preset.zones:
-            for key in self.assignments.get(zone.zone, []):
-                if key not in self.paired_subs:
+            for key in assignments.get(zone.zone, []):
+                if key not in pairings:
                     unpaired.append(key)
         return unpaired
 
-    def zone_member_count(self, zone_name: str) -> int:
-        return len(self.assignments.get(zone_name, []))
+    def zone_member_count(self, zone_name: str, phase: int | None = None) -> int:
+        """Member count at this zone. `phase=None` returns the count for
+        the currently selected phase (Phase 1 on flat presets)."""
+        phase = phase if phase is not None else self.selected_phase
+        return len(self.assignments_for_phase(phase).get(zone_name, []))
 
-    def zone_capacity(self, zone_name: str) -> int:
+    def zone_capacity(self, zone_name: str, phase: int | None = None) -> int:
+        """Per-zone capacity. On flat presets, returns `max_players` and
+        ignores `phase`. On phase-aware presets, returns the matching
+        per-phase cap (defaults to the selected phase)."""
         z = self.preset.find_zone(zone_name)
-        return int(z.max_players) if z else 0
+        if z is None:
+            return 0
+        if not self.is_phase_aware:
+            return int(z.max_players)
+        phase = phase if phase is not None else self.selected_phase
+        return z.max_for_phase(phase)
 
     def prune_stale_pairings(self) -> None:
         """Drop paired-sub entries whose primary is no longer in a zone.
 
         Called after Unassign / Move-to-subs. Without this, an unassigned
         primary's old pairing would linger and surface stale data in
-        the embed + the rosters_tab write."""
-        primaries_in_zones: set[str] = set()
-        for zone_members in self.assignments.values():
-            primaries_in_zones.update(zone_members)
-        # Filter the pairing map.
-        self.paired_subs = {
-            primary: sub
-            for primary, sub in self.paired_subs.items()
-            if primary in primaries_in_zones
-        }
+        the embed + the rosters_tab write. Walks both phases for
+        phase-aware sessions."""
+        for phase in self.iter_phases():
+            primaries_in_zones: set[str] = set()
+            for zone_members in self.assignments_for_phase(phase).values():
+                primaries_in_zones.update(zone_members)
+            pairings = self.paired_subs_for_phase(phase)
+            for primary in list(pairings.keys()):
+                if primary not in primaries_in_zones:
+                    del pairings[primary]
 
     def prune_stale_overrides(self) -> None:
         """Drop override entries for members no longer in any zone.
@@ -429,11 +530,22 @@ class RosterBuilderSession:
         unassigned (zone cleared) or moved to subs (subs don't carry
         the flag), the entry shouldn't survive — otherwise a later
         re-assignment without the toggle would still mark the slot.
+        Walks both phases for phase-aware sessions.
         """
-        currently_in_zones: set[str] = set()
-        for zone_members in self.assignments.values():
-            currently_in_zones.update(zone_members)
-        self.below_floor_overrides &= currently_in_zones
+        for phase in self.iter_phases():
+            currently_in_zones: set[str] = set()
+            for zone_members in self.assignments_for_phase(phase).values():
+                currently_in_zones.update(zone_members)
+            overrides = self.below_floor_overrides_for_phase(phase)
+            overrides &= currently_in_zones
+            # Replace contents in place — same set object so external
+            # references stay valid.
+            if phase == 3:
+                self.below_floor_overrides_p3 = overrides
+            elif phase == 2:
+                self.below_floor_overrides_p2 = overrides
+            else:
+                self.below_floor_overrides = overrides
 
 
 def _resolve_per_member_subject(
@@ -526,34 +638,39 @@ def _auto_fill_session(session: RosterBuilderSession) -> dict:
     Algorithm, in order:
       1. per_member zone rules — pin members to their named zone if
          capacity, the member is in the signed-up pool, and the zone
-         exists in the preset.
-      2. Greedy fill — for each zone in priority order (lowest int
-         first; priority=0 sorts last), fill remaining slots from the
-         eligibility-gated pool (uses `_eligible_member_keys_for_zone`,
-         which respects power_band rule relaxation).
+         exists in the preset. **Applied to Phase 1 only** on phase-
+         aware presets; the rule model doesn't yet carry a phase
+         dimension (#152 v1 simplification). Phase 2 greedy fill picks
+         up the same members later if they're eligible there too.
+      2. Greedy fill — runs once per phase. For each zone in priority
+         order (lowest int first; priority=0 sorts last), fills the
+         phase's remaining slots from the eligibility-gated pool. The
+         per-phase eligibility filter (#152) lets a Phase 1-assigned
+         member still appear in the Phase 2 picker for the migration
+         case.
       3. Spillover — unassigned members with known power go into the
-         sub pool. Power-unknown members are reported as gaps so the
-         officer can decide who to override below the floor.
+         event-level sub pool. Power-unknown members are reported as
+         gaps so the officer can decide who to override below the
+         floor.
 
     Returns the summary dict (also stored on `session.auto_fill_summary`).
-
-    Pool-source contract: this function ONLY auto-fills members present
-    in `session.members`. In structured mode, the upstream
-    `open_roster_builder` narrows that dict to signed-up members for
-    the team BEFORE constructing the session — so this function inherits
-    the signup-pool filter transitively. In free-tier mode, all roster
-    members are eligible. Tests in TestAutoFillRespectsMembersDict pin
-    this contract.
 
     The fill is officer-correctable — every assignment can be tweaked
     via the picker before Approve & Post.
     """
-    # Reset state — auto-fill is "redo from scratch".
-    for zone in list(session.assignments.keys()):
-        session.assignments[zone] = []
+    # ── Reset state ── auto-fill is "redo from scratch".
+    # Phase-aware: clear every phase's dicts. Flat: only phase 1 is
+    # touched.
+    for phase in session.iter_phases():
+        for zone in list(session.assignments_for_phase(phase).keys()):
+            session.assignments_for_phase(phase)[zone] = []
     session.subs = []
-    session.paired_subs = {}
+    session.paired_subs.clear()
+    session.paired_subs_p2.clear()
+    session.paired_subs_p3.clear()
     session.below_floor_overrides.clear()
+    session.below_floor_overrides_p2.clear()
+    session.below_floor_overrides_p3.clear()
 
     summary = {
         "per_member_rules_applied": 0,
@@ -564,21 +681,20 @@ def _auto_fill_session(session: RosterBuilderSession) -> dict:
         "conflicts":                [],  # short strings: rule application failures
     }
 
-    # ── 1. per_member zone rules ──
+    # Remember the officer's UI cursor; we mutate it while filling each
+    # phase so capacity / member-count helpers resolve correctly, then
+    # restore at the end.
+    original_phase = session.selected_phase
+
+    # ── 1. per_member zone rules ── (Phase 1 only on phase-aware)
+    session.selected_phase = 1
     for rule in session.per_member_rules:
         if rule.sub_type != "zone":
             continue
         subject = rule.subject.strip()
         zone = rule.value.strip()
-        # Same three-way resolution `_apply_rules_to_session` uses, so
-        # this consumer and the session-open pre-application can't drift.
         match_key = _resolve_per_member_subject(session.members, subject)
         if match_key is None:
-            # The opener pass (`_apply_rules_to_session`) already warned
-            # via `session.roster_errors`, but auto-fill is the consumer
-            # actually trying to place this rule. Record a conflict so
-            # the summary's "Per-member rules applied: N" lines up
-            # against the number of rules officers see in the editor.
             if subject:
                 summary["conflicts"].append(
                     f"per_member subject not on roster: {subject}"
@@ -594,93 +710,81 @@ def _auto_fill_session(session: RosterBuilderSession) -> dict:
                 f"{zone} full when pinning {subject}"
             )
             continue
+        # Cross-phase duplicate check: pinned member can't already be
+        # assigned in any phase or in the sub pool.
         if match_key in session.assigned_member_keys():
             summary["conflicts"].append(
                 f"{subject} pinned to multiple zones"
             )
             continue
-        session.assignments[zone].append(match_key)
+        session.assignments_for_phase(1)[zone].append(match_key)
         summary["per_member_rules_applied"] += 1
-        # A per_member pin of a power-unknown member is an officer
-        # decision to assign below the floor — record it in the
-        # override set so the rosters_tab `Override Below Floor`
-        # column lights up for that slot. Without this, an auto-fill
-        # decision is silently weaker than the equivalent manual
-        # assignment via the toggle.
         member = session.members.get(match_key)
         if member is not None and member.get("power") is None:
-            session.below_floor_overrides.add(match_key)
+            session.below_floor_overrides_for_phase(1).add(match_key)
 
-    # ── 2. Greedy fill by zone priority ──
-    # priority=0 means "no priority set" → sort to the end.
-    def _priority_key(z) -> int:
-        return z.priority if z.priority > 0 else 9999
+    # ── 2. Greedy fill by zone priority, per phase ──
+    # On flat presets we order once by the single `priority` field.
+    # On phase-aware presets the order is per-phase, so a preset can
+    # prioritise Power Tower in Phase 1 and Virus Lab in Phase 3.
+    # priority=0 means "no priority set" → sorts to the end via 9999.
+    def _phase_priority_key(p):
+        def key(z):
+            prio = z.priority_for_phase(p) if session.is_phase_aware else z.priority
+            return prio if prio > 0 else 9999
+        return key
 
-    zones_sorted = sorted(session.preset.zones, key=_priority_key)
-    for z in zones_sorted:
-        remaining = z.max_players - session.zone_member_count(z.zone)
-        if remaining <= 0:
-            continue
-        eligible_keys, _below = _eligible_member_keys_for_zone(session, z.zone)
-        if not eligible_keys:
-            continue
-        # eligible_keys is already sorted high-power-first AND
-        # name-tiebroken, so the result is deterministic across reads.
-        for key in eligible_keys[:remaining]:
-            session.assignments[z.zone].append(key)
-            summary["auto_filled_by_power"] += 1
-            # Did this member's power fall below the preset's per-team
-            # floor but pass the band-relaxed effective floor? If so,
-            # they're in via a power_band rule — count them honestly.
-            preset_floor = session.floor_for_zone(z.zone)
-            effective_floor = _effective_floor_for_zone(session, z.zone)
-            member_power = session.members[key].get("power")
-            if (
-                member_power is not None
-                and effective_floor < preset_floor
-                and member_power < preset_floor
-            ):
-                summary["power_band_rules_applied"] += 1
+    for phase in session.iter_phases():
+        session.selected_phase = phase
+        phase_assignments = session.assignments_for_phase(phase)
+        zones_sorted = sorted(session.preset.zones, key=_phase_priority_key(phase))
+        for z in zones_sorted:
+            remaining = session.zone_capacity(z.zone) - session.zone_member_count(z.zone)
+            if remaining <= 0:
+                continue
+            eligible_keys, _below = _eligible_member_keys_for_zone(session, z.zone)
+            if not eligible_keys:
+                continue
+            for key in eligible_keys[:remaining]:
+                phase_assignments[z.zone].append(key)
+                summary["auto_filled_by_power"] += 1
+                preset_floor = session.floor_for_zone(z.zone)
+                effective_floor = _effective_floor_for_zone(session, z.zone)
+                member_power = session.members[key].get("power")
+                if (
+                    member_power is not None
+                    and effective_floor < preset_floor
+                    and member_power < preset_floor
+                ):
+                    summary["power_band_rules_applied"] += 1
 
     # ── 3. Spillover (or pair) ──
-    # In paired mode, leftover known-power members get assigned as
-    # paired subs for unpaired primaries (in zone-priority order →
-    # highest-power-first to keep parity with the primary fill). In
-    # pool mode, leftovers go into the flat sub pool.
+    # Paired-sub pairing runs per phase: each phase's unpaired primaries
+    # get the strongest remaining sub for that phase. Subs are
+    # event-level so a member paired in phase 1 isn't pickable for
+    # phase 2 pairing (avoids double-booking the same sub seat).
     if session.is_paired:
-        unpaired = session.unpaired_primaries()
-        # Walk unpaired primaries in zone-priority order (already the
-        # order returned by unpaired_primaries since it iterates zones
-        # in preset order; auto-fill already greedy-filled in priority
-        # order, so this lines up). For each, pair with the next eligible
-        # member NOT already placed.
-        for primary_key in unpaired:
-            # Find the zone the primary is in so we can apply the right
-            # floor to the sub's eligibility.
-            primary_zone = None
-            for zone, zmembers in session.assignments.items():
-                if primary_key in zmembers:
-                    primary_zone = zone
-                    break
-            if not primary_zone:
-                continue
-            eligible_sub_keys, _below = _eligible_member_keys_for_zone(
-                session, primary_zone,
-            )
-            if not eligible_sub_keys:
-                continue
-            # Pair with the strongest eligible candidate. Count this in
-            # `auto_paired_subs` (not `auto_filled_by_power`) so the
-            # summary distinguishes primaries from paired subs —
-            # otherwise the embed reads "Auto-filled by power: 8" when
-            # really 4 primaries + 4 paired subs were placed.
-            session.paired_subs[primary_key] = eligible_sub_keys[0]
-            summary["auto_paired_subs"] += 1
+        for phase in session.iter_phases():
+            session.selected_phase = phase
+            phase_assignments = session.assignments_for_phase(phase)
+            phase_pairings = session.paired_subs_for_phase(phase)
+            unpaired = session.unpaired_primaries()
+            for primary_key in unpaired:
+                primary_zone = None
+                for zone, zmembers in phase_assignments.items():
+                    if primary_key in zmembers:
+                        primary_zone = zone
+                        break
+                if not primary_zone:
+                    continue
+                eligible_sub_keys, _below = _eligible_member_keys_for_zone(
+                    session, primary_zone,
+                )
+                if not eligible_sub_keys:
+                    continue
+                phase_pairings[primary_key] = eligible_sub_keys[0]
+                summary["auto_paired_subs"] += 1
 
-        # Anything else known-power → still surface as "available subs"
-        # the officer might want to swap in manually. Use the flat
-        # `subs` list as a holding area in paired mode (rendered as a
-        # diagnostic in the embed only when non-empty).
         assigned = session.assigned_member_keys()
         for key, m in session.members.items():
             if key in assigned:
@@ -697,9 +801,9 @@ def _auto_fill_session(session: RosterBuilderSession) -> dict:
             if m.get("power") is None:
                 summary["gaps"].append(m["name"])
                 continue
-            # Known-power leftovers → sub pool.
             session.subs.append(key)
 
+    session.selected_phase = original_phase
     session.auto_fill_summary = summary
     return summary
 
@@ -724,21 +828,48 @@ def _render_zone_line(session: RosterBuilderSession, zone_name: str) -> str:
     z = session.preset.find_zone(zone_name)
     if z is None:
         return f"• {zone_name} (?/?)"
-    count = session.zone_member_count(zone_name)
-    cap   = int(z.max_players)
-    if count == 0:
+    # Capacity readout. Phase-aware presets show every phase's count;
+    # flat presets show the single max_players count as before. Walks
+    # `iter_phases()` so 3-phase presets include P3 — hardcoding P1/P2
+    # left CS officers blind to Phase 3 fill state.
+    if session.is_phase_aware:
+        parts = [
+            f"P{p}: {session.zone_member_count(zone_name, phase=p)}/"
+            f"{int(z.max_for_phase(p))}"
+            for p in session.iter_phases()
+        ]
+        cap_readout = ", ".join(parts)
+        # Status reflects the currently-selected phase only — toggling
+        # phases re-colours the row, so officers can see "what's full
+        # in the phase I'm editing right now."
+        sel_count = session.zone_member_count(zone_name)
+        sel_cap = session.zone_capacity(zone_name)
+    else:
+        cap_readout = f"{session.zone_member_count(zone_name)}/{int(z.max_players)}"
+        sel_count = session.zone_member_count(zone_name)
+        sel_cap = int(z.max_players)
+    if sel_cap <= 0 and sel_count == 0:
+        # Zone with no capacity in the current phase (e.g. center zones
+        # in phase 1). Don't flag with the "empty" warning glyph.
+        status = "—"
+    elif sel_count == 0:
         status = "⬜"
-    elif count < cap:
+    elif sel_count < sel_cap:
         status = "🟡"
     else:
         status = "✅"
-    member_keys = session.assignments.get(zone_name, [])
+    # Member listing is for the SELECTED phase only — showing both
+    # phases inline would double the embed length on phase-aware
+    # presets, and the picker / assign actions operate on the
+    # selected phase anyway so listing the same set is consistent.
+    member_keys = session.assignments_for_phase(session.selected_phase).get(zone_name, [])
+    pairings = session.paired_subs_for_phase(session.selected_phase)
     names = []
     for k in member_keys:
         m = session.members.get(k)
         primary_label = m["name"] if m else f"<unknown:{k}>"
         if session.is_paired:
-            sub_key = session.paired_subs.get(k)
+            sub_key = pairings.get(k)
             if sub_key:
                 sub_m = session.members.get(sub_key)
                 sub_label = sub_m["name"] if sub_m else f"<unknown:{sub_key}>"
@@ -754,7 +885,7 @@ def _render_zone_line(session: RosterBuilderSession, zone_name: str) -> str:
     else:
         names_part = "(empty)"
     marker = " ←" if zone_name == session.selected_zone else ""
-    return f"{status} **{zone_name}** ({count}/{cap}){marker}: {names_part}"
+    return f"{status} **{zone_name}** ({cap_readout}){marker}: {names_part}"
 
 
 def _render_builder_embed(session: RosterBuilderSession) -> discord.Embed:
@@ -772,6 +903,14 @@ def _render_builder_embed(session: RosterBuilderSession) -> discord.Embed:
     if session.event_type == "DS":
         floor_label = "Min A" if session.team == "A" else "Min B"
         lines.append(f"⚖️ Enforcing **{floor_label}** floors for this team")
+    # Phase-aware (#152): surface the active phase prominently so an
+    # officer can see at a glance which phase the picker + assign
+    # buttons will mutate.
+    if session.is_phase_aware:
+        lines.append(
+            f"🔀 Editing **Phase {session.selected_phase}** "
+            f"_(use the Phase buttons below to switch)_"
+        )
     lines.append("")
     if session.is_paired:
         lines.append("**📋 Zones** _(paired mode — each primary has a dedicated sub)_")
@@ -817,8 +956,18 @@ def _render_builder_embed(session: RosterBuilderSession) -> discord.Embed:
             lines.append("🪑 **Subs**: _(none)_")
     lines.append("")
 
-    total_assigned = sum(len(v) for v in session.assignments.values())
-    total_capacity = sum(int(z.max_players) for z in session.preset.zones)
+    # Sum across every phase the preset declares. On flat presets this
+    # collapses to the original Phase 1 / max_players counts; on phase-
+    # aware presets the gauge sums P1+P2(+P3) assignments and the
+    # per-phase capacities so the readout matches reality (the prior
+    # code summed only Phase 1 and divided by `max_players` which is
+    # unset for phase-aware zones — produced "Filled: 2 / 0").
+    total_assigned = sum(
+        len(zone_members)
+        for phase in session.iter_phases()
+        for zone_members in session.assignments_for_phase(phase).values()
+    )
+    total_capacity = session.preset.total_capacity()
     lines.append(f"📊 **Filled:** {total_assigned} / {total_capacity}")
 
     selected = session.selected_zone
@@ -947,7 +1096,11 @@ def _eligible_member_keys_for_zone(
     `_effective_floor_for_zone` for the rationale.
     """
     floor = _effective_floor_for_zone(session, zone_name)
-    assigned = session.assigned_member_keys()
+    # Per-phase eligibility (#152): a member sitting in a Phase 1 slot
+    # is still pickable for Phase 2 (the migration case), so we only
+    # exclude members already in THIS phase's slots. Falls back to the
+    # union for flat presets via assigned_member_keys_in_phase(1).
+    assigned = session.assigned_member_keys_in_phase(session.selected_phase)
     eligible: list[str] = []
     below: list[str] = []
     for key, m in session.members.items():
@@ -995,11 +1148,55 @@ class RosterBuilderView(discord.ui.View):
         self.clear_items()
         s = self.session
 
-        # Row 0 — zone selector
+        # Row layout adapts to phase-aware (#152). Phase-aware presets
+        # reserve row 0 for the Phase 1 / Phase 2 nav buttons, pushing
+        # every other component down by one row. Flat presets keep the
+        # original 4-row layout (zone, member, actions, finalisation).
+        zone_row = 1 if s.is_phase_aware else 0
+        member_row = 2 if s.is_phase_aware else 1
+        action_row = 3 if s.is_phase_aware else 2
+        final_row = 4 if s.is_phase_aware else 3
+
+        # Row 0 — Phase navigation (phase-aware presets only). Walks
+        # `iter_phases()` so 3-phase presets get a Phase 3 button.
+        # Hardcoding `(1, 2)` left CS officers unable to edit Phase 3
+        # manually even though auto-fill placed members there.
+        if s.is_phase_aware:
+            for phase in s.iter_phases():
+                btn = discord.ui.Button(
+                    label=f"Phase {phase}"
+                          + (" •" if phase == s.selected_phase else ""),
+                    style=(discord.ButtonStyle.primary
+                           if phase == s.selected_phase
+                           else discord.ButtonStyle.secondary),
+                    row=0,
+                )
+
+                def _make_callback(p):
+                    async def _on_phase(inter: discord.Interaction):
+                        if not await self._guard_owner(inter):
+                            return
+                        s.selected_phase = p
+                        await self._refresh(inter)
+                    return _on_phase
+
+                btn.callback = _make_callback(phase)
+                self.add_item(btn)
+
+        # Row N — zone selector. Label shows the SELECTED phase's
+        # capacity (e.g. "Info Center (2/4)") on phase-aware presets so
+        # the dropdown stays scannable; the embed line still shows both
+        # phases' counts for the broader view.
         if s.preset.zones:
+            def _zone_option_label(z):
+                count = s.zone_member_count(z.zone)
+                cap = s.zone_capacity(z.zone)
+                if s.is_phase_aware:
+                    return f"P{s.selected_phase}: {z.zone} ({count}/{cap})"[:100]
+                return f"{z.zone} ({count}/{cap})"[:100]
             zone_options = [
                 discord.SelectOption(
-                    label=f"{z.zone} ({s.zone_member_count(z.zone)}/{int(z.max_players)})"[:100],
+                    label=_zone_option_label(z),
                     value=z.zone[:100],
                     default=(z.zone == s.selected_zone),
                 )
@@ -1009,6 +1206,7 @@ class RosterBuilderView(discord.ui.View):
                 placeholder="Pick a zone to edit…",
                 min_values=1, max_values=1,
                 options=zone_options,
+                row=zone_row,
             )
 
             async def _on_zone(inter: discord.Interaction):
@@ -1056,6 +1254,7 @@ class RosterBuilderView(discord.ui.View):
                 placeholder=placeholder[:150],
                 min_values=1, max_values=1,
                 options=options,
+                row=member_row,
             )
 
             async def _on_member(inter: discord.Interaction):
@@ -1088,9 +1287,13 @@ class RosterBuilderView(discord.ui.View):
                 # Record the override for the audit trail — anyone in
                 # `below` at assign time was assigned despite being
                 # below the effective floor (or having unknown power).
+                # Phase-aware (#152): both the assignment and the
+                # override flag write into the currently selected
+                # phase's dicts, so a member added to Phase 2 doesn't
+                # show up on Phase 1's audit trail.
                 if key in below:
-                    s.below_floor_overrides.add(key)
-                s.assignments[s.selected_zone].append(key)
+                    s.below_floor_overrides_for_phase(s.selected_phase).add(key)
+                s.assignments_for_phase(s.selected_phase)[s.selected_zone].append(key)
                 # Any manual edit invalidates the auto-fill summary —
                 # the names and counts the officer is reading no longer
                 # describe what's currently on the roster.
@@ -1114,7 +1317,7 @@ class RosterBuilderView(discord.ui.View):
             else "👁️ Show below-floor"
         )
         toggle_btn = discord.ui.Button(
-            label=toggle_label, style=discord.ButtonStyle.secondary, row=2,
+            label=toggle_label, style=discord.ButtonStyle.secondary, row=action_row,
         )
 
         async def _toggle(inter: discord.Interaction):
@@ -1127,7 +1330,7 @@ class RosterBuilderView(discord.ui.View):
         self.add_item(toggle_btn)
 
         unassign_btn = discord.ui.Button(
-            label="↩️ Unassign current zone", style=discord.ButtonStyle.secondary, row=2,
+            label="↩️ Unassign current zone", style=discord.ButtonStyle.secondary, row=action_row,
         )
 
         async def _unassign(inter: discord.Interaction):
@@ -1136,7 +1339,10 @@ class RosterBuilderView(discord.ui.View):
             if not s.selected_zone:
                 await inter.response.send_message("⚠️ Pick a zone first.", ephemeral=True)
                 return
-            s.assignments[s.selected_zone] = []
+            # Phase-aware (#152): only the selected phase's assignment
+            # is cleared. The other phase's slots stay intact so an
+            # officer can refine one phase without nuking the other.
+            s.assignments_for_phase(s.selected_phase)[s.selected_zone] = []
             s.prune_stale_overrides()
             s.prune_stale_pairings()
             s.auto_fill_summary = None
@@ -1146,13 +1352,16 @@ class RosterBuilderView(discord.ui.View):
         self.add_item(unassign_btn)
 
         move_to_subs_btn = discord.ui.Button(
-            label="🪑 Last to subs", style=discord.ButtonStyle.secondary, row=2,
+            label="🪑 Last to subs", style=discord.ButtonStyle.secondary, row=action_row,
         )
 
         async def _move_to_subs(inter: discord.Interaction):
             if not await self._guard_owner(inter):
                 return
-            members_in_zone = s.assignments.get(s.selected_zone, [])
+            # Move-to-subs operates on the selected phase's slot list.
+            members_in_zone = s.assignments_for_phase(s.selected_phase).get(
+                s.selected_zone, [],
+            )
             if not members_in_zone:
                 await inter.response.send_message(
                     "⚠️ No members in this zone to move.", ephemeral=True,
@@ -1176,7 +1385,7 @@ class RosterBuilderView(discord.ui.View):
         # reuses `_open_paired_sub_picker` for the actual swap.
         if s.is_paired:
             repair_btn = discord.ui.Button(
-                label="🔁 Re-pair sub", style=discord.ButtonStyle.secondary, row=2,
+                label="🔁 Re-pair sub", style=discord.ButtonStyle.secondary, row=action_row,
             )
 
             async def _repair(inter: discord.Interaction):
@@ -1193,7 +1402,7 @@ class RosterBuilderView(discord.ui.View):
         if s.is_structured:
             auto_fill_btn = discord.ui.Button(
                 label="🎯 Auto-fill",
-                style=discord.ButtonStyle.primary, row=2,
+                style=discord.ButtonStyle.primary, row=action_row,
             )
 
             async def _auto_fill(inter: discord.Interaction):
@@ -1245,7 +1454,7 @@ class RosterBuilderView(discord.ui.View):
 
             approve_btn = discord.ui.Button(
                 label="✅ Approve & Post",
-                style=discord.ButtonStyle.success, row=3,
+                style=discord.ButtonStyle.success, row=final_row,
             )
 
             async def _approve(inter: discord.Interaction):
@@ -1257,7 +1466,7 @@ class RosterBuilderView(discord.ui.View):
             self.add_item(approve_btn)
 
             preview_btn = discord.ui.Button(
-                label="📄 Preview mail", style=discord.ButtonStyle.secondary, row=3,
+                label="📄 Preview mail", style=discord.ButtonStyle.secondary, row=final_row,
             )
 
             async def _preview(inter: discord.Interaction):
@@ -1269,7 +1478,7 @@ class RosterBuilderView(discord.ui.View):
             self.add_item(preview_btn)
         else:
             mail_btn = discord.ui.Button(
-                label="📄 Generate mail", style=discord.ButtonStyle.primary, row=3,
+                label="📄 Generate mail", style=discord.ButtonStyle.primary, row=final_row,
             )
 
             async def _gen_mail(inter: discord.Interaction):
@@ -1281,7 +1490,7 @@ class RosterBuilderView(discord.ui.View):
             self.add_item(mail_btn)
 
             save_preset_btn = discord.ui.Button(
-                label="💾 Save as preset", style=discord.ButtonStyle.success, row=3,
+                label="💾 Save as preset", style=discord.ButtonStyle.success, row=final_row,
             )
 
             async def _save_preset(inter: discord.Interaction):
@@ -1297,7 +1506,7 @@ class RosterBuilderView(discord.ui.View):
         # the handler so the builder doesn't pay the import cost unless
         # the button's clicked.
         render_btn = discord.ui.Button(
-            label="🖼️ Render image", style=discord.ButtonStyle.secondary, row=3,
+            label="🖼️ Render image", style=discord.ButtonStyle.secondary, row=final_row,
         )
 
         async def _render(inter: discord.Interaction):
@@ -1310,7 +1519,7 @@ class RosterBuilderView(discord.ui.View):
 
         cancel_label = "❌ Cancel" if s.is_structured else "✅ Done"
         done_btn = discord.ui.Button(
-            label=cancel_label, style=discord.ButtonStyle.danger, row=3,
+            label=cancel_label, style=discord.ButtonStyle.danger, row=final_row,
         )
 
         async def _done(inter: discord.Interaction):
@@ -1387,10 +1596,25 @@ def _zone_of_primary(session: RosterBuilderSession, primary_key: str) -> str:
     """Return the zone a primary is currently assigned to, or the
     session's selected_zone as a fallback. The re-pair flow needs
     the primary's actual zone (not whatever the officer last
-    clicked on) so the sub-eligibility check enforces the right floor."""
-    for zone_name, keys in session.assignments.items():
+    clicked on) so the sub-eligibility check enforces the right floor.
+
+    Searches the selected phase first (so a primary assigned in both
+    P1 and P2 returns the phase the officer is currently editing),
+    then falls back to walking every other phase — without that walk
+    the lookup misses primaries assigned only to Phase 2 or Phase 3
+    and degrades to `selected_zone`, applying the wrong eligibility
+    floor to the paired sub."""
+    selected_phase = session.selected_phase
+    selected_zones = session.assignments_for_phase(selected_phase)
+    for zone_name, keys in selected_zones.items():
         if primary_key in keys:
             return zone_name
+    for phase in session.iter_phases():
+        if phase == selected_phase:
+            continue
+        for zone_name, keys in session.assignments_for_phase(phase).items():
+            if primary_key in keys:
+                return zone_name
     return session.selected_zone or ""
 
 
@@ -1540,12 +1764,16 @@ class _PairedSubPickerView(discord.ui.View):
             self.stop()
 
             s = self.main_view.session
-            s.paired_subs[self.primary_key] = sub_key
+            # Phase-aware (#152): pairing is per-phase. The primary
+            # was picked from the current phase's roster, so the sub
+            # binds to the same phase.
+            phase = s.selected_phase
+            s.paired_subs_for_phase(phase)[self.primary_key] = sub_key
             # If the sub was below-floor at pick time, capture it as an
             # override too so the rosters_tab write flags it.
             _eligible, below = _eligible_member_keys_for_zone(s, self.zone_name)
             if sub_key in below:
-                s.below_floor_overrides.add(sub_key)
+                s.below_floor_overrides_for_phase(phase).add(sub_key)
             # Manual edit invalidates the auto-fill summary.
             s.auto_fill_summary = None
 
@@ -1648,9 +1876,14 @@ async def _open_repair_primary_picker(
     primary; that picker resolves the primary's actual zone so the
     sub-eligibility floor is correct."""
     s = main_view.session
+    # Re-pair picker iterates the SELECTED phase's roster only. On
+    # phase-aware presets that means an officer on Phase 1 sees Phase 1
+    # primaries, and switching the phase-nav buttons before reopening
+    # the re-pair flow walks Phase 2 instead.
     primary_keys: list[tuple[str, str]] = []  # [(primary_key, zone_name)]
+    phase_assignments = s.assignments_for_phase(s.selected_phase)
     for z in s.preset.zones:
-        for key in s.assignments.get(z.zone, []):
+        for key in phase_assignments.get(z.zone, []):
             primary_keys.append((key, z.zone))
     if not primary_keys:
         try:
@@ -1706,12 +1939,13 @@ class _RepairPrimaryPickerView(discord.ui.View):
 
         s = main_view.session
         options: list[discord.SelectOption] = []
+        phase_pairings = s.paired_subs_for_phase(s.selected_phase)
         for primary_key, zone_name in primary_keys:
             m = s.members.get(primary_key)
             if not m:
                 continue
             primary_name = m.get("name") or primary_key
-            sub_key = s.paired_subs.get(primary_key)
+            sub_key = phase_pairings.get(primary_key)
             if sub_key:
                 sub_m = s.members.get(sub_key)
                 sub_name = sub_m.get("name") if sub_m else sub_key
@@ -1824,20 +2058,42 @@ class _SaveAsPresetModal(discord.ui.Modal, title="Save as preset"):
         s = self._view.session
         # Build a fresh PresetBuffer with zone capacities = current
         # filled counts (so re-applying the preset reproduces this roster).
+        # Preserves the session's phase shape — without phase_count +
+        # per-phase capacities, saving a phase-aware roster as a preset
+        # would silently strip it to flat and lose the phase-migration
+        # data the officer just built.
         import storm_strategy as ss
         new_zones = []
         for z in s.preset.zones:
-            cur_count = s.zone_member_count(z.zone)
+            # For each phase, prefer the live count if the officer
+            # filled any slots there, otherwise inherit the preset's
+            # capacity so re-applying produces the same shape.
+            def _cap_for(phase: int) -> int:
+                cur = s.zone_member_count(z.zone, phase=phase)
+                if cur > 0:
+                    return cur
+                return int(z.max_for_phase(phase) or 0)
+
+            flat_count = s.zone_member_count(z.zone, phase=1)
             new_zones.append(ss.ZoneRow(
                 zone=z.zone,
-                max_players=cur_count if cur_count > 0 else int(z.max_players),
+                max_players=(
+                    flat_count if flat_count > 0 else int(z.max_players)
+                ),
+                max_phase1=_cap_for(1),
+                max_phase2=_cap_for(2),
+                max_phase3=_cap_for(3),
                 min_power_a=int(z.min_power_a or 0),
                 min_power_b=int(z.min_power_b or 0),
                 priority=int(z.priority or 0),
+                priority_phase1=int(z.priority_phase1 or 0),
+                priority_phase2=int(z.priority_phase2 or 0),
+                priority_phase3=int(z.priority_phase3 or 0),
             ))
         buf = ss.PresetBuffer(
             name=name, event_type=s.event_type, zones=new_zones,
             faction=s.preset.faction,
+            phase_count=s.preset.phase_count,
         )
         ok = await asyncio.to_thread(
             ss.save_preset, s.guild_id, s.event_type, buf,
@@ -1954,6 +2210,7 @@ async def _render_and_attach(
 
 def _mail_zone_and_sub_lists(
     session: RosterBuilderSession,
+    phase: int = 1,
 ) -> tuple[dict[str, list[str]], list[str]]:
     """Return `(zones_for_mail, sub_names)` honoring the session's
     sub_mode.
@@ -1968,10 +2225,18 @@ def _mail_zone_and_sub_lists(
     finding was that paired subs were silently invisible in the mail
     because `session.subs` was the only sub source the mail builder
     saw, and `session.subs` is empty for paired-only rosters.
+
+    `phase` (#152): 1 or 2. Selects which phase's assignments and
+    paired-sub map to render. Flat presets ignore this and always
+    return phase-1 data. The global sub pool is event-level (not
+    per-phase) and is only attached to phase 1's return — phase 2
+    returns an empty sub list to avoid duplicating subs across blocks.
     """
     zones_for_mail: dict[str, list[str]] = {}
     is_paired = (session.sub_mode == "paired")
-    for zone_name, keys in session.assignments.items():
+    assignments = session.assignments_for_phase(phase)
+    pairings = session.paired_subs_for_phase(phase)
+    for zone_name, keys in assignments.items():
         if not keys:
             continue
         names: list[str] = []
@@ -1981,7 +2246,7 @@ def _mail_zone_and_sub_lists(
                 continue
             label = m["name"]
             if is_paired:
-                sub_key = session.paired_subs.get(k)
+                sub_key = pairings.get(k)
                 if sub_key is not None:
                     sub_m = session.members.get(sub_key)
                     if sub_m is not None:
@@ -1992,13 +2257,71 @@ def _mail_zone_and_sub_lists(
 
     # Overflow / pool subs render in the global sub block. In paired
     # mode these are the unmatched leftovers (`session.subs`), distinct
-    # from the inline paired subs above.
-    sub_names = [
-        session.members[k]["name"]
-        for k in session.subs
-        if k in session.members
-    ]
+    # from the inline paired subs above. Subs are event-level so they
+    # only attach to the phase-1 return; phase 2 callers get an empty
+    # list and don't double-render them.
+    if phase == 1:
+        sub_names = [
+            session.members[k]["name"]
+            for k in session.subs
+            if k in session.members
+        ]
+    else:
+        sub_names = []
     return zones_for_mail, sub_names
+
+
+def _build_mail_for_phase(
+    session: RosterBuilderSession, phase: int,
+) -> str:
+    """Build the mail body for a single phase, delegating to the
+    event-specific storm.build_*_mail. Phase 2 callers pass an empty
+    sub list so the global sub block only renders once (with phase 1)."""
+    import storm
+    zones_for_mail, sub_names = _mail_zone_and_sub_lists(session, phase=phase)
+    if session.event_type == "DS":
+        return storm.build_ds_mail(
+            team=session.team or "A",
+            zones=zones_for_mail,
+            subs=sub_names,
+            time_key="1",
+            guild_id=session.guild_id,
+        )
+    # CS mail builder doesn't take subs as a separate arg — they're
+    # part of the zones dict under CS_SUBS_KEY.
+    cs_zones = dict(zones_for_mail)
+    if sub_names:
+        try:
+            cs_zones[storm.CS_SUBS_KEY] = sub_names
+        except AttributeError:
+            pass
+    return storm.build_cs_mail(
+        team=session.team or "A",
+        z=cs_zones,
+        time_key="1",
+        guild_id=session.guild_id,
+    )
+
+
+def _build_mail_body(session: RosterBuilderSession) -> str:
+    """Top-level mail builder. Flat presets emit one block. Phase-aware
+    presets (#152) emit one block per phase separated by `Phase N`
+    headers so leadership can copy-paste the full event into one mail.
+
+    Walks `session.iter_phases()` so a 2-phase preset emits Phase 1 + 2
+    and a 3-phase preset emits Phase 1 + 2 + 3. Pre-#152-extension the
+    builder hardcoded Phase 1 + Phase 2 only; 3-phase Phase 3 was
+    silently dropped from the mailed roster while auto-fill + rosters_tab
+    still recorded those slots.
+    """
+    if not session.is_phase_aware:
+        return _build_mail_for_phase(session, phase=1)
+
+    blocks: list[str] = []
+    for phase in session.iter_phases():
+        body = _build_mail_for_phase(session, phase=phase)
+        blocks.append(f"**Phase {phase}**\n\n{body}")
+    return "\n\n".join(blocks)
 
 
 async def _send_mail_preview(
@@ -2007,32 +2330,7 @@ async def _send_mail_preview(
     """Build the text-template mail from the current roster and post a
     preview ephemerally. Officer copies it into the alliance's mail
     system manually (no auto-post in v1)."""
-    import storm
-    zones_for_mail, sub_names = _mail_zone_and_sub_lists(session)
-
-    if session.event_type == "DS":
-        mail = storm.build_ds_mail(
-            team=session.team or "A",
-            zones=zones_for_mail,
-            subs=sub_names,
-            time_key="1",
-            guild_id=session.guild_id,
-        )
-    else:
-        # CS mail builder doesn't take subs as a separate arg — they're
-        # part of the zones dict under CS_SUBS_KEY.
-        cs_zones = dict(zones_for_mail)
-        if sub_names:
-            try:
-                cs_zones[storm.CS_SUBS_KEY] = sub_names
-            except AttributeError:
-                pass
-        mail = storm.build_cs_mail(
-            team=session.team or "A",
-            z=cs_zones,
-            time_key="1",
-            guild_id=session.guild_id,
-        )
+    mail = _build_mail_body(session)
 
     # Truncate to fit a Discord message — keep within 1900 chars so the
     # code-fence framing stays under 2000.
@@ -2120,32 +2418,10 @@ async def _finalize_structured_roster(
             s.guild_id, s.event_date, e,
         )
 
-    # Build mail — `_mail_zone_and_sub_lists` honors paired sub_mode so
-    # paired subs render inline ("Alice + sub Bob") instead of being
-    # silently dropped from the mail.
-    zones_for_mail, sub_names = _mail_zone_and_sub_lists(s)
-
-    if s.event_type == "DS":
-        mail = storm.build_ds_mail(
-            team=s.team or "A",
-            zones=zones_for_mail,
-            subs=sub_names,
-            time_key="1",
-            guild_id=s.guild_id,
-        )
-    else:
-        cs_zones = dict(zones_for_mail)
-        if sub_names:
-            try:
-                cs_zones[storm.CS_SUBS_KEY] = sub_names
-            except AttributeError:
-                pass
-        mail = storm.build_cs_mail(
-            team=s.team or "A",
-            z=cs_zones,
-            time_key="1",
-            guild_id=s.guild_id,
-        )
+    # Build mail — `_build_mail_body` honors paired sub_mode (paired
+    # subs render inline as "Alice + sub Bob") and phase-aware presets
+    # (two phase blocks under "**Phase 1**" / "**Phase 2**" headers).
+    mail = _build_mail_body(s)
 
     cfg = config.get_storm_config(s.guild_id, s.event_type)
     post_channel_id = int(cfg.get("post_channel_id") or 0)
@@ -2311,11 +2587,19 @@ def _find_judicator_candidates(session: RosterBuilderSession) -> list[str]:
     after matchmaking reveals Rulebringers — at which point the actual
     line-up is known and a paired sub who took the slot is a
     legitimate candidate. Flat sub-pool members are still excluded;
-    they're a bench, not a designated replacement."""
+    they're a bench, not a designated replacement.
+
+    Walks `iter_phases()` so a 3-phase preset (CS, the explicit
+    motivator for phase support) catches Judicator candidates placed
+    in Phase 2 or Phase 3 — e.g. a Virus Lab pick that only opens in
+    Phase 3. The earlier implementation iterated only `assignments` /
+    `paired_subs` (Phase 1 only), silently dropping later-phase
+    candidates."""
     assigned: set[str] = set()
-    for zone_members in session.assignments.values():
-        assigned.update(zone_members)
-    assigned.update(session.paired_subs.values())
+    for phase in session.iter_phases():
+        for zone_members in session.assignments_for_phase(phase).values():
+            assigned.update(zone_members)
+        assigned.update(session.paired_subs_for_phase(phase).values())
     candidates: list[str] = []
     for rule in session.per_member_rules:
         if rule.sub_type != "special_role" or rule.value.strip().lower() != "judicator":
@@ -2536,7 +2820,7 @@ class _FactionRolesView(discord.ui.View):
 
 
 _ROSTERS_HEADER = [
-    "Event Date", "Team", "Zone", "Member", "Role",
+    "Event Date", "Team", "Phase", "Zone", "Member", "Role",
     "Power at Assignment", "Discord ID", "Override Below Floor",
     "Paired With", "Posted At (UTC)",
 ]
@@ -2596,74 +2880,121 @@ def _write_rosters_tab(session: RosterBuilderSession) -> list[str]:
         except Exception as e:
             existing = []
             errors.append(f"rosters tab header read failed: {e}")
-        if existing and "Paired With" not in existing:
+        # Two header migrations to handle:
+        # - "Paired With" column (added in #132)
+        # - "Phase" column (added in #152) — inserted at position 2
+        #   between Team and Zone, so EVERY existing data row needs a
+        #   blank cell shifted in at position 2 to keep header-name
+        #   lookups (e.g. `header.index("Zone")` → row[3]) honest.
+        # Without the row-rewrite, an old row's Zone string would sit
+        # under the new "Phase" column and Zone would read as Member,
+        # corrupting every downstream read.
+        needs_header_migration = existing and (
+            "Paired With" not in existing or "Phase" not in existing
+        )
+        if needs_header_migration:
             try:
-                ws.update("A1", [_ROSTERS_HEADER], value_input_option="RAW")
+                old_header = list(existing)
+                old_idx = {c: i for i, c in enumerate(old_header)}
+                # Translate each existing data row into the new column
+                # order via name lookup, defaulting missing cells to "".
+                rewritten_rows: list[list[str]] = [list(_ROSTERS_HEADER)]
+                for row in (all_values[1:] if all_values else []):
+                    new_row: list[str] = []
+                    for col_name in _ROSTERS_HEADER:
+                        if col_name == "Phase" and "Phase" not in old_idx:
+                            # Old rows pre-date phase support — they
+                            # represent a flat (single-phase) roster.
+                            # Write "1" so loaders can join on phase
+                            # without seeing blanks across the wire.
+                            new_row.append("1")
+                            continue
+                        idx = old_idx.get(col_name, -1)
+                        if 0 <= idx < len(row):
+                            new_row.append(str(row[idx]))
+                        else:
+                            new_row.append("")
+                    rewritten_rows.append(new_row)
+                # `ws.clear()` is reliable + atomic-from-the-reader's-
+                # perspective (gspread queues both calls back-to-back).
+                ws.clear()
+                ws.update("A1", rewritten_rows, value_input_option="RAW")
             except Exception as e:
                 errors.append(
                     f"rosters tab header migration failed (data still "
-                    f"appended, but readers may not see Paired With): {e}"
+                    f"appended, but readers may not see new columns): {e}"
                 )
 
     from config import _utcnow_iso
     posted_at = _utcnow_iso()
     rows: list[list[str]] = []
-    for z in session.preset.zones:
-        for key in session.assignments.get(z.zone, []):
-            m = session.members.get(key)
-            if not m:
-                continue
-            power = m.get("power")
-            override = "yes" if key in session.below_floor_overrides else ""
-            rows.append([
-                session.event_date or "",
-                session.team or "",
-                z.zone,
-                m["name"],
-                "primary",
-                str(power) if power is not None else "unknown",
-                m.get("discord_id") or "",
-                override,
-                "",  # Paired With — primary rows leave blank.
-                posted_at,
-            ])
-            # In paired mode, the sub partnered with this primary is
-            # written as its own row immediately after, so post-event
-            # review can see "Alice (primary) at Power Tower → Bob (sub
-            # paired)" in row order.
-            if session.is_paired:
-                sub_key = session.paired_subs.get(key)
-                if sub_key:
-                    sub_m = session.members.get(sub_key)
-                    if sub_m:
-                        sub_power = sub_m.get("power")
-                        sub_override = (
-                            "yes" if sub_key in session.below_floor_overrides else ""
-                        )
-                        rows.append([
-                            session.event_date or "",
-                            session.team or "",
-                            z.zone,
-                            sub_m["name"],
-                            "sub",
-                            str(sub_power) if sub_power is not None else "unknown",
-                            sub_m.get("discord_id") or "",
-                            sub_override,
-                            m["name"],  # Paired With → the primary
-                            posted_at,
-                        ])
+    # Iterate phases the session knows about. Flat presets yield [1]
+    # only — same row shape as before, with "1" written in the Phase
+    # column for traceability (and a literal "1" matches the implicit
+    # phase a flat preset represents). Phase-aware presets yield both
+    # phases so a Phase 2-only zone (Arsenal / Silo / Mercenary Factory
+    # on a phase-migration alliance) gets its rows written too.
+    for phase in session.iter_phases():
+        phase_assignments = session.assignments_for_phase(phase)
+        phase_pairings = session.paired_subs_for_phase(phase)
+        phase_overrides = session.below_floor_overrides_for_phase(phase)
+        phase_cell = str(phase)
+        for z in session.preset.zones:
+            for key in phase_assignments.get(z.zone, []):
+                m = session.members.get(key)
+                if not m:
+                    continue
+                power = m.get("power")
+                override = "yes" if key in phase_overrides else ""
+                rows.append([
+                    session.event_date or "",
+                    session.team or "",
+                    phase_cell,
+                    z.zone,
+                    m["name"],
+                    "primary",
+                    str(power) if power is not None else "unknown",
+                    m.get("discord_id") or "",
+                    override,
+                    "",  # Paired With — primary rows leave blank.
+                    posted_at,
+                ])
+                if session.is_paired:
+                    sub_key = phase_pairings.get(key)
+                    if sub_key:
+                        sub_m = session.members.get(sub_key)
+                        if sub_m:
+                            sub_power = sub_m.get("power")
+                            sub_override = (
+                                "yes" if sub_key in phase_overrides else ""
+                            )
+                            rows.append([
+                                session.event_date or "",
+                                session.team or "",
+                                phase_cell,
+                                z.zone,
+                                sub_m["name"],
+                                "sub",
+                                str(sub_power) if sub_power is not None else "unknown",
+                                sub_m.get("discord_id") or "",
+                                sub_override,
+                                m["name"],  # Paired With → the primary
+                                posted_at,
+                            ])
+
     # Pool-mode subs (or paired-mode overflow) — written without a
-    # paired-with reference.
+    # paired-with reference. Subs are event-level (no phase scope) so
+    # they don't repeat per phase — written once with the Phase cell
+    # left blank to distinguish from primary/paired-sub rows.
     for key in session.subs:
         m = session.members.get(key)
         if not m:
             continue
         power = m.get("power")
-        # Subs aren't subject to the per-zone floor; don't propagate the
-        # override flag to the sub slot.
         rows.append([
             session.event_date or "",
             session.team or "",
+            "",  # Phase — sub-pool rows are event-level, not phase-scoped.
             "",
             m["name"],
             "sub",

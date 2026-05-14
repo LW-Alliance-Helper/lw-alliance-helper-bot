@@ -605,7 +605,12 @@ class TestWriteRostersTab:
         # Header + 3 data rows.
         assert rows[0] == srb._ROSTERS_HEADER
         # Pull just the (member, role, power) for assertion stability.
-        data = [(r[3], r[4], r[5]) for r in rows[1:]]
+        # Use header.index so a new column inserted upstream doesn't
+        # silently shift the assertion.
+        mc = srb._ROSTERS_HEADER.index("Member")
+        rc = srb._ROSTERS_HEADER.index("Role")
+        pc = srb._ROSTERS_HEADER.index("Power at Assignment")
+        data = [(r[mc], r[rc], r[pc]) for r in rows[1:]]
         assert ("Alice", "primary", "412000000") in data
         assert ("Bob",   "primary", "350000000") in data
         assert ("Carol", "sub",     "280000000") in data
@@ -623,8 +628,10 @@ class TestWriteRostersTab:
         assert errors == []
         ws = fake.worksheet("DS Rosters")
         rows = ws.get_all_values()
-        data_rows = [r for r in rows[1:] if r and r[3] == "Erin"]
-        assert data_rows[0][5] == "unknown"
+        mc = srb._ROSTERS_HEADER.index("Member")
+        pc = srb._ROSTERS_HEADER.index("Power at Assignment")
+        data_rows = [r for r in rows[1:] if r and r[mc] == "Erin"]
+        assert data_rows[0][pc] == "unknown"
 
     def test_event_date_and_team_in_each_row(self, fake_env):
         fake, gid = fake_env
@@ -667,7 +674,8 @@ class TestOverrideBelowFloorCapture:
         ws = fake.worksheet("DS Rosters")
         rows = ws.get_all_values()
         col = self._override_col()
-        carol_row = next(r for r in rows[1:] if r[3] == "Carol")
+        mc = srb._ROSTERS_HEADER.index("Member")
+        carol_row = next(r for r in rows[1:] if r[mc] == "Carol")
         assert carol_row[col] == "yes"
 
     def test_at_floor_member_flag_blank(self, fake_env):
@@ -683,7 +691,8 @@ class TestOverrideBelowFloorCapture:
         ws = fake.worksheet("DS Rosters")
         rows = ws.get_all_values()
         col = self._override_col()
-        alice_row = next(r for r in rows[1:] if r[3] == "Alice")
+        mc = srb._ROSTERS_HEADER.index("Member")
+        alice_row = next(r for r in rows[1:] if r[mc] == "Alice")
         assert alice_row[col] == ""
 
     def test_sub_role_never_carries_override(self, fake_env):
@@ -702,7 +711,8 @@ class TestOverrideBelowFloorCapture:
         ws = fake.worksheet("DS Rosters")
         rows = ws.get_all_values()
         col = self._override_col()
-        carol_row = next(r for r in rows[1:] if r[3] == "Carol")
+        mc = srb._ROSTERS_HEADER.index("Member")
+        carol_row = next(r for r in rows[1:] if r[mc] == "Carol")
         assert carol_row[col] == ""
 
     def test_prune_clears_unassigned_overrides(self):
@@ -1863,7 +1873,8 @@ class TestPowerSnapshotAtFinalize:
         roster_ws = fake.worksheet("DS Rosters")
         rows = roster_ws.get_all_values()
         col = srb._ROSTERS_HEADER.index("Power at Assignment")
-        alice_row = next(r for r in rows[1:] if r[3] == "Alice")
+        mc = srb._ROSTERS_HEADER.index("Member")
+        alice_row = next(r for r in rows[1:] if r[mc] == "Alice")
         assert alice_row[col] == str(500_000_000)
 
 
@@ -1946,7 +1957,8 @@ class TestRostersTabHeaderMigration:
 
     def test_old_header_rewritten_in_place(self, fake_env):
         fake, gid = fake_env
-        # Seed an old-shape rosters_tab — the pre-#132 9-column header.
+        # Seed an old-shape rosters_tab — the pre-#132 9-column header
+        # (no `Paired With`, no `Phase`).
         old_rosters = fake.add_worksheet("DS Rosters")
         old_rosters._rows = [
             ["Event Date", "Team", "Zone", "Member", "Role",
@@ -1956,7 +1968,9 @@ class TestRostersTabHeaderMigration:
              "300000000", "1", "", ""],
         ]
 
-        # Build a session and finalise — header should migrate.
+        # Build a session and finalise — header should migrate AND the
+        # existing data row should shift so each value lands under the
+        # same column name in the new header.
         members = {
             "1001": {"key": "1001", "name": "Alice", "discord_id": "1001",
                      "power": 412_000_000, "not_on_discord": False},
@@ -1970,10 +1984,22 @@ class TestRostersTabHeaderMigration:
 
         new_header = old_rosters._rows[0]
         assert "Paired With" in new_header
+        assert "Phase" in new_header
         # Migrated header matches the canonical shape.
         assert new_header == srb._ROSTERS_HEADER
-        # Prior data row preserved (header migration only touches row 1).
-        assert old_rosters._rows[1][3] == "Old"
+        # Prior data row preserved AND re-aligned to the new column
+        # order. `Member` is at index 4 in the new shape (after Phase
+        # was inserted at idx 2); without the row shift the migration
+        # would silently corrupt every column-name read.
+        member_idx = srb._ROSTERS_HEADER.index("Member")
+        zone_idx = srb._ROSTERS_HEADER.index("Zone")
+        phase_idx = srb._ROSTERS_HEADER.index("Phase")
+        prior_row = old_rosters._rows[1]
+        assert prior_row[member_idx] == "Old"
+        assert prior_row[zone_idx] == "Power Tower"
+        # Pre-#152 rows get phase "1" so loaders can join on phase
+        # without seeing blanks.
+        assert prior_row[phase_idx] == "1"
 
 
 class TestFactionRolesSchemaAndApply:
@@ -2061,3 +2087,421 @@ class TestAutoFillSummarySplitsPairedFromPrimary:
         summary = srb._auto_fill_session(session)
         # Pool mode never pairs.
         assert summary["auto_paired_subs"] == 0
+
+
+# ── #152: phase-aware roster session ────────────────────────────────────────
+
+
+def _make_phase_aware_session(*, sub_mode: str = "pool"):
+    zones = [
+        ss.ZoneRow(zone="Info Center", max_players=0,
+                   max_phase1=2, max_phase2=1,
+                   min_power_a=200_000_000, min_power_b=100_000_000),
+        ss.ZoneRow(zone="Arsenal", max_players=0,
+                   max_phase1=0, max_phase2=4,
+                   min_power_a=0, min_power_b=0),
+    ]
+    preset = ss.PresetBuffer(name="Phased", event_type="DS",
+                             zones=zones, uses_phases=True)
+    members = {
+        "1": {"key": "1", "name": "Alice", "discord_id": "1",
+              "power": 412_000_000, "not_on_discord": False},
+        "2": {"key": "2", "name": "Bob",   "discord_id": "2",
+              "power": 350_000_000, "not_on_discord": False},
+        "3": {"key": "3", "name": "Cyrus", "discord_id": "3",
+              "power": 300_000_000, "not_on_discord": False},
+    }
+    return srb.RosterBuilderSession(
+        guild_id=1, user_id=42, event_type="DS",
+        team="A", preset=preset, members=members,
+        per_member_rules=[], power_band_rules=[],
+        sub_mode=sub_mode,
+    )
+
+
+class TestSessionPhaseAware:
+    def test_flat_session_is_phase_aware_false(self):
+        s = _make_session(team="A")
+        assert s.is_phase_aware is False
+        assert s.iter_phases() == [1]
+
+    def test_phase_aware_session_iterates_both_phases(self):
+        s = _make_phase_aware_session()
+        assert s.is_phase_aware is True
+        assert s.iter_phases() == [1, 2]
+
+    def test_assignments_for_phase_returns_correct_dict(self):
+        s = _make_phase_aware_session()
+        s.assignments["Info Center"].append("1")
+        s.assignments_p2["Arsenal"].append("2")
+        assert s.assignments_for_phase(1)["Info Center"] == ["1"]
+        assert s.assignments_for_phase(2)["Arsenal"] == ["2"]
+        # Phase 1 doesn't accidentally see phase 2's Arsenal assignment.
+        assert s.assignments_for_phase(1)["Arsenal"] == []
+
+    def test_zone_capacity_phase_aware_returns_per_phase_cap(self):
+        s = _make_phase_aware_session()
+        assert s.zone_capacity("Info Center", phase=1) == 2
+        assert s.zone_capacity("Info Center", phase=2) == 1
+        assert s.zone_capacity("Arsenal", phase=2) == 4
+
+    def test_zone_capacity_flat_ignores_phase_argument(self):
+        s = _make_session(team="A")
+        # Flat preset returns max_players regardless of phase.
+        assert s.zone_capacity("Power Tower", phase=1) == 4
+        assert s.zone_capacity("Power Tower", phase=2) == 4
+
+    def test_zone_member_count_defaults_to_selected_phase(self):
+        s = _make_phase_aware_session()
+        s.assignments["Info Center"].append("1")
+        s.assignments_p2["Arsenal"].append("2")
+        s.selected_phase = 1
+        assert s.zone_member_count("Info Center") == 1
+        s.selected_phase = 2
+        assert s.zone_member_count("Arsenal") == 1
+
+    def test_assigned_member_keys_unions_both_phases(self):
+        s = _make_phase_aware_session()
+        s.assignments["Info Center"].append("1")          # Alice in P1
+        s.assignments_p2["Arsenal"].append("2")           # Bob in P2
+        s.subs.append("3")                                # Cyrus in subs
+        assert s.assigned_member_keys() == {"1", "2", "3"}
+
+    def test_prune_stale_pairings_walks_both_phases(self):
+        s = _make_phase_aware_session(sub_mode="paired")
+        s.assignments["Info Center"].append("1")
+        s.paired_subs["1"] = "2"
+        s.assignments_p2["Arsenal"].append("1")
+        s.paired_subs_p2["1"] = "3"
+        # Now drop the P2 primary — phase-2 pairing should evaporate
+        # but phase-1 stays.
+        s.assignments_p2["Arsenal"].clear()
+        s.prune_stale_pairings()
+        assert s.paired_subs == {"1": "2"}
+        assert s.paired_subs_p2 == {}
+
+    def test_prune_stale_overrides_walks_both_phases(self):
+        s = _make_phase_aware_session()
+        s.assignments["Info Center"].append("1")
+        s.below_floor_overrides.add("1")
+        s.assignments_p2["Arsenal"].append("2")
+        s.below_floor_overrides_p2.add("2")
+        # Clear phase-1 assignment — its override goes too.
+        s.assignments["Info Center"].clear()
+        s.prune_stale_overrides()
+        assert s.below_floor_overrides == set()
+        assert s.below_floor_overrides_p2 == {"2"}
+
+
+def _make_three_phase_session():
+    """Build a session backed by a 3-phase CS preset for the new
+    Phase 3 attribute / iteration coverage."""
+    zones = [
+        ss.ZoneRow(zone="Power Tower", max_players=0,
+                   max_phase1=2, max_phase2=2, max_phase3=2,
+                   min_power_a=100_000_000,
+                   priority_phase1=1, priority_phase2=2, priority_phase3=3),
+        ss.ZoneRow(zone="Virus Lab", max_players=0,
+                   max_phase3=2,
+                   min_power_a=0,
+                   priority_phase3=1),
+    ]
+    preset = ss.PresetBuffer(name="ThreePhase", event_type="CS",
+                             zones=zones, phase_count=3,
+                             faction="Rulebringers")
+    members = {
+        str(i): {"key": str(i), "name": f"M{i}", "discord_id": str(i),
+                 "power": 500_000_000 - i * 10_000_000,
+                 "not_on_discord": False}
+        for i in range(1, 7)
+    }
+    return srb.RosterBuilderSession(
+        guild_id=1, user_id=42, event_type="CS",
+        team="A", preset=preset, members=members,
+        per_member_rules=[], power_band_rules=[],
+        sub_mode="pool",
+    )
+
+
+class TestSessionThreePhase:
+    def test_iter_phases_yields_one_two_three(self):
+        s = _make_three_phase_session()
+        assert s.iter_phases() == [1, 2, 3]
+        assert s.phase_count == 3
+        assert s.is_phase_aware is True
+
+    def test_assignments_for_phase_three(self):
+        s = _make_three_phase_session()
+        s.assignments_p3["Power Tower"].append("1")
+        assert s.assignments_for_phase(3)["Power Tower"] == ["1"]
+        assert s.assignments_for_phase(1)["Power Tower"] == []
+        assert s.assignments_for_phase(2)["Power Tower"] == []
+
+    def test_zone_capacity_phase_three(self):
+        s = _make_three_phase_session()
+        assert s.zone_capacity("Power Tower", phase=3) == 2
+        # Virus Lab is Phase 3 only — phases 1 and 2 cap to 0.
+        assert s.zone_capacity("Virus Lab", phase=1) == 0
+        assert s.zone_capacity("Virus Lab", phase=2) == 0
+        assert s.zone_capacity("Virus Lab", phase=3) == 2
+
+    def test_auto_fill_three_phase_uses_per_phase_priority(self):
+        s = _make_three_phase_session()
+        summary = srb._auto_fill_session(s)
+        # Phase 3 has two zones (PT + VL), both with priority 1 and 3
+        # respectively, both with capacity 2. With the per-phase
+        # priority, Virus Lab (priority 1 in P3) should fill before
+        # Power Tower (priority 3 in P3). Hard to assert order on the
+        # final list directly, but the summary's total counts should
+        # be 2 (PT P1) + 2 (PT P2) + 2 (PT P3) + 2 (VL P3) = 8.
+        assert summary["auto_filled_by_power"] == 8
+        # Phase 3 had Virus Lab and Power Tower both filled.
+        assert len(s.assignments_p3["Virus Lab"]) == 2
+        assert len(s.assignments_p3["Power Tower"]) == 2
+
+
+class TestMailBodyPhaseAware:
+    def test_flat_mail_has_no_phase_headers(self):
+        s = _make_session(team="A", members={
+            "1": {"key": "1", "name": "Alice", "discord_id": "1",
+                  "power": 412_000_000, "not_on_discord": False},
+        })
+        s.assignments["Power Tower"].append("1")
+        body = srb._build_mail_body(s)
+        assert "Phase 1" not in body
+        assert "Phase 2" not in body
+        assert "Alice" in body
+
+    def test_phase_aware_mail_emits_phase_headers(self):
+        s = _make_phase_aware_session()
+        s.assignments["Info Center"].append("1")          # Alice in P1
+        s.assignments_p2["Arsenal"].append("2")           # Bob in P2
+        body = srb._build_mail_body(s)
+        assert "**Phase 1**" in body
+        assert "**Phase 2**" in body
+        # Both members appear, each under its phase block.
+        p1_start = body.index("**Phase 1**")
+        p2_start = body.index("**Phase 2**")
+        assert "Alice" in body[p1_start:p2_start]
+        assert "Bob"   in body[p2_start:]
+
+    def test_phase_aware_mail_subs_only_in_phase_one_block(self):
+        s = _make_phase_aware_session()
+        s.assignments["Info Center"].append("1")
+        s.assignments_p2["Arsenal"].append("2")
+        s.subs.append("3")
+        body = srb._build_mail_body(s)
+        # Phase 1 block carries the subs line (Cyrus); phase 2 doesn't
+        # double-print them.
+        p1_start = body.index("**Phase 1**")
+        p2_start = body.index("**Phase 2**")
+        p1_block = body[p1_start:p2_start]
+        p2_block = body[p2_start:]
+        assert "Cyrus" in p1_block
+        assert "Cyrus" not in p2_block
+
+
+class TestPhaseAwareEligibility:
+    """The picker excludes already-assigned members in the *current*
+    phase only — a member in Phase 1 can still be picked for Phase 2
+    (the migration use case)."""
+
+    def test_assigned_member_keys_in_phase_only_returns_that_phase(self):
+        s = _make_phase_aware_session()
+        s.assignments["Info Center"].append("1")
+        s.assignments_p2["Arsenal"].append("2")
+        s.subs.append("3")
+        # Phase 1: Alice in primaries, Cyrus in sub pool.
+        assert s.assigned_member_keys_in_phase(1) == {"1", "3"}
+        # Phase 2: Bob in primaries, Cyrus still in sub pool (event-level).
+        assert s.assigned_member_keys_in_phase(2) == {"2", "3"}
+
+    def test_member_in_phase_one_remains_eligible_in_phase_two(self):
+        s = _make_phase_aware_session()
+        # Alice plays Info Center in Phase 1.
+        s.assignments["Info Center"].append("1")
+        # Selecting Phase 2 + asking for eligibility should NOT exclude
+        # Alice (the migration case) — she's only locked out of her
+        # current Phase-2 slot if one already exists.
+        s.selected_phase = 2
+        eligible, _below = srb._eligible_member_keys_for_zone(s, "Arsenal")
+        assert "1" in eligible
+
+    def test_member_assigned_in_current_phase_is_excluded(self):
+        s = _make_phase_aware_session()
+        s.assignments_p2["Arsenal"].append("1")
+        s.selected_phase = 2
+        eligible, _below = srb._eligible_member_keys_for_zone(s, "Info Center")
+        # Alice already in Arsenal (Phase 2) — picker shouldn't show her
+        # again in a Phase 2 dropdown.
+        assert "1" not in eligible
+
+    def test_sub_pool_member_excluded_from_both_phase_pickers(self):
+        s = _make_phase_aware_session()
+        s.subs.append("1")
+        for phase in (1, 2):
+            s.selected_phase = phase
+            eligible, _below = srb._eligible_member_keys_for_zone(s, "Info Center")
+            assert "1" not in eligible
+
+
+class TestAutoFillPhaseAware:
+    """Auto-fill must respect per-phase capacities and the migration
+    semantics (a member placed in Phase 1 stays pickable for Phase 2)."""
+
+    def _bigger_session(self):
+        zones = [
+            ss.ZoneRow(zone="Info Center", max_players=0,
+                       max_phase1=2, max_phase2=1,
+                       min_power_a=100_000_000, min_power_b=50_000_000),
+            ss.ZoneRow(zone="Arsenal", max_players=0,
+                       max_phase1=0, max_phase2=3,
+                       min_power_a=0, min_power_b=0),
+        ]
+        preset = ss.PresetBuffer(name="Phased", event_type="DS",
+                                 zones=zones, uses_phases=True)
+        members = {
+            str(i): {"key": str(i), "name": f"M{i}", "discord_id": str(i),
+                     "power": 500_000_000 - i * 10_000_000,
+                     "not_on_discord": False}
+            for i in range(1, 8)
+        }
+        return srb.RosterBuilderSession(
+            guild_id=1, user_id=42, event_type="DS",
+            team="A", preset=preset, members=members,
+            per_member_rules=[], power_band_rules=[],
+            sub_mode="pool",
+        )
+
+    def test_auto_fill_respects_per_phase_capacities(self):
+        s = self._bigger_session()
+        srb._auto_fill_session(s)
+        # Phase 1 caps: Info Center=2, Arsenal=0.
+        assert len(s.assignments["Info Center"]) == 2
+        assert len(s.assignments["Arsenal"]) == 0
+        # Phase 2 caps: Info Center=1, Arsenal=3.
+        assert len(s.assignments_p2["Info Center"]) == 1
+        assert len(s.assignments_p2["Arsenal"]) == 3
+
+    def test_auto_fill_allows_phase_1_member_to_also_appear_in_phase_2(self):
+        s = self._bigger_session()
+        srb._auto_fill_session(s)
+        # Phase 1 should have grabbed the top 2 power members for IC.
+        p1_ic = set(s.assignments["Info Center"])
+        # Phase 2 has 4 slots total (1 IC + 3 Arsenal). With 7 members
+        # and Phase 1 already using 2, Phase 2 should also see the
+        # top-power members — including overlap with Phase 1 since
+        # they're allowed to migrate.
+        p2_all = (set(s.assignments_p2["Info Center"]) |
+                  set(s.assignments_p2["Arsenal"]))
+        # The two strongest members (M1, M2) should appear in both
+        # phases — they're top-power so they get drafted into Phase 1
+        # and stay eligible for Phase 2.
+        assert p1_ic & p2_all, (
+            "expected at least one member to play in both phases "
+            "(migration use case)"
+        )
+
+    def test_auto_fill_summary_counts_both_phases(self):
+        s = self._bigger_session()
+        summary = srb._auto_fill_session(s)
+        # 2 P1 IC + 1 P2 IC + 3 P2 Arsenal = 6 power-based fills.
+        assert summary["auto_filled_by_power"] == 6
+
+    def test_auto_fill_on_flat_preset_unchanged(self):
+        # Sanity: flat presets don't get phase 2 fills.
+        s = _make_session(team="A", members={
+            "1": {"key": "1", "name": "Alice", "discord_id": "1",
+                  "power": 500_000_000, "not_on_discord": False},
+            "2": {"key": "2", "name": "Bob", "discord_id": "2",
+                  "power": 400_000_000, "not_on_discord": False},
+        })
+        srb._auto_fill_session(s)
+        # Phase 2 dict stays empty for flat presets even with members
+        # available.
+        assert all(len(v) == 0 for v in s.assignments_p2.values())
+
+
+class TestRostersTabPhaseColumn:
+    """The Phase column in rosters_tab is the post-event audit trail
+    that captures which phase a member played in. Flat presets write
+    "1" for traceability; sub-pool rows write empty (event-level)."""
+
+    def test_header_includes_phase_column(self):
+        assert "Phase" in srb._ROSTERS_HEADER
+        # Phase sits between Team and Zone so the columns read in the
+        # natural left-to-right order an officer scans.
+        assert (srb._ROSTERS_HEADER.index("Phase")
+                == srb._ROSTERS_HEADER.index("Team") + 1)
+        assert (srb._ROSTERS_HEADER.index("Zone")
+                == srb._ROSTERS_HEADER.index("Phase") + 1)
+
+    def test_flat_preset_writes_phase_one(self, fake_env):
+        fake, gid = fake_env
+        session = _make_session(team="A", members={
+            "1001": {"key": "1001", "name": "Alice", "discord_id": "1001",
+                     "power": 412_000_000, "not_on_discord": False},
+        })
+        session.guild_id = gid
+        session.event_date = "2026-05-18"
+        session.assignments["Power Tower"].append("1001")
+        srb._write_rosters_tab(session)
+        ws = fake.worksheet("DS Rosters")
+        rows = ws.get_all_values()
+        phase_col = srb._ROSTERS_HEADER.index("Phase")
+        member_col = srb._ROSTERS_HEADER.index("Member")
+        alice_row = next(r for r in rows[1:] if r[member_col] == "Alice")
+        assert alice_row[phase_col] == "1"
+
+    def test_phase_aware_preset_writes_correct_phase_per_row(self, fake_env):
+        fake, gid = fake_env
+        zones = [
+            ss.ZoneRow(zone="Power Tower", max_players=0,
+                       max_phase1=2, max_phase2=1,
+                       min_power_a=100_000_000, min_power_b=50_000_000),
+        ]
+        preset = ss.PresetBuffer(name="Phased", event_type="DS",
+                                 zones=zones, uses_phases=True)
+        members = {
+            "1": {"key": "1", "name": "Alice", "discord_id": "1",
+                  "power": 500_000_000, "not_on_discord": False},
+            "2": {"key": "2", "name": "Bob", "discord_id": "2",
+                  "power": 400_000_000, "not_on_discord": False},
+        }
+        session = srb.RosterBuilderSession(
+            guild_id=gid, user_id=42, event_type="DS",
+            team="A", preset=preset, members=members,
+            per_member_rules=[], power_band_rules=[],
+            sub_mode="pool",
+        )
+        session.event_date = "2026-05-18"
+        session.assignments["Power Tower"].append("1")
+        session.assignments_p2["Power Tower"].append("2")
+
+        srb._write_rosters_tab(session)
+        ws = fake.worksheet("DS Rosters")
+        rows = ws.get_all_values()
+        phase_col = srb._ROSTERS_HEADER.index("Phase")
+        member_col = srb._ROSTERS_HEADER.index("Member")
+        alice_row = next(r for r in rows[1:] if r[member_col] == "Alice")
+        bob_row = next(r for r in rows[1:] if r[member_col] == "Bob")
+        assert alice_row[phase_col] == "1"
+        assert bob_row[phase_col] == "2"
+
+    def test_subs_have_empty_phase_cell(self, fake_env):
+        fake, gid = fake_env
+        session = _make_session(team="A", members={
+            "1003": {"key": "1003", "name": "Carol", "discord_id": "1003",
+                     "power": 280_000_000, "not_on_discord": False},
+        })
+        session.guild_id = gid
+        session.event_date = "2026-05-18"
+        session.subs.append("1003")
+        srb._write_rosters_tab(session)
+        ws = fake.worksheet("DS Rosters")
+        rows = ws.get_all_values()
+        phase_col = srb._ROSTERS_HEADER.index("Phase")
+        member_col = srb._ROSTERS_HEADER.index("Member")
+        carol_row = next(r for r in rows[1:] if r[member_col] == "Carol")
+        # Sub-pool entries are event-level, not phase-scoped.
+        assert carol_row[phase_col] == ""

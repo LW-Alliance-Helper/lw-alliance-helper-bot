@@ -135,6 +135,17 @@ def load_rostered_slots(
     truthy = {"yes", "y", "1", "true", "t", "x"}
 
     slots: list[dict] = []
+    # Dedupe by `(team, zone, member)` so a phase-aware preset with a
+    # member playing the same zone across multiple phases (the typical
+    # "Alice stays at Power Tower for all phases" case) shows up
+    # ONCE in the attendance picker. Phase-migration members (Alice
+    # P1 Power Tower → P2 Nuclear Silo) remain as two separate slots
+    # because their (team, zone) keys differ — officers can mark
+    # attendance per zone, useful for alliances that track partial
+    # attendance across phase transitions. Attendance itself stays
+    # phase-blind per #152 spec ("phase-specific attendance" is out
+    # of scope).
+    seen: set[tuple[str, str, str]] = set()
     for row in values[1:]:
         def _cell(idx: int) -> str:
             return row[idx].strip() if 0 <= idx < len(row) else ""
@@ -143,6 +154,10 @@ def load_rostered_slots(
         member = _cell(member_col)
         if not member:
             continue
+        key = (_cell(team_col), _cell(zone_col), member)
+        if key in seen:
+            continue
+        seen.add(key)
         slots.append({
             "team":       _cell(team_col),
             "zone":       _cell(zone_col),

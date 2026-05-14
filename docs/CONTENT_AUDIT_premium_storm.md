@@ -30,25 +30,34 @@ A few storm-specific additions:
 | 🏜️ | Canyon Storm (rarely used; ⚔️ dominates) |
 | 🛡️ | Roster builder UI (main view) |
 | 🗺️ | Zones / map context |
+| 🅰️ / 🅱️ | Team A / Team B (sign-up buttons, bucket labels, Set-up buttons — replaced ✅ in the team-test refresh) |
+| 🔄 | Either time works (DS only) / Refresh / Status: Sub activated |
 | 📋 | Zone list / sub list / strategy preset |
 | 🪑 | Subs (any sub list — flat or paired) |
 | 🎯 | Active zone / auto-fill |
+| 🔀 | Phase mode / phase navigation (#152) |
+| 🙋 | Record on-behalf vote |
+| ❓ | Not voted yet (officer-view bucket) |
 | 🪞 | Faction reveal / matchmaking outcome |
 | 🔁 | Re-pair / swap |
 | 🖼️ | Image render |
 | 📄 | Mail preview / generate mail |
 | 💾 | Save preset / saved config |
-| ✅ | Yes / Use default / Keep current / Approve & Post / vote-team |
-| ❌ | No / Cancel / Cannot participate |
+| ✅ | Yes / Use default / Keep current / Approve & Post / Status: Attended |
+| ❌ | No / Cancel / Cannot participate / Status: No-show |
 | ⛔ | Permission denied |
 | ⚠️ | Validation warning / soft error |
+| ℹ️ | Informational (stale-vote redirect, capacity flex room) |
+| 🔒 | Premium-locked feature gate |
 | ⏰ | Timeout |
 
-The flow is **multi-step ephemeral**: every officer interaction is
-ephemeral by default so leadership chat stays clean. The only
-auto-posted (non-ephemeral) surfaces are the **sign-up post**, the
-**rosters mail**, and **scheduler-driven** posts (sign-up auto-
-schedule, attendance kick-off).
+The flow is **mixed ephemeral / public**: the roster-builder views
+(`/storm_signups → 🛡️ Set up Team X`), preset editor, and most
+follow-up pickers are ephemeral so leadership chat stays clean. The
+officer view (`/storm_signups`), attendance (`/storm_attendance`),
+preset editor (`/ds_strategy edit`), and Approve & Post mail are
+**public by design** — they double as a leadership audit trail so
+multiple officers can see what's happened across a session.
 
 ---
 
@@ -72,6 +81,11 @@ schedule, attendance kick-off).
 | **Below-floor override** | An officer's explicit decision to slot a member who doesn't meet the floor. |
 | **Faction roles** | Post-roster step that applies the Judicator role to candidates when matchmaking reveals Rulebringers. |
 | **Power-refresh DM** | One-off nudge DM'd to a voter whose roster Sheet power cell is blank/garbage. |
+| **Teams** (`teams`) | DS-only per-alliance config: `both` (default) / `A` / `B`. Single-team alliances see only their team's button on the sign-up post + a single Set-up-Team button in `/storm_signups` (#148). |
+| **Phase** | DS/CS event sub-window. Phase 1 = outer ring active; Phase 2 = central buildings (Arsenal / Silo / Mercenary Factory) open up; Phase 3 = late-event CS state. |
+| **Flat preset** | `phase_count = 0` — the original shape. One capacity, one assignment per zone. |
+| **Phase-aware preset** | `phase_count = 2` or `3` — per-phase capacities + assignments, mail/render groups by phase. |
+| **Phase migration** | Same member assigned to different zones across phases (e.g. Alice plays Info Center in P1, Nuclear Silo in P2). |
 
 ---
 
@@ -97,10 +111,10 @@ Premium gating is enforced at command entry via
 `storm_permissions.ensure_premium_structured(...)`. Free-tier
 guilds see this ephemeral on the gated commands:
 
-> 💎 **{feature_label}** is a Premium feature. See `/upgrade` for details.
+> 🔒 {feature_label} is a 💎 Premium feature. Run `/upgrade` to unlock it.
 
-(canonical phrasing in `premium.py` / `storm_permissions.py` — both
-storm-gated surfaces route through the same helper.)
+(canonical phrasing in `storm_permissions.py:~103` — every
+storm-gated surface routes through the same helper.)
 
 ---
 
@@ -133,12 +147,35 @@ Walks an alliance through opt-in + every per-event-type field.
 
 ### 2.4 Sign-up channel + schedule
 
+The sign-up time prompt was refreshed by the team-test triplet
+(commit 8ee0773) to match the 12-hour, tz-annotated copy the rest
+of the wizard family uses (train reminder, birthday, shiny).
+
 | Surface | Verbatim | File:line |
 |---|---|---|
 | Channel pick | `**Sign-Up Channel**\nWhich channel should the bot post the sign-up post into?` | `setup_cog.py:~5837` |
 | Day of week | `**Sign-Up Day of Week**\nWhich day of the week should the bot post the sign-up?` |  |
 | Lead days | `**Sign-Up Lead Days**\nHow many days BEFORE the event should the post fire?` |  |
-| Sign-up time | `**Sign-Up Time**\nWhat local time should the post fire? Use `HH:MM` 24-hour, e.g. `18:00`.` |  |
+| Sign-up time prompt | `**Sign-Up Time**\nWhat time should the bot fire the sign-up post? *(in your timezone: {tz_label})*\ne.g. \`2:00pm\`, \`9:00am\`, or 24-hour \`14:00\`.` | `setup_cog.py:~5519` |
+| Sign-up time modal label | `e.g. 2:00pm — blank for manual` |  |
+
+Storage stays 24-hour `HH:MM`. Keep-current button renders saved
+24-hour values back through `_format_24h_to_12h` so the re-entry
+button label reads e.g. `✅ Keep current: 2:00pm`.
+
+### 2.4a Teams selector (DS only — #148)
+
+Added by commit `b814152` (PR #150). Collected via a 3-button view
+between sub-mode and sign-up channel:
+
+| Surface | Verbatim |
+|---|---|
+| Prompt | `**Which Teams Run Desert Storm?**\nMost alliances run both Team A and Team B. Single-team alliances see only their team's button on the sign-up post, fewer Set-up buttons on /storm_signups, and zone-min-power inputs scoped to their team in the preset editor.` |
+| Button — both | `🅰️🅱️ Both teams` |
+| Button — A only | `🅰️ Team A only` |
+| Button — B only | `🅱️ Team B only` |
+| Keep current (re-entry) | `✅ Keep current: A & B / A only / B only` |
+| Re-entry summary line | `**Teams:** A & B / A only / B only` |
 
 ### 2.5 Tab name prompts (5)
 
@@ -207,21 +244,49 @@ override via `/setup_desertstorm` → mail template.)
 
 ### 3.2 SignupView buttons
 
+Button shape depends on `event_type` + `guild_storm_config.teams`
+(#148). All four button styles use the team-prefixed `🅰️ Team A: …`
+form so members can tell the side at a glance — the team-test
+session surfaced confusion when buttons rendered as bare times.
+
+**Desert Storm — `teams=both` (default, 4 buttons):**
+
 | Button | Style | Custom-id | File:line |
 |---|---|---|---|
-| `✅ {time_a_label}` (e.g. `✅ 4pm EDT`) | `success` | `signup:{guild}:{type}:{date}:a` | `storm_signup_view.py:97` |
-| `✅ {time_b_label}` | `success` | `signup:{guild}:{type}:{date}:b` | `storm_signup_view.py:98` |
-| `✅ Either time works` | `success` | `signup:{guild}:{type}:{date}:either` | `storm_signup_view.py:99` |
-| `❌ Cannot participate` | `danger` | `signup:{guild}:{type}:{date}:cannot` | `storm_signup_view.py:100` |
+| `🅰️ Team A: {time_a_label}` (e.g. `🅰️ Team A: 9pm ET (18:00 server time)`) | `success` | `signup:{guild}:ds:{date}:a` | `storm_signup_view.py:101` |
+| `🅱️ Team B: {time_b_label}` | `success` | `signup:{guild}:ds:{date}:b` | `storm_signup_view.py:104` |
+| `🔄 Either time works` | `success` | `signup:{guild}:ds:{date}:either` | `storm_signup_view.py:107` |
+| `❌ Cannot participate` | `danger` | `signup:{guild}:ds:{date}:cannot` | `storm_signup_view.py:109` |
+
+When `time_a_label`/`time_b_label` is empty (e.g. on
+`register_persistent_signup_views` re-registration with no saved
+labels), the bare team-name label fires (`🅰️ Team A` without the
+trailing colon).
+
+**Desert Storm — `teams="A"` or `teams="B"` (2 buttons):**
+
+Only the relevant team's button + `❌ Cannot participate`. Embed's
+"Available time slots" line omits the unused slot.
+
+**Canyon Storm (always 2 buttons):**
+
+CS has one time-slot per faction, so only `🅰️ Team A: {time_a_label}`
++ `❌ Cannot participate` render. `_force_all_buttons=True` (used by
+the persistent-view re-registration path) overrides this so
+pre-hotfix CS posts with 4 buttons still route clicks correctly
+after a bot restart.
 
 ### 3.3 Click handler ephemeral acks
 
 | Trigger | Verbatim | File:line |
 |---|---|---|
-| Malformed custom_id | `⚠️ This sign-up button is from an older version. Wait for the next sign-up post to vote.` | `storm_signup_view.py:140` |
-| Cross-guild leak | `⚠️ This sign-up post belongs to a different server. Please use the sign-up post in your alliance's channel.` | `storm_signup_view.py:163` |
-| Premium-revoked guild | `⚠️ This sign-up post is no longer active because the structured roster flow has been disabled for this server.` | `storm_signup_view.py:191` |
-| Successful vote | `✅ Vote recorded: **{Team A/Team B/Either/Cannot}**. You can change your vote any time before the event.` | `storm_signup_view.py:219` |
+| Malformed custom_id | `⚠️ This sign-up button is from an older version. Wait for the next sign-up post to vote.` | `storm_signup_view.py:149` |
+| Cross-guild leak | `⚠️ This sign-up post belongs to a different server. Please use the sign-up post in your alliance's channel.` | `storm_signup_view.py:172` |
+| Stale CS Team B / Either (#152 / batch 2) | `ℹ️ This sign-up post is from before Canyon Storm switched to a single-team format. Team B / Either time aren't valid for CS — vote on the next sign-up post (it'll only show Team A + Cannot).` | `storm_signup_view.py:~200` |
+| Stale Team B vote on `teams=A` alliance (#148) | `ℹ️ This alliance is configured as **Team A only**. Team B / Either aren't valid choices — pick **Team A** or **Cannot participate** on the next sign-up post.` | `storm_signup_view.py:~225` |
+| Stale Team A vote on `teams=B` alliance | `ℹ️ This alliance is configured as **Team B only**. Team A / Either aren't valid choices — pick **Team B** or **Cannot participate** on the next sign-up post.` | `storm_signup_view.py:~240` |
+| Premium-revoked guild | `⚠️ This sign-up post is no longer active because the structured roster flow has been disabled for this server.` | `storm_signup_view.py:~280` |
+| Successful vote | `✅ Vote recorded: **{Team A/Team B/Either/Cannot}**. You can change your vote any time before the event.` | `storm_signup_view.py:~310` |
 
 ### 3.4 Power-refresh DM (commit 3370ea3, refined in λ)
 
@@ -257,13 +322,18 @@ who invoked `/storm_signups`. Contains the bucket-map embed + filter
 
 ### 4.2 Bucket headers
 
+Labels refreshed in the team-test session (commit 9dfbf40) — the
+`✅ Team A — {n}` shape was confusing officers who interpreted ✅
+as "voted to attend" rather than the team marker. Now uses the same
+🅰️/🅱️/🔄 glyphs as the SignupView buttons.
+
 | Bucket | Label | File:line |
 |---|---|---|
-| `a` | `✅ Team A — {n}` | `storm_officer_view._BUCKET_LABELS` |
-| `b` | `✅ Team B — {n}` |  |
-| `either` | `✅ Either time — {n}` |  |
-| `cannot` | `❌ Cannot — {n}` |  |
-| `not_voted` | `🕓 Not voted — {n} [{m} not on Discord]` |  |
+| `a` | `🅰️ Voted Team A` | `storm_officer_view._BUCKET_LABELS` |
+| `b` | `🅱️ Voted Team B` |  |
+| `either` | `🔄 Voted Either` |  |
+| `cannot` | `❌ Voted Cannot` |  |
+| `not_voted` | `❓ Not voted yet` |  |
 
 Per-member entry shape: `• {display_name}` with `¹` superscript and
 italic footnote when `is_on_behalf=True`, plus `²` (or similar) when
@@ -275,22 +345,33 @@ italic footnote when `is_on_behalf=True`, plus `²` (or similar) when
 
 | Control | Verbatim | File:line |
 |---|---|---|
-| Filter dropdown placeholder | `Filter bucket — currently: {bucket_filter or 'All'}` | `storm_officer_view.py:579` |
-| Filter options | `All buckets` / `Team A` / `Team B` / `Either time` / `Cannot` / `Not voted` |  |
-| Refresh button | `🔄 Refresh` | `storm_officer_view.py:~620` |
-| On-behalf button | `✍️ Vote on behalf of…` |  |
-| Build roster button | `🛡️ Build roster…` |  |
+| Filter dropdown placeholder | `Filter bucket — currently: {bucket_filter or 'All'}` | `storm_officer_view.py:~605` |
+| Filter options | `All buckets` / `🅰️ Voted Team A` / `🅱️ Voted Team B` / `🔄 Voted Either` / `❌ Voted Cannot` / `❓ Not voted yet` |  |
+| Refresh button | `🔄 Refresh` | `storm_officer_view.py:~680` |
+| On-behalf button | `🙋 Record on-behalf vote` | `storm_officer_view.py:~639` |
+| Set up Team A button (DS, when `teams=both` or `teams=A`) | `🅰️ Set up Team A` | `storm_officer_view.py:~707` |
+| Set up Team B button (DS, when `teams=both` or `teams=B`) | `🅱️ Set up Team B` | `storm_officer_view.py:~710` |
+| Set up Roster button (CS) | `🏜️ Set up Roster` | `storm_officer_view.py:~725` |
+
+Single-team DS alliances (`teams=A` / `teams=B`) only see their
+team's Set-up button — wiring (#148) added in PR #150 (commit
+`a8ad4bd`). View captures `view.message` at send time so
+`on_timeout` (added in PR #150's batch 1) can edit the post with
+the canonical `⏰ The actions for this have timed out — use
+/storm_signups to re-initiate` notice.
 
 ### 4.4 On-behalf modal
 
 | Surface | Verbatim |
 |---|---|
-| Modal title | `Vote on behalf of a member` |
-| Member field | `Member (name or @mention)` |
-| Vote field | `Vote: A, B, Either, Cannot` |
-| Success ack | `✅ Recorded on-behalf vote for **{display}**: **{label}**.` |
-| Member not found | `⚠️ Couldn't resolve **{input}** to a roster member. Check the name or sync members first.` |
-| Invalid vote | `⚠️ Vote must be one of A, B, Either, Cannot.` |
+| Modal title | `Record vote on behalf` |
+| Member field | `Member name (must match your roster Sheet)` |
+| Vote field | `Vote: A / B / Either / Cannot` |
+| Numeric-name reject (#150) | `⚠️ On-behalf names can't be purely numeric — they collide with Discord IDs in storage. Use a non-numeric roster name (e.g. add an alliance prefix or member tag).` |
+| Invalid vote / blank | `⚠️ I couldn't read that. Member name and one of A, B, Either, or Cannot. Try again.` |
+| Member not found in roster | `⚠️ I don't see **{name}** in your roster Sheet. Check the spelling (it must match the name column on the roster tab) and try again.` |
+| Success | `✅ Recorded on-behalf vote for **{display}**.` |
+| Record failure | `⚠️ Couldn't record that vote. Check the bot logs.` |
 
 ---
 
@@ -307,9 +388,11 @@ Lives in `storm_roster_builder.py`. Two entry paths: structured-mode
 | Title | `🛡️ Roster Builder: {preset_name}{team_label}` | `storm_roster_builder.py:713` |
 | Header — Storm tag | `🗺️ Desert Storm` or `🗺️ Canyon Storm` | `:716` |
 | Header — floor reminder (DS) | `⚖️ Enforcing **Min A/B** floors for this team` | `:719` |
+| Header — active phase (phase-aware presets, #152) | `🔀 Editing **Phase {n}**` | `:~906` |
 | Zones header (pool) | `**📋 Zones**` | `:724` |
 | Zones header (paired) | `**📋 Zones** _(paired mode — each primary has a dedicated sub)_` | `:722` |
-| Zone line shape | `• {zone}  ({n}/{cap})  — {member1} ({power1}) [⚠ override], …` (paired adds `+ sub {sub_name}`) | `_render_zone_line` |
+| Zone line shape (flat preset) | `• {zone}  ({n}/{cap})  — {member1} ({power1}) [⚠ override], …` (paired adds `+ sub {sub_name}`) | `_render_zone_line` |
+| Zone line shape (phase-aware preset) | `• {zone}  (P1: {n}/{cap}, P2: {n}/{cap}[, P3: {n}/{cap}]) — {selected-phase member list}` (per-phase counts iterate `iter_phases()`; member listing is for the selected phase only) | `_render_zone_line` |
 
 ### 5.2 Subs / pairing status
 
@@ -350,26 +433,36 @@ commit `4edc46d` to split paired-sub count from primary count.
 
 ### 5.5 Action buttons
 
-Row 0: zone select. Row 1: member select. Row 2: action buttons.
-Row 3: finalisation.
+Row layout adapts to phase-aware presets (#152). Flat presets keep
+the original 4-row layout. Phase-aware presets reserve **row 0**
+for the phase navigation buttons, pushing every other component down
+one row.
 
-| Button | Label | Row | Style | File:line | Notes |
+**Flat:** row 0 = zone select, row 1 = member select, row 2 = action
+buttons, row 3 = finalisation.
+
+**Phase-aware:** row 0 = phase nav, row 1 = zone select, row 2 =
+member select, row 3 = action buttons, row 4 = finalisation.
+
+| Button | Label | Row (flat / phased) | Style | File:line | Notes |
 |---|---|---|---|---|---|
-| Zone select placeholder | `Pick a zone to edit…` | 0 | — | `:940` | One option per zone |
-| Member select placeholder (eligible) | `Pick a member for {zone or 'a zone'}…  (+N more)` | 1 | — | `:975-988` | `+N more` appended by **commit λ** |
-| Member select placeholder (none eligible) | `No eligible members — toggle below-floor override` | 1 | — | `:977` | |
-| Toggle below-floor (off) | `👁️ Show below-floor` | 2 | secondary | `:1058` | |
-| Toggle below-floor (on) | `👁️ Hide below-floor` | 2 | secondary | `:1057` | |
-| Unassign current zone | `↩️ Unassign current zone` | 2 | secondary | `:1075` | |
-| Last to subs | `🪑 Last to subs` | 2 | secondary | `:1094` | |
-| Re-pair Sub *(NEW in λ; paired mode only)* | `🔁 Re-pair sub` | 2 | secondary | `:1116-1132` | |
-| Auto-fill (structured) | `🎯 Auto-fill` | 2 | primary | `:1140` | |
-| Approve & Post (structured) | `✅ Approve & Post` | 3 | success | `:1154` | |
-| Preview mail (structured) | `📄 Preview mail` | 3 | secondary | `:1167` | |
-| Generate mail (free-tier) | `📄 Generate mail` | 3 | primary | `:1179` | |
-| Save as preset (free-tier) | `💾 Save as preset` | 3 | success | `:1191` | |
-| Render image | `🖼️ Render image` | 3 | secondary | `:1207` | Available both modes |
-| Cancel (structured) / Done (free-tier) | `❌ Cancel` / `✅ Done` | 3 | danger | `:1219` | |
+| Phase nav *(phase-aware only, one per phase from `iter_phases()`)* | `Phase {n}` (active phase suffixed ` •`) | — / 0 | `primary` for active, `secondary` for others | `:~1147` | Renders 2 buttons for `phase_count=2`, 3 for `phase_count=3` (commit aafb576) |
+| Zone select placeholder (flat) | `Pick a zone to edit…` | 0 / 1 | — | `:~1187` | |
+| Zone select placeholder (phase-aware) | `P{n}: {zone} ({count}/{cap})` per option | 0 / 1 | — | `:~1179` | Counts reflect the selected phase |
+| Member select placeholder (eligible) | `Pick a member for {zone or 'a zone'}…  (+N more)` | 1 / 2 | — | `:~975` | `+N more` appended by **commit λ** |
+| Member select placeholder (none eligible) | `No eligible members — toggle below-floor override` | 1 / 2 | — | `:~977` | |
+| Toggle below-floor (off) | `👁️ Show below-floor` | 2 / 3 | secondary | `:1058` | |
+| Toggle below-floor (on) | `👁️ Hide below-floor` | 2 / 3 | secondary | `:1057` | |
+| Unassign current zone | `↩️ Unassign current zone` | 2 / 3 | secondary | `:1075` | Operates on selected phase |
+| Last to subs | `🪑 Last to subs` | 2 / 3 | secondary | `:1094` | Selected phase |
+| Re-pair Sub *(paired mode only)* | `🔁 Re-pair sub` | 2 / 3 | secondary | `:1116` | Operates on selected phase |
+| Auto-fill (structured) | `🎯 Auto-fill` | 2 / 3 | primary | `:1140` | Auto-fill fills ALL phases for phase-aware presets (#152) |
+| Approve & Post (structured) | `✅ Approve & Post` | 3 / 4 | success | `:1154` | |
+| Preview mail (structured) | `📄 Preview mail` | 3 / 4 | secondary | `:1167` | |
+| Generate mail (free-tier) | `📄 Generate mail` | 3 / 4 | primary | `:1179` | |
+| Save as preset (free-tier) | `💾 Save as preset` | 3 / 4 | success | `:1191` | Preserves `phase_count` + per-phase capacities (#152) |
+| Render image | `🖼️ Render image` | 3 / 4 | secondary | `:1207` | Available both modes; phase-aware presets render one zone block per (phase, zone) |
+| Cancel (structured) / Done (free-tier) | `❌ Cancel` / `✅ Done` | 3 / 4 | danger | `:1219` | |
 
 ### 5.6 Capacity / override / ownership errors
 
@@ -481,17 +574,38 @@ Paired mode (overflow only):
 
 > 🪑 **Overflow subs ({n})**: {names}
 
-### 7.3 PNG image render
+### 7.3 Phase-aware mail (#152)
+
+Phase-aware presets emit one block per phase from `iter_phases()`,
+separated by `**Phase {n}**` headers so leadership can copy-paste
+the full event line-up into a single in-game mail. Flat presets
+emit one block with no phase header.
+
+> **Phase 1**  
+> _zone block — same shape as §7.1_  
+>   
+> **Phase 2**  
+> _zone block_  
+>   
+> **Phase 3** *(when `phase_count = 3`)*  
+> _zone block_  
+
+The Phase-3 block was missing pre-`aafb576` — the engine fills it,
+rosters_tab records it, but the mail builder hardcoded P1+P2 only.
+
+### 7.4 PNG image render
 
 Lives in `storm_renderer.py`. Triggered by `🖼️ Render image` button.
-Updated by **commit λ** to wrap the title and guard 25 MB.
+Updated by **commit λ** to wrap the title and guard 25 MB. Updated
+by `aafb576` (PR #153) to iterate phases for phase-aware presets.
 
 Layout: vertical white canvas, 720 px wide.
 
 | Section | Format |
 |---|---|
 | Title | Bold (`title_font=18`), wrapped to canvas width by `_wrap_text` |
-| Zone heading | `{zone}  ({n}/{cap})` (blue heading_font=14) |
+| Zone heading (flat preset) | `{zone}  ({n}/{cap})` (blue heading_font=14) |
+| Zone heading (phase-aware preset) | `Phase {n} — {zone}  ({count}/{phase-N max})` — one block per (phase, zone). Phase-N zones with `max=0` and no members are skipped to avoid empty rows. |
 | Member line | `• {name} ({power}) ⚠ override   ↳ sub: {sub}` |
 | Empty zone | `(empty)` (muted) |
 | Subs heading | `Subs ({n})` |
@@ -502,35 +616,52 @@ Layout: vertical white canvas, 720 px wide.
 ## 8. Post-event attendance
 
 Lives in `storm_attendance.py`. The `/storm_attendance` command
-opens an ephemeral view for the officer to mark each roster slot
-present/absent/late.
+opens an ephemeral view for the officer to mark each roster slot.
+Status codes were renamed during the team-test session (commit
+9dfbf40) to read more naturally for storm context.
+
+`load_rostered_slots` dedupes `(team, zone, member)` so a member
+playing the same zone across multiple phases (the "Alice stays put"
+case in phase-aware presets) shows ONCE in the picker — not N
+times. Migration members keep their N rows because their `(team,
+zone)` keys differ across phases (#152 / aafb576).
 
 | Surface | Verbatim |
 |---|---|
 | Title | `📋 {Event label} attendance — {date} (Team {team})` |
-| When no rosters_tab row for date | `⚠️ No roster found for **{date}** (Team {team}) in `{tab_name}`. Run Approve & Post on the roster builder first.` |
-| Per-slot picker placeholder | `Pick the attendance state for {name}…` |
-| Per-slot options | `✅ Present` / `❌ Absent` / `⏰ Late` |
+| Date parsing (event_date arg) | Routes through `storm_date_helpers.parse_event_date` — accepts ISO, `5/18`, `May 18`, `yesterday`, etc. |
+| When no rosters_tab row for date | `⚠️ No structured roster found for **{date}** ({Event label}).` |
+| Per-slot picker placeholder | `Record attendance for **{member}** ({zone or 'sub'}):` |
+| Per-slot options (3 + clear) | `✅ Attended` / `❌ No-show` / `🔄 Sub activated` / `↩️ Clear` |
+| Bulk: mark unrecorded → attended | `✅ Mark unrecorded → Attended` |
 | Save button | `💾 Save attendance` |
-| Save success | `✅ Saved attendance for **{n}** members to `{tab}`.` |
-| Save failure | `⚠️ Couldn't write attendance to `{tab}` — see bot logs.` |
+| Save success | `✅ Saved attendance for **{n}** members to \`{tab}\`.` |
+| Save partial failure | `⚠️ Attendance partially saved — {first error}` |
 
 ---
 
 ## 9. History browser (`/ds_strategy roster_history` + `/cs_strategy roster_history`)
 
 Lives in `storm_history.py`. Slash-command-invoked ephemeral
-embed + date hop buttons.
+embed. The `event_date` argument now accepts the full flexible-date
+parser surface (PR #147 — commit `4029f55`): ISO `2026-05-18`, US
+`5/18`, long/short month names `May 18` or `may 18`, ordinal
+suffixes (`18th`), weekday names (`saturday`), and the relative
+keywords `today` / `tomorrow` / `yesterday`. Without `event_date`,
+the command lists the most recent 8 events as clickable date
+buttons (NOT directional Previous / Next — directional nav is on
+the audit's open follow-up list).
 
 | Surface | Verbatim |
 |---|---|
-| Title | `📜 {Event label} — {date}` |
+| Title | `📜 {Event label} — {date_pretty}` (date rendered via `format_event_date`, e.g. `May 18, 2026`) |
+| Parse failure | `⚠️ \`{event_date}\` isn't a date I can parse. Try \`May 18\`, \`5/18\`, \`2026-05-18\`, or \`yesterday\`.` |
 | When no roster history for date | `⚠️ No roster on file for **{date}**.` |
-| Team picker (DS) | `Pick a team to view…` with `Team A` / `Team B` options |
 | Per-zone line | `**{zone}**  ({n} members)\n• {name} ({power})` (paired: adds `+ sub`) |
-| Prev / next date buttons | `◀️ Previous date` / `▶️ Next date` |
+| Date-list buttons (no `event_date`) | 8 buttons per event date (most recent first); click sends the date-detail embed as an ephemeral followup |
 | Attendance summary inline | `✅ {n_present}  ❌ {n_absent}  ⏰ {n_late}` |
 | No attendance data | `_No attendance recorded yet._` |
+| Phase-aware roster (#152) | `rosters_tab` now has a `Phase` column at index 2; multi-phase rosters are grouped by phase in the embed via `iter_phases()` |
 
 ---
 
@@ -729,16 +860,114 @@ Recurring patterns observed across this audit:
 
 ---
 
-## 18. Recent storm-related copy changes (audit trail)
+## 18. Phase-aware presets (#152)
+
+Strategy presets gained a `phase_count` field (0 / 2 / 3) so
+alliances can model "phase migration" tactics — Alice plays
+Info Center in Phase 1 then moves to Nuclear Silo in Phase 2.
+Flat presets (the default, `phase_count == 0`) see ZERO new UI;
+phase-aware presets get phase nav buttons, per-phase capacity
+readouts, and per-phase mail blocks.
+
+### 18.1 Preset editor — phase-mode selector
+
+A `discord.ui.Select` on its own row above the action buttons:
+
+| Surface | Verbatim |
+|---|---|
+| Select placeholder | `Pick a phase mode…` |
+| Option — flat | `Flat (no phases)` + description |
+| Option — 2-phase | `Yes — 2 Phases` + description |
+| Option — 3-phase | `Yes — 3 Phases` + description |
+| Editor embed line | `🔀 Mode: **{Flat / 2 Phases (P1 + P2) / 3 Phases (P1 + P2 + P3)}**` |
+| Toggle ack | `🔀 Switched to **{label}** mode. Stored capacities + assignments are kept — flip back any time without data loss.{ Seeded N per-zone capacity/priority value(s) from prior values; edit any zone to override.}` |
+
+Toggling 2→3 (or flat→2/3) seeds the newly-active phase's per-zone
+max + priority from the prior phase so the officer doesn't have to
+re-edit every zone. The seeded-count suffix appears only when at
+least one zone got a non-zero seed.
+
+### 18.2 Preset editor — multi-step zone wizard (phase-aware)
+
+When `phase_count >= 2`, editing a zone fires a 3-page wizard
+(modals + bridge `Next →` view) instead of the flat single modal —
+Discord's 5-input limit forces the split for 3-phase presets
+collecting max + priority + min-power across phases.
+
+| Page | Modal title | Fields |
+|---|---|---|
+| 1 — Capacities | `Edit Zone Capacities: {zone}` | `Max Phase 1`, `Max Phase 2`, `Max Phase 3` (only for 3-phase) |
+| Bridge | _(ephemeral)_ | Button: `Next → Power Floors` |
+| 2 — Floors | `Edit Zone Floors: {zone}` | `Min Power Team A` (+ `Min Power Team B` on DS both-teams). Single field on CS or single-team DS. |
+| Bridge | _(ephemeral)_ | Button: `Next → Priority` |
+| 3 — Priority | `Edit Zone Priority: {zone}` | `Priority Phase 1`, `Priority Phase 2`, `Priority Phase 3` (only for 3-phase) |
+| Final ack | _(ephemeral)_ | `✅ Updated **{zone}** — Max {p1/p2[/p3]}, Floor {floors}, Priority {p1/p2[/p3]}.` |
+
+After the final submit, if the preset has same-family sibling zones
+(Field Hospital II/III/IV from `_sibling_zone_names`), the #149
+Apply-to-Similar follow-up view fires.
+
+### 18.3 Roster builder — phase navigation
+
+For `phase_count >= 2` presets, row 0 of the builder gets one button
+per phase from `iter_phases()`:
+
+> 🅰️ Set up Team A → opens RosterBuilderView with:
+> Row 0: `Phase 1 •` `Phase 2` `Phase 3`  *(3 only when phase_count=3; active phase suffixed `•`)*
+> Row 1: zone select  
+> Row 2: member select  
+> Row 3: action buttons (toggle, unassign, last-to-subs, re-pair, auto-fill)  
+> Row 4: finalisation (Approve & Post / preview / render / cancel)
+
+Active phase rendered with `primary` style; inactive phases use
+`secondary`. Clicking flips `s.selected_phase` and re-renders.
+
+### 18.4 Phase-aware embed shapes
+
+| Surface | Verbatim |
+|---|---|
+| Editing phase header | `🔀 Editing **Phase {n}**` *(phase-aware presets only)* |
+| Zone-line capacity readout | `{zone}  (P1: 2/4, P2: 4/4)` for 2-phase; `(P1: 2/4, P2: 3/4, P3: 4/4)` for 3-phase. Iterates `iter_phases()`. |
+| Status glyph | Reflects the SELECTED phase's count vs cap (toggling re-colours rows) |
+| Filled gauge | `📊 **Filled:** {assigned across phases} / {preset.total_capacity()}` — phase-aware sums every phase; flat unchanged |
+
+### 18.5 rosters_tab Phase column
+
+`_ROSTERS_HEADER` now carries `Phase` at index 2 (between Team and
+Zone). Flat presets write `"1"` in the Phase column for traceability;
+sub-pool rows leave it blank. Header migration on first write to an
+existing rosters_tab translates every prior row by column-name
+lookup so pre-#152 data stays correctly aligned (commit `aafb576`).
+
+---
+
+## 19. Recent storm-related copy changes (audit trail)
 
 | Commit | Change |
 |---|---|
-| `acfb6c6` (λ) | `+N more` overflow indicator on member picker + paired-sub picker; Overflow subs line in paired-mode embed; Re-pair Sub button + primary picker; 25 MB attachment guard; PNG title wrap; DM body leading-"your" strip; Judicator/power-refresh DM keep-or-change branches |
-| `e5b9f6e` (μ) | Faction roles offer text unchanged; underlying candidate set now includes paired subs |
-| `fb73dbb` (ν) | No user-facing copy change; bot filter + cache pre-pass are silent |
-| `7d950a9` (ξ) | No user-facing copy change; typed-name normalisation is silent at save time |
-| `a3b54fe` (ο) | No user-facing storm copy change; new "Is this user in Discord?" column appears on roster Sheet but storm UX is unchanged |
-| `97045d9` | Soft-warning text refined for stale-ID + bot filter; surface message kept |
+| `aafb576` (PR #153) | Phase-aware fixes: 5 surfaces switched from hardcoded `(1, 2)` to `iter_phases()` (mail builder, phase nav, embed zone-line readout, faction-role candidate finder, PNG renderer); `save_preset` translates sibling rows by column name; `_write_rosters_tab` row-shifts on header migration; Filled gauge sums across phases; `_zone_of_primary` walks all phases; `_SaveAsPresetModal` preserves `phase_count` + per-phase caps; flat→2/3 + 2→3 toggle seeds newly-active phase from prior; attendance dedupes `(team, zone, member)` so same-zone-multi-phase shows once |
+| `8e916d6` (PR #153) | 3-way phase select + multi-step zone-edit wizard |
+| `2a577d4` (PR #153) | Session + auto-fill support for 3 phases |
+| `e5a07c6` (PR #153) | Schema extended to 1/2/3 phases via `phase_count` int (legacy `Use Phases` truthy → 2) |
+| `d02a4c0` (PR #153) | rosters_tab Phase column + phase-aware finalisation |
+| `c6b61df` (PR #153) | Phase-aware auto-fill |
+| `3fff703` (PR #153) | Phase-aware roster-builder UI (phase nav, per-phase pickers) |
+| `fac8567` (PR #153) | Phase-aware preset editor UI (mode toggle + capacity modals) |
+| `aa28bcc` (PR #153) | Phase-aware preset schema + session + mail foundation |
+| `a8ad4bd` (PR #150) | Single-team DS gate runtime wiring (#148): SignupView, OfficerView Set-up buttons, embed slot lines, click-handler reject all consult `teams` |
+| `614233e` (PR #150) | CS SignupView migration: `_force_all_buttons` keeps pre-hotfix CS posts clickable across restarts; stale b/either votes on CS rejected at click time; doubled-label fallback (`🅰️ Team A: Team A`) fixed |
+| `396dc6e` (PR #150) | `on_timeout` sweep across 8 storm views; on-behalf modal rejects purely numeric names; OfficerView captures `view.message` for the canonical `⏰ actions have timed out` notice |
+| `16f9f18` (PR #151) | Async refactor: every storm gspread call wrapped in `asyncio.to_thread`; `OfficerView.refresh_buckets` made async — no user-facing copy change |
+| `4029f55` (PR #147) | Flexible event_date parser: `May 18`, `5/18`, `yesterday`, weekday names; `format_event_date` for display |
+| `9dfbf40` | Team-test hotfix: SignupView buttons changed to `🅰️ Team A: time / 🅱️ Team B: time / 🔄 Either / ❌ Cannot` (was `✅ time` only); strategy preset save-time over-capacity refusal removed (>30 now informational); officer-view bucket labels switched to `🅰️ Voted Team A` family |
+| `8ee0773` | Team-test hotfix: sign-up time wizard prompt restored to 12-hour copy with tz annotation |
+| `8301f82` | Team-test hotfix: `_ZoneEditModal` label shortened to fit Discord's 45-char limit |
+| `acfb6c6` (λ, PR #141) | `+N more` overflow indicator on member picker + paired-sub picker; Overflow subs line in paired-mode embed; Re-pair Sub button + primary picker; 25 MB attachment guard; PNG title wrap; DM body leading-"your" strip; Judicator/power-refresh DM keep-or-change branches |
+| `e5b9f6e` (μ, PR #141) | Faction roles candidate set now includes paired subs |
+| `fb73dbb` (ν, PR #141) | No user-facing copy change; bot filter + cache pre-pass are silent |
+| `7d950a9` (ξ, PR #141) | No user-facing copy change; typed-name normalisation silent at save time |
+| `a3b54fe` (ο, PR #141) | New "Is this user in Discord?" column appears on roster Sheet; storm UX unchanged |
+| `97045d9` | Soft-warning text refined for stale-ID + bot filter |
 | `3370ea3` | Power-refresh DM body initial wording (refined by λ) |
 | `99b784e` | Faction roles preflight + summary wording added |
 | `07e158b` | PNG render output (initial body); refined by λ |

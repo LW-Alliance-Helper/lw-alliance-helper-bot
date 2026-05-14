@@ -96,6 +96,146 @@ class TestSignupViewConstruction:
         assert any("9pm ET" in lab for lab in labels)
         assert any("4pm ET" in lab for lab in labels)
 
+    def test_cs_default_renders_two_buttons(self):
+        """CS rosters only fight at one time per faction. Team B and
+        Either are meaningless for CS, so they're skipped on a fresh
+        post."""
+        view = sv.SignupView(12345, "CS", "2026-05-18")
+        codes = sorted(
+            sv.parse_custom_id(c.custom_id)["vote"] for c in view.children
+        )
+        assert codes == ["a", "cannot"]
+
+    def test_cs_force_all_buttons_renders_four(self):
+        """`_force_all_buttons=True` keeps all 4 button handlers
+        registered so a pre-hotfix CS post (which has all 4 buttons
+        already rendered in Discord) stays clickable after a bot
+        restart — discord.py routes by custom_id matching."""
+        view = sv.SignupView(12345, "CS", "2026-05-18",
+                             _force_all_buttons=True)
+        codes = sorted(
+            sv.parse_custom_id(c.custom_id)["vote"] for c in view.children
+        )
+        assert codes == ["a", "b", "cannot", "either"]
+
+    def test_force_all_buttons_noop_for_ds(self):
+        """DS always has all 4 buttons regardless of the flag."""
+        view_default = sv.SignupView(1, "DS", "2026-05-18")
+        view_forced = sv.SignupView(1, "DS", "2026-05-18",
+                                    _force_all_buttons=True)
+        assert len(view_default.children) == len(view_forced.children) == 4
+
+    def test_empty_time_label_renders_bare_team_name(self):
+        """The doubled-label bug: when `time_a_label=""`, the button
+        should render as `🅰️ Team A`, not `🅰️ Team A: ` (trailing
+        colon) and definitely not `🅰️ Team A: Team A`."""
+        view = sv.SignupView(1, "DS", "2026-05-18",
+                             time_a_label="", time_b_label="")
+        labels = [c.label for c in view.children]
+        assert any(lab == "🅰️ Team A" for lab in labels), (
+            f"expected bare '🅰️ Team A' in {labels}"
+        )
+        assert any(lab == "🅱️ Team B" for lab in labels), (
+            f"expected bare '🅱️ Team B' in {labels}"
+        )
+        # Nothing renders as a doubled label.
+        assert not any("Team A: Team A" in lab for lab in labels)
+        assert not any("Team B: Team B" in lab for lab in labels)
+
+
+class TestCsStaleVoteReject:
+    """Pre-hotfix CS sign-up posts have all 4 buttons rendered.
+    `register_persistent_signup_views` keeps them clickable via
+    `_force_all_buttons=True`, but b/either are meaningless for CS
+    now. The click handler intercepts and politely redirects rather
+    than writing a nonsensical row to storm_signups."""
+
+    @pytest.mark.asyncio
+    async def test_cs_b_vote_is_rejected_before_premium_check(self, seeded_db):
+        from unittest.mock import AsyncMock, MagicMock, patch
+        # CS post + member clicks the now-stale Team B button.
+        cid = sv.make_custom_id(TEST_GUILD_ID, "CS", "2026-05-18", "b")
+        interaction = MagicMock()
+        interaction.guild_id = TEST_GUILD_ID
+        interaction.data = {"custom_id": cid}
+        interaction.user.id = 42
+        interaction.response.send_message = AsyncMock()
+        interaction.response.defer       = AsyncMock()
+        interaction.followup.send        = AsyncMock()
+        with patch("premium.is_premium", new=AsyncMock(return_value=True)), \
+             patch("config.record_storm_vote") as record:
+            await sv._handle_signup_click(interaction, "b")
+        # The polite reject fires BEFORE record_storm_vote.
+        record.assert_not_called()
+        interaction.response.send_message.assert_awaited_once()
+        body = interaction.response.send_message.await_args.args[0]
+        assert "single-team" in body or "Canyon Storm" in body or "CS" in body
+
+    @pytest.mark.asyncio
+    async def test_cs_either_vote_is_rejected(self, seeded_db):
+        from unittest.mock import AsyncMock, MagicMock, patch
+        cid = sv.make_custom_id(TEST_GUILD_ID, "CS", "2026-05-18", "either")
+        interaction = MagicMock()
+        interaction.guild_id = TEST_GUILD_ID
+        interaction.data = {"custom_id": cid}
+        interaction.user.id = 42
+        interaction.response.send_message = AsyncMock()
+        with patch("premium.is_premium", new=AsyncMock(return_value=True)), \
+             patch("config.record_storm_vote") as record:
+            await sv._handle_signup_click(interaction, "either")
+        record.assert_not_called()
+
+    @pytest.mark.asyncio
+    async def test_cs_a_vote_proceeds(self, seeded_db):
+        """Sanity — `a` and `cannot` on CS still route through to the
+        record path."""
+        from unittest.mock import AsyncMock, MagicMock, patch
+        cid = sv.make_custom_id(TEST_GUILD_ID, "CS", "2026-05-18", "a")
+        interaction = MagicMock()
+        interaction.guild_id = TEST_GUILD_ID
+        interaction.data = {"custom_id": cid}
+        interaction.user.id = 42
+        interaction.channel_id = 0
+        interaction.message = None
+        interaction.client = MagicMock()
+        interaction.user.display_name = "Alice"
+        interaction.response.send_message = AsyncMock()
+        interaction.response.defer       = AsyncMock()
+        interaction.followup.send        = AsyncMock()
+        interaction.guild = None  # short-circuits the chunk pre-pass
+        with patch("premium.is_premium", new=AsyncMock(return_value=True)), \
+             patch("storm_signup_view._mirror_vote_to_sheet"), \
+             patch("storm_signup_view._maybe_send_power_refresh_dm",
+                   new=AsyncMock()), \
+             patch("config.record_storm_vote") as record:
+            await sv._handle_signup_click(interaction, "a")
+        record.assert_called_once()
+
+    @pytest.mark.asyncio
+    async def test_ds_b_vote_still_proceeds(self, seeded_db):
+        """The reject only fires on CS — DS Team B remains valid."""
+        from unittest.mock import AsyncMock, MagicMock, patch
+        cid = sv.make_custom_id(TEST_GUILD_ID, "DS", "2026-05-18", "b")
+        interaction = MagicMock()
+        interaction.guild_id = TEST_GUILD_ID
+        interaction.data = {"custom_id": cid}
+        interaction.user.id = 42
+        interaction.channel_id = 0
+        interaction.message = None
+        interaction.client = MagicMock()
+        interaction.user.display_name = "Alice"
+        interaction.response.send_message = AsyncMock()
+        interaction.response.defer       = AsyncMock()
+        interaction.followup.send        = AsyncMock()
+        interaction.guild = None
+        with patch("premium.is_premium", new=AsyncMock(return_value=True)), \
+             patch("storm_signup_view._mirror_vote_to_sheet"), \
+             patch("storm_signup_view._maybe_send_power_refresh_dm",
+                   new=AsyncMock()), \
+             patch("config.record_storm_vote") as record:
+            await sv._handle_signup_click(interaction, "b")
+        record.assert_called_once()
+
 
 class TestSignupHistoryAudit:
     """The UPSERT in `record_storm_vote` overwrites the prior row in

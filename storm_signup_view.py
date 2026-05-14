@@ -87,6 +87,7 @@ class SignupView(discord.ui.View):
         *,
         time_a_label: str = "",
         time_b_label: str = "",
+        _force_all_buttons: bool = False,
     ):
         super().__init__(timeout=None)
         self.guild_id   = int(guild_id)
@@ -98,9 +99,20 @@ class SignupView(discord.ui.View):
         # who haven't internalised "9pm is Team A, 4pm is Team B."
         # CS rosters only fight at one time per faction, so the B and
         # Either buttons are DS-only (meaningless with one slot).
+        #
+        # `_force_all_buttons` is the back-compat lever for the persistent-
+        # view re-registration path: pre-hotfix CS sign-up posts already
+        # in production have all 4 buttons rendered, and discord.py
+        # routes clicks by matching custom_id against the View's
+        # children. If we re-register a 2-button View against a 4-button
+        # message, clicks on the stale B / Either buttons fall through
+        # to "Interaction failed". `register_persistent_signup_views`
+        # passes True so every persisted CS post stays clickable; the
+        # click handler (`_handle_signup_click`) rejects stale b/either
+        # CS votes with a polite toast.
         a_label = f"🅰️ Team A: {time_a_label}" if time_a_label else "🅰️ Team A"
         self._add_vote_button("a", a_label[:80], discord.ButtonStyle.success)
-        if self.event_type == "ds":
+        if self.event_type == "ds" or _force_all_buttons:
             b_label = f"🅱️ Team B: {time_b_label}" if time_b_label else "🅱️ Team B"
             self._add_vote_button("b", b_label[:80], discord.ButtonStyle.success)
             self._add_vote_button(
@@ -171,6 +183,28 @@ async def _handle_signup_click(interaction: discord.Interaction, vote_code: str)
             await interaction.response.send_message(
                 "⚠️ This sign-up post belongs to a different server. "
                 "Please use the sign-up post in your alliance's channel.",
+                ephemeral=True,
+            )
+        except discord.HTTPException:
+            pass
+        return
+
+    # Stale-CS-button guard. CS rosters only have one time slot per
+    # faction, so the new SignupView only renders A + Cannot. Pre-hotfix
+    # CS posts in production already have all 4 buttons rendered, and
+    # `register_persistent_signup_views` keeps the click-routing alive
+    # for them via `_force_all_buttons=True`. But the b / either vote
+    # codes are meaningless for CS now — recording one would write a
+    # nonsensical row to storm_signups that downstream code (officer
+    # view, scheduler, faction roles) doesn't know how to interpret.
+    # Reject up front with a polite note.
+    if event_type == "CS" and vote in ("b", "either"):
+        try:
+            await interaction.response.send_message(
+                "ℹ️ This sign-up post is from before Canyon Storm switched "
+                "to a single-team format. Team B / Either time aren't valid "
+                "for CS — vote on the next sign-up post (it'll only show "
+                "Team A + Cannot).",
                 ephemeral=True,
             )
         except discord.HTTPException:
@@ -455,17 +489,32 @@ def _mirror_vote_to_sheet(
 def register_persistent_signup_views(bot) -> int:
     """Called once at startup (after `on_ready`). Re-attaches a SignupView
     for every registration post within the recent window so buttons keep
-    working after a restart. Returns the count of views registered."""
+    working after a restart. Returns the count of views registered.
+
+    Always re-registers with `_force_all_buttons=True` so a pre-hotfix
+    CS post (which has all 4 buttons rendered on the actual Discord
+    message) stays routable — discord.py matches button clicks by
+    custom_id against the View's children, and the new 2-button CS
+    construction would otherwise leave stale b/either clicks falling
+    through to "Interaction failed". New-post construction
+    (`storm_signup_post.post_registration`) doesn't pass the flag,
+    so freshly-posted CS messages keep the 2-button visual shape.
+    """
     import config
     posts = config.get_recent_storm_registration_posts()
     registered = 0
     for post in posts:
+        # Empty-string fallback (not "Team A"/"Team B") so the bare-
+        # team-name branch in `SignupView.__init__` fires; otherwise
+        # the button label renders as "🅰️ Team A: Team A" (doubled
+        # label, surfaced in the holistic audit).
         view = SignupView(
             post["guild_id"],
             post["event_type"],
             post["event_date"],
-            time_a_label=post.get("time_a_label") or "Team A",
-            time_b_label=post.get("time_b_label") or "Team B",
+            time_a_label=post.get("time_a_label") or "",
+            time_b_label=post.get("time_b_label") or "",
+            _force_all_buttons=True,
         )
         try:
             bot.add_view(view, message_id=int(post["message_id"]))

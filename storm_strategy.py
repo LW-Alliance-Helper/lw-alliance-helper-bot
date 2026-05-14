@@ -30,6 +30,7 @@ SQLite session table is needed for v1.
 
 from __future__ import annotations
 
+import asyncio
 import logging
 import re
 
@@ -909,9 +910,13 @@ class _RenameModal(discord.ui.Modal, title="Rename Preset"):
                 ephemeral=True,
             )
             return
-        # Uniqueness check excluding the current name.
+        # Uniqueness check excluding the current name. gspread off the
+        # event loop — `list_presets` reads the whole presets tab.
+        all_presets = await asyncio.to_thread(
+            list_presets, self._view.guild_id, self._view.buf.event_type,
+        )
         existing = [
-            p.lower() for p in list_presets(self._view.guild_id, self._view.buf.event_type)
+            p.lower() for p in all_presets
             if p.lower() != self._view.buf.name.lower()
         ]
         if new.lower() in existing:
@@ -1001,7 +1006,9 @@ class _PresetEditorView(discord.ui.View):
             # whether they're over or under; the save path doesn't
             # block on it.
             await inter.response.defer()
-            ok = save_preset(self.guild_id, self.buf.event_type, self.buf)
+            ok = await asyncio.to_thread(
+                save_preset, self.guild_id, self.buf.event_type, self.buf,
+            )
             if ok:
                 for item in self.children:
                     item.disabled = True
@@ -1118,7 +1125,11 @@ class _StrategyGroup(app_commands.Group):
                 "⚠️ Pick a preset name (e.g. `Standard Desert`).", ephemeral=True,
             )
             return
-        existing = [p.lower() for p in list_presets(interaction.guild_id, self.event_type)]
+        existing = [
+            p.lower() for p in await asyncio.to_thread(
+                list_presets, interaction.guild_id, self.event_type,
+            )
+        ]
         if name.lower() in existing:
             await interaction.response.send_message(
                 f"⚠️ A preset named **{name}** already exists. "
@@ -1133,7 +1144,9 @@ class _StrategyGroup(app_commands.Group):
     async def _edit(self, interaction: discord.Interaction, name: str):
         if not await _deny_if_not_leader(interaction):
             return
-        buf = load_preset(interaction.guild_id, self.event_type, name)
+        buf = await asyncio.to_thread(
+            load_preset, interaction.guild_id, self.event_type, name,
+        )
         if buf is None:
             await interaction.response.send_message(
                 f"⚠️ No preset named **{name}**. Use the list command to see saved presets.",
@@ -1145,7 +1158,9 @@ class _StrategyGroup(app_commands.Group):
     async def _list(self, interaction: discord.Interaction):
         if not await _deny_if_not_leader(interaction):
             return
-        names = list_presets(interaction.guild_id, self.event_type)
+        names = await asyncio.to_thread(
+            list_presets, interaction.guild_id, self.event_type,
+        )
         label = "Desert Storm" if self.event_type == "DS" else "Canyon Storm"
         if not names:
             await interaction.response.send_message(
@@ -1225,7 +1240,9 @@ class _StrategyGroup(app_commands.Group):
         if not view.confirmed:
             await interaction.followup.send("✅ Delete cancelled.", ephemeral=True)
             return
-        ok = delete_preset(interaction.guild_id, self.event_type, name)
+        ok = await asyncio.to_thread(
+            delete_preset, interaction.guild_id, self.event_type, name,
+        )
         if ok:
             await interaction.followup.send(
                 f"🗑️ Deleted preset **{name}**.",

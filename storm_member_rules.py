@@ -27,6 +27,7 @@ sorting works at the Sheet level. The slash command accepts shorthand
 
 from __future__ import annotations
 
+import asyncio
 import logging
 
 import discord
@@ -517,18 +518,31 @@ def _make_clear_callback(view: "_RulesListView", idx: int):
                 ephemeral=True,
             )
             return
-        ok = delete_rule_at(view.guild_id, view.event_type, idx)
+        # gspread off the event loop — delete + reload both block on
+        # a network round-trip.
+        await inter.response.defer()
+        ok = await asyncio.to_thread(
+            delete_rule_at, view.guild_id, view.event_type, idx,
+        )
         if not ok:
-            await inter.response.send_message(
+            await inter.followup.send(
                 "⚠️ Couldn't remove that rule. Rerun the list command to refresh.",
                 ephemeral=True,
             )
             return
-        view.rules = list_rules(view.guild_id, view.event_type)
+        view.rules = await asyncio.to_thread(
+            list_rules, view.guild_id, view.event_type,
+        )
         if view.page >= view.total_pages:
             view.page = max(0, view.total_pages - 1)
         view._build_buttons()
-        await inter.response.edit_message(embed=view.render_embed(), view=view)
+        # We deferred above, so edit the deferred response in place.
+        try:
+            await inter.edit_original_response(
+                embed=view.render_embed(), view=view,
+            )
+        except discord.HTTPException:
+            pass
     return _cb
 
 
@@ -579,7 +593,7 @@ class _MemberRuleGroup(app_commands.Group):
             f"\n⚠️ `{zone}` isn't in the canonical zone list — "
             "the rule was saved, but double-check the spelling."
         )
-        ok, msg = save_rule(
+        ok, msg = await asyncio.to_thread(save_rule,
             interaction.guild_id, self.event_type,
             Rule(rule_type=_RULE_TYPE_POWER_BAND,
                  subject=str(int(n)), value=zone, notes=notes),
@@ -621,7 +635,7 @@ class _MemberRuleGroup(app_commands.Group):
                 f"⚠️ Team must be `A` or `B`. Got `{team}`.", ephemeral=True,
             )
             return
-        ok, msg = save_rule(
+        ok, msg = await asyncio.to_thread(save_rule,
             interaction.guild_id, self.event_type,
             Rule(rule_type=_RULE_TYPE_PER_MEMBER,
                  subject=subject, sub_type="team",
@@ -663,7 +677,7 @@ class _MemberRuleGroup(app_commands.Group):
             f"\n⚠️ `{zone_clean}` isn't in the canonical zone list — "
             "saved anyway; double-check the spelling."
         )
-        ok, msg = save_rule(
+        ok, msg = await asyncio.to_thread(save_rule,
             interaction.guild_id, self.event_type,
             Rule(rule_type=_RULE_TYPE_PER_MEMBER,
                  subject=subject, sub_type="zone",
@@ -700,7 +714,7 @@ class _MemberRuleGroup(app_commands.Group):
                 ephemeral=True,
             )
             return
-        ok, msg = save_rule(
+        ok, msg = await asyncio.to_thread(save_rule,
             interaction.guild_id, self.event_type,
             Rule(rule_type=_RULE_TYPE_PER_MEMBER,
                  subject=subject, sub_type="special_role",
@@ -717,7 +731,10 @@ class _MemberRuleGroup(app_commands.Group):
     async def _list(self, interaction: discord.Interaction, member: str | None = None):
         if not await _deny_if_not_leader(interaction):
             return
-        rules = list_rules(interaction.guild_id, self.event_type)
+        # gspread off the event loop.
+        rules = await asyncio.to_thread(
+            list_rules, interaction.guild_id, self.event_type,
+        )
         if member:
             # Filter matches either the raw subject (works for non-Discord
             # name subjects) OR the resolved display name (works for

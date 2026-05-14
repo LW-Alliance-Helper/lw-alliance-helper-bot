@@ -31,6 +31,7 @@ don't create phantom signup rows that haunt every future officer view.
 
 from __future__ import annotations
 
+import asyncio
 import datetime as _dt
 import logging
 from typing import Optional
@@ -544,7 +545,14 @@ class _OnBehalfModal(discord.ui.Modal, title="Record vote on behalf"):
         # so typos don't create phantom signup rows. If the roster doesn't
         # have a `not_on_discord` column yet (or the Sheet read failed), we
         # fall back to permissive behaviour to keep the command useful.
-        roster_rows, _errors = _read_roster_rows(
+        # Defer first so the gspread round-trip below doesn't blow the
+        # 3-second initial-response token.
+        try:
+            await interaction.response.defer(ephemeral=True)
+        except discord.HTTPException:
+            pass
+        roster_rows, _errors = await asyncio.to_thread(
+            _read_roster_rows,
             self._view.guild_id, guild=self._view.guild,
         )
         canonical_name = raw_member
@@ -555,7 +563,7 @@ class _OnBehalfModal(discord.ui.Modal, title="Record vote on behalf"):
                 None,
             )
             if match is None:
-                await interaction.response.send_message(
+                await interaction.followup.send(
                     f"⚠️ I don't see **{raw_member}** in your roster Sheet. "
                     f"Check the spelling (it must match the name column on "
                     f"the roster tab) and try again.",
@@ -573,21 +581,34 @@ class _OnBehalfModal(discord.ui.Modal, title="Record vote on behalf"):
             is_on_behalf=True,
         )
         if not ok:
-            await interaction.response.send_message(
+            await interaction.followup.send(
                 "⚠️ Couldn't record that vote. Check the bot logs.",
                 ephemeral=True,
             )
             return
 
-        # Refresh the view in place.
-        self._view.refresh_buckets()
-        await interaction.response.edit_message(
-            embed=_render_embed(
-                self._view.guild, self._view.event_type, self._view.event_date,
-                self._view.buckets, self._view.bucket_filter,
-            ),
-            view=self._view,
-        )
+        # Refresh the view in place. `refresh_buckets` is async (gspread
+        # off the event loop) — re-renders the parent's posted message
+        # via `view.message.edit` since we deferred.
+        await self._view.refresh_buckets()
+        try:
+            if self._view.message is not None:
+                await self._view.message.edit(
+                    embed=_render_embed(
+                        self._view.guild, self._view.event_type, self._view.event_date,
+                        self._view.buckets, self._view.bucket_filter,
+                    ),
+                    view=self._view,
+                )
+        except discord.HTTPException:
+            pass
+        try:
+            await interaction.followup.send(
+                f"✅ Recorded on-behalf vote for **{canonical_name}**.",
+                ephemeral=True,
+            )
+        except discord.HTTPException:
+            pass
 
 
 class OfficerView(discord.ui.View):
@@ -610,7 +631,15 @@ class OfficerView(discord.ui.View):
         # officers); without an on_timeout, the buttons silently 404
         # after 15 minutes with "Interaction failed" and no signal.
         self.message: Optional[discord.Message] = None
-        self.refresh_buckets()
+        # NOTE: buckets are populated by the caller via
+        # `await view.refresh_buckets()` AFTER construction. Earlier
+        # code called `_build_bucket_map` synchronously inside __init__,
+        # which read the alliance roster Sheet on the event loop —
+        # under Sheets rate-limit pressure that stalled every other
+        # guild's button clicks + scheduler ticks. The slash command
+        # and the refresh-button callback are async, so threading the
+        # sheet read out is cheap; the buckets attribute starts empty
+        # and only the embed-render path reads it (post-refresh).
         self._build_components()
 
     async def on_timeout(self) -> None:
@@ -620,9 +649,12 @@ class OfficerView(discord.ui.View):
         from wizard_registry import expire_view_message
         await expire_view_message(self.message, command_hint="/storm_signups")
 
-    def refresh_buckets(self):
-        self.buckets, self.roster_errors = _build_bucket_map(
-            self.guild, self.event_type, self.event_date,
+    async def refresh_buckets(self) -> None:
+        """Re-read the alliance roster Sheet + storm_signups SQLite
+        and rebuild the bucket map. Off the event loop so a slow
+        gspread call doesn't stall the bot. Callers MUST await."""
+        self.buckets, self.roster_errors = await asyncio.to_thread(
+            _build_bucket_map, self.guild, self.event_type, self.event_date,
         )
 
     def _build_components(self):
@@ -689,12 +721,22 @@ class OfficerView(discord.ui.View):
                     ephemeral=True,
                 )
                 return
-            self.refresh_buckets()
-            await inter.response.edit_message(
-                embed=_render_embed(self.guild, self.event_type, self.event_date,
-                                    self.buckets, self.bucket_filter),
-                view=self,
-            )
+            # Defer first — `refresh_buckets` does a gspread read off
+            # the event loop, which can exceed Discord's 3-second
+            # initial-response window under Sheets rate-limit pressure.
+            try:
+                await inter.response.defer()
+            except discord.HTTPException:
+                pass
+            await self.refresh_buckets()
+            try:
+                await inter.edit_original_response(
+                    embed=_render_embed(self.guild, self.event_type, self.event_date,
+                                        self.buckets, self.bucket_filter),
+                    view=self,
+                )
+            except discord.HTTPException:
+                pass
         refresh_btn.callback = _refresh
         self.add_item(refresh_btn)
 
@@ -928,6 +970,11 @@ class StormSignupsViewCog(commands.Cog):
             )
 
         view = OfficerView(interaction.guild, interaction.user.id, et, date_clean)
+        # Populate buckets via `asyncio.to_thread` so the gspread read
+        # doesn't block the event loop (the read used to fire inside
+        # `__init__`, stalling every other guild's click handlers while
+        # this guild's Sheet was being fetched).
+        await view.refresh_buckets()
         followup_args = dict(
             embed=_render_embed(interaction.guild, et, date_clean, view.buckets),
             view=view,

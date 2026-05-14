@@ -15,6 +15,7 @@ re-running the build and re-recording attendance.
 
 from __future__ import annotations
 
+import asyncio
 import datetime as _dt
 import logging
 from typing import Optional
@@ -405,11 +406,16 @@ class _HistoryListView(discord.ui.View):
             # dates. The prior implementation disabled every button on
             # the first click, making the list view effectively one-shot.
             await inter.response.defer(ephemeral=True, thinking=True)
-            slots, _slot_errs = load_event_roster(
-                self.guild_id, self.event_type, date_str,
+            # Parallel Sheet reads off the event loop — gspread blocks
+            # for a network round-trip each.
+            slots_task = asyncio.to_thread(
+                load_event_roster, self.guild_id, self.event_type, date_str,
             )
-            attendance, _att_errs = load_event_attendance(
-                self.guild_id, self.event_type, date_str,
+            attendance_task = asyncio.to_thread(
+                load_event_attendance, self.guild_id, self.event_type, date_str,
+            )
+            (slots, _slot_errs), (attendance, _att_errs) = await asyncio.gather(
+                slots_task, attendance_task,
             )
             embed = render_event_embed(
                 event_type=self.event_type,
@@ -472,11 +478,15 @@ async def open_history(
                 ephemeral=True,
             )
             return
-        slots, slot_errors = load_event_roster(
-            interaction.guild_id, event_type, date_clean,
+        # Parallel Sheet reads off the event loop.
+        slots_task = asyncio.to_thread(
+            load_event_roster, interaction.guild_id, event_type, date_clean,
         )
-        attendance, _att_errs = load_event_attendance(
-            interaction.guild_id, event_type, date_clean,
+        attendance_task = asyncio.to_thread(
+            load_event_attendance, interaction.guild_id, event_type, date_clean,
+        )
+        (slots, slot_errors), (attendance, _att_errs) = await asyncio.gather(
+            slots_task, attendance_task,
         )
         embed = render_event_embed(
             event_type=event_type,
@@ -496,9 +506,9 @@ async def open_history(
         )
         return
 
-    # No date → list view.
-    dates, _list_errors = list_event_dates(
-        interaction.guild_id, event_type, limit=8,
+    # No date → list view. gspread off the event loop.
+    dates, _list_errors = await asyncio.to_thread(
+        list_event_dates, interaction.guild_id, event_type, limit=8,
     )
     embed = render_history_list_embed(event_type, dates)
     if dates:

@@ -2206,3 +2206,47 @@ class TestMailBodyPhaseAware:
         p2_block = body[p2_start:]
         assert "Cyrus" in p1_block
         assert "Cyrus" not in p2_block
+
+
+class TestPhaseAwareEligibility:
+    """The picker excludes already-assigned members in the *current*
+    phase only — a member in Phase 1 can still be picked for Phase 2
+    (the migration use case)."""
+
+    def test_assigned_member_keys_in_phase_only_returns_that_phase(self):
+        s = _make_phase_aware_session()
+        s.assignments["Info Center"].append("1")
+        s.assignments_p2["Arsenal"].append("2")
+        s.subs.append("3")
+        # Phase 1: Alice in primaries, Cyrus in sub pool.
+        assert s.assigned_member_keys_in_phase(1) == {"1", "3"}
+        # Phase 2: Bob in primaries, Cyrus still in sub pool (event-level).
+        assert s.assigned_member_keys_in_phase(2) == {"2", "3"}
+
+    def test_member_in_phase_one_remains_eligible_in_phase_two(self):
+        s = _make_phase_aware_session()
+        # Alice plays Info Center in Phase 1.
+        s.assignments["Info Center"].append("1")
+        # Selecting Phase 2 + asking for eligibility should NOT exclude
+        # Alice (the migration case) — she's only locked out of her
+        # current Phase-2 slot if one already exists.
+        s.selected_phase = 2
+        eligible, _below = srb._eligible_member_keys_for_zone(s, "Arsenal")
+        assert "1" in eligible
+
+    def test_member_assigned_in_current_phase_is_excluded(self):
+        s = _make_phase_aware_session()
+        s.assignments_p2["Arsenal"].append("1")
+        s.selected_phase = 2
+        eligible, _below = srb._eligible_member_keys_for_zone(s, "Info Center")
+        # Alice already in Arsenal (Phase 2) — picker shouldn't show her
+        # again in a Phase 2 dropdown.
+        assert "1" not in eligible
+
+    def test_sub_pool_member_excluded_from_both_phase_pickers(self):
+        s = _make_phase_aware_session()
+        s.subs.append("1")
+        for phase in (1, 2):
+            s.selected_phase = phase
+            eligible, _below = srb._eligible_member_keys_for_zone(s, "Info Center")
+            assert "1" not in eligible

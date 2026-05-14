@@ -605,7 +605,12 @@ class TestWriteRostersTab:
         # Header + 3 data rows.
         assert rows[0] == srb._ROSTERS_HEADER
         # Pull just the (member, role, power) for assertion stability.
-        data = [(r[3], r[4], r[5]) for r in rows[1:]]
+        # Use header.index so a new column inserted upstream doesn't
+        # silently shift the assertion.
+        mc = srb._ROSTERS_HEADER.index("Member")
+        rc = srb._ROSTERS_HEADER.index("Role")
+        pc = srb._ROSTERS_HEADER.index("Power at Assignment")
+        data = [(r[mc], r[rc], r[pc]) for r in rows[1:]]
         assert ("Alice", "primary", "412000000") in data
         assert ("Bob",   "primary", "350000000") in data
         assert ("Carol", "sub",     "280000000") in data
@@ -623,8 +628,10 @@ class TestWriteRostersTab:
         assert errors == []
         ws = fake.worksheet("DS Rosters")
         rows = ws.get_all_values()
-        data_rows = [r for r in rows[1:] if r and r[3] == "Erin"]
-        assert data_rows[0][5] == "unknown"
+        mc = srb._ROSTERS_HEADER.index("Member")
+        pc = srb._ROSTERS_HEADER.index("Power at Assignment")
+        data_rows = [r for r in rows[1:] if r and r[mc] == "Erin"]
+        assert data_rows[0][pc] == "unknown"
 
     def test_event_date_and_team_in_each_row(self, fake_env):
         fake, gid = fake_env
@@ -667,7 +674,8 @@ class TestOverrideBelowFloorCapture:
         ws = fake.worksheet("DS Rosters")
         rows = ws.get_all_values()
         col = self._override_col()
-        carol_row = next(r for r in rows[1:] if r[3] == "Carol")
+        mc = srb._ROSTERS_HEADER.index("Member")
+        carol_row = next(r for r in rows[1:] if r[mc] == "Carol")
         assert carol_row[col] == "yes"
 
     def test_at_floor_member_flag_blank(self, fake_env):
@@ -683,7 +691,8 @@ class TestOverrideBelowFloorCapture:
         ws = fake.worksheet("DS Rosters")
         rows = ws.get_all_values()
         col = self._override_col()
-        alice_row = next(r for r in rows[1:] if r[3] == "Alice")
+        mc = srb._ROSTERS_HEADER.index("Member")
+        alice_row = next(r for r in rows[1:] if r[mc] == "Alice")
         assert alice_row[col] == ""
 
     def test_sub_role_never_carries_override(self, fake_env):
@@ -702,7 +711,8 @@ class TestOverrideBelowFloorCapture:
         ws = fake.worksheet("DS Rosters")
         rows = ws.get_all_values()
         col = self._override_col()
-        carol_row = next(r for r in rows[1:] if r[3] == "Carol")
+        mc = srb._ROSTERS_HEADER.index("Member")
+        carol_row = next(r for r in rows[1:] if r[mc] == "Carol")
         assert carol_row[col] == ""
 
     def test_prune_clears_unassigned_overrides(self):
@@ -1863,7 +1873,8 @@ class TestPowerSnapshotAtFinalize:
         roster_ws = fake.worksheet("DS Rosters")
         rows = roster_ws.get_all_values()
         col = srb._ROSTERS_HEADER.index("Power at Assignment")
-        alice_row = next(r for r in rows[1:] if r[3] == "Alice")
+        mc = srb._ROSTERS_HEADER.index("Member")
+        alice_row = next(r for r in rows[1:] if r[mc] == "Alice")
         assert alice_row[col] == str(500_000_000)
 
 
@@ -2327,3 +2338,88 @@ class TestAutoFillPhaseAware:
         # Phase 2 dict stays empty for flat presets even with members
         # available.
         assert all(len(v) == 0 for v in s.assignments_p2.values())
+
+
+class TestRostersTabPhaseColumn:
+    """The Phase column in rosters_tab is the post-event audit trail
+    that captures which phase a member played in. Flat presets write
+    "1" for traceability; sub-pool rows write empty (event-level)."""
+
+    def test_header_includes_phase_column(self):
+        assert "Phase" in srb._ROSTERS_HEADER
+        # Phase sits between Team and Zone so the columns read in the
+        # natural left-to-right order an officer scans.
+        assert (srb._ROSTERS_HEADER.index("Phase")
+                == srb._ROSTERS_HEADER.index("Team") + 1)
+        assert (srb._ROSTERS_HEADER.index("Zone")
+                == srb._ROSTERS_HEADER.index("Phase") + 1)
+
+    def test_flat_preset_writes_phase_one(self, fake_env):
+        fake, gid = fake_env
+        session = _make_session(team="A", members={
+            "1001": {"key": "1001", "name": "Alice", "discord_id": "1001",
+                     "power": 412_000_000, "not_on_discord": False},
+        })
+        session.guild_id = gid
+        session.event_date = "2026-05-18"
+        session.assignments["Power Tower"].append("1001")
+        srb._write_rosters_tab(session)
+        ws = fake.worksheet("DS Rosters")
+        rows = ws.get_all_values()
+        phase_col = srb._ROSTERS_HEADER.index("Phase")
+        member_col = srb._ROSTERS_HEADER.index("Member")
+        alice_row = next(r for r in rows[1:] if r[member_col] == "Alice")
+        assert alice_row[phase_col] == "1"
+
+    def test_phase_aware_preset_writes_correct_phase_per_row(self, fake_env):
+        fake, gid = fake_env
+        zones = [
+            ss.ZoneRow(zone="Power Tower", max_players=0,
+                       max_phase1=2, max_phase2=1,
+                       min_power_a=100_000_000, min_power_b=50_000_000),
+        ]
+        preset = ss.PresetBuffer(name="Phased", event_type="DS",
+                                 zones=zones, uses_phases=True)
+        members = {
+            "1": {"key": "1", "name": "Alice", "discord_id": "1",
+                  "power": 500_000_000, "not_on_discord": False},
+            "2": {"key": "2", "name": "Bob", "discord_id": "2",
+                  "power": 400_000_000, "not_on_discord": False},
+        }
+        session = srb.RosterBuilderSession(
+            guild_id=gid, user_id=42, event_type="DS",
+            team="A", preset=preset, members=members,
+            per_member_rules=[], power_band_rules=[],
+            sub_mode="pool",
+        )
+        session.event_date = "2026-05-18"
+        session.assignments["Power Tower"].append("1")
+        session.assignments_p2["Power Tower"].append("2")
+
+        srb._write_rosters_tab(session)
+        ws = fake.worksheet("DS Rosters")
+        rows = ws.get_all_values()
+        phase_col = srb._ROSTERS_HEADER.index("Phase")
+        member_col = srb._ROSTERS_HEADER.index("Member")
+        alice_row = next(r for r in rows[1:] if r[member_col] == "Alice")
+        bob_row = next(r for r in rows[1:] if r[member_col] == "Bob")
+        assert alice_row[phase_col] == "1"
+        assert bob_row[phase_col] == "2"
+
+    def test_subs_have_empty_phase_cell(self, fake_env):
+        fake, gid = fake_env
+        session = _make_session(team="A", members={
+            "1003": {"key": "1003", "name": "Carol", "discord_id": "1003",
+                     "power": 280_000_000, "not_on_discord": False},
+        })
+        session.guild_id = gid
+        session.event_date = "2026-05-18"
+        session.subs.append("1003")
+        srb._write_rosters_tab(session)
+        ws = fake.worksheet("DS Rosters")
+        rows = ws.get_all_values()
+        phase_col = srb._ROSTERS_HEADER.index("Phase")
+        member_col = srb._ROSTERS_HEADER.index("Member")
+        carol_row = next(r for r in rows[1:] if r[member_col] == "Carol")
+        # Sub-pool entries are event-level, not phase-scoped.
+        assert carol_row[phase_col] == ""

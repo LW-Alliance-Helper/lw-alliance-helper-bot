@@ -2723,7 +2723,7 @@ class _FactionRolesView(discord.ui.View):
 
 
 _ROSTERS_HEADER = [
-    "Event Date", "Team", "Zone", "Member", "Role",
+    "Event Date", "Team", "Phase", "Zone", "Member", "Role",
     "Power at Assignment", "Discord ID", "Override Below Floor",
     "Paired With", "Posted At (UTC)",
 ]
@@ -2783,74 +2783,96 @@ def _write_rosters_tab(session: RosterBuilderSession) -> list[str]:
         except Exception as e:
             existing = []
             errors.append(f"rosters tab header read failed: {e}")
-        if existing and "Paired With" not in existing:
+        # Two header migrations to handle:
+        # - "Paired With" column (added in #132)
+        # - "Phase" column (added in #152)
+        # Both rewrite the full header. Existing data rows shift one
+        # column to the right under the new Phase column; readers that
+        # use the header to index look up "Zone" by name will still
+        # find it. Old code that hard-coded column indexes would break
+        # — search for `row[2]` style access in storm_history.
+        needs_header_migration = existing and (
+            "Paired With" not in existing or "Phase" not in existing
+        )
+        if needs_header_migration:
             try:
                 ws.update("A1", [_ROSTERS_HEADER], value_input_option="RAW")
             except Exception as e:
                 errors.append(
                     f"rosters tab header migration failed (data still "
-                    f"appended, but readers may not see Paired With): {e}"
+                    f"appended, but readers may not see new columns): {e}"
                 )
 
     from config import _utcnow_iso
     posted_at = _utcnow_iso()
     rows: list[list[str]] = []
-    for z in session.preset.zones:
-        for key in session.assignments.get(z.zone, []):
-            m = session.members.get(key)
-            if not m:
-                continue
-            power = m.get("power")
-            override = "yes" if key in session.below_floor_overrides else ""
-            rows.append([
-                session.event_date or "",
-                session.team or "",
-                z.zone,
-                m["name"],
-                "primary",
-                str(power) if power is not None else "unknown",
-                m.get("discord_id") or "",
-                override,
-                "",  # Paired With — primary rows leave blank.
-                posted_at,
-            ])
-            # In paired mode, the sub partnered with this primary is
-            # written as its own row immediately after, so post-event
-            # review can see "Alice (primary) at Power Tower → Bob (sub
-            # paired)" in row order.
-            if session.is_paired:
-                sub_key = session.paired_subs.get(key)
-                if sub_key:
-                    sub_m = session.members.get(sub_key)
-                    if sub_m:
-                        sub_power = sub_m.get("power")
-                        sub_override = (
-                            "yes" if sub_key in session.below_floor_overrides else ""
-                        )
-                        rows.append([
-                            session.event_date or "",
-                            session.team or "",
-                            z.zone,
-                            sub_m["name"],
-                            "sub",
-                            str(sub_power) if sub_power is not None else "unknown",
-                            sub_m.get("discord_id") or "",
-                            sub_override,
-                            m["name"],  # Paired With → the primary
-                            posted_at,
-                        ])
+    # Iterate phases the session knows about. Flat presets yield [1]
+    # only — same row shape as before, with "1" written in the Phase
+    # column for traceability (and a literal "1" matches the implicit
+    # phase a flat preset represents). Phase-aware presets yield both
+    # phases so a Phase 2-only zone (Arsenal / Silo / Mercenary Factory
+    # on a phase-migration alliance) gets its rows written too.
+    for phase in session.iter_phases():
+        phase_assignments = session.assignments_for_phase(phase)
+        phase_pairings = session.paired_subs_for_phase(phase)
+        phase_overrides = session.below_floor_overrides_for_phase(phase)
+        phase_cell = str(phase)
+        for z in session.preset.zones:
+            for key in phase_assignments.get(z.zone, []):
+                m = session.members.get(key)
+                if not m:
+                    continue
+                power = m.get("power")
+                override = "yes" if key in phase_overrides else ""
+                rows.append([
+                    session.event_date or "",
+                    session.team or "",
+                    phase_cell,
+                    z.zone,
+                    m["name"],
+                    "primary",
+                    str(power) if power is not None else "unknown",
+                    m.get("discord_id") or "",
+                    override,
+                    "",  # Paired With — primary rows leave blank.
+                    posted_at,
+                ])
+                if session.is_paired:
+                    sub_key = phase_pairings.get(key)
+                    if sub_key:
+                        sub_m = session.members.get(sub_key)
+                        if sub_m:
+                            sub_power = sub_m.get("power")
+                            sub_override = (
+                                "yes" if sub_key in phase_overrides else ""
+                            )
+                            rows.append([
+                                session.event_date or "",
+                                session.team or "",
+                                phase_cell,
+                                z.zone,
+                                sub_m["name"],
+                                "sub",
+                                str(sub_power) if sub_power is not None else "unknown",
+                                sub_m.get("discord_id") or "",
+                                sub_override,
+                                m["name"],  # Paired With → the primary
+                                posted_at,
+                            ])
+
     # Pool-mode subs (or paired-mode overflow) — written without a
-    # paired-with reference.
+    # paired-with reference. Subs are event-level (no phase scope) so
+    # they don't repeat per phase — written once with the Phase cell
+    # left blank to distinguish from primary/paired-sub rows.
     for key in session.subs:
         m = session.members.get(key)
         if not m:
             continue
         power = m.get("power")
-        # Subs aren't subject to the per-zone floor; don't propagate the
-        # override flag to the sub slot.
         rows.append([
             session.event_date or "",
             session.team or "",
+            "",  # Phase — sub-pool rows are event-level, not phase-scoped.
             "",
             m["name"],
             "sub",

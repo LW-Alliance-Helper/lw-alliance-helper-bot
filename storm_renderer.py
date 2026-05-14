@@ -90,8 +90,9 @@ def render(roster: RosterData) -> bytes:
         from PIL import Image, ImageDraw, ImageFont
     except ImportError as e:
         raise RuntimeError(
-            "Pillow isn't installed — `/storm_*` image render unavailable. "
-            "Add `Pillow>=10.0.0` to requirements.txt."
+            "Pillow isn't installed — `/desertstorm` / `/canyonstorm` "
+            "image render unavailable. Add `Pillow>=10.0.0` to "
+            "requirements.txt."
         ) from e
 
     # Font lookup tiers:

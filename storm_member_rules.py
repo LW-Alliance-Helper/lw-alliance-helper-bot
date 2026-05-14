@@ -988,6 +988,7 @@ class InlinePowerBandModal(discord.ui.Modal):
                 f"✅ Saved: ≥ {format_power(int(n))} → eligible for "
                 f"**{zone}**.{zone_warning}\n"
                 f"Add more rules later via `/{parent} member_rule …`.",
+                ephemeral=True,
             )
         else:
             await interaction.response.send_message(

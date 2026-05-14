@@ -54,7 +54,8 @@ _STORM_SIGNUPS_TOUR_STEPS: list[str] = [
     "members who signed up, with eligibility floors enforced.",
 
     "**Step 6 / 6 — That's the tour**\n"
-    "You can run `/help storm` any time to revisit it (coming soon). "
+    "You can run `/help` any time and pick **Desert Storm** or "
+    "**Canyon Storm** from the dropdown to revisit the command list. "
     "Closing this message drops you back to the live officer view.",
 ]
 
@@ -155,8 +156,9 @@ class _OfferView(discord.ui.View):
             item.disabled = True
         try:
             await inter.response.edit_message(
-                content="👍 Got it — won't ask again. Run `/help storm` any "
-                        "time if you want a refresher.",
+                content="👍 Got it — won't ask again. Run `/help` any "
+                        "time and pick Desert Storm or Canyon Storm "
+                        "if you want a refresher.",
                 view=self,
             )
         except discord.HTTPException:

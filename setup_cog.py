@@ -5979,10 +5979,10 @@ class _InlineCreateMemberRuleOffer(discord.ui.View):
         self.choice = "create"
         for child in self.children:
             child.disabled = True
-        # NOTE: we don't edit the message here — show_modal must be the
-        # first response to the click interaction. The offer view stays
-        # active visually until the modal returns; that's fine, the
-        # modal flow is short.
+        # send_modal must be the first response, so we can't edit the
+        # offer message via the interaction. Push the disabled state
+        # via the bot-owned message handle right after, so a fast second
+        # click can't fire a duplicate modal.
         try:
             from storm_member_rules import InlinePowerBandModal
             await inter.response.send_modal(InlinePowerBandModal(self.event_type))
@@ -5992,6 +5992,11 @@ class _InlineCreateMemberRuleOffer(discord.ui.View):
                 f"`/{self.parent} member_rule set_power_band` to retry.",
                 ephemeral=True,
             )
+        if self.message is not None:
+            try:
+                await self.message.edit(view=self)
+            except discord.HTTPException:
+                pass
         self.stop()
 
     @discord.ui.button(label="Skip for now", style=discord.ButtonStyle.secondary)
@@ -6406,14 +6411,19 @@ async def _run_structured_flow_setup_step(
 
     # ── Always-ask: preset library + member rules tab names (free + Premium) ──
     #
-    # Free-tier alliances still get strategy presets + member rules; the
-    # Premium gates above (registration post / officer view / roster builder)
-    # are what differentiate the tiers. Each block (#144):
+    # Strategy presets + member rules only drive the structured roster
+    # builder, so we only walk through them when the alliance has opted
+    # *in* to the structured flow. Otherwise we'd post Premium-only copy
+    # to a free-tier alliance that just declined the offer above.
+    # Each block (#144):
     #   1. Posts an explainer so officers know what the concept IS.
     #   2. Asks for the tab name via `ask_keep_or_change`.
     #   3. If the alliance has zero rows in that table, offers an inline
     #      "create your first one now" branch so the new concept is
     #      immediately reachable.
+    if not structured_opted_in:
+        return result
+
     parent = "desertstorm" if event_type == "DS" else "canyonstorm"
     from config import default_structured_tab
 
@@ -6473,6 +6483,19 @@ async def _run_structured_flow_setup_step(
         # proceeds; the on_timeout hook strips the buttons.
 
     # ── Member Rules ────────────────────────────────────────────────────
+    # Per-member rule list differs by event type: DS has teams, CS doesn't.
+    if event_type == "DS":
+        per_member_example = (
+            "`Alice always plays Team A`, `Bob is our Judicator candidate`"
+        )
+        per_member_subcmds = (
+            "`set_member_team` / `set_member_zone` / `set_member_role`"
+        )
+    else:
+        per_member_example = (
+            "`Carol always plays Power Tower`, `Dan is our Judicator candidate`"
+        )
+        per_member_subcmds = "`set_member_zone` / `set_member_role`"
     await channel.send(
         "**Member Rules**\n"
         "Member rules tell the roster builder how to treat individual "
@@ -6481,9 +6504,9 @@ async def _run_structured_flow_setup_step(
         "Primary rule type; reads against the power column you configured "
         "earlier.\n"
         "• **Per-member** — escape hatch for special cases: "
-        f"`Alice always plays Team A`, `Bob is our Judicator candidate`. "
+        f"{per_member_example}. "
         f"Add rules later with `/{parent} member_rule set_power_band` "
-        "/ `set_member_team` / `set_member_zone` / `set_member_role`."
+        f"/ {per_member_subcmds}."
     )
     picked = await ask_keep_or_change(
         channel,
@@ -6513,12 +6536,22 @@ async def _run_structured_flow_setup_step(
         rule_offer = _InlineCreateMemberRuleOffer(
             owner_id=user.id, event_type=event_type, parent=parent,
         )
+        # Per-member subcommands differ by event type (CS has no teams).
+        if event_type == "DS":
+            per_member_pointer = (
+                f"`/{parent} member_rule set_member_team` (or "
+                f"`set_member_zone` / `set_member_role`)"
+            )
+        else:
+            per_member_pointer = (
+                f"`/{parent} member_rule set_member_zone` "
+                f"(or `set_member_role`)"
+            )
         rule_offer.message = await channel.send(
             f"Want to add your first {label} rule now? The button opens "
             f"a quick modal for a power-band rule (the most common type); "
             f"per-member rules need a Discord member picker, so add those "
-            f"later via `/{parent} member_rule set_member_team` (or "
-            f"`set_member_zone` / `set_member_role`).",
+            f"later via {per_member_pointer}.",
             view=rule_offer,
         )
         await wait_view_or_cancel(rule_offer, cancel_event)

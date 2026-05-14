@@ -216,7 +216,10 @@ class TestRosterFromSession:
         sess = _make_session(team="A")
         data = sr.roster_from_session(sess)
         assert "Team A" in data.title
-        assert "2026-05-18" in data.title
+        # Date is now rendered as the human form (#145) — Monday May 18 2026.
+        assert "May" in data.title
+        assert "18" in data.title
+        assert "2026" in data.title
         assert "Standard" in data.title
 
     def test_includes_zones_and_capacities(self):

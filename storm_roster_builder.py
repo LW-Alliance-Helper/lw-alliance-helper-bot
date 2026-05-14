@@ -2808,9 +2808,10 @@ async def open_roster_builder(
                 f"roster row: {', '.join(sorted(missing))[:200]}"
             )
         if not members:
+            from storm_date_helpers import format_event_date
             await interaction.followup.send(
                 f"⚠️ No signed-up members match team **{team or 'A'}** for "
-                f"event **{event_date}**. Check `/storm_signups` to see who's "
+                f"event **{format_event_date(event_date)}**. Check `/storm_signups` to see who's "
                 f"voted, or run the apply flow without an event date to use "
                 f"the full roster.",
                 ephemeral=True,
@@ -2834,9 +2835,10 @@ async def open_roster_builder(
             interaction.user.id,
         )
         if not ok:
+            from storm_date_helpers import format_event_date
             await interaction.followup.send(
                 f"⚠️ Another officer (<@{holder}>) is already building "
-                f"**Team {team or 'roster'}** for event **{event_date}**. "
+                f"**Team {team or 'roster'}** for event **{format_event_date(event_date)}**. "
                 f"Wait for them to finish, or coordinate before re-opening.",
                 ephemeral=True,
                 allowed_mentions=discord.AllowedMentions.none(),

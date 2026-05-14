@@ -16,6 +16,7 @@ from __future__ import annotations
 
 import datetime as _dt
 import logging
+from typing import Optional
 
 import discord
 from discord import app_commands
@@ -64,13 +65,11 @@ def _today_in_guild_tz(guild_id: int | None) -> _dt.date:
 def _build_registration_embed(event_type: str, event_date_iso: str,
                               time_a: str, time_b: str,
                               teams: str = "both") -> discord.Embed:
+    from storm_date_helpers import format_event_date
+
     label = "Desert Storm" if event_type == "DS" else "Canyon Storm"
     emoji = "⚔️" if event_type == "DS" else "🏜️"
-    try:
-        d = _dt.date.fromisoformat(event_date_iso)
-        date_pretty = d.strftime("%A, %B %d, %Y")
-    except ValueError:
-        date_pretty = event_date_iso
+    date_pretty = format_event_date(event_date_iso)
     desc = (
         f"Pick one option below. Changing your vote replaces the previous "
         f"one — feel free to update if your availability shifts before the event."
@@ -222,7 +221,7 @@ class StormSignupPostCog(commands.Cog):
     )
     @app_commands.describe(
         event_type="Which event to post sign-ups for",
-        event_date="Date of the event (YYYY-MM-DD)",
+        event_date="Optional — defaults to the next configured event day. Accepts e.g. May 18, 5/18, 2026-05-18, Sunday.",
     )
     @app_commands.choices(event_type=[
         app_commands.Choice(name="Desert Storm", value="DS"),
@@ -233,12 +232,15 @@ class StormSignupPostCog(commands.Cog):
         self,
         interaction: discord.Interaction,
         event_type: app_commands.Choice[str],
-        event_date: str,
+        event_date: Optional[str] = None,
     ):
         from storm_permissions import (
             is_leader_or_admin,
             deny_non_leader,
             ensure_premium_structured,
+        )
+        from storm_date_helpers import (
+            parse_event_date, next_event_date, format_event_date,
         )
 
         if not is_leader_or_admin(interaction):
@@ -246,25 +248,35 @@ class StormSignupPostCog(commands.Cog):
             return
 
         et = event_type.value
-        date_clean = event_date.strip()
-        try:
-            parsed_date = _dt.date.fromisoformat(date_clean)
-        except ValueError:
-            await interaction.response.send_message(
-                f"⚠️ `{event_date}` isn't a valid date. Use the format `YYYY-MM-DD` "
-                f"(e.g. `2026-05-18`).",
-                ephemeral=True,
-            )
-            return
-
         # Compare against today in the alliance's configured timezone, not
         # the host's local clock — Railway runs UTC, so an east-of-UTC
         # alliance posting near midnight their time would otherwise see
         # their own event date flagged "in the past".
         today_local = _today_in_guild_tz(interaction.guild_id)
+
+        raw_input = (event_date or "").strip()
+        if not raw_input:
+            # No date passed — infer next configured event day, matching
+            # the alliance's structured-flow schedule when set.
+            date_clean = next_event_date(
+                interaction.guild_id, et, today=today_local,
+            )
+        else:
+            parsed = parse_event_date(raw_input, today=today_local)
+            if parsed is None:
+                await interaction.response.send_message(
+                    f"⚠️ `{event_date}` isn't a date I can parse. Try `May 18`, "
+                    f"`5/18`, `2026-05-18`, `Sunday`, or `tomorrow`.",
+                    ephemeral=True,
+                )
+                return
+            date_clean = parsed.isoformat()
+
+        parsed_date = _dt.date.fromisoformat(date_clean)
         if parsed_date < today_local:
+            pretty = format_event_date(date_clean)
             await interaction.response.send_message(
-                f"⚠️ Event date `{date_clean}` is in the past. Sign-ups should be "
+                f"⚠️ Event date {pretty} is in the past. Sign-ups should be "
                 f"posted for upcoming events.",
                 ephemeral=True,
             )
@@ -299,21 +311,24 @@ def _format_post_result_message(
     Used by the slash command. The scheduler logs against the same
     status codes but doesn't surface a user message.
     """
+    from storm_date_helpers import format_event_date
+
     status = result.get("status")
     label = "Desert Storm" if event_type == "DS" else "Canyon Storm"
     setup_cmd = "/setup_desertstorm" if event_type == "DS" else "/setup_canyonstorm"
+    date_pretty = format_event_date(event_date)
 
     if status == "ok":
         cid = result.get("channel_id")
         return (
-            f"✅ Sign-up post for {label} on **{event_date}** is live in "
+            f"✅ Sign-up post for {label} on **{date_pretty}** is live in "
             f"<#{cid}>. Members can vote any time before the event. "
             f"Open `/storm_signups` to review who's voted."
         )
     if status == "already_posted":
         cid = result.get("channel_id")
         return (
-            f"ℹ️ A sign-up post already exists for {event_date} ({event_type}). "
+            f"ℹ️ A sign-up post already exists for {date_pretty} ({event_type}). "
             f"Check <#{cid}> for the existing post — members can keep voting on "
             f"it. If you need to re-post, delete the prior message first."
         )

@@ -2756,7 +2756,7 @@ async def open_roster_builder(
     team = team_override or ""
     if event_type == "DS" and not team:
         team_view = _TeamPickerView(interaction.user.id)
-        await interaction.followup.send(
+        team_view.message = await interaction.followup.send(
             f"Build roster for **Team A** or **Team B** with preset "
             f"**{preset_name}**?",
             view=team_view, ephemeral=True,
@@ -2896,6 +2896,7 @@ class _TeamPickerView(discord.ui.View):
         super().__init__(timeout=120)
         self.owner_id = owner_id
         self.selected: Optional[str] = None
+        self.message: Optional[discord.Message] = None
 
         a = discord.ui.Button(label="🅰️ Team A", style=discord.ButtonStyle.primary)
         b = discord.ui.Button(label="🅱️ Team B", style=discord.ButtonStyle.success)
@@ -2932,3 +2933,14 @@ class _TeamPickerView(discord.ui.View):
         b.callback = _pick_b
         self.add_item(a)
         self.add_item(b)
+
+    async def on_timeout(self) -> None:
+        """Strip the buttons after the 2-minute window. Officer can
+        re-run the slash command to re-open the picker."""
+        for item in self.children:
+            item.disabled = True
+        if self.message is not None:
+            try:
+                await self.message.edit(view=self)
+            except discord.HTTPException:
+                pass

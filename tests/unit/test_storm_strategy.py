@@ -330,3 +330,202 @@ class TestSheetRoundTrip:
         with patch.object(config, "get_spreadsheet", return_value=None):
             assert ss.load_preset(TEST_GUILD_ID, "DS", "Anything") is None
             assert ss.list_presets(TEST_GUILD_ID, "DS") == []
+
+
+# ── #148: configured-teams gate ─────────────────────────────────────────────
+
+
+class TestZoneRowRenderLine:
+    def test_ds_both_renders_both_floors(self):
+        row = ss.ZoneRow(zone="Nuclear Silo", max_players=4,
+                         min_power_a=300_000_000, min_power_b=180_000_000)
+        line = row.render_line("DS", teams="both")
+        assert "Min A:" in line
+        assert "Min B:" in line
+        assert "300M" in line
+        assert "180M" in line
+
+    def test_ds_a_only_drops_min_b(self):
+        row = ss.ZoneRow(zone="Nuclear Silo", max_players=4,
+                         min_power_a=300_000_000, min_power_b=180_000_000)
+        line = row.render_line("DS", teams="A")
+        assert "Min:" in line
+        assert "300M" in line
+        assert "Min A:" not in line
+        assert "Min B:" not in line
+        assert "180M" not in line
+
+    def test_ds_b_only_shows_only_b(self):
+        row = ss.ZoneRow(zone="Nuclear Silo", max_players=4,
+                         min_power_a=300_000_000, min_power_b=180_000_000)
+        line = row.render_line("DS", teams="B")
+        assert "180M" in line
+        assert "300M" not in line
+
+    def test_cs_ignores_teams_param(self):
+        row = ss.ZoneRow(zone="Power Tower", max_players=4,
+                         min_power_a=250_000_000)
+        # CS storage uses min_power_a for the single floor.
+        line = row.render_line("CS", teams="A")
+        assert "Min:" in line
+        assert "250M" in line
+
+    def test_default_teams_is_both(self):
+        row = ss.ZoneRow(zone="Nuclear Silo", max_players=4,
+                         min_power_a=300_000_000, min_power_b=180_000_000)
+        assert row.render_line("DS") == row.render_line("DS", teams="both")
+
+
+class TestResolveDsTeams:
+    def test_unconfigured_falls_back_to_both(self):
+        # Patch the config read to return an empty dict (never-configured
+        # alliance shape).
+        with patch("config.get_storm_config", return_value={}):
+            assert ss._resolve_ds_teams(123) == "both"
+
+    def test_reads_saved_value(self):
+        with patch("config.get_storm_config", return_value={"teams": "A"}):
+            assert ss._resolve_ds_teams(123) == "A"
+        with patch("config.get_storm_config", return_value={"teams": "B"}):
+            assert ss._resolve_ds_teams(123) == "B"
+        with patch("config.get_storm_config", return_value={"teams": "both"}):
+            assert ss._resolve_ds_teams(123) == "both"
+
+    def test_invalid_value_falls_back_to_both(self):
+        with patch("config.get_storm_config", return_value={"teams": "weird"}):
+            assert ss._resolve_ds_teams(123) == "both"
+
+    def test_config_exception_falls_back_to_both(self):
+        with patch("config.get_storm_config", side_effect=RuntimeError("db down")):
+            assert ss._resolve_ds_teams(123) == "both"
+
+
+class TestTeamsConfigPersistence:
+    """End-to-end check that `save_storm_config(teams=...)` round-trips
+    through `get_storm_config` on a real SQLite. Covers the schema
+    migration and the new column."""
+
+    def test_default_when_unset(self, seeded_db):
+        import config
+        from tests.unit.test_config import TEST_GUILD_ID
+        # The seeded_db fixture creates a guild with default columns;
+        # `teams` should read as 'both'.
+        cfg = config.get_storm_config(TEST_GUILD_ID, "DS")
+        assert cfg.get("teams") == "both"
+
+    def test_save_a_only(self, seeded_db):
+        import config
+        from tests.unit.test_config import TEST_GUILD_ID
+        config.save_storm_config(
+            TEST_GUILD_ID, "DS", "DS Assignments", "tpl",
+            "America/New_York", log_channel_id=0,
+            teams="A",
+        )
+        cfg = config.get_storm_config(TEST_GUILD_ID, "DS")
+        assert cfg.get("teams") == "A"
+
+    def test_save_invalid_normalizes_to_both(self, seeded_db):
+        import config
+        from tests.unit.test_config import TEST_GUILD_ID
+        config.save_storm_config(
+            TEST_GUILD_ID, "DS", "DS Assignments", "tpl",
+            "America/New_York", log_channel_id=0,
+            teams="garbage",
+        )
+        cfg = config.get_storm_config(TEST_GUILD_ID, "DS")
+        assert cfg.get("teams") == "both"
+
+
+# ── #149: apply-to-similar ─────────────────────────────────────────────────
+
+
+class TestZoneFamilyPrefix:
+    def test_strips_roman_numerals(self):
+        assert ss._zone_family_prefix("Field Hospital I") == "Field Hospital"
+        assert ss._zone_family_prefix("Field Hospital II") == "Field Hospital"
+        assert ss._zone_family_prefix("Field Hospital III") == "Field Hospital"
+        assert ss._zone_family_prefix("Field Hospital IV") == "Field Hospital"
+        assert ss._zone_family_prefix("Oil Refinery I") == "Oil Refinery"
+        assert ss._zone_family_prefix("Oil Refinery II") == "Oil Refinery"
+
+    def test_strips_arabic_numerals(self):
+        assert ss._zone_family_prefix("Sample Warehouse 1") == "Sample Warehouse"
+        assert ss._zone_family_prefix("Sample Warehouse 4") == "Sample Warehouse"
+        assert ss._zone_family_prefix("Data Center 1") == "Data Center"
+        assert ss._zone_family_prefix("Defense System 2") == "Defense System"
+
+    def test_returns_input_when_no_numeric_suffix(self):
+        assert ss._zone_family_prefix("Arsenal") == "Arsenal"
+        assert ss._zone_family_prefix("Nuclear Silo") == "Nuclear Silo"
+        assert ss._zone_family_prefix("Mercenary Factory") == "Mercenary Factory"
+        assert ss._zone_family_prefix("Power Tower") == "Power Tower"
+        assert ss._zone_family_prefix("Virus Lab") == "Virus Lab"
+
+    def test_handles_empty(self):
+        assert ss._zone_family_prefix("") == ""
+        assert ss._zone_family_prefix(None) == ""
+
+
+class TestSiblingZoneNames:
+    def _ds_preset(self):
+        return [
+            ss.ZoneRow(zone="Nuclear Silo"),
+            ss.ZoneRow(zone="Oil Refinery I"),
+            ss.ZoneRow(zone="Oil Refinery II"),
+            ss.ZoneRow(zone="Field Hospital I"),
+            ss.ZoneRow(zone="Field Hospital II"),
+            ss.ZoneRow(zone="Field Hospital III"),
+            ss.ZoneRow(zone="Field Hospital IV"),
+            ss.ZoneRow(zone="Arsenal"),
+            ss.ZoneRow(zone="Mercenary Factory"),
+        ]
+
+    def test_field_hospital_family(self):
+        zones = self._ds_preset()
+        sibs = ss._sibling_zone_names(zones, "Field Hospital II")
+        assert sorted(sibs) == [
+            "Field Hospital I", "Field Hospital III", "Field Hospital IV",
+        ]
+
+    def test_oil_refinery_family(self):
+        zones = self._ds_preset()
+        sibs = ss._sibling_zone_names(zones, "Oil Refinery I")
+        assert sibs == ["Oil Refinery II"]
+
+    def test_singleton_zone_has_no_siblings(self):
+        zones = self._ds_preset()
+        assert ss._sibling_zone_names(zones, "Arsenal") == []
+        assert ss._sibling_zone_names(zones, "Mercenary Factory") == []
+        assert ss._sibling_zone_names(zones, "Nuclear Silo") == []
+
+    def test_zone_not_in_preset(self):
+        zones = self._ds_preset()
+        # A zone whose name isn't in the preset at all — function should
+        # still detect siblings if there are any with a matching prefix.
+        # (This is the path the modal takes BEFORE upsert, but in the
+        # actual call the zone IS in the buffer; covering both branches.)
+        sibs = ss._sibling_zone_names(zones, "Field Hospital V")
+        assert "Field Hospital I" in sibs
+        assert "Field Hospital IV" in sibs
+
+    def test_cs_sample_warehouse_family(self):
+        zones = [
+            ss.ZoneRow(zone="Sample Warehouse 1"),
+            ss.ZoneRow(zone="Sample Warehouse 2"),
+            ss.ZoneRow(zone="Sample Warehouse 3"),
+            ss.ZoneRow(zone="Sample Warehouse 4"),
+            ss.ZoneRow(zone="Virus Lab"),
+        ]
+        sibs = ss._sibling_zone_names(zones, "Sample Warehouse 2")
+        assert sorted(sibs) == [
+            "Sample Warehouse 1", "Sample Warehouse 3", "Sample Warehouse 4",
+        ]
+
+    def test_excludes_self_case_insensitively(self):
+        zones = [
+            ss.ZoneRow(zone="Field Hospital I"),
+            ss.ZoneRow(zone="Field Hospital II"),
+        ]
+        # Self should be excluded regardless of casing on the query.
+        sibs = ss._sibling_zone_names(zones, "FIELD HOSPITAL I")
+        assert sibs == ["Field Hospital II"]

@@ -522,11 +522,16 @@ class _AttendanceView(discord.ui.View):
                     return
                 team, zone, member = parts
                 key = (team, zone, member)
+                picker_view = _StatusPickerView(self, key)
                 await inter.response.send_message(
                     f"Record attendance for **{member}** ({zone or 'sub'}):",
-                    view=_StatusPickerView(self, key),
+                    view=picker_view,
                     ephemeral=True,
                 )
+                try:
+                    picker_view.message = await inter.original_response()
+                except discord.HTTPException:
+                    picker_view.message = None
 
             picker.callback = _on_pick
             self.add_item(picker)
@@ -648,6 +653,7 @@ class _StatusPickerView(discord.ui.View):
         super().__init__(timeout=120)
         self._parent = parent
         self._key = key
+        self.message: discord.Message | None = None
 
         for status in _VALID_STATUSES:
             btn = discord.ui.Button(
@@ -693,6 +699,19 @@ class _StatusPickerView(discord.ui.View):
                 pass
             self.stop()
         return _cb
+
+    async def on_timeout(self) -> None:
+        """Strip the buttons after the 2-minute window so a stale
+        click doesn't surface 'Interaction failed'. The parent
+        attendance view remains active — the officer can re-pick the
+        same slot to re-open the picker."""
+        for item in self.children:
+            item.disabled = True
+        if self.message is not None:
+            try:
+                await self.message.edit(view=self)
+            except discord.HTTPException:
+                pass
 
 
 # ── Slash command ────────────────────────────────────────────────────────────

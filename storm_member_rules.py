@@ -416,7 +416,20 @@ class _RulesListView(discord.ui.View):
         # subjects to their current display name. Falls back gracefully
         # to the raw subject when None.
         self.guild    = guild
+        self.message: discord.Message | None = None
         self._build_buttons()
+
+    async def on_timeout(self) -> None:
+        """Strip the buttons on timeout so officers know the list went
+        stale (Clear and pagination would otherwise surface 'Interaction
+        failed' silently)."""
+        for item in self.children:
+            item.disabled = True
+        if self.message is not None:
+            try:
+                await self.message.edit(view=self)
+            except discord.HTTPException:
+                pass
 
     @property
     def total_pages(self) -> int:
@@ -727,6 +740,10 @@ class _MemberRuleGroup(app_commands.Group):
             guild=interaction.guild,
         )
         await interaction.response.send_message(embed=view.render_embed(), view=view)
+        try:
+            view.message = await interaction.original_response()
+        except discord.HTTPException:
+            view.message = None
 
 
 def _build_ds_group() -> _MemberRuleGroup:

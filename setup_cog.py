@@ -4656,6 +4656,11 @@ async def run_storm_setup(interaction: discord.Interaction, bot, event_type: str
             ),
             ("Structured Roster Flow", structured_status),
         ]
+        if event_type == "DS":
+            _summary_teams = {"both": "A & B", "A": "A only", "B": "B only"}.get(
+                (current.get("teams") or "both"), "A & B",
+            )
+            fields.insert(1, ("Teams", _summary_teams))
         emoji = "⚔️" if event_type == "DS" else "🏜️"
         proceed = await ask_proceed_with_existing_config(
             channel,
@@ -4692,6 +4697,14 @@ async def run_storm_setup(interaction: discord.Interaction, bot, event_type: str
         return
 
     # ── Step 2: Which teams? ───────────────────────────────────────────────────
+    saved_teams_raw = (current.get("teams") or "both").strip()
+    saved_teams = saved_teams_raw if saved_teams_raw in ("both", "A", "B") else "both"
+    _team_blurb = {
+        "both": "Team A & Team B",
+        "A":    "Team A only",
+        "B":    "Team B only",
+    }
+
     class TeamChoiceView(discord.ui.View):
         def __init__(self):
             super().__init__(timeout=120)
@@ -4718,9 +4731,26 @@ async def run_storm_setup(interaction: discord.Interaction, bot, event_type: str
             await wizard_registry.safe_edit_response(inter, content="✅ Teams: **Team B only**", view=self)
             self.stop()
 
+        # Re-entry: keep the previously-saved choice without re-clicking.
+        # Only rendered when the alliance has a saved value to keep.
+        @discord.ui.button(label="Keep current", style=discord.ButtonStyle.success)
+        async def keep_current(self, inter: discord.Interaction, button: discord.ui.Button):
+            self.selected = saved_teams
+            for item in self.children: item.disabled = True
+            await wizard_registry.safe_edit_response(
+                inter, content=f"✅ Teams: **{_team_blurb[saved_teams]}** (kept current)", view=self,
+            )
+            self.stop()
+
     team_view = TeamChoiceView()
+    if not storm_already_configured:
+        # Hide Keep current on fresh setup — there's no current value to keep.
+        team_view.remove_item(team_view.keep_current)
     await channel.send(
-        f"**Step 2 of 7 — Which teams do you run for {label}?**",
+        (
+            f"**Step 2 of 7 — Which teams do you run for {label}?**"
+            + (f"\nCurrent: **{_team_blurb[saved_teams]}**" if storm_already_configured else "")
+        ),
         view=team_view,
     )
     await wait_view_or_cancel(team_view, cancel_event)
@@ -4960,20 +4990,27 @@ async def run_storm_setup(interaction: discord.Interaction, bot, event_type: str
         save_storm_config, save_participation_config, update_config_field,
         save_structured_storm_config,
     )
+    # `teams` carries the wizard's Step 2 choice ('both' / 'A' / 'B') so
+    # the strategy preset editor can hide Min Power inputs for a team the
+    # alliance doesn't run (#148). CS rows store 'both' and ignore it.
+    teams_persisted = teams if event_type == "DS" else "both"
     if template_a:
         save_storm_config(guild_id, f"{event_type}_A", tab_name, template_a,
                           timezone, log_channel_id,
                           post_channel_id=post_channel_id,
-                          dm_reminder_message=dm_reminder_message)
+                          dm_reminder_message=dm_reminder_message,
+                          teams=teams_persisted)
     if template_b:
         save_storm_config(guild_id, f"{event_type}_B", tab_name, template_b,
                           timezone, log_channel_id,
                           post_channel_id=post_channel_id,
-                          dm_reminder_message=dm_reminder_message)
+                          dm_reminder_message=dm_reminder_message,
+                          teams=teams_persisted)
     save_storm_config(guild_id, event_type, tab_name, template_a or template_b,
                       timezone, log_channel_id,
                       post_channel_id=post_channel_id,
-                      dm_reminder_message=dm_reminder_message)
+                      dm_reminder_message=dm_reminder_message,
+                      teams=teams_persisted)
 
     # Persist the participation config to the (guild, event_type) row.
     save_participation_config(

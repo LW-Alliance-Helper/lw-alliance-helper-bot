@@ -282,6 +282,10 @@ def init_db():
                 log_channel_id           INTEGER DEFAULT 0,
                 post_channel_id          INTEGER DEFAULT 0,
                 dm_reminder_message      TEXT    DEFAULT '',
+                -- Which teams the alliance runs for this event (#148).
+                -- DS: 'both' | 'A' | 'B'. CS only ever runs one team so this
+                -- defaults to 'both' and is unused on CS rows.
+                teams                    TEXT    DEFAULT 'both',
                 -- Structured storm flow (#38 + #54)
                 structured_flow_enabled  INTEGER DEFAULT 0,
                 power_column_name        TEXT    DEFAULT '',
@@ -556,6 +560,10 @@ def init_db():
             # Premium /desertstorm_remind / /canyonstorm_remind DM body
             # (empty → hardcoded default in storm_log.py).
             ("dm_reminder_message",           "TEXT    DEFAULT ''"),
+            # Which DS teams the alliance runs (#148) — 'both' | 'A' | 'B'.
+            # Defaults to 'both' so existing alliances see no behaviour change.
+            # CS rows ignore this field.
+            ("teams",                         "TEXT    DEFAULT 'both'"),
             # ── Structured storm flow (#38 + #54) ────────────────────────────────
             # Premium opt-in structured roster builder. `structured_flow_enabled`
             # gates the registration post, on-behalf voting, eligibility-gated
@@ -1316,6 +1324,7 @@ def get_storm_config(guild_id: int, event_type: str) -> dict:
         "timezone":             "America/New_York",
         "post_channel_id":      0,
         "dm_reminder_message":  "",
+        "teams":                "both",
         # Structured storm flow (#38 + #54) — never-configured guilds get
         # all-off; tab fields resolve to event-type defaults via
         # default_structured_tab() / get_structured_storm_config().
@@ -1344,7 +1353,8 @@ def save_storm_config(guild_id: int, event_type: str, tab_name: str,
                       templates: list | None = None,
                       default_template: str = "Default",
                       post_channel_id: int = 0,
-                      dm_reminder_message: str = ""):
+                      dm_reminder_message: str = "",
+                      teams: str = "both"):
     """
     Insert or replace a guild's storm config.
 
@@ -1362,6 +1372,10 @@ def save_storm_config(guild_id: int, event_type: str, tab_name: str,
     leadership runs `/desertstorm_remind` or `/canyonstorm_remind`. Empty
     string means "use the hardcoded default in storm_log.py". Supports the
     `{name}` placeholder.
+
+    `teams` is the wizard's "Which teams do you run?" answer for DS
+    (`both` | `A` | `B`); CS ignores the field. Default `both` preserves
+    pre-#148 behaviour for callers that don't pass it.
     """
     import json
     if templates is None:
@@ -1371,12 +1385,13 @@ def save_storm_config(guild_id: int, event_type: str, tab_name: str,
         (t["template"] for t in templates if t.get("name") == default_template),
         templates[0]["template"] if templates else "",
     )
+    teams_value = teams if teams in ("both", "A", "B") else "both"
     with _get_conn() as conn:
         conn.execute(
             "INSERT INTO guild_storm_config "
             "(guild_id, event_type, tab_name, mail_template, templates_json, default_template, "
-            "timezone, log_channel_id, post_channel_id, dm_reminder_message) "
-            "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?) "
+            "timezone, log_channel_id, post_channel_id, dm_reminder_message, teams) "
+            "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?) "
             "ON CONFLICT(guild_id, event_type) DO UPDATE SET "
             "tab_name=excluded.tab_name, mail_template=excluded.mail_template, "
             "templates_json=excluded.templates_json, "
@@ -1384,9 +1399,10 @@ def save_storm_config(guild_id: int, event_type: str, tab_name: str,
             "timezone=excluded.timezone, "
             "log_channel_id=excluded.log_channel_id, "
             "post_channel_id=excluded.post_channel_id, "
-            "dm_reminder_message=excluded.dm_reminder_message",
+            "dm_reminder_message=excluded.dm_reminder_message, "
+            "teams=excluded.teams",
             (guild_id, event_type, tab_name, default_text, templates_json, default_template,
-             timezone, log_channel_id, post_channel_id, dm_reminder_message)
+             timezone, log_channel_id, post_channel_id, dm_reminder_message, teams_value)
         )
         conn.commit()
 

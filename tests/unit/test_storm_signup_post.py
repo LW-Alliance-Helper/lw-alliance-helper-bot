@@ -118,3 +118,42 @@ class TestTodayInGuildTz:
         # Should fall through to UTC, not raise ZoneInfoNotFoundError.
         result = ssp._today_in_guild_tz(TEST_GUILD_ID)
         assert isinstance(result, _dt.date)
+
+
+class TestRegistrationEmbedTeamsGate:
+    """#148 — the embed's "Available time slots" lines only render the
+    slot(s) the alliance actually runs. A `teams=A` alliance with a
+    Team B time configured shouldn't surface Team B in the embed."""
+
+    def test_teams_a_omits_team_b_line(self):
+        embed = ssp._build_registration_embed(
+            "DS", "2026-05-18", "9pm ET", "4pm ET", teams="A",
+        )
+        body = "\n".join(f.value or "" for f in embed.fields)
+        assert "9pm ET" in body
+        assert "4pm ET" not in body
+
+    def test_teams_b_omits_team_a_line(self):
+        embed = ssp._build_registration_embed(
+            "DS", "2026-05-18", "9pm ET", "4pm ET", teams="B",
+        )
+        body = "\n".join(f.value or "" for f in embed.fields)
+        assert "4pm ET" in body
+        assert "9pm ET" not in body
+
+    def test_teams_both_renders_both_lines(self):
+        """Default behaviour — same as before #148."""
+        embed = ssp._build_registration_embed(
+            "DS", "2026-05-18", "9pm ET", "4pm ET", teams="both",
+        )
+        body = "\n".join(f.value or "" for f in embed.fields)
+        assert "9pm ET" in body
+        assert "4pm ET" in body
+
+    def test_cs_ignores_teams_setting(self):
+        """CS has no Team B concept — the field is DS-only."""
+        embed = ssp._build_registration_embed(
+            "CS", "2026-05-18", "9pm ET", "", teams="A",
+        )
+        body = "\n".join(f.value or "" for f in embed.fields)
+        assert "9pm ET" in body

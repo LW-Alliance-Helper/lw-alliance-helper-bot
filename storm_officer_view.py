@@ -525,6 +525,21 @@ class _OnBehalfModal(discord.ui.Modal, title="Record vote on behalf"):
             )
             return
 
+        # Reject all-numeric names. `storm_signups.target_member_id`
+        # is a UNIQUE index over `(guild, event, date, target_id)` and
+        # stores `str(discord_user_id)` for self-votes; a roster row
+        # named "1234" would silently overwrite Discord user 1234's
+        # vote on the same event. Reject up front so the collision
+        # never reaches the schema.
+        if raw_member.isdigit():
+            await interaction.response.send_message(
+                "⚠️ On-behalf names can't be purely numeric — they collide "
+                "with Discord IDs in storage. Use a non-numeric roster name "
+                "(e.g. add an alliance prefix or member tag).",
+                ephemeral=True,
+            )
+            return
+
         # Resolve the member name against the roster Sheet (case-insensitive)
         # so typos don't create phantom signup rows. If the roster doesn't
         # have a `not_on_discord` column yet (or the Sheet read failed), we
@@ -589,8 +604,21 @@ class OfficerView(discord.ui.View):
         self.bucket_filter: str | None = None
         self.buckets: dict[str, list[dict]] = {}
         self.roster_errors: list[str] = []
+        # `message` is captured at send-time so `on_timeout` can edit
+        # the rendered post. The view is intentionally public (the
+        # bucket map serves as a leadership audit trail across multiple
+        # officers); without an on_timeout, the buttons silently 404
+        # after 15 minutes with "Interaction failed" and no signal.
+        self.message: Optional[discord.Message] = None
         self.refresh_buckets()
         self._build_components()
+
+    async def on_timeout(self) -> None:
+        """Strip the view + append the canonical timeout notice so
+        officers know the buttons are dead. Matches the auto-post-view
+        cleanup contract in CLAUDE.md."""
+        from wizard_registry import expire_view_message
+        await expire_view_message(self.message, command_hint="/storm_signups")
 
     def refresh_buckets(self):
         self.buckets, self.roster_errors = _build_bucket_map(
@@ -671,27 +699,41 @@ class OfficerView(discord.ui.View):
         self.add_item(refresh_btn)
 
         # Team setup buttons (#129) — opens the structured roster builder
-        # filtered to signed-up members for this team. DS gets two buttons;
-        # CS has a single "Set up Roster" since the faction is implicit
-        # in the preset.
+        # filtered to signed-up members for this team. DS gets up to two
+        # buttons (gated by #148's `teams` field — single-team alliances
+        # only see their team's button); CS has a single "Set up Roster"
+        # since the faction is implicit in the preset.
         if self.event_type == "DS":
-            a_btn = discord.ui.Button(
-                label="🅰️ Set up Team A", style=discord.ButtonStyle.success, row=2,
-            )
-            b_btn = discord.ui.Button(
-                label="🅱️ Set up Team B", style=discord.ButtonStyle.success, row=2,
-            )
+            from config import get_storm_config
+            ds_cfg = get_storm_config(self.guild_id, "DS") or {}
+            teams_setting = (ds_cfg.get("teams") or "both").strip()
+            if teams_setting not in ("both", "A", "B"):
+                teams_setting = "both"
 
-            async def _setup_a(inter: discord.Interaction):
-                await _open_team_setup(inter, self, team="A")
+            show_a = teams_setting in ("both", "A")
+            show_b = teams_setting in ("both", "B")
 
-            async def _setup_b(inter: discord.Interaction):
-                await _open_team_setup(inter, self, team="B")
+            if show_a:
+                a_btn = discord.ui.Button(
+                    label="🅰️ Set up Team A", style=discord.ButtonStyle.success, row=2,
+                )
 
-            a_btn.callback = _setup_a
-            b_btn.callback = _setup_b
-            self.add_item(a_btn)
-            self.add_item(b_btn)
+                async def _setup_a(inter: discord.Interaction):
+                    await _open_team_setup(inter, self, team="A")
+
+                a_btn.callback = _setup_a
+                self.add_item(a_btn)
+
+            if show_b:
+                b_btn = discord.ui.Button(
+                    label="🅱️ Set up Team B", style=discord.ButtonStyle.success, row=2,
+                )
+
+                async def _setup_b(inter: discord.Interaction):
+                    await _open_team_setup(inter, self, team="B")
+
+                b_btn.callback = _setup_b
+                self.add_item(b_btn)
         else:
             cs_btn = discord.ui.Button(
                 label="🏜️ Set up Roster", style=discord.ButtonStyle.success, row=2,
@@ -737,6 +779,10 @@ async def _open_team_setup(
         f"Pick a strategy preset to apply for **{team_label}**:",
         view=picker, ephemeral=True,
     )
+    try:
+        picker.message = await inter.original_response()
+    except discord.HTTPException:
+        picker.message = None
     await picker.wait()
     if not picker.selected_preset:
         return  # user dismissed or timed out
@@ -760,6 +806,7 @@ class _PresetPickerView(discord.ui.View):
         super().__init__(timeout=180)
         self.owner_id = owner_id
         self.selected_preset: Optional[str] = None
+        self.message: Optional[discord.Message] = None
         options = [
             discord.SelectOption(label=n[:100], value=n[:100])
             for n in preset_names[:25]
@@ -788,6 +835,17 @@ class _PresetPickerView(discord.ui.View):
 
         select.callback = _on_pick
         self.add_item(select)
+
+    async def on_timeout(self) -> None:
+        """Strip the picker on timeout so a click on a stale option
+        doesn't surface 'Interaction failed'."""
+        for item in self.children:
+            item.disabled = True
+        if self.message is not None:
+            try:
+                await self.message.edit(view=self)
+            except discord.HTTPException:
+                pass
 
 
 # ── Cog ──────────────────────────────────────────────────────────────────────
@@ -891,7 +949,7 @@ class StormSignupsViewCog(commands.Cog):
                 "[STORM OFFICER VIEW] roster errors for guild=%s: %s",
                 interaction.guild_id, "; ".join(view.roster_errors),
             )
-        await interaction.followup.send(**followup_args)
+        view.message = await interaction.followup.send(**followup_args)
 
         # First-run walkthrough offer (#130). Fires after the main view
         # lands so the officer sees the actual command output even if

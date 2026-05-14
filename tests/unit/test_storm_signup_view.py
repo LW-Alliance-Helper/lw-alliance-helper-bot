@@ -125,6 +125,57 @@ class TestSignupViewConstruction:
                                     _force_all_buttons=True)
         assert len(view_default.children) == len(view_forced.children) == 4
 
+    def test_ds_teams_a_renders_a_plus_cannot(self):
+        """#148 single-team DS: alliance opted into Team A only.
+        SignupView renders A + Cannot (no B / Either)."""
+        view = sv.SignupView(1, "DS", "2026-05-18", teams="A")
+        codes = sorted(
+            sv.parse_custom_id(c.custom_id)["vote"] for c in view.children
+        )
+        assert codes == ["a", "cannot"]
+
+    def test_ds_teams_b_renders_b_plus_cannot(self):
+        view = sv.SignupView(1, "DS", "2026-05-18", teams="B")
+        codes = sorted(
+            sv.parse_custom_id(c.custom_id)["vote"] for c in view.children
+        )
+        assert codes == ["b", "cannot"]
+
+    def test_ds_teams_both_renders_all_four(self):
+        """`teams="both"` is the default and matches the current behaviour."""
+        view = sv.SignupView(1, "DS", "2026-05-18", teams="both")
+        assert len(view.children) == 4
+
+    def test_force_all_buttons_overrides_single_team_setting(self):
+        """Re-registration always reattaches all 4 button handlers
+        regardless of the current `teams` setting — a pre-config-change
+        post may have all 4 buttons rendered, and the View needs
+        routes for every persisted custom_id."""
+        view = sv.SignupView(1, "DS", "2026-05-18",
+                             teams="A", _force_all_buttons=True)
+        assert len(view.children) == 4
+
+    def test_cs_ignores_teams_setting(self):
+        """CS has no Team B concept; the `teams` field is DS-only.
+        CS construction always renders A + Cannot."""
+        view = sv.SignupView(1, "CS", "2026-05-18", teams="A")
+        codes = sorted(
+            sv.parse_custom_id(c.custom_id)["vote"] for c in view.children
+        )
+        assert codes == ["a", "cannot"]
+        view = sv.SignupView(1, "CS", "2026-05-18", teams="B")
+        codes = sorted(
+            sv.parse_custom_id(c.custom_id)["vote"] for c in view.children
+        )
+        assert codes == ["a", "cannot"]
+
+    def test_garbage_teams_value_falls_back_to_both(self):
+        """A schema-drift sentinel: if `teams` reads as something other
+        than the three valid values, the View falls back to the
+        permissive default rather than rendering zero buttons."""
+        view = sv.SignupView(1, "DS", "2026-05-18", teams="garbage")
+        assert len(view.children) == 4
+
     def test_empty_time_label_renders_bare_team_name(self):
         """The doubled-label bug: when `time_a_label=""`, the button
         should render as `🅰️ Team A`, not `🅰️ Team A: ` (trailing
@@ -235,6 +286,149 @@ class TestCsStaleVoteReject:
              patch("config.record_storm_vote") as record:
             await sv._handle_signup_click(interaction, "b")
         record.assert_called_once()
+
+
+class TestDsSingleTeamStaleVoteReject:
+    """#148 single-team DS: a `teams=A` alliance with a stale 4-button
+    post in the channel should reject Team B / Either clicks. Same
+    shape as the CS reject — defense-in-depth for the config-drift
+    case where the alliance flipped `teams` after a post went live."""
+
+    @pytest.fixture
+    def env_teams_a(self, seeded_db):
+        import config
+        config.save_storm_config(
+            TEST_GUILD_ID, "DS",
+            tab_name="DS Tab", mail_template="",
+            timezone="America/New_York", log_channel_id=0,
+            teams="A",
+        )
+        return TEST_GUILD_ID
+
+    @pytest.fixture
+    def env_teams_b(self, seeded_db):
+        import config
+        config.save_storm_config(
+            TEST_GUILD_ID, "DS",
+            tab_name="DS Tab", mail_template="",
+            timezone="America/New_York", log_channel_id=0,
+            teams="B",
+        )
+        return TEST_GUILD_ID
+
+    def _fake_interaction(self, vote: str, event_type: str = "DS"):
+        from unittest.mock import AsyncMock, MagicMock
+        cid = sv.make_custom_id(TEST_GUILD_ID, event_type, "2026-05-18", vote)
+        interaction = MagicMock()
+        interaction.guild_id = TEST_GUILD_ID
+        interaction.data = {"custom_id": cid}
+        interaction.user.id = 42
+        interaction.channel_id = 0
+        interaction.message = None
+        interaction.client = MagicMock()
+        interaction.user.display_name = "Alice"
+        interaction.response.send_message = AsyncMock()
+        interaction.response.defer       = AsyncMock()
+        interaction.followup.send        = AsyncMock()
+        interaction.guild = None
+        return interaction
+
+    @pytest.mark.asyncio
+    async def test_teams_a_rejects_team_b_vote(self, env_teams_a):
+        from unittest.mock import AsyncMock, patch
+        inter = self._fake_interaction("b")
+        with patch("premium.is_premium", new=AsyncMock(return_value=True)), \
+             patch("config.record_storm_vote") as record:
+            await sv._handle_signup_click(inter, "b")
+        record.assert_not_called()
+        body = inter.response.send_message.await_args.args[0]
+        assert "Team A only" in body
+
+    @pytest.mark.asyncio
+    async def test_teams_a_rejects_either_vote(self, env_teams_a):
+        from unittest.mock import AsyncMock, patch
+        inter = self._fake_interaction("either")
+        with patch("premium.is_premium", new=AsyncMock(return_value=True)), \
+             patch("config.record_storm_vote") as record:
+            await sv._handle_signup_click(inter, "either")
+        record.assert_not_called()
+
+    @pytest.mark.asyncio
+    async def test_teams_a_accepts_team_a_vote(self, env_teams_a):
+        from unittest.mock import AsyncMock, patch
+        inter = self._fake_interaction("a")
+        with patch("premium.is_premium", new=AsyncMock(return_value=True)), \
+             patch("storm_signup_view._mirror_vote_to_sheet"), \
+             patch("storm_signup_view._maybe_send_power_refresh_dm",
+                   new=AsyncMock()), \
+             patch("config.record_storm_vote") as record:
+            await sv._handle_signup_click(inter, "a")
+        record.assert_called_once()
+
+    @pytest.mark.asyncio
+    async def test_teams_a_accepts_cannot_vote(self, env_teams_a):
+        from unittest.mock import AsyncMock, patch
+        inter = self._fake_interaction("cannot")
+        with patch("premium.is_premium", new=AsyncMock(return_value=True)), \
+             patch("storm_signup_view._mirror_vote_to_sheet"), \
+             patch("storm_signup_view._maybe_send_power_refresh_dm",
+                   new=AsyncMock()), \
+             patch("config.record_storm_vote") as record:
+            await sv._handle_signup_click(inter, "cannot")
+        record.assert_called_once()
+
+    @pytest.mark.asyncio
+    async def test_teams_b_rejects_team_a_vote(self, env_teams_b):
+        from unittest.mock import AsyncMock, patch
+        inter = self._fake_interaction("a")
+        with patch("premium.is_premium", new=AsyncMock(return_value=True)), \
+             patch("config.record_storm_vote") as record:
+            await sv._handle_signup_click(inter, "a")
+        record.assert_not_called()
+        body = inter.response.send_message.await_args.args[0]
+        assert "Team B only" in body
+
+    @pytest.mark.asyncio
+    async def test_teams_b_rejects_either_vote(self, env_teams_b):
+        from unittest.mock import AsyncMock, patch
+        inter = self._fake_interaction("either")
+        with patch("premium.is_premium", new=AsyncMock(return_value=True)), \
+             patch("config.record_storm_vote") as record:
+            await sv._handle_signup_click(inter, "either")
+        record.assert_not_called()
+
+    @pytest.mark.asyncio
+    async def test_teams_b_accepts_team_b_vote(self, env_teams_b):
+        from unittest.mock import AsyncMock, patch
+        inter = self._fake_interaction("b")
+        with patch("premium.is_premium", new=AsyncMock(return_value=True)), \
+             patch("storm_signup_view._mirror_vote_to_sheet"), \
+             patch("storm_signup_view._maybe_send_power_refresh_dm",
+                   new=AsyncMock()), \
+             patch("config.record_storm_vote") as record:
+            await sv._handle_signup_click(inter, "b")
+        record.assert_called_once()
+
+    @pytest.mark.asyncio
+    async def test_teams_both_accepts_all_votes(self, seeded_db):
+        """teams=both (default) preserves the original 4-vote behaviour."""
+        import config
+        config.save_storm_config(
+            TEST_GUILD_ID, "DS",
+            tab_name="DS Tab", mail_template="",
+            timezone="America/New_York", log_channel_id=0,
+            teams="both",
+        )
+        from unittest.mock import AsyncMock, patch
+        for vote in ("a", "b", "either", "cannot"):
+            inter = self._fake_interaction(vote)
+            with patch("premium.is_premium", new=AsyncMock(return_value=True)), \
+                 patch("storm_signup_view._mirror_vote_to_sheet"), \
+                 patch("storm_signup_view._maybe_send_power_refresh_dm",
+                       new=AsyncMock()), \
+                 patch("config.record_storm_vote") as record:
+                await sv._handle_signup_click(inter, vote)
+            record.assert_called_once(), f"vote {vote} should record"
 
 
 class TestSignupHistoryAudit:

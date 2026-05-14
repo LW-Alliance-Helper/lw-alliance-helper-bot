@@ -62,7 +62,8 @@ def _today_in_guild_tz(guild_id: int | None) -> _dt.date:
 
 
 def _build_registration_embed(event_type: str, event_date_iso: str,
-                              time_a: str, time_b: str) -> discord.Embed:
+                              time_a: str, time_b: str,
+                              teams: str = "both") -> discord.Embed:
     label = "Desert Storm" if event_type == "DS" else "Canyon Storm"
     emoji = "⚔️" if event_type == "DS" else "🏜️"
     try:
@@ -79,11 +80,17 @@ def _build_registration_embed(event_type: str, event_date_iso: str,
         description=desc,
         color=discord.Color.gold() if event_type == "DS" else discord.Color.orange(),
     )
-    if time_a or time_b:
+    # Single-team DS alliances see only their team's time slot — the
+    # opposite team's button doesn't render in SignupView, so the
+    # embed line would point at a slot members can't select.
+    teams_norm = teams if teams in ("both", "A", "B") else "both"
+    show_a = event_type != "DS" or teams_norm in ("both", "A")
+    show_b = event_type == "DS" and teams_norm in ("both", "B")
+    if (show_a and time_a) or (show_b and time_b):
         time_lines = []
-        if time_a:
+        if show_a and time_a:
             time_lines.append(f"• **{time_a}**")
-        if time_b:
+        if show_b and time_b:
             time_lines.append(f"• **{time_b}**")
         embed.add_field(name="Available time slots", value="\n".join(time_lines), inline=False)
     embed.set_footer(text="Vote recorded with timestamp — leadership uses /storm_signups to review.")
@@ -140,18 +147,34 @@ async def post_registration(
     if config.has_registration_post(guild.id, event_type, event_date):
         return {"status": "already_posted", "channel_id": channel_id}
 
+    # Read the per-alliance team gate (#148). DS-only field; CS
+    # ignores it because CS has no Team B concept.
+    ds_cfg = config.get_storm_config(guild.id, "DS") if event_type == "DS" else {}
+    teams_setting = (ds_cfg.get("teams") or "both").strip() if ds_cfg else "both"
+    if teams_setting not in ("both", "A", "B"):
+        teams_setting = "both"
+
     time_a, time_b = _slot_labels(event_type, guild.id)
-    if event_type == "DS" and not (time_a and time_b):
-        return {"status": "missing_slot_labels", "channel_id": channel_id}
-    if event_type == "CS" and not time_a:
+    # Slot-label validation gates only the slots an alliance actually
+    # uses. A `teams=A` alliance with no Team B time configured is
+    # fine; their post only needs the Team A label.
+    if event_type == "DS":
+        needs_a = teams_setting in ("both", "A")
+        needs_b = teams_setting in ("both", "B")
+        if (needs_a and not time_a) or (needs_b and not time_b):
+            return {"status": "missing_slot_labels", "channel_id": channel_id}
+    elif event_type == "CS" and not time_a:
         return {"status": "missing_slot_labels", "channel_id": channel_id}
 
     view = SignupView(
         guild.id, event_type, event_date,
-        time_a_label=(time_a or "Team A"),
-        time_b_label=(time_b or "Team B"),
+        time_a_label=(time_a or ""),
+        time_b_label=(time_b or ""),
+        teams=teams_setting,
     )
-    embed = _build_registration_embed(event_type, event_date, time_a, time_b)
+    embed = _build_registration_embed(
+        event_type, event_date, time_a, time_b, teams=teams_setting,
+    )
     try:
         posted = await channel.send(embed=embed, view=view)
     except discord.Forbidden:
@@ -167,8 +190,8 @@ async def post_registration(
         guild.id, event_type, event_date,
         channel_id=channel.id,
         message_id=posted.id,
-        time_a_label=(time_a or "Team A"),
-        time_b_label=(time_b or "Team B"),
+        time_a_label=(time_a or ""),
+        time_b_label=(time_b or ""),
     )
 
     try:

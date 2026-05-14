@@ -625,6 +625,73 @@ class TestOnBehalfNumericNameReject:
         )
 
 
+class TestOfficerViewTeamsGate:
+    """#148 — OfficerView's "Set up Team A/B" buttons honor the
+    alliance's `teams` setting. Single-team alliances see only their
+    team's button."""
+
+    def test_teams_both_shows_both_buttons(self, seeded_db):
+        import config
+        config.save_storm_config(
+            TEST_GUILD_ID, "DS",
+            tab_name="DS Tab", mail_template="",
+            timezone="America/New_York", log_channel_id=0,
+            teams="both",
+        )
+        guild = _FakeGuild(TEST_GUILD_ID, [])
+        view = sov.OfficerView(guild, owner_user_id=1, event_type="DS",
+                               event_date="2026-05-18")
+        labels = [getattr(c, "label", "") for c in view.children if hasattr(c, "label")]
+        assert any("Set up Team A" in lab for lab in labels)
+        assert any("Set up Team B" in lab for lab in labels)
+
+    def test_teams_a_shows_only_a_button(self, seeded_db):
+        import config
+        config.save_storm_config(
+            TEST_GUILD_ID, "DS",
+            tab_name="DS Tab", mail_template="",
+            timezone="America/New_York", log_channel_id=0,
+            teams="A",
+        )
+        guild = _FakeGuild(TEST_GUILD_ID, [])
+        view = sov.OfficerView(guild, owner_user_id=1, event_type="DS",
+                               event_date="2026-05-18")
+        labels = [getattr(c, "label", "") for c in view.children if hasattr(c, "label")]
+        assert any("Set up Team A" in lab for lab in labels)
+        assert not any("Set up Team B" in lab for lab in labels)
+
+    def test_teams_b_shows_only_b_button(self, seeded_db):
+        import config
+        config.save_storm_config(
+            TEST_GUILD_ID, "DS",
+            tab_name="DS Tab", mail_template="",
+            timezone="America/New_York", log_channel_id=0,
+            teams="B",
+        )
+        guild = _FakeGuild(TEST_GUILD_ID, [])
+        view = sov.OfficerView(guild, owner_user_id=1, event_type="DS",
+                               event_date="2026-05-18")
+        labels = [getattr(c, "label", "") for c in view.children if hasattr(c, "label")]
+        assert any("Set up Team B" in lab for lab in labels)
+        assert not any("Set up Team A" in lab for lab in labels)
+
+    def test_cs_event_unaffected_by_teams_setting(self, seeded_db):
+        """CS has no Team A/B concept — `teams` is DS-only.
+        CS guilds get the single 'Set up Roster' button regardless."""
+        import config
+        config.save_storm_config(
+            TEST_GUILD_ID, "CS",
+            tab_name="CS Tab", mail_template="",
+            timezone="America/New_York", log_channel_id=0,
+            teams="A",  # Should be ignored
+        )
+        guild = _FakeGuild(TEST_GUILD_ID, [])
+        view = sov.OfficerView(guild, owner_user_id=1, event_type="CS",
+                               event_date="2026-05-18")
+        labels = [getattr(c, "label", "") for c in view.children if hasattr(c, "label")]
+        assert any("Set up Roster" in lab for lab in labels)
+
+
 class TestOfficerViewTimeout:
     """The OfficerView is posted publicly so multiple leadership members
     can use it as an audit trail. Without `on_timeout`, the buttons

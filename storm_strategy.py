@@ -699,7 +699,7 @@ class _ZoneEditModal(discord.ui.Modal):
                         priority=priority,
                     ),
                 )
-                await interaction.followup.send(
+                apply_view.message = await interaction.followup.send(
                     content=(
                         f"💡 **{self._zone_name}** has similar zones in this preset: "
                         f"{', '.join(siblings)}. Pick any to copy these same "
@@ -731,6 +731,7 @@ class _ApplyToSimilarView(discord.ui.View):
         self._editor = editor_view
         self._source = source_zone
         self._values = values
+        self.message: discord.Message | None = None
         # Default to nothing selected — officers reach for apply-to-similar
         # to opt INTO bulk copies; pre-checking every sibling would surprise
         # the cautious case where they only want one or two.
@@ -843,6 +844,17 @@ class _ApplyToSimilarView(discord.ui.View):
 
         skip_btn.callback = _skip
         self.add_item(skip_btn)
+
+    async def on_timeout(self) -> None:
+        """Strip the picker on timeout so a click on a stale option
+        doesn't surface 'Interaction failed'."""
+        for item in self.children:
+            item.disabled = True
+        if self.message is not None:
+            try:
+                await self.message.edit(view=self)
+            except discord.HTTPException:
+                pass
 
 
 class _AddZoneModal(discord.ui.Modal, title="Add Zone to Preset"):
@@ -1053,6 +1065,19 @@ class _PresetEditorView(discord.ui.View):
         except discord.HTTPException:
             pass
 
+    async def on_timeout(self) -> None:
+        """Strip the editor + append the canonical timeout notice. The
+        editor is posted publicly (so multiple leadership members can
+        see the edit progress) with a 15-minute interaction-token
+        window; without this hook, buttons silently 404 with
+        'Interaction failed' after timeout."""
+        from wizard_registry import expire_view_message
+        hint = (
+            "/ds_strategy edit" if self.buf.event_type == "DS"
+            else "/cs_strategy edit"
+        )
+        await expire_view_message(self.message, command_hint=hint)
+
 
 # ── Cog + slash command groups ───────────────────────────────────────────────
 
@@ -1145,6 +1170,7 @@ class _StrategyGroup(app_commands.Group):
                 super().__init__(timeout=60)
                 self_.owner_id = owner_id
                 self_.confirmed = None
+                self_.message: discord.Message | None = None
 
             @discord.ui.button(label="🗑️ Delete preset", style=discord.ButtonStyle.danger)
             async def yes(self_, inter: discord.Interaction, btn: discord.ui.Button):
@@ -1172,6 +1198,18 @@ class _StrategyGroup(app_commands.Group):
                 await inter.response.edit_message(view=self_)
                 self_.stop()
 
+            async def on_timeout(self_) -> None:
+                """Strip the confirm prompt on timeout so the buttons
+                don't surface 'Interaction failed' after the 60-second
+                window. Treats no-decision as cancel."""
+                for item in self_.children:
+                    item.disabled = True
+                if self_.message is not None:
+                    try:
+                        await self_.message.edit(view=self_)
+                    except discord.HTTPException:
+                        pass
+
         view = _ConfirmDelete(interaction.user.id)
         await interaction.response.send_message(
             f"⚠️ Delete preset **{name}**? This removes all rows for this preset from your "
@@ -1179,6 +1217,10 @@ class _StrategyGroup(app_commands.Group):
             view=view,
             ephemeral=True,
         )
+        try:
+            view.message = await interaction.original_response()
+        except discord.HTTPException:
+            view.message = None
         await view.wait()
         if not view.confirmed:
             await interaction.followup.send("✅ Delete cancelled.", ephemeral=True)

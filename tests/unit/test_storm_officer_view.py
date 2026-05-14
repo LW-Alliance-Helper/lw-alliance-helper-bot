@@ -560,3 +560,86 @@ class TestStaleIdLogDedup:
         # surfaces — only the log dedupes.
         assert any("stale Discord IDs" in e for e in errs1)
         assert any("stale Discord IDs" in e for e in errs2)
+
+
+class TestOnBehalfNumericNameReject:
+    """`storm_signups.target_member_id` UPSERTs on a UNIQUE
+    `(guild, event_type, event_date, target_member_id)` index. Self-votes
+    store `str(discord_user_id)`; on-behalf votes store the roster name.
+    A purely numeric roster name silently collides with a real Discord
+    user's vote. The on-behalf modal rejects numeric names at submit
+    time so the collision can't reach the schema."""
+
+    def _fake_view(self):
+        view = MagicMock()
+        view.guild_id = TEST_GUILD_ID
+        view.guild = _FakeGuild(TEST_GUILD_ID, [])
+        view.event_type = "DS"
+        view.event_date = "2026-05-18"
+        return view
+
+    async def test_purely_numeric_name_rejected(self, seeded_db):
+        modal = sov._OnBehalfModal(self._fake_view())
+        # Bypass discord.py's modal-submit machinery by setting the
+        # TextInput values directly. The handler reads from `.value`.
+        modal.member_name = MagicMock(value="1234")
+        modal.vote_label  = MagicMock(value="A")
+        interaction = MagicMock()
+        interaction.response.send_message = AsyncMock()
+        interaction.response.edit_message = AsyncMock()
+        with patch(
+            "config.record_storm_vote", new=MagicMock(return_value=True),
+        ) as record:
+            await modal.on_submit(interaction)
+        record.assert_not_called()
+        interaction.response.send_message.assert_awaited_once()
+        body = interaction.response.send_message.await_args.args[0]
+        assert "purely numeric" in body or "numeric" in body.lower()
+
+    async def test_alphanumeric_name_passes_through(self, seeded_db):
+        """Sanity — names with any non-digit pass the numeric reject and
+        proceed to the roster-Sheet validation (which will fail in this
+        test because no roster is configured; the point is we get past
+        the up-front numeric reject)."""
+        modal = sov._OnBehalfModal(self._fake_view())
+        modal.member_name = MagicMock(value="Charlie #1234")
+        modal.vote_label  = MagicMock(value="A")
+        interaction = MagicMock()
+        interaction.response.send_message = AsyncMock()
+        interaction.response.edit_message = AsyncMock()
+        with patch(
+            "storm_officer_view._read_roster_rows", return_value=([], []),
+        ), patch(
+            "config.record_storm_vote", new=MagicMock(return_value=True),
+        ):
+            await modal.on_submit(interaction)
+        # `_read_roster_rows` returned empty so the validation falls
+        # back to permissive — the record_storm_vote path is reached.
+        # The numeric-reject branch did NOT fire (no "purely numeric"
+        # ephemeral).
+        all_ephemerals = [
+            c.args[0] for c in interaction.response.send_message.await_args_list
+        ]
+        assert not any(
+            "purely numeric" in (m or "") for m in all_ephemerals
+        )
+
+
+class TestOfficerViewTimeout:
+    """The OfficerView is posted publicly so multiple leadership members
+    can use it as an audit trail. Without `on_timeout`, the buttons
+    silently 404 after 15 minutes with 'Interaction failed' and no
+    signal. `on_timeout` strips the buttons + appends the canonical
+    timeout notice via `wizard_registry.expire_view_message`."""
+
+    async def test_on_timeout_calls_expire_view_message(self, seeded_db):
+        guild = _FakeGuild(TEST_GUILD_ID, [])
+        view = sov.OfficerView(guild, owner_user_id=1, event_type="DS",
+                               event_date="2026-05-18")
+        view.message = MagicMock()
+        with patch("wizard_registry.expire_view_message", new=AsyncMock()) as ex:
+            await view.on_timeout()
+        ex.assert_awaited_once()
+        # Command hint is the storm_signups slash command.
+        kwargs = ex.await_args.kwargs
+        assert kwargs.get("command_hint") == "/storm_signups"

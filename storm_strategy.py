@@ -710,11 +710,17 @@ def _build_editor_embed(buf: PresetBuffer, team_size_hint: int = _TEAM_SIZE_HINT
     if buf.event_type == "CS":
         desc_lines.append(f"⚙️ Faction: {buf.faction}")
     # Phase mode line surfaces the toggle state so officers can
-    # eyeball whether the preset is phase-aware without opening the
-    # button row.
-    desc_lines.append(
-        f"🔀 Mode: **{'Phases (P1 + P2)' if buf.uses_phases else 'Flat'}**"
-    )
+    # eyeball which mode the preset is in without scanning the
+    # dropdown.
+    if buf.phase_count == 0:
+        mode_label = "Flat"
+    elif buf.phase_count == 2:
+        mode_label = "2 Phases (P1 + P2)"
+    elif buf.phase_count == 3:
+        mode_label = "3 Phases (P1 + P2 + P3)"
+    else:
+        mode_label = f"{buf.phase_count} Phases"
+    desc_lines.append(f"🔀 Mode: **{mode_label}**")
     desc_lines.append("")
     if buf.zones:
         desc_lines.append("📋 **Zones:**")
@@ -751,16 +757,16 @@ def _build_editor_embed(buf: PresetBuffer, team_size_hint: int = _TEAM_SIZE_HINT
 
 
 class _ZoneEditModal(discord.ui.Modal):
-    """Modal for editing one zone's capacity / floors / priority.
+    """Modal for editing one zone on a **flat** preset.
+
+    Phase-aware presets (#152) use the multi-step
+    `_open_zone_phase_wizard` flow instead — Discord modals cap at 5
+    fields, which isn't enough for `Max P1`, `Max P2`, `Max P3`,
+    `Min A`, `Min B`, `Priority P1..3` in one shot.
 
     Branches DS vs CS on field count, and on DS branches further on
-    whether the alliance has both teams configured (#148) — Team A-only
-    or Team B-only alliances see only the floor that matters.
-
-    Phase-aware presets (#152) swap the single Max Players field for
-    two explicit fields (Max Phase 1, Max Phase 2). Discord allows up
-    to 5 components per modal so phase-aware two-team DS sits right at
-    the cap (P1, P2, Min A, Min B, Priority).
+    whether the alliance has both teams configured (#148). Single-team
+    alliances see only the floor that matters.
 
     There's no "remove zone" field — clearing a zone's numeric fields
     and saving leaves the zone in the list with zero capacity, which
@@ -773,34 +779,15 @@ class _ZoneEditModal(discord.ui.Modal):
         self._view = view
         self._zone_name = zone_name
         existing = view.buf.find_zone(zone_name) or ZoneRow(zone=zone_name)
-        self._uses_phases = bool(view.buf.uses_phases)
-
-        if self._uses_phases:
-            self.max_input = None
-            self.max_phase1_input = discord.ui.TextInput(
-                label="Max Phase 1",
-                placeholder="e.g. 4",
-                default=str(existing.max_phase1 or ""),
-                required=False, max_length=4,
-            )
-            self.max_phase2_input = discord.ui.TextInput(
-                label="Max Phase 2",
-                placeholder="e.g. 2",
-                default=str(existing.max_phase2 or ""),
-                required=False, max_length=4,
-            )
-            self.add_item(self.max_phase1_input)
-            self.add_item(self.max_phase2_input)
-        else:
-            self.max_phase1_input = None
-            self.max_phase2_input = None
-            self.max_input = discord.ui.TextInput(
-                label="Max Players",
-                placeholder="e.g. 4",
-                default=str(existing.max_players or ""),
-                required=False, max_length=4,
-            )
-            self.add_item(self.max_input)
+        # Single Max Players field — phase-aware editing routes through
+        # the wizard flow, not this modal.
+        self.max_input = discord.ui.TextInput(
+            label="Max Players",
+            placeholder="e.g. 4",
+            default=str(existing.max_players or ""),
+            required=False, max_length=4,
+        )
+        self.add_item(self.max_input)
 
         # Resolve which DS teams the alliance runs so the modal only
         # asks for the relevant floors. The parent view snapshotted this
@@ -850,45 +837,24 @@ class _ZoneEditModal(discord.ui.Modal):
         self.add_item(self.priority_input)
 
     async def on_submit(self, interaction: discord.Interaction):
-        # Preserve existing values when the relevant field is hidden in
-        # this modal (e.g. Max Players when the preset is phase-aware,
-        # or vice versa) — keeps prior settings intact through a
-        # uses_phases toggle.
+        # Preserve existing phase values when editing a flat preset —
+        # the officer might toggle phases back on later.
         existing = self._view.buf.find_zone(self._zone_name) or ZoneRow(zone=self._zone_name)
         max_phase1 = existing.max_phase1
         max_phase2 = existing.max_phase2
-        if self._uses_phases:
-            try:
-                max_phase1 = int((self.max_phase1_input.value or "0").strip() or 0)
-            except ValueError:
-                await interaction.response.send_message(
-                    f"⚠️ Max Phase 1 must be a number — got "
-                    f"`{self.max_phase1_input.value}`. Try again.",
-                    ephemeral=True,
-                )
-                return
-            try:
-                max_phase2 = int((self.max_phase2_input.value or "0").strip() or 0)
-            except ValueError:
-                await interaction.response.send_message(
-                    f"⚠️ Max Phase 2 must be a number — got "
-                    f"`{self.max_phase2_input.value}`. Try again.",
-                    ephemeral=True,
-                )
-                return
-            # max_players stays at whatever it was; ignored at render
-            # time while uses_phases is True.
-            max_players = existing.max_players
-        else:
-            try:
-                max_players = int((self.max_input.value or "0").strip() or 0)
-            except ValueError:
-                await interaction.response.send_message(
-                    f"⚠️ Max Players must be a number — got `{self.max_input.value}`. "
-                    f"Try again.",
-                    ephemeral=True,
-                )
-                return
+        max_phase3 = existing.max_phase3
+        priority_phase1 = existing.priority_phase1
+        priority_phase2 = existing.priority_phase2
+        priority_phase3 = existing.priority_phase3
+        try:
+            max_players = int((self.max_input.value or "0").strip() or 0)
+        except ValueError:
+            await interaction.response.send_message(
+                f"⚠️ Max Players must be a number — got `{self.max_input.value}`. "
+                f"Try again.",
+                ephemeral=True,
+            )
+            return
 
         # Refuse garbage in the power fields rather than silently zeroing —
         # a typo would otherwise persist as a "no floor" entry and the
@@ -940,9 +906,12 @@ class _ZoneEditModal(discord.ui.Modal):
         self._view.buf.upsert_zone(ZoneRow(
             zone=self._zone_name,
             max_players=max_players,
-            max_phase1=max_phase1, max_phase2=max_phase2,
+            max_phase1=max_phase1, max_phase2=max_phase2, max_phase3=max_phase3,
             min_power_a=min_a, min_power_b=min_b,
             priority=priority,
+            priority_phase1=priority_phase1,
+            priority_phase2=priority_phase2,
+            priority_phase3=priority_phase3,
         ))
         siblings = _sibling_zone_names(self._view.buf.zones, self._zone_name)
         await self._view.refresh(
@@ -962,9 +931,12 @@ class _ZoneEditModal(discord.ui.Modal):
                     values=ZoneRow(
                         zone=self._zone_name,
                         max_players=max_players,
-                        max_phase1=max_phase1, max_phase2=max_phase2,
+                        max_phase1=max_phase1, max_phase2=max_phase2, max_phase3=max_phase3,
                         min_power_a=min_a, min_power_b=min_b,
                         priority=priority,
+                        priority_phase1=priority_phase1,
+                        priority_phase2=priority_phase2,
+                        priority_phase3=priority_phase3,
                     ),
                 )
                 apply_view.message = await interaction.followup.send(
@@ -982,6 +954,390 @@ class _ZoneEditModal(discord.ui.Modal):
                     "posted for zone=%s in preset=%s: %s",
                     self._zone_name, self._view.buf.name, e,
                 )
+
+
+# ── Phase-aware zone edit wizard (#152) ──────────────────────────────────────
+#
+# Multi-step modal flow for phase-aware presets. Discord allows at most
+# 5 components in a single modal, which isn't enough to ask for every
+# value a 3-phase DS-both preset needs (Max P1/P2/P3, Min A, Min B,
+# Priority P1/P2/P3 = 9 fields). Splitting into three pages — capacity,
+# power floors, priorities — keeps each modal under the cap and reads
+# clearly: officers see "set my Phase 1 / 2 / 3 capacities", "set my
+# Team A / B floors", "set my Phase 1 / 2 / 3 priorities" instead of
+# one big form.
+#
+# State threads through each page via the parent editor view's
+# `_pending_zone_edit` attribute (keyed by zone name). Once page 3
+# submits, the accumulated values land on the PresetBuffer in one
+# upsert_zone call and the editor embed refreshes. Apply-to-similar
+# (#149) still fires after the final page like the flat flow.
+
+
+def _stash_pending_edit(view, zone_name: str) -> dict:
+    """Get or create the per-zone wizard state stash on the editor."""
+    stash = getattr(view, "_pending_zone_edits", None)
+    if stash is None:
+        stash = {}
+        view._pending_zone_edits = stash
+    if zone_name not in stash:
+        existing = view.buf.find_zone(zone_name) or ZoneRow(zone=zone_name)
+        # Seed from the saved row so a wizard cancel mid-flow leaves
+        # nothing changed downstream.
+        stash[zone_name] = {
+            "max_phase1": existing.max_phase1,
+            "max_phase2": existing.max_phase2,
+            "max_phase3": existing.max_phase3,
+            "min_power_a": existing.min_power_a,
+            "min_power_b": existing.min_power_b,
+            "priority_phase1": existing.priority_phase1,
+            "priority_phase2": existing.priority_phase2,
+            "priority_phase3": existing.priority_phase3,
+        }
+    return stash[zone_name]
+
+
+def _clear_pending_edit(view, zone_name: str) -> None:
+    stash = getattr(view, "_pending_zone_edits", None) or {}
+    stash.pop(zone_name, None)
+
+
+class _ZonePhaseCapacityModal(discord.ui.Modal):
+    """Page 1/3 of the phase-aware wizard — capacities per phase."""
+
+    def __init__(self, view: "_PresetEditorView", zone_name: str):
+        phase_count = int(getattr(view.buf, "phase_count", 2) or 2)
+        super().__init__(title=f"{zone_name} — Capacity ({phase_count}P)"[:45])
+        self._view = view
+        self._zone_name = zone_name
+        self._phase_count = phase_count
+        pending = _stash_pending_edit(view, zone_name)
+
+        self.max_phase1_input = discord.ui.TextInput(
+            label="Max Phase 1",
+            placeholder="e.g. 4 (leave 0 to skip Phase 1 at this zone)",
+            default=str(pending["max_phase1"] or ""),
+            required=False, max_length=4,
+        )
+        self.add_item(self.max_phase1_input)
+        self.max_phase2_input = discord.ui.TextInput(
+            label="Max Phase 2",
+            placeholder="e.g. 2 (leave 0 to skip Phase 2 at this zone)",
+            default=str(pending["max_phase2"] or ""),
+            required=False, max_length=4,
+        )
+        self.add_item(self.max_phase2_input)
+        if phase_count >= 3:
+            self.max_phase3_input = discord.ui.TextInput(
+                label="Max Phase 3",
+                placeholder="e.g. 3 (leave 0 to skip Phase 3 at this zone)",
+                default=str(pending["max_phase3"] or ""),
+                required=False, max_length=4,
+            )
+            self.add_item(self.max_phase3_input)
+        else:
+            self.max_phase3_input = None
+
+    async def on_submit(self, interaction: discord.Interaction):
+        pending = _stash_pending_edit(self._view, self._zone_name)
+        # Validate each field; the wizard refuses to advance on any
+        # parse error so officers fix it before moving on.
+        for field, key in (
+            (self.max_phase1_input, "max_phase1"),
+            (self.max_phase2_input, "max_phase2"),
+            (self.max_phase3_input, "max_phase3"),
+        ):
+            if field is None:
+                continue
+            try:
+                pending[key] = int((field.value or "0").strip() or 0)
+            except ValueError:
+                await interaction.response.send_message(
+                    f"⚠️ {field.label} must be a number — got `{field.value}`. "
+                    f"Reopen the zone to retry.",
+                    ephemeral=True,
+                )
+                return
+        # Post the Next-button follow-up to advance to page 2.
+        view = _ZoneWizardNextView(
+            self._view, self._zone_name,
+            next_page="floors",
+            label="Next → Power Floors",
+        )
+        await interaction.response.send_message(
+            content=(
+                f"✅ Capacities recorded for **{self._zone_name}**. "
+                f"Click **Next** to set the power floors."
+            ),
+            view=view, ephemeral=True,
+        )
+        view.message = await interaction.original_response()
+
+
+class _ZonePhaseFloorsModal(discord.ui.Modal):
+    """Page 2/3 of the phase-aware wizard — power floors. Same field
+    shape as the flat modal (DS = Min A + Min B, CS = single Min)."""
+
+    def __init__(self, view: "_PresetEditorView", zone_name: str):
+        super().__init__(title=f"{zone_name} — Power Floors"[:45])
+        self._view = view
+        self._zone_name = zone_name
+        pending = _stash_pending_edit(view, zone_name)
+        self._teams = (
+            getattr(view, "teams", "both") if view.buf.event_type == "DS" else "both"
+        )
+
+        if view.buf.event_type == "DS":
+            self.power_input = None
+            self.power_a_input = None
+            self.power_b_input = None
+            if self._teams in ("both", "A"):
+                self.power_a_input = discord.ui.TextInput(
+                    label="Min Power Team A",
+                    placeholder="e.g. 300M",
+                    default=format_power(pending["min_power_a"])
+                            if pending["min_power_a"] else "",
+                    required=False, max_length=12,
+                )
+                self.add_item(self.power_a_input)
+            if self._teams in ("both", "B"):
+                self.power_b_input = discord.ui.TextInput(
+                    label="Min Power Team B",
+                    placeholder="e.g. 180M",
+                    default=format_power(pending["min_power_b"])
+                            if pending["min_power_b"] else "",
+                    required=False, max_length=12,
+                )
+                self.add_item(self.power_b_input)
+        else:
+            self.power_a_input = None
+            self.power_b_input = None
+            self.power_input = discord.ui.TextInput(
+                label="Min Power",
+                placeholder="e.g. 250M",
+                default=format_power(pending["min_power_a"])
+                        if pending["min_power_a"] else "",
+                required=False, max_length=12,
+            )
+            self.add_item(self.power_input)
+
+    async def on_submit(self, interaction: discord.Interaction):
+        pending = _stash_pending_edit(self._view, self._zone_name)
+        if self._view.buf.event_type == "DS":
+            if self.power_a_input is not None:
+                val, bad = _parse_power_cell(self.power_a_input.value or "")
+                if bad:
+                    await interaction.response.send_message(
+                        f"⚠️ Min Power Team A didn't parse — got "
+                        f"`{self.power_a_input.value}`. Use `300M`, `1.2B`, or "
+                        f"`300000000`.",
+                        ephemeral=True,
+                    )
+                    return
+                pending["min_power_a"] = val
+            if self.power_b_input is not None:
+                val, bad = _parse_power_cell(self.power_b_input.value or "")
+                if bad:
+                    await interaction.response.send_message(
+                        f"⚠️ Min Power Team B didn't parse — got "
+                        f"`{self.power_b_input.value}`. Use `300M`, `1.2B`, or "
+                        f"`300000000`.",
+                        ephemeral=True,
+                    )
+                    return
+                pending["min_power_b"] = val
+        else:
+            val, bad = _parse_power_cell(self.power_input.value or "")
+            if bad:
+                await interaction.response.send_message(
+                    f"⚠️ Min Power didn't parse — got "
+                    f"`{self.power_input.value}`. Use `250M`, `1.2B`, or "
+                    f"`250000000`.",
+                    ephemeral=True,
+                )
+                return
+            pending["min_power_a"] = val
+
+        view = _ZoneWizardNextView(
+            self._view, self._zone_name,
+            next_page="priority",
+            label="Next → Priority Per Phase",
+        )
+        await interaction.response.send_message(
+            content=(
+                f"✅ Floors recorded for **{self._zone_name}**. "
+                f"Click **Next** to set the per-phase auto-fill priorities."
+            ),
+            view=view, ephemeral=True,
+        )
+        view.message = await interaction.original_response()
+
+
+class _ZonePhasePriorityModal(discord.ui.Modal):
+    """Page 3/3 of the phase-aware wizard — priority per phase.
+    Submitting this page finalises the edit and refreshes the editor."""
+
+    def __init__(self, view: "_PresetEditorView", zone_name: str):
+        phase_count = int(getattr(view.buf, "phase_count", 2) or 2)
+        super().__init__(title=f"{zone_name} — Priority ({phase_count}P)"[:45])
+        self._view = view
+        self._zone_name = zone_name
+        self._phase_count = phase_count
+        pending = _stash_pending_edit(view, zone_name)
+
+        self.prio_p1_input = discord.ui.TextInput(
+            label="Priority Phase 1 (1 = highest)",
+            placeholder="leave blank for no priority",
+            default=str(pending["priority_phase1"] or ""),
+            required=False, max_length=3,
+        )
+        self.add_item(self.prio_p1_input)
+        self.prio_p2_input = discord.ui.TextInput(
+            label="Priority Phase 2",
+            placeholder="leave blank for no priority",
+            default=str(pending["priority_phase2"] or ""),
+            required=False, max_length=3,
+        )
+        self.add_item(self.prio_p2_input)
+        if phase_count >= 3:
+            self.prio_p3_input = discord.ui.TextInput(
+                label="Priority Phase 3",
+                placeholder="leave blank for no priority",
+                default=str(pending["priority_phase3"] or ""),
+                required=False, max_length=3,
+            )
+            self.add_item(self.prio_p3_input)
+        else:
+            self.prio_p3_input = None
+
+    async def on_submit(self, interaction: discord.Interaction):
+        pending = _stash_pending_edit(self._view, self._zone_name)
+        for field, key in (
+            (self.prio_p1_input, "priority_phase1"),
+            (self.prio_p2_input, "priority_phase2"),
+            (self.prio_p3_input, "priority_phase3"),
+        ):
+            if field is None:
+                continue
+            try:
+                pending[key] = int((field.value or "0").strip() or 0)
+            except ValueError:
+                await interaction.response.send_message(
+                    f"⚠️ {field.label} must be a number — got `{field.value}`. "
+                    f"Reopen the zone to retry.",
+                    ephemeral=True,
+                )
+                return
+
+        # Finalise: write the accumulated values to the PresetBuffer.
+        existing = self._view.buf.find_zone(self._zone_name) or ZoneRow(zone=self._zone_name)
+        self._view.buf.upsert_zone(ZoneRow(
+            zone=self._zone_name,
+            # max_players + flat priority preserved from the existing
+            # row so toggling back to flat doesn't lose those values.
+            max_players=existing.max_players,
+            priority=existing.priority,
+            max_phase1=pending["max_phase1"],
+            max_phase2=pending["max_phase2"],
+            max_phase3=pending["max_phase3"],
+            min_power_a=pending["min_power_a"],
+            min_power_b=pending["min_power_b"],
+            priority_phase1=pending["priority_phase1"],
+            priority_phase2=pending["priority_phase2"],
+            priority_phase3=pending["priority_phase3"],
+        ))
+        _clear_pending_edit(self._view, self._zone_name)
+        siblings = _sibling_zone_names(self._view.buf.zones, self._zone_name)
+        await self._view.refresh(
+            interaction,
+            message=f"✏️ Updated **{self._zone_name}** ({self._phase_count}-phase).",
+        )
+        # Apply-to-similar follow-up — same offer as the flat flow.
+        if siblings:
+            try:
+                apply_view = _ApplyToSimilarView(
+                    editor_view=self._view,
+                    source_zone=self._zone_name,
+                    sibling_names=siblings,
+                    values=ZoneRow(
+                        zone=self._zone_name,
+                        max_players=existing.max_players,
+                        max_phase1=pending["max_phase1"],
+                        max_phase2=pending["max_phase2"],
+                        max_phase3=pending["max_phase3"],
+                        min_power_a=pending["min_power_a"],
+                        min_power_b=pending["min_power_b"],
+                        priority=existing.priority,
+                        priority_phase1=pending["priority_phase1"],
+                        priority_phase2=pending["priority_phase2"],
+                        priority_phase3=pending["priority_phase3"],
+                    ),
+                )
+                apply_view.message = await interaction.followup.send(
+                    content=(
+                        f"💡 **{self._zone_name}** has similar zones in this preset: "
+                        f"{', '.join(siblings)}. Pick any to copy these same "
+                        f"settings to, or skip."
+                    ),
+                    view=apply_view, ephemeral=True,
+                )
+            except discord.HTTPException as e:
+                logger.warning(
+                    "[STORM STRATEGY] apply-to-similar follow-up couldn't be "
+                    "posted for zone=%s in preset=%s: %s",
+                    self._zone_name, self._view.buf.name, e,
+                )
+
+
+class _ZoneWizardNextView(discord.ui.View):
+    """One-button bridge between wizard pages. The button opens the
+    next page's modal so the multi-step flow doesn't need an outer
+    coordinator object."""
+
+    def __init__(self, editor_view: "_PresetEditorView",
+                 zone_name: str, *, next_page: str, label: str):
+        super().__init__(timeout=300)
+        self._editor = editor_view
+        self._zone_name = zone_name
+        self._next_page = next_page
+        self.message: discord.Message | None = None
+
+        btn = discord.ui.Button(label=label, style=discord.ButtonStyle.primary)
+
+        async def _go(inter: discord.Interaction):
+            if inter.user.id != editor_view.user_id:
+                await inter.response.send_message(
+                    "⛔ Only the editor's owner can advance the wizard.",
+                    ephemeral=True,
+                )
+                return
+            if next_page == "floors":
+                await inter.response.send_modal(
+                    _ZonePhaseFloorsModal(editor_view, zone_name)
+                )
+            elif next_page == "priority":
+                await inter.response.send_modal(
+                    _ZonePhasePriorityModal(editor_view, zone_name)
+                )
+            else:
+                await inter.response.send_message(
+                    f"⚠️ Unknown wizard step `{next_page}`.",
+                    ephemeral=True,
+                )
+                return
+            # Disable our button so officers don't double-click into
+            # two open modals on the next page.
+            for item in self.children:
+                item.disabled = True
+            try:
+                if self.message:
+                    await self.message.edit(view=self)
+            except discord.HTTPException:
+                pass
+            self.stop()
+
+        btn.callback = _go
+        self.add_item(btn)
 
 
 class _ApplyToSimilarView(discord.ui.View):
@@ -1057,9 +1413,13 @@ class _ApplyToSimilarView(discord.ui.View):
                     max_players=self._values.max_players,
                     max_phase1=self._values.max_phase1,
                     max_phase2=self._values.max_phase2,
+                    max_phase3=self._values.max_phase3,
                     min_power_a=self._values.min_power_a,
                     min_power_b=self._values.min_power_b,
                     priority=self._values.priority,
+                    priority_phase1=self._values.priority_phase1,
+                    priority_phase2=self._values.priority_phase2,
+                    priority_phase3=self._values.priority_phase3,
                 ))
                 applied.append(sibling)
             for item in self.children:
@@ -1239,21 +1599,84 @@ class _PresetEditorView(discord.ui.View):
                     )
                     return
                 zone_name = zone_select.values[0]
-                await inter.response.send_modal(_ZoneEditModal(self, zone_name))
+                # Phase-aware presets get the multi-step wizard since
+                # all 6+ fields don't fit in one modal. Flat presets
+                # use the single-modal flow.
+                if self.buf.phase_count >= 2:
+                    await inter.response.send_modal(
+                        _ZonePhaseCapacityModal(self, zone_name)
+                    )
+                else:
+                    await inter.response.send_modal(
+                        _ZoneEditModal(self, zone_name)
+                    )
 
             zone_select.callback = _on_select
             self.add_item(zone_select)
 
+        # Phase-mode select (#152) — replaces the old binary toggle so
+        # 3-phase CS presets can opt in. Selecting a different option
+        # mutates buf.phase_count, marks dirty, and re-renders. Stored
+        # phase capacities + assignments aren't touched on a mode flip
+        # so an officer can move between modes without losing data.
+        phase_mode_select = discord.ui.Select(
+            placeholder="🔀 Phase mode",
+            min_values=1, max_values=1,
+            options=[
+                discord.SelectOption(
+                    label="Flat (no phases)",
+                    value="0",
+                    description="Single per-zone slot — Max Players only.",
+                    default=self.buf.phase_count == 0,
+                ),
+                discord.SelectOption(
+                    label="Yes — 2 Phases",
+                    value="2",
+                    description="DS-style migration: Phase 1 → Phase 2.",
+                    default=self.buf.phase_count == 2,
+                ),
+                discord.SelectOption(
+                    label="Yes — 3 Phases",
+                    value="3",
+                    description="CS-style stages: Phase 1 → 2 → 3.",
+                    default=self.buf.phase_count == 3,
+                ),
+            ],
+        )
+
+        async def _on_phase_mode(inter: discord.Interaction):
+            if inter.user.id != self.user_id:
+                await inter.response.send_message(
+                    "⛔ Only the editor's owner can change this preset.",
+                    ephemeral=True,
+                )
+                return
+            new_count = int(phase_mode_select.values[0])
+            if new_count == self.buf.phase_count:
+                # Officer re-picked the same option — silent ack so the
+                # dropdown doesn't appear frozen.
+                try:
+                    await inter.response.defer()
+                except discord.HTTPException:
+                    pass
+                return
+            self.buf.phase_count = new_count
+            self.buf.dirty = True
+            label = "Flat" if new_count == 0 else f"{new_count}-phase"
+            await self.refresh(
+                inter,
+                message=(
+                    f"🔀 Switched to **{label}** mode. "
+                    "Stored capacities + assignments are kept — flip back "
+                    "any time without data loss."
+                ),
+            )
+
+        phase_mode_select.callback = _on_phase_mode
+
         # Action buttons
         add_btn   = discord.ui.Button(label="➕ Add zone", style=discord.ButtonStyle.secondary)
         rename_btn = discord.ui.Button(label="✏️ Rename", style=discord.ButtonStyle.secondary)
-        phases_btn = discord.ui.Button(
-            # Surface current state on the label so officers don't have
-            # to open the embed footer to tell which mode they're in.
-            label=("🔀 Phases: ON" if self.buf.uses_phases else "🔀 Phases: OFF"),
-            style=(discord.ButtonStyle.primary if self.buf.uses_phases
-                   else discord.ButtonStyle.secondary),
-        )
         save_btn  = discord.ui.Button(
             label="💾 Save preset",
             style=discord.ButtonStyle.success,
@@ -1272,26 +1695,6 @@ class _PresetEditorView(discord.ui.View):
                 await inter.response.send_message("⛔ Only the editor's owner can change this preset.", ephemeral=True); return
             await inter.response.send_modal(_RenameModal(self))
         rename_btn.callback = _rename
-
-        async def _toggle_phases(inter):
-            if inter.user.id != self.user_id:
-                await inter.response.send_message(
-                    "⛔ Only the editor's owner can change this preset.",
-                    ephemeral=True,
-                )
-                return
-            self.buf.uses_phases = not self.buf.uses_phases
-            self.buf.dirty = True
-            mode = "Phases" if self.buf.uses_phases else "Flat"
-            await self.refresh(
-                inter,
-                message=(
-                    f"🔀 Switched to **{mode}** mode. "
-                    "Phase capacities and member assignments unchanged on the "
-                    "DB side — toggle back any time without data loss."
-                ),
-            )
-        phases_btn.callback = _toggle_phases
 
         async def _save(inter):
             if inter.user.id != self.user_id:
@@ -1350,9 +1753,9 @@ class _PresetEditorView(discord.ui.View):
             self.stop()
         cancel_btn.callback = _cancel
 
+        self.add_item(phase_mode_select)
         self.add_item(add_btn)
         self.add_item(rename_btn)
-        self.add_item(phases_btn)
         self.add_item(save_btn)
         self.add_item(cancel_btn)
 

@@ -372,6 +372,123 @@ def render_history_list_embed(
 # ── Officer view ─────────────────────────────────────────────────────────────
 
 
+class _RosterImageLinksView(discord.ui.View):
+    """`[📷 View Team A image]` / `[📷 View Team B image]` (or just
+    `[📷 View image]` for CS / single-team DS) buttons attached below
+    the event-detail embed. Each click fetches the saved message at
+    runtime; on `discord.NotFound` (the image was deleted from the
+    original channel), the officer gets a friendly explanation + the
+    pointer is auto-removed so the stale link doesn't keep appearing.
+
+    Image bytes live in Discord — we just remember (channel_id,
+    message_id) and resolve at click time. No CDN URLs are stored
+    (they expire); no bytes are persisted server-side.
+    """
+
+    def __init__(
+        self, *,
+        owner_id: int, guild_id: int, event_type: str, event_date: str,
+        refs: list[dict],
+    ):
+        super().__init__(timeout=300)
+        self.owner_id = owner_id
+        self.guild_id = guild_id
+        self.event_type = event_type
+        self.event_date = event_date
+
+        for ref in refs:
+            team = ref.get("team") or ""
+            if event_type == "DS" and team:
+                label = f"📷 View Team {team} image"
+            else:
+                label = "📷 View image"
+            btn = discord.ui.Button(
+                label=label, style=discord.ButtonStyle.secondary,
+            )
+            btn.callback = self._make_callback(ref)
+            self.add_item(btn)
+
+    async def interaction_check(self, inter: discord.Interaction) -> bool:
+        if inter.user.id != self.owner_id:
+            await inter.response.send_message(
+                "⛔ Only the officer who opened this view can use these buttons.",
+                ephemeral=True,
+            )
+            return False
+        return True
+
+    def _make_callback(self, ref: dict):
+        async def _cb(inter: discord.Interaction):
+            channel_id = int(ref["channel_id"])
+            message_id = int(ref["message_id"])
+            team = ref.get("team") or ""
+
+            channel = inter.guild.get_channel_or_thread(channel_id) if inter.guild else None
+            if channel is None:
+                # Channel was deleted or the bot lost access. Treat as
+                # a deleted-image case — same friendly message.
+                await self._handle_missing(inter, team, reason="channel")
+                return
+            try:
+                msg = await channel.fetch_message(message_id)
+            except discord.NotFound:
+                await self._handle_missing(inter, team, reason="message")
+                return
+            except discord.Forbidden:
+                await inter.response.send_message(
+                    f"⚠️ The bot lost access to the channel where the image "
+                    f"was posted ({channel.mention if channel else 'unknown'}). "
+                    f"Re-render to save a new copy.",
+                    ephemeral=True,
+                )
+                return
+            except discord.HTTPException as e:
+                logger.warning(
+                    "[STORM HISTORY] image fetch failed guild=%s msg=%s: %s",
+                    self.guild_id, message_id, e,
+                )
+                await inter.response.send_message(
+                    f"⚠️ Couldn't fetch the saved image: {e}.", ephemeral=True,
+                )
+                return
+
+            link = msg.jump_url
+            await inter.response.send_message(
+                f"📷 [Open the saved roster image]({link}) "
+                f"(posted in {channel.mention}).",
+                ephemeral=True,
+            )
+
+        return _cb
+
+    async def _handle_missing(
+        self, inter: discord.Interaction, team: str, *, reason: str,
+    ) -> None:
+        """The saved message was deleted (or the channel is gone).
+        Drop the stale pointer so the button stops appearing on future
+        history opens, and tell the officer what happened."""
+        import config
+        try:
+            await asyncio.to_thread(
+                config.delete_roster_image_ref,
+                self.guild_id, self.event_type, self.event_date, team,
+            )
+        except Exception as e:
+            logger.warning(
+                "[STORM HISTORY] delete_roster_image_ref failed: %s", e,
+            )
+        parent = "desertstorm" if self.event_type == "DS" else "canyonstorm"
+        team_label = f" for Team {team}" if (self.event_type == "DS" and team) else ""
+        what = "channel" if reason == "channel" else "image"
+        await inter.response.send_message(
+            f"⚠️ The saved roster {what}{team_label} can no longer be "
+            f"found — it was deleted from the original channel. The link "
+            f"has been cleared. To save a new image: open the roster "
+            f"builder, click 🖼️ Render image, then 💾 Save to history.",
+            ephemeral=True,
+        )
+
+
 class _HistoryListView(discord.ui.View):
     """Lists recent event dates as buttons. Click → re-renders the
     embed for that event."""
@@ -411,15 +528,21 @@ class _HistoryListView(discord.ui.View):
             # the first click, making the list view effectively one-shot.
             await inter.response.defer(ephemeral=True, thinking=True)
             # Parallel Sheet reads off the event loop — gspread blocks
-            # for a network round-trip each.
+            # for a network round-trip each. SQLite image-refs lookup
+            # is cheap but fans out here so the await is in one place.
+            import config
             slots_task = asyncio.to_thread(
                 load_event_roster, self.guild_id, self.event_type, date_str,
             )
             attendance_task = asyncio.to_thread(
                 load_event_attendance, self.guild_id, self.event_type, date_str,
             )
-            (slots, _slot_errs), (attendance, _att_errs) = await asyncio.gather(
-                slots_task, attendance_task,
+            image_refs_task = asyncio.to_thread(
+                config.list_roster_image_refs,
+                self.guild_id, self.event_type, date_str,
+            )
+            (slots, _slot_errs), (attendance, _att_errs), image_refs = await asyncio.gather(
+                slots_task, attendance_task, image_refs_task,
             )
             embed = render_event_embed(
                 event_type=self.event_type,
@@ -427,7 +550,20 @@ class _HistoryListView(discord.ui.View):
                 slots=slots,
                 attendance=attendance,
             )
-            await inter.followup.send(embed=embed, ephemeral=True)
+            child_view: Optional[discord.ui.View] = None
+            if image_refs:
+                child_view = _RosterImageLinksView(
+                    owner_id=self.user_id,
+                    guild_id=self.guild_id,
+                    event_type=self.event_type,
+                    event_date=date_str,
+                    refs=image_refs,
+                )
+            await inter.followup.send(
+                embed=embed,
+                view=child_view or discord.utils.MISSING,
+                ephemeral=True,
+            )
         return _cb
 
     async def on_timeout(self):
@@ -484,15 +620,22 @@ async def open_history(
             return
         date_clean = parsed.isoformat()
         # Parallel Sheet reads off the event loop — gspread blocks for
-        # a network round-trip each.
+        # a network round-trip each. Image refs come from SQLite and
+        # are cheap, but we batch with the Sheet reads anyway so the
+        # await fans out in one place.
+        import config
         slots_task = asyncio.to_thread(
             load_event_roster, interaction.guild_id, event_type, date_clean,
         )
         attendance_task = asyncio.to_thread(
             load_event_attendance, interaction.guild_id, event_type, date_clean,
         )
-        (slots, slot_errors), (attendance, _att_errs) = await asyncio.gather(
-            slots_task, attendance_task,
+        image_refs_task = asyncio.to_thread(
+            config.list_roster_image_refs,
+            interaction.guild_id, event_type, date_clean,
+        )
+        (slots, slot_errors), (attendance, _att_errs), image_refs = await asyncio.gather(
+            slots_task, attendance_task, image_refs_task,
         )
         embed = render_event_embed(
             event_type=event_type,
@@ -507,8 +650,18 @@ async def open_history(
                 "[STORM HISTORY] roster read errors guild=%s date=%s: %s",
                 interaction.guild_id, date_clean, "; ".join(slot_errors),
             )
+        view: Optional[discord.ui.View] = None
+        if image_refs:
+            view = _RosterImageLinksView(
+                owner_id=interaction.user.id,
+                guild_id=interaction.guild_id,
+                event_type=event_type,
+                event_date=date_clean,
+                refs=image_refs,
+            )
         await interaction.followup.send(
-            content=content, embed=embed, ephemeral=True,
+            content=content, embed=embed, view=view or discord.utils.MISSING,
+            ephemeral=True,
         )
         return
 

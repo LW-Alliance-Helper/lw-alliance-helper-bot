@@ -426,3 +426,98 @@ class TestOpenHistoryEphemeralConsistency:
             "ephemeral=True; the audit fix is to keep all three render "
             "paths officer-only."
         )
+
+
+class TestRosterImageLinksView:
+    """`[📷 View image]` buttons attached to the history embed when a
+    saved roster-image pointer exists. Resolves the message at click
+    time so deletion is detected gracefully."""
+
+    def test_ds_two_teams_render_two_buttons(self, fake_env):
+        fake, gid = fake_env
+        refs = [
+            {"team": "A", "channel_id": 900, "message_id": 1001},
+            {"team": "B", "channel_id": 900, "message_id": 2002},
+        ]
+        view = sh._RosterImageLinksView(
+            owner_id=42, guild_id=gid,
+            event_type="DS", event_date="2026-05-18",
+            refs=refs,
+        )
+        labels = [b.label for b in view.children]
+        assert labels == ["📷 View Team A image", "📷 View Team B image"]
+
+    def test_cs_single_button_no_team_suffix(self, fake_env):
+        fake, gid = fake_env
+        refs = [{"team": "", "channel_id": 900, "message_id": 5555}]
+        view = sh._RosterImageLinksView(
+            owner_id=42, guild_id=gid,
+            event_type="CS", event_date="2026-05-18",
+            refs=refs,
+        )
+        assert len(view.children) == 1
+        assert view.children[0].label == "📷 View image"
+
+    @pytest.mark.asyncio
+    async def test_deleted_message_prunes_pointer_and_warns(self, fake_env):
+        """Click-time fetch on a 404'd message → friendly warning +
+        the stale pointer auto-deletes so it doesn't keep showing up."""
+        import config
+        from unittest.mock import AsyncMock, MagicMock
+        import discord
+
+        fake, gid = fake_env
+        # Save a pointer the test can later observe being deleted.
+        config.save_roster_image_ref(
+            gid, "DS", "2026-05-18", "A",
+            channel_id=900, message_id=1001, user_id=42,
+        )
+
+        refs = config.list_roster_image_refs(gid, "DS", "2026-05-18")
+        view = sh._RosterImageLinksView(
+            owner_id=42, guild_id=gid,
+            event_type="DS", event_date="2026-05-18",
+            refs=refs,
+        )
+
+        # Fake interaction with a channel that 404s on fetch_message.
+        channel = MagicMock()
+        channel.fetch_message = AsyncMock(
+            side_effect=discord.NotFound(MagicMock(status=404), "gone"),
+        )
+        inter = MagicMock()
+        inter.user = MagicMock(); inter.user.id = 42
+        inter.guild = MagicMock()
+        inter.guild.get_channel_or_thread = MagicMock(return_value=channel)
+        inter.response = MagicMock()
+        inter.response.send_message = AsyncMock()
+
+        await view.children[0].callback(inter)
+
+        # Warning was surfaced.
+        inter.response.send_message.assert_awaited_once()
+        args, kwargs = inter.response.send_message.await_args
+        assert kwargs.get("ephemeral") is True
+        assert "no longer be found" in args[0] or "no longer be found" in kwargs.get("content", "")
+
+        # Stale pointer pruned — second history open won't re-offer it.
+        assert config.list_roster_image_refs(gid, "DS", "2026-05-18") == []
+
+    @pytest.mark.asyncio
+    async def test_owner_only_button_interaction_check(self, fake_env):
+        from unittest.mock import AsyncMock, MagicMock
+        fake, gid = fake_env
+        refs = [{"team": "A", "channel_id": 900, "message_id": 1001}]
+        view = sh._RosterImageLinksView(
+            owner_id=42, guild_id=gid,
+            event_type="DS", event_date="2026-05-18",
+            refs=refs,
+        )
+        inter = MagicMock()
+        inter.user = MagicMock(); inter.user.id = 999   # not the owner
+        inter.response = MagicMock()
+        inter.response.send_message = AsyncMock()
+
+        allowed = await view.interaction_check(inter)
+        assert allowed is False
+        inter.response.send_message.assert_awaited_once()

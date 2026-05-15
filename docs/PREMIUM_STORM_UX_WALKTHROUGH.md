@@ -3327,17 +3327,22 @@ same builder.
 
 ---
 
-### Screen 7.17 — Render image
+### Screen 7.17 — Render image (public post + ephemeral action bar)
 
-Kevin clicks `🖼️ Render image`. Bot defers ephemerally, then calls
-`storm_renderer.render` on a thread executor. Happy path:
+Kevin clicks `🖼️ Render image`. Bot defers ephemerally with the
+spinner, calls `storm_renderer.render` on a thread executor, then
+**posts the PNG publicly in the channel Kevin invoked the builder
+from** so other leaders in the channel see + reference it. After
+the public post lands, Kevin gets an ephemeral followup with three
+action buttons — only he sees it.
+
+**Public message in the channel** (everyone with channel access sees):
 
 ```
 ┌──────────────────────────────────────────────────────────────────────┐
-│ 🖼️ Roster image attached:                                            │
-│ [ds-roster-2026-05-18-team-A.png] (attachment)                       │
+│ [ds-roster-2026-05-18-team-A.png]  (attachment, no message body)     │
 └──────────────────────────────────────────────────────────────────────┘
-(ephemeral — only Kevin sees it)
+                                              — posted by LW Alliance Helper
 ```
 
 Filename pattern:
@@ -3346,30 +3351,272 @@ free-tier apply produces `ds-roster.png`, structured-mode is
 `ds-roster-2026-05-18-team-A.png`, CS is
 `cs-roster-2026-05-18.png`.
 
-Pillow-missing fallback:
+**Ephemeral action bar** (Kevin only):
 
 ```
 ┌──────────────────────────────────────────────────────────────────────┐
-│ ⚠️ Image render isn't available — the host is missing Pillow. Use    │
-│ the text-template mail in the meantime.                              │
+│ 🖼️ Roster image posted above. Pick an action below — only you'll    │
+│ see this prompt.                                                     │
+└──────────────────────────────────────────────────────────────────────┘
+[📥 Download]  [💾 Save to history]  [📢 Post to channel...]
+(ephemeral — only Kevin sees it)
+```
+
+- `[📥 Download]` is `ButtonStyle.secondary` (grey).
+- `[💾 Save to history]` is `ButtonStyle.primary` (blue) — the
+  recommended action for events the alliance will reference later.
+- `[📢 Post to channel...]` is `ButtonStyle.secondary` (grey).
+- View timeout: 15 minutes. After timeout, buttons disable silently
+  — no notice; the public image is already in the channel and Kevin
+  can re-render any time to get a fresh action bar.
+
+---
+
+### Screen 7.17a — `[📥 Download]` clicked
+
+Kevin clicks `📥 Download`. The bot DMs him the same PNG. DMs surface
+native save-to-device UI on every Discord client (right-click on
+desktop, long-press → save to camera roll on mobile), which is more
+discoverable than the channel attachment menu.
+
+**DM body** (private — Kevin only):
+
+```
+┌──────────────────────────────────────────────────────────────────────┐
+│ 📥 Here's the roster image you asked to download (from DS on        │
+│ 2026-05-18). Right-click → Save image, or tap → save on mobile.     │
+│ [ds-roster-2026-05-18-team-A.png] (attachment)                       │
+└──────────────────────────────────────────────────────────────────────┘
+(DM — sent directly to Kevin)
+```
+
+**Ephemeral ack in the channel** (Kevin only):
+
+```
+┌──────────────────────────────────────────────────────────────────────┐
+│ 📥 Sent to your DMs — check your direct messages with the bot.      │
+└──────────────────────────────────────────────────────────────────────┘
+(ephemeral)
+```
+
+**DMs blocked by Kevin's privacy settings**:
+
+```
+┌──────────────────────────────────────────────────────────────────────┐
+│ ⚠️ I can't DM you — your privacy settings block bot DMs. Right-     │
+│ click the image in the channel and use Save image instead.         │
+└──────────────────────────────────────────────────────────────────────┘
+(ephemeral)
+```
+
+**Other DM send failure**:
+
+```
+┌──────────────────────────────────────────────────────────────────────┐
+│ ⚠️ DM send failed: <error>. Right-click the channel image to save.  │
+└──────────────────────────────────────────────────────────────────────┘
+(ephemeral)
+```
+
+---
+
+### Screen 7.17b — `[💾 Save to history]` clicked
+
+Kevin clicks `💾 Save to history`. The bot writes the `(channel_id,
+message_id)` of the public post into the new `storm_roster_images`
+SQLite table, keyed on `(guild, event_type, event_date, team)`. The
+image bytes themselves stay in Discord — only the pointer is stored
+server-side.
+
+**Success ack** (Kevin only):
+
+```
+┌──────────────────────────────────────────────────────────────────────┐
+│ 💾 Saved. The image is now linked from `/desertstorm strategy       │
+│ roster_history` for this event date (stays available until the      │
+│ original message is deleted).                                        │
+└──────────────────────────────────────────────────────────────────────┘
+(ephemeral)
+```
+
+*(CS variant: `…linked from /canyonstorm strategy roster_history…`)*
+
+**Re-save** (Kevin clicks `💾 Save to history` again on a fresh
+render): the new pointer overwrites the old via UPSERT — no
+duplicate row. Same success ack.
+
+**No event date** (free-tier / manual builder — `session.event_date`
+is empty):
+
+```
+┌──────────────────────────────────────────────────────────────────────┐
+│ ⚠️ Can't save to history without an event date — open the roster    │
+│ from /desertstorm signups / /canyonstorm signups so the event date  │
+│ is set.                                                              │
+└──────────────────────────────────────────────────────────────────────┘
+(ephemeral)
+```
+
+**SQLite write failure** (rare — disk full, permission, etc.):
+
+```
+┌──────────────────────────────────────────────────────────────────────┐
+│ ⚠️ Couldn't save to history — see bot logs.                          │
+└──────────────────────────────────────────────────────────────────────┘
+(ephemeral)
+```
+
+---
+
+### Screen 7.17c — `[📢 Post to channel...]` — channel picker
+
+Kevin clicks `📢 Post to channel...`. The bot sends a fresh ephemeral
+followup with a channel-select dropdown. The dropdown accepts text
+channels, public threads, private threads, and announcement
+(news) channels — wherever the alliance might want the image.
+
+```
+┌──────────────────────────────────────────────────────────────────────┐
+│ 📢 Pick a channel to post this image to. You'll get a modal to add  │
+│ an optional caption.                                                 │
+└──────────────────────────────────────────────────────────────────────┘
+[ ▾ Channel to post to...           ]
+(ephemeral — only Kevin sees it)
+```
+
+Picker timeout: 5 minutes. Owner-locked — only Kevin can click.
+
+---
+
+### Screen 7.17d — Caption modal (after picking a channel)
+
+Kevin picks `#strategy-archive` from the dropdown. The picker stops,
+a modal opens:
+
+```
+┌──────────────────────────────────────────────────────────────────────┐
+│ Post roster image to channel                                  [X]    │
+│                                                                      │
+│ Caption (optional)                                                   │
+│ ┌────────────────────────────────────────────────────────────────┐   │
+│ │ e.g. Saturday's Desert Storm — final assignments               │   │
+│ │                                                                │   │
+│ │                                                                │   │
+│ └────────────────────────────────────────────────────────────────┘   │
+│                                                                      │
+│                                            [Cancel]    [Submit]      │
 └──────────────────────────────────────────────────────────────────────┘
 ```
 
-Generic Pillow error:
+- Title: `Post roster image to channel`.
+- Field: `Caption (optional)`, `style=paragraph`, `max_length=1500`,
+  `required=False` — Kevin can submit without a caption and just
+  re-post the image bare.
+
+---
+
+### Screen 7.17e — Caption modal submitted → post lands
+
+Kevin types `Final assignments for Saturday — review and tag your
+preferred sub time in #storm-signups.` and clicks Submit.
+
+**The new public message in `#strategy-archive`** (everyone with
+channel access sees it):
+
+```
+┌──────────────────────────────────────────────────────────────────────┐
+│ Final assignments for Saturday — review and tag your preferred sub  │
+│ time in #storm-signups.                                              │
+│ [ds-roster-2026-05-18-team-A.png] (attachment)                       │
+└──────────────────────────────────────────────────────────────────────┘
+                                              — posted by LW Alliance Helper
+```
+
+**Ephemeral ack to Kevin**:
+
+```
+┌──────────────────────────────────────────────────────────────────────┐
+│ 📢 Posted to #strategy-archive.                                      │
+└──────────────────────────────────────────────────────────────────────┘
+(ephemeral)
+```
+
+**Bot lacks Send-Messages in the picked channel** (caught at submit
+time):
+
+```
+┌──────────────────────────────────────────────────────────────────────┐
+│ ⚠️ I don't have permission to post in #strategy-archive. Check the  │
+│ channel's permissions and try a different channel.                   │
+└──────────────────────────────────────────────────────────────────────┘
+(ephemeral — Kevin can re-click 📢 Post to channel... and pick another)
+```
+
+**Channel deleted between picker and submit** (rare race):
+
+```
+┌──────────────────────────────────────────────────────────────────────┐
+│ ⚠️ Couldn't resolve that channel — it may have been deleted between │
+│ picker and submit. Try again.                                        │
+└──────────────────────────────────────────────────────────────────────┘
+(ephemeral)
+```
+
+**Other Discord error**:
+
+```
+┌──────────────────────────────────────────────────────────────────────┐
+│ ⚠️ Discord refused the post: <error>.                                │
+└──────────────────────────────────────────────────────────────────────┘
+(ephemeral)
+```
+
+---
+
+### Screen 7.17f — Failure modes on the initial render
+
+**Bot lacks Send-Messages perms in the invoking channel** (no public
+post possible — falls back to ephemeral-only delivery so Kevin still
+gets the image, just without the action bar):
+
+```
+┌──────────────────────────────────────────────────────────────────────┐
+│ 🖼️ Roster image attached (couldn't post publicly — check the bot's  │
+│ permissions in this channel):                                        │
+│ [ds-roster-2026-05-18-team-A.png] (attachment)                       │
+└──────────────────────────────────────────────────────────────────────┘
+(ephemeral — only Kevin sees it)
+```
+
+**Pillow not installed** (degraded host — Railway should always have
+it, this is a defence for unusual deployments):
+
+```
+┌──────────────────────────────────────────────────────────────────────┐
+│ ⚠️ Image render isn't available — the host is missing Pillow. Use   │
+│ the text-template mail in the meantime.                              │
+└──────────────────────────────────────────────────────────────────────┘
+(ephemeral)
+```
+
+**Generic Pillow error** (unexpected — e.g. an asset file is
+corrupt):
 
 ```
 ┌──────────────────────────────────────────────────────────────────────┐
 │ ⚠️ Couldn't render the roster image — see bot logs.                  │
 └──────────────────────────────────────────────────────────────────────┘
+(ephemeral)
 ```
 
-> 25 MB output:
+**> 25 MB output** (degenerate roster — huge unicode name set):
 
 ```
 ┌──────────────────────────────────────────────────────────────────────┐
 │ ⚠️ Rendered roster image is too large to attach (27 MB > 25 MB       │
 │ Discord limit). Use the text-template mail instead.                  │
 └──────────────────────────────────────────────────────────────────────┘
+(ephemeral)
 ```
 
 ---
@@ -8557,6 +8804,70 @@ buttons remain clickable so Kevin can hop to other dates without
 re-running the command. Each click sends a fresh ephemeral followup
 with the new event's embed.
 
+**Image-link buttons** (when one or more `💾 Save to history` clicks
+have been recorded for this event): the followup carries a
+`_RosterImageLinksView` below the embed with one button per saved
+image. DS with both Team A and Team B saved:
+
+```
+┌──────────────────────────────────────────────────────────────────────┐
+│ 📜 Desert Storm Roster — Monday, May 18, 2026                        │
+│ … (embed body as above) …                                            │
+└──────────────────────────────────────────────────────────────────────┘
+[📷 View Team A image]  [📷 View Team B image]
+(ephemeral)
+```
+
+CS (single roster — no team suffix):
+
+```
+[📷 View image]
+```
+
+Click handler at runtime: the bot calls `channel.fetch_message` to
+confirm the saved post still exists. On success, sends an ephemeral
+with a jump link:
+
+```
+┌──────────────────────────────────────────────────────────────────────┐
+│ 📷 [Open the saved roster image](<jump URL>) (posted in              │
+│ #leadership-storm).                                                  │
+└──────────────────────────────────────────────────────────────────────┘
+(ephemeral)
+```
+
+**Deletion fallback** — if the original message was deleted, the
+bot prunes the stale pointer (so the button stops appearing on
+future opens) and surfaces a friendly explanation:
+
+```
+┌──────────────────────────────────────────────────────────────────────┐
+│ ⚠️ The saved roster image for Team A can no longer be found — it    │
+│ was deleted from the original channel. The link has been cleared.   │
+│ To save a new image: open the roster builder, click 🖼️ Render image,│
+│ then 💾 Save to history.                                             │
+└──────────────────────────────────────────────────────────────────────┘
+(ephemeral)
+```
+
+*(CS / single-roster variant drops `for Team A` from the message.)*
+
+**Channel-gone variant** (bot lost access to the original channel
+or the whole channel was deleted): same shape as the deletion case
+with `roster channel` instead of `roster image`. Pointer is also
+auto-pruned.
+
+**Forbidden** (bot still sees the channel but lost read perms on
+it specifically — rare): does NOT prune the pointer; surfaces:
+
+```
+┌──────────────────────────────────────────────────────────────────────┐
+│ ⚠️ The bot lost access to the channel where the image was posted    │
+│ (#leadership-storm). Re-render to save a new copy.                  │
+└──────────────────────────────────────────────────────────────────────┘
+(ephemeral)
+```
+
 ---
 
 ### Screen 15.9 — Date-button clicked — attendance not yet recorded
@@ -8675,8 +8986,16 @@ as Screen 15.8 — no list view, just the detail straight away:
 │ ───────────────────────────────────────────────────────────────────  │
 │ Attendance: ✅ 4  ·  ❌ 1  ·  🔄 1  (recorded 6 of 7 slots)          │
 └──────────────────────────────────────────────────────────────────────┘
-(ephemeral, no buttons)
+[📷 View Team A image]  [📷 View Team B image]   ← only when saved
+(ephemeral)
 ```
+
+The `📷 View` buttons appear if and only if a `💾 Save to history`
+click has been recorded for this event. Click behaviour matches
+Screen 15.8 (fetch at runtime → ephemeral jump link on success,
+friendly warning + auto-prune on deletion). CS shows a single
+`[📷 View image]`; DS may show one or two depending on which teams
+were saved.
 
 Other accepted inputs for the same Monday 5/18/2026 event:
 `date:May 18`, `date:5/18`, `date:5-18-2026`, `date:May 18th`,

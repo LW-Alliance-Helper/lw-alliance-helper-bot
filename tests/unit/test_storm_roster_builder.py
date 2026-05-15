@@ -1682,6 +1682,120 @@ class TestSessionStateLock:
         assert holder == 42
 
 
+class TestRenderActionView:
+    """Three-button ephemeral bar shown after the public roster image
+    is posted. Confirms the buttons exist with expected labels, the
+    save button writes to SQLite, and the download button handles a
+    DMs-disabled user gracefully."""
+
+    def _make_view(self, *, owner_id=42, event_date="2026-05-18", team="A",
+                   guild_id=None):
+        return srb._RenderActionView(
+            owner_id=owner_id,
+            png_bytes=b"\x89PNG\r\n\x1a\n" + b"\x00" * 64,
+            filename="ds-roster.png",
+            guild_id=guild_id or TEST_GUILD_ID,
+            event_type="DS",
+            event_date=event_date,
+            team=team,
+            public_channel_id=900,
+            public_message_id=12345,
+        )
+
+    def test_three_buttons_present(self):
+        view = self._make_view()
+        labels = [getattr(c, "label", "") for c in view.children]
+        assert "📥 Download" in labels
+        assert "💾 Save to history" in labels
+        assert "📢 Post to channel..." in labels
+
+    @pytest.mark.asyncio
+    async def test_non_owner_blocked_by_interaction_check(self):
+        from unittest.mock import AsyncMock, MagicMock
+        view = self._make_view(owner_id=42)
+        inter = MagicMock()
+        inter.user = MagicMock(); inter.user.id = 999
+        inter.response = MagicMock()
+        inter.response.send_message = AsyncMock()
+        allowed = await view.interaction_check(inter)
+        assert allowed is False
+        inter.response.send_message.assert_awaited_once()
+
+    @pytest.mark.asyncio
+    async def test_save_button_writes_pointer_to_sqlite(self, seeded_db):
+        from unittest.mock import AsyncMock, MagicMock
+        import config
+        view = self._make_view()
+        inter = MagicMock()
+        inter.user = MagicMock(); inter.user.id = 42
+        inter.response = MagicMock()
+        inter.response.send_message = AsyncMock()
+
+        # Find the save button and drive its callback.
+        save_btn = next(c for c in view.children
+                        if getattr(c, "label", "") == "💾 Save to history")
+        await save_btn.callback(inter)
+
+        refs = config.list_roster_image_refs(TEST_GUILD_ID, "DS", "2026-05-18")
+        assert len(refs) == 1
+        assert refs[0]["team"] == "A"
+        assert refs[0]["channel_id"] == 900
+        assert refs[0]["message_id"] == 12345
+        inter.response.send_message.assert_awaited_once()
+        sent_args = inter.response.send_message.await_args
+        assert sent_args.kwargs.get("ephemeral") is True
+
+    @pytest.mark.asyncio
+    async def test_save_button_rejects_when_no_event_date(self, seeded_db):
+        """Manual / free-tier builders don't carry an event_date, so
+        the save pointer would have a degenerate key. Refuse cleanly
+        instead of writing a stub row."""
+        from unittest.mock import AsyncMock, MagicMock
+        import config
+        view = self._make_view(event_date="")
+        inter = MagicMock()
+        inter.user = MagicMock(); inter.user.id = 42
+        inter.response = MagicMock()
+        inter.response.send_message = AsyncMock()
+
+        save_btn = next(c for c in view.children
+                        if getattr(c, "label", "") == "💾 Save to history")
+        await save_btn.callback(inter)
+
+        # Nothing was written.
+        assert config.list_roster_image_refs(TEST_GUILD_ID, "DS", "") == []
+        # Officer was told why.
+        sent = inter.response.send_message.await_args
+        msg = sent.args[0] if sent.args else sent.kwargs.get("content", "")
+        assert "event date" in msg.lower()
+
+    @pytest.mark.asyncio
+    async def test_download_button_dm_blocked_falls_back_gracefully(self):
+        """DMs disabled → friendly ephemeral instead of crashing."""
+        from unittest.mock import AsyncMock, MagicMock
+        import discord
+        view = self._make_view()
+
+        user = MagicMock()
+        user.id = 42
+        user.create_dm = AsyncMock(
+            side_effect=discord.Forbidden(MagicMock(status=403), "DMs off"),
+        )
+        inter = MagicMock()
+        inter.user = user
+        inter.response = MagicMock()
+        inter.response.send_message = AsyncMock()
+
+        download_btn = next(c for c in view.children
+                            if getattr(c, "label", "") == "📥 Download")
+        await download_btn.callback(inter)
+
+        inter.response.send_message.assert_awaited_once()
+        sent = inter.response.send_message.await_args
+        msg = sent.args[0] if sent.args else sent.kwargs.get("content", "")
+        assert "privacy settings" in msg.lower() or "can't dm" in msg.lower()
+
+
 class TestBuilderViewTimeoutCleanup:
     @pytest.mark.asyncio
     async def test_on_timeout_releases_structured_lock(self, seeded_db):

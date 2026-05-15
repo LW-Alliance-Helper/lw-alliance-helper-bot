@@ -2113,46 +2113,49 @@ class _SaveAsPresetModal(discord.ui.Modal, title="Save as preset"):
 # ── Mail generation ──────────────────────────────────────────────────────────
 
 
+_MAX_ATTACHMENT_BYTES = 25 * 1024 * 1024
+
+
 async def _render_and_attach(
     inter: discord.Interaction, session: RosterBuilderSession,
 ) -> None:
-    """Render the current roster as a PNG and attach it ephemerally.
+    """Render the current roster as a PNG, post it publicly in the
+    invoking channel so other leaders can see + reference it, and
+    follow up with an ephemeral action bar (Download / Save to history
+    / Post to channel) that only the clicking officer sees.
+
     Pillow import lives inside the handler so the builder module
     doesn't pay the import cost unless render is actually invoked.
-
-    Defers immediately and runs the CPU-bound Pillow render in a
-    thread executor — without this, a 30-slot PNG encode would blow
-    the 3-second interaction token AND stall the gateway heartbeat
-    for every other guild while it runs. Same pattern the rest of
-    the storm flow uses for slow I/O (1.1.7 hotfix for /train).
+    The CPU-bound Pillow encode runs in a thread executor so a 30-slot
+    PNG doesn't blow the 3-second interaction token or stall the
+    gateway heartbeat for other guilds.
 
     Failure modes:
       * Pillow not installed → renderer raises `RuntimeError`; surface
         a one-line ephemeral. Officer continues with text-only mail.
       * Other Pillow error → log + ephemeral "could not render."
+      * Bot can't post in the channel → log + ephemeral with the
+        recovery hint ("check channel permissions").
     """
     import asyncio
 
-    # Defer first so the encode + upload have time. `thinking=False`
-    # because the followup carries the file directly (no spinner UX).
+    # Defer first so the encode + upload have time. `thinking=True`
+    # because we're about to post a public message + ephemeral action
+    # bar — the spinner is the right idle UI.
     try:
-        await inter.response.defer(ephemeral=True, thinking=False)
+        await inter.response.defer(ephemeral=True, thinking=True)
     except discord.HTTPException as e:
         logger.warning(
             "[STORM RENDER] defer failed (guild=%s): %s",
             session.guild_id, e,
         )
-        # Interaction is probably dead — bail. No followup is reachable.
         return
 
     try:
         import storm_renderer
         roster_data = storm_renderer.roster_from_session(session)
-        # Pillow encode is CPU-bound; off the event loop so other
-        # guilds' heartbeat doesn't stall on a multi-second render.
         png_bytes = await asyncio.to_thread(storm_renderer.render, roster_data)
     except RuntimeError as e:
-        # Pillow missing — degrade gracefully.
         logger.warning(
             "[STORM RENDER] Pillow not available (guild=%s event=%s): %s",
             session.guild_id, session.event_type, e,
@@ -2174,13 +2177,6 @@ async def _render_and_attach(
         )
         return
 
-    # Discord refuses attachments > 25 MB on the default boost tier
-    # with a 40005 / 413 response that surfaces to the user as a
-    # generic "interaction failed". A degenerate roster (huge Unicode
-    # name set with a TTF fallback that ballooned the canvas) could
-    # in principle cross that line; bail with a readable message
-    # instead of letting Discord eat the upload silently.
-    _MAX_ATTACHMENT_BYTES = 25 * 1024 * 1024
     if len(png_bytes) > _MAX_ATTACHMENT_BYTES:
         logger.warning(
             "[STORM RENDER] PNG exceeded 25MB (size=%d guild=%s event=%s)",
@@ -2200,12 +2196,307 @@ async def _render_and_attach(
         + (f"-team-{session.team}" if session.team else "")
         + ".png"
     )
-    file = discord.File(io.BytesIO(png_bytes), filename=filename)
+
+    # Public post in the invoking channel. Other leaders in the
+    # channel can see + save the image directly; Discord hosts it
+    # durably for as long as the message exists.
+    public_msg: Optional[discord.Message] = None
+    if inter.channel is not None:
+        try:
+            public_msg = await inter.channel.send(
+                file=discord.File(io.BytesIO(png_bytes), filename=filename),
+            )
+        except discord.Forbidden:
+            logger.warning(
+                "[STORM RENDER] no perms to post in channel=%s guild=%s",
+                getattr(inter.channel, "id", None), session.guild_id,
+            )
+            # Fall through to ephemeral-only delivery so the officer
+            # still gets the image — they just don't get the public copy.
+        except discord.HTTPException as e:
+            logger.warning(
+                "[STORM RENDER] failed to post public image (guild=%s): %s",
+                session.guild_id, e,
+            )
+
+    if public_msg is None:
+        # No public post → simpler ephemeral delivery, no action bar
+        # (the action bar's value is acting on a public message).
+        await inter.followup.send(
+            content=(
+                "🖼️ Roster image attached (couldn't post publicly — check "
+                "the bot's permissions in this channel):"
+            ),
+            file=discord.File(io.BytesIO(png_bytes), filename=filename),
+            ephemeral=True,
+        )
+        return
+
+    # Ephemeral action bar — only the clicking officer sees it.
+    view = _RenderActionView(
+        owner_id=inter.user.id,
+        png_bytes=png_bytes,
+        filename=filename,
+        guild_id=session.guild_id,
+        event_type=session.event_type,
+        event_date=session.event_date or "",
+        team=session.team or "",
+        public_channel_id=public_msg.channel.id,
+        public_message_id=public_msg.id,
+    )
     await inter.followup.send(
-        content="🖼️ Roster image attached:",
-        file=file,
+        content=(
+            f"🖼️ Roster image posted above. Pick an action below — only "
+            f"you'll see this prompt."
+        ),
+        view=view,
         ephemeral=True,
     )
+
+
+class _RenderActionView(discord.ui.View):
+    """Three-button ephemeral action bar shown after a public roster
+    image is posted. Each button operates on the same `png_bytes`
+    snapshot captured at render time so subsequent actions reflect the
+    image the officer just saw — not whatever the session looks like
+    seconds later if they keep tweaking."""
+
+    def __init__(
+        self, *, owner_id: int, png_bytes: bytes, filename: str,
+        guild_id: int, event_type: str, event_date: str, team: str,
+        public_channel_id: int, public_message_id: int,
+    ):
+        super().__init__(timeout=900)  # 15 min — enough for a coffee + caption typing
+        self.owner_id = owner_id
+        self.png_bytes = png_bytes
+        self.filename = filename
+        self.guild_id = guild_id
+        self.event_type = event_type
+        self.event_date = event_date
+        self.team = team
+        self.public_channel_id = public_channel_id
+        self.public_message_id = public_message_id
+
+    async def interaction_check(self, inter: discord.Interaction) -> bool:
+        if inter.user.id != self.owner_id:
+            await inter.response.send_message(
+                "⛔ These actions are for the officer who rendered the image.",
+                ephemeral=True,
+            )
+            return False
+        return True
+
+    @discord.ui.button(label="📥 Download", style=discord.ButtonStyle.secondary)
+    async def download_btn(
+        self, inter: discord.Interaction, _btn: discord.ui.Button,
+    ):
+        """DM the image to the officer. DMs have native save-to-device
+        UI on every Discord client (right-click on desktop, long-press
+        → save to camera roll on mobile), which is more discoverable
+        than the channel attachment menu."""
+        try:
+            dm = await inter.user.create_dm()
+            await dm.send(
+                content=(
+                    f"📥 Here's the roster image you asked to download "
+                    f"(from {self.event_type} on {self.event_date or 'today'}). "
+                    f"Right-click → Save image, or tap → save on mobile."
+                ),
+                file=discord.File(io.BytesIO(self.png_bytes), filename=self.filename),
+            )
+        except discord.Forbidden:
+            await inter.response.send_message(
+                "⚠️ I can't DM you — your privacy settings block bot DMs. "
+                "Right-click the image in the channel and use Save image instead.",
+                ephemeral=True,
+            )
+            return
+        except discord.HTTPException as e:
+            logger.warning(
+                "[STORM RENDER] download DM failed user=%s guild=%s: %s",
+                inter.user.id, self.guild_id, e,
+            )
+            await inter.response.send_message(
+                f"⚠️ DM send failed: {e}. Right-click the channel image to save.",
+                ephemeral=True,
+            )
+            return
+        await inter.response.send_message(
+            "📥 Sent to your DMs — check your direct messages with the bot.",
+            ephemeral=True,
+        )
+
+    @discord.ui.button(label="💾 Save to history", style=discord.ButtonStyle.primary)
+    async def save_btn(
+        self, inter: discord.Interaction, _btn: discord.ui.Button,
+    ):
+        """Store the (channel, message) pointer so the history browser
+        can offer a `📷 View image` button on this event. Image bytes
+        live in Discord; we just remember where."""
+        import config
+        if not self.event_date:
+            await inter.response.send_message(
+                "⚠️ Can't save to history without an event date — open the "
+                "roster from `/desertstorm signups` / `/canyonstorm signups` "
+                "so the event date is set.",
+                ephemeral=True,
+            )
+            return
+        try:
+            await asyncio.to_thread(
+                config.save_roster_image_ref,
+                self.guild_id, self.event_type, self.event_date, self.team,
+                self.public_channel_id, self.public_message_id, inter.user.id,
+            )
+        except Exception as e:
+            logger.exception(
+                "[STORM RENDER] save_roster_image_ref failed guild=%s: %s",
+                self.guild_id, e,
+            )
+            await inter.response.send_message(
+                "⚠️ Couldn't save to history — see bot logs.",
+                ephemeral=True,
+            )
+            return
+        parent = "desertstorm" if self.event_type == "DS" else "canyonstorm"
+        await inter.response.send_message(
+            f"💾 Saved. The image is now linked from "
+            f"`/{parent} strategy roster_history` for this event date "
+            f"(stays available until the original message is deleted).",
+            ephemeral=True,
+        )
+
+    @discord.ui.button(label="📢 Post to channel...", style=discord.ButtonStyle.secondary)
+    async def post_btn(
+        self, inter: discord.Interaction, _btn: discord.ui.Button,
+    ):
+        """Open a channel picker; once picked, prompt for an optional
+        caption, then re-post the image into the chosen channel."""
+        picker = _PostToChannelPicker(
+            owner_id=self.owner_id,
+            png_bytes=self.png_bytes,
+            filename=self.filename,
+            event_type=self.event_type,
+            event_date=self.event_date,
+        )
+        await inter.response.send_message(
+            content=(
+                "📢 Pick a channel to post this image to. You'll get a "
+                "modal to add an optional caption."
+            ),
+            view=picker,
+            ephemeral=True,
+        )
+
+
+class _PostToChannelPicker(discord.ui.View):
+    """Ephemeral channel-select view. On selection, opens the caption
+    modal; the modal's submit handler actually posts the image."""
+
+    def __init__(
+        self, *, owner_id: int, png_bytes: bytes, filename: str,
+        event_type: str, event_date: str,
+    ):
+        super().__init__(timeout=300)
+        self.owner_id = owner_id
+        self.png_bytes = png_bytes
+        self.filename = filename
+        self.event_type = event_type
+        self.event_date = event_date
+
+        select = discord.ui.ChannelSelect(
+            channel_types=[
+                discord.ChannelType.text,
+                discord.ChannelType.public_thread,
+                discord.ChannelType.private_thread,
+                discord.ChannelType.news,
+            ],
+            placeholder="Channel to post to...",
+            min_values=1, max_values=1,
+        )
+
+        async def _on_pick(picker_inter: discord.Interaction):
+            if picker_inter.user.id != self.owner_id:
+                await picker_inter.response.send_message(
+                    "⛔ Not for you.", ephemeral=True,
+                )
+                return
+            picked = select.values[0]
+            modal = _PostCaptionModal(
+                channel_id=picked.id,
+                channel_mention=picked.mention,
+                png_bytes=self.png_bytes,
+                filename=self.filename,
+            )
+            await picker_inter.response.send_modal(modal)
+            # Stop the picker view — modal carries the rest of the flow.
+            self.stop()
+
+        select.callback = _on_pick
+        self.add_item(select)
+
+    async def interaction_check(self, inter: discord.Interaction) -> bool:
+        if inter.user.id != self.owner_id:
+            await inter.response.send_message("⛔ Not for you.", ephemeral=True)
+            return False
+        return True
+
+
+class _PostCaptionModal(discord.ui.Modal):
+    """Optional caption + Post button. On submit, fetches the chosen
+    channel and posts the image with the caption as the message body."""
+
+    def __init__(
+        self, *, channel_id: int, channel_mention: str,
+        png_bytes: bytes, filename: str,
+    ):
+        super().__init__(title="Post roster image to channel")
+        self.channel_id = channel_id
+        self.channel_mention = channel_mention
+        self.png_bytes = png_bytes
+        self.filename = filename
+        self.caption = discord.ui.TextInput(
+            label="Caption (optional)",
+            placeholder="e.g. Saturday's Desert Storm — final assignments",
+            required=False,
+            max_length=1500,
+            style=discord.TextStyle.paragraph,
+        )
+        self.add_item(self.caption)
+
+    async def on_submit(self, inter: discord.Interaction) -> None:
+        channel = inter.guild.get_channel_or_thread(self.channel_id) if inter.guild else None
+        if channel is None:
+            await inter.response.send_message(
+                "⚠️ Couldn't resolve that channel — it may have been "
+                "deleted between picker and submit. Try again.",
+                ephemeral=True,
+            )
+            return
+        try:
+            await channel.send(
+                content=self.caption.value or None,
+                file=discord.File(io.BytesIO(self.png_bytes), filename=self.filename),
+            )
+        except discord.Forbidden:
+            await inter.response.send_message(
+                f"⚠️ I don't have permission to post in {self.channel_mention}. "
+                f"Check the channel's permissions and try a different channel.",
+                ephemeral=True,
+            )
+            return
+        except discord.HTTPException as e:
+            logger.warning(
+                "[STORM RENDER] post-to-channel failed channel=%s: %s",
+                self.channel_id, e,
+            )
+            await inter.response.send_message(
+                f"⚠️ Discord refused the post: {e}.", ephemeral=True,
+            )
+            return
+        await inter.response.send_message(
+            f"📢 Posted to {self.channel_mention}.", ephemeral=True,
+        )
 
 
 def _mail_zone_and_sub_lists(

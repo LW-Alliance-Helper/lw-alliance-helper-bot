@@ -498,6 +498,32 @@ def init_db():
         """)
         conn.commit()
 
+        # storm_roster_images — pointer to a public roster-image message
+        # in Discord, written by the `💾 Save to history` action on the
+        # builder's render flow. The history browser surfaces this as
+        # a `📷 View image` button on the matching event embed so a
+        # roster image from week N is still retrievable in week N+8.
+        # `team` differentiates DS Team A / Team B; CS uses empty string.
+        # UPSERT on the composite key — re-saving overwrites the prior
+        # pointer (officer rendered + saved twice). Image bytes are not
+        # stored anywhere — Discord hosts the message, and we resolve
+        # via channel.fetch_message at click time so a deleted message
+        # is detected gracefully rather than served as a stale link.
+        conn.execute("""
+            CREATE TABLE IF NOT EXISTS storm_roster_images (
+                guild_id          INTEGER NOT NULL,
+                event_type        TEXT    NOT NULL,
+                event_date        TEXT    NOT NULL,
+                team              TEXT    NOT NULL DEFAULT '',
+                channel_id        INTEGER NOT NULL,
+                message_id        INTEGER NOT NULL,
+                posted_by_user_id INTEGER NOT NULL,
+                posted_at         TEXT    NOT NULL,
+                PRIMARY KEY (guild_id, event_type, event_date, team)
+            )
+        """)
+        conn.commit()
+
         # shiny_task_servers — global table of every Last War server
         # known to cpt-hedge, refreshed weekly. The 3-day shiny-task
         # cycle is fully derivable from `creation_date` (no phase
@@ -1846,6 +1872,74 @@ def get_recent_storm_registration_posts(within_days: int = 14) -> list[dict]:
             (cutoff,),
         ).fetchall()
     return [dict(r) for r in rows]
+
+
+# ── Saved roster-image pointers (#140 follow-up) ────────────────────────────
+
+
+def save_roster_image_ref(
+    guild_id: int, event_type: str, event_date: str, team: str,
+    channel_id: int, message_id: int, user_id: int,
+) -> None:
+    """UPSERT the (channel_id, message_id) of a freshly-posted roster
+    image. Composite key (guild, event_type, event_date, team) — DS has
+    one image per team (A / B), CS uses empty team string for its
+    single-roster shape. Officer re-renders and re-saves overwrite
+    the prior pointer."""
+    posted_at = _utcnow_iso()
+    with _get_conn() as conn:
+        conn.execute(
+            "INSERT INTO storm_roster_images "
+            "(guild_id, event_type, event_date, team, channel_id, "
+            " message_id, posted_by_user_id, posted_at) "
+            "VALUES (?, ?, ?, ?, ?, ?, ?, ?) "
+            "ON CONFLICT (guild_id, event_type, event_date, team) DO UPDATE "
+            "SET channel_id = excluded.channel_id, "
+            "    message_id = excluded.message_id, "
+            "    posted_by_user_id = excluded.posted_by_user_id, "
+            "    posted_at = excluded.posted_at",
+            (
+                int(guild_id), event_type, event_date, team or "",
+                int(channel_id), int(message_id), int(user_id), posted_at,
+            ),
+        )
+        conn.commit()
+
+
+def list_roster_image_refs(
+    guild_id: int, event_type: str, event_date: str,
+) -> list[dict]:
+    """All saved roster-image pointers for a (guild, event) — usually
+    one for CS, up to two (Team A + Team B) for DS. Empty list if no
+    `💾 Save to history` clicks have been recorded for this event.
+    Ordered so DS Team A renders before Team B in the history view."""
+    with _get_conn() as conn:
+        rows = conn.execute(
+            "SELECT guild_id, event_type, event_date, team, channel_id, "
+            "       message_id, posted_by_user_id, posted_at "
+            "FROM storm_roster_images "
+            "WHERE guild_id = ? AND event_type = ? AND event_date = ? "
+            "ORDER BY team",
+            (int(guild_id), event_type, event_date),
+        ).fetchall()
+    return [dict(r) for r in rows]
+
+
+def delete_roster_image_ref(
+    guild_id: int, event_type: str, event_date: str, team: str,
+) -> bool:
+    """Remove a saved pointer (e.g. when the click-time fetch finds the
+    message was deleted and the officer asks to unlink). Returns True
+    if a row was deleted."""
+    with _get_conn() as conn:
+        cur = conn.execute(
+            "DELETE FROM storm_roster_images "
+            "WHERE guild_id = ? AND event_type = ? AND event_date = ? "
+            "  AND team = ?",
+            (int(guild_id), event_type, event_date, team or ""),
+        )
+        conn.commit()
+        return cur.rowcount > 0
 
 
 # ── Power-refresh DM cooldown (#138) ────────────────────────────────────────

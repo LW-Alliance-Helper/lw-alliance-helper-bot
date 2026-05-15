@@ -596,20 +596,43 @@ rosters_tab records it, but the mail builder hardcoded P1+P2 only.
 ### 7.4 PNG image render
 
 Lives in `storm_renderer.py`. Triggered by `🖼️ Render image` button.
-Updated by **commit λ** to wrap the title and guard 25 MB. Updated
-by `aafb576` (PR #153) to iterate phases for phase-aware presets.
+Replaced by **#140**: the original vertical text canvas (`#132` v1)
+is gone; the renderer now produces a map-based image with icons,
+faction-coloured spawn zones, and a Subs column. Layout coordinates
+match the alliance lead's SVG mocks (`ds_layout.svg`,
+`CS_layout.svg`) 1:1.
 
-Layout: vertical white canvas, 720 px wide.
+Canvas: SVG-units × `SCALE` (2 by default). DS = ~2215 × 1525, CS =
+~2471 × 2090. Inter is the project font (bundled at
+`assets/fonts/Inter-{Regular,Bold}.ttf`). Icons live at
+`assets/storm_icons/{ds,cs}/`.
 
-| Section | Format |
-|---|---|
-| Title | Bold (`title_font=18`), wrapped to canvas width by `_wrap_text` |
-| Zone heading (flat preset) | `{zone}  ({n}/{cap})` (blue heading_font=14) |
-| Zone heading (phase-aware preset) | `Phase {n} — {zone}  ({count}/{phase-N max})` — one block per (phase, zone). Phase-N zones with `max=0` and no members are skipped to avoid empty rows. |
-| Member line | `• {name} ({power}) ⚠ override   ↳ sub: {sub}` |
-| Empty zone | `(empty)` (muted) |
-| Subs heading | `Subs ({n})` |
-| Special-roles line | `{Role title}: {comma-separated names}` |
+Dispatches on `roster.event_type`:
+
+| Layer | DS | CS |
+|---|---|---|
+| Header bar | `Desert Storm — {preset_name}` / `Team {A|B}` / date | `Canyon Storm — {preset_name}` / `{faction}` / date |
+| Background | Sand fill, subs column right of `x=921` with 1 px black stroke (vertical separator) | Sand fill, subs column right of `x=1050` with same stroke |
+| Spawn zones | Two narrow vertical strips at left/right edges: Team A blue, Team B red | Rulebringers blue horizontal band top; Dawnbreakers red split into two bands bottom |
+| Zone count | 11 canonical zones in a diamond around Nuclear Silo | 12 canonical zones in 3 rows (Stage 1 top, Stage 2 middle, Stage 3 bottom) |
+| Phase headers in member pill | `Stage/Phase {N}:` bold (8 pt Inter Bold) | Same |
+| Member name | 8 pt Inter Regular, auto-shrinks when content overflows |  Same |
+| Missing icon (Arsenal / Mercenary Factory, blocked on game-bug fix) | Grey placeholder circle | N/A — CS icon set is complete |
+| Subs column | Flat list when `paired_subs` empty; two-column `Primary` / `Sub` table with row dividers when populated | Same |
+
+`roster_from_session` plumbs:
+
+* `event_type` → drives layout dispatch
+* `preset_name` → header left text (combined with event name)
+* `team_label` → header center (`Team A` / `Rulebringers` / etc.)
+* `event_date_label` → header right (formatted via `format_event_date`)
+* `phase_count` → controls per-phase iteration
+* Each `RosterZone` carries `phase` + `canonical_zone` so the renderer
+  groups by zone and stacks per-phase blocks inside one text pill.
+
+Unknown / typo zone names are logged at DEBUG and skipped (vs.
+crashing). Pillow missing → `RuntimeError` so the caller can fall
+back to a text-only post.
 
 ---
 

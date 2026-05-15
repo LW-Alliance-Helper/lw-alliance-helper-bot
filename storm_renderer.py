@@ -1,5 +1,6 @@
 """
-Pillow-based PNG render of a storm roster (#132).
+Pillow-based map render of a storm roster (#140 — replaces the text-
+canvas v1 from #132).
 
 Contract:
 
@@ -9,362 +10,763 @@ Used by the manual roster builder (free tier) when leadership clicks
 `[🖼️ Render image]`, and by the structured-flow Approve & Post
 finalisation (Premium) as a file attachment alongside the mail.
 
-The implementation is intentionally simple: a vertical text layout
-on a white canvas with the default Pillow font, sized to fit the
-roster. No backgrounds, no fancy graphics — those are Map Manager
-territory and stay out of scope per the [#54](https://github.com/LW-Alliance-Helper/lw-alliance-helper-bot/issues/54) "Out of scope" list.
+The new renderer is event-type aware. Desert Storm uses the diamond
+layout around Nuclear Silo with vertical spawn strips at the left and
+right edges; Canyon Storm uses a wider 3-stage layout with a single
+Rulebringers (blue) band at the top and split Dawnbreakers (red)
+bands at the bottom. The shared `RosterData` carries enough structure
+(event_type, phase_count, per-zone phase info) for the renderer to
+dispatch without the caller needing to know which layout is in play.
 
-The contract is stable enough that the Pillow backend can be swapped
-for a Map Manager API call later without touching any callsite.
+Coordinates were extracted from the SVG mocks (`ds_layout.svg`,
+`CS_layout.svg`) the alliance lead authored — every box position
+matches the design 1:1, scaled by `SCALE` for crisper output.
+
+Phase-aware zones render with `Stage/Phase N:` headers inside their
+member-list pill. A member migrating across phases (e.g. Alice plays
+Info Center in Phase 1, Nuclear Silo in Phase 2) shows up in two
+different zone blocks, one per phase. Member-list font auto-shrinks
+when content overflows the box.
 """
 
 from __future__ import annotations
 
 import io
 import logging
+import os
 from dataclasses import dataclass, field
 from typing import Optional
 
 logger = logging.getLogger(__name__)
 
 
+# ── Data shapes ──────────────────────────────────────────────────────
+
+
 @dataclass
 class RosterZone:
-    """One zone in the rendered roster."""
-    name: str
+    """One zone-phase slot in the rendered roster.
+
+    Phase-aware presets emit one `RosterZone` per (zone, phase) so the
+    PNG carries every phase's roster. Flat presets emit one block per
+    zone with `phase = 0`. The renderer groups by `canonical_zone` to
+    place each zone's icon + text pill at its layout slot, then
+    stacks the per-phase member lists inside the text pill.
+    """
+    name: str                   # display name; may include "Phase N — " prefix
     max_players: int
     members: list[str] = field(default_factory=list)
+    phase: int = 0              # 0 = flat preset, 1/2/3 = phase-aware
+    canonical_zone: str = ""    # base zone name (no phase prefix) for icon lookup
 
 
 @dataclass
 class RosterData:
-    """Everything the renderer needs to produce a PNG."""
-    title: str                              # e.g. "Desert Storm — Standard — Team A — 2026-05-18"
+    """Everything the renderer needs to produce a PNG.
+
+    Structured fields (`event_type`, `phase_count`, `team_label`,
+    `event_date_label`, `preset_name`) drive the map dispatch and the
+    header line; the legacy `title` field is retained for callers and
+    tests that consume it as a fallback string.
+    """
+    title: str                                      # legacy back-compat
     zones: list[RosterZone]
     subs: list[str] = field(default_factory=list)
     special_roles: dict[str, list[str]] = field(default_factory=dict)
-    # Optional paired-sub mapping: {primary_name: sub_name}. Rendered
-    # alongside the primary line when present.
     paired_subs: dict[str, str] = field(default_factory=dict)
-    # Per-member metadata for rich rendering. Map keyed on `name` so
-    # the renderer doesn't have to plumb a richer data structure
-    # through every layout helper.
-    #
-    # `powers[name]` → human-readable power string ("412M") or "" /
-    # missing to omit. The audit found the screenshot artifact dropped
-    # the power readout the embed shows, so officers couldn't
-    # cross-check power-by-zone from the image.
-    #
-    # `overrides` → set of member names assigned below the zone floor.
-    # The rosters_tab `Override Below Floor` column captures the same
-    # data; without surfacing it in the PNG, post-event review loses a
-    # decision an officer made at build time.
     powers: dict[str, str] = field(default_factory=dict)
     overrides: set[str] = field(default_factory=set)
+    # Map-renderer fields
+    event_type: str = "DS"                          # "DS" or "CS"
+    preset_name: str = ""                           # surfaces under event name
+    team_label: str = ""                            # "Team A" / "Rulebringers" / ""
+    event_date_label: str = ""                      # human-readable date string
+    phase_count: int = 0                            # 0 = flat, 2 or 3 = phase-aware
 
 
-# Layout constants — kept readable + isolated so a future redesign
-# can tweak without hunting through the render code.
-_PADDING_X      = 24
-_PADDING_Y      = 24
-_TITLE_GAP      = 18
-_SECTION_GAP    = 14
-_LINE_GAP       = 6
-_BG_COLOR       = (255, 255, 255)   # white
-_TEXT_COLOR     = (32, 32, 32)
-_MUTED_COLOR    = (110, 110, 110)
-_TITLE_COLOR    = (16, 16, 16)
-_ZONE_COLOR     = (30, 60, 110)     # blue-ish heading
-_WIDTH          = 720               # px
+# ── Asset paths ──────────────────────────────────────────────────────
+
+
+_HERE = os.path.dirname(os.path.abspath(__file__))
+_INTER_REGULAR = os.path.join(_HERE, "assets", "fonts", "Inter-Regular.ttf")
+_INTER_BOLD = os.path.join(_HERE, "assets", "fonts", "Inter-Bold.ttf")
+_ICONS_DS_DIR = os.path.join(_HERE, "assets", "storm_icons", "ds")
+_ICONS_CS_DIR = os.path.join(_HERE, "assets", "storm_icons", "cs")
+
+# Icon filename per canonical zone. Some DS slots map to a missing
+# icon (Arsenal + Mercenary Factory blocked on a game bug); render a
+# grey placeholder circle for those instead of crashing.
+_DS_ICON_FILES: dict[str, Optional[str]] = {
+    "Nuclear Silo":         "Nuclear Silo.png",
+    "Oil Refinery I":       "Oil Refinery.png",
+    "Oil Refinery II":      "Oil Refinery.png",
+    "Science Hub":          "Science Hub.png",
+    "Info Center":          "Info Center.png",
+    "Field Hospital I":     "Field Hospital.png",
+    "Field Hospital II":    "Field Hospital.png",
+    "Field Hospital III":   "Field Hospital.png",
+    "Field Hospital IV":    "Field Hospital.png",
+    "Arsenal":              None,
+    "Mercenary Factory":    None,
+}
+_CS_ICON_FILES: dict[str, Optional[str]] = {
+    "Power Tower":          "Power Tower.png",
+    "Data Center 1":        "Data Center.png",
+    "Data Center 2":        "Data Center.png",
+    "Defense System 1":     "Defense System.png",
+    "Defense System 2":     "Defense System.png",
+    "Serum Factory 1":      "Serum Factory.png",
+    "Serum Factory 2":      "Serum Factory.png",
+    "Sample Warehouse 1":   "Sample Warehouse.png",
+    "Sample Warehouse 2":   "Sample Warehouse.png",
+    "Sample Warehouse 3":   "Sample Warehouse.png",
+    "Sample Warehouse 4":   "Sample Warehouse.png",
+    "Virus Lab":            "Virus Lab.png",
+}
+
+
+# ── Layout primitives ───────────────────────────────────────────────
+
+
+# SVG render scale. 2× produces a sharp image at typical Discord
+# zoom; bigger still fits within Discord's 8 MB attachment limit for
+# typical rosters.
+SCALE = 2
+
+
+@dataclass(frozen=True)
+class Box:
+    """Pixel-coordinate box in SVG units. The renderer multiplies by
+    SCALE when committing to canvas."""
+    x: float
+    y: float
+    w: float
+    h: float
+
+
+@dataclass(frozen=True)
+class ZoneLayout:
+    """One zone's three layout pills + icon position."""
+    title: Box
+    text: Box
+    icon: Box
+
+
+@dataclass(frozen=True)
+class EventLayout:
+    """Per-event-type layout: canvas size, backgrounds, header, spawn
+    zones, per-zone slots, subs section."""
+    svg_w: float
+    svg_h: float
+    header: Box
+    bg_main: Box
+    bg_subs: Box
+    # Spawn rectangles. DS = two vertical strips; CS = one blue band
+    # top + two red bands bottom. Each rect carries an RGBA fill.
+    spawn_rects: list[tuple[Box, tuple[int, int, int, int]]]
+    zones: dict[str, ZoneLayout]                # canonical_zone → layout
+    subs_title: Box
+    subs_text_flat: Box
+    subs_text_pairs: Box
+    subs_pair_left_x: float
+    subs_pair_right_x: float
+    pairs_header_offset_y: float
+    pairs_underline_offset_y: float
+    pairs_row1_offset_y: float
+    pairs_row_step: float
+    pairs_divider_x0: float
+    pairs_divider_x1: float
+
+
+# ── DS layout ────────────────────────────────────────────────────────
+
+
+_DS_LAYOUT = EventLayout(
+    svg_w=1107.60, svg_h=764.26,
+    header=Box(0, 0, 1107.60, 48.00),
+    bg_main=Box(1.30, 46.75, 920.03, 715.24),
+    bg_subs=Box(921.27, 46.71, 184.79, 715.24),
+    spawn_rects=[
+        # DS spawn squares — narrow vertical strips at left/right edges.
+        # Game-defined colours: Team A blue, Team B red.
+        (Box(0, 289.84, 38.33, 213.57),       (92, 124, 199, 255)),    # blue
+        (Box(883.01, 287.32, 38.33, 213.57),  (208, 102, 99, 255)),    # red
+    ],
+    zones={
+        "Info Center": ZoneLayout(
+            title=Box(48.39, 85.63, 213.64, 16.79),
+            text=Box(48.38, 106.20, 127.34, 136.60),
+            icon=Box(175.08, 102.42, 96, 96),
+        ),
+        "Oil Refinery I": ZoneLayout(
+            title=Box(58.31, 252.84, 223.34, 16.79),
+            text=Box(154.31, 273.41, 127.34, 136.60),
+            icon=Box(57.47, 269.52, 96, 96),
+        ),
+        "Field Hospital I": ZoneLayout(
+            title=Box(58.31, 420.84, 223.34, 16.79),
+            text=Box(154.31, 441.41, 127.34, 136.60),
+            icon=Box(58.31, 437.63, 96, 96),
+        ),
+        "Field Hospital II": ZoneLayout(
+            title=Box(51.19, 589.63, 219.91, 16.79),
+            text=Box(52.01, 610.20, 127.34, 136.60),
+            icon=Box(178.70, 606.42, 96, 96),
+        ),
+        "Arsenal": ZoneLayout(
+            title=Box(399.22, 77.35, 127.34, 16.79),
+            text=Box(399.22, 189.94, 127.34, 74.05),
+            icon=Box(413.21, 94.13, 96, 96),
+        ),
+        "Nuclear Silo": ZoneLayout(
+            title=Box(400.19, 329.72, 127.34, 16.79),
+            text=Box(399.22, 434.32, 127.34, 74.05),
+            icon=Box(415.57, 341.69, 96, 96),
+        ),
+        "Mercenary Factory": ZoneLayout(
+            title=Box(399.22, 563.90, 128.31, 16.79),
+            text=Box(399.22, 676.49, 127.34, 74.05),
+            icon=Box(413.21, 580.68, 96, 96),
+        ),
+        "Field Hospital IV": ZoneLayout(
+            title=Box(658.94, 86.16, 223.34, 16.79),
+            text=Box(754.94, 106.73, 127.34, 136.60),
+            icon=Box(658.95, 102.95, 96, 96),
+        ),
+        "Field Hospital III": ZoneLayout(
+            title=Box(640.77, 252.09, 223.34, 16.79),
+            text=Box(641.59, 272.65, 127.34, 136.60),
+            icon=Box(768.29, 268.87, 96, 96),
+        ),
+        "Oil Refinery II": ZoneLayout(
+            title=Box(644.13, 420.91, 223.34, 16.79),
+            text=Box(644.12, 441.48, 127.34, 136.60),
+            icon=Box(771.46, 437.63, 96, 96),
+        ),
+        "Science Hub": ZoneLayout(
+            title=Box(658.94, 589.74, 223.34, 16.79),
+            text=Box(754.94, 610.31, 127.34, 136.60),
+            icon=Box(658.94, 606.42, 96, 96),
+        ),
+    },
+    subs_title=Box(930.68, 78.16, 167.59, 16.79),
+    subs_text_flat=Box(930.69, 106.73, 167.59, 150.61),
+    subs_text_pairs=Box(930.69, 106.73, 167.59, 369.32),
+    subs_pair_left_x=946.03,
+    subs_pair_right_x=1018.60,
+    pairs_header_offset_y=287.82 - 266.73,       # ≈ 21.09
+    pairs_underline_offset_y=308.75 - 266.73,    # ≈ 42.02
+    pairs_row1_offset_y=320.24 - 266.73,         # ≈ 53.51
+    pairs_row_step=32.0,
+    pairs_divider_x0=940.59,
+    pairs_divider_x1=1086.72,
+)
+
+
+# ── CS layout ────────────────────────────────────────────────────────
+
+
+_CS_LAYOUT = EventLayout(
+    svg_w=1235.67, svg_h=1045.44,
+    header=Box(0, 0, 1235.67, 48.00),
+    bg_main=Box(1.30, 46.77, 1049.07, 996.44),
+    bg_subs=Box(1050.26, 47.62, 184.79, 996.44),
+    spawn_rects=[
+        # CS spawn bands — game-defined factions.
+        # Rulebringers (blue) — single horizontal band at top.
+        (Box(343.01, 47.48, 349.54, 38.33),    (92, 124, 199, 255)),
+        # Dawnbreakers (red) — split into two horizontal bands at bottom.
+        (Box(117.97, 1004.88, 392.00, 38.33),  (208, 102, 99, 255)),
+        (Box(550.35, 1004.88, 374.27, 38.33),  (208, 102, 99, 255)),
+    ],
+    zones={
+        # Top row
+        "Data Center 1": ZoneLayout(
+            title=Box(246.62, 100.23, 223.34, 16.79),
+            text=Box(342.62, 120.80, 127.34, 188.82),
+            icon=Box(246.62, 116.89, 96, 96),
+        ),
+        "Data Center 2": ZoneLayout(
+            title=Box(574.38, 100.23, 223.34, 16.79),
+            text=Box(574.38, 120.80, 127.34, 188.82),
+            icon=Box(700.91, 116.89, 96, 96),
+        ),
+        # Mid-upper
+        "Serum Factory 1": ZoneLayout(
+            title=Box(22.24, 313.41, 223.34, 16.79),
+            text=Box(22.24, 333.97, 127.34, 166.65),
+            icon=Box(150.62, 331.22, 96, 96),
+        ),
+        "Defense System 1": ZoneLayout(
+            title=Box(797.71, 313.41, 223.34, 16.79),
+            text=Box(893.71, 333.97, 127.34, 166.65),
+            icon=Box(797.71, 331.22, 96, 96),
+        ),
+        "Power Tower": ZoneLayout(
+            title=Box(417.83, 332.24, 223.34, 16.79),
+            text=Box(514.63, 354.94, 127.34, 188.82),
+            icon=Box(416.05, 348.75, 96, 96),
+        ),
+        # Mid-lower
+        "Defense System 2": ZoneLayout(
+            title=Box(22.24, 537.41, 223.34, 16.79),
+            text=Box(22.24, 557.83, 127.34, 166.65),
+            icon=Box(150.62, 555.22, 96, 96),
+        ),
+        "Serum Factory 2": ZoneLayout(
+            title=Box(797.71, 537.41, 223.34, 16.79),
+            text=Box(893.71, 557.83, 127.34, 166.65),
+            icon=Box(797.71, 555.22, 96, 96),
+        ),
+        "Virus Lab": ZoneLayout(
+            title=Box(417.83, 576.87, 223.34, 16.79),
+            text=Box(417.83, 597.29, 127.34, 88.66),
+            icon=Box(545.16, 593.62, 96, 96),
+        ),
+        # Bottom row
+        "Sample Warehouse 1": ZoneLayout(
+            title=Box(21.97, 763.69, 223.34, 16.79),
+            text=Box(117.97, 784.26, 127.34, 188.82),
+            icon=Box(21.97, 781.68, 96, 96),
+        ),
+        "Sample Warehouse 2": ZoneLayout(
+            title=Box(285.97, 763.69, 223.34, 16.79),
+            text=Box(381.97, 784.26, 127.34, 188.82),
+            icon=Box(285.97, 781.68, 96, 96),
+        ),
+        "Sample Warehouse 3": ZoneLayout(
+            title=Box(549.97, 763.69, 223.34, 16.79),
+            text=Box(549.97, 784.26, 127.34, 188.82),
+            icon=Box(677.31, 781.68, 96, 96),
+        ),
+        "Sample Warehouse 4": ZoneLayout(
+            title=Box(797.97, 763.69, 223.34, 16.79),
+            text=Box(797.97, 784.26, 127.34, 188.82),
+            icon=Box(925.31, 781.68, 96, 96),
+        ),
+    },
+    subs_title=Box(1059.68, 63.08, 167.59, 16.79),
+    subs_text_flat=Box(1059.69, 91.64, 167.59, 150.61),
+    subs_text_pairs=Box(1059.69, 91.64, 167.59, 369.32),
+    subs_pair_left_x=1075.03,
+    subs_pair_right_x=1147.59,
+    # CS pairs offsets relative to a "flat-position" pairs box at
+    # y=91.64. The SVG mock has the pairs version at y=251.64 in the
+    # subs column; the renderer collapses them so whichever variant
+    # renders sits right under the title pill.
+    pairs_header_offset_y=272.74 - 251.64,
+    pairs_underline_offset_y=290.05 - 251.64,
+    pairs_row1_offset_y=305.05 - 251.64,
+    pairs_row_step=32.0,
+    pairs_divider_x0=1069.45,
+    pairs_divider_x1=1215.58,
+)
+
+
+_LAYOUTS: dict[str, EventLayout] = {
+    "DS": _DS_LAYOUT,
+    "CS": _CS_LAYOUT,
+}
+
+
+# ── Colours ──────────────────────────────────────────────────────────
+
+
+_SAND = (218, 178, 130, 255)
+_HEADER_FILL = (67, 67, 67, 255)
+_HEADER_TEXT = (245, 245, 245, 255)
+_PILL_FILL = (255, 255, 255, 126)
+_PILL_OUTLINE = (0, 0, 0, 255)
+_SPAWN_OUTLINE = (40, 40, 40, 255)
+_PLACEHOLDER_FILL = (217, 217, 217, 255)
+_PLACEHOLDER_OUTLINE = (0, 0, 0, 255)
+_TEXT_DARK = (20, 20, 20, 255)
+_TEXT_MUTED = (60, 60, 60, 255)
+_PAIRS_UNDERLINE_COLOR = (158, 158, 158, 255)
+_PAIRS_DIVIDER_COLOR = (153, 153, 153, 255)
+_PAIRS_UNDERLINE_WIDTH_SVG = 3
+_PAIRS_DIVIDER_WIDTH_SVG = 2
+
+
+# ── Font sizing ──────────────────────────────────────────────────────
+
+
+# Locked sizes per the alliance lead's design spec (8 pt labels +
+# members, 14 pt header). Converted from typographic points to SCALEd
+# pixels via the 96-DPI web convention.
+_LABEL_PT = 8
+_HEADER_PT = 14
+
+
+def _pt_to_px(pt: float) -> int:
+    return int(round(pt * 96 / 72 * SCALE))
+
+
+# ── Public API ───────────────────────────────────────────────────────
 
 
 def render(roster: RosterData) -> bytes:
     """Render the roster to a PNG byte-string.
 
     Raises `RuntimeError` if Pillow isn't installed — caller should
-    catch and fall back to text-only output. Returning bytes (rather
-    than a Pillow Image) keeps the contract independent of the
-    rendering library so a Map Manager swap is trivial.
+    catch and fall back to text-only output.
     """
     try:
         from PIL import Image, ImageDraw, ImageFont
     except ImportError as e:
         raise RuntimeError(
-            "Pillow isn't installed — `/desertstorm` / `/canyonstorm` "
-            "image render unavailable. Add `Pillow>=10.0.0` to "
-            "requirements.txt."
+            "Pillow isn't installed — `/storm_*` image render unavailable. "
+            "Add `Pillow>=10.0.0` to requirements.txt."
         ) from e
 
-    # Font lookup tiers:
-    #   1. DejaVuSans TTF if available on the host (covers Latin-1
-    #      Supplement, Greek, Cyrillic, Korean, CJK depending on the
-    #      installed variant) — common on Linux/Railway containers.
-    #   2. Pillow's bundled default with size= (Pillow >= 10).
-    #   3. Pillow's bundled default at native (tiny ASCII bitmap).
-    # The bundled default is 1bpp ASCII — member names with emoji or
-    # CJK characters render as `?` boxes through that path, so the
-    # TTF lookup is what makes the PNG actually usable for non-English
-    # alliances.
-    title_font   = _best_font(ImageFont, size=18)
-    heading_font = _best_font(ImageFont, size=14)
-    body_font    = _best_font(ImageFont, size=12)
+    layout = _LAYOUTS.get(roster.event_type.upper(), _DS_LAYOUT)
+    canvas_w = int(round(layout.svg_w * SCALE))
+    canvas_h = int(round(layout.svg_h * SCALE))
+    canvas = Image.new("RGBA", (canvas_w, canvas_h), (0, 0, 0, 0))
 
-    # First pass: compute height by walking the layout dry.
-    height = _measure_height(roster, title_font, heading_font, body_font)
-    img = Image.new("RGB", (_WIDTH, height), _BG_COLOR)
-    draw = ImageDraw.Draw(img)
+    # 1. Backgrounds: main play area + subs column. Subs column
+    #    carries a 1 px black stroke whose left edge is the vertical
+    #    separator between the map and the subs section.
+    bg_layer = Image.new("RGBA", canvas.size, (0, 0, 0, 0))
+    bg_draw = ImageDraw.Draw(bg_layer)
+    bg_draw.rectangle(_s_box(layout.bg_main), fill=_SAND)
+    bg_draw.rectangle(_s_box(layout.bg_subs), fill=_SAND,
+                      outline=(0, 0, 0, 255), width=max(1, SCALE // 2))
+    canvas.alpha_composite(bg_layer)
 
-    y = _PADDING_Y
+    # 2. Header bar with event / team / date.
+    layer = Image.new("RGBA", canvas.size, (0, 0, 0, 0))
+    d = ImageDraw.Draw(layer)
+    _draw_header(d, layout, roster)
+    canvas.alpha_composite(layer)
 
-    # Title — word-wrapped to the canvas width so long preset names /
-    # paired-mode labels don't overflow the right edge. Without this,
-    # "Desert Storm — <Long Preset Name> — Team A — 2026-05-18" got
-    # truncated visually in the rendered PNG.
-    title_lines = _wrap_text(
-        roster.title, title_font, _WIDTH - 2 * _PADDING_X,
-    )
-    for line in title_lines:
-        draw.text(
-            (_PADDING_X, y), line, fill=_TITLE_COLOR, font=title_font,
-        )
-        y += _line_height(title_font)
-    y += _TITLE_GAP
+    # 3. Spawn zones.
+    layer = Image.new("RGBA", canvas.size, (0, 0, 0, 0))
+    d = ImageDraw.Draw(layer)
+    for spawn_box, color in layout.spawn_rects:
+        d.rectangle(_s_box(spawn_box), fill=color,
+                    outline=_SPAWN_OUTLINE, width=max(1, SCALE // 2))
+    canvas.alpha_composite(layer)
 
-    # Zones
-    for zone in roster.zones:
-        count = len(zone.members)
-        heading = f"{zone.name}  ({count}/{zone.max_players})"
-        draw.text(
-            (_PADDING_X, y), heading, fill=_ZONE_COLOR, font=heading_font,
-        )
-        y += _line_height(heading_font) + _LINE_GAP
-        if not zone.members:
-            draw.text(
-                (_PADDING_X + 16, y), "(empty)",
-                fill=_MUTED_COLOR, font=body_font,
-            )
-            y += _line_height(body_font) + _LINE_GAP
-        else:
-            for name in zone.members:
-                sub = roster.paired_subs.get(name)
-                power_str = roster.powers.get(name) or ""
-                is_override = name in roster.overrides
-                line = f"• {name}"
-                if power_str:
-                    line += f" ({power_str})"
-                if is_override:
-                    line += "  ⚠ override"
-                if sub:
-                    line += f"   ↳ sub: {sub}"
-                draw.text(
-                    (_PADDING_X + 16, y), line,
-                    fill=_TEXT_COLOR, font=body_font,
-                )
-                y += _line_height(body_font) + _LINE_GAP
-        y += _SECTION_GAP - _LINE_GAP
+    # 4. Zones. Group input zones by `canonical_zone` so each layout
+    #    slot renders once with every phase's members stacked inside.
+    grouped: dict[str, list[RosterZone]] = {}
+    for z in roster.zones:
+        key = z.canonical_zone or z.name
+        grouped.setdefault(key, []).append(z)
+    icon_files = (_DS_ICON_FILES if roster.event_type.upper() == "DS"
+                  else _CS_ICON_FILES)
+    icons_dir = (_ICONS_DS_DIR if roster.event_type.upper() == "DS"
+                 else _ICONS_CS_DIR)
 
-    # Subs
-    if roster.subs:
-        draw.text(
-            (_PADDING_X, y), f"Subs ({len(roster.subs)})",
-            fill=_ZONE_COLOR, font=heading_font,
-        )
-        y += _line_height(heading_font) + _LINE_GAP
-        for name in roster.subs:
-            draw.text(
-                (_PADDING_X + 16, y), f"• {name}",
-                fill=_TEXT_COLOR, font=body_font,
-            )
-            y += _line_height(body_font) + _LINE_GAP
-        y += _SECTION_GAP - _LINE_GAP
+    for canonical, phase_blocks in grouped.items():
+        zlayout = layout.zones.get(canonical)
+        if zlayout is None:
+            # Non-canonical zone name — skip silently. Pre-#152
+            # presets with typo zones would otherwise crash here.
+            logger.debug("render: skipping unknown zone %r for %s",
+                         canonical, roster.event_type)
+            continue
+        _draw_zone(canvas, zlayout, canonical, phase_blocks,
+                   icon_files, icons_dir, roster)
 
-    # Special roles
-    if roster.special_roles:
-        for role_name, names in roster.special_roles.items():
-            if not names:
-                continue
-            heading = f"{role_name.title()}: {', '.join(names)}"
-            draw.text(
-                (_PADDING_X, y), heading,
-                fill=_TEXT_COLOR, font=body_font,
-            )
-            y += _line_height(body_font) + _LINE_GAP
+    # 5. Subs section — picks flat or pairs variant on data shape.
+    _draw_subs_section(canvas, layout, roster)
 
-    # Serialize.
     buf = io.BytesIO()
-    img.save(buf, format="PNG")
+    canvas.convert("RGB").save(buf, format="PNG")
     return buf.getvalue()
 
 
-# ── Layout helpers ───────────────────────────────────────────────────────────
+# ── Drawing helpers ──────────────────────────────────────────────────
 
 
-# Cached at first-render time so the probe doesn't run on every click.
-# Lazy (not module-import) so the renderer module still loads without
-# Pillow installed — the actual `render()` call raises the helpful
-# RuntimeError.
-_SUPPORTS_SIZE: Optional[bool] = None
-_TTF_PATH: Optional[str] = None
-_TTF_LOOKED_UP: bool = False
-
-# TTF candidates probed once. Order matters — pick the most likely to
-# be present on the host. DejaVu ships with most Linux distros and is
-# what Pillow's default load_default falls back to on a fresh container.
-_TTF_CANDIDATES = (
-    "DejaVuSans.ttf",
-    "DejaVuSans-Bold.ttf",
-    "/usr/share/fonts/truetype/dejavu/DejaVuSans.ttf",
-    "/usr/share/fonts/dejavu/DejaVuSans.ttf",
-    "/Library/Fonts/Arial Unicode.ttf",
-    "C:/Windows/Fonts/arial.ttf",
-)
+def _s(v: float) -> int:
+    return int(round(v * SCALE))
 
 
-def _supports_size() -> bool:
-    """Pillow 10+ supports `size=` on `load_default()`. Older versions
-    raise TypeError. Cached after first call so the render path doesn't
-    re-probe every click."""
-    global _SUPPORTS_SIZE
-    if _SUPPORTS_SIZE is not None:
-        return _SUPPORTS_SIZE
-    try:
-        from PIL import ImageFont
-        ImageFont.load_default(size=10)
-        _SUPPORTS_SIZE = True
-    except (TypeError, ImportError):
-        _SUPPORTS_SIZE = False
-    return _SUPPORTS_SIZE
+def _s_box(b: Box) -> tuple[int, int, int, int]:
+    return _s(b.x), _s(b.y), _s(b.x + b.w), _s(b.y + b.h)
 
 
-def _best_font(image_font_module, *, size: int):
-    """Return the best font Pillow can resolve at `size`:
-      1. TTF (one of `_TTF_CANDIDATES`) — covers Unicode for non-English
-         alliances and emoji-in-member-names.
-      2. `load_default(size=size)` — Pillow's tiny ASCII bitmap, scaled.
-      3. `load_default()` — the same bitmap at native size (very old
-         Pillow).
-
-    The TTF path is cached after first call. If no TTF resolves on the
-    host, every render still works (degraded), so we don't hard-fail.
-    """
-    global _TTF_LOOKED_UP, _TTF_PATH
-    if not _TTF_LOOKED_UP:
-        _TTF_LOOKED_UP = True
-        for candidate in _TTF_CANDIDATES:
-            try:
-                image_font_module.truetype(candidate, size=size)
-                _TTF_PATH = candidate
-                break
-            except (OSError, IOError):
-                continue
-    if _TTF_PATH:
+def _try_font(size: int, bold: bool = False):
+    """Inter is the project font (bundled at `assets/fonts/`). Falls
+    back to DejaVu / Arial if the bundled files aren't present —
+    keeps `render()` non-fatal in environments where assets weren't
+    copied (e.g. partial deployments)."""
+    from PIL import ImageFont
+    candidates = [_INTER_BOLD if bold else _INTER_REGULAR]
+    candidates.extend([
+        "arialbd.ttf" if bold else "arial.ttf",
+        "DejaVuSans-Bold.ttf" if bold else "DejaVuSans.ttf",
+        "/usr/share/fonts/truetype/dejavu/DejaVuSans-Bold.ttf"
+            if bold else "/usr/share/fonts/truetype/dejavu/DejaVuSans.ttf",
+    ])
+    for path in candidates:
         try:
-            return image_font_module.truetype(_TTF_PATH, size=size)
+            return ImageFont.truetype(path, size)
         except (OSError, IOError):
-            # Race: TTF disappeared between probe and use. Fall through.
-            pass
-    if _supports_size():
-        return image_font_module.load_default(size=size)
-    return image_font_module.load_default()
-
-
-def _line_height(font) -> int:
-    """Approximate the line height for a font. Falls back to a sane
-    default if `getbbox` is unavailable (very old Pillow)."""
-    try:
-        # bbox of "Ag" (ascender + descender characters) for a stable
-        # vertical extent.
-        bbox = font.getbbox("Ag")
-        return bbox[3] - bbox[1] + 2
-    except AttributeError:
-        return 14
-
-
-def _text_width(font, text: str) -> int:
-    """Pixel width of `text` rendered in `font`. Approximates 8 px per
-    character on very old Pillow that lacks `getbbox`."""
-    if not text:
-        return 0
-    try:
-        bbox = font.getbbox(text)
-        return bbox[2] - bbox[0]
-    except AttributeError:
-        return len(text) * 8
-
-
-def _wrap_text(text: str, font, max_width: int) -> list[str]:
-    """Word-wrap `text` so every line fits within `max_width` pixels.
-    A token wider than `max_width` on its own (extremely long member
-    name or one-word title) is broken character by character — never
-    silently truncated. Always returns at least one line."""
-    if not text:
-        return [""]
-    if _text_width(font, text) <= max_width:
-        return [text]
-    words = text.split(" ")
-    lines: list[str] = []
-    current = ""
-    for word in words:
-        candidate = f"{current} {word}" if current else word
-        if _text_width(font, candidate) <= max_width:
-            current = candidate
             continue
-        if current:
-            lines.append(current)
-            current = ""
-        if _text_width(font, word) <= max_width:
-            current = word
+    return ImageFont.load_default()
+
+
+def _draw_header(draw, layout: EventLayout, roster: RosterData) -> None:
+    """Header strip: charcoal bar with left / center / right text.
+    Left text combines the event name with the preset name when
+    present so the rendered image is self-identifying when alliances
+    save them for records."""
+    canvas_w = int(round(layout.svg_w * SCALE))
+    draw.rectangle((0, 0, canvas_w, _s(layout.header.h)), fill=_HEADER_FILL)
+    font = _try_font(_pt_to_px(_HEADER_PT), bold=True)
+    pad_x = _s(15)
+    text_y = _s(layout.header.h / 2) - int(font.size * 0.55)
+
+    event_full = "Desert Storm" if roster.event_type.upper() == "DS" else "Canyon Storm"
+    if roster.preset_name:
+        left_text = f"{event_full} — {roster.preset_name}"
+    else:
+        left_text = event_full
+    draw.text((pad_x, text_y), left_text, fill=_HEADER_TEXT, font=font)
+
+    if roster.team_label:
+        tw = draw.textlength(roster.team_label, font=font)
+        draw.text(((canvas_w - tw) / 2, text_y),
+                  roster.team_label, fill=_HEADER_TEXT, font=font)
+
+    if roster.event_date_label:
+        tw = draw.textlength(roster.event_date_label, font=font)
+        draw.text((canvas_w - pad_x - tw, text_y),
+                  roster.event_date_label, fill=_HEADER_TEXT, font=font)
+
+
+def _draw_pill(draw, b: Box, radius_svg: float) -> None:
+    x0, y0, x1, y1 = _s_box(b)
+    r = int(round(radius_svg * SCALE))
+    draw.rounded_rectangle((x0, y0, x1, y1), radius=r, fill=_PILL_FILL)
+    draw.rounded_rectangle((x0, y0, x1, y1), radius=r,
+                           outline=_PILL_OUTLINE, width=max(1, SCALE // 2))
+
+
+def _draw_centered_text(draw, b: Box, text: str, font, fill) -> None:
+    x0, y0, x1, y1 = _s_box(b)
+    tw = draw.textlength(text, font=font)
+    tx = (x0 + x1) / 2 - tw / 2
+    ty = (y0 + y1) / 2 - font.size * 0.55
+    draw.text((tx, ty), text, fill=fill, font=font)
+
+
+def _draw_icon(canvas, draw, zlayout: ZoneLayout, canonical: str,
+               icon_files: dict, icons_dir: str) -> None:
+    """Place the zone icon at its layout position. Falls back to a
+    grey placeholder circle if the icon file is missing (Arsenal +
+    Mercenary Factory on DS, blocked on the game-bug fix that adds
+    them back to the in-game Rules > Structures menu)."""
+    from PIL import Image
+    x0, y0, x1, y1 = _s_box(zlayout.icon)
+    icon_name = icon_files.get(canonical)
+    if icon_name:
+        path = os.path.join(icons_dir, icon_name)
+        try:
+            icon = Image.open(path).convert("RGBA")
+            icon = icon.resize((x1 - x0, y1 - y0), Image.LANCZOS)
+            canvas.alpha_composite(icon, (x0, y0))
+            return
+        except (OSError, IOError) as e:
+            logger.debug("render: icon load failed for %s (%s) — placeholder",
+                         canonical, e)
+    draw.ellipse((x0, y0, x1, y1),
+                 fill=_PLACEHOLDER_FILL, outline=_PLACEHOLDER_OUTLINE,
+                 width=max(1, SCALE // 2))
+
+
+def _measure_member_block(phase_blocks: list[RosterZone],
+                          fh, fm, line_gap: int, block_gap: int) -> int:
+    """Vertical space the member list will consume at the given font
+    sizes. Used by `_pick_member_fonts` to auto-shrink content that
+    overflows the text pill."""
+    h = 0
+    first = True
+    for block in phase_blocks:
+        if not block.members and block.phase == 0:
             continue
-        # Token alone overflows — char-wrap it.
-        buf = ""
-        for ch in word:
-            if _text_width(font, buf + ch) <= max_width:
-                buf += ch
-            else:
-                if buf:
-                    lines.append(buf)
-                buf = ch
-        current = buf
-    if current:
-        lines.append(current)
-    return lines or [text]
+        if not first:
+            h += block_gap
+        first = False
+        if block.phase >= 1:
+            h += fh.size + line_gap
+        h += len(block.members) * (fm.size + line_gap)
+    return h
 
 
-def _measure_height(
-    roster: RosterData,
-    title_font, heading_font, body_font,
-) -> int:
-    """Walk the same layout the renderer will, summing y-extent so the
-    canvas is sized correctly. Returns at least 200 px for the empty
-    case so the resulting PNG is never visually weird."""
-    title_lines = _wrap_text(
-        roster.title, title_font, _WIDTH - 2 * _PADDING_X,
-    )
-    y = (
-        _PADDING_Y
-        + len(title_lines) * _line_height(title_font)
-        + _TITLE_GAP
-    )
-    for zone in roster.zones:
-        y += _line_height(heading_font) + _LINE_GAP
-        if not zone.members:
-            y += _line_height(body_font) + _LINE_GAP
-        else:
-            y += (len(zone.members)) * (_line_height(body_font) + _LINE_GAP)
-        y += _SECTION_GAP - _LINE_GAP
-    if roster.subs:
-        y += _line_height(heading_font) + _LINE_GAP
-        y += len(roster.subs) * (_line_height(body_font) + _LINE_GAP)
-        y += _SECTION_GAP - _LINE_GAP
-    if roster.special_roles:
-        for role, names in roster.special_roles.items():
-            if names:
-                y += _line_height(body_font) + _LINE_GAP
-    y += _PADDING_Y
-    return max(200, y)
+def _pick_member_fonts(phase_blocks: list[RosterZone], max_h: int):
+    """Pick bold-header + regular-name fonts that fit `max_h`. Starts
+    at the locked 8-pt size and shrinks until content fits."""
+    base = _pt_to_px(_LABEL_PT)
+    for shrink in (0, 2, 4, 6, 8, 10):
+        sz = max(10, base - shrink)
+        fh = _try_font(sz, bold=True)
+        fm = _try_font(sz, bold=False)
+        if _measure_member_block(phase_blocks, fh, fm, 4, 8) <= max_h:
+            return fh, fm
+    return _try_font(10, bold=True), _try_font(10)
 
 
-# ── Conversion helper from a RosterBuilderSession ────────────────────────────
+def _draw_member_block(draw, b: Box, phase_blocks: list[RosterZone],
+                       paired_subs: dict[str, str], is_paired: bool) -> None:
+    """Render the member list inside a zone's text pill. Phase-aware
+    blocks get a bold `Stage/Phase N:` header; flat blocks render the
+    member list directly. Paired-mode formatting appends `+ sub Bob`
+    inline so the pill stays compact."""
+    x0, y0, x1, y1 = _s_box(b)
+    pad = max(8, _s(6))
+    py = max(6, _s(5))
+    avail_h = (y1 - y0) - 2 * py
+    line_gap = max(2, _s(2))
+    block_gap = max(4, _s(4))
+    fh, fm = _pick_member_fonts(phase_blocks, avail_h)
+    cy = y0 + py
+    indent = max(8, _s(6))
+    first = True
+    for block in sorted(phase_blocks, key=lambda z: z.phase):
+        if not block.members and block.phase == 0:
+            continue
+        if not first:
+            cy += block_gap
+        first = False
+        if block.phase >= 1:
+            draw.text((x0 + pad, cy),
+                      f"Stage/Phase {block.phase}:",
+                      fill=_TEXT_DARK, font=fh)
+            cy += fh.size + line_gap
+        for name in block.members:
+            label = name
+            if is_paired and name in paired_subs:
+                label = f"{name} + sub {paired_subs[name]}"
+            draw.text((x0 + pad + indent, cy),
+                      label, fill=_TEXT_MUTED, font=fm)
+            cy += fm.size + line_gap
+
+
+def _draw_zone(canvas, zlayout: ZoneLayout, canonical: str,
+               phase_blocks: list[RosterZone],
+               icon_files: dict, icons_dir: str,
+               roster: RosterData) -> None:
+    """Render the three pills + icon for one canonical zone slot.
+    `phase_blocks` is the list of `RosterZone` entries for this zone
+    (one per phase for phase-aware presets, one total for flat)."""
+    from PIL import Image, ImageDraw
+    layer = Image.new("RGBA", canvas.size, (0, 0, 0, 0))
+    d = ImageDraw.Draw(layer)
+    _draw_pill(d, zlayout.title, radius_svg=zlayout.title.h / 2)
+    _draw_pill(d, zlayout.text,
+               radius_svg=min(zlayout.text.w, zlayout.text.h) / 9)
+    canvas.alpha_composite(layer)
+
+    layer = Image.new("RGBA", canvas.size, (0, 0, 0, 0))
+    d = ImageDraw.Draw(layer)
+    _draw_centered_text(d, zlayout.title, canonical,
+                        _try_font(_pt_to_px(_LABEL_PT), bold=True), _TEXT_DARK)
+    canvas.alpha_composite(layer)
+
+    layer = Image.new("RGBA", canvas.size, (0, 0, 0, 0))
+    d = ImageDraw.Draw(layer)
+    _draw_icon(canvas, d, zlayout, canonical, icon_files, icons_dir)
+    canvas.alpha_composite(layer)
+
+    layer = Image.new("RGBA", canvas.size, (0, 0, 0, 0))
+    d = ImageDraw.Draw(layer)
+    is_paired = bool(roster.paired_subs)
+    _draw_member_block(d, zlayout.text, phase_blocks,
+                       roster.paired_subs, is_paired)
+    canvas.alpha_composite(layer)
+
+
+def _draw_subs_section(canvas, layout: EventLayout,
+                       roster: RosterData) -> None:
+    """Subs column on the right. Chooses the pairs variant when
+    `paired_subs` carries entries; flat list otherwise."""
+    from PIL import Image, ImageDraw
+    use_pairs = bool(roster.paired_subs)
+
+    layer = Image.new("RGBA", canvas.size, (0, 0, 0, 0))
+    d = ImageDraw.Draw(layer)
+    _draw_pill(d, layout.subs_title, radius_svg=layout.subs_title.h / 2)
+    canvas.alpha_composite(layer)
+
+    layer = Image.new("RGBA", canvas.size, (0, 0, 0, 0))
+    d = ImageDraw.Draw(layer)
+    _draw_centered_text(d, layout.subs_title, "Subs",
+                        _try_font(_pt_to_px(_LABEL_PT), bold=True), _TEXT_DARK)
+    canvas.alpha_composite(layer)
+
+    content_box = layout.subs_text_pairs if use_pairs else layout.subs_text_flat
+    layer = Image.new("RGBA", canvas.size, (0, 0, 0, 0))
+    d = ImageDraw.Draw(layer)
+    _draw_pill(d, content_box,
+               radius_svg=min(content_box.w, content_box.h) / 9)
+    canvas.alpha_composite(layer)
+
+    layer = Image.new("RGBA", canvas.size, (0, 0, 0, 0))
+    d = ImageDraw.Draw(layer)
+    pad_x = max(8, _s(6))
+    pad_y = max(6, _s(6))
+    line_gap = max(2, _s(3))
+    fm = _try_font(_pt_to_px(_LABEL_PT), bold=False)
+    fm_bold = _try_font(_pt_to_px(_LABEL_PT), bold=True)
+    x0, y0, x1, y1 = _s_box(content_box)
+    cy = y0 + pad_y
+
+    if use_pairs:
+        # Table: "Primary" / "Sub" headers, thick underline, one row per
+        # pair with a thin divider between rows.
+        box_top = content_box.y
+        primary_x = _s(layout.subs_pair_left_x)
+        sub_x = _s(layout.subs_pair_right_x)
+        header_y = _s(box_top + layout.pairs_header_offset_y)
+        underline_y = _s(box_top + layout.pairs_underline_offset_y)
+        row1_y = _s(box_top + layout.pairs_row1_offset_y)
+        row_step_px = _s(layout.pairs_row_step)
+
+        d.text((primary_x, header_y), "Primary",
+               fill=_TEXT_DARK, font=fm_bold)
+        d.text((sub_x, header_y), "Sub",
+               fill=_TEXT_DARK, font=fm_bold)
+        d.line(
+            (_s(layout.pairs_divider_x0), underline_y,
+             _s(layout.pairs_divider_x1), underline_y),
+            fill=_PAIRS_UNDERLINE_COLOR,
+            width=max(1, _s(_PAIRS_UNDERLINE_WIDTH_SVG)),
+        )
+        pairs_list = list(roster.paired_subs.items())
+        for i, (primary, sub) in enumerate(pairs_list):
+            row_y = row1_y + i * row_step_px
+            if row_y + fm.size > y1 - pad_y:
+                break
+            d.text((primary_x, row_y), primary,
+                   fill=_TEXT_DARK, font=fm)
+            d.text((sub_x, row_y), sub,
+                   fill=_TEXT_DARK, font=fm)
+            if i < len(pairs_list) - 1:
+                div_y = row_y + _s(layout.pairs_row_step * 0.625)
+                if div_y < y1 - 4:
+                    d.line(
+                        (_s(layout.pairs_divider_x0), div_y,
+                         _s(layout.pairs_divider_x1), div_y),
+                        fill=_PAIRS_DIVIDER_COLOR,
+                        width=max(1, _s(_PAIRS_DIVIDER_WIDTH_SVG)),
+                    )
+    else:
+        # Flat list — one sub per row.
+        for name in roster.subs:
+            if cy + fm.size > y1 - pad_y:
+                break
+            d.text((x0 + pad_x + 4, cy), name, fill=_TEXT_DARK, font=fm)
+            cy += fm.size + line_gap
+
+    canvas.alpha_composite(layer)
+
+
+# ── Conversion helper from a RosterBuilderSession ────────────────────
 
 
 def roster_from_session(session) -> RosterData:
@@ -375,17 +777,22 @@ def roster_from_session(session) -> RosterData:
     free-tier builder shouldn't pay the cost unless image render is
     actually used.
     """
-    event_label = "Desert Storm" if session.event_type == "DS" else "Canyon Storm"
+    event_full = "Desert Storm" if session.event_type == "DS" else "Canyon Storm"
+    team_label = ""
     team_suffix = ""
     if session.event_type == "DS" and session.team:
-        team_suffix = f" — Team {session.team}"
+        team_label = f"Team {session.team}"
+        team_suffix = f" — {team_label}"
     elif session.preset.faction and session.preset.faction != "Either":
-        team_suffix = f" — {session.preset.faction}"
+        team_label = session.preset.faction
+        team_suffix = f" — {team_label}"
+
+    event_date_label = ""
+    date_suffix = ""
     if session.event_date:
         from storm_date_helpers import format_event_date
-        date_suffix = f" — {format_event_date(session.event_date)}"
-    else:
-        date_suffix = ""
+        event_date_label = format_event_date(session.event_date)
+        date_suffix = f" — {event_date_label}"
 
     zones: list[RosterZone] = []
     paired_subs: dict[str, str] = {}
@@ -401,11 +808,6 @@ def roster_from_session(session) -> RosterData:
         except (TypeError, ValueError, ImportError):
             return str(p)
 
-    # Walk every phase the preset declares. Flat presets resolve to a
-    # single Phase-1 pass with the legacy data shape. Phase-aware presets
-    # emit one zone block per (phase, zone) so the rendered PNG surfaces
-    # the full migration line-up — earlier code looked at
-    # `session.assignments` only and silently dropped Phase 2 / Phase 3.
     is_phased = session.is_phase_aware
 
     def _build_member_block(zone_name: str, phase: int) -> list[str]:
@@ -428,11 +830,6 @@ def roster_from_session(session) -> RosterData:
                     sub_m = session.members.get(sub_key)
                     if sub_m:
                         sub_name = sub_m["name"]
-                        # Key the paired-sub map by primary name; if a
-                        # primary is paired with different subs across
-                        # phases, the latest phase wins in this dict.
-                        # The phase-tagged zone-block name surfaces the
-                        # per-phase context for the reader regardless.
                         paired_subs[primary_name] = sub_name
                         powers[sub_name] = _format_power(sub_m.get("power"))
                         if sub_key in overrides_set:
@@ -444,35 +841,41 @@ def roster_from_session(session) -> RosterData:
             for phase in session.iter_phases():
                 cap = int(z.max_for_phase(phase))
                 names = _build_member_block(z.zone, phase)
-                # Skip zones with no capacity in this phase AND no
-                # assignments — empty Phase-1 center zones would
-                # otherwise clutter the rendered image with empty rows.
+                # Skip empty phase blocks for zones that don't
+                # participate in this phase (Phase-1 center zones in
+                # DS, Phase-1/Phase-2 Virus Lab in CS).
                 if cap == 0 and not names:
                     continue
                 zones.append(RosterZone(
                     name=f"Phase {phase} — {z.zone}",
                     max_players=cap,
                     members=names,
+                    phase=phase,
+                    canonical_zone=z.zone,
                 ))
         else:
             names = _build_member_block(z.zone, 1)
             zones.append(RosterZone(
-                name=z.zone, max_players=int(z.max_players), members=names,
+                name=z.zone, max_players=int(z.max_players),
+                members=names, phase=0, canonical_zone=z.zone,
             ))
 
     subs = [
         session.members[k]["name"] for k in session.subs
         if k in session.members
     ]
-    # Power readout for overflow subs too — leadership reading the
-    # image can see why these members are in the sub block.
     for k in session.subs:
         m = session.members.get(k)
         if m is not None:
             powers[m["name"]] = _format_power(m.get("power"))
 
     return RosterData(
-        title=f"{event_label} — {session.preset.name}{team_suffix}{date_suffix}",
+        title=f"{event_full} — {session.preset.name}{team_suffix}{date_suffix}",
         zones=zones, subs=subs, paired_subs=paired_subs,
         powers=powers, overrides=overrides,
+        event_type=session.event_type,
+        preset_name=session.preset.name,
+        team_label=team_label,
+        event_date_label=event_date_label,
+        phase_count=int(getattr(session.preset, "phase_count", 0) or 0),
     )

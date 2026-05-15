@@ -6,9 +6,11 @@ Contract:
 
     storm_renderer.render(roster: RosterData) -> bytes  # PNG
 
-Used by the manual roster builder (free tier) when leadership clicks
-`[🖼️ Render image]`, and by the structured-flow Approve & Post
-finalisation (Premium) as a file attachment alongside the mail.
+Triggered by `[🖼️ Render image]` in the roster builder (available in
+both free + structured/Premium modes). Approve & Post itself does
+NOT auto-attach the PNG — the rendered image is its own artifact for
+sharing with the wider alliance, separate from the leadership-facing
+mail body.
 
 The new renderer is event-type aware. Desert Storm uses the diamond
 layout around Nuclear Silo with vertical spawn strips at the left and
@@ -66,17 +68,17 @@ class RosterData:
 
     Structured fields (`event_type`, `phase_count`, `team_label`,
     `event_date_label`, `preset_name`) drive the map dispatch and the
-    header line; the legacy `title` field is retained for callers and
-    tests that consume it as a fallback string.
+    header line. The map renderer is deliberately a shareable artifact
+    for the wider alliance — it carries zone names, member names, and
+    paired-sub formatting only. Per-member power readouts, below-floor
+    override markers, and special-role footers are NOT drawn (those
+    are leadership-internal signals surfaced in the builder embed and
+    mail body, not the public artifact).
     """
     title: str                                      # legacy back-compat
     zones: list[RosterZone]
     subs: list[str] = field(default_factory=list)
-    special_roles: dict[str, list[str]] = field(default_factory=dict)
     paired_subs: dict[str, str] = field(default_factory=dict)
-    powers: dict[str, str] = field(default_factory=dict)
-    overrides: set[str] = field(default_factory=set)
-    # Map-renderer fields
     event_type: str = "DS"                          # "DS" or "CS"
     preset_name: str = ""                           # surfaces under event name
     team_label: str = ""                            # "Team A" / "Rulebringers" / ""
@@ -796,17 +798,6 @@ def roster_from_session(session) -> RosterData:
 
     zones: list[RosterZone] = []
     paired_subs: dict[str, str] = {}
-    powers: dict[str, str] = {}
-    overrides: set[str] = set()
-
-    def _format_power(p) -> str:
-        if p is None:
-            return "power unknown"
-        try:
-            from storm_strategy import format_power
-            return format_power(int(p))
-        except (TypeError, ValueError, ImportError):
-            return str(p)
 
     is_phased = session.is_phase_aware
 
@@ -814,26 +805,18 @@ def roster_from_session(session) -> RosterData:
         names: list[str] = []
         assignments = session.assignments_for_phase(phase)
         pairings = session.paired_subs_for_phase(phase)
-        overrides_set = session.below_floor_overrides_for_phase(phase)
         for key in assignments.get(zone_name, []):
             m = session.members.get(key)
             if not m:
                 continue
             primary_name = m["name"]
             names.append(primary_name)
-            powers[primary_name] = _format_power(m.get("power"))
-            if key in overrides_set:
-                overrides.add(primary_name)
             if session.is_paired:
                 sub_key = pairings.get(key)
                 if sub_key:
                     sub_m = session.members.get(sub_key)
                     if sub_m:
-                        sub_name = sub_m["name"]
-                        paired_subs[primary_name] = sub_name
-                        powers[sub_name] = _format_power(sub_m.get("power"))
-                        if sub_key in overrides_set:
-                            overrides.add(sub_name)
+                        paired_subs[primary_name] = sub_m["name"]
         return names
 
     for z in session.preset.zones:
@@ -864,15 +847,10 @@ def roster_from_session(session) -> RosterData:
         session.members[k]["name"] for k in session.subs
         if k in session.members
     ]
-    for k in session.subs:
-        m = session.members.get(k)
-        if m is not None:
-            powers[m["name"]] = _format_power(m.get("power"))
 
     return RosterData(
         title=f"{event_full} — {session.preset.name}{team_suffix}{date_suffix}",
         zones=zones, subs=subs, paired_subs=paired_subs,
-        powers=powers, overrides=overrides,
         event_type=session.event_type,
         preset_name=session.preset.name,
         team_label=team_label,

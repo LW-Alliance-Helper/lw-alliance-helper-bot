@@ -595,9 +595,10 @@ async def open_history(
             "⚠️ This command must be used inside a server.", ephemeral=True,
         )
         return
+    parent = "desertstorm" if event_type == "DS" else "canyonstorm"
     ok, _structured = await ensure_premium_structured(
         interaction, event_type,
-        feature_label="`/" + ("ds" if event_type == "DS" else "cs") + "_strategy roster_history`",
+        feature_label=f"`/{parent} strategy roster_history`",
     )
     if not ok:
         return

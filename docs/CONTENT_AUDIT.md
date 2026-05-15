@@ -205,11 +205,11 @@ Track member birthdays from your Google Sheet and optionally post announcements 
 ⚔️ Desert Storm
 Generate weekly Desert Storm team mail drafts and log participation each event. Setup Step 6 lets you turn on participation tracking and define exactly what you want to log — vote count, sit-outs, custom questions — using free types (text, yes/no, numeric, roster names) or 💎 Premium types (single-select, multi-select, date).
 `/setup_desertstorm` — Configure teams, log channel, post channel, mail template, participation
-`/desertstorm` — Show current rosters and the active mail template
-`/desertstorm_draft` — Walk through team → time → template, then preview & post the mail
-`/desertstorm_participation` — Run the configurable participation log for this week
-`/desertstorm_log [date]` — View a Desert Storm log entry (free: 4 most recent / premium: all)
-`/desertstorm_remind` — 💎 DM every roster member to participate in this week's DS
+`/desertstorm overview` — Show current rosters and the active mail template
+`/desertstorm draft` — Walk through team → time → template, then preview & post the mail
+`/desertstorm participation` — Run the configurable participation log for this week
+`/desertstorm log [date]` — View a Desert Storm log entry (free: 4 most recent / premium: all)
+`/desertstorm remind` — 💎 DM every roster member to participate in this week's DS
 ```
 
 ```text
@@ -217,11 +217,11 @@ Generate weekly Desert Storm team mail drafts and log participation each event. 
 🏜️ Canyon Storm
 Generate weekly Canyon Storm team mail drafts and log participation each event. Same flow as Desert Storm — preview in leadership, post to a public channel, plus configurable participation tracking on Setup Step 6.
 `/setup_canyonstorm` — Configure teams, log channel, post channel, mail template, participation
-`/canyonstorm` — Show current rosters and the active mail template
-`/canyonstorm_draft` — Walk through team → time → template, then preview & post the mail
-`/canyonstorm_participation` — Run the configurable participation log for this week
-`/canyonstorm_log [date]` — View a Canyon Storm log entry (free: 4 most recent / premium: all)
-`/canyonstorm_remind` — 💎 DM every roster member to participate in this week's CS
+`/canyonstorm overview` — Show current rosters and the active mail template
+`/canyonstorm draft` — Walk through team → time → template, then preview & post the mail
+`/canyonstorm participation` — Run the configurable participation log for this week
+`/canyonstorm log [date]` — View a Canyon Storm log entry (free: 4 most recent / premium: all)
+`/canyonstorm remind` — 💎 DM every roster member to participate in this week's CS
 ```
 
 ```text
@@ -250,8 +250,8 @@ Unlock with `/upgrade`. Premium adds member-aware features that build on top of 
 `/sync_members` — Manually re-sync the member roster now
 Multiple named surveys — manage from `/survey` directly via Add / Edit / Remove buttons
 `/survey_remind` — Send DM reminders via Member Roster, or schedule recurring DM reminders per survey
-`/desertstorm_remind` — DM every roster member about this week's DS
-`/canyonstorm_remind` — DM every roster member about this week's CS
+`/desertstorm remind` — DM every roster member about this week's DS
+`/canyonstorm remind` — DM every roster member about this week's CS
 *Plus: personal birthday DMs, train-assignment DMs, auto-mention members in train reminders, use threads as destinations, multi-template train and storm support, advanced survey/participation question types (single-select, multi-select, date), and more.*
 ```
 
@@ -1111,7 +1111,7 @@ Please manually add {name} to the schedule.
 > `Canyon Storm` labels, the `🔥` (DS) / `⚡` (CS) emoji on the Step 1 wizard
 > header, the embed colors (DS dark red, CS gold), and the legacy log field
 > labels (`Prior Sit-Out No Vote` for DS vs `Prior Sit-Out No Request` for
-> CS). The shared `/desertstorm_remind` / `/canyonstorm_remind` DM uses ⚔️
+> CS). The shared `/desertstorm remind` / `/canyonstorm remind` DM uses ⚔️
 > for both events — possible inconsistency worth flagging.
 
 ### 8.1 `/setup_desertstorm` and `/setup_canyonstorm`
@@ -1276,7 +1276,7 @@ Examples: *Vote count*, *Sitting out*, *Did anyone show up late?*
 | Embed value | `❌ Disabled` | `setup_cog.py` |
 | Embed footer | `Run /{cmd_name} again to update.` | `setup_cog.py` |
 
-### 8.2 `/desertstorm` and `/canyonstorm` overview
+### 8.2 `/desertstorm overview` and `/canyonstorm overview`
 
 | Type | Copy | File |
 |---|---|---|
@@ -1292,7 +1292,7 @@ Examples: *Vote count*, *Sitting out*, *Did anyone show up late?*
 | Embed field (error) | `Current Mail Template` \| `⚠️ Could not load: {e}` | `storm.py` |
 | Embed footer | `Run /{setup_cmd} to update. Run /{cmd_name}_draft to generate a draft.` | `storm.py` |
 
-### 8.3 `/desertstorm_draft` and `/canyonstorm_draft` — 4-step wizard
+### 8.3 `/desertstorm draft` and `/canyonstorm draft` — 4-step wizard
 
 #### 8.3.1 Command + guard messages
 
@@ -1311,8 +1311,8 @@ Examples: *Vote count*, *Sitting out*, *Did anyone show up late?*
 | Button | `Team A` (primary) | `storm.py` |
 | Button | `Team B` (success) | `storm.py` |
 | Success | `✅ Team {team} selected.` | `storm.py` |
-| Timeout (DS) | `⏰ Timed out. Use \`/desertstorm_draft\` to start again.` | `storm.py` |
-| Timeout (CS) | `⏰ Timed out. Use \`/canyonstorm_draft\` to start again.` | `storm.py` |
+| Timeout (DS) | `⏰ Timed out. Use \`/desertstorm draft\` to start again.` | `storm.py` |
+| Timeout (CS) | `⏰ Timed out. Use \`/canyonstorm draft\` to start again.` | `storm.py` |
 | Timeout (ephemeral) | `⏰ Timed out.` | `storm.py` |
 
 #### 8.3.3 Step 2 — Pick Time
@@ -1333,8 +1333,8 @@ Examples: *Vote count*, *Sitting out*, *Did anyone show up late?*
 | Button | `✏️ Edit` (primary) | `storm.py` |
 | Wizard prompt (edit) | `✏️ {user.mention} — copy the block above, make your edits, and paste it back below.\n*(10 minutes to respond — type \`cancel\` to stop)*` | `storm.py` |
 | Cancel | `❌ Draft cancelled.` | `storm.py` |
-| Error (DS parse fail) | `⚠️ Could not parse any zone assignments. Make sure the format matches the template and try \`/desertstorm_draft\` again.` | `storm.py` |
-| Error (CS parse fail) | `⚠️ Could not parse any assignments. Make sure the format matches the template and try \`/canyonstorm_draft\` again.` | `storm.py` |
+| Error (DS parse fail) | `⚠️ Could not parse any zone assignments. Make sure the format matches the template and try \`/desertstorm draft\` again.` | `storm.py` |
+| Error (CS parse fail) | `⚠️ Could not parse any assignments. Make sure the format matches the template and try \`/canyonstorm draft\` again.` | `storm.py` |
 | Warning (parse) | `⚠️ Some lines were skipped:\n• {error1}\n• {error2}…` | `storm.py` |
 | Validation retry (DS zone line) | `Could not parse zone line: {line}` | `storm.py` |
 | Validation retry (DS unknown zone) | `Unknown zone \`{zone}\` — must be one of: {canonical_list}` | `storm.py` |
@@ -1350,7 +1350,7 @@ Examples: *Vote count*, *Sitting out*, *Did anyone show up late?*
 | Select option | `{template_name}` *(truncated to 100 chars)* | `storm.py` |
 | Wizard prompt | `💎 You have multiple saved templates. Pick one for this draft:` | `storm.py` |
 | Success | `✅ Template: **{name}**` | `storm.py` |
-| Timeout | `⏰ Template picker timed out. Run \`/desertstorm_draft\` or \`/canyonstorm_draft\` to start over.` | `storm.py` |
+| Timeout | `⏰ Template picker timed out. Run \`/desertstorm draft\` or \`/canyonstorm draft\` to start over.` | `storm.py` |
 
 #### 8.3.6 Step 4 — Preview + Post & Copy
 
@@ -1438,7 +1438,7 @@ Subs
 …
 ```
 
-### 8.4 `/desertstorm_participation` and `/canyonstorm_participation`
+### 8.4 `/desertstorm participation` and `/canyonstorm participation`
 
 #### 8.4.1 Command + entry messages
 
@@ -1517,7 +1517,7 @@ Question header (all types): `**Step {idx} of {total_steps} — {qlabel}**`
 | Button | `✅ Done` (success) | `storm_log.py` |
 | Button | `Skip (none)` (secondary) | `storm_log.py` |
 
-### 8.5 `/desertstorm_log` and `/canyonstorm_log`
+### 8.5 `/desertstorm log` and `/canyonstorm log`
 
 | Type | Copy | File |
 |---|---|---|
@@ -1536,7 +1536,7 @@ Question header (all types): `**Step {idx} of {total_steps} — {qlabel}**`
 | Channel post (legacy DS — prior) | `**Prior Sit-Out No Vote:** {value or 'None'}` | `storm_log.py` |
 | Channel post (legacy CS — prior) | `**Prior Sit-Out No Request:** {value or 'None'}` | `storm_log.py` |
 
-### 8.6 `/desertstorm_remind` and `/canyonstorm_remind` 💎
+### 8.6 `/desertstorm remind` and `/canyonstorm remind` 💎
 
 | Type | Copy | File |
 |---|---|---|

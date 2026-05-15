@@ -5,7 +5,7 @@ Two rule types complement the strategy preset library (#126):
 
   * power_band — "Members with power ≥ X (in the configured power column)
     are eligible for Zone Y." Primary rule type; surfaces by default in
-    /ds_member_rule list.
+    `/desertstorm member_rule list` (and the CS equivalent).
   * per_member — Escape hatch for special cases. Three sub-types:
         team           e.g. "Alice always plays Team A"
         zone           e.g. "Charlie is always at Power Tower"
@@ -32,7 +32,6 @@ import logging
 
 import discord
 from discord import app_commands
-from discord.ext import commands
 
 logger = logging.getLogger(__name__)
 
@@ -763,9 +762,9 @@ class _MemberRuleGroup(app_commands.Group):
             view.message = None
 
 
-def _build_ds_group() -> _MemberRuleGroup:
+def build_ds_member_rule_group() -> _MemberRuleGroup:
     grp = _MemberRuleGroup(
-        name="ds_member_rule",
+        name="member_rule",
         description="Manage Desert Storm member rules (power bands + per-member)",
         event_type="DS",
     )
@@ -854,9 +853,9 @@ def _build_ds_group() -> _MemberRuleGroup:
     return grp
 
 
-def _build_cs_group() -> _MemberRuleGroup:
+def build_cs_member_rule_group() -> _MemberRuleGroup:
     grp = _MemberRuleGroup(
-        name="cs_member_rule",
+        name="member_rule",
         description="Manage Canyon Storm member rules (power bands + per-member)",
         event_type="CS",
     )
@@ -922,21 +921,76 @@ def _build_cs_group() -> _MemberRuleGroup:
     return grp
 
 
-class StormMemberRulesCog(commands.Cog):
-    def __init__(self, bot: commands.Bot):
-        self.bot = bot
-        self.ds_group = _build_ds_group()
-        self.cs_group = _build_cs_group()
-        bot.tree.add_command(self.ds_group)
-        bot.tree.add_command(self.cs_group)
-
-    async def cog_unload(self):
-        try:
-            self.bot.tree.remove_command(self.ds_group.name)
-            self.bot.tree.remove_command(self.cs_group.name)
-        except Exception:
-            pass
+# The member-rule groups are registered by `storm_commands_root` as
+# subgroups under the `/desertstorm` and `/canyonstorm` parents. This
+# module exposes `build_ds_member_rule_group` / `build_cs_member_rule_group`
+# for that root cog to call; no slash commands are registered here directly.
 
 
-async def setup(bot: commands.Bot):
-    await bot.add_cog(StormMemberRulesCog(bot))
+# ── Inline power-band rule modal (#144 — setup wizard inline create) ──────
+#
+# Streamlined `set_power_band` flow for the /setup_desertstorm and
+# /setup_canyonstorm wizard's 'add your first rule now?' branch. The full
+# slash command (`/<parent> member_rule set_power_band`) takes threshold +
+# zone + optional notes; the modal omits notes for brevity — alliances
+# can edit later via the slash command if they want to add notes.
+
+class InlinePowerBandModal(discord.ui.Modal):
+    def __init__(self, event_type: str):
+        label = "Desert Storm" if event_type == "DS" else "Canyon Storm"
+        super().__init__(title=f"{label} Power-Band Rule")
+        self.event_type = event_type
+        self.threshold = discord.ui.TextInput(
+            label="Minimum power",
+            placeholder="e.g. 250M, 1.2B, 300,000,000",
+            required=True,
+            max_length=20,
+        )
+        self.zone = discord.ui.TextInput(
+            label="Zone the rule applies to",
+            placeholder="e.g. Power Tower",
+            required=True,
+            max_length=80,
+        )
+        self.add_item(self.threshold)
+        self.add_item(self.zone)
+
+    async def on_submit(self, interaction: discord.Interaction):
+        parse_power, format_power, canonical_zones_for = _strategy_helpers()
+        n = parse_power(self.threshold.value)
+        parent = "desertstorm" if self.event_type == "DS" else "canyonstorm"
+        if n is None or n < 0:
+            await interaction.response.send_message(
+                f"⚠️ Couldn't parse `{self.threshold.value}` as a power "
+                f"value. Try `250M`, `1.2B`, or `300,000,000` next time "
+                f"via `/{parent} member_rule set_power_band`.",
+                ephemeral=True,
+            )
+            return
+        zone = (self.zone.value or "").strip()
+        if not zone:
+            await interaction.response.send_message(
+                "⚠️ Zone is required.", ephemeral=True,
+            )
+            return
+        canonical = {z.lower() for z in canonical_zones_for(self.event_type)}
+        zone_warning = "" if zone.lower() in canonical else (
+            f"\n⚠️ `{zone}` isn't in the canonical zone list — saved "
+            "anyway; double-check the spelling."
+        )
+        ok, msg = await asyncio.to_thread(save_rule,
+            interaction.guild_id, self.event_type,
+            Rule(rule_type=_RULE_TYPE_POWER_BAND,
+                 subject=str(int(n)), value=zone),
+        )
+        if ok:
+            await interaction.response.send_message(
+                f"✅ Saved: ≥ {format_power(int(n))} → eligible for "
+                f"**{zone}**.{zone_warning}\n"
+                f"Add more rules later via `/{parent} member_rule …`.",
+                ephemeral=True,
+            )
+        else:
+            await interaction.response.send_message(
+                f"⚠️ {msg}", ephemeral=True,
+            )

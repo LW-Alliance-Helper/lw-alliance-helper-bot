@@ -1,6 +1,6 @@
 """
 Tests for `storm_log._send_storm_reminder` — the Premium-only command
-behind /desertstorm_remind and /canyonstorm_remind. DMs every roster
+behind /desertstorm remind and /canyonstorm remind. DMs every roster
 member with a participation reminder for the upcoming storm.
 
 Audit gap #4 — the entire flow (roster fetch → row iteration → DM

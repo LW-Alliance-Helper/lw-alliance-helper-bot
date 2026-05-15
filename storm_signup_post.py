@@ -1,7 +1,7 @@
 """
 Storm sign-up post command (#124).
 
-Leadership runs `/storm_post_signup event_type:DS|CS event_date:YYYY-MM-DD`
+Leadership runs `/desertstorm post_signup event_date:YYYY-MM-DD` (or the CS equivalent)
 to publish a registration message in the alliance's configured sign-up
 channel. The message embeds a `SignupView` (#123) so members click to
 vote; the persistent-View infra handles vote capture + Sheet mirroring.
@@ -19,8 +19,6 @@ import logging
 from typing import Optional
 
 import discord
-from discord import app_commands
-from discord.ext import commands
 
 logger = logging.getLogger(__name__)
 
@@ -92,7 +90,10 @@ def _build_registration_embed(event_type: str, event_date_iso: str,
         if show_b and time_b:
             time_lines.append(f"• **{time_b}**")
         embed.add_field(name="Available time slots", value="\n".join(time_lines), inline=False)
-    embed.set_footer(text="Vote recorded with timestamp — leadership uses /storm_signups to review.")
+    parent = "desertstorm" if event_type == "DS" else "canyonstorm"
+    embed.set_footer(
+        text=f"Vote recorded with timestamp — leadership uses /{parent} signups to review."
+    )
     return embed
 
 
@@ -111,9 +112,9 @@ async def post_registration(
 
     Idempotent on `(guild_id, event_type, event_date)` — if a post
     already exists, returns status `already_posted` without sending
-    again. Used by both the leadership-triggered `/storm_post_signup`
-    slash command (which shapes the response into user-facing copy)
-    and the auto-scheduler loop (#131) (which logs status).
+    again. Used by both the leadership-triggered `/desertstorm post_signup`
+    slash command (and the CS equivalent, which shape the response into
+    user-facing copy) and the auto-scheduler loop (#131) (which logs status).
 
     Returns a dict carrying at minimum a `status` key. Possible values:
       * `ok`               — message sent + recorded; `message_id` and
@@ -208,99 +209,90 @@ async def post_registration(
     }
 
 
-# ── Slash command ────────────────────────────────────────────────────────────
+# ── Slash command handler ────────────────────────────────────────────────────
+#
+# The slash command itself is registered by `storm_commands_root` under the
+# `/desertstorm post_signup` and `/canyon_storm post_signup` parents. This
+# module just exposes the handler body so the root cog stays a thin
+# dispatcher.
 
 
-class StormSignupPostCog(commands.Cog):
-    def __init__(self, bot: commands.Bot):
-        self.bot = bot
-
-    @app_commands.command(
-        name="storm_post_signup",
-        description="Post a sign-up message for an upcoming Desert Storm or Canyon Storm event",
+async def handle_post_signup(
+    bot,
+    interaction: discord.Interaction,
+    event_type: str,
+    event_date: Optional[str] = None,
+) -> None:
+    from storm_permissions import (
+        is_leader_or_admin,
+        deny_non_leader,
+        ensure_premium_structured,
     )
-    @app_commands.describe(
-        event_type="Which event to post sign-ups for",
-        event_date="Optional — defaults to the next configured event day. Accepts e.g. May 18, 5/18, 2026-05-18, Sunday.",
+    from storm_date_helpers import (
+        parse_event_date, next_event_date, format_event_date,
     )
-    @app_commands.choices(event_type=[
-        app_commands.Choice(name="Desert Storm", value="DS"),
-        app_commands.Choice(name="Canyon Storm", value="CS"),
-    ])
-    @app_commands.guild_only()
-    async def storm_post_signup(
-        self,
-        interaction: discord.Interaction,
-        event_type: app_commands.Choice[str],
-        event_date: Optional[str] = None,
-    ):
-        from storm_permissions import (
-            is_leader_or_admin,
-            deny_non_leader,
-            ensure_premium_structured,
+
+    if not is_leader_or_admin(interaction):
+        await deny_non_leader(interaction)
+        return
+
+    et = event_type
+    # Compare against today in the alliance's configured timezone, not
+    # the host's local clock — Railway runs UTC, so an east-of-UTC
+    # alliance posting near midnight their time would otherwise see
+    # their own event date flagged "in the past".
+    today_local = _today_in_guild_tz(interaction.guild_id)
+
+    raw_input = (event_date or "").strip()
+    if not raw_input:
+        # No date passed — infer next configured event day, matching
+        # the alliance's structured-flow schedule when set.
+        date_clean = next_event_date(
+            interaction.guild_id, et, today=today_local,
         )
-        from storm_date_helpers import (
-            parse_event_date, next_event_date, format_event_date,
-        )
-
-        if not is_leader_or_admin(interaction):
-            await deny_non_leader(interaction)
-            return
-
-        et = event_type.value
-        # Compare against today in the alliance's configured timezone, not
-        # the host's local clock — Railway runs UTC, so an east-of-UTC
-        # alliance posting near midnight their time would otherwise see
-        # their own event date flagged "in the past".
-        today_local = _today_in_guild_tz(interaction.guild_id)
-
-        raw_input = (event_date or "").strip()
-        if not raw_input:
-            # No date passed — infer next configured event day, matching
-            # the alliance's structured-flow schedule when set.
-            date_clean = next_event_date(
-                interaction.guild_id, et, today=today_local,
-            )
-        else:
-            parsed = parse_event_date(raw_input, today=today_local)
-            if parsed is None:
-                await interaction.response.send_message(
-                    f"⚠️ `{event_date}` isn't a date I can parse. Try `May 18`, "
-                    f"`5/18`, `2026-05-18`, `Sunday`, or `tomorrow`.",
-                    ephemeral=True,
-                )
-                return
-            date_clean = parsed.isoformat()
-
-        parsed_date = _dt.date.fromisoformat(date_clean)
-        if parsed_date < today_local:
-            pretty = format_event_date(date_clean)
+    else:
+        parsed = parse_event_date(raw_input, today=today_local)
+        if parsed is None:
             await interaction.response.send_message(
-                f"⚠️ Event date {pretty} is in the past. Sign-ups should be "
-                f"posted for upcoming events.",
+                f"⚠️ `{event_date}` isn't a date I can parse. Try `May 18`, "
+                f"`5/18`, `2026-05-18`, `Sunday`, or `tomorrow`.",
                 ephemeral=True,
             )
             return
+        date_clean = parsed.isoformat()
 
-        ok, structured = await ensure_premium_structured(
-            interaction, et,
-            bot=self.bot,
-            feature_label="`/storm_post_signup`",
-        )
-        if not ok:
-            return
-
-        # Defer so the post helper has headroom over the 3-second window.
-        await interaction.response.defer(ephemeral=True)
-
-        result = await post_registration(
-            self.bot, interaction.guild, et, date_clean,
-            structured=structured,
-        )
-        await interaction.followup.send(
-            _format_post_result_message(et, date_clean, result),
+    parsed_date = _dt.date.fromisoformat(date_clean)
+    if parsed_date < today_local:
+        pretty = format_event_date(date_clean)
+        await interaction.response.send_message(
+            f"⚠️ Event date {pretty} is in the past. Sign-ups should be "
+            f"posted for upcoming events.",
             ephemeral=True,
         )
+        return
+
+    feature_label = (
+        f"`/{'desertstorm' if et == 'DS' else 'canyonstorm'} post_signup`"
+    )
+    ok, structured = await ensure_premium_structured(
+        interaction, et,
+        bot=bot,
+        feature_label=feature_label,
+    )
+    if not ok:
+        return
+
+    # Defer so the post helper has headroom over the 3-second window.
+    await interaction.response.defer(ephemeral=True)
+
+    result = await post_registration(
+        bot, interaction.guild, et, date_clean,
+        structured=structured,
+    )
+    await interaction.followup.send(
+        _format_post_result_message(et, date_clean, result),
+        ephemeral=True,
+    )
 
 
 def _format_post_result_message(
@@ -318,12 +310,13 @@ def _format_post_result_message(
     setup_cmd = "/setup_desertstorm" if event_type == "DS" else "/setup_canyonstorm"
     date_pretty = format_event_date(event_date)
 
+    parent = "desertstorm" if event_type == "DS" else "canyonstorm"
     if status == "ok":
         cid = result.get("channel_id")
         return (
             f"✅ Sign-up post for {label} on **{date_pretty}** is live in "
             f"<#{cid}>. Members can vote any time before the event. "
-            f"Open `/storm_signups` to review who's voted."
+            f"Open `/{parent} signups` to review who's voted."
         )
     if status == "already_posted":
         cid = result.get("channel_id")
@@ -365,7 +358,3 @@ def _format_post_result_message(
             f"⚠️ Discord refused the sign-up message: `{err}`. See bot logs for details."
         )
     return f"⚠️ Sign-up post returned unexpected status `{status}`."
-
-
-async def setup(bot: commands.Bot):
-    await bot.add_cog(StormSignupPostCog(bot))

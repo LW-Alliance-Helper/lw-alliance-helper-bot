@@ -1,5 +1,5 @@
 """
-`/storm_signups` officer view (#125).
+`/desertstorm signups` and `/canyonstorm signups` officer view (#125).
 
 Leadership-only command that surfaces who's voted for an event,
 grouped by vote bucket, with a path to cast on-behalf votes for
@@ -37,8 +37,6 @@ import logging
 from typing import Optional
 
 import discord
-from discord import app_commands
-from discord.ext import commands
 
 logger = logging.getLogger(__name__)
 
@@ -647,7 +645,8 @@ class OfficerView(discord.ui.View):
         officers know the buttons are dead. Matches the auto-post-view
         cleanup contract in CLAUDE.md."""
         from wizard_registry import expire_view_message
-        await expire_view_message(self.message, command_hint="/storm_signups")
+        parent = "desertstorm" if self.event_type == "DS" else "canyonstorm"
+        await expire_view_message(self.message, command_hint=f"/{parent} signups")
 
     async def refresh_buckets(self) -> None:
         """Re-read the alliance roster Sheet + storm_signups SQLite
@@ -803,10 +802,11 @@ async def _open_team_setup(
     import storm_strategy as ss
     preset_names = ss.list_presets(officer_view.guild_id, officer_view.event_type)
     if not preset_names:
+        parent = "desertstorm" if officer_view.event_type == "DS" else "canyonstorm"
         await inter.response.send_message(
             f"⚠️ No strategy presets defined yet for "
             f"{'Desert Storm' if officer_view.event_type == 'DS' else 'Canyon Storm'}. "
-            f"Run `/ds_strategy create` (or `/cs_strategy create`) first.",
+            f"Run `/{parent} strategy create` first.",
             ephemeral=True,
         )
         return
@@ -890,128 +890,114 @@ class _PresetPickerView(discord.ui.View):
                 pass
 
 
-# ── Cog ──────────────────────────────────────────────────────────────────────
+# ── Slash command handler ────────────────────────────────────────────────────
+#
+# Registered by `storm_commands_root` under `/desertstorm signups` and
+# `/canyon_storm signups`. This module exposes the handler body so the
+# root cog stays a thin dispatcher.
 
 
-class StormSignupsViewCog(commands.Cog):
-    def __init__(self, bot: commands.Bot):
-        self.bot = bot
-
-    @app_commands.command(
-        name="storm_signups",
-        description="Leadership view of who's signed up for an upcoming storm event",
+async def handle_storm_signups(
+    bot,
+    interaction: discord.Interaction,
+    event_type: str,
+    event_date: Optional[str] = None,
+) -> None:
+    from storm_permissions import (
+        is_leader_or_admin,
+        deny_non_leader,
+        ensure_premium_structured,
     )
-    @app_commands.describe(
-        event_type="Which event's sign-ups to view",
-        event_date="Optional — defaults to the next configured event day. Accepts e.g. May 18, 5/18, Sunday.",
+    from storm_date_helpers import parse_event_date, next_event_date
+
+    if not is_leader_or_admin(interaction):
+        await deny_non_leader(interaction)
+        return
+
+    et = event_type
+    raw_input = (event_date or "").strip()
+    if not raw_input:
+        date_clean = next_event_date(interaction.guild_id, et)
+    else:
+        parsed = parse_event_date(raw_input)
+        if parsed is None:
+            await interaction.response.send_message(
+                f"⚠️ `{event_date}` isn't a date I can parse. Try `May 18`, "
+                f"`5/18`, `2026-05-18`, `Sunday`, or `tomorrow`.",
+                ephemeral=True,
+            )
+            return
+        date_clean = parsed.isoformat()
+
+    feature_label = (
+        f"`/{'desertstorm' if et == 'DS' else 'canyonstorm'} signups`"
     )
-    @app_commands.choices(event_type=[
-        app_commands.Choice(name="Desert Storm", value="DS"),
-        app_commands.Choice(name="Canyon Storm", value="CS"),
-    ])
-    @app_commands.guild_only()
-    async def storm_signups(
-        self,
-        interaction: discord.Interaction,
-        event_type: app_commands.Choice[str],
-        event_date: Optional[str] = None,
-    ):
-        from storm_permissions import (
-            is_leader_or_admin,
-            deny_non_leader,
-            ensure_premium_structured,
+    ok, _structured = await ensure_premium_structured(
+        interaction, et,
+        bot=bot,
+        feature_label=feature_label,
+    )
+    if not ok:
+        return
+
+    # Defer before building buckets — roster Sheet read + member-cache
+    # scan can blow past the 3-second initial-response token on a cold
+    # cache or rate-limited Sheets API.
+    await interaction.response.defer(thinking=True)
+
+    # Ensure the guild member cache is populated so `guild.get_member`
+    # in `_read_roster_rows` doesn't false-positive-infer members as
+    # not-on-Discord during a cold cache (cold restart, this guild
+    # not yet touched by an interaction, etc.). `_ensure_member_cache`
+    # is a no-op when the cache is already chunked and silently
+    # tolerates the SERVER MEMBERS INTENT being off (the warning
+    # path in `_read_roster_rows` still surfaces).
+    try:
+        import member_roster
+        await member_roster._ensure_member_cache(interaction.guild)
+    except Exception as e:
+        logger.warning(
+            "[STORM OFFICER VIEW] guild.chunk() pre-pass failed for "
+            "guild=%s: %s",
+            interaction.guild_id, e,
         )
-        from storm_date_helpers import parse_event_date, next_event_date
 
-        if not is_leader_or_admin(interaction):
-            await deny_non_leader(interaction)
-            return
-
-        et = event_type.value
-        raw_input = (event_date or "").strip()
-        if not raw_input:
-            date_clean = next_event_date(interaction.guild_id, et)
-        else:
-            parsed = parse_event_date(raw_input)
-            if parsed is None:
-                await interaction.response.send_message(
-                    f"⚠️ `{event_date}` isn't a date I can parse. Try `May 18`, "
-                    f"`5/18`, `2026-05-18`, `Sunday`, or `tomorrow`.",
-                    ephemeral=True,
-                )
-                return
-            date_clean = parsed.isoformat()
-
-        ok, _structured = await ensure_premium_structured(
-            interaction, et,
-            bot=self.bot,
-            feature_label="`/storm_signups`",
+    view = OfficerView(interaction.guild, interaction.user.id, et, date_clean)
+    # Populate buckets via `asyncio.to_thread` so the gspread read
+    # doesn't block the event loop (the read used to fire inside
+    # `__init__`, stalling every other guild's click handlers while
+    # this guild's Sheet was being fetched).
+    await view.refresh_buckets()
+    followup_args = dict(
+        embed=_render_embed(interaction.guild, et, date_clean, view.buckets),
+        view=view,
+    )
+    if view.roster_errors:
+        # Surface the actual error contents — alliances need to see
+        # WHICH IDs are stale (or which read failed) so they can fix
+        # the roster Sheet. The prior generic "See bot logs" message
+        # hid the detail the audit explicitly asked to expose.
+        preview = " · ".join(view.roster_errors[:2])
+        followup_args["content"] = (
+            "⚠️ Roster Sheet read had issues — non-Discord member "
+            f"enumeration may be incomplete: {preview}"
         )
-        if not ok:
-            return
-
-        # Defer before building buckets — roster Sheet read + member-cache
-        # scan can blow past the 3-second initial-response token on a cold
-        # cache or rate-limited Sheets API.
-        await interaction.response.defer(thinking=True)
-
-        # Ensure the guild member cache is populated so `guild.get_member`
-        # in `_read_roster_rows` doesn't false-positive-infer members as
-        # not-on-Discord during a cold cache (cold restart, this guild
-        # not yet touched by an interaction, etc.). `_ensure_member_cache`
-        # is a no-op when the cache is already chunked and silently
-        # tolerates the SERVER MEMBERS INTENT being off (the warning
-        # path in `_read_roster_rows` still surfaces).
-        try:
-            import member_roster
-            await member_roster._ensure_member_cache(interaction.guild)
-        except Exception as e:
-            logger.warning(
-                "[STORM OFFICER VIEW] guild.chunk() pre-pass failed for "
-                "guild=%s: %s",
-                interaction.guild_id, e,
-            )
-
-        view = OfficerView(interaction.guild, interaction.user.id, et, date_clean)
-        # Populate buckets via `asyncio.to_thread` so the gspread read
-        # doesn't block the event loop (the read used to fire inside
-        # `__init__`, stalling every other guild's click handlers while
-        # this guild's Sheet was being fetched).
-        await view.refresh_buckets()
-        followup_args = dict(
-            embed=_render_embed(interaction.guild, et, date_clean, view.buckets),
-            view=view,
+        logger.warning(
+            "[STORM OFFICER VIEW] roster errors for guild=%s: %s",
+            interaction.guild_id, "; ".join(view.roster_errors),
         )
-        if view.roster_errors:
-            # Surface the actual error contents — alliances need to see
-            # WHICH IDs are stale (or which read failed) so they can fix
-            # the roster Sheet. The prior generic "See bot logs" message
-            # hid the detail the audit explicitly asked to expose.
-            preview = " · ".join(view.roster_errors[:2])
-            followup_args["content"] = (
-                "⚠️ Roster Sheet read had issues — non-Discord member "
-                f"enumeration may be incomplete: {preview}"
-            )
-            logger.warning(
-                "[STORM OFFICER VIEW] roster errors for guild=%s: %s",
-                interaction.guild_id, "; ".join(view.roster_errors),
-            )
-        view.message = await interaction.followup.send(**followup_args)
+    view.message = await interaction.followup.send(**followup_args)
 
-        # First-run walkthrough offer (#130). Fires after the main view
-        # lands so the officer sees the actual command output even if
-        # they decline the tour. No-op if already dismissed. Failures
-        # here must not crash the main flow — the officer view is the
-        # critical path; the tour is a nice-to-have.
-        try:
-            from storm_walkthrough import maybe_offer_storm_signups_tour
-            await maybe_offer_storm_signups_tour(interaction)
-        except Exception as e:
-            logger.warning(
-                "[STORM OFFICER VIEW] walkthrough offer failed for guild=%s: %s",
-                interaction.guild_id, e,
-            )
-
-
-async def setup(bot: commands.Bot):
-    await bot.add_cog(StormSignupsViewCog(bot))
+    # First-run walkthrough offer (#130). Fires after the main view
+    # lands so the officer sees the actual command output even if
+    # they decline the tour. No-op if already dismissed. Failures
+    # here must not crash the main flow — the officer view is the
+    # critical path; the tour is a nice-to-have.
+    try:
+        from storm_walkthrough import maybe_offer_storm_signups_tour
+        await maybe_offer_storm_signups_tour(interaction)
+    except Exception as e:
+        logger.warning(
+            "[STORM OFFICER VIEW] walkthrough offer failed for guild=%s: %s",
+            interaction.guild_id, e,
+        )

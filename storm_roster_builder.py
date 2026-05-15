@@ -1,7 +1,7 @@
 """
 Manual roster builder for Desert Storm and Canyon Storm (#128).
 
-`/ds_strategy apply name:<preset>` (and the CS equivalent) opens an
+`/desertstorm strategy apply name:<preset>` (and the CS equivalent) opens an
 interactive roster builder. Leadership picks the team, the bot loads
 the named preset + member rules + roster powers, and the builder
 enforces per-zone power floors as members are assigned.
@@ -3150,9 +3150,10 @@ async def open_roster_builder(
             )
         if not members:
             from storm_date_helpers import format_event_date
+            parent = "desertstorm" if event_type == "DS" else "canyonstorm"
             await interaction.followup.send(
                 f"⚠️ No signed-up members match team **{team or 'A'}** for "
-                f"event **{format_event_date(event_date)}**. Check `/storm_signups` to see who's "
+                f"event **{format_event_date(event_date)}**. Check `/{parent} signups` to see who's "
                 f"voted, or run the apply flow without an event date to use "
                 f"the full roster.",
                 ephemeral=True,

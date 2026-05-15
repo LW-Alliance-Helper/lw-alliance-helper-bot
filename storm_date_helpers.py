@@ -211,8 +211,8 @@ def next_event_date(
     today: Optional[_dt.date] = None,
 ) -> str:
     """ISO event date the officer most likely meant when they omitted
-    `event_date` on a pre-event command (`/storm_post_signup`,
-    `/storm_signups`).
+    `event_date` on a pre-event command (`post_signup`, `signups` under
+    the storm parent groups).
 
     Inference order:
       1. Structured-flow `event_day_of_week` if configured — the
@@ -247,7 +247,7 @@ def most_recent_event_date(
     pulled from `storm_registration_posts`. Returns None when no posts
     have been recorded yet for this guild + event type.
 
-    Used by `/storm_attendance` when the officer omits `event_date` —
+    Used by the `attendance` subcommand when the officer omits `event_date` —
     attendance is recorded after-the-fact, so the right default is the
     last event that actually happened.
     """

@@ -2,7 +2,7 @@
 Guided first-run walkthrough on storm entry points (#130).
 
 Surfaces a `[👋 Walk me through this]` offer the first time an officer
-hits `/storm_signups` in a guild. Clicking it runs a narrated micro-tour
+opens the storm sign-ups view in a guild. Clicking it runs a narrated micro-tour
 that explains each component of the officer view; clicking dismiss
 records the choice so the offer never re-appears for that officer.
 
@@ -54,7 +54,8 @@ _STORM_SIGNUPS_TOUR_STEPS: list[str] = [
     "members who signed up, with eligibility floors enforced.",
 
     "**Step 6 / 6 — That's the tour**\n"
-    "You can run `/help storm` any time to revisit it (coming soon). "
+    "You can run `/help` any time and pick **Desert Storm** or "
+    "**Canyon Storm** from the dropdown to revisit the command list. "
     "Closing this message drops you back to the live officer view.",
 ]
 
@@ -70,7 +71,7 @@ async def maybe_offer_storm_signups_tour(
     offer doesn't reappear).
 
     No-op if the walkthrough was already dismissed. Safe to call once
-    per `/storm_signups` invocation.
+    per storm sign-ups view invocation.
     """
     import config
     guild_id = interaction.guild_id
@@ -84,8 +85,8 @@ async def maybe_offer_storm_signups_tour(
                       walkthrough_key=walkthrough_key)
     try:
         msg = await interaction.followup.send(
-            "👋 First time using `/storm_signups`? Want a quick walkthrough "
-            "of what each piece does?",
+            "👋 First time opening the storm sign-ups view? Want a quick "
+            "walkthrough of what each piece does?",
             view=view,
             ephemeral=True,
             wait=True,
@@ -155,8 +156,9 @@ class _OfferView(discord.ui.View):
             item.disabled = True
         try:
             await inter.response.edit_message(
-                content="👍 Got it — won't ask again. Run `/help storm` any "
-                        "time if you want a refresher.",
+                content="👍 Got it — won't ask again. Run `/help` any "
+                        "time and pick Desert Storm or Canyon Storm "
+                        "if you want a refresher.",
                 view=self,
             )
         except discord.HTTPException:

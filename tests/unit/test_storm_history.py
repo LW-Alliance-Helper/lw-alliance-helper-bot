@@ -208,8 +208,8 @@ class TestRenderEventEmbed:
         )
         # Renders an unrecorded marker, not crash.
         assert "—" in _embed_body(embed)
-        # Footer hints how to record.
-        assert "/storm_attendance" in (embed.footer.text or "")
+        # Footer hints how to record under the new parent-group command tree.
+        assert "/desertstorm attendance" in (embed.footer.text or "")
 
     def test_below_floor_override_visible(self):
         slots = [

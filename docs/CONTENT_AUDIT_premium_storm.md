@@ -52,10 +52,10 @@ A few storm-specific additions:
 | ⏰ | Timeout |
 
 The flow is **mixed ephemeral / public**: the roster-builder views
-(`/storm_signups → 🛡️ Set up Team X`), preset editor, and most
+(`signups → 🛡️ Set up Team X` under the parent group), preset editor, and most
 follow-up pickers are ephemeral so leadership chat stays clean. The
-officer view (`/storm_signups`), attendance (`/storm_attendance`),
-preset editor (`/ds_strategy edit`), and Approve & Post mail are
+officer view (`signups`), attendance (`attendance`) — both under `/desertstorm` or `/canyonstorm`,
+preset editor (`/desertstorm strategy edit`), and Approve & Post mail are
 **public by design** — they double as a leadership audit trail so
 multiple officers can see what's happened across a session.
 
@@ -81,7 +81,7 @@ multiple officers can see what's happened across a session.
 | **Below-floor override** | An officer's explicit decision to slot a member who doesn't meet the floor. |
 | **Faction roles** | Post-roster step that applies the Judicator role to candidates when matchmaking reveals Rulebringers. |
 | **Power-refresh DM** | One-off nudge DM'd to a voter whose roster Sheet power cell is blank/garbage. |
-| **Teams** (`teams`) | DS-only per-alliance config: `both` (default) / `A` / `B`. Single-team alliances see only their team's button on the sign-up post + a single Set-up-Team button in `/storm_signups` (#148). |
+| **Teams** (`teams`) | DS-only per-alliance config: `both` (default) / `A` / `B`. Single-team alliances see only their team's button on the sign-up post + a single Set-up-Team button in `/desertstorm signups` (#148). |
 | **Phase** | DS/CS event sub-window. Phase 1 = outer ring active; Phase 2 = central buildings (Arsenal / Silo / Mercenary Factory) open up; Phase 3 = late-event CS state. |
 | **Flat preset** | `phase_count = 0` — the original shape. One capacity, one assignment per zone. |
 | **Phase-aware preset** | `phase_count = 2` or `3` — per-phase capacities + assignments, mail/render groups by phase. |
@@ -99,13 +99,13 @@ sorted by where the user normally encounters them.
 | `/setup_desertstorm` | Configure Desert Storm mail template and time options | `setup_cog.py:1507` |
 | `/setup_canyonstorm` | Configure Canyon Storm mail template and time options | `setup_cog.py:1522` |
 | `/sync_members` | Force a fresh `/sync_members` write to the alliance roster Sheet | `member_roster.py:430` |
-| `/storm_post_signup` | Manually post a sign-up post for the next storm event | `storm_signup_post.py:197` |
-| `/storm_signups` | Open the officer view (bucket map + filter + on-behalf) | `storm_officer_view.py:801` |
-| `/storm_attendance` | Post-event attendance tracker (Premium) | `storm_attendance.py:703` |
-| `/ds_strategy create|edit|list|delete|apply|roster_history` | DS strategy preset management | `storm_strategy.py:935-983` |
-| `/cs_strategy create|edit|list|delete|apply|roster_history` | CS strategy preset management | `storm_strategy.py:983-1009` |
-| `/ds_member_rule set_power_band|set_member_team|set_member_zone|set_member_role|list` | DS per-member + power-band rules | `storm_member_rules.py:734-824` |
-| `/cs_member_rule set_power_band|set_member_zone|set_member_role|list` | CS per-member + power-band rules (no `team` — CS has no teams) | `storm_member_rules.py:825-882` |
+| `post_signup` (under `/desertstorm` or `/canyonstorm` parent group) | Manually post a sign-up post for the next storm event | `storm_signup_post.py:197` |
+| `signups` (under `/desertstorm` or `/canyonstorm` parent group) | Open the officer view (bucket map + filter + on-behalf) | `storm_officer_view.py:801` |
+| `attendance` (under `/desertstorm` or `/canyonstorm` parent group) | Post-event attendance tracker (Premium) | `storm_attendance.py:703` |
+| `/desertstorm strategy create|edit|list|delete|apply|roster_history` | DS strategy preset management | `storm_strategy.py:935-983` |
+| `/canyonstorm strategy create|edit|list|delete|apply|roster_history` | CS strategy preset management | `storm_strategy.py:983-1009` |
+| `/desertstorm member_rule set_power_band|set_member_team|set_member_zone|set_member_role|list` | DS per-member + power-band rules | `storm_member_rules.py:734-824` |
+| `/canyonstorm member_rule set_power_band|set_member_zone|set_member_role|list` | CS per-member + power-band rules (no `team` — CS has no teams) | `storm_member_rules.py:825-882` |
 
 Premium gating is enforced at command entry via
 `storm_permissions.ensure_premium_structured(...)`. Free-tier
@@ -170,7 +170,7 @@ between sub-mode and sign-up channel:
 
 | Surface | Verbatim |
 |---|---|
-| Prompt | `**Which Teams Run Desert Storm?**\nMost alliances run both Team A and Team B. Single-team alliances see only their team's button on the sign-up post, fewer Set-up buttons on /storm_signups, and zone-min-power inputs scoped to their team in the preset editor.` |
+| Prompt | `**Which Teams Run Desert Storm?**\nMost alliances run both Team A and Team B. Single-team alliances see only their team's button on the sign-up post, fewer Set-up buttons on /desertstorm signups, and zone-min-power inputs scoped to their team in the preset editor.` |
 | Button — both | `🅰️🅱️ Both teams` |
 | Button — A only | `🅰️ Team A only` |
 | Button — B only | `🅱️ Team B only` |
@@ -197,7 +197,7 @@ Updated by **commit λ** with a keep-or-change branch.
 |---|---|---|
 | Re-entry, role set | Three-button view (`_KeepOrChangeRoleGate`) | `**Judicator Role (💎 Premium — CS only)**\nCurrently set to **{role_label}**. Keep it, switch to no role, or pick a different role.` |
 | Re-entry buttons | | `✅ Keep current: {label}` / `↩️ Skip — no role to apply` / `✏️ Change role` |
-| First run / change | Full role picker | `**Judicator Role (💎 Premium — CS only)**\nPick the Discord role the bot should apply to members tagged as Judicator candidates (via `/cs_member_rule set_member_role`) after a CS roster is approved and matchmaking reveals **Rulebringers**. Skip if you don't use this — the bot won't apply any role.` |
+| First run / change | Full role picker | `**Judicator Role (💎 Premium — CS only)**\nPick the Discord role the bot should apply to members tagged as Judicator candidates (via `/canyonstorm member_rule set_member_role`) after a CS roster is approved and matchmaking reveals **Rulebringers**. Skip if you don't use this — the bot won't apply any role.` |
 | Picker placeholder | | `Pick the Judicator role (or skip)` |
 | Skip sentinel option | | `Skip — no role to apply` |
 | Confirmation | | `✅ Judicator role skipped.` OR `✅ Judicator role: <@&{id}>` |
@@ -305,10 +305,10 @@ See [storm_signup_view.py:323-345](../storm_signup_view.py#L323-L345).
 
 ---
 
-## 4. Officer view (`/storm_signups`)
+## 4. Officer view (`signups` under `/desertstorm` or `/canyonstorm`)
 
 Lives in `storm_officer_view.py`. Posted ephemerally to the officer
-who invoked `/storm_signups`. Contains the bucket-map embed + filter
+who invoked `/desertstorm signups` or `/canyonstorm signups`. Contains the bucket-map embed + filter
 + refresh + on-behalf buttons.
 
 ### 4.1 Embed title + summary
@@ -358,7 +358,7 @@ team's Set-up button — wiring (#148) added in PR #150 (commit
 `a8ad4bd`). View captures `view.message` at send time so
 `on_timeout` (added in PR #150's batch 1) can edit the post with
 the canonical `⏰ The actions for this have timed out — use
-/storm_signups to re-initiate` notice.
+/desertstorm signups (or /canyonstorm signups) to re-initiate` notice.
 
 ### 4.4 On-behalf modal
 
@@ -379,7 +379,7 @@ the canonical `⏰ The actions for this have timed out — use
 
 Lives in `storm_roster_builder.py`. Two entry paths: structured-mode
 (via `🛡️ Build roster…` from the officer view) or free-tier-mode
-(via `/ds_strategy apply` / `/cs_strategy apply`).
+(via `/desertstorm strategy apply` / `/canyonstorm strategy apply`).
 
 ### 5.1 Embed (header + zones)
 
@@ -536,7 +536,7 @@ Updated by **commit μ** to include paired subs as candidates.
 | Offer prompt | `⚔️ **Apply Faction Roles?**\nMatchmaking will reveal your faction post-roster. When you know it's **Rulebringers**, click below to apply the configured Judicator role to your candidates: {names}.` |
 | Rulebringers button | `⚔️ Rulebringers (apply Judicator)` |
 | Dawnbreakers button | `🪞 Dawnbreakers (no role to apply)` |
-| Perms preflight failure | `⛔ Can't apply **{role}**: the bot is missing **Manage Roles** OR the bot's top role is below **{role}** in the hierarchy. Fix that and re-open the offer via `/storm_signups` → Build roster → Approve & Post.` |
+| Perms preflight failure | `⛔ Can't apply **{role}**: the bot is missing **Manage Roles** OR the bot's top role is below **{role}** in the hierarchy. Fix that and re-open the offer via `/desertstorm signups` (or `/canyonstorm signups`) → Build roster → Approve & Post.` |
 | Rulebringers apply success | `✅ Applied **{role}** to {n}/{total} candidates: {names}.` |
 | Rulebringers — all failed | `⚠️ Couldn't apply **{role}** to any candidate. Check the bot's role hierarchy + Manage Roles permission.` |
 | Dawnbreakers ack | `✅ No role to apply for Dawnbreakers. Good luck out there!` |
@@ -615,8 +615,8 @@ Layout: vertical white canvas, 720 px wide.
 
 ## 8. Post-event attendance
 
-Lives in `storm_attendance.py`. The `/storm_attendance` command
-opens an ephemeral view for the officer to mark each roster slot.
+Lives in `storm_attendance.py`. The `/desertstorm attendance` and `/canyonstorm attendance` commands
+open an ephemeral view for the officer to mark each roster slot.
 Status codes were renamed during the team-test session (commit
 9dfbf40) to read more naturally for storm context.
 
@@ -640,7 +640,7 @@ zone)` keys differ across phases (#152 / aafb576).
 
 ---
 
-## 9. History browser (`/ds_strategy roster_history` + `/cs_strategy roster_history`)
+## 9. History browser (`/desertstorm strategy roster_history` + `/canyonstorm strategy roster_history`)
 
 Lives in `storm_history.py`. Slash-command-invoked ephemeral
 embed. The `event_date` argument now accepts the full flexible-date
@@ -665,7 +665,7 @@ the audit's open follow-up list).
 
 ---
 
-## 10. Member rules (`/ds_member_rule`, `/cs_member_rule`)
+## 10. Member rules (`/desertstorm member_rule`, `/canyonstorm member_rule`)
 
 Lives in `storm_member_rules.py`. Per-command ephemeral acks.
 
@@ -722,7 +722,7 @@ double-rules for the same person.
 
 ---
 
-## 11. Strategy presets (`/ds_strategy`, `/cs_strategy`)
+## 11. Strategy presets (`/desertstorm strategy`, `/canyonstorm strategy`)
 
 Lives in `storm_strategy.py`. Modals + ephemeral confirmations.
 
@@ -740,7 +740,7 @@ Lives in `storm_strategy.py`. Modals + ephemeral confirmations.
 
 ---
 
-## 12. `/storm_post_signup` (manual fire)
+## 12. `/desertstorm post_signup` / `/canyonstorm post_signup` (manual fire)
 
 Lives in `storm_signup_post.py:197`. Manually post the sign-up post
 for the next event date (when the auto-scheduler is off OR the
@@ -748,7 +748,7 @@ officer wants to fire early).
 
 | Surface | Verbatim |
 |---|---|
-| Free-tier guard | `💎 **/storm_post_signup** is a Premium feature. See `/upgrade` for details.` |
+| Free-tier guard | `💎 **/desertstorm post_signup** (or **/canyonstorm post_signup**) is a Premium feature. See `/upgrade` for details.` |
 | Structured flow off | `⚠️ Structured flow isn't enabled for {event_label}. Run `/setup_desertstorm` and opt in.` |
 | No sign-up channel | `⚠️ No sign-up channel configured. Run `/setup_desertstorm` to set one.` |
 | Success | `✅ Sign-up post fired in <#{channel}> for **{event_date}**.` |
@@ -828,15 +828,15 @@ the bot respects.
 ## 16. Free-tier surfaces (in scope for the Premium flow)
 
 These free-tier commands sit *adjacent* to the Premium flow — the
-audit covers them only when they intersect (e.g. `/ds_strategy`
+audit covers them only when they intersect (e.g. `/desertstorm strategy`
 preset management is free-tier; only `apply` opens the structured
 roster builder under Premium).
 
 | Free-tier command | Premium intersection |
 |---|---|
-| `/ds_strategy create|edit|list|delete` | None — full free-tier surface for preset library mgmt. |
-| `/ds_strategy apply` | Premium-only when invoked with `event_date` (structured mode). |
-| `/ds_member_rule *` | Premium-only when read by the roster builder's auto-fill (but rules can be CREATED in free-tier). |
+| `/desertstorm strategy create|edit|list|delete` | None — full free-tier surface for preset library mgmt. |
+| `/desertstorm strategy apply` | Premium-only when invoked with `event_date` (structured mode). |
+| `/desertstorm member_rule *` | Premium-only when read by the roster builder's auto-fill (but rules can be CREATED in free-tier). |
 | `/setup_members` + `/sync_members` | Premium-only; populates the roster Sheet the storm flow reads. |
 
 ---
@@ -850,7 +850,7 @@ Recurring patterns observed across this audit:
 - "X — Y" em-dash separates the actor from the action (`Roster
   builder — Auto-fill applied`).
 - Timeouts always reference the slash command to re-open
-  (`⏰ Timed out. Run `/storm_signups` to start again.`).
+  (`⏰ Timed out. Run `/desertstorm signups` (or `/canyonstorm signups`) to start again.`).
 - Soft warnings (`⚠️`) never block flow; permission denials
   (`⛔`) do block.
 - Numeric counts are bold (`**{n}**`); names are bold (`**{name}**`);
@@ -993,7 +993,7 @@ priority enough to ship in this batch:
   page-content emoji.
 - **Audit per-bucket label override**: alliances who want
   `Team Alpha` / `Team Bravo` instead of A/B can't override the
-  bucket-map labels in `/storm_signups` today.
+  bucket-map labels in `/desertstorm signups` (or `/canyonstorm signups`) today.
 
 Track in [#54](https://github.com/LW-Alliance-Helper/lw-alliance-helper-bot/issues/54)
 if/when these surface as friction in onboarding.

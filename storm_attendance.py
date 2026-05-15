@@ -1,7 +1,7 @@
 """
 Post-event attendance tracking (#133 — Step 7 of the #38 8-step flow).
 
-`/storm_attendance event_type:DS|CS event_date:YYYY-MM-DD` opens an
+`/desertstorm attendance event_date:YYYY-MM-DD` (and the CS equivalent) opens an
 officer view that lets leadership mark who actually showed for each
 assigned slot. Writes one row per slot to the alliance's configured
 `attendance_tab` Sheet.
@@ -20,8 +20,6 @@ import logging
 from typing import Optional
 
 import discord
-from discord import app_commands
-from discord.ext import commands
 
 logger = logging.getLogger(__name__)
 
@@ -96,11 +94,12 @@ def load_rostered_slots(
     if not tab:
         return [], ["no rosters tab configured"]
 
+    parent_cmd = "/desertstorm signups" if event_type == "DS" else "/canyonstorm signups"
     try:
         ws = sh.worksheet(tab)
     except Exception:
         return [], [f"rosters tab '{tab}' doesn't exist yet — post a "
-                    f"structured roster first via /storm_signups"]
+                    f"structured roster first via {parent_cmd}"]
 
     try:
         values = ws.get_all_values()
@@ -442,9 +441,10 @@ def _render_embed(session: _AttendanceSession) -> discord.Embed:
               else discord.Color.orange(),
     )
 
+    parent = "desertstorm" if session.event_type == "DS" else "canyonstorm"
     if not session.slots:
         embed.description = (
-            "_No roster slots found for this event. Run `/storm_signups` "
+            f"_No roster slots found for this event. Run `/{parent} signups` "
             "and build a structured roster first; attendance only applies "
             "to structured-flow rosters._"
         )
@@ -734,123 +734,110 @@ class _StatusPickerView(discord.ui.View):
 # ── Slash command ────────────────────────────────────────────────────────────
 
 
-class StormAttendanceCog(commands.Cog):
-    def __init__(self, bot: commands.Bot):
-        self.bot = bot
+# ── Slash command handler ────────────────────────────────────────────────────
+#
+# Registered by `storm_commands_root` under `/desertstorm attendance` and
+# `/canyon_storm attendance`. This module exposes the handler body so the
+# root cog stays a thin dispatcher.
 
-    @app_commands.command(
-        name="storm_attendance",
-        description="Record who showed for an assigned storm event",
+
+async def handle_storm_attendance(
+    bot,
+    interaction: discord.Interaction,
+    event_type: str,
+    event_date: Optional[str] = None,
+) -> None:
+    from storm_permissions import (
+        is_leader_or_admin, deny_non_leader, ensure_premium_structured,
     )
-    @app_commands.describe(
-        event_type="Which event's attendance to record",
-        event_date="Optional — defaults to the most recent posted event. Accepts e.g. May 18, 5/18, yesterday.",
+    from storm_date_helpers import (
+        parse_event_date, most_recent_event_date, format_event_date,
     )
-    @app_commands.choices(event_type=[
-        app_commands.Choice(name="Desert Storm", value="DS"),
-        app_commands.Choice(name="Canyon Storm", value="CS"),
-    ])
-    @app_commands.guild_only()
-    async def storm_attendance(
-        self,
-        interaction: discord.Interaction,
-        event_type: app_commands.Choice[str],
-        event_date: Optional[str] = None,
-    ):
-        from storm_permissions import (
-            is_leader_or_admin, deny_non_leader, ensure_premium_structured,
-        )
-        from storm_date_helpers import (
-            parse_event_date, most_recent_event_date, format_event_date,
-        )
-        if not is_leader_or_admin(interaction):
-            await deny_non_leader(interaction)
+    if not is_leader_or_admin(interaction):
+        await deny_non_leader(interaction)
+        return
+
+    et = event_type
+    parent = "desertstorm" if et == "DS" else "canyonstorm"
+    raw_input = (event_date or "").strip()
+    if not raw_input:
+        date_clean = most_recent_event_date(interaction.guild_id, et)
+        if not date_clean:
+            await interaction.response.send_message(
+                f"⚠️ No posted {('Desert Storm' if et == 'DS' else 'Canyon Storm')} "
+                f"events on record. Run `/{parent} post_signup` and build a roster "
+                f"before recording attendance, or pass `event_date` explicitly.",
+                ephemeral=True,
+            )
             return
+    else:
+        parsed = parse_event_date(raw_input)
+        if parsed is None:
+            await interaction.response.send_message(
+                f"⚠️ `{event_date}` isn't a date I can parse. Try `May 18`, "
+                f"`5/18`, `2026-05-18`, `yesterday`, or `today`.",
+                ephemeral=True,
+            )
+            return
+        date_clean = parsed.isoformat()
 
-        et = event_type.value
-        raw_input = (event_date or "").strip()
-        if not raw_input:
-            date_clean = most_recent_event_date(interaction.guild_id, et)
-            if not date_clean:
-                await interaction.response.send_message(
-                    f"⚠️ No posted {('Desert Storm' if et == 'DS' else 'Canyon Storm')} "
-                    f"events on record. Run `/storm_post_signup` and build a roster "
-                    f"before recording attendance, or pass `event_date` explicitly.",
-                    ephemeral=True,
-                )
-                return
+    ok, _structured = await ensure_premium_structured(
+        interaction, et,
+        bot=bot,
+        feature_label=f"`/{parent} attendance`",
+    )
+    if not ok:
+        return
+
+    await interaction.response.defer(thinking=True)
+
+    # gspread reads off the event loop. Two parallel Sheet fetches
+    # in one go via `asyncio.gather` so the user-facing wait is one
+    # round-trip, not two stacked sequentially.
+    slots_task = asyncio.to_thread(
+        load_rostered_slots, interaction.guild_id, et, date_clean,
+    )
+    attendance_task = asyncio.to_thread(
+        load_attendance, interaction.guild_id, et, date_clean,
+    )
+    (slots, slot_errors), (existing, attendance_errors) = await asyncio.gather(
+        slots_task, attendance_task,
+    )
+
+    if not slots:
+        msg_lines = [
+            f"⚠️ No structured roster found for **{format_event_date(date_clean)}** "
+            f"({'Desert Storm' if et == 'DS' else 'Canyon Storm'})."
+        ]
+        if slot_errors:
+            msg_lines.append("Details: " + slot_errors[0])
         else:
-            parsed = parse_event_date(raw_input)
-            if parsed is None:
-                await interaction.response.send_message(
-                    f"⚠️ `{event_date}` isn't a date I can parse. Try `May 18`, "
-                    f"`5/18`, `2026-05-18`, `yesterday`, or `today`.",
-                    ephemeral=True,
-                )
-                return
-            date_clean = parsed.isoformat()
-
-        ok, _structured = await ensure_premium_structured(
-            interaction, et,
-            bot=self.bot,
-            feature_label="`/storm_attendance`",
-        )
-        if not ok:
-            return
-
-        await interaction.response.defer(thinking=True)
-
-        # gspread reads off the event loop. Two parallel Sheet fetches
-        # in one go via `asyncio.gather` so the user-facing wait is one
-        # round-trip, not two stacked sequentially.
-        slots_task = asyncio.to_thread(
-            load_rostered_slots, interaction.guild_id, et, date_clean,
-        )
-        attendance_task = asyncio.to_thread(
-            load_attendance, interaction.guild_id, et, date_clean,
-        )
-        (slots, slot_errors), (existing, attendance_errors) = await asyncio.gather(
-            slots_task, attendance_task,
-        )
-
-        if not slots:
-            msg_lines = [
-                f"⚠️ No structured roster found for **{format_event_date(date_clean)}** "
-                f"({'Desert Storm' if et == 'DS' else 'Canyon Storm'})."
-            ]
-            if slot_errors:
-                msg_lines.append("Details: " + slot_errors[0])
-            else:
-                msg_lines.append(
-                    "Attendance is only recordable for events with a "
-                    "structured roster posted via `/storm_signups`."
-                )
-            await interaction.followup.send("\n".join(msg_lines), ephemeral=True)
-            return
-
-        session = _AttendanceSession(
-            guild_id=interaction.guild_id,
-            user_id=interaction.user.id,
-            event_type=et,
-            event_date=date_clean,
-            slots=slots,
-            existing=existing,
-        )
-        view = _AttendanceView(session)
-        embed = _render_embed(session)
-        content = None
-        if attendance_errors:
-            logger.warning(
-                "[STORM ATTENDANCE] attendance read errors for guild=%s: %s",
-                interaction.guild_id, "; ".join(attendance_errors),
+            msg_lines.append(
+                "Attendance is only recordable for events with a "
+                f"structured roster posted via `/{parent} signups`."
             )
-            content = (
-                "⚠️ Read existing attendance had issues — see bot logs. "
-                "You can still record fresh entries below."
-            )
-        msg = await interaction.followup.send(content=content, embed=embed, view=view)
-        view.message = msg
+        await interaction.followup.send("\n".join(msg_lines), ephemeral=True)
+        return
 
-
-async def setup(bot: commands.Bot):
-    await bot.add_cog(StormAttendanceCog(bot))
+    session = _AttendanceSession(
+        guild_id=interaction.guild_id,
+        user_id=interaction.user.id,
+        event_type=et,
+        event_date=date_clean,
+        slots=slots,
+        existing=existing,
+    )
+    view = _AttendanceView(session)
+    embed = _render_embed(session)
+    content = None
+    if attendance_errors:
+        logger.warning(
+            "[STORM ATTENDANCE] attendance read errors for guild=%s: %s",
+            interaction.guild_id, "; ".join(attendance_errors),
+        )
+        content = (
+            "⚠️ Read existing attendance had issues — see bot logs. "
+            "You can still record fresh entries below."
+        )
+    msg = await interaction.followup.send(content=content, embed=embed, view=view)
+    view.message = msg

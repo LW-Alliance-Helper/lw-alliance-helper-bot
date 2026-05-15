@@ -176,8 +176,9 @@ async def _run_one_tick(bot: discord.Client) -> int:
                     "[STORM SCHEDULER] guild=%s event=%s/%s — auto-post "
                     "window for this week's event already passed "
                     "(lead=%s days, days-remaining=%s); next auto-post "
-                    "targets %s. Run /storm_post_signup manually if you "
-                    "need to post for the skipped event.",
+                    "targets %s. Run the parent group's post_signup "
+                    "subcommand manually if you need to post for the "
+                    "skipped event.",
                     guild_id, event_type, skipped_event.isoformat(),
                     row.get("signup_lead_days"),
                     (skipped_event - today).days,
@@ -226,8 +227,8 @@ async def _run_one_tick(bot: discord.Client) -> int:
                 result.get("channel_id"), result.get("message_id"),
             )
         elif status == "already_posted":
-            # Idempotence: another tick (or a manual /storm_post_signup
-            # earlier in the same minute) already posted. Quiet.
+            # Idempotence: another tick (or a manual post_signup earlier
+            # in the same minute) already posted. Quiet.
             pass
         else:
             logger.warning(

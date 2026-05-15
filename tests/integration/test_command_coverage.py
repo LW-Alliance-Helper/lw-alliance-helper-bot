@@ -50,15 +50,6 @@ EXPECTED_COG_COMMANDS = {
         "setup_desertstorm", "setup_canyonstorm",
         "setup_events", "setup_survey", "setup_shiny_tasks",
     },
-    "StormCog": {
-        "desertstorm_draft", "canyonstorm_draft",
-        "desertstorm", "canyonstorm",
-    },
-    "LogCog": {
-        "desertstorm_participation", "canyonstorm_participation",
-        "desertstorm_log", "canyonstorm_log",
-        "desertstorm_remind", "canyonstorm_remind",
-    },
     "SurveyCog": {
         "survey_post", "survey", "survey_remind",
     },
@@ -76,6 +67,30 @@ EXPECTED_COG_COMMANDS = {
     "ExportImportCog": {
         "export_config", "import_config",
     },
+}
+
+
+# Storm commands consolidated under `/desertstorm` and `/canyonstorm` parent
+# groups (#143). The root cog owns both groups and dispatches into the
+# per-feature modules; nothing else registers storm slash commands.
+EXPECTED_STORM_PARENTS = {"desertstorm", "canyonstorm"}
+EXPECTED_STORM_SUBCOMMANDS = {
+    "overview", "draft", "remind", "participation", "log",
+    "post_signup", "signups", "attendance",
+    # Nested subgroups — enumerated separately below:
+    "strategy", "member_rule",
+}
+EXPECTED_STRATEGY_SUBCOMMANDS = {
+    "create", "edit", "list", "delete", "apply", "roster_history",
+}
+EXPECTED_DS_MEMBER_RULE_SUBCOMMANDS = {
+    "set_power_band", "set_member_team",
+    "set_member_zone", "set_member_role", "list",
+}
+EXPECTED_CS_MEMBER_RULE_SUBCOMMANDS = {
+    # CS has no `set_member_team` — Canyon Storm runs one team per faction.
+    "set_power_band",
+    "set_member_zone", "set_member_role", "list",
 }
 
 # Module-level slash commands defined directly in bot.py (not on a cog).
@@ -120,15 +135,32 @@ class TestCogRegistration:
             # SetupCog doesn't start tasks; nothing to tear down
             pass
 
-    def test_storm_cog_registers_expected_commands(self, seeded_db):
-        from storm import StormCog
-        cog = _make_cog(StormCog)
-        assert _commands_on(cog) == EXPECTED_COG_COMMANDS["StormCog"]
+    def test_storm_commands_root_cog_registers_parent_groups(self, seeded_db):
+        """`/desertstorm` and `/canyonstorm` parent groups host every
+        consolidated storm subcommand. Each parent advertises the same
+        eight verbs plus the two nested subgroups (`strategy`,
+        `member_rule`). Asserts the exact set so an accidentally-dropped
+        subcommand surfaces immediately."""
+        from storm_commands_root import StormCommandsRootCog
+        cog = _make_cog(StormCommandsRootCog)
+        for parent_name, parent in (
+            ("desertstorm", cog.desertstorm_group),
+            ("canyonstorm", cog.canyonstorm_group),
+        ):
+            actual = {c.name for c in parent.commands}
+            assert actual == EXPECTED_STORM_SUBCOMMANDS, (
+                f"/{parent_name} subcommand set mismatch — "
+                f"missing: {EXPECTED_STORM_SUBCOMMANDS - actual}, "
+                f"unexpected: {actual - EXPECTED_STORM_SUBCOMMANDS}"
+            )
+            strategy = parent.get_command("strategy")
+            assert strategy is not None, f"/{parent_name} strategy subgroup missing"
+            assert {c.name for c in strategy.commands} == EXPECTED_STRATEGY_SUBCOMMANDS
 
-    def test_log_cog_registers_expected_commands(self, seeded_db):
-        from storm_log import LogCog
-        cog = _make_cog(LogCog)
-        assert _commands_on(cog) == EXPECTED_COG_COMMANDS["LogCog"]
+        ds_rules = cog.desertstorm_group.get_command("member_rule")
+        cs_rules = cog.canyonstorm_group.get_command("member_rule")
+        assert {c.name for c in ds_rules.commands} == EXPECTED_DS_MEMBER_RULE_SUBCOMMANDS
+        assert {c.name for c in cs_rules.commands} == EXPECTED_CS_MEMBER_RULE_SUBCOMMANDS
 
     @pytest.mark.asyncio
     async def test_survey_cog_registers_expected_commands(self, seeded_db):
@@ -190,17 +222,18 @@ class TestCogRegistration:
     async def test_no_unexpected_extra_commands(self, seeded_db):
         """Catch the inverse: a command that exists on a cog but isn't in
         our expected set (e.g. someone added /foo without updating docs).
-        Async because SurveyCog/TrainCog start tasks.loops at construction."""
+        Async because SurveyCog/TrainCog start tasks.loops at construction.
+        Storm is exercised in the parent-group test above — the root cog
+        doesn't surface its commands as top-level attributes the way the
+        per-feature cogs used to."""
         from setup_cog import SetupCog
-        from storm import StormCog
-        from storm_log import LogCog
         from survey import SurveyCog
         from train_cog import TrainCog
         from member_roster import MemberRosterCog
         from donate import DonateCog
         from export_import_cog import ExportImportCog
 
-        for cog_class in (SetupCog, StormCog, LogCog, SurveyCog,
+        for cog_class in (SetupCog, SurveyCog,
                           TrainCog, MemberRosterCog, DonateCog, ExportImportCog):
             cog = _make_cog(cog_class)
             expected = EXPECTED_COG_COMMANDS[cog_class.__name__]
@@ -341,54 +374,86 @@ class TestMemberRosterCommandsGate:
         assert "Premium" in (embed.title or "")
 
 
-# ── Storm + LogCog command gates (leadership role) ──────────────────────────
+# ── Storm command gates (under the consolidated parent groups) ──────────────
+
+def _resolve_storm_subcommand(parent_name: str, *path: str):
+    """Walk the StormCommandsRootCog's parent group tree and return the
+    leaf command's callback. `path` is the sequence of subcommand names
+    — e.g. `("draft",)` or `("strategy", "create")` or `("member_rule",
+    "set_power_band")`. Returns the bound callback that takes
+    `(interaction, *args)` directly."""
+    from storm_commands_root import StormCommandsRootCog
+    cog = _make_cog(StormCommandsRootCog)
+    parent = (
+        cog.desertstorm_group if parent_name == "desertstorm"
+        else cog.canyonstorm_group
+    )
+    node = parent
+    for name in path:
+        node = node.get_command(name)
+        assert node is not None, (
+            f"Storm command tree is missing /{parent_name} "
+            f"{' '.join(path)} (failed at `{name}`)"
+        )
+    return node.callback
+
 
 class TestStormCommandsGate:
+    """Every subcommand on `/desertstorm` and `/canyonstorm` rejects a
+    caller without the leadership role. Walks the actual command tree
+    rather than asserting against handler functions so a regression in
+    the parent-group wiring (#143) surfaces here too."""
+
+    # Subcommands that take no positional args beyond `interaction`.
+    _NO_ARG_SUBS = ("overview", "draft", "remind", "participation")
+
+    # Subcommands that accept an optional `event_date` / `date` arg.
+    _DATE_SUBS = ("log", "post_signup", "signups", "attendance")
 
     @pytest.mark.asyncio
-    @pytest.mark.parametrize("command_name", [
-        "desertstorm_draft", "canyonstorm_draft",
-        "desertstorm", "canyonstorm",
-    ])
-    async def test_rejects_caller_without_leadership_role(self, seeded_db, command_name):
-        from storm import StormCog
-        cog = _make_cog(StormCog)
-
+    @pytest.mark.parametrize("parent", ["desertstorm", "canyonstorm"])
+    @pytest.mark.parametrize("sub", _NO_ARG_SUBS + _DATE_SUBS)
+    async def test_rejects_caller_without_leadership_role(
+        self, seeded_db, parent, sub,
+    ):
+        callback = _resolve_storm_subcommand(parent, sub)
         interaction = make_mock_interaction()
         interaction.user.roles = []   # no leadership role
 
-        cmd = getattr(cog, command_name)
-        await cmd.callback(cog, interaction)
+        # Date-taking subcommands accept `event_date: str | None = None`;
+        # the gate runs first, so passing the default is fine. Branch on
+        # the known shape.
+        if sub in self._DATE_SUBS:
+            await callback(interaction, None)
+        else:
+            await callback(interaction)
 
+        content, _ = _last_message(interaction)
+        assert "leadership" in (content or "").lower(), (
+            f"/{parent} {sub} should reject non-leadership caller, "
+            f"got: {content!r}"
+        )
+
+    @pytest.mark.asyncio
+    @pytest.mark.parametrize("parent", ["desertstorm", "canyonstorm"])
+    async def test_strategy_list_rejects_non_leadership(self, seeded_db, parent):
+        """Spot-check a nested-subgroup subcommand to confirm the parent →
+        subgroup → command dispatch chain still enforces the gate."""
+        callback = _resolve_storm_subcommand(parent, "strategy", "list")
+        interaction = make_mock_interaction()
+        interaction.user.roles = []
+        await callback(interaction)
         content, _ = _last_message(interaction)
         assert "leadership" in (content or "").lower()
 
-
-class TestLogCommandsGate:
-
     @pytest.mark.asyncio
-    @pytest.mark.parametrize("command_name", [
-        "desertstorm_participation", "canyonstorm_participation",
-        "desertstorm_log", "canyonstorm_log",
-        "desertstorm_remind", "canyonstorm_remind",
-    ])
-    async def test_rejects_caller_without_leadership_role(self, seeded_db, command_name):
-        from storm_log import LogCog
-        cog = _make_cog(LogCog)
-
+    @pytest.mark.parametrize("parent", ["desertstorm", "canyonstorm"])
+    async def test_member_rule_list_rejects_non_leadership(self, seeded_db, parent):
+        callback = _resolve_storm_subcommand(parent, "member_rule", "list")
         interaction = make_mock_interaction()
-        interaction.user.roles = []   # no leadership role
-
-        cmd = getattr(cog, command_name)
-        # /[event]_log takes a date arg; the gate runs first, so any
-        # extra positional doesn't matter — but the callback signature
-        # does. Pass `None` for the optional kwargs.
-        try:
-            await cmd.callback(cog, interaction)
-        except TypeError:
-            # date-taking commands need a second arg
-            await cmd.callback(cog, interaction, None)
-
+        interaction.user.roles = []
+        # `list` accepts an optional `member: str | None` filter.
+        await callback(interaction, None)
         content, _ = _last_message(interaction)
         assert "leadership" in (content or "").lower()
 

@@ -99,25 +99,49 @@ HELP_CATEGORIES: dict[str, dict] = {
         "emoji": "⚔️",
         "label": "Desert Storm",
         "description": (
-            "Run weekly Desert Storm with structured drafts and configurable "
-            "participation tracking."
+            "Run weekly Desert Storm with mail drafts, strategy presets, "
+            "structured sign-ups + roster builder (💎 Premium), and "
+            "configurable participation tracking."
         ),
         "commands": [
             ("/setup_desertstorm",
-             "Configure Team rosters, log channel, public post channel, and "
-             "mail template. Enable participation tracking and define exactly "
-             "what to log: vote counts, sit-outs, custom questions."),
-            ("/desertstorm",
+             "Configure Team rosters, log channel, public post channel, "
+             "mail template, and (💎 Premium) the structured-flow sign-up "
+             "channel, schedule, and Sheet tabs."),
+            ("/desertstorm overview",
              "Show current rosters and the active mail template."),
-            ("/desertstorm_draft",
+            ("/desertstorm draft",
              "Step through team → time → template, preview, and post."),
-            ("/desertstorm_participation",
+            ("/desertstorm strategy <create | edit | list | delete | "
+             "apply | roster_history>",
+             "Manage strategy presets — saved zone layouts with optional "
+             "per-zone power floors. `apply` opens the roster builder; "
+             "`roster_history` browses past structured rosters with "
+             "attendance overlay (💎 Premium)."),
+            ("/desertstorm member_rule <set_power_band | set_member_team "
+             "| set_member_zone | set_member_role | list>",
+             "Manage member rules: power-band eligibility "
+             "(`≥ 250M → Power Tower`) plus per-member overrides "
+             "(`Alice always plays Team A`, `Bob is our Judicator "
+             "candidate`)."),
+            ("/desertstorm post_signup [event_date]",
+             "💎 Post a sign-up message in the configured channel; "
+             "members click buttons to register Team A / Team B / Either "
+             "/ Cannot."),
+            ("/desertstorm signups [event_date]",
+             "💎 Leadership view of who's signed up; record on-behalf "
+             "votes for non-Discord roster members; open the roster "
+             "builder per team."),
+            ("/desertstorm attendance [event_date]",
+             "💎 Record who attended each assigned slot after the event; "
+             "writes to the attendance Sheet tab."),
+            ("/desertstorm participation",
              "Run this week's participation log using your configured "
              "questions."),
-            ("/desertstorm_log [date]",
-             "View a saved log entry (free: 4 most recent / 💎 Premium: full "
-             "history)."),
-            ("/desertstorm_remind",
+            ("/desertstorm log [date]",
+             "View a saved log entry (free: 4 most recent / 💎 Premium: "
+             "full history)."),
+            ("/desertstorm remind",
              "💎 DM the roster to participate this week."),
         ],
     },
@@ -125,25 +149,51 @@ HELP_CATEGORIES: dict[str, dict] = {
         "emoji": "🏜️",
         "label": "Canyon Storm",
         "description": (
-            "Same flow as Desert Storm — drafts, preview, configurable "
-            "participation."
+            "Same shape as Desert Storm — mail drafts, strategy presets, "
+            "structured sign-ups + roster builder (💎 Premium), and "
+            "configurable participation. CS adds an Apply-Faction-Roles "
+            "step after matchmaking reveals Rulebringers."
         ),
         "commands": [
             ("/setup_canyonstorm",
-             "Configure Team rosters, log channel, public post channel, and "
-             "mail template. Enable participation tracking and define exactly "
-             "what to log: vote counts, sit-outs, custom questions."),
-            ("/canyonstorm",
+             "Configure Team rosters, log channel, public post channel, "
+             "mail template, the Judicator role (💎 Premium), and the "
+             "structured-flow sign-up channel, schedule, and Sheet tabs."),
+            ("/canyonstorm overview",
              "Show current rosters and the active mail template."),
-            ("/canyonstorm_draft",
+            ("/canyonstorm draft",
              "Step through team → time → template, preview, and post."),
-            ("/canyonstorm_participation",
+            ("/canyonstorm strategy <create | edit | list | delete | "
+             "apply | roster_history>",
+             "Manage strategy presets — saved zone layouts with optional "
+             "per-zone power floors. `apply` opens the roster builder; "
+             "`roster_history` browses past structured rosters with "
+             "attendance overlay (💎 Premium)."),
+            ("/canyonstorm member_rule <set_power_band | set_member_zone "
+             "| set_member_role | list>",
+             "Manage member rules: power-band eligibility "
+             "(`≥ 250M → Power Tower`) plus per-member overrides "
+             "(`Charlie is always at Power Tower`, `Bob is our Judicator "
+             "candidate`). CS doesn't have a `set_member_team` — Canyon "
+             "Storm is single-team per faction."),
+            ("/canyonstorm post_signup [event_date]",
+             "💎 Post a sign-up message in the configured channel; "
+             "members click buttons to register their availability."),
+            ("/canyonstorm signups [event_date]",
+             "💎 Leadership view of who's signed up; record on-behalf "
+             "votes for non-Discord roster members; open the roster "
+             "builder. Approve & Post offers the Apply-Faction-Roles "
+             "step if matchmaking puts you on Rulebringers."),
+            ("/canyonstorm attendance [event_date]",
+             "💎 Record who attended each assigned slot after the event; "
+             "writes to the attendance Sheet tab."),
+            ("/canyonstorm participation",
              "Run this week's participation log using your configured "
              "questions."),
-            ("/canyonstorm_log [date]",
-             "View a saved log entry (free: 4 most recent / 💎 Premium: full "
-             "history)."),
-            ("/canyonstorm_remind",
+            ("/canyonstorm log [date]",
+             "View a saved log entry (free: 4 most recent / 💎 Premium: "
+             "full history)."),
+            ("/canyonstorm remind",
              "💎 DM the roster to participate this week."),
         ],
     },
@@ -237,7 +287,7 @@ HELP_CATEGORIES: dict[str, dict] = {
             ("Multiple named surveys",
              "Manage from `/survey` directly via Add / Edit / Remove."),
             ("DM-mode reminders",
-             "`/survey_remind`, `/desertstorm_remind`, `/canyonstorm_remind` "
+             "`/survey_remind`, `/desertstorm remind`, `/canyonstorm remind` "
              "all gain DM-via-roster delivery; survey reminders can also "
              "schedule recurring DMs."),
             ("✨ More",

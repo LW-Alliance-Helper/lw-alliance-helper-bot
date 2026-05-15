@@ -57,7 +57,7 @@ state to migrate:
   `<@id>` instead of plain text when the roster knows them.
 - **Multiple named templates** — for train prompts and storm mails.
 - **Multiple named surveys** — manage extras from `/survey` (Add / Edit / Remove).
-- **`/survey_remind`, `/desertstorm_remind`, `/canyonstorm_remind`** —
+- **`/survey_remind`, `/desertstorm remind`, `/canyonstorm remind`** —
   manual DM blasts to the whole roster.
 - **30-day windows on `/events_log` and `/train_log`** (vs 7).
 - **Unlimited storm-log lookback**.

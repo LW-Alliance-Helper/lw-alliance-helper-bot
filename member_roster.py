@@ -9,12 +9,20 @@ sheet to look up Discord IDs by display name.
 Sheet structure (column indices configurable per guild):
   Discord ID | Name | Display Name | Joined | Roles
 
+Plus an auto-created `Is this user in Discord?` column the bot maintains
+with Yes/No values per row + a Google Sheets data validation dropdown.
+The storm readers prefer this column over the legacy `not_on_discord`
+column when present — the alliance no longer has to flag non-Discord
+members manually for the storm flow's officer-view bucketing to be
+accurate.
+
 Commands:
   /setup_members  — admin wizard to configure tab/columns/role filter
   /sync_members   — manually run a full sync now
 """
 
 import asyncio
+import logging
 from datetime import datetime, timezone
 
 import discord
@@ -24,8 +32,16 @@ from discord.ext import commands
 import premium
 from config import (
     get_config, get_member_roster_config, save_member_roster_config,
-    update_roster_last_synced, get_member_roster_sheet,
+    update_roster_last_synced, get_member_roster_sheet, get_spreadsheet,
 )
+
+
+logger = logging.getLogger(__name__)
+
+
+# Header for the bot-maintained presence column. Storm readers also
+# search this exact string — keep them in sync.
+DISCORD_FLAG_COLUMN_HEADER = "Is this user in Discord?"
 
 
 # ── Sync logic (pure-ish; takes a guild and config) ───────────────────────────
@@ -51,6 +67,20 @@ def _eligible(member: discord.Member, role_filter_id: int) -> bool:
     return any(r.id == role_filter_id for r in member.roles)
 
 
+def _bot_managed_cols(cfg: dict) -> dict[int, tuple[str, callable]]:
+    """The column indices the bot owns and overwrites on every sync,
+    keyed by index. Anything outside this set on the Sheet is alliance-
+    owned data (custom power columns, the `not_on_discord` flag, etc.)
+    and must be preserved across sync calls."""
+    return {
+        cfg["discord_id_col"]: ("Discord ID",   lambda m: str(m.id)),
+        cfg["name_col"]:       ("Name",         lambda m: m.name),
+        cfg["display_col"]:    ("Display Name", lambda m: m.display_name),
+        cfg["joined_col"]:     ("Joined",       _format_joined),
+        cfg["roles_col"]:      ("Roles",        lambda m: _format_roles(m)),
+    }
+
+
 def _build_roster_rows(guild: discord.Guild, cfg: dict) -> list[list[str]]:
     """
     Build the rows that will be written to the sheet, including a header row.
@@ -58,13 +88,7 @@ def _build_roster_rows(guild: discord.Guild, cfg: dict) -> list[list[str]]:
     strings so each row is at least max(col_index)+1 cells wide.
     """
     role_filter = cfg.get("role_filter_id", 0)
-    cols = {
-        cfg["discord_id_col"]: ("Discord ID",   lambda m: str(m.id)),
-        cfg["name_col"]:       ("Name",         lambda m: m.name),
-        cfg["display_col"]:    ("Display Name", lambda m: m.display_name),
-        cfg["joined_col"]:     ("Joined",       _format_joined),
-        cfg["roles_col"]:      ("Roles",        lambda m: _format_roles(m)),
-    }
+    cols = _bot_managed_cols(cfg)
     width = max(cols.keys()) + 1
 
     header_row = [""] * width
@@ -85,9 +109,77 @@ def _build_roster_rows(guild: discord.Guild, cfg: dict) -> list[list[str]]:
     return [header_row, *member_rows]
 
 
+def _merge_with_existing(
+    new_rows: list[list[str]], existing: list[list[str]], cfg: dict,
+) -> list[list[str]]:
+    """Merge bot-managed columns from `new_rows` with alliance-owned
+    columns preserved from `existing`.
+
+    Strategy:
+      * The bot writes the columns named in `_bot_managed_cols`. Every
+        OTHER column is alliance data (custom Power column, the
+        `not_on_discord` flag, an annotation column, etc.) and is
+        preserved as-is per Discord-ID match.
+      * The header row keeps the bot's labels for managed columns and
+        the alliance's labels for everything else.
+      * Members who left the alliance — and whose data therefore drops
+        out of `new_rows` — also lose their custom-column data. That's
+        the correct behaviour: leaving the alliance means their row
+        is gone.
+      * New members joining get blank cells in custom columns; the
+        alliance can fill them in.
+    """
+    if not new_rows:
+        return new_rows
+
+    bot_cols = set(_bot_managed_cols(cfg).keys())
+    id_col   = cfg["discord_id_col"]
+
+    new_header = new_rows[0]
+    existing_header = existing[0] if existing else []
+    width = max(len(new_header), len(existing_header))
+
+    # Header — bot owns its columns, alliance keeps theirs.
+    header = list(new_header) + [""] * (width - len(new_header))
+    for i in range(width):
+        if i in bot_cols:
+            continue
+        if i < len(existing_header) and existing_header[i]:
+            header[i] = existing_header[i]
+
+    # Index existing rows by Discord ID so we can copy per-member custom
+    # columns over to the new data.
+    existing_by_id: dict[str, list[str]] = {}
+    for row in existing[1:] if existing else []:
+        did = row[id_col] if id_col < len(row) else ""
+        did = did.strip()
+        if did:
+            existing_by_id[did] = row
+
+    merged_rows = [header]
+    for new_row in new_rows[1:]:
+        merged = list(new_row)
+        if len(merged) < width:
+            merged.extend([""] * (width - len(merged)))
+        did = merged[id_col] if id_col < len(merged) else ""
+        old = existing_by_id.get(did.strip())
+        if old:
+            for i in range(width):
+                if i in bot_cols:
+                    continue
+                if i < len(old):
+                    merged[i] = old[i]
+        merged_rows.append(merged)
+
+    return merged_rows
+
+
 def write_roster(guild: discord.Guild, cfg: dict) -> int:
     """
-    Replace the contents of the configured tab with a fresh roster.
+    Rebuild the configured tab with a fresh roster while preserving
+    alliance-owned columns (custom Power column, `not_on_discord`,
+    etc.) per Discord-ID match.
+
     Returns the number of member rows written (excluding header).
 
     The caller is responsible for ensuring the guild's member cache is
@@ -99,13 +191,151 @@ def write_roster(guild: discord.Guild, cfg: dict) -> int:
     catches missing-intent and missing-chunk cases at runtime.
     """
     _warn_if_cache_looks_thin(guild)
-    rows = _build_roster_rows(guild, cfg)
+    new_rows = _build_roster_rows(guild, cfg)
     ws = get_member_roster_sheet(guild.id, cfg["tab_name"])
+    try:
+        existing = ws.get_all_values()
+    except Exception:
+        existing = []
+    merged = _merge_with_existing(new_rows, existing, cfg)
+    # Ensure the "Is this user in Discord?" column exists on the
+    # sheet and is filled with bot-derived Yes/No values. Returns the
+    # final column index so the data-validation request can target it.
+    flag_col_idx = _ensure_discord_flag_column(merged, guild, cfg)
     ws.clear()
-    if rows:
-        ws.update("A1", rows, value_input_option="USER_ENTERED")
+    if merged:
+        ws.update("A1", merged, value_input_option="USER_ENTERED")
+    # Apply the Yes/No dropdown data-validation rule on the new column.
+    # Best-effort — a Sheets API failure here doesn't roll back the row
+    # write (the column's values are correct either way).
+    if flag_col_idx is not None and len(merged) > 1:
+        try:
+            _apply_discord_flag_validation(
+                guild.id, ws, flag_col_idx, row_count=len(merged),
+            )
+        except Exception as e:
+            logger.warning(
+                "[ROSTER] data-validation rule write failed for guild=%s: %s",
+                guild.id, e,
+            )
     update_roster_last_synced(guild.id, datetime.now(timezone.utc).isoformat())
-    return max(0, len(rows) - 1)
+    return max(0, len(merged) - 1)
+
+
+def _ensure_discord_flag_column(
+    merged: list[list[str]], guild: discord.Guild, cfg: dict,
+) -> int | None:
+    """Ensure the bot-maintained presence column exists in `merged` and
+    fill every member row with "Yes" or "No" based on live guild
+    membership.
+
+    Mutates `merged` in place. Returns the column index (0-based) so
+    the caller can target the data-validation request, or None when
+    `merged` is empty.
+
+    Header lookup is case-insensitive against
+    `DISCORD_FLAG_COLUMN_HEADER`. If the column doesn't exist yet, a
+    new column is appended at the right edge — every existing row is
+    extended with a blank cell that the value fill then overwrites.
+    """
+    if not merged:
+        return None
+
+    header = merged[0]
+    target = DISCORD_FLAG_COLUMN_HEADER.strip().lower()
+    flag_idx = -1
+    for i, cell in enumerate(header):
+        if str(cell or "").strip().lower() == target:
+            flag_idx = i
+            break
+
+    if flag_idx < 0:
+        # Append a new column at the right edge for every row.
+        flag_idx = len(header)
+        header.append(DISCORD_FLAG_COLUMN_HEADER)
+        for row in merged[1:]:
+            row.append("")
+    else:
+        header[flag_idx] = DISCORD_FLAG_COLUMN_HEADER  # canonical casing
+        for row in merged[1:]:
+            while len(row) <= flag_idx:
+                row.append("")
+
+    # Build a (non-bot) member ID lookup once. `int()` conversion is
+    # done in the same pass so the per-row check is a set membership.
+    live_ids: set[int] = set()
+    for m in getattr(guild, "members", []) or []:
+        if getattr(m, "bot", False):
+            continue
+        try:
+            live_ids.add(int(m.id))
+        except (TypeError, ValueError):
+            continue
+
+    id_col = cfg["discord_id_col"]
+    for row in merged[1:]:
+        discord_id = (row[id_col] if id_col < len(row) else "").strip()
+        is_on_discord = False
+        if discord_id.isdigit():
+            try:
+                is_on_discord = int(discord_id) in live_ids
+            except (TypeError, ValueError):
+                is_on_discord = False
+        row[flag_idx] = "Yes" if is_on_discord else "No"
+
+    return flag_idx
+
+
+def _apply_discord_flag_validation(
+    guild_id: int, ws, flag_col_idx: int, *, row_count: int,
+) -> None:
+    """Write a Yes/No-dropdown data validation rule on the presence
+    column for every member row. Spans rows 2..row_count (skipping
+    header). gspread surfaces this via the spreadsheet-level
+    `batch_update`."""
+    spreadsheet = get_spreadsheet(guild_id)
+    if spreadsheet is None:
+        return  # no Sheet configured at all — nothing to validate
+    sheet_id_raw = getattr(ws, "id", None)
+    if sheet_id_raw is None:
+        return
+    try:
+        sheet_id_int = int(sheet_id_raw)
+    except (TypeError, ValueError):
+        # Worksheet's `.id` isn't numeric (test fake, malformed mock).
+        # Silent skip — the row values are still correct on the Sheet.
+        return
+    request = {
+        "requests": [
+            {
+                "setDataValidation": {
+                    "range": {
+                        "sheetId":          sheet_id_int,
+                        "startRowIndex":    1,            # skip header
+                        "endRowIndex":      row_count,    # exclusive
+                        "startColumnIndex": flag_col_idx,
+                        "endColumnIndex":   flag_col_idx + 1,
+                    },
+                    "rule": {
+                        "condition": {
+                            "type":   "ONE_OF_LIST",
+                            "values": [
+                                {"userEnteredValue": "Yes"},
+                                {"userEnteredValue": "No"},
+                            ],
+                        },
+                        "showCustomUi": True,
+                        "strict":       True,
+                        "inputMessage": (
+                            "Auto-filled by the LW Alliance Helper bot. "
+                            "Override to Yes/No if needed."
+                        ),
+                    },
+                },
+            },
+        ],
+    }
+    spreadsheet.batch_update(request)
 
 
 def _warn_if_cache_looks_thin(guild: discord.Guild) -> None:

@@ -206,7 +206,8 @@ class TestWriteRoster:
         ws.clear  = MagicMock()
         ws.update = MagicMock()
 
-        with patch("member_roster.get_member_roster_sheet", return_value=ws):
+        with patch("member_roster.get_member_roster_sheet", return_value=ws), \
+             patch("member_roster.get_spreadsheet", return_value=None):
             count = write_roster(guild, _default_cfg())
 
         assert count == 2
@@ -225,12 +226,313 @@ class TestWriteRoster:
         guild.members = []
 
         ws = MagicMock()
-        with patch("member_roster.get_member_roster_sheet", return_value=ws):
+        ws.get_all_values = MagicMock(return_value=[])
+        with patch("member_roster.get_member_roster_sheet", return_value=ws), \
+             patch("member_roster.get_spreadsheet", return_value=None):
             config.save_member_roster_config(TEST_GUILD_ID, enabled=1)
             write_roster(guild, _default_cfg())
 
         cfg_after = config.get_member_roster_config(TEST_GUILD_ID)
         assert cfg_after["last_synced_at"]   # non-empty ISO timestamp
+
+
+class TestPreserveUnknownColumns:
+    """`/sync_members` must preserve alliance-owned columns (the custom
+    Power column the structured-flow eligibility filter reads, the
+    `not_on_discord` flag the officer view reads, etc.). The prior
+    `ws.clear()` + write-bot-cols path silently destroyed them on
+    every sync."""
+
+    def test_alliance_power_column_preserved_for_retained_members(self, seeded_db):
+        from member_roster import write_roster
+        guild = MagicMock()
+        guild.id = TEST_GUILD_ID
+        guild.members = [
+            _make_member(100, "Alice"),
+            _make_member(200, "Bob"),
+        ]
+        # Existing Sheet: bot columns 0-4 plus a custom "1st Squad Power"
+        # at column 5 and a "not_on_discord" flag at column 6.
+        existing = [
+            ["Discord ID", "Name", "Display Name", "Joined", "Roles",
+             "1st Squad Power", "not_on_discord"],
+            ["100", "Alice", "Alice", "", "", "300M",  ""],
+            ["200", "Bob",   "Bob",   "", "", "180M",  ""],
+            # Charlie was on the roster manually with not_on_discord=yes
+            # but isn't in guild.members today — her custom data goes with
+            # her (expected: leaving the alliance drops the row).
+            ["",    "Charlie", "Charlie", "", "", "120M", "yes"],
+        ]
+        ws = MagicMock()
+        ws.get_all_values.return_value = existing
+        ws.update = MagicMock()
+        ws.clear  = MagicMock()
+        with patch("member_roster.get_member_roster_sheet", return_value=ws), \
+             patch("member_roster.get_spreadsheet", return_value=None):
+            write_roster(guild, _default_cfg())
+
+        rows = ws.update.call_args.args[1]
+        # Header preserves the alliance's custom column names.
+        header = rows[0]
+        assert "1st Squad Power" in header
+        assert "not_on_discord" in header
+        # Alice and Bob keep their power values.
+        member_rows = {r[1]: r for r in rows[1:]}
+        assert "Alice" in member_rows
+        assert "300M"  in member_rows["Alice"]
+        assert "Bob"   in member_rows
+        assert "180M"  in member_rows["Bob"]
+
+    def test_new_member_gets_blank_custom_columns(self, seeded_db):
+        from member_roster import write_roster
+        guild = MagicMock()
+        guild.id = TEST_GUILD_ID
+        guild.members = [
+            _make_member(100, "Alice"),
+            _make_member(300, "Diana"),  # new — wasn't in `existing`
+        ]
+        existing = [
+            ["Discord ID", "Name", "Display Name", "Joined", "Roles",
+             "1st Squad Power"],
+            ["100", "Alice", "Alice", "", "", "300M"],
+        ]
+        ws = MagicMock()
+        ws.get_all_values.return_value = existing
+        ws.update = MagicMock()
+        ws.clear  = MagicMock()
+        with patch("member_roster.get_member_roster_sheet", return_value=ws), \
+             patch("member_roster.get_spreadsheet", return_value=None):
+            write_roster(guild, _default_cfg())
+
+        rows = ws.update.call_args.args[1]
+        member_rows = {r[1]: r for r in rows[1:]}
+        # Diana's power cell is blank — she's new, alliance fills it in.
+        assert member_rows["Diana"][5] == ""
+        # Alice's power is preserved.
+        assert member_rows["Alice"][5] == "300M"
+
+    def test_empty_existing_sheet_falls_back_to_bot_cols_only(self, seeded_db):
+        from member_roster import write_roster
+        guild = MagicMock()
+        guild.id = TEST_GUILD_ID
+        guild.members = [_make_member(100, "Alice")]
+        ws = MagicMock()
+        ws.get_all_values.return_value = []
+        ws.update = MagicMock()
+        ws.clear  = MagicMock()
+        with patch("member_roster.get_member_roster_sheet", return_value=ws), \
+             patch("member_roster.get_spreadsheet", return_value=None):
+            count = write_roster(guild, _default_cfg())
+        assert count == 1
+        rows = ws.update.call_args.args[1]
+        # Five bot-managed columns plus the auto-appended presence
+        # column ("Is this user in Discord?") that the bot now
+        # maintains for every roster Sheet.
+        assert len(rows[0]) == 6
+        assert rows[0][5] == "Is this user in Discord?"
+
+    def test_get_all_values_failure_does_not_block_sync(self, seeded_db):
+        from member_roster import write_roster
+        guild = MagicMock()
+        guild.id = TEST_GUILD_ID
+        guild.members = [_make_member(100, "Alice")]
+        ws = MagicMock()
+        ws.get_all_values.side_effect = RuntimeError("simulated read failure")
+        ws.update = MagicMock()
+        ws.clear  = MagicMock()
+        with patch("member_roster.get_member_roster_sheet", return_value=ws), \
+             patch("member_roster.get_spreadsheet", return_value=None):
+            count = write_roster(guild, _default_cfg())
+        # Falls through to writing just the bot-managed columns; the
+        # write isn't blocked by a read failure.
+        assert count == 1
+
+
+class TestDiscordPresenceColumn:
+    """The "Is this user in Discord?" column is bot-maintained: the bot
+    creates the header if missing, fills every row with Yes/No based
+    on live guild membership, and writes a Yes/No-dropdown data
+    validation rule. Storm readers prefer this column over the legacy
+    `not_on_discord` column."""
+
+    def test_appends_column_when_absent(self, seeded_db):
+        from member_roster import write_roster, DISCORD_FLAG_COLUMN_HEADER
+        guild = MagicMock()
+        guild.id = TEST_GUILD_ID
+        guild.members = [
+            _make_member(100, "Alice"),
+            _make_member(200, "Bob"),
+        ]
+        ws = MagicMock()
+        ws.get_all_values.return_value = []
+        ws.update = MagicMock()
+        with patch("member_roster.get_member_roster_sheet", return_value=ws), \
+             patch("member_roster.get_spreadsheet", return_value=None):
+            write_roster(guild, _default_cfg())
+        rows = ws.update.call_args.args[1]
+        header = rows[0]
+        # New column appended at the right edge.
+        assert DISCORD_FLAG_COLUMN_HEADER in header
+        flag_idx = header.index(DISCORD_FLAG_COLUMN_HEADER)
+        # Both Alice and Bob are in guild.members → Yes.
+        member_rows = {r[1]: r for r in rows[1:]}
+        assert member_rows["Alice"][flag_idx] == "Yes"
+        assert member_rows["Bob"][flag_idx] == "Yes"
+
+    def test_normalises_existing_column_to_canonical_header(self, seeded_db):
+        """A pre-existing column with a slightly different label
+        (alliance manually typed it before the bot was updated) is
+        normalised to the canonical header. The new bot row fills
+        Yes/No regardless of what was there before."""
+        from member_roster import write_roster, DISCORD_FLAG_COLUMN_HEADER
+        guild = MagicMock()
+        guild.id = TEST_GUILD_ID
+        guild.members = [_make_member(100, "Alice")]
+        existing = [
+            ["Discord ID", "Name", "Display Name", "Joined", "Roles",
+             "is this user in discord?"],   # lowercase variant
+            ["100", "Alice", "Alice", "", "", "manual override"],
+        ]
+        ws = MagicMock()
+        ws.get_all_values.return_value = existing
+        ws.update = MagicMock()
+        with patch("member_roster.get_member_roster_sheet", return_value=ws), \
+             patch("member_roster.get_spreadsheet", return_value=None):
+            write_roster(guild, _default_cfg())
+        rows = ws.update.call_args.args[1]
+        # Header normalised — single canonical entry.
+        assert rows[0].count(DISCORD_FLAG_COLUMN_HEADER) == 1
+        # Bot's value wins.
+        assert rows[1][5] == "Yes"
+
+    def test_writes_no_for_members_not_in_guild(self, seeded_db):
+        """A roster row whose Discord ID isn't in `guild.members` gets
+        "No" written — the stale-ID inference path baked into the
+        column."""
+        from member_roster import write_roster
+        guild = MagicMock()
+        guild.id = TEST_GUILD_ID
+        # Alice in guild, but the existing Sheet has Charlie (id=999)
+        # who isn't a member any more.
+        guild.members = [_make_member(100, "Alice")]
+        existing = [
+            ["Discord ID", "Name", "Display Name", "Joined", "Roles"],
+            ["999", "Charlie", "Charlie", "", ""],
+        ]
+        ws = MagicMock()
+        ws.get_all_values.return_value = existing
+        ws.update = MagicMock()
+        with patch("member_roster.get_member_roster_sheet", return_value=ws), \
+             patch("member_roster.get_spreadsheet", return_value=None):
+            write_roster(guild, _default_cfg())
+        rows = ws.update.call_args.args[1]
+        # Charlie isn't in guild.members today — her row dropped from
+        # the merged output (leaving the alliance drops the row), so
+        # only Alice remains.
+        names = [r[1] for r in rows[1:]]
+        assert "Alice" in names
+        # Alice → Yes.
+        flag_idx = rows[0].index("Is this user in Discord?")
+        alice = next(r for r in rows[1:] if r[1] == "Alice")
+        assert alice[flag_idx] == "Yes"
+
+    def test_writes_no_for_blank_or_non_numeric_discord_id(self, seeded_db):
+        """A roster row with no Discord ID (non-Discord member) gets
+        "No" — the existing inference path now surfaces as a Sheet
+        cell instead of being implicit. Exercises the helper directly
+        with a synthetic merged list so we don't have to fight the
+        merge path's "members who left lose their row" rule."""
+        from member_roster import (
+            _ensure_discord_flag_column, DISCORD_FLAG_COLUMN_HEADER,
+        )
+        guild = MagicMock()
+        guild.id = TEST_GUILD_ID
+        guild.members = [_make_member(100, "Alice")]
+        merged = [
+            ["Discord ID", "Name", "Display Name", "Joined", "Roles"],
+            ["100", "Alice",   "Alice",   "", ""],   # in guild
+            ["",    "Charlie", "Charlie", "", ""],   # blank id
+            ["TBD", "Diana",   "Diana",   "", ""],   # non-numeric id
+        ]
+        flag_idx = _ensure_discord_flag_column(merged, guild, _default_cfg())
+        assert flag_idx == 5
+        assert merged[0][flag_idx] == DISCORD_FLAG_COLUMN_HEADER
+        assert merged[1][flag_idx] == "Yes"   # Alice in guild
+        assert merged[2][flag_idx] == "No"    # blank id
+        assert merged[3][flag_idx] == "No"    # non-numeric id
+
+    def test_data_validation_request_targets_new_column(self, seeded_db):
+        """The Yes/No-dropdown data validation rule fires once after
+        the row write, targeting the presence column and spanning
+        every member row."""
+        from member_roster import write_roster
+        guild = MagicMock()
+        guild.id = TEST_GUILD_ID
+        guild.members = [
+            _make_member(100, "Alice"),
+            _make_member(200, "Bob"),
+        ]
+        ws = MagicMock()
+        ws.id = 12345  # numeric sheetId
+        ws.get_all_values.return_value = []
+        ws.update = MagicMock()
+        spreadsheet = MagicMock()
+        spreadsheet.batch_update = MagicMock()
+        with patch("member_roster.get_member_roster_sheet", return_value=ws), \
+             patch("member_roster.get_spreadsheet", return_value=spreadsheet):
+            write_roster(guild, _default_cfg())
+        spreadsheet.batch_update.assert_called_once()
+        req = spreadsheet.batch_update.call_args.args[0]
+        rule = req["requests"][0]["setDataValidation"]
+        # Targets the new presence column (col 5 — bot-managed cols 0-4
+        # plus this one appended).
+        assert rule["range"]["sheetId"] == 12345
+        assert rule["range"]["startColumnIndex"] == 5
+        assert rule["range"]["endColumnIndex"]   == 6
+        # Yes/No dropdown values.
+        vals = rule["rule"]["condition"]["values"]
+        assert {v["userEnteredValue"] for v in vals} == {"Yes", "No"}
+        assert rule["rule"]["showCustomUi"] is True
+        # Range covers all member rows (2 members + header).
+        assert rule["range"]["startRowIndex"] == 1
+        assert rule["range"]["endRowIndex"]   == 3
+
+    def test_data_validation_skipped_when_empty_member_set(self, seeded_db):
+        """No member rows → no validation request fires (nothing to
+        constrain)."""
+        from member_roster import write_roster
+        guild = MagicMock()
+        guild.id = TEST_GUILD_ID
+        guild.members = []
+        ws = MagicMock()
+        ws.id = 12345
+        ws.get_all_values.return_value = []
+        ws.update = MagicMock()
+        spreadsheet = MagicMock()
+        spreadsheet.batch_update = MagicMock()
+        with patch("member_roster.get_member_roster_sheet", return_value=ws), \
+             patch("member_roster.get_spreadsheet", return_value=spreadsheet):
+            write_roster(guild, _default_cfg())
+        spreadsheet.batch_update.assert_not_called()
+
+    def test_data_validation_failure_does_not_block_sync(self, seeded_db):
+        """A Sheets API failure on the validation request just logs —
+        the row values were written first and are correct either way."""
+        from member_roster import write_roster
+        guild = MagicMock()
+        guild.id = TEST_GUILD_ID
+        guild.members = [_make_member(100, "Alice")]
+        ws = MagicMock()
+        ws.id = 12345
+        ws.get_all_values.return_value = []
+        ws.update = MagicMock()
+        spreadsheet = MagicMock()
+        spreadsheet.batch_update.side_effect = RuntimeError("API quota")
+        with patch("member_roster.get_member_roster_sheet", return_value=ws), \
+             patch("member_roster.get_spreadsheet", return_value=spreadsheet):
+            count = write_roster(guild, _default_cfg())
+        # Sync still completed — the row values are on the sheet.
+        assert count == 1
 
 
 # ── Cache-population safety net ──────────────────────────────────────────────

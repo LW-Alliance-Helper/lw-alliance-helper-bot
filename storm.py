@@ -2,8 +2,8 @@
 storm.py — Desert Storm mail generation
 
 Commands (Leadership only, leadership channel only):
-  /desertstorm_draft — Generate a Desert Storm mail draft for Team A or Team B
-  /canyonstorm_draft — Generate a Canyon Storm mail draft for Team A or Team B
+  /desertstorm draft — Generate a Desert Storm mail draft for Team A or Team B
+  /canyonstorm draft — Generate a Canyon Storm mail draft for Team A or Team B
 
 Flow:
   1. Pick Team (A or B)
@@ -27,8 +27,6 @@ import asyncio
 import json
 import os
 import discord
-from discord import app_commands
-from discord.ext import commands
 from config import get_config
 import wizard_registry
 
@@ -37,7 +35,7 @@ WIZARD_TIMEOUT = 600  # 10 minutes
 
 # ── Default assignments ────────────────────────────────────────────────────────
 # DS rosters start empty per team. Leadership fills them in via
-# `/desertstorm_draft`; the saved sheet is the source of truth thereafter.
+# `/desertstorm draft`; the saved sheet is the source of truth thereafter.
 
 DEFAULTS = {
     "A": ({}, []),
@@ -603,7 +601,7 @@ async def _pick_storm_template(bot, channel, guild_id: int | None, event_type: s
     if view.selected is None:
         await channel.send(
             "⏰ Template picker timed out. "
-            "Run `/desertstorm_draft` or `/canyonstorm_draft` to start over."
+            "Run `/desertstorm draft` or `/canyonstorm draft` to start over."
         )
         return False
     return view.selected
@@ -612,7 +610,7 @@ async def _pick_storm_template(bot, channel, guild_id: int | None, event_type: s
 async def run_ds_draft_flow(bot, channel, user, team: str,
                              current_zones: dict, current_subs: list):
     """
-    Step 2-4 of /desertstorm_draft:
+    Step 2-4 of /desertstorm draft:
 
       Step 2 — Pick Time
       Step 3 — Show template, choose Use as-is / Edit
@@ -636,7 +634,7 @@ async def run_ds_draft_flow(bot, channel, user, team: str,
     except discord.HTTPException:
         pass
     if time_view.selected is None:
-        await channel.send("⏰ Timed out. Use `/desertstorm_draft` to start again.")
+        await channel.send("⏰ Timed out. Use `/desertstorm draft` to start again.")
         return
     time_key = time_view.selected
 
@@ -663,7 +661,7 @@ async def run_ds_draft_flow(bot, channel, user, team: str,
     )
     await use_view.wait()
     if use_view.choice is None:
-        await channel.send("⏰ Timed out. Use `/desertstorm_draft` to start again.")
+        await channel.send("⏰ Timed out. Use `/desertstorm draft` to start again.")
         return
 
     zones, subs = current_zones, current_subs
@@ -679,7 +677,7 @@ async def run_ds_draft_flow(bot, channel, user, team: str,
         try:
             reply = await bot.wait_for("message", check=check, timeout=WIZARD_TIMEOUT)
         except asyncio.TimeoutError:
-            await channel.send("⏰ Timed out. Use `/desertstorm_draft` to start again.")
+            await channel.send("⏰ Timed out. Use `/desertstorm draft` to start again.")
             try:
                 await prompt.delete()
             except discord.HTTPException:
@@ -699,7 +697,7 @@ async def run_ds_draft_flow(bot, channel, user, team: str,
         if not edited_zones:
             await channel.send(
                 "⚠️ Could not parse any zone assignments. "
-                "Make sure the format matches the template and try `/desertstorm_draft` again."
+                "Make sure the format matches the template and try `/desertstorm draft` again."
             )
             return
         if errors:
@@ -762,119 +760,71 @@ async def _guard(interaction: discord.Interaction) -> bool:
     return True
 
 
-# ── Cog ────────────────────────────────────────────────────────────────────────
+# ── Slash command handlers ────────────────────────────────────────────────────
+#
+# Registered by `storm_commands_root` under the `/desertstorm` and
+# `/canyonstorm` parent groups. This module exposes the handler bodies
+# so the root cog stays a thin dispatcher.
 
-class StormCog(commands.Cog):
-    def __init__(self, bot):
-        self.bot = bot
 
-    @app_commands.command(
-        name="desertstorm_draft",
-        description="Generate a Desert Storm mail draft for Team A or Team B",
+async def handle_storm_draft(bot, interaction: discord.Interaction, event_type: str) -> None:
+    if not await _guard(interaction):
+        return
+
+    await interaction.response.defer(ephemeral=True)
+    channel = interaction.channel
+    if channel is None:
+        await interaction.followup.send("⚠️ Could not find the channel.", ephemeral=True)
+        return
+
+    is_ds = event_type == "DS"
+    icon = "🔥" if is_ds else "⚡"
+    label = "Desert Storm" if is_ds else "Canyon Storm"
+    parent = "desertstorm" if is_ds else "canyonstorm"
+
+    # Step 1: Pick team
+    team_msg = await channel.send(
+        f"{icon} **{label} Draft** — started by {interaction.user.mention}\n\n"
+        f"**Step 1 of 4 — Pick Team**\nWhich team are you drafting for?"
     )
-    async def desertstorm_draft(self, interaction: discord.Interaction):
-        if not await _guard(interaction):
-            return
+    team_view = TeamSelectView()
+    await team_msg.edit(view=team_view)
+    await team_view.wait()
+    try:
+        await team_msg.delete()
+    except discord.HTTPException:
+        pass
 
-        await interaction.response.defer(ephemeral=True)
-        channel = interaction.channel
-        if channel is None:
-            await interaction.followup.send("⚠️ Could not find the channel.", ephemeral=True)
-            return
+    if team_view.selected is None:
+        await channel.send(f"⏰ Timed out. Use `/{parent} draft` to start again.")
+        await interaction.followup.send("⏰ Timed out.", ephemeral=True)
+        return
 
-        # Step 1: Pick team
-        team_msg  = await channel.send(
-            f"🔥 **Desert Storm Draft** — started by {interaction.user.mention}\n\n"
-            f"**Step 1 of 4 — Pick Team**\nWhich team are you drafting for?"
-        )
-        team_view = TeamSelectView()
-        await team_msg.edit(view=team_view)
-        await team_view.wait()
-        try:
-            await team_msg.delete()
-        except discord.HTTPException:
-            pass
+    team = team_view.selected
 
-        if team_view.selected is None:
-            await channel.send("⏰ Timed out. Use `/desertstorm_draft` to start again.")
-            await interaction.followup.send("⏰ Timed out.", ephemeral=True)
-            return
-
-        team = team_view.selected
-
-        # Load the team's saved assignments so they become the starting template.
+    # Load the team's saved assignments so they become the starting template.
+    if is_ds:
         zones, subs = await asyncio.get_event_loop().run_in_executor(
             None, load_ds_assignments, team, interaction.guild_id,
         )
-
-        await interaction.followup.send(f"✅ Team {team} selected.", ephemeral=True)
-
-        # Steps 2-4: Time → Template (Use as-is / Edit) → Preview (Post & Copy)
-        await run_ds_draft_flow(self.bot, channel, interaction.user, team, zones, subs)
-
-
-    @app_commands.command(
-        name="canyonstorm_draft",
-        description="Generate a Canyon Storm mail draft for Team A or Team B",
-    )
-    async def canyonstorm_draft(self, interaction: discord.Interaction):
-        if not await _guard(interaction):
-            return
-
-        await interaction.response.defer(ephemeral=True)
-        channel = interaction.channel
-        if channel is None:
-            await interaction.followup.send("⚠️ Could not find the channel.", ephemeral=True)
-            return
-
-        # Step 1: Pick team
-        team_msg  = await channel.send(
-            f"⚡ **Canyon Storm Draft** — started by {interaction.user.mention}\n\n"
-            f"**Step 1 of 4 — Pick Team**\nWhich team are you drafting for?"
-        )
-        team_view = TeamSelectView()
-        await team_msg.edit(view=team_view)
-        await team_view.wait()
-        try:
-            await team_msg.delete()
-        except discord.HTTPException:
-            pass
-
-        if team_view.selected is None:
-            await channel.send("⏰ Timed out. Use `/canyonstorm_draft` to start again.")
-            await interaction.followup.send("⏰ Timed out.", ephemeral=True)
-            return
-
-        team = team_view.selected
-
-        # Load the team's saved assignments so they become the starting template.
+    else:
         zones = await asyncio.get_event_loop().run_in_executor(
             None, load_cs_assignments, team, interaction.guild_id,
         )
 
-        await interaction.followup.send(f"✅ Team {team} selected.", ephemeral=True)
+    await interaction.followup.send(f"✅ Team {team} selected.", ephemeral=True)
 
-        # Steps 2-4: Time → Template (Use as-is / Edit) → Preview (Post & Copy)
-        await run_cs_draft_flow(self.bot, channel, interaction.user, team, zones)
+    # Steps 2-4: Time → Template (Use as-is / Edit) → Preview (Post & Copy)
+    if is_ds:
+        await run_ds_draft_flow(bot, channel, interaction.user, team, zones, subs)
+    else:
+        await run_cs_draft_flow(bot, channel, interaction.user, team, zones)
 
 
-    @app_commands.command(
-        name="desertstorm",
-        description="Show the configured Desert Storm setup and current rosters",
-    )
-    async def desertstorm(self, interaction: discord.Interaction):
-        if not await _guard(interaction):
-            return
-        await _show_storm_overview(interaction, "DS")
-
-    @app_commands.command(
-        name="canyonstorm",
-        description="Show the configured Canyon Storm setup and current rosters",
-    )
-    async def canyonstorm(self, interaction: discord.Interaction):
-        if not await _guard(interaction):
-            return
-        await _show_storm_overview(interaction, "CS")
+async def handle_storm_overview(bot, interaction: discord.Interaction, event_type: str) -> None:
+    if not await _guard(interaction):
+        return
+    await _show_storm_overview(interaction, event_type)
 
 
 async def _show_storm_overview(interaction: discord.Interaction, event_type: str):
@@ -921,12 +871,8 @@ async def _show_storm_overview(interaction: discord.Interaction, event_type: str
     except Exception as e:
         embed.add_field(name="Current Mail Template", value=f"⚠️ Could not load: {e}", inline=False)
 
-    embed.set_footer(text=f"Run /{setup_cmd} to update. Run /{cmd_name}_draft to generate a draft.")
+    embed.set_footer(text=f"Run /{setup_cmd} to update. Run /{cmd_name} draft to generate a draft.")
     await interaction.followup.send(embed=embed, ephemeral=True)
-
-
-async def setup(bot: commands.Bot):
-    await bot.add_cog(StormCog(bot))
 
 # ══════════════════════════════════════════════════════════════════════════════
 # CANYON STORM (CS)
@@ -936,7 +882,7 @@ async def setup(bot: commands.Bot):
 
 # ── CS Defaults ───────────────────────────────────────────────────────────────
 
-# Empty placeholders — alliances fill these via `/canyonstorm_draft`.
+# Empty placeholders — alliances fill these via `/canyonstorm draft`.
 # Keys must match the canonical CS_ZONE_STRUCTURE (defined later in this
 # file) plus the CS_SUBS_KEY for {subs}; the existing test suite asserts
 # that property, so any key drift will fail loudly in CI.
@@ -1336,7 +1282,7 @@ class CSApprovalView(discord.ui.View):
 
 async def run_cs_draft_flow(bot, channel, user, team: str, current_zones: dict):
     """
-    Step 2-4 of /canyonstorm_draft: Time → Template (Use as-is / Edit) →
+    Step 2-4 of /canyonstorm draft: Time → Template (Use as-is / Edit) →
     Preview (Post & Copy). See `run_ds_draft_flow` for the shape.
     """
     guild_id = getattr(getattr(channel, "guild", None), "id", None)
@@ -1351,7 +1297,7 @@ async def run_cs_draft_flow(bot, channel, user, team: str, current_zones: dict):
     except discord.HTTPException:
         pass
     if time_view.selected is None:
-        await channel.send("⏰ Timed out. Use `/canyonstorm_draft` to start again.")
+        await channel.send("⏰ Timed out. Use `/canyonstorm draft` to start again.")
         return
     time_key = time_view.selected
 
@@ -1378,7 +1324,7 @@ async def run_cs_draft_flow(bot, channel, user, team: str, current_zones: dict):
     )
     await use_view.wait()
     if use_view.choice is None:
-        await channel.send("⏰ Timed out. Use `/canyonstorm_draft` to start again.")
+        await channel.send("⏰ Timed out. Use `/canyonstorm draft` to start again.")
         return
 
     zones = current_zones
@@ -1394,7 +1340,7 @@ async def run_cs_draft_flow(bot, channel, user, team: str, current_zones: dict):
         try:
             reply = await bot.wait_for("message", check=check, timeout=WIZARD_TIMEOUT)
         except asyncio.TimeoutError:
-            await channel.send("⏰ Timed out. Use `/canyonstorm_draft` to start again.")
+            await channel.send("⏰ Timed out. Use `/canyonstorm draft` to start again.")
             try:
                 await prompt.delete()
             except discord.HTTPException:
@@ -1414,7 +1360,7 @@ async def run_cs_draft_flow(bot, channel, user, team: str, current_zones: dict):
         if not edited_zones:
             await channel.send(
                 "⚠️ Could not parse any assignments. "
-                "Make sure the format matches the template and try `/canyonstorm_draft` again."
+                "Make sure the format matches the template and try `/canyonstorm draft` again."
             )
             return
         if errors:

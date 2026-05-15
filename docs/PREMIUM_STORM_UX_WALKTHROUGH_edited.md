@@ -429,7 +429,7 @@ the next prompt arriving is the signal it accepted.
 └──────────────────────────────────────────────────────────────────────┘
 ```
 
-**Variant A — First-time (no saved sub_mode, defaults to "pool"):**
+**Variant A — First-time (no saved sub_mode, defaults to "pool"):** EDITED
 
 ```
 [Use Default: Pool]  [Paired — primary↔sub pairs]
@@ -438,13 +438,13 @@ the next prompt arriving is the signal it accepted.
 (The current default is highlighted green, the other in blue.)
 
 **Variant B — Re-entry with saved `pool`:** identical layout — Pool
-shows as `✅ Pool` (green), Paired shows as `Paired — primary↔sub pairs`
-(blue).
+shows as `Use Current: Pool` (green), Paired shows as `Paired — primary↔sub pairs`
+(blue). - EDITED
 
-**Variant C — Re-entry with saved `paired`:**
+**Variant C — Re-entry with saved `paired`:** EDITED
 
 ```
-[Pool — flat sub list]  [✅ Paired]
+[Pool — flat sub list]  [Use Current: Paired]
 ```
 
 After click, the picked button shows the ack inline:
@@ -465,14 +465,14 @@ After click, the picked button shows the ack inline:
 Uses the same `ChannelSelectStep` view that other wizard channel picks
 use — buttons + native ChannelSelect with a Keep-current option.
 
-**Variant A — First-time (no saved sign-up channel):**
+**Variant A — First-time (no saved sign-up channel):** EDITED
 
 ```
 ┌──────────────────────────────────────────────────────────────────────┐
 │ Desert Storm Sign-Up Channel                                         │
 │ The bot will auto-post a sign-up poll here each week. Members click  │
-│ buttons to register their availability; leadership opens the officer │
-│ view via /desertstorm signups.                                             │
+│ buttons to register their availability.                              │
+│ You can open the officer view via /desertstorm signups.              │
 └──────────────────────────────────────────────────────────────────────┘
 [📢 Channel]  [🧵 Thread]
 ```
@@ -484,7 +484,7 @@ After clicking `📢 Channel`:
 
 ```
 [ChannelSelect — placeholder: "Select the channel where Desert Storm sign-up polls post..."]
-[🧵 Pick a thread instead]
+[+ Create New Channel]  [🧵 Pick a thread instead]
 ```
 
 Kevin picks `#storm-signups`. The select disables in place:
@@ -511,43 +511,43 @@ Clicking `✅ Keep current: #storm-signups`:
 └──────────────────────────────────────────────────────────────────────┘
 ```
 
-**Variant C — Re-entry, the configured channel was deleted:**
+**Variant C — Re-entry, the configured channel was deleted:** EDITED
 
 The wizard posts a stale-channel warning above the picker, then
 falls back to the Variant A flow (no Keep-current button):
 
 ```
 ┌──────────────────────────────────────────────────────────────────────┐
-│ ⚠️ Your previously configured Desert Storm sign-up channel no       │
-│ longer exists. Pick a new one below.                                 │
+│ ⚠️ Your previously configured Desert Storm sign-up channel no        │
+│ longer exists. Select a new channel.                                 │
 └──────────────────────────────────────────────────────────────────────┘
 ┌──────────────────────────────────────────────────────────────────────┐
 │ Desert Storm Sign-Up Channel                                         │
 │ The bot will auto-post a sign-up poll here each week. Members click  │
-│ buttons to register their availability; leadership opens the officer │
-│ view via /desertstorm signups.                                             │
+│ buttons to register their availability.                              │
+│ You can open the officer view via /desertstorm signups.              │
 └──────────────────────────────────────────────────────────────────────┘
 [📢 Channel]  [🧵 Thread]
 ```
 
 ---
 
-### Screen 2.7 — Auto-schedule: event day-of-week
+### Screen 2.7 — Auto-schedule: event day-of-week EDITED
+NOTE: DS always runs on Friday at 4pm ET or 9pm ET. We should only ask when they want to post the poll.
 
 ```
 ┌──────────────────────────────────────────────────────────────────────┐
 │ Auto-Schedule — Event Day (💎 Premium)                               │
-│ On which day of the week does Desert Storm run for your alliance?   │
-│ The bot will fire the sign-up post `lead days` before that.          │
+│ What day should we send the poll for members to sign up?             │
 └──────────────────────────────────────────────────────────────────────┘
-[Dropdown — placeholder: "Which day of the week does this storm event run?"]
+[Dropdown — placeholder: "When should the poll be posted?"]
+  • Sunday
   • Monday
   • Tuesday
   • Wednesday
   • Thursday
   • Friday
   • Saturday
-  • Sunday
   • Skip auto-scheduling (use /desertstorm post_signup manually)
 ```
 
@@ -571,8 +571,8 @@ If he picks `Skip auto-scheduling…` instead:
 
 ```
 ┌──────────────────────────────────────────────────────────────────────┐
-│ ✅ Auto-scheduling skipped — /desertstorm post_signup will still work     │
-│ manually.                                                            │
+│ ✅ Auto-scheduling skipped — /desertstorm post_signup will still     │
+│ work manually.                                                       │
 └──────────────────────────────────────────────────────────────────────┘
 [Dropdown] (disabled)
 ```
@@ -582,7 +582,7 @@ Screen 2.10 with `lead=5`, `time=""`.)
 
 ---
 
-### Screen 2.8 — Auto-schedule: lead days
+### Screen 2.8 — Auto-schedule: lead days EDITED - REMOVE
 
 Uses `ask_keep_or_change` with default `5`.
 
@@ -646,16 +646,15 @@ and only non-5 saved values surface the three-button layout.
 
 ---
 
-### Screen 2.9 — Auto-schedule: sign-up time
+### Screen 2.9 — Auto-schedule: sign-up time EDITED
+NOTE: Do not have the option to leave blank. They have already said they want it to be posted automatically so they need to define the time.
 
 ```
 ┌──────────────────────────────────────────────────────────────────────┐
 │ Auto-Schedule — Sign-Up Post Time                                    │
-│ What time should the bot fire the sign-up post? (in your timezone:   │
+│ What time should the bot send the sign-up post? (in your timezone:   │
 │ (UTC-5) Eastern (New York, Toronto, Miami))                          │
 │ (e.g. `2:00pm`, `9:00am`, or 24-hour `14:00`)                        │
-│ Leave blank for manual posting only (you keep the rest of the        │
-│ schedule config but the bot won't auto-post).                        │
 └──────────────────────────────────────────────────────────────────────┘
 ```
 
@@ -703,6 +702,7 @@ Submitting an empty value stores `""` (= manual posting only).
 (`DS Signups` / `CS Signups`).
 
 **Variant A — First-time (no saved value):**
+NOTE: We need to be sure that we /create/ the tab if it doesn't exist. Update the wording here like we do elsewhere when that is the case.
 
 ```
 ┌──────────────────────────────────────────────────────────────────────┐
@@ -752,6 +752,8 @@ Ack after pick or submit:
 ### Screen 2.11 — Rosters tab
 
 Same shape as Screen 2.10, with `Rosters` substituted throughout.
+NOTE: We need to be sure that we /create/ the tab if it doesn't exist. Update the wording here like we do elsewhere when that is the case.
+
 
 ```
 ┌──────────────────────────────────────────────────────────────────────┐
@@ -773,13 +775,15 @@ Modal title: `Rosters Tab Name`. Ack: `✅ Using DS Rosters`.
 ### Screen 2.12 — Attendance tab
 
 Same shape again.
+NOTE: We need to be sure that we /create/ the tab if it doesn't exist. Update the wording here like we do elsewhere when that is the case.
+
 
 ```
 ┌──────────────────────────────────────────────────────────────────────┐
 │ Attendance Tab                                                       │
 │ Which Google Sheet tab should the bot use for Desert Storm           │
-│ attendance? The bot manages the structure — just make sure the tab   │
-│ exists.                                                              │
+│ attendance? The bot creates and maintains this tab if it doesn't     |
+| exist.                                                               │
 └──────────────────────────────────────────────────────────────────────┘
 ```
 
@@ -790,7 +794,8 @@ Modal title: `Attendance Tab Name`. Ack: `✅ Using DS Attendance`.
 
 ---
 
-### Screen 2.12c — Judicator role (CS only, Premium)
+### Screen 2.12c — Judicator role (CS only, Premium) EDITED
+NOTE: Remove this, it seems like an extra, unnecessary thing for our users to try and set up in this manner.
 
 **This screen does not fire for `/setup_desertstorm`.** It only
 appears in the CS wizard, after the Attendance tab screen.
@@ -803,14 +808,14 @@ appears in the CS wizard, after the Attendance tab screen.
 │ Pick the Discord role the bot should apply to members tagged as      │
 │ Judicator candidates (via /canyonstorm member_rule set_member_role) after a   │
 │ CS roster is approved and matchmaking reveals Rulebringers. Skip if  │
-│ you don't use this — the bot won't apply any role.                   │
+│ you don't use this.                   │
 └──────────────────────────────────────────────────────────────────────┘
-[Dropdown — placeholder: "Pick the Judicator role (or skip)"]
-  • Skip — no role to apply
+[Dropdown — placeholder: "Pick the Judicator role"]
   • @Judicator
   • @Officer
   • @Member
   • … (up to 24 roles, hierarchy-ordered)
+[+ Create role]  [Skip]
 ```
 
 After Kevin picks `@Judicator`:
@@ -884,7 +889,9 @@ deleted in Discord):** the gate still fires but with
 
 ---
 
-### Screen 2.12d — Power-refresh DM (Premium)
+### Screen 2.12d — Power-refresh DM (Premium) EDITED
+
+NOTE: This will need to be edited to match the changes we make with how we select Column instead. We should fetch the column header and have it say something like "Column B: 1st Squad Power" in this section.
 
 Fires for both DS and CS as the last opted-in step.
 
@@ -948,7 +955,7 @@ Click `↩️ Switch to: No`:
 
 ---
 
-### Screen 2.13a — Strategy Presets explainer (Premium + opted-in only)
+### Screen 2.13a — Strategy Presets explainer (Premium + opted-in only) EDITED
 
 The wizard posts a plain-text explainer before asking for the tab
 name, so officers know what the concept *is* before they're asked
@@ -960,12 +967,17 @@ block, since strategy presets only drive the roster builder.
 ```
 ┌──────────────────────────────────────────────────────────────────────┐
 │ Strategy Presets                                                     │
-│ A strategy preset is a saved zone layout — which zones exist, how    │
-│ many spots each holds, and (optionally) per-zone power floors for    │
-│ Desert Storm. When leadership builds a roster, they pick which       │
-│ preset to apply; the bot uses the preset to gate eligibility and lay │
-│ out the team. Manage presets with `/desertstorm strategy create /    │
-│ edit / list / apply`.                                                │
+│ A strategy preset is a saved zone layout including:                  │
+│ Maximum players per zone                                             │
+| Optional power requirements                                          │
+│ Priority                                                             │
+│                                                                      │
+| When leadership builds a roster, they pick which                     │
+│ preset to apply. The bot uses the preset to gate eligibility and     │
+│ fill out the team.                                                   │
+│                                                                      │
+│ Manage presets with                                                  │
+| `/desertstorm strategy create / edit / list / apply`.                │
 └──────────────────────────────────────────────────────────────────────┘
 ```
 
@@ -982,14 +994,13 @@ The wizard immediately follows with Screen 2.13.
 Fires only when the alliance opted into the structured flow at 2.3.
 Same `ask_keep_or_change` shape as the Premium tab prompts.
 
-**Variant A — First-time:**
+**Variant A — First-time:** EDITED
 
 ```
 ┌──────────────────────────────────────────────────────────────────────┐
 │ Strategy Presets Tab                                                 │
-│ Which Google Sheet tab should store Desert Storm strategy presets?  │
-│ The bot creates and maintains this tab — leave the default if you   │
-│ don't have a preference.                                             │
+│ Which Google Sheet tab should store Desert Storm strategy presets?   │
+│ The bot creates and maintains this tab.                              │
 └──────────────────────────────────────────────────────────────────────┘
 [✅ Use default: DS Strategies]  [✏️ Define my own]
 ```
@@ -1062,31 +1073,37 @@ stripped from the message and a footer is appended:
 
 ---
 
-### Screen 2.14a — Member Rules explainer (Premium + opted-in only)
+### Screen 2.14a — Member Rules explainer (Premium + opted-in only) EDITED
 
 Mirrors 2.13a — a plain-text explainer before the tab prompt. Same
 gating: only fires when the alliance is opted into the structured
 flow. Per-member rule guidance differs by event type — DS has teams,
 CS doesn't.
 
-**Variant A — Desert Storm:**
+**Variant A — Desert Storm:** EDITED
 
 ```
 ┌──────────────────────────────────────────────────────────────────────┐
 │ Member Rules                                                         │
 │ Member rules tell the roster builder how to treat individual         │
-│ members. Two types:                                                  │
-│ • Power-band — `members ≥ 250M are eligible for Power Tower`.        │
-│   Primary rule type; reads against the power column you configured   │
-│   earlier.                                                           │
-│ • Per-member — escape hatch for special cases: `Alice always plays   │
-│   Team A`, `Bob is our Judicator candidate`. Add rules later with    │
-│   `/desertstorm member_rule set_power_band` /                        │
+│ members.                                                             │
+│                                                                      │
+| There are two types of Member rules.                                 │
+│ • Power-band:                                                        |
+|      Example: `members ≥ 250M are eligible for Power Tower`          │
+│      Primary rule type that reads against the power column you       │
+│      configured earlier.                                             │
+│ • Per-member:                                                        │
+|      Used for special cases, example: `Alice always plays on Team A`,│
+│                                                                      │
+| Add rules later with                                                 │
+│   `/desertstorm member_rule` : `set_power_band` /                    │
 │   `set_member_team` / `set_member_zone` / `set_member_role`.         │
 └──────────────────────────────────────────────────────────────────────┘
 ```
 
-**Variant B — Canyon Storm:**
+**Variant B — Canyon Storm:** EDITED
+NOTE: Use the same as above but replace with canyonstorm. There are teams as stated previously in this document.
 
 ```
 ┌──────────────────────────────────────────────────────────────────────┐
@@ -1103,23 +1120,22 @@ CS doesn't.
 └──────────────────────────────────────────────────────────────────────┘
 ```
 
-Note CS drops `set_member_team` from the rule-subcommand list — CS
+~~Note CS drops `set_member_team` from the rule-subcommand list — CS
 has no teams so the subcommand doesn't exist under the CS parent.
 The example also swaps the team-based "Alice always plays Team A"
-for the zone-based "Carol always plays Power Tower".
+for the zone-based "Carol always plays Power Tower".~~
 
 ---
 
-### Screen 2.14 — Member Rules tab (Premium + opted-in only)
+### Screen 2.14 — Member Rules tab (Premium + opted-in only) EDITED
 
 Same shape as 2.13.
 
 ```
 ┌──────────────────────────────────────────────────────────────────────┐
 │ Member Rules Tab                                                     │
-│ Which Google Sheet tab should store Desert Storm member rules?      │
-│ The bot creates and maintains this tab — leave the default if you   │
-│ don't have a preference.                                             │
+│ Which Google Sheet tab should store Desert Storm member rules?       │
+│ The bot creates and maintains this tab.                              │
 └──────────────────────────────────────────────────────────────────────┘
 ```
 
@@ -1177,7 +1193,8 @@ not posted.
 
 ---
 
-### Screen 2.14c — InlinePowerBandModal (opened by 2.14b)
+### Screen 2.14c — InlinePowerBandModal (opened by 2.14b) EDITED
+NOTE: Make the Zone a dropdown
 
 ```
 ┌──────────────────────────────────────────────────────────────────────┐
@@ -1210,7 +1227,7 @@ Power-Band Rule` for CS). Both fields are `required`.
 (ephemeral — only Kevin sees it)
 ```
 
-**Submit — unparseable power value (e.g. typed `dunno`):**
+**Submit — unparseable power value (e.g. typed `dunno`):** - Give users the retry if they input something we can't parse - same as others like this.
 
 ```
 ┌──────────────────────────────────────────────────────────────────────┐
@@ -1221,13 +1238,11 @@ Power-Band Rule` for CS). Both fields are `required`.
 (ephemeral — only Kevin sees it)
 ```
 
-**Submit — non-canonical zone (e.g. typed `Powr Twr`):**
+**Submit — non-canonical zone (e.g. typed `Powr Twr`):** REMOVE - NOT NEEDED WITH ZONE DROPDOWN
 
 ```
 ┌──────────────────────────────────────────────────────────────────────┐
 │ ✅ Saved: ≥ 250M → eligible for **Powr Twr**.                        │
-│ ⚠️ `Powr Twr` isn't in the canonical zone list — saved anyway;      │
-│ double-check the spelling.                                           │
 │ Add more rules later via `/desertstorm member_rule …`.               │
 └──────────────────────────────────────────────────────────────────────┘
 (ephemeral — only Kevin sees it)
@@ -1253,7 +1268,7 @@ Power-Band Rule` for CS). Both fields are `required`.
 
 ---
 
-### Screen 2.15 — Inline post-first-signup offer (#144)
+### Screen 2.15 — Inline post-first-signup offer (#144) EDITED
 
 After the structured-flow setup save completes (the `[SETUP]` log
 fires) AND the alliance opted into the structured flow AND a sign-up
@@ -1267,13 +1282,13 @@ setup.
 ┌──────────────────────────────────────────────────────────────────────┐
 │ 📣 Want to post your first Desert Storm sign-up now? It'll land in   │
 │ #storm-signups with vote buttons members can click. You can also     │
-│ wait for the auto-schedule to fire it (if you set one up) or run     │
+│ wait for the auto-schedule to post it (if you set one up) or run     │
 │ `/desertstorm post_signup` later.                                    │
 └──────────────────────────────────────────────────────────────────────┘
-[📣 Post my first sign-up now]  [Skip — I'll post later]
+[📣 Post my first sign-up now]  [Skip]
 ```
 
-Behaviour on `[Skip — I'll post later]`: both buttons disable in
+Behaviour on `[Skip]`: both buttons disable in
 place, setup ends. Behaviour on `[📣 Post my first sign-up now]`:
 fires the same `post_registration` code path as `/desertstorm
 post_signup`, so the success / error screens in Section 4 (4.8 –
@@ -1465,7 +1480,7 @@ Fires when Apex is Premium but hasn't run `/setup_members` yet.
 
 ---
 
-### Screen 3.4 — Sync running (typing indicator)
+### Screen 3.4 — Sync running (typing indicator) EDITED
 
 After the gates pass, the bot defers the interaction (`thinking`
 state — Discord shows "LW Alliance Helper is thinking…" to Kevin
@@ -1474,7 +1489,7 @@ just the spinner.
 
 ```
 ┌──────────────────────────────────────────────────────────────────────┐
-│ LW Alliance Helper is thinking…                                     │
+│ LW Alliance Helper is working...                                     │
 └──────────────────────────────────────────────────────────────────────┘
 (ephemeral — only Kevin sees it)
 ```
@@ -1512,7 +1527,7 @@ from the saved config. (`Member Roster` is the default.)
 
 ---
 
-### Screen 3.6 — Sync failure
+### Screen 3.6 — Sync failure EDITED
 
 If `write_roster()` raises (e.g. Sheets API 403, network blip, tab
 permission revoked):
@@ -1530,7 +1545,7 @@ The error message is whatever `str(e)` returns from the underlying
 gspread exception. Examples:
 
 ```
-⚠️ Sync failed: APIError: [403]: The caller does not have permission
+⚠️ Sync failed: APIError: [403]: The caller does not have permission.
 Make sure the bot has access to your sheet and that the
 Member Roster tab can be written to.
 ```
@@ -2340,7 +2355,7 @@ embed body and footer counts update silently.
 
 ---
 
-### Screen 5.15 — Truncated buckets
+### Screen 5.15 — Truncated buckets EDITED
 
 A long member list pushed the description past `_DESCRIPTION_BUDGET`
 (3800 chars). One or more buckets after the cap are dropped from the
@@ -2356,9 +2371,9 @@ default "All" view and the footnote at the bottom flags it:
 │ **🅱️ Voted Team B** (38)                                             │
 │ …                                                                    │
 │                                                                      │
-│ _Some buckets clipped — use the filter dropdown to drill in._        │
+│ _Some buckets clipped — use the filter dropdown see all votes.       │
 │                                                                      │
-│ 🅰️ 42 · 🅱️ 38 · 🔄 4 · ❌ 2 · ❓ 1                                   │
+│ 🅰️ 42 · 🅱️ 38 · 🔄 4 · ❌ 2 · ❓ 1                                  │
 └──────────────────────────────────────────────────────────────────────┘
 ```
 
@@ -2399,7 +2414,7 @@ votes for non-Discord members.
 
 ---
 
-### Screen 5.17 — Set-up Team A → preset picker
+### Screen 5.17 — Set-up Team A → preset picker EDITED
 
 Kevin clicks `🅰️ Set up Team A`. The bot loads `ss.list_presets`. If
 no presets exist:
@@ -2407,20 +2422,21 @@ no presets exist:
 ```
 ┌──────────────────────────────────────────────────────────────────────┐
 │ ⚠️ No strategy presets defined yet for Desert Storm. Run             │
-│ `/desertstorm strategy create` (or `/canyonstorm strategy create`) first.              │
+│ `/desertstorm strategy create` first.                                │
 └──────────────────────────────────────────────────────────────────────┘
 (ephemeral — only Kevin sees it)
 ```
 
 (CS variant swaps the label: `Canyon Storm`.)
+NEW: CS variant swaps `/desertstorm` to `/canyonstorm`
 
 If presets exist, the `_PresetPickerView` ephemeral fires:
 
 ```
 ┌──────────────────────────────────────────────────────────────────────┐
-│ Pick a strategy preset to apply for **Team A**:                      │
+│ Select a strategy preset to apply for **Team A**:                    │
 └──────────────────────────────────────────────────────────────────────┘
-[Pick a preset…                                                     ▾]
+[Select a preset…                                                     ▾]
 ```
 
 Dropdown contains up to 25 saved preset names (`Standard DS`,
@@ -2429,7 +2445,7 @@ Dropdown contains up to 25 saved preset names (`Standard DS`,
 For CS the team_label is `this roster`:
 
 ```
-Pick a strategy preset to apply for **this roster**:
+Select a strategy preset to apply for **this roster**:
 ```
 
 ---
@@ -2482,7 +2498,7 @@ emits with `command_hint="/desertstorm signups"`.
 
 ---
 
-### Screen 5.21 — First-run walkthrough offer
+### Screen 5.21 — First-run walkthrough offer EDITED
 
 Right after the embed lands, if Kevin hasn't dismissed the
 `storm_signups` walkthrough yet, a second ephemeral fires
@@ -2493,7 +2509,7 @@ Right after the embed lands, if Kevin hasn't dismissed the
 │ 👋 First time using `/desertstorm signups`? Want a quick walkthrough of    │
 │ what each piece does?                                                │
 └──────────────────────────────────────────────────────────────────────┘
-[👋 Walk me through this]  [No thanks]
+[👋 Walk me through this]  [No thanks]  [Ask again next time]
 (ephemeral — only Kevin sees it)
 ```
 
@@ -2502,9 +2518,18 @@ ephemeral updates to:
 
 ```
 ┌──────────────────────────────────────────────────────────────────────┐
-│ 👍 Got it — won't ask again. Run `/help` any time and pick Desert    │
+│ 👍 Got it, won't ask again. Run `/help` any time and pick Desert     │
 │ Storm or Canyon Storm if you want a refresher.                       │
-│ a refresher.                                                         │
+└──────────────────────────────────────────────────────────────────────┘
+```
+
+ADDED: If Kevin clicks **Ask again next time** the offer is dismissed and the
+ephemeral updates to:
+
+```
+┌──────────────────────────────────────────────────────────────────────┐
+│ 👍 Got it, will ask you again next time you run                      │
+│ `/deserstorm signups`.                                               │
 └──────────────────────────────────────────────────────────────────────┘
 ```
 
@@ -2569,7 +2594,8 @@ view. Defined in `storm_officer_view._OnBehalfModal`. Lets him cast
 a vote for a non-Discord member without requiring that member to ever
 sign into Discord.
 
-### Screen 6.1 — The modal as Discord renders it
+### Screen 6.1 — The modal as Discord renders it EDITED
+NOTE: This should have a list of members that the user can vote on behalf of from the roster, as a select menu so that we don't have issues with mistaken text entries. The Vote should also be a dropdown and show the same exact values that we do on the buttons so we know the Team and Time.
 
 ```
 ┌──────────────────────────────────────────────────────────────────────┐
@@ -2606,6 +2632,7 @@ normalisation.
 ---
 
 ### Screen 6.2 — Unparseable inputs
+NOTE: Should not happen when we switch to dropdowns.
 
 Kevin submits with empty name or an unknown vote string (e.g. `yes`):
 
@@ -2623,6 +2650,7 @@ Fired before any roster-Sheet lookup. Kevin has to re-click
 ---
 
 ### Screen 6.3 — Numeric-name rejection
+NOTE: Should not happen when we switch to dropdowns.
 
 Kevin types `1234` into the name field (or pastes a Discord ID by
 mistake):
@@ -2642,6 +2670,7 @@ Surfaces *before* the gspread read so the schema collision
 ---
 
 ### Screen 6.4 — Member-not-found-in-roster
+NOTE: Should not happen when we switch to dropdowns.
 
 Kevin types `Allice` (typo). The roster Sheet had `Alice` only.
 `_read_roster_rows` returns rows, no case-insensitive match is found:
@@ -2678,7 +2707,7 @@ the officer only sees this short message.
 
 ---
 
-### Screen 6.6 — Success
+### Screen 6.6 — Success EDITED
 
 Kevin typed `Erin`, vote `Cannot`. The roster Sheet has `Erin` in the
 name column. The bot defers (gspread read might be slow), normalises
@@ -2688,7 +2717,7 @@ in place, then fires the success ephemeral:
 
 ```
 ┌──────────────────────────────────────────────────────────────────────┐
-│ ✅ Recorded on-behalf vote for **Erin**.                             │
+│ ✅ Recorded vote on behalf of **Erin**.                              │
 └──────────────────────────────────────────────────────────────────────┘
 (ephemeral — only Kevin sees it)
 ```
@@ -2700,7 +2729,7 @@ the italic `(on behalf)` from `is_on_behalf=True`).
 
 ---
 
-### Screen 6.7 — Case-normalisation success
+### Screen 6.7 — Case-normalisation success EDITED
 
 Kevin types `alice` (lowercase). The roster row is `Alice`. The
 canonical name `Alice` from the Sheet is what gets stored. The success
@@ -2708,13 +2737,13 @@ ephemeral reflects the canonical form:
 
 ```
 ┌──────────────────────────────────────────────────────────────────────┐
-│ ✅ Recorded on-behalf vote for **Alice**.                            │
+│ ✅ Recorded vote on behalf of **Alice**.                             │
 └──────────────────────────────────────────────────────────────────────┘
 ```
 
 ---
 
-### Screen 6.8 — Permissive fallback (roster read failed entirely)
+### Screen 6.8 — Permissive fallback (roster read failed entirely) EDITED
 
 Roster Sheet open / read raised. `_read_roster_rows` returned
 `(rows=[], errors=["roster-sheet read failed: …"])`. With an empty
@@ -2723,7 +2752,7 @@ verbatim (`canonical_name = raw_member`):
 
 ```
 ┌──────────────────────────────────────────────────────────────────────┐
-│ ✅ Recorded on-behalf vote for **Erin from Apex**.                   │
+│ ✅ Recorded vote on behalf of **Erin from Apex**.                    │
 └──────────────────────────────────────────────────────────────────────┘
 (ephemeral — only Kevin sees it)
 ```
@@ -2847,28 +2876,31 @@ officer view's `🅰️ Set up Team A` button), Screen 7.1 is skipped.
 
 ---
 
-### Screen 7.2 — Preset-not-found
+### Screen 7.2 — Preset-not-found EDITED
+NOTE: Add a button to show the list of them from here.
 
 Kevin typed `/desertstorm strategy apply name:foo` and there's no preset
 called `foo`:
 
 ```
 ┌──────────────────────────────────────────────────────────────────────┐
-│ ⚠️ No preset named **foo**. Use the list command to see saved       │
-│ presets.                                                             │
+│ ⚠️ No preset named **foo**.                                          │
 └──────────────────────────────────────────────────────────────────────┘
+[List saved strategies]
 (ephemeral — only Kevin sees it)
 ```
 
 ---
 
-### Screen 7.3 — Preset has no zones
+### Screen 7.3 — Preset has no zones EDITED
+NOTE: Add a button to allow them to go into Editing from here.
 
 ```
 ┌──────────────────────────────────────────────────────────────────────┐
 │ ⚠️ Preset **Standard DS** has no zones yet. Edit it first to add    │
 │ zones before applying.                                               │
 └──────────────────────────────────────────────────────────────────────┘
+[Edit Standard DS]
 (ephemeral — only Kevin sees it)
 ```
 
@@ -2947,7 +2979,7 @@ The mention renders as a clickable @username in Discord (not a ping).
 
 ---
 
-### Screen 7.8 — The builder embed (flat, pool mode, structured)
+### Screen 7.8 — The builder embed (flat, pool mode, structured) EDITED
 
 The happy-path embed Kevin sees after preset + team are resolved.
 Apex has a flat `Standard DS` preset with the six zones the user
@@ -2960,7 +2992,7 @@ seeded.
 │ 🛡️ Roster Builder: Standard DS — Team A                              │
 │                                                                      │
 │ 🗺️ Desert Storm                                                      │
-│ ⚖️ Enforcing **Min A** floors for this team                          │
+│ ⚖️ Enforcing **Min A** minimum for this team                         │
 │                                                                      │
 │ **📋 Zones**                                                         │
 │ ⬜ **Power Tower** (0/4): (empty)                                    │
@@ -2973,13 +3005,14 @@ seeded.
 │ 🪑 **Subs**: _(none)_                                                │
 │                                                                      │
 │ 📊 **Filled:** 0 / 20                                                │
-│ 🎯 **Active zone:** **Power Tower** — floor **300M**                 │
+│ 🎯 **Active zone:** **Power Tower** — minimum **300M**               │
 └──────────────────────────────────────────────────────────────────────┘
 [Pick a zone to edit…                                                ▾]
 [Pick a member for Power Tower…                                      ▾]
-[👁️ Show below-floor]  [↩️ Unassign current zone]  [🪑 Last to subs]
-[🎯 Auto-fill]
-[✅ Approve & Post]  [📄 Preview mail]  [🖼️ Render image]  [❌ Cancel]
+[👁️ Show members below minimum]  [↩️ Remove current zone assignees]
+[🪑 Add all unassigned to Subs]  [🎯 Auto-fill]
+
+[✅ Approve & Post]  [📄 Preview mail]  [🖼️ Generate DS assignments image]  [❌ Cancel]
 ```
 
 Key surface details:
@@ -3013,15 +3046,16 @@ Buttons in `row` order:
 
 - Row 0: `[Pick a zone to edit…]` (Select)
 - Row 1: `[Pick a member for <zone>…]` (Select)
-- Row 2: `[👁️ Show below-floor]` / `[↩️ Unassign current zone]` /
-  `[🪑 Last to subs]` + `[🎯 Auto-fill]` (structured only)
-- Row 3: `[✅ Approve & Post]` `[📄 Preview mail]` `[🖼️ Render image]`
+- Row 2: `[👁️ Show members below minimum]` / `[↩️ Remove current zone assignees]`
+- Row 3: `[🪑 Add all unassigned to Subs]` + `[🎯 Auto-fill]` (structured only)
+- Row 4: Blank row for spacing
+- Row 5: `[✅ Approve & Post]` `[📄 Preview mail]` `[🖼️ Generate DS assignments image]`
   `[❌ Cancel]` (structured) — or `[📄 Generate mail]`
-  `[💾 Save as preset]` `[🖼️ Render image]` `[✅ Done]` (free-tier).
+  `[💾 Save as preset]` `[🖼️ Generate DS assignments image]` `[✅ Done]` (free-tier).
 
 ---
 
-### Screen 7.9 — Builder embed, after assignments
+### Screen 7.9 — Builder embed, after assignments EDITED - MIMIC 7.8
 
 Kevin picked Power Tower, then Alice (412M), then Bob (380M). Picked
 Info Center, then Carol (350M). Auto-fill has not been clicked. The
@@ -3055,7 +3089,8 @@ zone is still below capacity.
 
 ---
 
-### Screen 7.10 — Member picker dropdown
+### Screen 7.10 — Member picker dropdown EDITED
+NOTE: Change Floor to Minimum in general - more user friendly
 
 Kevin opened the member dropdown for Info Center. Eligible-only:
 
@@ -3071,7 +3106,7 @@ Kevin opened the member dropdown for Info Center. Eligible-only:
 └──────────────────────────────────────────────────────────────────────┘
 ```
 
-When the toggle is on (`👁️ Hide below-floor` showing), below-floor
+When the toggle is on (`👁️ Hide members below minimum` showing), below-floor
 members are appended with a description annotation:
 
 ```
@@ -3081,8 +3116,8 @@ members are appended with a description annotation:
 │ Alice (412M)                                                         │
 │ Bob (380M)                                                           │
 │ …                                                                    │
-│ Hank (90M)                       below floor                         │
-│ Ivan (power unknown) ¹           below floor                         │
+│ Hank (90M)                       below minimum                       │
+│ Ivan (power unknown) ¹           below minimum                       │
 └──────────────────────────────────────────────────────────────────────┘
 ```
 
@@ -3104,7 +3139,7 @@ case — option shouldn't even be in the pool):
 
 ```
 ┌──────────────────────────────────────────────────────────────────────┐
-│ ⚠️ Toggle the below-floor override to assign this member.            │
+│ ⚠️ Toggle the below minimum override to assign this member.          │
 └──────────────────────────────────────────────────────────────────────┘
 (ephemeral — only Kevin sees it)
 ```
@@ -3134,24 +3169,24 @@ Kevin tries to assign a 5th member to Power Tower (cap 4):
 
 ---
 
-### Screen 7.12 — Below-floor toggle button states
+### Screen 7.12 — Below-floor toggle button states EDITED
 
 Default state — toggle is off:
 
 ```
-[👁️ Show below-floor]
+[👁️ Show members below minimum]
 ```
 
 After click — toggle is on, label inverts:
 
 ```
-[👁️ Hide below-floor]
+[👁️ Hide members below minimum]
 ```
 
 A new line surfaces in the embed under the Active zone line:
 
 ```
-👁️ Below-floor members visible in the picker.
+👁️ Members below minimum visible in the picker.
 ```
 
 (Plus the picker pool now includes below-floor + power-unknown rows.)
@@ -3162,9 +3197,9 @@ intended).
 
 ---
 
-### Screen 7.13 — Unassign-zone
+### Screen 7.13 — Unassign-zone EDITED
 
-Kevin clicks `↩️ Unassign current zone`. The selected zone's
+Kevin clicks `↩️ Remove current zone assignees`. The selected zone's
 assignment for the current phase is cleared. Embed re-renders with
 the zone showing `⬜ (empty)`. Paired-sub pairings whose primaries
 are now gone get pruned (`prune_stale_pairings`); below-floor flags
@@ -3180,9 +3215,9 @@ If Kevin clicks unassign without a zone selected (degenerate state):
 
 ---
 
-### Screen 7.14 — Last-to-subs
+### Screen 7.14 — Last-to-subs EDITED
 
-Kevin clicks `🪑 Last to subs`. The last-added member of the selected
+Kevin clicks `🪑 Add all unassigned to Subs`. The last-added member of the selected
 zone moves to the flat sub pool. Embed updates:
 
 ```
@@ -3271,7 +3306,7 @@ free-tier). Both call `_send_mail_preview`:
 │ Sam                                                                  │
 │ Tia                                                                  │
 │                                                                      │
-│ **Sub Pairs**                                                        │
+│ **Subs**                                                             │
 │ (none)                                                               │
 │                                                                      │
 │ **Time:** 4pm EDT (18:00 server time)                                │
@@ -3304,14 +3339,14 @@ same builder.
 
 ---
 
-### Screen 7.17 — Render image
+### Screen 7.17 — Render image EDITED
 
-Kevin clicks `🖼️ Render image`. Bot defers ephemerally, then calls
+Kevin clicks `🖼️ Generate DS assignments image`. Bot defers ephemerally, then calls
 `storm_renderer.render` on a thread executor. Happy path:
 
 ```
 ┌──────────────────────────────────────────────────────────────────────┐
-│ 🖼️ Roster image attached:                                            │
+│ 🖼️ DS assignments image attached:                                    │
 │ [ds-roster-2026-05-18-team-A.png] (attachment)                       │
 └──────────────────────────────────────────────────────────────────────┘
 (ephemeral — only Kevin sees it)
@@ -3486,7 +3521,7 @@ Sheet-write soft error appended below any of the above:
 
 ---
 
-### Screen 7.20 — Faction-roles offer (CS Approve & Post, Judicator configured)
+### Screen 7.20 — Faction-roles offer (CS Approve & Post, Judicator configured) EDITED - REMOVE BASED ON PREVIOUS ANNOTATIONS ABOVE
 
 Right after a CS approve posts successfully, if the alliance has
 `judicator_role_id` set in structured config AND the roster has at
@@ -3672,7 +3707,7 @@ just the inert buttons:
 
 ---
 
-### Screen 7.23 — Phase-aware variant: builder embed
+### Screen 7.23 — Phase-aware variant: builder embed - MIMIC DS FOR ALL BUTTONS AND LAYOUT
 
 Kevin opened the builder against the `CS Standard` 3-phase preset.
 The embed gains a phase-nav row at the top and the zone capacity
@@ -3734,6 +3769,7 @@ Phase 2 counts as the live readout, and Mercenary/Arsenal now show
 ---
 
 ### Screen 7.24 — Paired-mode variant: builder embed
+NOTE: There are only 10 subs and 20 primaries, not all will have a sub paired with them. We should have this so that we can have a button to pair subs. When the user clicks that, open a modal with all currently assigned Primary. Next to each primary should be a dropdown that lists Subs. Make sure we have a Submit/Save button on the modal with that.
 
 Kevin opened a paired-sub preset (sub_mode="paired"). The embed
 header includes a paired-mode hint and zones render with inline sub
@@ -3762,7 +3798,7 @@ annotations:
 [Pick a zone to edit…                                                ▾]
 [Pick a member for Power Tower…                                      ▾]
 [👁️ Show below-floor]  [↩️ Unassign current zone]  [🪑 Last to subs]
-[🔁 Re-pair sub]  [🎯 Auto-fill]
+[🔁 Pair subs]  [🎯 Auto-fill]
 [✅ Approve & Post]  [📄 Preview mail]  [🖼️ Render image]  [❌ Cancel]
 ```
 

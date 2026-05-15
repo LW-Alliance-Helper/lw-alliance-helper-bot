@@ -189,12 +189,6 @@ async def on_ready():
     if "train" not in bot.extensions:
         await bot.load_extension("train")
         print(f"[INFO] Train cog loaded")
-    if "storm" not in bot.extensions:
-        await bot.load_extension("storm")
-        print(f"[INFO] Storm cog loaded")
-    if "storm_log" not in bot.extensions:
-        await bot.load_extension("storm_log")
-        print(f"[INFO] Log cog loaded")
     if "survey" not in bot.extensions:
         await bot.load_extension("survey")
         print(f"[INFO] Survey cog loaded")
@@ -210,6 +204,12 @@ async def on_ready():
     if "export_import_cog" not in bot.extensions:
         await bot.load_extension("export_import_cog")
         print(f"[INFO] Export/Import cog loaded")
+    # Storm commands all live under `/desertstorm` and `/canyonstorm`
+    # — one root cog registers both parent groups and dispatches into
+    # the per-feature handler modules (storm.py, storm_log.py, etc.).
+    if "storm_commands_root" not in bot.extensions:
+        await bot.load_extension("storm_commands_root")
+        print(f"[INFO] Storm commands root cog loaded")
 
     # Sync slash commands globally so they work in any server. Commands
     # decorated with `guilds=[...]` are excluded from the global sync;
@@ -253,6 +253,16 @@ async def on_ready():
             sentry_sdk.capture_exception(e)
     print(f"[GUILD] Refreshed install metadata for {len(bot.guilds)} guild(s)")
 
+    # Re-register persistent storm sign-up Views so their buttons keep
+    # working after a restart. Fed from `storm_registration_posts`; safely
+    # a no-op until #124 starts writing to that table. See storm_signup_view.
+    try:
+        from storm_signup_view import register_persistent_signup_views
+        register_persistent_signup_views(bot)
+    except Exception as e:
+        print(f"[STORM SIGNUP] Failed to re-register sign-up views: {e}")
+        sentry_sdk.capture_exception(e)
+
     # Only start background tasks once — they persist across reconnects
     if not hasattr(bot, "_tasks_started"):
         bot._tasks_started = True
@@ -266,6 +276,13 @@ async def on_ready():
         print(f"[INFO] Shiny tasks weekly refresh started")
         shiny_tasks_post_task.start()
         print(f"[INFO] Shiny tasks per-minute post loop started")
+        try:
+            from storm_signup_scheduler import start_storm_signup_scheduler
+            start_storm_signup_scheduler(bot)
+            print(f"[INFO] Storm sign-up scheduler started")
+        except Exception as e:
+            print(f"[STORM SCHEDULER] Failed to start: {e}")
+            sentry_sdk.capture_exception(e)
 
 
 @bot.event

@@ -10,6 +10,8 @@ visual review concern. These tests pin behaviour:
   * The session → RosterData conversion is faithful.
 """
 
+import io
+
 import pytest
 
 
@@ -55,123 +57,22 @@ def test_render_no_zones_no_subs_no_roles():
 
 
 def test_render_includes_paired_subs():
+    # Map-based renderer (#140): paired-mode rosters render the sub
+    # inline with the primary inside each zone's member-list pill,
+    # AND switch the Subs column to the two-column pairs table. We
+    # can't easily assert against pixels, but the path must produce
+    # a valid PNG without crashing.
     roster = sr.RosterData(
         title="Paired demo",
+        event_type="DS",
         zones=[sr.RosterZone(
-            name="Power Tower", max_players=2,
-            members=["Alice", "Bob"],
+            name="Nuclear Silo", canonical_zone="Nuclear Silo",
+            max_players=2, members=["Alice", "Bob"],
         )],
         paired_subs={"Alice": "Carol"},
     )
-    # The renderer should fold paired subs in — we can't easily check
-    # pixels, but the canvas height should grow when paired subs are
-    # present compared to no pairing.
-    no_pair = sr.RosterData(
-        title="No pair demo",
-        zones=[sr.RosterZone(
-            name="Power Tower", max_players=2, members=["Alice", "Bob"],
-        )],
-    )
-    h_paired = sr._measure_height(
-        roster,
-        title_font=_default_font(18),
-        heading_font=_default_font(14),
-        body_font=_default_font(12),
-    )
-    h_no_pair = sr._measure_height(
-        no_pair,
-        title_font=_default_font(18),
-        heading_font=_default_font(14),
-        body_font=_default_font(12),
-    )
-    # Same number of body lines (the sub is part of the same primary
-    # line in the renderer), so heights should be equal.
-    assert h_paired == h_no_pair
-    # Sanity: render the paired version too.
     png = sr.render(roster)
     assert png[:8] == b"\x89PNG\r\n\x1a\n"
-
-
-def test_render_includes_special_roles():
-    roster = sr.RosterData(
-        title="Roles demo",
-        zones=[sr.RosterZone(name="Power Tower", max_players=1, members=["Alice"])],
-        special_roles={"Commander": ["Alice"], "Judicator": ["Bob"]},
-    )
-    png = sr.render(roster)
-    assert png[:8] == b"\x89PNG\r\n\x1a\n"
-
-
-def test_wrap_text_short_string_returns_single_line():
-    font = _default_font(14)
-    lines = sr._wrap_text("Short title", font, max_width=1000)
-    assert lines == ["Short title"]
-
-
-def test_wrap_text_wraps_on_word_boundary():
-    font = _default_font(14)
-    # A narrow max_width forces splitting between words. The contract
-    # is "every returned line fits in max_width and the join recovers
-    # the input modulo whitespace."
-    text = "alpha beta gamma delta epsilon zeta"
-    lines = sr._wrap_text(text, font, max_width=60)
-    assert len(lines) > 1
-    for line in lines:
-        assert sr._text_width(font, line) <= 60
-    joined = " ".join(lines)
-    assert set(joined.split()) == set(text.split())
-
-
-def test_wrap_text_breaks_overlong_token_by_chars():
-    font = _default_font(14)
-    # One word much wider than the max width gets char-split rather
-    # than silently truncated.
-    lines = sr._wrap_text("aaaaaaaaaaaaaaaaaaaaaa", font, max_width=20)
-    assert len(lines) > 1
-    for line in lines:
-        assert sr._text_width(font, line) <= 20
-
-
-def test_wrap_text_empty_string_returns_single_empty_line():
-    font = _default_font(14)
-    assert sr._wrap_text("", font, max_width=100) == [""]
-
-
-def test_render_long_title_wraps_and_grows_canvas():
-    # Compare a 1-line title to a wrapped one by counting how many
-    # title lines `_wrap_text` produces — the empty-roster height
-    # floor would otherwise mask the growth.
-    title_font = _default_font(18)
-    short_lines = sr._wrap_text(
-        "DS", title_font, sr._WIDTH - 2 * sr._PADDING_X,
-    )
-    long_title = (
-        "Desert Storm — Standard Preset With Lots Of Words Past Edge — "
-        "Team A — 2026-05-18 — extra words that force a wrap"
-    )
-    long_lines = sr._wrap_text(
-        long_title, title_font, sr._WIDTH - 2 * sr._PADDING_X,
-    )
-    assert len(short_lines) == 1
-    assert len(long_lines) > 1, (
-        f"long title must wrap to multiple lines, got {long_lines}"
-    )
-    # And the render path still produces a valid PNG for the long one.
-    long_roster = sr.RosterData(
-        title=long_title,
-        zones=[sr.RosterZone(name="Z", max_players=1, members=["A"])],
-    )
-    png = sr.render(long_roster)
-    assert png[:8] == b"\x89PNG\r\n\x1a\n"
-
-
-def _default_font(size: int):
-    """Mirror the renderer's font-load logic so test sizing aligns
-    exactly with the real path."""
-    from PIL import ImageFont
-    if sr._supports_size():
-        return ImageFont.load_default(size=size)
-    return ImageFont.load_default()
 
 
 # ── roster_from_session conversion ───────────────────────────────────────────
@@ -296,97 +197,191 @@ class TestRendererPillowMissing:
                 sr.render(roster)
 
 
-class TestRendererSurfacesPowerAndOverride:
-    """Audit Majors M6 + M7: the screenshot artifact lost the override
-    marker the embed surfaces AND dropped the power readout entirely.
-    `roster_from_session` now populates `powers` and `overrides`."""
+class TestMapBasedRender:
+    """#140 — map-based renderer dispatching on event_type. Pin the
+    new public-contract behaviour (DS vs CS dispatch, phase-aware
+    grouping, missing-zone resilience) so a future tweak can't
+    silently regress what the alliance lead's SVG mock specified."""
 
-    def test_powers_populated_for_assigned_members(self):
-        import storm_roster_builder as srb
-        members = {
-            "1001": {"key": "1001", "name": "Alice", "discord_id": "1001",
-                     "power": 412_000_000, "not_on_discord": False},
-        }
-        preset = ss.PresetBuffer(
-            name="P", event_type="DS",
-            zones=[ss.ZoneRow(zone="Power Tower", max_players=4)],
-        )
-        sess = srb.RosterBuilderSession(
-            guild_id=1, user_id=42, event_type="DS", team="A",
-            preset=preset, members=members,
-            per_member_rules=[], power_band_rules=[],
-        )
-        sess.assignments["Power Tower"].append("1001")
-        data = sr.roster_from_session(sess)
-        # Power formatted via storm_strategy.format_power.
-        assert data.powers["Alice"] == "412M"
-
-    def test_overrides_populated_from_session(self):
-        import storm_roster_builder as srb
-        members = {
-            "1001": {"key": "1001", "name": "Alice", "discord_id": "1001",
-                     "power": 180_000_000, "not_on_discord": False},
-        }
-        preset = ss.PresetBuffer(
-            name="P", event_type="DS",
-            zones=[ss.ZoneRow(zone="Power Tower", max_players=4,
-                              min_power_a=300_000_000)],
-        )
-        sess = srb.RosterBuilderSession(
-            guild_id=1, user_id=42, event_type="DS", team="A",
-            preset=preset, members=members,
-            per_member_rules=[], power_band_rules=[],
-        )
-        sess.assignments["Power Tower"].append("1001")
-        sess.below_floor_overrides.add("1001")
-        data = sr.roster_from_session(sess)
-        assert "Alice" in data.overrides
-
-    def test_power_unknown_renders_as_unknown_label(self):
-        import storm_roster_builder as srb
-        members = {
-            "1001": {"key": "1001", "name": "Erin", "discord_id": "1001",
-                     "power": None, "not_on_discord": False},
-        }
-        preset = ss.PresetBuffer(
-            name="P", event_type="DS",
-            zones=[ss.ZoneRow(zone="Power Tower", max_players=4)],
-        )
-        sess = srb.RosterBuilderSession(
-            guild_id=1, user_id=42, event_type="DS", team="A",
-            preset=preset, members=members,
-            per_member_rules=[], power_band_rules=[],
-        )
-        sess.assignments["Power Tower"].append("1001")
-        data = sr.roster_from_session(sess)
-        # The sentinel makes it clear in the image, vs. dropping the
-        # readout entirely (which would let officers misread the slot
-        # as a known-power member).
-        assert data.powers["Erin"] == "power unknown"
-
-    def test_render_with_power_and_override_doesnt_crash(self):
+    def test_ds_render_produces_png(self):
         roster = sr.RosterData(
-            title="t",
-            zones=[sr.RosterZone(
-                name="Power Tower", max_players=4,
-                members=["Alice", "Bob"],
-            )],
-            powers={"Alice": "412M", "Bob": "180M"},
-            overrides={"Bob"},
+            title="DS demo", event_type="DS",
+            preset_name="Standard", team_label="Team A",
+            event_date_label="May 18 2026",
+            zones=[
+                sr.RosterZone(name="Nuclear Silo",
+                              canonical_zone="Nuclear Silo",
+                              max_players=4, members=["Alice", "Bob"]),
+                sr.RosterZone(name="Info Center",
+                              canonical_zone="Info Center",
+                              max_players=4, members=["Carol"]),
+            ],
+            subs=["Dan"],
+        )
+        png = sr.render(roster)
+        assert png[:8] == b"\x89PNG\r\n\x1a\n"
+        # Sanity: the DS layout canvas is wider than tall after
+        # SCALE-up — distinguishable from a CS render.
+        from PIL import Image
+        img = Image.open(io.BytesIO(png))
+        assert img.size[0] > img.size[1]
+
+    def test_cs_render_produces_png_with_taller_canvas(self):
+        roster = sr.RosterData(
+            title="CS demo", event_type="CS",
+            preset_name="Rulebringers Plan", team_label="Rulebringers",
+            event_date_label="May 18 2026",
+            zones=[
+                sr.RosterZone(name="Power Tower",
+                              canonical_zone="Power Tower",
+                              max_players=4, members=["Alice"]),
+                sr.RosterZone(name="Virus Lab",
+                              canonical_zone="Virus Lab",
+                              max_players=4, members=["Bob"]),
+            ],
+        )
+        png = sr.render(roster)
+        assert png[:8] == b"\x89PNG\r\n\x1a\n"
+        # CS canvas is taller-relative to DS because the 3-stage
+        # layout needs the extra vertical room.
+        from PIL import Image
+        img = Image.open(io.BytesIO(png))
+        # CS svg is 1235.67 wide x 1045.44 tall — aspect ratio ≈ 1.18.
+        # DS is 1107.6 x 764.3 — aspect ≈ 1.45. CS render must be the
+        # taller-aspect one.
+        assert img.size[1] / img.size[0] > 0.8
+
+    def test_render_missing_zone_doesnt_crash(self):
+        # Unknown / typo canonical zones get skipped silently — render
+        # produces a PNG with everything ELSE intact. Without this
+        # the old text-canvas would print whatever string came in; the
+        # map renderer drops zones it can't place.
+        roster = sr.RosterData(
+            title="Typo zone", event_type="DS",
+            zones=[
+                sr.RosterZone(name="Misspelled Zone",
+                              canonical_zone="Misspelled Zone",
+                              max_players=4, members=["Alice"]),
+                sr.RosterZone(name="Nuclear Silo",
+                              canonical_zone="Nuclear Silo",
+                              max_players=4, members=["Bob"]),
+            ],
         )
         png = sr.render(roster)
         assert png[:8] == b"\x89PNG\r\n\x1a\n"
 
+    def test_phase_aware_groups_by_canonical_zone(self):
+        # A 2-phase preset sends one RosterZone per (zone, phase); the
+        # renderer groups them so the map slot for Info Center renders
+        # once with both phases' members stacked inside the pill.
+        roster = sr.RosterData(
+            title="Phased demo", event_type="DS",
+            phase_count=2,
+            zones=[
+                sr.RosterZone(name="Phase 1 — Info Center",
+                              canonical_zone="Info Center",
+                              max_players=4, members=["Alice", "Bob"],
+                              phase=1),
+                sr.RosterZone(name="Phase 2 — Info Center",
+                              canonical_zone="Info Center",
+                              max_players=2, members=["Carol"],
+                              phase=2),
+            ],
+        )
+        png = sr.render(roster)
+        assert png[:8] == b"\x89PNG\r\n\x1a\n"
 
-class TestSupportsSizeCached:
-    """Audit minor: `_supports_size` was called per-render. Now cached
-    so the probe doesn't fire on every click."""
+    def test_three_phase_cs_render(self):
+        roster = sr.RosterData(
+            title="3-phase CS", event_type="CS",
+            phase_count=3, team_label="Rulebringers",
+            zones=[
+                sr.RosterZone(name="Phase 1 — Power Tower",
+                              canonical_zone="Power Tower",
+                              max_players=4, members=["A", "B"],
+                              phase=1),
+                sr.RosterZone(name="Phase 2 — Power Tower",
+                              canonical_zone="Power Tower",
+                              max_players=2, members=["C"],
+                              phase=2),
+                sr.RosterZone(name="Phase 3 — Power Tower",
+                              canonical_zone="Power Tower",
+                              max_players=2, members=["D"],
+                              phase=3),
+            ],
+        )
+        png = sr.render(roster)
+        assert png[:8] == b"\x89PNG\r\n\x1a\n"
 
-    def test_supports_size_cached_after_first_call(self):
-        # Reset the cache so the test isn't dependent on order.
-        sr._SUPPORTS_SIZE = None
-        first = sr._supports_size()
-        # After the first call the cache holds a bool.
-        assert sr._SUPPORTS_SIZE is not None
-        second = sr._supports_size()
-        assert first is second
+    def test_missing_icon_falls_back_to_placeholder(self):
+        # Arsenal + Mercenary Factory icons are blocked on a game-bug
+        # fix that adds them back to the in-game Rules > Structures
+        # menu. The renderer must draw a placeholder circle for those
+        # slots, not crash.
+        roster = sr.RosterData(
+            title="Missing icon", event_type="DS",
+            zones=[
+                sr.RosterZone(name="Arsenal", canonical_zone="Arsenal",
+                              max_players=4, members=["Alice"]),
+                sr.RosterZone(name="Mercenary Factory",
+                              canonical_zone="Mercenary Factory",
+                              max_players=4, members=["Bob"]),
+            ],
+        )
+        png = sr.render(roster)
+        assert png[:8] == b"\x89PNG\r\n\x1a\n"
+
+    def test_event_type_defaults_to_ds_layout(self):
+        # Unknown / empty event_type falls back to DS — protects
+        # against a stale RosterData that didn't get the new field
+        # plumbed through.
+        roster = sr.RosterData(title="Default", zones=[])
+        png = sr.render(roster)
+        assert png[:8] == b"\x89PNG\r\n\x1a\n"
+
+
+class TestRosterFromSessionStructuredFields:
+    """#140 plumbs new structured fields (event_type, preset_name,
+    team_label, event_date_label, phase_count) so the map renderer
+    doesn't have to parse the legacy `title` string."""
+
+    def test_ds_session_populates_team_label(self):
+        sess = _make_session(team="A")
+        data = sr.roster_from_session(sess)
+        assert data.event_type == "DS"
+        assert data.team_label == "Team A"
+        assert data.preset_name == "Standard"
+
+    def test_cs_session_populates_faction_label(self):
+        import storm_roster_builder as srb
+        preset = ss.PresetBuffer(
+            name="Plan", event_type="CS", faction="Rulebringers",
+            zones=[ss.ZoneRow(zone="Virus Lab", max_players=4)],
+        )
+        sess = srb.RosterBuilderSession(
+            guild_id=1, user_id=42, event_type="CS", team="",
+            preset=preset, members={}, per_member_rules=[],
+            power_band_rules=[], event_date="2026-05-18",
+        )
+        data = sr.roster_from_session(sess)
+        assert data.event_type == "CS"
+        assert data.team_label == "Rulebringers"
+
+    def test_phase_count_carried_through(self):
+        import storm_roster_builder as srb
+        preset = ss.PresetBuffer(
+            name="Phased", event_type="DS", phase_count=2,
+            zones=[ss.ZoneRow(zone="Info Center", max_phase1=4, max_phase2=2)],
+        )
+        sess = srb.RosterBuilderSession(
+            guild_id=1, user_id=42, event_type="DS", team="A",
+            preset=preset, members={}, per_member_rules=[],
+            power_band_rules=[],
+        )
+        data = sr.roster_from_session(sess)
+        assert data.phase_count == 2
+        # Each phase block carries phase + canonical_zone for the
+        # renderer's grouping pass.
+        ic_blocks = [z for z in data.zones if z.canonical_zone == "Info Center"]
+        assert len(ic_blocks) == 2
+        assert {b.phase for b in ic_blocks} == {1, 2}

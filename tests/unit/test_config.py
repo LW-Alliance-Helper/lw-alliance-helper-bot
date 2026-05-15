@@ -543,6 +543,106 @@ class TestStormSignups:
         assert old    not in dates
 
 
+class TestStormRosterImages:
+    """Pointer to a saved roster-image message — written by the
+    `💾 Save to history` action, read by the history browser."""
+
+    def test_save_and_list_single_image(self, temp_db):
+        import config
+        config.save_roster_image_ref(
+            TEST_GUILD_ID, "DS", "2026-05-18", "A",
+            channel_id=900, message_id=12345, user_id=1,
+        )
+        refs = config.list_roster_image_refs(TEST_GUILD_ID, "DS", "2026-05-18")
+        assert len(refs) == 1
+        assert refs[0]["team"] == "A"
+        assert refs[0]["channel_id"] == 900
+        assert refs[0]["message_id"] == 12345
+        assert refs[0]["posted_by_user_id"] == 1
+
+    def test_save_two_teams_one_event(self, temp_db):
+        """DS rosters can have one image per team (A + B). Both
+        survive in the same query, ordered by team for stable
+        history rendering."""
+        import config
+        config.save_roster_image_ref(
+            TEST_GUILD_ID, "DS", "2026-05-18", "B",
+            channel_id=900, message_id=2002, user_id=1,
+        )
+        config.save_roster_image_ref(
+            TEST_GUILD_ID, "DS", "2026-05-18", "A",
+            channel_id=900, message_id=1001, user_id=1,
+        )
+        refs = config.list_roster_image_refs(TEST_GUILD_ID, "DS", "2026-05-18")
+        assert [r["team"] for r in refs] == ["A", "B"]
+        assert refs[0]["message_id"] == 1001
+        assert refs[1]["message_id"] == 2002
+
+    def test_cs_uses_empty_team(self, temp_db):
+        """CS has one roster per event — saved with empty team."""
+        import config
+        config.save_roster_image_ref(
+            TEST_GUILD_ID, "CS", "2026-05-18", "",
+            channel_id=900, message_id=5555, user_id=1,
+        )
+        refs = config.list_roster_image_refs(TEST_GUILD_ID, "CS", "2026-05-18")
+        assert len(refs) == 1
+        assert refs[0]["team"] == ""
+
+    def test_resave_upserts(self, temp_db):
+        """Officer renders + saves twice — second save overwrites the
+        first pointer (the public message has a new ID)."""
+        import config
+        config.save_roster_image_ref(
+            TEST_GUILD_ID, "DS", "2026-05-18", "A",
+            channel_id=900, message_id=1001, user_id=1,
+        )
+        config.save_roster_image_ref(
+            TEST_GUILD_ID, "DS", "2026-05-18", "A",
+            channel_id=900, message_id=2002, user_id=2,
+        )
+        refs = config.list_roster_image_refs(TEST_GUILD_ID, "DS", "2026-05-18")
+        assert len(refs) == 1
+        assert refs[0]["message_id"] == 2002
+        assert refs[0]["posted_by_user_id"] == 2
+
+    def test_delete_clears_stale_pointer(self, temp_db):
+        """When the history browser detects a deleted message at
+        click time, the stale pointer gets pruned so it stops
+        showing up on future opens."""
+        import config
+        config.save_roster_image_ref(
+            TEST_GUILD_ID, "DS", "2026-05-18", "A",
+            channel_id=900, message_id=1001, user_id=1,
+        )
+        deleted = config.delete_roster_image_ref(
+            TEST_GUILD_ID, "DS", "2026-05-18", "A",
+        )
+        assert deleted is True
+        assert config.list_roster_image_refs(TEST_GUILD_ID, "DS", "2026-05-18") == []
+        # Second delete is a no-op (idempotent), not an error.
+        again = config.delete_roster_image_ref(
+            TEST_GUILD_ID, "DS", "2026-05-18", "A",
+        )
+        assert again is False
+
+    def test_event_isolation(self, temp_db):
+        """Two events on different dates don't bleed into each other."""
+        import config
+        config.save_roster_image_ref(
+            TEST_GUILD_ID, "DS", "2026-05-18", "A",
+            channel_id=900, message_id=1001, user_id=1,
+        )
+        config.save_roster_image_ref(
+            TEST_GUILD_ID, "DS", "2026-05-25", "A",
+            channel_id=900, message_id=2002, user_id=1,
+        )
+        may18 = config.list_roster_image_refs(TEST_GUILD_ID, "DS", "2026-05-18")
+        may25 = config.list_roster_image_refs(TEST_GUILD_ID, "DS", "2026-05-25")
+        assert len(may18) == 1 and may18[0]["message_id"] == 1001
+        assert len(may25) == 1 and may25[0]["message_id"] == 2002
+
+
 class TestSurveyConfig:
     """Test guild_survey_config save/load."""
 

@@ -596,20 +596,79 @@ rosters_tab records it, but the mail builder hardcoded P1+P2 only.
 ### 7.4 PNG image render
 
 Lives in `storm_renderer.py`. Triggered by `🖼️ Render image` button.
-Updated by **commit λ** to wrap the title and guard 25 MB. Updated
-by `aafb576` (PR #153) to iterate phases for phase-aware presets.
+Replaced by **#140**: the original vertical text canvas (`#132` v1)
+is gone; the renderer now produces a map-based image with icons,
+faction-coloured spawn zones, and a Subs column. Layout coordinates
+match the alliance lead's SVG mocks (`ds_layout.svg`,
+`CS_layout.svg`) 1:1.
 
-Layout: vertical white canvas, 720 px wide.
+**Delivery flow** (#140 follow-up): clicking the button posts the
+PNG as a **public** message in the channel the builder was opened
+in, so other leaders in that channel can see + save the image
+directly. The officer who clicked the button then sees an ephemeral
+followup with three action buttons:
 
-| Section | Format |
+| Button | What it does |
 |---|---|
-| Title | Bold (`title_font=18`), wrapped to canvas width by `_wrap_text` |
-| Zone heading (flat preset) | `{zone}  ({n}/{cap})` (blue heading_font=14) |
-| Zone heading (phase-aware preset) | `Phase {n} — {zone}  ({count}/{phase-N max})` — one block per (phase, zone). Phase-N zones with `max=0` and no members are skipped to avoid empty rows. |
-| Member line | `• {name} ({power}) ⚠ override   ↳ sub: {sub}` |
-| Empty zone | `(empty)` (muted) |
-| Subs heading | `Subs ({n})` |
-| Special-roles line | `{Role title}: {comma-separated names}` |
+| `📥 Download` | DMs the same PNG to the clicking officer. DMs surface "save to device" prominently on both desktop (right-click) and mobile (long-press → save to camera roll). DM-blocked → graceful ephemeral falls back to "right-click the channel image." |
+| `💾 Save to history` | Writes `(channel_id, message_id, team, posted_by, posted_at)` to the new `storm_roster_images` SQLite table. The history browser (`/<event> strategy roster_history`) gets a `📷 View Team A/B image` (DS) / `📷 View image` (CS) button per saved pointer. Image bytes stay in Discord — only the pointer is stored. UPSERT on (guild, event_type, event_date, team) so re-saving overwrites. Refuses cleanly if `session.event_date` is empty (manual / free-tier builder). |
+| `📢 Post to channel...` | Channel picker → caption modal → re-posts the same PNG (with the optional caption as the message body) into the chosen channel. Useful when the configured `post_channel` is for mail and the alliance wants the image in a different channel (a strategy / leadership channel, an announcements channel, etc.). |
+
+| Surface | Verbatim |
+|---|---|
+| Initial ephemeral copy | `🖼️ Roster image posted above. Pick an action below — only you'll see this prompt.` |
+| Bot lacks Send-Messages perms in channel | `🖼️ Roster image attached (couldn't post publicly — check the bot's permissions in this channel):` — falls back to attaching the PNG ephemerally so the officer still gets it, just no public copy + no action bar. |
+| Pillow missing | `⚠️ Image render isn't available — the host is missing Pillow. Use the text-template mail in the meantime.` |
+| Other Pillow error | `⚠️ Couldn't render the roster image — see bot logs.` |
+| > 25 MB attachment | `⚠️ Rendered roster image is too large to attach ({N} MB > 25 MB Discord limit). Use the text-template mail instead.` |
+| Download — success | `📥 Sent to your DMs — check your direct messages with the bot.` |
+| Download — DMs blocked | `⚠️ I can't DM you — your privacy settings block bot DMs. Right-click the image in the channel and use Save image instead.` |
+| Download — DM body | `📥 Here's the roster image you asked to download (from {ET} on {date}). Right-click → Save image, or tap → save on mobile.` |
+| Save — success | `💾 Saved. The image is now linked from \`/{parent} strategy roster_history\` for this event date (stays available until the original message is deleted).` |
+| Save — no event date | `⚠️ Can't save to history without an event date — open the roster from \`/desertstorm signups\` / \`/canyonstorm signups\` so the event date is set.` |
+| Post-to-channel — picker prompt | `📢 Pick a channel to post this image to. You'll get a modal to add an optional caption.` |
+| Post-to-channel — modal title | `Post roster image to channel` (caption field placeholder: `e.g. Saturday's Desert Storm — final assignments`) |
+| Post-to-channel — success | `📢 Posted to {channel mention}.` |
+| Post-to-channel — Forbidden | `⚠️ I don't have permission to post in {channel}. Check the channel's permissions and try a different channel.` |
+| Action view timeout (15 min) | View buttons disable in place — no notice; the public image is already in the channel and the officer can re-render to get a fresh action bar. |
+
+**Deliberate scope**: the rendered PNG is a *shareable artifact* — it
+shows zone names + member names + paired-sub formatting only. Per-
+member power values, `⚠ override` markers, and `special_roles` are
+NOT drawn (those are leadership-internal signals surfaced in the
+builder embed and mail body, not on the public image).
+
+Canvas: SVG-units × `SCALE` (2 by default). DS = ~2215 × 1525, CS =
+~2471 × 2090. Inter is the project font (bundled at
+`assets/fonts/Inter-{Regular,Bold}.ttf`). Icons live at
+`assets/storm_icons/{ds,cs}/`.
+
+Dispatches on `roster.event_type`:
+
+| Layer | DS | CS |
+|---|---|---|
+| Header bar | `Desert Storm — {preset_name}` / `Team {A|B}` / date | `Canyon Storm — {preset_name}` / `{faction}` / date |
+| Background | Sand fill, subs column right of `x=921` with 1 px black stroke (vertical separator) | Sand fill, subs column right of `x=1050` with same stroke |
+| Spawn zones | Two narrow vertical strips at left/right edges: Team A blue, Team B red | Rulebringers blue horizontal band top; Dawnbreakers red split into two bands bottom |
+| Zone count | 11 canonical zones in a diamond around Nuclear Silo | 12 canonical zones in 3 rows (Stage 1 top, Stage 2 middle, Stage 3 bottom) |
+| Phase headers in member pill | `Stage/Phase {N}:` bold (8 pt Inter Bold) | Same |
+| Member name | 8 pt Inter Regular, auto-shrinks when content overflows |  Same |
+| Missing icon (Arsenal / Mercenary Factory, blocked on game-bug fix) | Grey placeholder circle | N/A — CS icon set is complete |
+| Subs column | Flat list when `paired_subs` empty; two-column `Primary` / `Sub` table with row dividers when populated | Same |
+
+`roster_from_session` plumbs:
+
+* `event_type` → drives layout dispatch
+* `preset_name` → header left text (combined with event name)
+* `team_label` → header center (`Team A` / `Rulebringers` / etc.)
+* `event_date_label` → header right (formatted via `format_event_date`)
+* `phase_count` → controls per-phase iteration
+* Each `RosterZone` carries `phase` + `canonical_zone` so the renderer
+  groups by zone and stacks per-phase blocks inside one text pill.
+
+Unknown / typo zone names are logged at DEBUG and skipped (vs.
+crashing). Pillow missing → `RuntimeError` so the caller can fall
+back to a text-only post.
 
 ---
 

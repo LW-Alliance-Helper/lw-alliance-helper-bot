@@ -51,7 +51,7 @@ _STORM_SIGNUPS_TOUR_STEPS: list[str] = [
     "or **🅱️ Set up Team B** (Desert Storm) — or **🏜️ Set up Roster** "
     "(Canyon Storm; one roster per faction). The bot will ask which "
     "preset to use, then open the roster builder pre-filtered to "
-    "members who signed up, with eligibility floors enforced.",
+    "members who signed up, with eligibility minimums enforced.",
 
     "**Step 6 / 6 — That's the tour**\n"
     "You can run `/help` any time and pick **Desert Storm** or "

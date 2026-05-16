@@ -902,7 +902,7 @@ def _render_builder_embed(session: RosterBuilderSession) -> discord.Embed:
     lines.append(f"🗺️ {event_label}")
     if session.event_type == "DS":
         floor_label = "Min A" if session.team == "A" else "Min B"
-        lines.append(f"⚖️ Enforcing **{floor_label}** floors for this team")
+        lines.append(f"⚖️ Enforcing **{floor_label}** minimum for this team")
     # Phase-aware (#152): surface the active phase prominently so an
     # officer can see at a glance which phase the picker + assign
     # buttons will mutate.
@@ -976,21 +976,21 @@ def _render_builder_embed(session: RosterBuilderSession) -> discord.Embed:
         effective_floor = _effective_floor_for_zone(session, selected)
         from storm_strategy import format_power
         if effective_floor != preset_floor:
-            # A power_band Member Rule lowered the effective floor for
+            # A power_band Member Rule lowered the effective minimum for
             # this zone — surface both so leadership can tell at a
             # glance which rule is in play.
             lines.append(
-                f"🎯 **Active zone:** **{selected}** — floor "
+                f"🎯 **Active zone:** **{selected}** — minimum "
                 f"**{format_power(effective_floor) if effective_floor else '(none)'}** "
-                f"_(preset floor {format_power(preset_floor)} relaxed by power_band rule)_"
+                f"_(preset minimum {format_power(preset_floor)} relaxed by power_band rule)_"
             )
         else:
             lines.append(
-                f"🎯 **Active zone:** **{selected}** — floor "
+                f"🎯 **Active zone:** **{selected}** — minimum "
                 f"**{format_power(effective_floor) if effective_floor else '(none)'}**"
             )
         if session.show_below_floor:
-            lines.append("👁️ Below-floor members visible in the picker.")
+            lines.append("👁️ Members below minimum visible in the picker.")
     has_unknown = any(m.get("power") is None for m in session.members.values())
     if has_unknown:
         lines.append(
@@ -1010,7 +1010,7 @@ def _render_builder_embed(session: RosterBuilderSession) -> discord.Embed:
             f"• Per-member rules applied: **{af['per_member_rules_applied']}**"
         )
         lines.append(
-            f"• Members slotted via a band-relaxed floor: **{af['power_band_rules_applied']}**"
+            f"• Members slotted via a band-relaxed minimum: **{af['power_band_rules_applied']}**"
         )
         lines.append(
             f"• Auto-filled by power: **{af['auto_filled_by_power']}**"
@@ -1235,14 +1235,14 @@ class RosterBuilderView(discord.ui.View):
                 seen_values.add(value)
                 label = _format_member_label(m)[:100]
                 is_below = k in below
-                description = "below floor" if is_below else None
+                description = "below minimum" if is_below else None
                 options.append(discord.SelectOption(
                     label=label, value=value, description=description,
                 ))
             placeholder = (
                 f"Pick a member for {s.selected_zone or 'a zone'}…"
                 if eligible or s.show_below_floor else
-                "No eligible members — toggle below-floor override"
+                "No eligible members — toggle below-minimum override"
             )
             # Surface overflow so the officer knows the dropdown is
             # truncated — Discord caps Select options at 25 and a
@@ -1280,7 +1280,7 @@ class RosterBuilderView(discord.ui.View):
                     # Shouldn't happen since the option isn't in the pool,
                     # but be defensive.
                     await inter.response.send_message(
-                        "⚠️ Toggle the below-floor override to assign this member.",
+                        "⚠️ Toggle the below-minimum override to assign this member.",
                         ephemeral=True,
                     )
                     return
@@ -1313,8 +1313,8 @@ class RosterBuilderView(discord.ui.View):
 
         # Row 2 — action buttons
         toggle_label = (
-            "👁️ Hide below-floor" if s.show_below_floor
-            else "👁️ Show below-floor"
+            "👁️ Hide members below minimum" if s.show_below_floor
+            else "👁️ Show members below minimum"
         )
         toggle_btn = discord.ui.Button(
             label=toggle_label, style=discord.ButtonStyle.secondary, row=action_row,
@@ -1672,7 +1672,7 @@ async def _open_paired_sub_picker(
         content = (
             f"🪑 No eligible subs found for **{primary_label}** at "
             f"**{s.selected_zone}**. Skip and pair them later, or toggle "
-            f"the below-floor override on the main view to widen the pool."
+            f"the below-minimum override on the main view to widen the pool."
         )
     try:
         await interaction.response.send_message(

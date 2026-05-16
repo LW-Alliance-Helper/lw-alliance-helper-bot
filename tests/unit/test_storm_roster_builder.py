@@ -498,8 +498,8 @@ class TestEmbedRendering:
         session = _make_session(team="A")
         session.show_below_floor = True
         embed = srb._render_builder_embed(session)
-        assert "below-floor" in embed.description.lower() or \
-               "below floor" in embed.description.lower()
+        assert "below minimum" in embed.description.lower() or \
+               "below-minimum" in embed.description.lower()
 
     def test_capacity_summary_present(self):
         session = _make_session(team="A")

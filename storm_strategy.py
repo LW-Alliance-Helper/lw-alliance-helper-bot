@@ -744,7 +744,7 @@ def _build_editor_embed(buf: PresetBuffer, team_size_hint: int = _TEAM_SIZE_HINT
         # Surface the gate on the embed too — without this, an officer
         # opening a single-team preset would see only one floor in the
         # rows and wonder if their setup is broken.
-        desc_lines.append(f"👥 Teams: **Team {teams} only** (floors shown match)")
+        desc_lines.append(f"👥 Teams: **Team {teams} only** (minimums shown match)")
     if buf.event_type == "CS":
         desc_lines.append(f"⚙️ Faction: {buf.faction}")
     # Phase mode line surfaces the toggle state so officers can
@@ -915,7 +915,7 @@ class _ZoneEditModal(discord.ui.Modal):
                 await interaction.response.send_message(
                     "⚠️ One of the power values didn't parse. "
                     "Use formats like `300M`, `1.2B`, or `300000000`. "
-                    "Leave blank for no floor.",
+                    "Leave blank for no minimum.",
                     ephemeral=True,
                 )
                 return
@@ -926,7 +926,7 @@ class _ZoneEditModal(discord.ui.Modal):
                 await interaction.response.send_message(
                     f"⚠️ Couldn't parse `{self.power_input.value}` as a power "
                     f"value. Try `250M`, `1.2B`, or `300000000`. Leave blank "
-                    f"for no floor.",
+                    f"for no minimum.",
                     ephemeral=True,
                 )
                 return
@@ -1100,12 +1100,12 @@ class _ZonePhaseCapacityModal(discord.ui.Modal):
         view = _ZoneWizardNextView(
             self._view, self._zone_name,
             next_page="floors",
-            label="Next → Power Floors",
+            label="Next → Power Minimums",
         )
         await interaction.response.send_message(
             content=(
                 f"✅ Capacities recorded for **{self._zone_name}**. "
-                f"Click **Next** to set the power floors."
+                f"Click **Next** to set the power minimums."
             ),
             view=view, ephemeral=True,
         )
@@ -1117,7 +1117,7 @@ class _ZonePhaseFloorsModal(discord.ui.Modal):
     shape as the flat modal (DS = Min A + Min B, CS = single Min)."""
 
     def __init__(self, view: "_PresetEditorView", zone_name: str):
-        super().__init__(title=f"{zone_name} — Power Floors"[:45])
+        super().__init__(title=f"{zone_name} — Power Minimums"[:45])
         self._view = view
         self._zone_name = zone_name
         pending = _stash_pending_edit(view, zone_name)
@@ -1203,7 +1203,7 @@ class _ZonePhaseFloorsModal(discord.ui.Modal):
         )
         await interaction.response.send_message(
             content=(
-                f"✅ Floors recorded for **{self._zone_name}**. "
+                f"✅ Minimums recorded for **{self._zone_name}**. "
                 f"Click **Next** to set the per-phase auto-fill priorities."
             ),
             view=view, ephemeral=True,

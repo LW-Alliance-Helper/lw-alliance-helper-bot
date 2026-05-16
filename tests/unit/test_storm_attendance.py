@@ -353,7 +353,7 @@ class TestOverrideBelowFloorSurface:
         assert "⚠️" in carol_line
         assert "⚠️" not in alice_line
         # Footnote present.
-        assert "Assigned below the zone floor" in body
+        assert "Assigned below the zone minimum" in body
 
     def test_override_truthy_values_all_accepted(self, fake_env):
         # Officers may hand-edit the Sheet — accept the usual yes-set.

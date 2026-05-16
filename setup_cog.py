@@ -6431,7 +6431,7 @@ async def _run_structured_flow_setup_step(
     await channel.send(
         "**Strategy Presets**\n"
         "A strategy preset is a saved zone layout — which zones exist, "
-        "how many spots each holds, and (optionally) per-zone power floors "
+        "how many spots each holds, and (optionally) per-zone power minimums "
         f"for {label}. When leadership builds a roster, they pick which "
         "preset to apply; the bot uses the preset to gate eligibility and "
         "lay out the team. Manage presets with "

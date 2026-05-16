@@ -115,7 +115,7 @@ HELP_CATEGORIES: dict[str, dict] = {
             ("/desertstorm strategy <create | edit | list | delete | "
              "apply | roster_history>",
              "Manage strategy presets — saved zone layouts with optional "
-             "per-zone power floors. `apply` opens the roster builder; "
+             "per-zone power minimums. `apply` opens the roster builder; "
              "`roster_history` browses past structured rosters with "
              "attendance overlay (💎 Premium)."),
             ("/desertstorm member_rule <set_power_band | set_member_team "
@@ -166,7 +166,7 @@ HELP_CATEGORIES: dict[str, dict] = {
             ("/canyonstorm strategy <create | edit | list | delete | "
              "apply | roster_history>",
              "Manage strategy presets — saved zone layouts with optional "
-             "per-zone power floors. `apply` opens the roster builder; "
+             "per-zone power minimums. `apply` opens the roster builder; "
              "`roster_history` browses past structured rosters with "
              "attendance overlay (💎 Premium)."),
             ("/canyonstorm member_rule <set_power_band | set_member_zone "

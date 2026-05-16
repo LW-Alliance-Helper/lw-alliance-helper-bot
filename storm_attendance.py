@@ -475,7 +475,7 @@ def _render_embed(session: _AttendanceSession) -> discord.Embed:
                 f"{label_status} {slot['member']}{zone_part}{role_marker}{override_marker}"
             )
     if has_overrides:
-        lines.append("\n_⚠️ Assigned below the zone floor at build time._")
+        lines.append("\n_⚠️ Assigned below the zone minimum at build time._")
 
     counts = session.counts()
     summary = (

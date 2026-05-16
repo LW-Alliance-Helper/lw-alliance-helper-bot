@@ -329,6 +329,72 @@ class TestRenderEmbed:
         assert "✅ 1" in footer
         assert "❌ 0" in footer
 
+    def test_footer_drops_sub_activated_count(self):
+        """Rule K (#171): footer is ✅ / ❌ / — only. Any legacy
+        `sub_activated` rows count toward the unrecorded bucket so the
+        math stays correct, but the bare 🔄 column is gone."""
+        slots = _slots_fixture()
+        sess = sa._AttendanceSession(
+            guild_id=1, user_id=42, event_type="DS",
+            event_date="2026-05-18", slots=slots, existing={},
+        )
+        sess.statuses[("A", "Power Tower", "Alice")] = "attended"
+        sess.statuses[("A", "Power Tower", "Bob")] = "sub_activated"
+        embed = sa._render_embed(sess)
+        footer = embed.footer.text or ""
+        assert "🔄" not in footer
+        assert "✅ 1" in footer
+        assert "❌ 0" in footer
+        # 3 unrecorded slots (Carol, Dan) plus Bob's legacy
+        # sub_activated row roll into the — bucket → 3 total.
+        assert "— 3" in footer
+
+
+class TestAttendanceViewInteractions:
+    """#171 / Decision #5: the view's two action buttons branch on
+    whether a slot is selected — bulk-mark when empty, single-write
+    when selected. Empty-state hides the buttons entirely. The pre-
+    #171 `_StatusPickerView` ephemeral is gone (and no longer exists)."""
+
+    def _session(self):
+        slots = _slots_fixture()
+        return sa._AttendanceSession(
+            guild_id=1, user_id=42, event_type="DS",
+            event_date="2026-05-18", slots=slots, existing={},
+        )
+
+    def test_status_picker_view_removed(self):
+        assert not hasattr(sa, "_StatusPickerView")
+
+    def test_sub_activated_is_no_longer_a_pickable_status(self):
+        assert sa.STATUS_SUB_ACTIVATED not in sa._VALID_STATUSES
+
+    def test_empty_state_hides_action_buttons(self):
+        sess = sa._AttendanceSession(
+            guild_id=1, user_id=42, event_type="DS",
+            event_date="2026-05-18", slots=[], existing={},
+        )
+        view = sa._AttendanceView(sess)
+        # Empty roster → no buttons or select.
+        assert view.children == []
+
+    def test_no_selection_buttons_say_mark_all(self):
+        view = sa._AttendanceView(self._session())
+        labels = [getattr(c, "label", "") for c in view.children]
+        assert any("Mark all unrecorded as attended" in lab for lab in labels)
+        assert any("Mark all unrecorded as did not attend" in lab for lab in labels)
+        assert not any("Mark as attended" in lab and "all" not in lab for lab in labels)
+
+    def test_selection_swaps_buttons_to_single_mode(self):
+        view = sa._AttendanceView(self._session())
+        view.selected_key = ("A", "Power Tower", "Alice")
+        view._build()
+        labels = [getattr(c, "label", "") for c in view.children]
+        assert any(lab == "✅ Mark as attended" for lab in labels)
+        assert any(lab == "❌ Mark as did not attend" for lab in labels)
+        # The all-variant copy is gone now.
+        assert not any("Mark all" in lab for lab in labels)
+
 
 class TestOverrideBelowFloorSurface:
     """The Override Below Floor column from rosters_tab (added in
@@ -344,7 +410,12 @@ class TestOverrideBelowFloorSurface:
         assert by_name["Carol"]["override_below_floor"] is True
         assert by_name["Alice"]["override_below_floor"] is False
 
-    def test_override_marker_renders_in_embed(self, fake_env):
+    def test_override_marker_not_rendered_in_embed(self, fake_env):
+        """Decision #6 (#171): the Override Below Floor ⚠️ glyph + the
+        trailing "Assigned below the zone minimum" footnote are dropped
+        from the attendance UI. The Sheet still records the flag for
+        post-event audit (see `test_override_flag_read_from_rosters_tab`)
+        but officers recording attendance don't need it surfaced."""
         fake, gid = fake_env
         slots, _ = sa.load_rostered_slots(gid, "DS", "2026-05-18")
         sess = sa._AttendanceSession(
@@ -352,14 +423,14 @@ class TestOverrideBelowFloorSurface:
             event_date="2026-05-18", slots=slots, existing={},
         )
         embed = sa._render_embed(sess)
-        # Carol carries the ⚠️ marker; Alice does not.
         body = embed.description or ""
+        # Neither member's row carries the ⚠️ glyph anymore.
         carol_line = next(line for line in body.split("\n") if "Carol" in line)
         alice_line = next(line for line in body.split("\n") if "Alice" in line)
-        assert "⚠️" in carol_line
+        assert "⚠️" not in carol_line
         assert "⚠️" not in alice_line
-        # Footnote present.
-        assert "Assigned below the zone minimum" in body
+        # Footnote is gone.
+        assert "Assigned below the zone minimum" not in body
 
     def test_override_truthy_values_all_accepted(self, fake_env):
         # Officers may hand-edit the Sheet — accept the usual yes-set.

@@ -474,6 +474,23 @@ class RosterBuilderSession:
         keys.update(self.subs)
         return keys
 
+    def has_existing_assignments(self) -> bool:
+        """True iff the session carries any roster data the auto-fill
+        would clobber — at least one zone has a primary, the subs pool
+        is non-empty, or any phase has a pairing. Used by the
+        auto-fill button to gate the destructive-confirm prompt
+        (Decision #9 / #171). A freshly-opened session reads False so
+        first-click auto-fill skips the confirm."""
+        for phase in self.iter_phases():
+            for zone_members in self.assignments_for_phase(phase).values():
+                if zone_members:
+                    return True
+            if self.paired_subs_for_phase(phase):
+                return True
+        if self.subs:
+            return True
+        return False
+
     def unpaired_primaries(self) -> list[str]:
         """In paired mode, the list of zone members who don't yet have
         a paired sub for the *currently selected phase*. Order matches
@@ -665,7 +682,11 @@ def _auto_fill_session(session: RosterBuilderSession) -> dict:
         "per_member_rules_applied": 0,
         "power_band_rules_applied": 0,
         "auto_filled_by_power":     0,
-        "auto_paired_subs":         0,
+        # Decision #14 (#171): track each auto-pair explicitly so the
+        # summary can list `Alice ↔ Bob, Carol ↔ Dan` instead of a
+        # bare count. Officers edit auto-paired subs most often, so
+        # visibility matters.
+        "auto_paired_subs":         [],  # list[str] each "PrimaryName ↔ SubName"
         "gaps":                     [],  # member names with no parseable power
         "conflicts":                [],  # short strings: rule application failures
     }
@@ -771,8 +792,15 @@ def _auto_fill_session(session: RosterBuilderSession) -> dict:
                 )
                 if not eligible_sub_keys:
                     continue
-                phase_pairings[primary_key] = eligible_sub_keys[0]
-                summary["auto_paired_subs"] += 1
+                sub_key = eligible_sub_keys[0]
+                phase_pairings[primary_key] = sub_key
+                primary_m = session.members.get(primary_key)
+                sub_m = session.members.get(sub_key)
+                primary_name = primary_m["name"] if primary_m else primary_key
+                sub_name = sub_m["name"] if sub_m else sub_key
+                summary["auto_paired_subs"].append(
+                    f"{primary_name} ↔ {sub_name}"
+                )
 
         assigned = session.assigned_member_keys()
         for key, m in session.members.items():
@@ -1045,24 +1073,28 @@ def _render_builder_embed(session: RosterBuilderSession) -> discord.Embed:
         lines.append(
             f"• Auto-filled by power: **{af['auto_filled_by_power']}**"
         )
-        # Separate paired-sub count so the auto-filled total isn't
-        # inflated by the paired-sub count for paired-mode alliances.
-        # Defaults to 0 for pool mode where it's always 0 anyway.
-        if af.get("auto_paired_subs"):
+        # Decision #14 (#171): auto-paired subs render explicitly so
+        # officers can see who got paired with whom — pairing is the
+        # highest-edit candidate, so visibility matters more than
+        # brevity. The bare count surfaces nothing actionable.
+        paired = af.get("auto_paired_subs") or []
+        if paired:
             lines.append(
-                f"• Auto-paired subs: **{af['auto_paired_subs']}**"
+                f"• Auto-paired subs ({len(paired)}): {', '.join(paired)}"
             )
+        # Decision #8 (#171): no truncation. Officers need every gap +
+        # every conflict listed so they can make slotting decisions
+        # manually — `(+N more)` hid exactly the entries they needed.
         if af["gaps"]:
-            preview = ", ".join(af["gaps"][:5])
-            extra = f" (+{len(af['gaps']) - 5} more)" if len(af["gaps"]) > 5 else ""
             lines.append(
                 f"• Gaps (power unknown, not slotted): **{len(af['gaps'])}** — "
-                f"{preview}{extra}"
+                f"{', '.join(af['gaps'])}"
             )
         if af["conflicts"]:
-            preview = "; ".join(af["conflicts"][:3])
-            extra = f" (+{len(af['conflicts']) - 3} more)" if len(af["conflicts"]) > 3 else ""
-            lines.append(f"• Conflicts: **{len(af['conflicts'])}** — {preview}{extra}")
+            lines.append(
+                f"• Conflicts: **{len(af['conflicts'])}** — "
+                f"{'; '.join(af['conflicts'])}"
+            )
         else:
             lines.append("• Conflicts: **0**")
 
@@ -1447,15 +1479,13 @@ class RosterBuilderView(discord.ui.View):
                 style=discord.ButtonStyle.primary, row=action_row,
             )
 
-            async def _auto_fill(inter: discord.Interaction):
-                if not await self._guard_owner(inter):
-                    return
+            async def _run_auto_fill(inter: discord.Interaction):
+                """Actually execute the auto-fill + refresh. Pulled out
+                so both the direct first-click path AND the
+                post-confirm path can call it through the same code."""
                 # Wrap the algorithm in explicit logging so when team-
                 # test reports "auto-fill skipped after the first
-                # power-unknown" we have a trail in Railway logs. The
-                # callback also surfaces any exception to the officer
-                # rather than letting discord.py's default handler
-                # eat it silently.
+                # power-unknown" we have a trail in Railway logs.
                 logger.info(
                     "[STORM AUTO-FILL] start: guild=%s event=%s team=%s "
                     "preset=%s pool_size=%d (members=%s)",
@@ -1490,6 +1520,28 @@ class RosterBuilderView(discord.ui.View):
                     len(s.subs), len(s.paired_subs),
                 )
                 await self._refresh(inter)
+
+            async def _auto_fill(inter: discord.Interaction):
+                if not await self._guard_owner(inter):
+                    return
+                # Decision #9 (#171): destructive re-runs prompt for
+                # confirmation. A fresh session (no assignments, subs,
+                # or pairings) skips the prompt and runs straight away.
+                if not s.has_existing_assignments():
+                    await _run_auto_fill(inter)
+                    return
+                confirm_view = _AutoFillConfirmView(parent_view=self)
+                await inter.response.send_message(
+                    "⚠️ **Re-run auto-fill?** This will reset every "
+                    "assignment, sub pairing, and override on this team. "
+                    "Manual edits you've made since the last auto-fill "
+                    "will be lost.",
+                    view=confirm_view, ephemeral=True,
+                )
+                try:
+                    confirm_view.message = await inter.original_response()
+                except discord.HTTPException:
+                    confirm_view.message = None
 
             auto_fill_btn.callback = _auto_fill
             self.add_item(auto_fill_btn)
@@ -1663,6 +1715,114 @@ def _zone_of_primary(session: RosterBuilderSession, primary_key: str) -> str:
             if primary_key in keys:
                 return zone_name
     return session.selected_zone or ""
+
+
+class _AutoFillConfirmView(discord.ui.View):
+    """Confirm/cancel prompt for re-running auto-fill on a session that
+    already has manual edits (#171 / Decision #9).
+
+    First-click auto-fill on a fresh session skips this view entirely.
+    Confirming runs auto-fill on the parent session and refreshes the
+    parent builder view via its captured message handle (the ephemeral
+    confirm interaction has already consumed its own response slot, so
+    the main view can't be edited through this interaction).
+    """
+
+    def __init__(self, *, parent_view: "RosterBuilderView"):
+        super().__init__(timeout=120)
+        self.parent_view = parent_view
+        self.message: Optional[discord.Message] = None
+
+    async def _guard_owner(self, inter: discord.Interaction) -> bool:
+        if inter.user.id != self.parent_view.session.user_id:
+            await inter.response.send_message(
+                "⛔ Only the builder's owner can confirm.", ephemeral=True,
+            )
+            return False
+        return True
+
+    @discord.ui.button(label="🎯 Re-run auto-fill",
+                       style=discord.ButtonStyle.danger)
+    async def confirm(self, inter: discord.Interaction,
+                      _btn: discord.ui.Button):
+        if not await self._guard_owner(inter):
+            return
+        if self.is_finished():
+            return
+        self.stop()
+        for item in self.children:
+            item.disabled = True
+        s = self.parent_view.session
+        try:
+            summary = _auto_fill_session(s)
+        except Exception as e:
+            logger.exception(
+                "[STORM AUTO-FILL] confirm-path crashed for guild=%s event=%s: %s",
+                s.guild_id, s.event_type, e,
+            )
+            try:
+                await inter.response.edit_message(
+                    content=(
+                        f"⚠️ Auto-fill hit an unexpected error: "
+                        f"`{type(e).__name__}: {str(e)[:120]}`. Logs have "
+                        f"details."
+                    ),
+                    view=self,
+                )
+            except discord.HTTPException:
+                pass
+            return
+        logger.info(
+            "[STORM AUTO-FILL] confirm-path done: guild=%s event=%s summary=%s",
+            s.guild_id, s.event_type, summary,
+        )
+        try:
+            await inter.response.edit_message(
+                content="🎯 Auto-fill re-run complete — main view refreshed.",
+                view=self,
+            )
+        except discord.HTTPException:
+            pass
+        # Refresh the main builder view via its captured message handle,
+        # not through this interaction — the ephemeral confirm and the
+        # main builder live on separate messages.
+        try:
+            if self.parent_view.message is not None:
+                self.parent_view._rebuild()
+                await self.parent_view.message.edit(
+                    embed=_render_builder_embed(s),
+                    view=self.parent_view,
+                )
+        except discord.HTTPException:
+            pass
+
+    @discord.ui.button(label="↩️ Cancel",
+                       style=discord.ButtonStyle.secondary)
+    async def cancel(self, inter: discord.Interaction,
+                     _btn: discord.ui.Button):
+        if not await self._guard_owner(inter):
+            return
+        if self.is_finished():
+            return
+        self.stop()
+        for item in self.children:
+            item.disabled = True
+        try:
+            await inter.response.edit_message(
+                content="↩️ Auto-fill cancelled — your edits are intact.",
+                view=self,
+            )
+        except discord.HTTPException:
+            pass
+
+    async def on_timeout(self) -> None:
+        for item in self.children:
+            item.disabled = True
+        if self.message is not None:
+            try:
+                await self.message.edit(view=self)
+            except discord.HTTPException:
+                pass
 
 
 async def _open_pair_subs_view(

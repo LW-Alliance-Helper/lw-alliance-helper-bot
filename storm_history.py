@@ -224,10 +224,14 @@ def load_event_attendance(
 # ── Renderers ────────────────────────────────────────────────────────────────
 
 
+# Rule K (#171): 🔄 Sub activated is dropped from the UI everywhere. The
+# Sheet may still carry legacy `sub_activated` rows from before the
+# decision; the reader keeps them mapped to `—` so officers see "not
+# recorded" rather than a crashing/unknown status.
 _STATUS_GLYPH = {
     "attended":      "✅",
     "no_show":       "❌",
-    "sub_activated": "🔄",
+    "sub_activated": "—",
     "":              "—",
 }
 
@@ -286,30 +290,36 @@ def render_event_embed(
     total_recorded = 0
     total_attended = 0
     total_no_show = 0
-    total_sub_activated = 0
 
     # Per-team `add_field` (each capped at 1024 chars) instead of one
     # giant `embed.description` — a 30+ slot roster with status + power
     # markers can blow Discord's 4096-char description limit.
     def _render_slot(slot: dict) -> str:
         """One per-member row inside a zone (or zone-phase) section.
-        Side-effecting on the outer counters via `nonlocal`."""
-        nonlocal total_recorded, total_attended, total_no_show, total_sub_activated
+        Side-effecting on the outer counters via `nonlocal`.
+
+        Per Decision #6 (#171), the Override Below Floor flag is not
+        surfaced in the per-slot rendering anymore — the builder still
+        captures it on the Sheet for post-event audit, but history
+        consumers don't need to see it. Per Rule K, legacy
+        `sub_activated` rows render as `—` and don't get their own
+        counter."""
+        nonlocal total_recorded, total_attended, total_no_show
         key = _attendance_join_key(
             slot["team"], slot["zone"], slot["member"],
         )
         status = attendance.get(key, "")
         glyph = _STATUS_GLYPH.get(status, "—")
-        if status:
+        if status == "attended":
             total_recorded += 1
-            if status == "attended":
-                total_attended += 1
-            elif status == "no_show":
-                total_no_show += 1
-            elif status == "sub_activated":
-                total_sub_activated += 1
+            total_attended += 1
+        elif status == "no_show":
+            total_recorded += 1
+            total_no_show += 1
+        # `sub_activated` legacy rows surface as `—` and don't count
+        # toward `total_recorded` so the footer math matches what the
+        # officer sees (✅ + ❌).
         power_part = _format_power_display(slot.get("power", ""))
-        override = " ⚠️ override" if slot.get("override_below_floor") else ""
         # Role marker: a sub paired with a specific primary surfaces
         # "paired with X" so the pairing is visible in the history; a
         # pool sub shows the generic "(sub)".
@@ -318,7 +328,7 @@ def render_event_embed(
             role_marker = f" (sub, paired with {paired})" if paired else " (sub)"
         else:
             role_marker = ""
-        return f"{glyph} {slot['member']}{role_marker}{power_part}{override}"
+        return f"{glyph} {slot['member']}{role_marker}{power_part}"
 
     for team in sorted(teams.keys()):
         zones = teams[team]
@@ -382,8 +392,7 @@ def render_event_embed(
         embed.set_footer(
             text=(
                 f"Attendance: ✅ {total_attended}  ·  "
-                f"❌ {total_no_show}  ·  "
-                f"🔄 {total_sub_activated}  "
+                f"❌ {total_no_show}  "
                 f"(recorded {total_recorded} of {len(slots)} slots)"
             )
         )

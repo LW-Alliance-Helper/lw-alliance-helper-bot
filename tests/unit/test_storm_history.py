@@ -211,17 +211,24 @@ class TestRenderEventEmbed:
         # Footer hints how to record under the new parent-group command tree.
         assert "/desertstorm attendance" in (embed.footer.text or "")
 
-    def test_below_floor_override_visible(self):
+    def test_below_floor_override_not_rendered(self):
+        """Decision #6 (#171): the Override Below Floor flag stays on
+        the rosters_tab Sheet for post-event audit, but the history
+        embed no longer surfaces it — the same drop the attendance UI
+        made. Officers reviewing history don't need the build-time
+        override flagged."""
         slots = [
-            {"team": "A", "zone": "Power Tower", "member": "Erin",
+            {"team": "A", "phase": "", "zone": "Power Tower", "member": "Erin",
              "role": "primary", "power": "190000000",
-             "discord_id": "5", "override_below_floor": True},
+             "discord_id": "5", "override_below_floor": True,
+             "paired_with": ""},
         ]
         embed = sh.render_event_embed(
             event_type="DS", event_date="2026-05-11",
             slots=slots, attendance={},
         )
-        assert "override" in _embed_body(embed).lower()
+        assert "override" not in _embed_body(embed).lower()
+        assert "⚠️" not in _embed_body(embed)
 
     def test_empty_slots_message(self):
         embed = sh.render_event_embed(
@@ -365,11 +372,15 @@ class TestRenderEventEmbed:
             event_type="DS", event_date="2026-05-18",
             slots=slots, attendance=attendance,
         )
+        # Rule K (#171): footer drops 🔄 Sub activated. Legacy
+        # `sub_activated` rows render as `—` and don't count toward
+        # the recorded total, so `recorded` matches ✅ + ❌.
         footer = embed.footer.text or ""
         assert "✅ 1" in footer
         assert "❌ 1" in footer
-        assert "🔄 1" in footer
-        assert "recorded 3 of 3" in footer
+        assert "🔄" not in footer
+        assert "sub_activated" not in footer
+        assert "recorded 2 of 3" in footer
 
 
 class TestRenderHistoryListEmbed:

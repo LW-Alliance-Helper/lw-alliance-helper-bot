@@ -7,7 +7,7 @@ view + modal are integration territory and not unit-tested here.
 """
 
 import pytest
-from unittest.mock import patch
+from unittest.mock import MagicMock, patch
 
 import storm_roster_builder as srb
 import storm_strategy as ss
@@ -1890,7 +1890,10 @@ class TestAutoFillSummarySplitsPairedFromPrimary:
     read 'Auto-filled by power: 8' even though only 4 primaries were
     auto-filled. Now `auto_paired_subs` is a separate count."""
 
-    def test_paired_mode_summary_has_separate_paired_count(self):
+    def test_paired_mode_summary_has_separate_paired_list(self):
+        """Decision #14 (#171): `auto_paired_subs` is now a list of
+        `Primary ↔ Sub` strings rather than a bare count, so the
+        summary can render the explicit pairings."""
         members = {
             f"100{i}": {"key": f"100{i}", "name": f"M{i}", "discord_id": f"100{i}",
                         "power": 400_000_000 - i * 10_000_000,
@@ -1902,11 +1905,14 @@ class TestAutoFillSummarySplitsPairedFromPrimary:
         session = _make_session(team="A", members=members,
                                 preset_zones=zones, sub_mode="paired")
         summary = srb._auto_fill_session(session)
-        # 4 primaries auto-filled + 4 paired subs.
+        # 4 primaries auto-filled + 4 paired subs (each rendered as
+        # "PrimaryName ↔ SubName").
         assert summary["auto_filled_by_power"] == 4
-        assert summary["auto_paired_subs"] == 4
+        assert len(summary["auto_paired_subs"]) == 4
+        for pair in summary["auto_paired_subs"]:
+            assert "↔" in pair
 
-    def test_pool_mode_paired_count_is_zero(self):
+    def test_pool_mode_paired_list_is_empty(self):
         members = {
             "1001": {"key": "1001", "name": "Alice", "discord_id": "1001",
                      "power": 412_000_000, "not_on_discord": False},
@@ -1914,7 +1920,121 @@ class TestAutoFillSummarySplitsPairedFromPrimary:
         session = _make_session(team="A", members=members, sub_mode="pool")
         summary = srb._auto_fill_session(session)
         # Pool mode never pairs.
-        assert summary["auto_paired_subs"] == 0
+        assert summary["auto_paired_subs"] == []
+
+
+class TestAutoFillSummaryRenderingNoTruncation:
+    """Decision #8 (#171): the auto-fill summary lists every gap +
+    every conflict — no `(+N more)` truncation. Officers need the full
+    list to act on it. Decision #14: auto-pair listing renders the
+    explicit `Primary ↔ Sub` pairs instead of a bare count."""
+
+    def test_gaps_list_is_not_truncated(self):
+        members = {
+            f"100{i}": {"key": f"100{i}", "name": f"Ghost{i}", "discord_id": f"100{i}",
+                        "power": None, "not_on_discord": False}
+            for i in range(10)
+        }
+        session = _make_session(team="A", members=members)
+        srb._auto_fill_session(session)
+        embed = srb._render_builder_embed(session)
+        body = embed.description or ""
+        # All 10 names should appear; no truncation marker.
+        for i in range(10):
+            assert f"Ghost{i}" in body
+        assert "more)" not in body
+
+    def test_conflicts_list_is_not_truncated(self):
+        members = self._three_members()
+        # 4 per-member rules pointing at an unknown zone — each triggers
+        # a conflict.
+        per_member = [
+            smr.Rule(rule_type="per_member", subject="Alice",
+                     sub_type="zone", value=f"No Such Zone {i}")
+            for i in range(4)
+        ]
+        session = _make_session(team="A", members=members,
+                                per_member_rules=per_member)
+        srb._auto_fill_session(session)
+        embed = srb._render_builder_embed(session)
+        body = embed.description or ""
+        # Every unknown-zone conflict surfaces.
+        for i in range(4):
+            assert f"No Such Zone {i}" in body
+        assert "more)" not in body
+
+    def test_auto_paired_listing_shows_explicit_pairs(self):
+        members = {
+            f"100{i}": {"key": f"100{i}", "name": f"M{i}", "discord_id": f"100{i}",
+                        "power": 400_000_000 - i * 10_000_000,
+                        "not_on_discord": False}
+            for i in range(4)
+        }
+        zones = [ss.ZoneRow(zone="Power Tower", max_players=2,
+                            min_power_a=100_000_000, priority=1)]
+        session = _make_session(team="A", members=members,
+                                preset_zones=zones, sub_mode="paired")
+        srb._auto_fill_session(session)
+        embed = srb._render_builder_embed(session)
+        body = embed.description or ""
+        # Pair line uses the ↔ marker between each pair.
+        assert "Auto-paired subs (" in body
+        assert "↔" in body
+
+    def _three_members(self):
+        return {
+            "1001": {"key": "1001", "name": "Alice", "discord_id": "1001",
+                     "power": 412_000_000, "not_on_discord": False},
+            "1002": {"key": "1002", "name": "Bob", "discord_id": "1002",
+                     "power": 380_000_000, "not_on_discord": False},
+            "1003": {"key": "1003", "name": "Carol", "discord_id": "1003",
+                     "power": 350_000_000, "not_on_discord": False},
+        }
+
+
+class TestAutoFillConfirmDestructive:
+    """Decision #9 (#171): clicking auto-fill on a session that already
+    holds data prompts a confirm view. Fresh sessions skip the prompt
+    and run directly."""
+
+    def test_fresh_session_has_no_existing_assignments(self):
+        members = {
+            "1001": {"key": "1001", "name": "Alice", "discord_id": "1001",
+                     "power": 412_000_000, "not_on_discord": False},
+        }
+        session = _make_session(team="A", members=members)
+        assert session.has_existing_assignments() is False
+
+    def test_session_with_assignment_reports_existing(self):
+        members = {
+            "1001": {"key": "1001", "name": "Alice", "discord_id": "1001",
+                     "power": 412_000_000, "not_on_discord": False},
+        }
+        session = _make_session(team="A", members=members)
+        session.assignments["Power Tower"].append("1001")
+        assert session.has_existing_assignments() is True
+
+    def test_session_with_sub_reports_existing(self):
+        members = {
+            "1001": {"key": "1001", "name": "Alice", "discord_id": "1001",
+                     "power": 412_000_000, "not_on_discord": False},
+        }
+        session = _make_session(team="A", members=members)
+        session.subs.append("1001")
+        assert session.has_existing_assignments() is True
+
+    def test_session_with_phase_two_assignment_reports_existing(self):
+        s = _make_phase_aware_session()
+        s.assignments_p2["Arsenal"].append("1")
+        assert s.has_existing_assignments() is True
+
+    def test_confirm_view_renders_confirm_and_cancel_buttons(self):
+        parent_view = MagicMock()
+        parent_view.session.user_id = 42
+        view = srb._AutoFillConfirmView(parent_view=parent_view)
+        labels = [getattr(c, "label", "") for c in view.children]
+        assert any("Re-run auto-fill" in lab for lab in labels)
+        assert any("Cancel" in lab for lab in labels)
 
 
 # ── #152: phase-aware roster session ────────────────────────────────────────

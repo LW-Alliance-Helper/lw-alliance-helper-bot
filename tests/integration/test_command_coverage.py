@@ -85,12 +85,12 @@ EXPECTED_STRATEGY_SUBCOMMANDS = {
 }
 EXPECTED_DS_MEMBER_RULE_SUBCOMMANDS = {
     "set_power_band", "set_member_team",
-    "set_member_zone", "set_member_role", "list",
+    "set_member_zone", "list",
 }
 EXPECTED_CS_MEMBER_RULE_SUBCOMMANDS = {
     # CS has no `set_member_team` — Canyon Storm runs one team per faction.
     "set_power_band",
-    "set_member_zone", "set_member_role", "list",
+    "set_member_zone", "list",
 }
 
 # Module-level slash commands defined directly in bot.py (not on a cog).

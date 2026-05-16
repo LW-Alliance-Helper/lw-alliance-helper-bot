@@ -15,7 +15,7 @@ Each subcommand is a thin dispatcher into the relevant feature module:
   storm_officer_view.py    — signups
   storm_attendance.py      — attendance
   storm_strategy.py        — strategy ▶ create/edit/list/delete/apply/roster_history
-  storm_member_rules.py    — member_rule ▶ set_power_band/set_member_team/set_member_zone/set_member_role/list
+  storm_member_rules.py    — member_rule ▶ set_power_band/set_member_team/set_member_zone/list
 
 The feature modules expose `handle_*` coroutines (or build_*_group factory
 functions for the strategy / member_rule subgroups) that take an explicit

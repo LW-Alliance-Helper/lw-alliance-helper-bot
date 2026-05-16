@@ -6,10 +6,9 @@ Two rule types complement the strategy preset library (#126):
   * power_band — "Members with power ≥ X (in the configured power column)
     are eligible for Zone Y." Primary rule type; surfaces by default in
     `/desertstorm member_rule list` (and the CS equivalent).
-  * per_member — Escape hatch for special cases. Three sub-types:
+  * per_member — Escape hatch for special cases. Two sub-types:
         team           e.g. "Alice always plays Team A"
         zone           e.g. "Charlie is always at Power Tower"
-        special_role   e.g. "Bob is our Judicator candidate"
 
 Sheet shape (`DS Member Rules` / `CS Member Rules`):
     Rule Type | Subject | Sub-Type | Value | Notes
@@ -18,7 +17,7 @@ Where:
   power_band rows:  Rule Type=power_band | Subject=<int power> | Sub-Type='' |
                     Value=<zone name>    | Notes=<free text>
   per_member rows:  Rule Type=per_member | Subject=<member name> |
-                    Sub-Type=<team|zone|special_role> | Value=<…> | Notes=<…>
+                    Sub-Type=<team|zone> | Value=<…> | Notes=<…>
 
 Stored Subject for power_band is the raw integer (e.g. "250000000") so
 sorting works at the Sheet level. The slash command accepts shorthand
@@ -50,8 +49,7 @@ _HEADER = ["Rule Type", "Subject", "Sub-Type", "Value", "Notes"]
 _RULE_TYPE_POWER_BAND = "power_band"
 _RULE_TYPE_PER_MEMBER = "per_member"
 
-_PER_MEMBER_SUB_TYPES = ("team", "zone", "special_role")
-_SPECIAL_ROLES        = ("commander", "judicator")
+_PER_MEMBER_SUB_TYPES = ("team", "zone")
 _TEAMS                = ("A", "B")
 
 
@@ -206,8 +204,6 @@ class Rule:
             return f"👤  **{display}** → plays **Team {self.value}**"
         if self.sub_type == "zone":
             return f"👤  **{display}** → always at **{self.value}**"
-        if self.sub_type == "special_role":
-            return f"🎖️  **{display}** → **{self.value.title()}** candidate"
         return f"👤  **{display}** → {self.sub_type}={self.value}"
 
     def _resolve_display_name(self, guild) -> str:
@@ -613,8 +609,8 @@ class _MemberRuleGroup(app_commands.Group):
             return
         if self.event_type == "CS":
             await interaction.response.send_message(
-                "⚠️ `team` rules only apply to Desert Storm. Use the zone or special_role "
-                "commands for Canyon Storm.",
+                "⚠️ `team` rules only apply to Desert Storm. Use the "
+                "`set_member_zone` command for Canyon Storm.",
                 ephemeral=True,
             )
             return
@@ -683,43 +679,6 @@ class _MemberRuleGroup(app_commands.Group):
         if ok:
             await interaction.response.send_message(
                 f"✅ Saved: **{display}** → always at **{zone_clean}**.{zone_warning}",
-            )
-        else:
-            await interaction.response.send_message(f"⚠️ {msg}", ephemeral=True)
-
-    # ── set_member_role ──────────────────────────────────────────────
-    async def _set_member_role(
-        self, interaction: discord.Interaction,
-        member_user: discord.Member | None,
-        member_name: str | None,
-        role: str, notes: str = "",
-    ):
-        if not await _deny_if_not_leader(interaction):
-            return
-        subject, display = _resolve_subject(
-            member_user, member_name, guild=interaction.guild,
-        )
-        if subject is None:
-            await interaction.response.send_message(
-                _SUBJECT_REQUIRED_MSG, ephemeral=True,
-            )
-            return
-        role_clean = (role or "").strip().lower()
-        if role_clean not in _SPECIAL_ROLES:
-            await interaction.response.send_message(
-                f"⚠️ Role must be `commander` or `judicator`. Got `{role}`.",
-                ephemeral=True,
-            )
-            return
-        ok, msg = await asyncio.to_thread(save_rule,
-            interaction.guild_id, self.event_type,
-            Rule(rule_type=_RULE_TYPE_PER_MEMBER,
-                 subject=subject, sub_type="special_role",
-                 value=role_clean, notes=notes),
-        )
-        if ok:
-            await interaction.response.send_message(
-                f"✅ Saved: **{display}** → **{role_clean.title()}** candidate.",
             )
         else:
             await interaction.response.send_message(f"⚠️ {msg}", ephemeral=True)
@@ -819,29 +778,6 @@ def build_ds_member_rule_group() -> _MemberRuleGroup:
             interaction, member_user, member_name, zone, notes,
         )
 
-    @grp.command(name="set_member_role",
-                 description="Tag a member as a Commander or Judicator candidate")
-    @app_commands.describe(
-        member_user="Pick from the server (preferred)",
-        member_name="OR a roster name if the member isn't on Discord",
-        role="Commander or Judicator",
-        notes="Optional free-text notes",
-    )
-    @app_commands.choices(role=[
-        app_commands.Choice(name="Commander", value="commander"),
-        app_commands.Choice(name="Judicator", value="judicator"),
-    ])
-    async def set_role(
-        interaction: discord.Interaction,
-        role: app_commands.Choice[str],
-        member_user: discord.Member | None = None,
-        member_name: str | None = None,
-        notes: str = "",
-    ):
-        await grp._set_member_role(
-            interaction, member_user, member_name, role.value, notes,
-        )
-
     @grp.command(name="list",
                  description="Show all saved DS member rules (with Clear buttons)")
     @app_commands.describe(member="Optional — filter to one member's rules")
@@ -885,29 +821,6 @@ def build_cs_member_rule_group() -> _MemberRuleGroup:
     ):
         await grp._set_member_zone(
             interaction, member_user, member_name, zone, notes,
-        )
-
-    @grp.command(name="set_member_role",
-                 description="Tag a member as a Commander or Judicator candidate")
-    @app_commands.describe(
-        member_user="Pick from the server (preferred)",
-        member_name="OR a roster name if the member isn't on Discord",
-        role="Commander or Judicator",
-        notes="Optional free-text notes",
-    )
-    @app_commands.choices(role=[
-        app_commands.Choice(name="Commander", value="commander"),
-        app_commands.Choice(name="Judicator", value="judicator"),
-    ])
-    async def set_role(
-        interaction: discord.Interaction,
-        role: app_commands.Choice[str],
-        member_user: discord.Member | None = None,
-        member_name: str | None = None,
-        notes: str = "",
-    ):
-        await grp._set_member_role(
-            interaction, member_user, member_name, role.value, notes,
         )
 
     @grp.command(name="list",

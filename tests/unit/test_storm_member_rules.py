@@ -114,18 +114,6 @@ class TestSaveAndList:
         assert rules[0].sub_type == "zone"
         assert rules[0].value    == "Power Tower"
 
-    def test_save_per_member_special_role(self, fake_sheet):
-        fake, gid = fake_sheet
-        ok, _ = smr.save_rule(gid, "DS", smr.Rule(
-            rule_type="per_member", subject="Bob",
-            sub_type="special_role", value="judicator",
-        ))
-        assert ok is True
-        rules = smr.list_rules(gid, "DS")
-        assert rules[0].sub_type == "special_role"
-        assert rules[0].value    == "judicator"
-
-
 class TestDuplicateDetection:
     def test_power_band_duplicate_rejected(self, fake_sheet):
         fake, gid = fake_sheet
@@ -548,9 +536,3 @@ class TestRenderLabel:
         assert "Charlie" in r.render_label()
         assert "Power Tower" in r.render_label()
 
-    def test_per_member_special_role_label(self):
-        r = smr.Rule(rule_type="per_member", subject="Bob",
-                     sub_type="special_role", value="judicator")
-        label = r.render_label()
-        assert "Bob" in label
-        assert "Judicator" in label

@@ -5047,7 +5047,6 @@ async def run_storm_setup(interaction: discord.Interaction, bot, event_type: str
         member_rules_tab       =structured_cfg["member_rules_tab"],
         poll_day_of_week       =structured_cfg.get("poll_day_of_week", -1),
         signup_time            =structured_cfg.get("signup_time", ""),
-        judicator_role_id      =structured_cfg.get("judicator_role_id", 0),
         power_refresh_dm_enabled=bool(structured_cfg.get("power_refresh_dm_enabled", False)),
     )
 
@@ -5631,7 +5630,9 @@ def _normalise_hhmm(raw: str) -> str | None:
     return parse_storm_signup_time(raw)
 
 
-# ── Judicator role picker (#137) ─────────────────────────────────────────────
+# ── Keep-or-flip Yes/No re-entry gate ───────────────────────────────────────
+# Used by power-refresh DM step (and previously the Judicator role step,
+# now dropped per Rule G / #167).
 
 
 class _KeepOrFlipYesNoGate(discord.ui.View):
@@ -5687,197 +5688,6 @@ class _KeepOrFlipYesNoGate(discord.ui.View):
 
         flip_btn.callback = _flip_cb
         self.add_item(flip_btn)
-
-
-class _KeepOrChangeRoleGate(discord.ui.View):
-    """Re-entry gate for `_ask_judicator_role`. Three buttons:
-    Keep current / Skip (no role) / Change (descend to picker).
-    Returns its decision via `self.decision` in {"keep", "skip",
-    "change"} or None on timeout. Mirrors `ask_keep_or_change`'s
-    three-button shape for the role flavour."""
-
-    def __init__(self, *, current_label: str):
-        super().__init__(timeout=WIZARD_TIMEOUT)
-        self.decision: str | None = None
-        self.cancelled = False
-
-        keep_btn = discord.ui.Button(
-            label=f"✅ Keep current: {current_label}"[:80],
-            style=discord.ButtonStyle.success,
-        )
-
-        async def _keep_cb(inter: discord.Interaction):
-            self.decision = "keep"
-            for item in self.children: item.disabled = True
-            await wizard_registry.safe_edit_response(
-                inter, content=f"✅ Keeping **{current_label}**", view=self,
-            )
-            self.stop()
-
-        keep_btn.callback = _keep_cb
-        self.add_item(keep_btn)
-
-        skip_btn = discord.ui.Button(
-            label="↩️ Skip — no role to apply",
-            style=discord.ButtonStyle.secondary,
-        )
-
-        async def _skip_cb(inter: discord.Interaction):
-            self.decision = "skip"
-            for item in self.children: item.disabled = True
-            await wizard_registry.safe_edit_response(
-                inter, content="✅ Judicator role cleared.", view=self,
-            )
-            self.stop()
-
-        skip_btn.callback = _skip_cb
-        self.add_item(skip_btn)
-
-        change_btn = discord.ui.Button(
-            label="✏️ Change role",
-            style=discord.ButtonStyle.secondary,
-        )
-
-        async def _change_cb(inter: discord.Interaction):
-            self.decision = "change"
-            for item in self.children: item.disabled = True
-            await wizard_registry.safe_edit_response(
-                inter, content="✏️ Pick a new role below…", view=self,
-            )
-            self.stop()
-
-        change_btn.callback = _change_cb
-        self.add_item(change_btn)
-
-
-async def _ask_judicator_role(
-    channel, bot, user, cancel_event, *,
-    cmd_name: str,
-    interaction_guild,
-    current_role_id: int,
-) -> int | None:
-    """CS-only Premium sub-step: pick the Discord role the bot will
-    apply to per_member Judicator candidates when matchmaking reveals
-    Rulebringers. Officer can also skip (returns 0).
-
-    Returns the role ID, 0 for "skip / no role configured," or None
-    on timeout / cancel."""
-    import wizard_registry
-
-    # Keep-or-change branch — re-runs of the setup wizard shouldn't
-    # force leadership through the full role-picker every time. If a
-    # role is already configured, show a quick confirm-or-change view
-    # and only descend into the full picker on "Change". The bare
-    # picker still fires on first run (current_role_id == 0).
-    if current_role_id:
-        current_role = (
-            interaction_guild.get_role(int(current_role_id))
-            if interaction_guild else None
-        )
-        current_label = (
-            current_role.name if current_role else f"role id {current_role_id}"
-        )
-        gate_view = _KeepOrChangeRoleGate(current_label=current_label)
-        await channel.send(
-            "**Judicator Role (💎 Premium — CS only)**\n"
-            f"Currently set to **{current_label}**. Keep it, switch to "
-            f"no role, or pick a different role.",
-            view=gate_view,
-            allowed_mentions=discord.AllowedMentions.none(),
-        )
-        await wait_view_or_cancel(gate_view, cancel_event)
-        if getattr(gate_view, "cancelled", False):
-            return None
-        if gate_view.decision is None:
-            await channel.send(
-                f"⏰ Timed out. Run `/{cmd_name}` to start again."
-            )
-            return None
-        if gate_view.decision == "keep":
-            return int(current_role_id)
-        if gate_view.decision == "skip":
-            return 0
-        # Otherwise: fall through to the full picker.
-
-    # Build a Select of guild roles. Discord caps Select options at
-    # 25, so pre-filter to non-managed, non-default roles by name
-    # length (truncate long names) and keep the most recently created
-    # 24 — plus a "Skip" sentinel option. Alliances rarely have >25
-    # custom roles; if they do, the lower priorities tend to be the
-    # ones that don't need to be Judicator anyway.
-    roles = [
-        r for r in (interaction_guild.roles if interaction_guild else [])
-        if not r.is_default() and not r.managed
-    ]
-    # Sort by hierarchy position (top of the role list first). Admins
-    # tend to place storm-relevant roles toward the top of the role
-    # picker in Server Settings → Roles, so the top of the hierarchy
-    # surfaces the most likely Judicator-role candidates first. NOT
-    # creation-date order despite the prior comment — `r.position` is
-    # the hierarchy index, not created_at.
-    roles.sort(key=lambda r: r.position, reverse=True)
-    roles = roles[:24]
-
-    class _RolePickerView(discord.ui.View):
-        def __init__(self):
-            super().__init__(timeout=300)
-            self.selected: int | None = None
-            self.cancelled = False
-            options = [
-                discord.SelectOption(
-                    label="Skip — no role to apply",
-                    value="0",
-                    default=(current_role_id == 0),
-                ),
-            ]
-            for r in roles:
-                options.append(discord.SelectOption(
-                    label=r.name[:100],
-                    value=str(r.id),
-                    default=(r.id == current_role_id),
-                ))
-            sel = discord.ui.Select(
-                placeholder="Pick the Judicator role (or skip)",
-                min_values=1, max_values=1,
-                options=options,
-            )
-
-            async def _on_pick(inter: discord.Interaction):
-                try:
-                    self.selected = int(sel.values[0])
-                except (TypeError, ValueError):
-                    self.selected = 0
-                for item in self.children: item.disabled = True
-                if self.selected == 0:
-                    msg = "✅ Judicator role skipped."
-                else:
-                    msg = f"✅ Judicator role: <@&{self.selected}>"
-                await wizard_registry.safe_edit_response(
-                    inter, content=msg, view=self,
-                )
-                self.stop()
-
-            sel.callback = _on_pick
-            self.add_item(sel)
-
-    view = _RolePickerView()
-    await channel.send(
-        "**Judicator Role (💎 Premium — CS only)**\n"
-        "Pick the Discord role the bot should apply to members tagged "
-        "as Judicator candidates (via `/canyonstorm member_rule set_member_role`) "
-        "after a CS roster is approved and matchmaking reveals "
-        "**Rulebringers**. Skip if you don't use this — the bot won't "
-        "apply any role.",
-        view=view,
-        allowed_mentions=discord.AllowedMentions.none(),
-    )
-    await wait_view_or_cancel(view, cancel_event)
-    if view.cancelled:
-        return None
-    if view.selected is None:
-        await channel.send(f"⏰ Timed out. Run `/{cmd_name}` to start again.")
-        return None
-    return int(view.selected)
 
 
 # ── Inline-create offers for the structured-flow setup wizard (#144) ─────────
@@ -6137,7 +5947,6 @@ async def _run_structured_flow_setup_step(
         result.setdefault(tab, "")
     result.setdefault("poll_day_of_week", -1)
     result.setdefault("signup_time", "")
-    result.setdefault("judicator_role_id", 0)
     result.setdefault("power_refresh_dm_enabled", False)
 
     cmd_short = cmd_name.replace("setup_", "")
@@ -6339,20 +6148,6 @@ async def _run_structured_flow_setup_step(
                 return None
             result[tab_key] = picked
 
-        # Judicator role (#137) — CS-only. After matchmaking reveals
-        # Rulebringers, the Apply Faction Roles button assigns this
-        # Discord role to per_member.special_role=judicator candidates.
-        if event_type == "CS":
-            jud_pick = await _ask_judicator_role(
-                channel, bot, user, cancel_event,
-                cmd_name=cmd_name,
-                interaction_guild=interaction_guild,
-                current_role_id=result.get("judicator_role_id", 0),
-            )
-            if jud_pick is None:
-                return None
-            result["judicator_role_id"] = jud_pick
-
         # Power-refresh DM nudge (#138) — Premium-only. When on, the
         # signup-button handler DMs the voter if their power column
         # value isn't readable. Cooldown is one nudge per event_date
@@ -6489,17 +6284,11 @@ async def _run_structured_flow_setup_step(
     # ── Member Rules ────────────────────────────────────────────────────
     # Per-member rule list differs by event type: DS has teams, CS doesn't.
     if event_type == "DS":
-        per_member_example = (
-            "`Alice always plays Team A`, `Bob is our Judicator candidate`"
-        )
-        per_member_subcmds = (
-            "`set_member_team` / `set_member_zone` / `set_member_role`"
-        )
+        per_member_example = "`Alice always plays Team A`"
+        per_member_subcmds = "`set_member_team` / `set_member_zone`"
     else:
-        per_member_example = (
-            "`Carol always plays Power Tower`, `Dan is our Judicator candidate`"
-        )
-        per_member_subcmds = "`set_member_zone` / `set_member_role`"
+        per_member_example = "`Carol always plays Power Tower`"
+        per_member_subcmds = "`set_member_zone`"
     await channel.send(
         "**Member Rules**\n"
         "Member rules tell the roster builder how to treat individual "
@@ -6544,12 +6333,11 @@ async def _run_structured_flow_setup_step(
         if event_type == "DS":
             per_member_pointer = (
                 f"`/{parent} member_rule set_member_team` (or "
-                f"`set_member_zone` / `set_member_role`)"
+                f"`set_member_zone`)"
             )
         else:
             per_member_pointer = (
-                f"`/{parent} member_rule set_member_zone` "
-                f"(or `set_member_role`)"
+                f"`/{parent} member_rule set_member_zone`"
             )
         rule_offer.message = await channel.send(
             f"Want to add your first {label} rule now? The button opens "

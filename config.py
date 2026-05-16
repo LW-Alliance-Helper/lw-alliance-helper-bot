@@ -299,7 +299,6 @@ def init_db():
                 member_rules_tab         TEXT    DEFAULT '',
                 poll_day_of_week         INTEGER DEFAULT -1,
                 signup_time              TEXT    DEFAULT '',
-                judicator_role_id        INTEGER DEFAULT 0,
                 power_refresh_dm_enabled INTEGER DEFAULT 0,
                 PRIMARY KEY (guild_id, event_type)
             )
@@ -614,12 +613,6 @@ def init_db():
             # "manual posting only — use /<parent> post_signup".
             ("poll_day_of_week",        "INTEGER DEFAULT -1"),
             ("signup_time",             "TEXT    DEFAULT ''"),
-            # Faction roles (#137). Premium-only Discord role ID
-            # applied to per_member.special_role=judicator candidates
-            # after a CS Approve & Post when matchmaking reveals
-            # Rulebringers. DS rows leave this at 0; the wizard skips
-            # the question for DS setup.
-            ("judicator_role_id",       "INTEGER DEFAULT 0"),
             # Power-refresh DM nudge (#138). Premium-only — when on,
             # the SignupView click handler DMs the voter if their
             # power_column_name cell on the roster Sheet is missing
@@ -633,6 +626,15 @@ def init_db():
                 print(f"[CONFIG] Added {col} to guild_storm_config")
             except Exception:
                 pass
+
+        # ── Drop judicator_role_id (Rule G / #167) ────────────────────────────
+        # Faction-roles feature removed end-to-end. Drop the column.
+        try:
+            conn.execute("ALTER TABLE guild_storm_config DROP COLUMN judicator_role_id")
+            conn.commit()
+            print("[CONFIG] Dropped judicator_role_id from guild_storm_config")
+        except Exception:
+            pass
 
         # ── Power-column letter migration (Rule C / #165) ─────────────────────
         # Old shape stored `power_column_name TEXT DEFAULT ''` (a header
@@ -1463,7 +1465,6 @@ def get_storm_config(guild_id: int, event_type: str) -> dict:
         "member_rules_tab":        "",
         "poll_day_of_week":        -1,
         "signup_time":             "",
-        "judicator_role_id":       0,
         "power_refresh_dm_enabled": 0,
     }
     return _normalize_storm_templates(fallback, event_type)
@@ -1591,7 +1592,6 @@ def get_structured_storm_config(guild_id: int, event_type: str) -> dict:
         "member_rules_tab":        _tab("member_rules_tab"),
         "poll_day_of_week":        int(raw_dow),
         "signup_time":             cfg.get("signup_time") or "",
-        "judicator_role_id":       int(cfg.get("judicator_role_id") or 0),
         "power_refresh_dm_enabled": bool(cfg.get("power_refresh_dm_enabled")),
     }
 
@@ -1670,7 +1670,6 @@ def save_structured_storm_config(
     member_rules_tab: str           = "",
     poll_day_of_week: int           = -1,
     signup_time: str                = "",
-    judicator_role_id: int          = 0,
     power_refresh_dm_enabled: bool  = False,
 ) -> bool:
     """UPDATE the structured-flow fields on an existing (guild_id, event_type)
@@ -1699,12 +1698,6 @@ def save_structured_storm_config(
         dow = -1
     if not (-1 <= dow <= 6):
         dow = -1
-    try:
-        jud_role = int(judicator_role_id or 0)
-    except (TypeError, ValueError):
-        jud_role = 0
-    if jud_role < 0:
-        jud_role = 0
     with _get_conn() as conn:
         cur = conn.execute(
             "UPDATE guild_storm_config SET "
@@ -1720,7 +1713,6 @@ def save_structured_storm_config(
             "  member_rules_tab = ?, "
             "  poll_day_of_week = ?, "
             "  signup_time = ?, "
-            "  judicator_role_id = ?, "
             "  power_refresh_dm_enabled = ? "
             "WHERE guild_id = ? AND event_type = ?",
             (
@@ -1729,7 +1721,7 @@ def save_structured_storm_config(
                 int(signup_channel_id or 0), signup_schedule_cron,
                 signups_tab, rosters_tab, attendance_tab,
                 strategies_tab, member_rules_tab,
-                dow, signup_time, jud_role,
+                dow, signup_time,
                 1 if power_refresh_dm_enabled else 0,
                 guild_id, event_type,
             ),

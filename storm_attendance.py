@@ -64,14 +64,11 @@ def _rosters_tab_name(guild_id: int, event_type: str) -> str:
     )
 
 
-def _open_or_create_tab(sh, tab_name: str, header: list[str]):
-    """Return the worksheet, creating it (with header) if missing."""
-    try:
-        return sh.worksheet(tab_name)
-    except Exception:
-        ws = sh.add_worksheet(title=tab_name, rows=2000, cols=max(8, len(header)))
-        ws.append_row(header, value_input_option="RAW")
-        return ws
+# Tab open/create uses `config.get_or_create_worksheet` so every
+# structured-flow tab (Sign-Ups, Rosters, Attendance, Strategies,
+# Member Rules) auto-creates on first touch with the documented
+# "The bot creates and maintains this tab if it doesn't exist."
+# semantic. See config.get_or_create_worksheet for the shared helper.
 
 
 def load_rostered_slots(
@@ -94,12 +91,10 @@ def load_rostered_slots(
     if not tab:
         return [], ["no rosters tab configured"]
 
-    parent_cmd = "/desertstorm signups" if event_type == "DS" else "/canyonstorm signups"
     try:
-        ws = sh.worksheet(tab)
-    except Exception:
-        return [], [f"rosters tab '{tab}' doesn't exist yet — post a "
-                    f"structured roster first via {parent_cmd}"]
+        ws = config.get_or_create_worksheet(sh, tab)
+    except Exception as e:
+        return [], [f"rosters tab open failed: {e}"]
 
     try:
         values = ws.get_all_values()
@@ -187,9 +182,9 @@ def load_attendance(
     if not tab:
         return {}, []
     try:
-        ws = sh.worksheet(tab)
+        ws = config.get_or_create_worksheet(sh, tab, header_row=_ATTENDANCE_HEADER)
     except Exception:
-        return {}, []  # tab not yet created → no existing attendance
+        return {}, []  # tab create/open failed → no existing attendance
 
     try:
         values = ws.get_all_values()
@@ -280,7 +275,7 @@ def save_attendance(
     if not tab:
         return ["no attendance tab configured"]
 
-    ws = _open_or_create_tab(sh, tab, _ATTENDANCE_HEADER)
+    ws = config.get_or_create_worksheet(sh, tab, header_row=_ATTENDANCE_HEADER)
 
     try:
         all_values = ws.get_all_values()

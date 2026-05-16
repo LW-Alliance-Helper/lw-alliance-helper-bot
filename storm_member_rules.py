@@ -165,12 +165,10 @@ def _get_or_create_rules_worksheet(guild_id: int, event_type: str):
     tab_name = _rules_tab_name(guild_id, event_type)
     if not tab_name:
         return None
-    try:
-        ws = sh.worksheet(tab_name)
-    except Exception:
-        ws = sh.add_worksheet(title=tab_name, rows=500, cols=max(8, len(_HEADER)))
-        ws.append_row(_HEADER, value_input_option="RAW")
-    return ws
+    return config.get_or_create_worksheet(
+        sh, tab_name, header_row=_HEADER, rows=500,
+        cols=max(8, len(_HEADER)),
+    )
 
 
 class Rule:

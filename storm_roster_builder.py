@@ -3171,13 +3171,12 @@ def _write_rosters_tab(session: RosterBuilderSession) -> list[str]:
         return ["spreadsheet not configured — Sheet write skipped."]
 
     try:
-        ws = sh.worksheet(tab)
-    except Exception:
-        try:
-            ws = sh.add_worksheet(title=tab, rows=2000, cols=len(_ROSTERS_HEADER))
-            ws.append_row(_ROSTERS_HEADER, value_input_option="RAW")
-        except Exception as e:
-            return [f"rosters tab create failed: {e}"]
+        ws = config.get_or_create_worksheet(
+            sh, tab, header_row=_ROSTERS_HEADER,
+            rows=2000, cols=len(_ROSTERS_HEADER),
+        )
+    except Exception as e:
+        return [f"rosters tab create/open failed: {e}"]
     else:
         # Header migration: alliances created their rosters_tab before
         # `Paired With` was added in #132. New writes still produce 10

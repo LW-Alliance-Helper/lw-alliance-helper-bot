@@ -530,17 +530,14 @@ def _mirror_vote_to_sheet(
     if sh is None:
         return  # Guild has no Sheet configured.
 
-    try:
-        ws = sh.worksheet(tab_name)
-    except Exception:
-        # Tab missing → create it with a header row. Alliance can rename
-        # the tab later via setup; the bot will follow the renamed config.
-        ws = sh.add_worksheet(title=tab_name, rows=1000, cols=6)
-        ws.append_row(
-            ["Event Date", "Member", "Vote", "Voter Discord ID",
-             "On Behalf?", "Voted At (UTC)"],
-            value_input_option="RAW",
-        )
+    # Tab auto-creates via the shared helper. Alliance can rename
+    # the tab later via setup; the bot will follow the renamed config.
+    ws = config.get_or_create_worksheet(
+        sh, tab_name,
+        header_row=["Event Date", "Member", "Vote", "Voter Discord ID",
+                    "On Behalf?", "Voted At (UTC)"],
+        rows=1000, cols=6,
+    )
 
     voted_at = _dt.datetime.now(_dt.timezone.utc).isoformat(timespec="seconds")
     ws.append_row(

@@ -940,6 +940,38 @@ def get_spreadsheet(guild_id: int = None):
     return gc.open_by_key(sheet_id)
 
 
+def get_or_create_worksheet(
+    spreadsheet, tab_name: str, *,
+    header_row=None, rows: int = 200, cols: int = 10,
+):
+    """Return the worksheet matching `tab_name`, creating it if absent.
+
+    Used by the storm structured-flow surfaces (Sign-Ups, Rosters,
+    Attendance, Strategies, Member Rules) so officers don't have to
+    pre-create tabs as a manual step. `header_row` seeds row 1 on
+    newly-created tabs; leaves existing tabs alone.
+
+    Catches a broad `Exception` on the lookup so fake-worksheet
+    test stubs (which raise plain `Exception("Worksheet X not found")`)
+    work the same way as the real gspread `WorksheetNotFound`. The
+    `add_worksheet` call is left to raise — if creation fails the
+    caller surfaces the gspread error.
+    """
+    try:
+        return spreadsheet.worksheet(tab_name)
+    except Exception:
+        ws = spreadsheet.add_worksheet(title=tab_name, rows=rows, cols=cols)
+        if header_row:
+            try:
+                ws.update("A1", [list(header_row)])
+            except TypeError:
+                # Fake-worksheet stubs in tests use `append_row(header)`
+                # instead of `update`; fall back so tests don't have to
+                # learn the gspread API surface.
+                ws.append_row(list(header_row), value_input_option="RAW")
+        return ws
+
+
 def describe_sheet_error(e: Exception, *,
                          guild_id=None, tab: str = None) -> str:
     """Render a gspread exception as a one-line diagnostic for logging.

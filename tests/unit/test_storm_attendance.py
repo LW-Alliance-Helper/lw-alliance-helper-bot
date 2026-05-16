@@ -134,13 +134,19 @@ class TestLoadRosteredSlots:
         names = {s["member"] for s in slots}
         assert "Erin" not in names  # Erin is on 2026-05-25
 
-    def test_missing_rosters_tab_returns_friendly_error(self, fake_env):
+    def test_missing_rosters_tab_auto_creates_and_returns_empty(self, fake_env):
+        """Rule D: the rosters tab auto-creates on first read. Attendance
+        before any Approve & Post returns an empty slot list with no
+        errors — the downstream UI surfaces 'No structured roster
+        found for this date' via the empty-slot branch."""
         fake, gid = fake_env
         # Delete the rosters tab.
         del fake._tabs["DS Rosters"]
         slots, errors = sa.load_rostered_slots(gid, "DS", "2026-05-18")
         assert slots == []
-        assert errors and "doesn't exist" in errors[0]
+        assert errors == []
+        # Tab was recreated by the read.
+        assert "DS Rosters" in fake._tabs
 
 
 class TestLoadAttendance:

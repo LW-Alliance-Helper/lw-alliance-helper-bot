@@ -55,7 +55,7 @@ def _read_tab_values(guild_id: int, tab_name: str) -> tuple[list[list[str]], lis
     if sh is None:
         return [], []
     try:
-        ws = sh.worksheet(tab_name)
+        ws = config.get_or_create_worksheet(sh, tab_name)
     except Exception:
         return [], []
     try:

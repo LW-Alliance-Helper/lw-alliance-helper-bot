@@ -497,12 +497,11 @@ def _get_or_create_strategies_worksheet(guild_id: int, event_type: str):
     if not tab_name:
         return None
     header = _DS_HEADER if event_type == "DS" else _CS_HEADER
-    try:
-        ws = sh.worksheet(tab_name)
-    except Exception:
-        ws = sh.add_worksheet(title=tab_name, rows=1000, cols=max(8, len(header)))
-        ws.append_row(header, value_input_option="RAW")
-    return ws
+    import config
+    return config.get_or_create_worksheet(
+        sh, tab_name, header_row=header,
+        rows=1000, cols=max(8, len(header)),
+    )
 
 
 def load_preset(guild_id: int, event_type: str, name: str) -> PresetBuffer | None:

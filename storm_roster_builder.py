@@ -1330,7 +1330,7 @@ class RosterBuilderView(discord.ui.View):
         self.add_item(toggle_btn)
 
         unassign_btn = discord.ui.Button(
-            label="↩️ Unassign current zone", style=discord.ButtonStyle.secondary, row=action_row,
+            label="↩️ Remove current zone assignees", style=discord.ButtonStyle.secondary, row=action_row,
         )
 
         async def _unassign(inter: discord.Interaction):
@@ -1352,23 +1352,37 @@ class RosterBuilderView(discord.ui.View):
         self.add_item(unassign_btn)
 
         move_to_subs_btn = discord.ui.Button(
-            label="🪑 Last to subs", style=discord.ButtonStyle.secondary, row=action_row,
+            label="🪑 Add all unassigned to Subs", style=discord.ButtonStyle.secondary, row=action_row,
         )
 
         async def _move_to_subs(inter: discord.Interaction):
             if not await self._guard_owner(inter):
                 return
-            # Move-to-subs operates on the selected phase's slot list.
-            members_in_zone = s.assignments_for_phase(s.selected_phase).get(
-                s.selected_zone, [],
-            )
-            if not members_in_zone:
+            # Bulk move: every member in this team's available pool who
+            # isn't already a primary in any phase + isn't already in
+            # subs (or paired with a primary, in paired mode) goes to
+            # the subs pool. Subs have no minimum power filter — this
+            # is a pure pool transfer, not an eligibility check.
+            primaries: set[str] = set()
+            for phase in s.iter_phases():
+                for zone_members in s.assignments_for_phase(phase).values():
+                    primaries.update(zone_members)
+            already_subs = set(s.subs)
+            paired_keys = set(s.paired_subs.values()) if s.is_paired else set()
+            to_move = [
+                key for key in s.members.keys()
+                if key not in primaries
+                and key not in already_subs
+                and key not in paired_keys
+            ]
+            if not to_move:
                 await inter.response.send_message(
-                    "⚠️ No members in this zone to move.", ephemeral=True,
+                    "⚠️ No unassigned members to move — everyone in this "
+                    "team's pool is already assigned as a primary or sub.",
+                    ephemeral=True,
                 )
                 return
-            moved = members_in_zone.pop()
-            s.subs.append(moved)
+            s.subs.extend(to_move)
             s.prune_stale_overrides()
             s.prune_stale_pairings()
             s.auto_fill_summary = None
@@ -1505,8 +1519,13 @@ class RosterBuilderView(discord.ui.View):
         # alongside the main message. Pillow import happens lazily inside
         # the handler so the builder doesn't pay the import cost unless
         # the button's clicked.
+        render_label = (
+            "🖼️ Generate DS assignments image"
+            if s.event_type == "DS"
+            else "🖼️ Generate CS assignments image"
+        )
         render_btn = discord.ui.Button(
-            label="🖼️ Render image", style=discord.ButtonStyle.secondary, row=final_row,
+            label=render_label, style=discord.ButtonStyle.secondary, row=final_row,
         )
 
         async def _render(inter: discord.Interaction):

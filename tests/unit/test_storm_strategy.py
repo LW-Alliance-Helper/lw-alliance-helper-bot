@@ -792,6 +792,62 @@ class TestStrategyListView:
                 assert disabled is False
 
 
+class TestPresetEditorPolish:
+    """#174 / Decisions 10 + 13: the editor view drops the [➕ Add zone]
+    affordance (zones are game-defined), renames action buttons to be
+    self-describing, drops the redundant 'Yes — ' prefix on the phase-
+    mode dropdown, and reframes the dirty-state + mode-toggle copy."""
+
+    def test_add_zone_modal_class_removed(self):
+        # Decision #13: zones come exclusively from DS_ZONE_STRUCTURE /
+        # CS_ZONE_STRUCTURE; alliances can't add their own.
+        assert not hasattr(ss, "_AddZoneModal")
+
+    def test_phase_mode_dropdown_drops_yes_prefix(self):
+        """The pre-#174 labels were 'Yes — 2 Phases' / 'Yes — 3 Phases'.
+        The 'Yes — ' was redundant once 'Flat (no phases)' became the
+        no-phase option."""
+        # Build the editor view to inspect its components without going
+        # through the slash command path.
+        buf = ss.PresetBuffer(name="P", event_type="DS")
+        view = ss._PresetEditorView(guild_id=1, user_id=1, buf=buf)
+        phase_selects = [
+            c for c in view.children
+            if isinstance(c, __import__("discord").ui.Select)
+            and "Phase mode" in (c.placeholder or "")
+        ]
+        assert len(phase_selects) == 1
+        labels = [opt.label for opt in phase_selects[0].options]
+        assert "Flat (no phases)" in labels
+        assert "2 Phases" in labels
+        assert "3 Phases" in labels
+        assert not any("Yes —" in lab for lab in labels)
+
+    def test_action_button_labels_self_describe(self):
+        """Decision #13's button-sweep: '✏️ Rename' → '✏️ Rename preset',
+        '🔙 Abandon' → '🔙 Abandon this preset' so the button is
+        understandable out of context (e.g. on mobile where the embed
+        is collapsed)."""
+        buf = ss.PresetBuffer(name="P", event_type="DS")
+        view = ss._PresetEditorView(guild_id=1, user_id=1, buf=buf)
+        labels = [getattr(c, "label", "") for c in view.children]
+        assert "✏️ Rename preset" in labels
+        assert "🔙 Abandon this preset" in labels
+        # The Add Zone button is gone.
+        assert not any("Add zone" in lab for lab in labels)
+
+    def test_unsaved_changes_footer_uses_new_wording(self):
+        buf = ss.PresetBuffer(name="P", event_type="DS")
+        buf.dirty = True
+        embed = ss._build_editor_embed(buf, teams="both")
+        body = embed.description or ""
+        assert "Unsaved changes" in body
+        # New phrasing: "Save preset to save your changes."; old phrasing
+        # ("hit Save Preset to commit") is gone.
+        assert "Save preset to save your changes" in body
+        assert "to commit" not in body
+
+
 class TestPresetPickerView:
     """The Edit / Delete buttons open this picker. Capped at 25 options
     (Discord Select limit); the action dictates the downstream handler."""

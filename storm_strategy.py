@@ -790,7 +790,7 @@ def _build_editor_embed(buf: PresetBuffer, team_size_hint: int = _TEAM_SIZE_HINT
         f"📊 Capacity: **{cap}** (team size {team_size_hint}; flex room is fine) {glyph}"
     )
     if buf.dirty:
-        desc_lines.append("⚠️ *Unsaved changes — hit Save Preset to commit.*")
+        desc_lines.append("⚠️ *Unsaved changes — Save preset to save your changes.*")
     return discord.Embed(
         title=title,
         description="\n".join(desc_lines),
@@ -981,8 +981,8 @@ class _ZoneEditModal(discord.ui.Modal):
                 apply_view.message = await interaction.followup.send(
                     content=(
                         f"💡 **{self._zone_name}** has similar zones in this preset: "
-                        f"{', '.join(siblings)}. Pick any to copy these same "
-                        f"settings to, or skip."
+                        f"{', '.join(siblings)}. Would you like to apply the "
+                        f"same settings to these as well?"
                     ),
                     view=apply_view,
                     ephemeral=True,
@@ -1291,8 +1291,8 @@ class _ZonePhasePriorityModal(discord.ui.Modal):
                 apply_view.message = await interaction.followup.send(
                     content=(
                         f"💡 **{self._zone_name}** has similar zones in this preset: "
-                        f"{', '.join(siblings)}. Pick any to copy these same "
-                        f"settings to, or skip."
+                        f"{', '.join(siblings)}. Would you like to apply the "
+                        f"same settings to these as well?"
                     ),
                     view=apply_view, ephemeral=True,
                 )
@@ -1377,7 +1377,7 @@ class _ApplyToSimilarView(discord.ui.View):
         self._selected: list[str] = []
 
         select = discord.ui.Select(
-            placeholder="Choose siblings to apply to…",
+            placeholder="Select zones",
             min_values=0, max_values=min(len(sibling_names), 25),
             options=[
                 discord.SelectOption(label=name[:100], value=name[:100])
@@ -1502,39 +1502,6 @@ class _ApplyToSimilarView(discord.ui.View):
                 pass
 
 
-class _AddZoneModal(discord.ui.Modal, title="Add Zone to Preset"):
-    """For alliances who want to extend the canonical zone list with a
-    custom name (rare; mostly handled by the canonical list, but useful
-    for special-case zones)."""
-
-    def __init__(self, view: "_PresetEditorView"):
-        super().__init__()
-        self._view = view
-        self.zone_input = discord.ui.TextInput(
-            label="Zone name",
-            placeholder="e.g. Power Tower",
-            required=True, max_length=40,
-        )
-        self.add_item(self.zone_input)
-
-    async def on_submit(self, interaction: discord.Interaction):
-        name = (self.zone_input.value or "").strip()
-        if not name:
-            await interaction.response.send_message(
-                "⚠️ Zone name is required.",
-                ephemeral=True,
-            )
-            return
-        if self._view.buf.find_zone(name):
-            await interaction.response.send_message(
-                f"⚠️ Zone **{name}** is already in this preset.",
-                ephemeral=True,
-            )
-            return
-        self._view.buf.upsert_zone(ZoneRow(zone=name, max_players=0))
-        await self._view.refresh(interaction, message=f"➕ Added **{name}**.")
-
-
 class _RenameModal(discord.ui.Modal, title="Rename Preset"):
     def __init__(self, view: "_PresetEditorView"):
         super().__init__()
@@ -1646,13 +1613,13 @@ class _PresetEditorView(discord.ui.View):
                     default=self.buf.phase_count == 0,
                 ),
                 discord.SelectOption(
-                    label="Yes — 2 Phases",
+                    label="2 Phases",
                     value="2",
                     description="DS-style migration: Phase 1 → Phase 2.",
                     default=self.buf.phase_count == 2,
                 ),
                 discord.SelectOption(
-                    label="Yes — 3 Phases",
+                    label="3 Phases",
                     value="3",
                     description="CS-style stages: Phase 1 → 2 → 3.",
                     default=self.buf.phase_count == 3,
@@ -1718,32 +1685,36 @@ class _PresetEditorView(discord.ui.View):
                 f"from prior values; edit any zone to override."
                 if seeded and old_count < new_count else ""
             )
+            # Mode-toggle copy reframes the persistence contract from
+            # "flip back any time" (vague) to "re-select the same mode"
+            # (concrete) per #174 / Decision #13's polish notes.
+            restore_label = (
+                "Flat" if old_count == 0 else f"{old_count}-phase"
+            )
             await self.refresh(
                 inter,
                 message=(
-                    f"🔀 Switched to **{label}** mode. "
-                    "Stored capacities + assignments are kept — flip back "
-                    "any time without data loss." + seeded_note
+                    f"🔀 Switched to **{label}** mode. Capacities + "
+                    f"assignments are kept. Re-select **{restore_label}** "
+                    f"mode to restore without data loss." + seeded_note
                 ),
             )
 
         phase_mode_select.callback = _on_phase_mode
 
-        # Action buttons
-        add_btn   = discord.ui.Button(label="➕ Add zone", style=discord.ButtonStyle.secondary)
-        rename_btn = discord.ui.Button(label="✏️ Rename", style=discord.ButtonStyle.secondary)
+        # Action buttons. Decision #13 (#174): the [➕ Add zone]
+        # affordance is removed entirely — zones come from
+        # DS_ZONE_STRUCTURE / CS_ZONE_STRUCTURE, which are
+        # game-defined. Alliances configure max-players / minimum
+        # power / priority for the canonical zones only; they don't
+        # get to invent new ones.
+        rename_btn = discord.ui.Button(label="✏️ Rename preset", style=discord.ButtonStyle.secondary)
         save_btn  = discord.ui.Button(
             label="💾 Save preset",
             style=discord.ButtonStyle.success,
             disabled=not self.buf.dirty,
         )
-        cancel_btn = discord.ui.Button(label="🔙 Abandon", style=discord.ButtonStyle.danger)
-
-        async def _add(inter):
-            if inter.user.id != self.user_id:
-                await inter.response.send_message("⛔ Only the editor's owner can change this preset.", ephemeral=True); return
-            await inter.response.send_modal(_AddZoneModal(self))
-        add_btn.callback = _add
+        cancel_btn = discord.ui.Button(label="🔙 Abandon this preset", style=discord.ButtonStyle.danger)
 
         async def _rename(inter):
             if inter.user.id != self.user_id:
@@ -1809,7 +1780,6 @@ class _PresetEditorView(discord.ui.View):
         cancel_btn.callback = _cancel
 
         self.add_item(phase_mode_select)
-        self.add_item(add_btn)
         self.add_item(rename_btn)
         self.add_item(save_btn)
         self.add_item(cancel_btn)

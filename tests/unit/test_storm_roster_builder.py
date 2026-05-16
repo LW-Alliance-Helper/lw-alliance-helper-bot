@@ -117,7 +117,8 @@ def fake_env(seeded_db):
         config.save_structured_storm_config(
             TEST_GUILD_ID, et,
             structured_flow_enabled=True,
-            power_column_name="1st Squad Power",
+            # Fake roster sheet has "1st Squad Power" at column F (index 5).
+            power_metric_column="F",
         )
 
     # Patch both get_spreadsheet AND get_member_roster_sheet to return our fake.
@@ -167,32 +168,34 @@ class TestReadRosterPowers:
         assert "Dave" in members
         assert members["Dave"]["discord_id"] == ""
 
-    def test_missing_power_column_surfaces_error(self, fake_env):
+    def test_power_column_letter_past_header_surfaces_error(self, fake_env):
         fake, gid = fake_env
         import config
-        # Re-save structured config with a power column that doesn't exist.
+        # Fake roster sheet has 7 columns (A-G). Picking column Z (past
+        # the header) surfaces a soft error + every power reads None.
         config.save_structured_storm_config(
             gid, "DS",
             structured_flow_enabled=True,
-            power_column_name="Nonexistent Column",
+            power_metric_column="Z",
         )
         members, errs = srb._read_roster_powers(gid, "DS")
-        # Members still read, but every power is None and an error is
-        # surfaced for leadership to see.
-        assert any("Nonexistent Column" in e for e in errs)
+        assert any("power column Z doesn't exist" in e.lower() or
+                   "power column z doesn't exist" in e.lower()
+                   for e in errs)
         assert all(m["power"] is None for m in members.values())
 
-    def test_unconfigured_power_column_surfaces_error(self, fake_env):
+    def test_power_column_letter_at_non_power_column_reads_none(self, fake_env):
         fake, gid = fake_env
         import config
+        # Pointing at the Name column (B) — every cell parses as None
+        # (not a power value), no soft error.
         config.save_structured_storm_config(
             gid, "DS",
             structured_flow_enabled=True,
-            power_column_name="",  # not set
+            power_metric_column="B",
         )
-        members, errs = srb._read_roster_powers(gid, "DS")
-        assert any("no power metric column" in e.lower() for e in errs)
-        # All powers read as None.
+        members, _errs = srb._read_roster_powers(gid, "DS")
+        # Name cells like "alice" can't parse as power -> None.
         assert all(m["power"] is None for m in members.values())
 
 

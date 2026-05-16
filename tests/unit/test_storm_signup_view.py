@@ -565,7 +565,7 @@ class TestPowerRefreshDmNudge:
         config.save_structured_storm_config(
             TEST_GUILD_ID, "DS",
             structured_flow_enabled=True,
-            power_column_name="1st Squad Power",
+            power_metric_column="B",
             power_refresh_dm_enabled=True,
         )
         return TEST_GUILD_ID
@@ -641,56 +641,14 @@ class TestPowerRefreshDmNudge:
             )
         inter.user.send.assert_awaited_once()
         body = inter.user.send.await_args.args[0]
-        assert "1st Squad Power" in body
+        # Post-Rule C (#165): DM body uses a generic "power value"
+        # phrase rather than naming the column header — the column is
+        # configured as a letter, not a header string.
+        assert "power value" in body.lower()
         # Cooldown row recorded — subsequent re-vote is silent.
         assert config.has_power_refresh_dm_been_sent(
             env, "DS", "2026-05-18", 42,
         )
-
-    @pytest.mark.asyncio
-    async def test_dm_body_strips_leading_your_to_avoid_double_possessive(
-        self, env,
-    ):
-        """If the alliance named their power column 'Your Power', the
-        rendered body must not read 'your **Your Power** on the alliance
-        roster Sheet…'. The strip-leading-your fix drops the duplicate."""
-        import config
-        config.save_structured_storm_config(
-            env, "DS",
-            structured_flow_enabled=True,
-            power_column_name="Your Squad Power",
-            power_refresh_dm_enabled=True,
-        )
-        inter = self._fake_interaction()
-        with self._patch_roster(voter_power=None):
-            await sv._maybe_send_power_refresh_dm(
-                inter, env, "DS", "2026-05-18", 42,
-            )
-        body = inter.user.send.await_args.args[0]
-        # Column header rendered without its leading "Your "
-        assert "**Squad Power**" in body
-        assert "your **Your" not in body.lower()
-
-    @pytest.mark.asyncio
-    async def test_dm_body_keeps_column_name_when_no_leading_possessive(
-        self, env,
-    ):
-        """A column header without a leading 'your'/'my' renders
-        verbatim — the strip only kicks in when needed."""
-        import config
-        config.save_structured_storm_config(
-            env, "DS",
-            structured_flow_enabled=True,
-            power_column_name="Squad Power",
-            power_refresh_dm_enabled=True,
-        )
-        inter = self._fake_interaction()
-        with self._patch_roster(voter_power=None):
-            await sv._maybe_send_power_refresh_dm(
-                inter, env, "DS", "2026-05-18", 42,
-            )
-        body = inter.user.send.await_args.args[0]
-        assert "**Squad Power**" in body
 
     @pytest.mark.asyncio
     async def test_cooldown_prevents_double_dm_on_revote(self, env):

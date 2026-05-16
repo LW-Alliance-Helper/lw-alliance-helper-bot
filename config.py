@@ -288,7 +288,7 @@ def init_db():
                 teams                    TEXT    DEFAULT 'both',
                 -- Structured storm flow (#38 + #54)
                 structured_flow_enabled  INTEGER DEFAULT 0,
-                power_column_name        TEXT    DEFAULT '',
+                power_metric_column      TEXT    DEFAULT 'B',
                 sub_mode                 TEXT    DEFAULT 'pool',
                 signup_channel_id        INTEGER DEFAULT 0,
                 signup_schedule_cron     TEXT    DEFAULT '',
@@ -592,13 +592,14 @@ def init_db():
             # ── Structured storm flow (#38 + #54) ────────────────────────────────
             # Premium opt-in structured roster builder. `structured_flow_enabled`
             # gates the registration post, on-behalf voting, eligibility-gated
-            # roster builder, and structured mail post. `power_column_name` is
-            # which header on the roster Sheet to read for eligibility checks
-            # (e.g. "1st Squad Power"). `sub_mode` is `pool` (flat sub list) or
-            # `paired` (primary→sub pairs). Tab names default to empty and are
-            # resolved to event-type-aware defaults at read time.
+            # roster builder, and structured mail post. `power_metric_column`
+            # is the column letter (A-Z) on the roster Sheet that stores power
+            # — used at render time to look up the actual header (Rule C / #165).
+            # `sub_mode` is `pool` (flat sub list) or `paired` (primary→sub
+            # pairs). Tab names default to empty and are resolved to
+            # event-type-aware defaults at read time.
             ("structured_flow_enabled", "INTEGER DEFAULT 0"),
-            ("power_column_name",       "TEXT    DEFAULT ''"),
+            ("power_metric_column",     "TEXT    DEFAULT 'B'"),
             ("sub_mode",                "TEXT    DEFAULT 'pool'"),
             ("signup_channel_id",       "INTEGER DEFAULT 0"),
             ("signup_schedule_cron",    "TEXT    DEFAULT ''"),
@@ -632,6 +633,31 @@ def init_db():
                 print(f"[CONFIG] Added {col} to guild_storm_config")
             except Exception:
                 pass
+
+        # ── Power-column letter migration (Rule C / #165) ─────────────────────
+        # Old shape stored `power_column_name TEXT DEFAULT ''` (a header
+        # string like "1st Squad Power"). New shape stores the column
+        # LETTER (A-Z) and resolves to the header row at render time.
+        # Migration policy: every existing row falls back to the default
+        # 'B' on the new column. Alliances using a non-B column re-run
+        # setup to pick their letter — a one-time prompt that beats
+        # making init_db() do per-guild gspread network calls at boot.
+        try:
+            conn.execute(
+                "UPDATE guild_storm_config SET power_metric_column = 'B' "
+                "WHERE power_metric_column = ''"
+            )
+            conn.commit()
+        except Exception:
+            pass
+        try:
+            conn.execute(
+                "ALTER TABLE guild_storm_config DROP COLUMN power_column_name"
+            )
+            conn.commit()
+            print("[CONFIG] Dropped power_column_name from guild_storm_config")
+        except Exception:
+            pass
 
         # ── Poll-day model migration (Rule H / #164) ──────────────────────────
         # Move alliances who configured event_day_of_week + signup_lead_days
@@ -994,6 +1020,21 @@ def get_or_create_worksheet(
                 # learn the gspread API surface.
                 ws.append_row(list(header_row), value_input_option="RAW")
         return ws
+
+
+def power_column_letter_to_index(letter: str) -> int:
+    """Convert a single column letter (A-Z) to a 0-indexed integer.
+
+    `'A'` → 0, `'B'` → 1, …, `'Z'` → 25. Falls back to `1` (column B)
+    for empty input, lowercase letters get normalised, anything else
+    is invalid and also falls back to 1. Shared between the roster
+    builder, signup-view power-refresh DM, and any future power-column
+    reader (Rule C / #165).
+    """
+    cleaned = (letter or "").strip().upper()
+    if len(cleaned) == 1 and "A" <= cleaned <= "Z":
+        return ord(cleaned) - ord("A")
+    return 1  # default B
 
 
 def describe_sheet_error(e: Exception, *,
@@ -1411,7 +1452,7 @@ def get_storm_config(guild_id: int, event_type: str) -> dict:
         # all-off; tab fields resolve to event-type defaults via
         # default_structured_tab() / get_structured_storm_config().
         "structured_flow_enabled": 0,
-        "power_column_name":       "",
+        "power_metric_column":     "B",
         "sub_mode":                "pool",
         "signup_channel_id":       0,
         "signup_schedule_cron":    "",
@@ -1539,7 +1580,7 @@ def get_structured_storm_config(guild_id: int, event_type: str) -> dict:
         raw_dow = -1
     return {
         "structured_flow_enabled": bool(cfg.get("structured_flow_enabled")),
-        "power_column_name":       cfg.get("power_column_name") or "",
+        "power_metric_column":     (cfg.get("power_metric_column") or "B").upper(),
         "sub_mode":                cfg.get("sub_mode") or "pool",
         "signup_channel_id":       int(cfg.get("signup_channel_id") or 0),
         "signup_schedule_cron":    cfg.get("signup_schedule_cron") or "",
@@ -1618,7 +1659,7 @@ def get_scheduled_storm_rows() -> list[dict]:
 def save_structured_storm_config(
     guild_id: int, event_type: str, *,
     structured_flow_enabled: bool = False,
-    power_column_name: str          = "",
+    power_metric_column: str        = "B",
     sub_mode: str                   = "pool",
     signup_channel_id: int          = 0,
     signup_schedule_cron: str       = "",
@@ -1668,7 +1709,7 @@ def save_structured_storm_config(
         cur = conn.execute(
             "UPDATE guild_storm_config SET "
             "  structured_flow_enabled = ?, "
-            "  power_column_name = ?, "
+            "  power_metric_column = ?, "
             "  sub_mode = ?, "
             "  signup_channel_id = ?, "
             "  signup_schedule_cron = ?, "
@@ -1684,7 +1725,7 @@ def save_structured_storm_config(
             "WHERE guild_id = ? AND event_type = ?",
             (
                 1 if structured_flow_enabled else 0,
-                power_column_name, sub_mode,
+                (power_metric_column or "B").strip().upper()[:1] or "B", sub_mode,
                 int(signup_channel_id or 0), signup_schedule_cron,
                 signups_tab, rosters_tab, attendance_tab,
                 strategies_tab, member_rules_tab,

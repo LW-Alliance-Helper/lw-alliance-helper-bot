@@ -199,7 +199,7 @@ class TestStructuredStormConfig:
         cfg = config.get_structured_storm_config(TEST_GUILD_ID, "DS")
         assert cfg["structured_flow_enabled"] is False
         assert cfg["sub_mode"]                == "pool"
-        assert cfg["power_column_name"]       == ""
+        assert cfg["power_metric_column"]     == "B"
 
     def test_tab_defaults_are_event_type_aware(self, temp_db):
         import config
@@ -239,7 +239,7 @@ class TestStructuredStormConfig:
         updated = config.save_structured_storm_config(
             TEST_GUILD_ID, "DS",
             structured_flow_enabled=True,
-            power_column_name="1st Squad Power",
+            power_metric_column="F",
             sub_mode="paired",
             signup_channel_id=12345,
             signup_schedule_cron="0 14 * * 0",
@@ -253,7 +253,7 @@ class TestStructuredStormConfig:
 
         cfg = config.get_structured_storm_config(TEST_GUILD_ID, "DS")
         assert cfg["structured_flow_enabled"] is True
-        assert cfg["power_column_name"]       == "1st Squad Power"
+        assert cfg["power_metric_column"]     == "F"
         assert cfg["sub_mode"]                == "paired"
         assert cfg["signup_channel_id"]       == 12345
         assert cfg["signup_schedule_cron"]    == "0 14 * * 0"
@@ -306,19 +306,19 @@ class TestStructuredStormConfig:
         config.save_structured_storm_config(
             TEST_GUILD_ID, "DS",
             structured_flow_enabled=True,
-            power_column_name="1st Squad Power",
+            power_metric_column="F",
         )
         config.save_structured_storm_config(
             TEST_GUILD_ID, "CS",
             structured_flow_enabled=False,
-            power_column_name="Total Power",
+            power_metric_column="G",
         )
         ds = config.get_structured_storm_config(TEST_GUILD_ID, "DS")
         cs = config.get_structured_storm_config(TEST_GUILD_ID, "CS")
         assert ds["structured_flow_enabled"] is True
         assert cs["structured_flow_enabled"] is False
-        assert ds["power_column_name"] == "1st Squad Power"
-        assert cs["power_column_name"] == "Total Power"
+        assert ds["power_metric_column"] == "F"
+        assert cs["power_metric_column"] == "G"
 
     def test_default_structured_tab_helper(self):
         import config

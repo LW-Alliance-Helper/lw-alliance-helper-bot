@@ -446,25 +446,15 @@ async def _maybe_send_power_refresh_dm(
     if not inserted:
         return
 
-    power_column = structured.get("power_column_name") or "your power column"
-    # The alliance's column header often already includes a leading
-    # possessive ("Your Power", "My Squad Power") — without trimming it
-    # the rendered body reads "your **Your Power** on the alliance
-    # roster Sheet…", which the audit flagged as awkward. Drop the
-    # leading possessive on the column label and let the body prefix
-    # supply it instead.
-    column_label = power_column.strip()
-    lowered = column_label.lower()
-    if lowered.startswith("your "):
-        column_label = column_label[5:].strip()
-    elif lowered.startswith("my "):
-        column_label = column_label[3:].strip()
-    if not column_label:
-        column_label = power_column
+    # Post-Rule C (#165): the power column is configured as a letter,
+    # not a header string. The DM doesn't try to surface the exact
+    # column name — it points the member at "the power column on the
+    # roster" and lets the alliance's screenshots / setup conversation
+    # cover the rest.
     body = (
-        f"Heads up — your **{column_label}** on the alliance roster "
-        f"Sheet isn't readable. Could you update it before the next "
-        f"storm so leadership has accurate numbers for zone assignments?"
+        "Heads up — your power value on the alliance roster Sheet "
+        "isn't readable. Could you update it before the next storm "
+        "so leadership has accurate numbers for zone assignments?"
     )
 
     user = interaction.user

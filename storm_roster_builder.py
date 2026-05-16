@@ -83,13 +83,8 @@ def _read_roster_powers(
     except Exception as e:
         return {}, [f"structured-config read failed: {e}"]
 
-    power_col_name = (structured.get("power_column_name") or "").strip()
-    if not power_col_name:
-        setup_cmd = "/setup_desertstorm" if event_type == "DS" else "/setup_canyonstorm"
-        errors.append(
-            "no power metric column configured — every member will read as "
-            f"'power unknown'. Run {setup_cmd} to set the Power Metric Column."
-        )
+    power_letter = (structured.get("power_metric_column") or "B").strip().upper()
+    power_col = config.power_column_letter_to_index(power_letter)
 
     if not roster_cfg.get("enabled"):
         errors.append(
@@ -126,7 +121,26 @@ def _read_roster_powers(
 
     id_col      = int(roster_cfg.get("discord_id_col", 0))
     name_col    = int(roster_cfg.get("display_col", roster_cfg.get("name_col", 1)))
-    power_col   = _find_col(power_col_name) if power_col_name else -1
+    # Power column is a configured letter (Rule C / #165) — A=0, B=1, etc.
+    # If the configured letter sits past the end of the header row,
+    # surface a soft warning + treat power as unreadable for every row.
+    power_col_header = (
+        header[power_col].strip()
+        if 0 <= power_col < len(header) else ""
+    )
+    if not power_col_header:
+        errors.append(
+            f"power column {power_letter} doesn't exist in your roster "
+            f"Sheet header (or is blank). Re-run the setup wizard's Power "
+            f"Metric Column step to pick a different column."
+        )
+        logger.warning(
+            "[STORM ROSTER] power column letter %r resolves to index %d, "
+            "which is past the header row (len=%d) for guild=%s event=%s. "
+            "Header: %s",
+            power_letter, power_col, len(header),
+            guild_id, event_type, header,
+        )
     # Prefer the bot-maintained presence column when present. Falls
     # back to the legacy `not_on_discord` column for back-compat with
     # alliances that haven't synced under the new bot version yet.
@@ -135,18 +149,6 @@ def _read_roster_powers(
     if not_disc_col < 0:
         not_disc_col = _find_col("not on discord")
 
-    if power_col_name and power_col < 0:
-        errors.append(
-            f"power column '{power_col_name}' not found in your roster Sheet "
-            f"header. Add it (or change the configured column at setup) so "
-            f"the eligibility gate has something to read."
-        )
-        logger.warning(
-            "[STORM ROSTER] power column %r not found in roster header for "
-            "guild=%s event=%s. Sheet header was: %s",
-            power_col_name, guild_id, event_type, header,
-        )
-
     # Diagnostic logging — team-test feedback flagged "matching by name
     # not Discord ID" and "power not reading even when in the sheet."
     # Surface the exact column resolution so a single log line answers
@@ -154,12 +156,12 @@ def _read_roster_powers(
     logger.info(
         "[STORM ROSTER] guild=%s event=%s column resolution: "
         "id_col=%d (cfg discord_id_col=%d), name_col=%d (cfg display_col=%d), "
-        "power_col=%d (cfg power_column_name=%r), "
+        "power_col=%d (letter %s, header %r), "
         "presence_col=%d, not_disc_col=%d, header=%s",
         guild_id, event_type,
         id_col, int(roster_cfg.get("discord_id_col", 0)),
         name_col, int(roster_cfg.get("display_col", roster_cfg.get("name_col", 1))),
-        power_col, power_col_name,
+        power_col, power_letter, power_col_header,
         presence_col, not_disc_col, header,
     )
 

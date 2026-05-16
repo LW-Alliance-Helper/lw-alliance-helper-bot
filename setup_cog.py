@@ -5036,7 +5036,7 @@ async def run_storm_setup(interaction: discord.Interaction, bot, event_type: str
     save_structured_storm_config(
         guild_id, event_type,
         structured_flow_enabled=structured_cfg["structured_flow_enabled"],
-        power_column_name      =structured_cfg["power_column_name"],
+        power_metric_column    =structured_cfg.get("power_metric_column", "B"),
         sub_mode               =structured_cfg["sub_mode"],
         signup_channel_id      =structured_cfg["signup_channel_id"],
         signup_schedule_cron   =structured_cfg.get("signup_schedule_cron", ""),
@@ -5071,11 +5071,11 @@ async def run_storm_setup(interaction: discord.Interaction, bot, event_type: str
         embed.add_field(
             name="Structured Roster Flow",
             value=(
-                f"✅ Enabled · Power column: `{structured_cfg['power_column_name'] or '*not set*'}` · "
+                f"✅ Enabled · Power column: `{structured_cfg.get('power_metric_column', 'B')}` · "
                 f"Sub mode: `{structured_cfg['sub_mode']}` · "
                 f"Sign-up channel: <#{structured_cfg['signup_channel_id']}>"
                 if structured_cfg["signup_channel_id"] else
-                f"✅ Enabled · Power column: `{structured_cfg['power_column_name'] or '*not set*'}` · "
+                f"✅ Enabled · Power column: `{structured_cfg.get('power_metric_column', 'B')}` · "
                 f"Sub mode: `{structured_cfg['sub_mode']}`"
             ),
             inline=False,
@@ -6128,7 +6128,7 @@ async def _run_structured_flow_setup_step(
     result = dict(current_structured)
     # Force-coerce to the keys save_structured_storm_config expects.
     result.setdefault("structured_flow_enabled", False)
-    result.setdefault("power_column_name", "")
+    result.setdefault("power_metric_column", "B")
     result.setdefault("sub_mode", "pool")
     result.setdefault("signup_channel_id", 0)
     result.setdefault("signup_schedule_cron", "")
@@ -6169,29 +6169,36 @@ async def _run_structured_flow_setup_step(
 
     # ── Premium + opted-in: full config ────────────────────────────────────
     if structured_opted_in:
-        # Power metric column
-        await channel.send(
-            "**Power Metric Column**\n"
-            "Which column header on your roster Sheet stores the power value "
-            f"the bot should use to gate {label} zone eligibility? "
-            "Examples: `1st Squad Power`, `Total Power`, `FC Power`.\n\n"
-            "Type the exact header text from your Sheet."
+        # Power metric column — single letter A-Z (Rule C / #165). The
+        # bot reads the column at that letter on the roster Sheet at
+        # render time, so officers don't need to keep the header string
+        # in sync between Sheet and config.
+        current_letter = (
+            result.get("power_metric_column") or "B"
+        ).strip().upper()
+        if not (len(current_letter) == 1 and "A" <= current_letter <= "Z"):
+            current_letter = "B"
+        picked_letter = await ask_keep_or_change(
+            channel,
+            f"**Power Metric Column**\n"
+            f"Which column on your roster Sheet stores the power value "
+            f"the bot should use to gate {label} zone eligibility? Enter "
+            f"a single column letter (A–Z); the bot reads that column at "
+            f"render time, so renaming the Sheet header later won't break "
+            f"anything.",
+            default="B",
+            current=current_letter if current_letter != "B" else "",
+            modal_title="Power Metric Column",
+            modal_label="Column letter (A–Z)",
+            timeout_cmd=cmd_name,
+            cancel_event=cancel_event,
         )
-        def _check(m):
-            return m.author == user and m.channel == channel
-        try:
-            reply = await wizard_registry.wait_or_cancel(
-                bot.wait_for("message", check=_check, timeout=300),
-                cancel_event,
-            )
-        except Exception:
-            reply = None
-        if reply is None:
-            if cancel_event.is_set():
-                return None
-            await channel.send(f"⏰ Timed out. Run `/{cmd_name}` to start again.")
+        if picked_letter is None:
             return None
-        result["power_column_name"] = reply.content.strip()[:80]
+        cleaned = str(picked_letter).strip().upper()
+        if not (len(cleaned) == 1 and "A" <= cleaned <= "Z"):
+            cleaned = "B"
+        result["power_metric_column"] = cleaned
 
         # Sub mode
         class SubModeView(discord.ui.View):
@@ -6370,8 +6377,9 @@ async def _run_structured_flow_setup_step(
             await channel.send(
                 f"**Power-Refresh DM (💎 Premium)**\n"
                 f"When a member clicks a sign-up button for **{label}** and "
-                f"their **{result.get('power_column_name') or 'power column'}** "
-                f"cell is blank or unparseable, the bot can DM them a "
+                f"their power value (Column "
+                f"**{result.get('power_metric_column', 'B')}** on the roster "
+                f"Sheet) is blank or unparseable, the bot can DM them a "
                 f"one-line nudge to update it. Currently "
                 f"**{'on' if current_yn else 'off'}** — keep it or flip.",
                 view=gate,
@@ -6390,10 +6398,11 @@ async def _run_structured_flow_setup_step(
             await channel.send(
                 f"**Power-Refresh DM (💎 Premium)**\n"
                 f"When a member clicks a sign-up button for **{label}** and "
-                f"their **{result.get('power_column_name') or 'power column'}** "
-                f"cell is blank or unparseable, should the bot DM them a "
-                f"one-line nudge to update it? At most one DM per member per "
-                f"event date.",
+                f"their power value (Column "
+                f"**{result.get('power_metric_column', 'B')}** on the roster "
+                f"Sheet) is blank or unparseable, should the bot DM them a "
+                f"one-line nudge to update it? At most one DM per member "
+                f"per event date.",
                 view=nudge_view,
             )
             await wait_view_or_cancel(nudge_view, cancel_event)

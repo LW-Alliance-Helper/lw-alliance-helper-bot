@@ -107,6 +107,74 @@ class TestTourContent:
         assert "Team A" in step_5 and "Team B" in step_5
 
 
+class TestTourBuilderBranching:
+    """#170 / Rule N + Decision #12: the tour now branches on event_type
+    + the alliance's `teams` config so the on-behalf flow (Step 4), the
+    Set-Up button copy (Step 5), and the /help category pointer (Step 6)
+    describe the actual UI the officer will see."""
+
+    def test_step_4_describes_view_picker_not_modal(self):
+        """Post-#168 the on-behalf flow is a Member + Vote select view,
+        not a free-text modal. Step 4 copy must reflect that."""
+        steps = sw._build_storm_signups_tour_steps("DS", "both")
+        step_4 = steps[3]
+        # New flow vocabulary.
+        assert "picker" in step_4.lower() or "dropdown" in step_4.lower()
+        assert "Submit" in step_4
+        # Old free-text framing is gone.
+        assert "modal" not in step_4.lower()
+        assert "typos are rejected" not in step_4
+
+    def test_step_5_both_teams_lists_both_buttons(self):
+        steps = sw._build_storm_signups_tour_steps("DS", "both")
+        step_5 = steps[4]
+        assert "Set up Team A" in step_5
+        assert "Set up Team B" in step_5
+
+    def test_step_5_team_a_only_lists_only_a_button(self):
+        steps = sw._build_storm_signups_tour_steps("DS", "A")
+        step_5 = steps[4]
+        assert "Set up Team A" in step_5
+        assert "Set up Team B" not in step_5
+
+    def test_step_5_team_b_only_lists_only_b_button(self):
+        steps = sw._build_storm_signups_tour_steps("CS", "B")
+        step_5 = steps[4]
+        assert "Set up Team B" in step_5
+        assert "Set up Team A" not in step_5
+
+    def test_step_5_event_label_matches_event_type(self):
+        ds_step5 = sw._build_storm_signups_tour_steps("DS", "both")[4]
+        cs_step5 = sw._build_storm_signups_tour_steps("CS", "both")[4]
+        assert "Desert Storm" in ds_step5
+        assert "Canyon Storm" in cs_step5
+
+    def test_step_6_help_category_matches_event_type(self):
+        """The /help dropdown has separate Desert Storm + Canyon Storm
+        categories. A CS officer shouldn't be told to pick Desert Storm."""
+        ds_step6 = sw._build_storm_signups_tour_steps("DS", "both")[5]
+        cs_step6 = sw._build_storm_signups_tour_steps("CS", "both")[5]
+        assert "Desert Storm" in ds_step6
+        assert "Canyon Storm" not in ds_step6
+        assert "Canyon Storm" in cs_step6
+        assert "Desert Storm" not in cs_step6
+
+    def test_unknown_teams_value_falls_back_to_both(self):
+        steps = sw._build_storm_signups_tour_steps("DS", "garbage")
+        step_5 = steps[4]
+        assert "Set up Team A" in step_5
+        assert "Set up Team B" in step_5
+
+    def test_offer_view_carries_event_type_and_teams(self):
+        view = sw._OfferView(
+            guild_id=TEST_GUILD_ID, user_id=42,
+            walkthrough_key=sw.STORM_SIGNUPS_TOUR_KEY,
+            event_type="CS", teams="A",
+        )
+        assert view.event_type == "CS"
+        assert view.teams == "A"
+
+
 class TestTourStepProgression:
     """The tour is six steps; each Next click must advance the index.
 

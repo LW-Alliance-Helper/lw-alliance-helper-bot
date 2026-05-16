@@ -4656,11 +4656,13 @@ async def run_storm_setup(interaction: discord.Interaction, bot, event_type: str
             ),
             ("Structured Roster Flow", structured_status),
         ]
-        if event_type == "DS":
-            _summary_teams = {"both": "A & B", "A": "A only", "B": "B only"}.get(
-                (current.get("teams") or "both"), "A & B",
-            )
-            fields.insert(1, ("Teams", _summary_teams))
+        # CS reads `teams` like DS does (Rule A / #166), so surface the
+        # field in the re-entry summary for both event types — officers
+        # can see their current single-team / both-teams config.
+        _summary_teams = {"both": "A & B", "A": "A only", "B": "B only"}.get(
+            (current.get("teams") or "both"), "A & B",
+        )
+        fields.insert(1, ("Teams", _summary_teams))
         emoji = "⚔️" if event_type == "DS" else "🏜️"
         proceed = await ask_proceed_with_existing_config(
             channel,
@@ -6134,9 +6136,9 @@ async def _run_structured_flow_setup_step(
             picked = await ask_keep_or_change(
                 channel,
                 f"**{label_text} Tab**\n"
-                f"Which Google Sheet tab should the bot use for {label} "
-                f"{label_text.lower()}? The bot manages the structure — "
-                f"just make sure the tab exists.",
+                f"Which Google Sheet tab should store {label} "
+                f"{label_text.lower()}? The bot creates and maintains this "
+                f"tab — leave the default if you don't have a preference.",
                 default=tab_default,
                 current=result.get(tab_key, ""),
                 modal_title=f"{label_text} Tab Name",

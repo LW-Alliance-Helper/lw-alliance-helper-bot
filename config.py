@@ -2118,7 +2118,10 @@ def dismiss_walkthrough(
 # independently build the same team for the same event and both Approve
 # (which would post two mails + write two sets of rosters_tab rows).
 # The session row is keyed on (guild_id, event_type, event_date, team).
-# `team` is `""` for CS (one roster per faction per event).
+# `team` is `"A"` / `"B"` when the alliance configured `teams=both` (DS
+# or CS), and the configured single team (`"A"` or `"B"`) when
+# `teams=A` / `teams=B`. Legacy CS rosters from before Rule A / #166
+# may carry `""` (single-roster era).
 
 
 def claim_storm_session(

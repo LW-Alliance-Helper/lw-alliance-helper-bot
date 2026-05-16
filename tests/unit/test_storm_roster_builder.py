@@ -1422,7 +1422,10 @@ class TestSessionStateLock:
         assert ok_2 is True
 
     def test_cs_uses_empty_team_field(self, seeded_db):
-        # CS has one roster per faction per event; team field is "".
+        # Legacy pre-#166 CS rosters used team="" for the single-roster
+        # shape. The claim/release helpers still accept that key shape
+        # so historical Sheet data round-trips cleanly. Post-#166, new
+        # CS sessions use "A"/"B" the same as DS does.
         import config
         ok_1, _ = config.claim_storm_session(
             TEST_GUILD_ID, "CS", "2026-05-18", "", user_id=42,

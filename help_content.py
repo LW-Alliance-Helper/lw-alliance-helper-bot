@@ -151,8 +151,7 @@ HELP_CATEGORIES: dict[str, dict] = {
         "description": (
             "Same shape as Desert Storm — mail drafts, strategy presets, "
             "structured sign-ups + roster builder (💎 Premium), and "
-            "configurable participation. CS adds an Apply-Faction-Roles "
-            "step after matchmaking reveals Rulebringers."
+            "configurable participation."
         ),
         "commands": [
             ("/setup_canyonstorm",
@@ -182,8 +181,7 @@ HELP_CATEGORIES: dict[str, dict] = {
             ("/canyonstorm signups [event_date]",
              "💎 Leadership view of who's signed up; record on-behalf "
              "votes for non-Discord roster members; open the roster "
-             "builder. Approve & Post offers the Apply-Faction-Roles "
-             "step if matchmaking puts you on Rulebringers."),
+             "builder; Approve & Post finalises the roster."),
             ("/canyonstorm attendance [event_date]",
              "💎 Record who attended each assigned slot after the event; "
              "writes to the attendance Sheet tab."),

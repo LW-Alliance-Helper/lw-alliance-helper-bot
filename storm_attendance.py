@@ -445,8 +445,9 @@ def _render_embed(session: _AttendanceSession) -> discord.Embed:
         )
         return embed
 
-    # Group by team for readability. Sort teams alphabetically so CS
-    # (single "" key) and DS (A, B) render predictably across runs.
+    # Group by team for readability. Sort team keys alphabetically so
+    # rendering is stable across runs (DS / CS-teams=both → A, B;
+    # single-team config → A or B; legacy pre-#166 CS data → "").
     teams: dict[str, list[dict]] = {}
     for slot in session.slots:
         teams.setdefault(slot["team"] or "(no team)", []).append(slot)

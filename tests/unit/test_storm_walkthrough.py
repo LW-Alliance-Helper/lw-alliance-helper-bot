@@ -98,14 +98,13 @@ class TestTourContent:
         for step in sw._STORM_SIGNUPS_TOUR_STEPS:
             assert len(step) < 800, f"Step too long ({len(step)} chars):\n{step}"
 
-    def test_step_5_mentions_both_ds_and_cs_buttons(self):
-        # CS officers see "🏜️ Set up Roster" (single faction-based
-        # roster), not "Set up Team A/B". The tour wording must mention
-        # both shapes or CS officers go looking for a button that isn't
-        # there.
+    def test_step_5_mentions_team_setup_buttons(self):
+        # Post Rule A / #166: CS reads the same `teams=both/A/B` config
+        # as DS does, so both event types render "🅰️ Set up Team A" /
+        # "🅱️ Set up Team B" (or just the configured single team).
+        # The pre-#166 CS-only "🏜️ Set up Roster" button is gone.
         step_5 = sw._STORM_SIGNUPS_TOUR_STEPS[4]
         assert "Team A" in step_5 and "Team B" in step_5
-        assert "Set up Roster" in step_5 or "🏜️" in step_5
 
 
 class TestTourStepProgression:

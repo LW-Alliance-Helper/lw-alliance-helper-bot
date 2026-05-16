@@ -5581,9 +5581,9 @@ async def _ask_signup_schedule(
         lead = 14
 
     # ── Step 3: sign-up time ──
-    # Empty string is a meaningful value here: "auto-schedule is set up
-    # but no auto-fire" — leadership uses /<parent> post_signup manually
-    # for posting. Leave the time empty to express that.
+    # The alliance opted into auto-scheduling at Step 1 (`dow >= 0`),
+    # so the time field is required (#163 / Rule F). Empty submissions
+    # surface a one-line re-prompt and the modal re-opens.
     #
     # Time copy follows the existing convention used by train / birthday
     # / shiny setup: 12-hour clock for display + parsing, with the
@@ -5591,31 +5591,35 @@ async def _ask_signup_schedule(
     # so the scheduler doesn't have to disambiguate at fire time.
     saved_12h = _format_24h_to_12h(current_time) if current_time else ""
     tz_hint = f" *(in your timezone: {tz_label})*" if tz_label else ""
-    time_picked = await ask_keep_or_change(
-        channel,
-        f"**Auto-Schedule — Sign-Up Post Time**\n"
-        f"What time should the bot fire the sign-up post?{tz_hint}\n"
-        f"*(e.g. `2:00pm`, `9:00am`, or 24-hour `14:00`)*\n"
-        f"Leave blank for manual posting only (you keep the rest of the "
-        f"schedule config but the bot won't auto-post).",
-        default="12:00pm",
-        current=saved_12h,
-        modal_title="Sign-Up Time",
-        modal_label="e.g. 2:00pm — blank for manual",
-        timeout_cmd=cmd_name,
-        cancel_event=cancel_event,
-    )
-    if time_picked is None:
-        return None
-    # Preserve an explicit empty input as "manual posting only" — don't
-    # silently coerce it to the default. Otherwise try the 12-hour
-    # parser first (matches the prompt's example formats), then fall
-    # back to the existing 24-hour normaliser.
-    raw = str(time_picked).strip()
-    if not raw:
-        time_clean = ""
-    else:
-        time_clean = _parse_12h_time(raw) or _normalise_hhmm(raw) or "12:00"
+    time_clean: str | None = None
+    for attempt in range(3):
+        time_picked = await ask_keep_or_change(
+            channel,
+            f"**Auto-Schedule — Sign-Up Post Time**\n"
+            f"What time should the bot fire the sign-up post?{tz_hint}\n"
+            f"*(e.g. `2:00pm`, `9:00am`, or 24-hour `14:00`)*",
+            default="12:00pm",
+            current=saved_12h,
+            modal_title="Sign-Up Time",
+            modal_label="e.g. 2:00pm",
+            timeout_cmd=cmd_name,
+            cancel_event=cancel_event,
+        )
+        if time_picked is None:
+            return None
+        raw = str(time_picked).strip()
+        if raw:
+            time_clean = _parse_12h_time(raw) or _normalise_hhmm(raw) or "12:00"
+            break
+        # Empty submission — surface a friendly nudge and re-prompt.
+        await channel.send(
+            "⚠️ A sign-up time is required when auto-scheduling is on. "
+            "Pick a time (e.g. `12:00pm`) or use the default."
+        )
+    if time_clean is None:
+        # Three blank attempts in a row — fall back to the default so
+        # the wizard doesn't loop forever.
+        time_clean = _parse_12h_time("12:00pm") or "12:00"
 
     return {
         "dow":  dow_view.selected,

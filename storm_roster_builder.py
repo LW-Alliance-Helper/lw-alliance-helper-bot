@@ -930,23 +930,22 @@ def _render_builder_embed(session: RosterBuilderSession) -> discord.Embed:
             )
             lines.append(
                 f"⚠️ **Unpaired primaries ({len(unpaired)})**: {unpaired_names} — "
-                f"pick a sub for each via the picker."
+                f"click **🔁 Pair subs** to attach a sub to any of them. "
+                f"Subs may not cover every primary — that's expected."
             )
-        else:
-            lines.append("🪑 **Sub pairings**: complete for every primary.")
-        # Surface the overflow-sub pool too — paired subs live inline
+        # Surface the available subs pool — paired subs live inline
         # against each primary, but auto-fill or manual add can leave
         # extra subs in `session.subs` that don't belong to any
-        # primary. Without this line the officer can't tell those
+        # primary yet. Without this line the officer can't tell those
         # exist from the embed.
-        overflow_sub_names = [
+        sub_names = [
             session.members[k]["name"] for k in session.subs if k in session.members
         ]
-        if overflow_sub_names:
+        if sub_names:
             lines.append(
-                f"🪑 **Overflow subs ({len(overflow_sub_names)})**: "
-                f"{', '.join(overflow_sub_names)} — pair via the picker "
-                f"or send as bench."
+                f"🪑 **Available subs ({len(sub_names)})**: "
+                f"{', '.join(sub_names)} — pair via **🔁 Pair subs** "
+                f"or leave as bench."
             )
     else:
         sub_names = [
@@ -1300,14 +1299,12 @@ class RosterBuilderView(discord.ui.View):
                 # the names and counts the officer is reading no longer
                 # describe what's currently on the roster.
                 s.auto_fill_summary = None
-                # In paired mode, immediately prompt for the paired sub
-                # so the pairing happens in the same step as the primary
-                # assignment. The picker fires ephemerally so it doesn't
-                # crowd the main view, and on close it re-renders the
-                # main view to surface the new pairing.
-                if s.is_paired:
-                    await _open_paired_sub_picker(inter, self, primary_key=key)
-                    return
+                # In paired mode (#168), pairings are explicit — the
+                # officer pairs primaries with subs via the 🔁 Pair subs
+                # button, not an auto-prompt after every primary
+                # assignment. This matches the spec that some primaries
+                # won't get a sub (e.g. 10 subs, 20 primaries) so a
+                # forced prompt after every primary was always wrong.
                 await self._refresh(inter)
 
             member_select.callback = _on_member
@@ -1393,24 +1390,24 @@ class RosterBuilderView(discord.ui.View):
         move_to_subs_btn.callback = _move_to_subs
         self.add_item(move_to_subs_btn)
 
-        # Re-pair button (paired mode only). Without it, the officer
-        # has to unassign + re-add a primary to change its sub —
-        # which loses the primary assignment + below-floor override
-        # and surfaces a transient ⚠️ unpaired-primary state in the
-        # embed. The button opens an ephemeral primary-picker that
-        # reuses `_open_paired_sub_picker` for the actual swap.
+        # Pair subs button (paired mode only). Opens an ephemeral view
+        # with a running pair list + Primary Select + Sub Select +
+        # Assign + Done. Picking a pair writes immediately; the unpair
+        # affordance is on the same view so officers can fix mistakes
+        # without flipping screens. Replaces the per-primary auto-prompt
+        # + separate Re-pair flow that #168 retired.
         if s.is_paired:
-            repair_btn = discord.ui.Button(
-                label="🔁 Re-pair sub", style=discord.ButtonStyle.secondary, row=action_row,
+            pair_btn = discord.ui.Button(
+                label="🔁 Pair subs", style=discord.ButtonStyle.secondary, row=action_row,
             )
 
-            async def _repair(inter: discord.Interaction):
+            async def _pair_subs(inter: discord.Interaction):
                 if not await self._guard_owner(inter):
                     return
-                await _open_repair_primary_picker(inter, self)
+                await _open_pair_subs_view(inter, self)
 
-            repair_btn.callback = _repair
-            self.add_item(repair_btn)
+            pair_btn.callback = _pair_subs
+            self.add_item(pair_btn)
 
         # Row 3 — finalisation. Structured-mode adds an Approve & Post
         # button that fires the rosters_tab write + auto-post; free
@@ -1639,414 +1636,428 @@ def _zone_of_primary(session: RosterBuilderSession, primary_key: str) -> str:
     return session.selected_zone or ""
 
 
-async def _open_paired_sub_picker(
-    interaction: discord.Interaction,
-    main_view: "RosterBuilderView",
-    *,
-    primary_key: str,
-) -> None:
-    """Fire the ephemeral sub-picker after a primary assignment in
-    paired mode. Lets the officer either pair a sub immediately or
-    skip and pair later from the main view."""
-    s = main_view.session
-    primary = s.members.get(primary_key)
-    primary_label = primary["name"] if primary else f"<{primary_key}>"
-
-    # Resolve the primary's actual zone — re-pair flow may invoke this
-    # picker for a primary in a zone the officer isn't currently
-    # editing. Falling back to selected_zone keeps the original
-    # post-primary-assignment callsite working unchanged.
-    picker_zone = _zone_of_primary(s, primary_key) or s.selected_zone
-
-    # Eligibility for the paired sub matches the primary's zone:
-    # subs cover the no-show, so they must meet the same per-team
-    # floor for that zone. `_eligible_member_keys_for_zone` already
-    # filters out every assigned primary + paired sub, so the pool
-    # is the set of unassigned members who clear the floor.
-    eligible, below = _eligible_member_keys_for_zone(s, picker_zone)
-    pool = list(eligible)
-    if s.show_below_floor:
-        pool.extend(below)
-    # Cap at the 25-option Discord limit. If the alliance has more
-    # eligible candidates, the count is surfaced in the message body
-    # so the officer knows the picker is truncated — they can toggle
-    # the below-floor override or skip + pair later from the main view.
-    overflow = max(0, len(pool) - _MAX_DROPDOWN_OPTIONS)
-    pool = pool[:_MAX_DROPDOWN_OPTIONS]
-
-    picker = _PairedSubPickerView(
-        main_view=main_view,
-        primary_key=primary_key,
-        pool=pool,
-        zone_name=picker_zone,
-    )
-    overflow_note = (
-        f" *(+{overflow} more eligible — not shown; Discord limits the "
-        f"picker to 25)*"
-        if overflow > 0 else ""
-    )
-    content = (
-        f"🪑 Pick a sub for **{primary_label}** at **{s.selected_zone}**, "
-        f"or skip and pair them later.{overflow_note}"
-    )
-    if not pool:
-        content = (
-            f"🪑 No eligible subs found for **{primary_label}** at "
-            f"**{s.selected_zone}**. Skip and pair them later, or toggle "
-            f"the below-minimum override on the main view to widen the pool."
-        )
-    try:
-        await interaction.response.send_message(
-            content=content, view=picker, ephemeral=True,
-        )
-        picker.message = await interaction.original_response()
-    except discord.HTTPException as e:
-        logger.warning(
-            "[STORM BUILDER] paired sub picker failed to send "
-            "(guild=%s primary=%s): %s",
-            s.guild_id, primary_key, e,
-        )
-        # Best-effort fallback: refresh the main view so the unpaired
-        # primary is at least visible in the embed.
-        try:
-            if main_view.message:
-                main_view._rebuild()
-                await main_view.message.edit(
-                    embed=_render_builder_embed(s), view=main_view,
-                )
-        except discord.HTTPException:
-            pass
-
-
-class _PairedSubPickerView(discord.ui.View):
-    """Ephemeral picker shown after a primary assignment in paired mode."""
-
-    def __init__(
-        self,
-        *,
-        main_view: "RosterBuilderView",
-        primary_key: str,
-        pool: list[str],
-        zone_name: str,
-    ):
-        super().__init__(timeout=300)
-        self.main_view  = main_view
-        self.primary_key = primary_key
-        self.zone_name  = zone_name
-        self.message: Optional[discord.Message] = None
-
-        if pool:
-            s = main_view.session
-            options = []
-            for k in pool:
-                m = s.members.get(k)
-                if not m:
-                    continue
-                label = _format_member_label(m)[:100]
-                options.append(discord.SelectOption(label=label, value=k[:100]))
-            if options:
-                sel = discord.ui.Select(
-                    placeholder="Pick a paired sub…",
-                    min_values=1, max_values=1,
-                    options=options,
-                )
-                sel.callback = self._make_pick_callback()
-                self.add_item(sel)
-
-        skip_btn = discord.ui.Button(
-            label="↩️ Skip — pair later",
-            style=discord.ButtonStyle.secondary,
-        )
-        skip_btn.callback = self._make_skip_callback()
-        self.add_item(skip_btn)
-
-    def _make_pick_callback(self):
-        async def _cb(inter: discord.Interaction):
-            if inter.user.id != self.main_view.session.user_id:
-                await inter.response.send_message(
-                    "⛔ Only the builder's owner can pair subs.",
-                    ephemeral=True,
-                )
-                return
-            if self.is_finished():
-                return
-            # Find the Select component to read its value.
-            sub_key = None
-            for child in self.children:
-                if isinstance(child, discord.ui.Select):
-                    sub_key = child.values[0] if child.values else None
-                    break
-            if not sub_key:
-                await inter.response.send_message(
-                    "⚠️ Couldn't read the picked sub. Try again.",
-                    ephemeral=True,
-                )
-                return
-            self.stop()
-
-            s = self.main_view.session
-            # Phase-aware (#152): pairing is per-phase. The primary
-            # was picked from the current phase's roster, so the sub
-            # binds to the same phase.
-            phase = s.selected_phase
-            s.paired_subs_for_phase(phase)[self.primary_key] = sub_key
-            # If the sub was below-floor at pick time, capture it as an
-            # override too so the rosters_tab write flags it.
-            _eligible, below = _eligible_member_keys_for_zone(s, self.zone_name)
-            if sub_key in below:
-                s.below_floor_overrides_for_phase(phase).add(sub_key)
-            # Manual edit invalidates the auto-fill summary.
-            s.auto_fill_summary = None
-
-            for item in self.children:
-                item.disabled = True
-            primary_m = s.members.get(self.primary_key)
-            sub_m = s.members.get(sub_key)
-            primary_name = primary_m["name"] if primary_m else self.primary_key
-            sub_name = sub_m["name"] if sub_m else sub_key
-            try:
-                await inter.response.edit_message(
-                    content=f"✅ Paired **{sub_name}** with **{primary_name}**.",
-                    view=self,
-                )
-            except discord.HTTPException:
-                pass
-            # Re-render the main view so the new pairing surfaces.
-            try:
-                if self.main_view.message:
-                    self.main_view._rebuild()
-                    await self.main_view.message.edit(
-                        embed=_render_builder_embed(s), view=self.main_view,
-                    )
-            except discord.HTTPException:
-                pass
-        return _cb
-
-    def _make_skip_callback(self):
-        async def _cb(inter: discord.Interaction):
-            if inter.user.id != self.main_view.session.user_id:
-                await inter.response.send_message(
-                    "⛔ Only the builder's owner can skip.",
-                    ephemeral=True,
-                )
-                return
-            if self.is_finished():
-                return
-            self.stop()
-            for item in self.children:
-                item.disabled = True
-            try:
-                await inter.response.edit_message(
-                    content="↩️ Skipped — you can pair this primary later.",
-                    view=self,
-                )
-            except discord.HTTPException:
-                pass
-            # Re-render the main view so the ⚠️ marker on the unpaired
-            # primary is visible.
-            try:
-                if self.main_view.message:
-                    self.main_view._rebuild()
-                    await self.main_view.message.edit(
-                        embed=_render_builder_embed(self.main_view.session),
-                        view=self.main_view,
-                    )
-            except discord.HTTPException:
-                pass
-        return _cb
-
-    async def on_timeout(self):
-        """Strip the view AND refresh the main builder view so the
-        primary appears with its ⚠️ "no sub paired" marker. Without the
-        main-view refresh, the officer sees the pre-assignment state
-        until they click another button — confusing UX when the
-        picker timed out silently after a primary assignment.
-
-        Same auto-post-view contract the audit pass codified for the
-        rest of the storm flow.
-        """
-        for item in self.children:
-            item.disabled = True
-        if self.message is not None:
-            try:
-                await self.message.edit(view=self)
-            except discord.HTTPException:
-                pass
-        # Refresh main view so the unpaired-primary state is visible.
-        if self.main_view.message is not None:
-            try:
-                self.main_view._rebuild()
-                await self.main_view.message.edit(
-                    embed=_render_builder_embed(self.main_view.session),
-                    view=self.main_view,
-                )
-            except discord.HTTPException:
-                pass
-
-
-async def _open_repair_primary_picker(
+async def _open_pair_subs_view(
     interaction: discord.Interaction,
     main_view: "RosterBuilderView",
 ) -> None:
-    """Open the ephemeral primary-picker for the Re-pair Sub button.
-    Lists every primary currently assigned to a zone (regardless of the
-    builder's selected_zone) with its current sub annotation, so the
-    officer can swap a sub without unassigning + re-adding the primary.
+    """Open the combined Pair-Subs ephemeral view (#168).
 
-    Once a primary is picked, `_open_paired_sub_picker` fires for that
-    primary; that picker resolves the primary's actual zone so the
-    sub-eligibility floor is correct."""
+    Replaces the old auto-fire-after-each-primary picker (`_PairedSubPickerView`)
+    and the separate Re-pair flow (`_RepairPrimaryPickerView`) with a single
+    persistent view: running pair list at top, Primary Select + Sub Select +
+    Assign + Unpair + Done buttons below. Subs that exceed available primaries
+    (or vice versa) are expected — the view's body copy spells out the ratio.
+    """
     s = main_view.session
-    # Re-pair picker iterates the SELECTED phase's roster only. On
-    # phase-aware presets that means an officer on Phase 1 sees Phase 1
-    # primaries, and switching the phase-nav buttons before reopening
-    # the re-pair flow walks Phase 2 instead.
-    primary_keys: list[tuple[str, str]] = []  # [(primary_key, zone_name)]
-    phase_assignments = s.assignments_for_phase(s.selected_phase)
-    for z in s.preset.zones:
-        for key in phase_assignments.get(z.zone, []):
-            primary_keys.append((key, z.zone))
-    if not primary_keys:
+    if not s.is_paired:
         try:
             await interaction.response.send_message(
-                "⚠️ No primaries assigned yet — assign a primary to a zone "
-                "before re-pairing a sub.",
+                "⚠️ This view is only available in paired-sub mode.",
                 ephemeral=True,
             )
         except discord.HTTPException:
             pass
         return
 
-    overflow = max(0, len(primary_keys) - _MAX_DROPDOWN_OPTIONS)
-    primary_keys = primary_keys[:_MAX_DROPDOWN_OPTIONS]
-
-    view = _RepairPrimaryPickerView(main_view=main_view, primary_keys=primary_keys)
-    overflow_note = (
-        f" *(+{overflow} more primaries — not shown; Discord limits the "
-        f"picker to 25)*"
-        if overflow > 0 else ""
-    )
-    content = (
-        "🔁 Pick a primary to re-pair their sub. The current pairing "
-        "(if any) is shown next to each name.{0}"
-    ).format(overflow_note)
+    view = _PairSubsView(main_view=main_view)
     try:
         await interaction.response.send_message(
-            content=content, view=view, ephemeral=True,
+            content=view.render_content(), view=view, ephemeral=True,
         )
         view.message = await interaction.original_response()
     except discord.HTTPException as e:
         logger.warning(
-            "[STORM BUILDER] repair primary picker failed to send "
-            "(guild=%s): %s",
+            "[STORM BUILDER] pair-subs view failed to send (guild=%s): %s",
             s.guild_id, e,
         )
 
 
-class _RepairPrimaryPickerView(discord.ui.View):
-    """Ephemeral picker for the Re-pair Sub button. Picking a primary
-    fires `_open_paired_sub_picker` for that primary, which writes the
-    new pairing on selection (or skips on cancel)."""
+class _PairSubsView(discord.ui.View):
+    """Combined Primary + Sub picker with a running pair list.
 
-    def __init__(
-        self,
-        *,
-        main_view: "RosterBuilderView",
-        primary_keys: list[tuple[str, str]],
-    ):
-        super().__init__(timeout=300)
+    Renders the message content as the running pair list (one row per
+    pairing, blank when no pairings exist yet); the embed/view body
+    carries the two Selects + action buttons. Pairings are written
+    immediately on Assign — there's no separate Save step. The Unpair
+    button opens a single-Select dropdown of currently-paired primaries
+    and clears the chosen pair on submit.
+
+    Phase-aware (#152): operates on `session.selected_phase`. The
+    primary's phase comes from `assignments_for_phase`; the sub binds
+    to the same phase via `paired_subs_for_phase`.
+    """
+
+    def __init__(self, *, main_view: "RosterBuilderView"):
+        super().__init__(timeout=600)
         self.main_view = main_view
         self.message: Optional[discord.Message] = None
+        self.selected_primary: str | None = None
+        self.selected_sub: str | None = None
+        # Toggle: when True, the view shows an Unpair-select instead of
+        # the Primary-select so the officer can pick which pair to drop.
+        self.unpair_mode = False
+        self.selected_unpair_primary: str | None = None
+        self._build_components()
 
-        s = main_view.session
-        options: list[discord.SelectOption] = []
-        phase_pairings = s.paired_subs_for_phase(s.selected_phase)
-        for primary_key, zone_name in primary_keys:
-            m = s.members.get(primary_key)
-            if not m:
-                continue
-            primary_name = m.get("name") or primary_key
-            sub_key = phase_pairings.get(primary_key)
-            if sub_key:
-                sub_m = s.members.get(sub_key)
-                sub_name = sub_m.get("name") if sub_m else sub_key
-                desc = f"{zone_name} · sub: {sub_name}"
-            else:
-                desc = f"{zone_name} · no sub paired"
-            options.append(discord.SelectOption(
-                label=primary_name[:100],
-                value=primary_key[:100],
-                description=desc[:100],
-            ))
-        if options:
-            sel = discord.ui.Select(
-                placeholder="Pick a primary to re-pair…",
-                min_values=1, max_values=1,
-                options=options,
-            )
-            sel.callback = self._make_callback()
-            self.add_item(sel)
+    # ── Data helpers ─────────────────────────────────────────────────
+    def _phase_assignments(self) -> dict[str, list[str]]:
+        s = self.main_view.session
+        return s.assignments_for_phase(s.selected_phase)
 
-        cancel_btn = discord.ui.Button(
-            label="↩️ Cancel", style=discord.ButtonStyle.secondary,
+    def _phase_pairings(self) -> dict[str, str]:
+        s = self.main_view.session
+        return s.paired_subs_for_phase(s.selected_phase)
+
+    def _unpaired_primaries(self) -> list[tuple[str, str]]:
+        """[(primary_key, zone_name), …] of primaries without a paired
+        sub in the selected phase, sorted by zone-then-roster order."""
+        pairings = self._phase_pairings()
+        out: list[tuple[str, str]] = []
+        for z in self.main_view.session.preset.zones:
+            for key in self._phase_assignments().get(z.zone, []):
+                if key not in pairings:
+                    out.append((key, z.zone))
+        return out
+
+    def _available_subs(self) -> list[str]:
+        """Members in the team's subs pool not yet paired with a
+        primary in the selected phase. Mirrors the spec's "hides already-
+        paired subs" rule."""
+        paired_sub_keys = set(self._phase_pairings().values())
+        s = self.main_view.session
+        return [k for k in s.subs if k not in paired_sub_keys]
+
+    def _pair_rows(self) -> list[tuple[str, str, str]]:
+        """[(primary_name, sub_name, zone), …] for the running pair
+        list, in zone-then-roster order so the rendering is deterministic."""
+        s = self.main_view.session
+        pairings = self._phase_pairings()
+        out: list[tuple[str, str, str]] = []
+        for z in s.preset.zones:
+            for primary_key in self._phase_assignments().get(z.zone, []):
+                sub_key = pairings.get(primary_key)
+                if not sub_key:
+                    continue
+                p_m = s.members.get(primary_key)
+                s_m = s.members.get(sub_key)
+                p_name = p_m["name"] if p_m else primary_key
+                s_name = s_m["name"] if s_m else sub_key
+                out.append((p_name, s_name, z.zone))
+        return out
+
+    # ── Rendering ────────────────────────────────────────────────────
+    def render_content(self) -> str:
+        s = self.main_view.session
+        unpaired = self._unpaired_primaries()
+        primary_count = len(self._phase_assignments_flat())
+        sub_pool = len(s.subs)
+        header = (
+            f"🔁 **Pair subs** — Phase {s.selected_phase}\n"
+            f"You have **{sub_pool} sub{'s' if sub_pool != 1 else ''}** "
+            f"and **{primary_count} primar{'ies' if primary_count != 1 else 'y'}** — "
+            f"not every primary will get a sub."
         )
-        cancel_btn.callback = self._make_cancel_callback()
-        self.add_item(cancel_btn)
-
-    def _make_callback(self):
-        async def _cb(inter: discord.Interaction):
-            if inter.user.id != self.main_view.session.user_id:
-                await inter.response.send_message(
-                    "⛔ Only the builder's owner can re-pair subs.",
-                    ephemeral=True,
-                )
-                return
-            if self.is_finished():
-                return
-            primary_key = None
-            for child in self.children:
-                if isinstance(child, discord.ui.Select):
-                    primary_key = child.values[0] if child.values else None
-                    break
-            if not primary_key:
-                await inter.response.send_message(
-                    "⚠️ Couldn't read the picked primary. Try again.",
-                    ephemeral=True,
-                )
-                return
-            self.stop()
-            for item in self.children:
-                item.disabled = True
-            # `_open_paired_sub_picker` uses `interaction.response.send_message`,
-            # so don't consume the interaction response here. The
-            # original primary picker view is stopped; the sub picker
-            # opens as a fresh ephemeral. Officer can still see the
-            # stopped primary picker message but its buttons are inert.
-            await _open_paired_sub_picker(
-                inter, self.main_view, primary_key=primary_key,
+        pair_rows = self._pair_rows()
+        if pair_rows:
+            pair_block = "\n".join(
+                f"• **{p}** → **{s_name}**  _({zone})_"
+                for p, s_name, zone in pair_rows
             )
-        return _cb
+            pairs_line = f"\n\n**Current pairings ({len(pair_rows)}):**\n{pair_block}"
+        else:
+            pairs_line = "\n\n_No pairings yet._"
+        if unpaired:
+            unpaired_block = ", ".join(
+                self.main_view.session.members[k]["name"]
+                for k, _zone in unpaired
+                if k in self.main_view.session.members
+            )
+            unpaired_line = (
+                f"\n\n⚠️ **Unpaired primaries ({len(unpaired)}):** {unpaired_block}"
+            )
+        else:
+            unpaired_line = ""
+        return header + pairs_line + unpaired_line
 
-    def _make_cancel_callback(self):
-        async def _cb(inter: discord.Interaction):
-            if inter.user.id != self.main_view.session.user_id:
-                await inter.response.send_message(
-                    "⛔ Only the builder's owner can cancel.",
-                    ephemeral=True,
+    def _phase_assignments_flat(self) -> list[str]:
+        out: list[str] = []
+        for keys in self._phase_assignments().values():
+            out.extend(keys)
+        return out
+
+    # ── Component layout ─────────────────────────────────────────────
+    def _build_components(self):
+        self.clear_items()
+        if self.unpair_mode:
+            self._build_unpair_components()
+        else:
+            self._build_assign_components()
+
+    def _build_assign_components(self):
+        unpaired = self._unpaired_primaries()
+        available_subs = self._available_subs()
+        s = self.main_view.session
+
+        if unpaired:
+            options = []
+            for primary_key, zone in unpaired[:_MAX_DROPDOWN_OPTIONS]:
+                m = s.members.get(primary_key)
+                name = m["name"] if m else primary_key
+                options.append(discord.SelectOption(
+                    label=name[:100],
+                    value=primary_key[:100],
+                    description=zone[:100],
+                    default=(primary_key == self.selected_primary),
+                ))
+            primary_select = discord.ui.Select(
+                placeholder="Pick an unpaired primary…",
+                min_values=1, max_values=1, options=options, row=0,
+            )
+
+            async def _on_primary(inter: discord.Interaction):
+                if not await self._guard_owner(inter):
+                    return
+                self.selected_primary = primary_select.values[0]
+                self._build_components()
+                try:
+                    await inter.response.edit_message(
+                        content=self.render_content(), view=self,
+                    )
+                except discord.HTTPException:
+                    pass
+
+            primary_select.callback = _on_primary
+            self.add_item(primary_select)
+
+        if available_subs:
+            options = []
+            for sub_key in available_subs[:_MAX_DROPDOWN_OPTIONS]:
+                m = s.members.get(sub_key)
+                if not m:
+                    continue
+                options.append(discord.SelectOption(
+                    label=_format_member_label(m)[:100],
+                    value=sub_key[:100],
+                    default=(sub_key == self.selected_sub),
+                ))
+            if options:
+                sub_select = discord.ui.Select(
+                    placeholder="Pick a sub…",
+                    min_values=1, max_values=1, options=options, row=1,
                 )
-                return
-            if self.is_finished():
-                return
-            self.stop()
-            for item in self.children:
-                item.disabled = True
-            try:
-                await inter.response.edit_message(
-                    content="↩️ Re-pair cancelled.", view=self,
+
+                async def _on_sub(inter: discord.Interaction):
+                    if not await self._guard_owner(inter):
+                        return
+                    self.selected_sub = sub_select.values[0]
+                    self._build_components()
+                    try:
+                        await inter.response.edit_message(
+                            content=self.render_content(), view=self,
+                        )
+                    except discord.HTTPException:
+                        pass
+
+                sub_select.callback = _on_sub
+                self.add_item(sub_select)
+
+        assign_btn = discord.ui.Button(
+            label="✅ Assign pair", style=discord.ButtonStyle.primary, row=2,
+            disabled=not (self.selected_primary and self.selected_sub),
+        )
+        assign_btn.callback = self._on_assign
+        self.add_item(assign_btn)
+
+        unpair_btn = discord.ui.Button(
+            label="🔄 Unpair…", style=discord.ButtonStyle.secondary, row=2,
+            disabled=not bool(self._phase_pairings()),
+        )
+        unpair_btn.callback = self._enter_unpair_mode
+        self.add_item(unpair_btn)
+
+        done_btn = discord.ui.Button(
+            label="✔ Done", style=discord.ButtonStyle.secondary, row=2,
+        )
+        done_btn.callback = self._on_done
+        self.add_item(done_btn)
+
+    def _build_unpair_components(self):
+        s = self.main_view.session
+        pairings = self._phase_pairings()
+        # Build [(primary_key, primary_name, sub_name, zone), …] in the
+        # same zone-then-roster order as the running pair list.
+        rows: list[tuple[str, str, str, str]] = []
+        for z in s.preset.zones:
+            for primary_key in self._phase_assignments().get(z.zone, []):
+                sub_key = pairings.get(primary_key)
+                if not sub_key:
+                    continue
+                p_m = s.members.get(primary_key)
+                s_m = s.members.get(sub_key)
+                p_name = p_m["name"] if p_m else primary_key
+                s_name = s_m["name"] if s_m else sub_key
+                rows.append((primary_key, p_name, s_name, z.zone))
+
+        if rows:
+            options = [
+                discord.SelectOption(
+                    label=f"{p_name} → {s_name}"[:100],
+                    value=p_key[:100],
+                    description=zone[:100],
+                    default=(p_key == self.selected_unpair_primary),
                 )
-            except discord.HTTPException:
-                pass
-        return _cb
+                for p_key, p_name, s_name, zone in rows[:_MAX_DROPDOWN_OPTIONS]
+            ]
+            unpair_select = discord.ui.Select(
+                placeholder="Pick a pair to unpair…",
+                min_values=1, max_values=1, options=options, row=0,
+            )
+
+            async def _on_pick(inter: discord.Interaction):
+                if not await self._guard_owner(inter):
+                    return
+                self.selected_unpair_primary = unpair_select.values[0]
+                self._build_components()
+                try:
+                    await inter.response.edit_message(
+                        content=self.render_content(), view=self,
+                    )
+                except discord.HTTPException:
+                    pass
+
+            unpair_select.callback = _on_pick
+            self.add_item(unpair_select)
+
+        confirm_btn = discord.ui.Button(
+            label="🔄 Confirm unpair", style=discord.ButtonStyle.danger, row=1,
+            disabled=not self.selected_unpair_primary,
+        )
+        confirm_btn.callback = self._on_confirm_unpair
+        self.add_item(confirm_btn)
+
+        back_btn = discord.ui.Button(
+            label="↩️ Back", style=discord.ButtonStyle.secondary, row=1,
+        )
+        back_btn.callback = self._exit_unpair_mode
+        self.add_item(back_btn)
+
+    # ── Callbacks ────────────────────────────────────────────────────
+    async def _guard_owner(self, inter: discord.Interaction) -> bool:
+        if inter.user.id != self.main_view.session.user_id:
+            await inter.response.send_message(
+                "⛔ Only the builder's owner can pair subs.",
+                ephemeral=True,
+            )
+            return False
+        return True
+
+    async def _on_assign(self, inter: discord.Interaction):
+        if not await self._guard_owner(inter):
+            return
+        if not (self.selected_primary and self.selected_sub):
+            await inter.response.send_message(
+                "⚠️ Pick a primary and a sub before assigning.",
+                ephemeral=True,
+            )
+            return
+        s = self.main_view.session
+        phase = s.selected_phase
+        s.paired_subs_for_phase(phase)[self.selected_primary] = self.selected_sub
+        # Below-floor capture: subs that are below the primary's zone
+        # floor still pair, but the rosters_tab write should mark the
+        # slot as an override. Find the zone the primary is in.
+        primary_zone = _zone_of_primary(s, self.selected_primary)
+        if primary_zone:
+            _eligible, below = _eligible_member_keys_for_zone(s, primary_zone)
+            if self.selected_sub in below:
+                s.below_floor_overrides_for_phase(phase).add(self.selected_sub)
+        s.auto_fill_summary = None
+
+        self.selected_primary = None
+        self.selected_sub = None
+        self._build_components()
+        try:
+            await inter.response.edit_message(
+                content=self.render_content(), view=self,
+            )
+        except discord.HTTPException:
+            pass
+        # Re-render the main view so the new pairing is visible there too.
+        try:
+            if self.main_view.message:
+                self.main_view._rebuild()
+                await self.main_view.message.edit(
+                    embed=_render_builder_embed(s), view=self.main_view,
+                )
+        except discord.HTTPException:
+            pass
+
+    async def _enter_unpair_mode(self, inter: discord.Interaction):
+        if not await self._guard_owner(inter):
+            return
+        self.unpair_mode = True
+        self.selected_unpair_primary = None
+        self._build_components()
+        try:
+            await inter.response.edit_message(
+                content=self.render_content(), view=self,
+            )
+        except discord.HTTPException:
+            pass
+
+    async def _exit_unpair_mode(self, inter: discord.Interaction):
+        if not await self._guard_owner(inter):
+            return
+        self.unpair_mode = False
+        self.selected_unpair_primary = None
+        self._build_components()
+        try:
+            await inter.response.edit_message(
+                content=self.render_content(), view=self,
+            )
+        except discord.HTTPException:
+            pass
+
+    async def _on_confirm_unpair(self, inter: discord.Interaction):
+        if not await self._guard_owner(inter):
+            return
+        if not self.selected_unpair_primary:
+            await inter.response.send_message(
+                "⚠️ Pick a pair to unpair.", ephemeral=True,
+            )
+            return
+        s = self.main_view.session
+        phase = s.selected_phase
+        s.paired_subs_for_phase(phase).pop(self.selected_unpair_primary, None)
+        s.auto_fill_summary = None
+        self.selected_unpair_primary = None
+        self.unpair_mode = False
+        self._build_components()
+        try:
+            await inter.response.edit_message(
+                content=self.render_content(), view=self,
+            )
+        except discord.HTTPException:
+            pass
+        try:
+            if self.main_view.message:
+                self.main_view._rebuild()
+                await self.main_view.message.edit(
+                    embed=_render_builder_embed(s), view=self.main_view,
+                )
+        except discord.HTTPException:
+            pass
+
+    async def _on_done(self, inter: discord.Interaction):
+        if not await self._guard_owner(inter):
+            return
+        for item in self.children:
+            item.disabled = True
+        self.stop()
+        try:
+            await inter.response.edit_message(view=self)
+        except discord.HTTPException:
+            pass
 
     async def on_timeout(self):
         for item in self.children:

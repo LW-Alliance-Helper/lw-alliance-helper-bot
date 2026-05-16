@@ -1275,32 +1275,32 @@ class TestPairedSubMode:
         assert "⚠️" in embed.description
         assert "Unpaired primaries" in embed.description
 
-    def test_render_embed_paired_mode_surfaces_overflow_subs(self):
-        """Paired mode's flat sub list (overflow pool) used to be
-        invisible from the embed — only primaries with their inline
-        subs rendered. The fix adds an Overflow subs line so the
-        officer knows extra subs exist."""
+    def test_render_embed_paired_mode_surfaces_available_subs(self):
+        """Paired mode's flat sub list used to be invisible from the
+        embed — only primaries with their inline subs rendered. The
+        Available subs line surfaces subs that haven't been paired yet
+        so the officer knows there are members to attach via 🔁 Pair
+        subs."""
         members = self._three_members()
         sess = _make_session(team="A", members=members, sub_mode="paired")
         sess.assignments["Power Tower"].append("1001")
         sess.paired_subs["1001"] = "1002"
-        # Carol ends up in the overflow pool (every primary already
-        # has a paired sub, no zone seat left).
+        # Carol sits in the available pool — not yet paired.
         sess.subs.append("1003")
         embed = srb._render_builder_embed(sess)
-        assert "Overflow subs" in embed.description
+        assert "Available subs" in embed.description
         assert "Carol" in embed.description
 
-    def test_render_embed_paired_mode_no_overflow_line_when_empty(self):
-        """Embed must not render the Overflow subs line when there
+    def test_render_embed_paired_mode_no_subs_line_when_empty(self):
+        """Embed must not render the Available subs line when there
         aren't any — keeps the embed compact in the typical case."""
         members = self._three_members()
         sess = _make_session(team="A", members=members, sub_mode="paired")
         sess.assignments["Power Tower"].append("1001")
         sess.paired_subs["1001"] = "1002"
-        # No overflow.
+        # No available subs.
         embed = srb._render_builder_embed(sess)
-        assert "Overflow subs" not in embed.description
+        assert "Available subs" not in embed.description
 
     def test_zone_of_primary_returns_zone_for_assigned(self):
         members = self._three_members()

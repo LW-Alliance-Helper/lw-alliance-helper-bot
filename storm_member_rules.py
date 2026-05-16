@@ -873,36 +873,42 @@ def build_cs_member_rule_group() -> _MemberRuleGroup:
 # for that root cog to call; no slash commands are registered here directly.
 
 
-# ── Inline power-band rule modal (#144 — setup wizard inline create) ──────
+# ── Inline power-band rule view (#144 / #168 — setup wizard inline create) ──
 #
 # Streamlined `set_power_band` flow for the /setup_desertstorm and
 # /setup_canyonstorm wizard's 'add your first rule now?' branch. The full
 # slash command (`/<parent> member_rule set_power_band`) takes threshold +
-# zone + optional notes; the modal omits notes for brevity — alliances
-# can edit later via the slash command if they want to add notes.
+# zone + optional notes; this inline flow omits notes for brevity —
+# alliances can edit later via the slash command if they want to add notes.
+#
+# Shape (#168 — Rule E): zone is a Select sourced from
+# DS_ZONE_STRUCTURE / CS_ZONE_STRUCTURE so a typo can't slip through; the
+# power threshold stays a free-text TextInput (values are open-ended
+# magnitudes like `250M` / `1.2B` / `300,000,000`). The view captures the
+# picked zone, then a [Set minimum power] button opens a single-field
+# modal for the power value. Submit on the modal writes the rule.
 
-class InlinePowerBandModal(discord.ui.Modal):
-    def __init__(self, event_type: str):
+
+class _InlinePowerBandPowerModal(discord.ui.Modal):
+    """Single-field modal that captures the power threshold for the picked
+    zone and writes the rule. Opened from `InlinePowerBandView` after the
+    officer has chosen a zone via the Select."""
+
+    def __init__(self, event_type: str, zone: str):
         label = "Desert Storm" if event_type == "DS" else "Canyon Storm"
-        super().__init__(title=f"{label} Power-Band Rule")
+        super().__init__(title=f"{label} Power-Band Rule — {zone}"[:45])
         self.event_type = event_type
+        self.zone = zone
         self.threshold = discord.ui.TextInput(
-            label="Minimum power",
+            label=f"Minimum power for {zone}"[:45],
             placeholder="e.g. 250M, 1.2B, 300,000,000",
             required=True,
             max_length=20,
         )
-        self.zone = discord.ui.TextInput(
-            label="Zone the rule applies to",
-            placeholder="e.g. Power Tower",
-            required=True,
-            max_length=80,
-        )
         self.add_item(self.threshold)
-        self.add_item(self.zone)
 
     async def on_submit(self, interaction: discord.Interaction):
-        parse_power, format_power, canonical_zones_for = _strategy_helpers()
+        parse_power, format_power, _ = _strategy_helpers()
         n = parse_power(self.threshold.value)
         parent = "desertstorm" if self.event_type == "DS" else "canyonstorm"
         if n is None or n < 0:
@@ -913,26 +919,15 @@ class InlinePowerBandModal(discord.ui.Modal):
                 ephemeral=True,
             )
             return
-        zone = (self.zone.value or "").strip()
-        if not zone:
-            await interaction.response.send_message(
-                "⚠️ Zone is required.", ephemeral=True,
-            )
-            return
-        canonical = {z.lower() for z in canonical_zones_for(self.event_type)}
-        zone_warning = "" if zone.lower() in canonical else (
-            f"\n⚠️ `{zone}` isn't in the canonical zone list — saved "
-            "anyway; double-check the spelling."
-        )
         ok, msg = await asyncio.to_thread(save_rule,
             interaction.guild_id, self.event_type,
             Rule(rule_type=_RULE_TYPE_POWER_BAND,
-                 subject=str(int(n)), value=zone),
+                 subject=str(int(n)), value=self.zone),
         )
         if ok:
             await interaction.response.send_message(
                 f"✅ Saved: ≥ {format_power(int(n))} → eligible for "
-                f"**{zone}**.{zone_warning}\n"
+                f"**{self.zone}**.\n"
                 f"Add more rules later via `/{parent} member_rule …`.",
                 ephemeral=True,
             )
@@ -940,3 +935,124 @@ class InlinePowerBandModal(discord.ui.Modal):
             await interaction.response.send_message(
                 f"⚠️ {msg}", ephemeral=True,
             )
+
+
+class InlinePowerBandView(discord.ui.View):
+    """Zone-picker view that gates the power-threshold modal.
+
+    Sent ephemerally from the setup wizard's "Add a rule now?" offer. The
+    officer picks a canonical zone from the Select, which enables the
+    [Set minimum power] button; clicking it opens a one-field modal for
+    the threshold. The whole flow stays ephemeral.
+    """
+
+    def __init__(self, event_type: str, owner_id: int):
+        super().__init__(timeout=300)
+        self.event_type = event_type
+        self.owner_id = owner_id
+        self.selected_zone: str | None = None
+        self.message: discord.Message | None = None
+        self._build_components()
+
+    def _build_components(self):
+        self.clear_items()
+        _, _, canonical_zones_for = _strategy_helpers()
+        zones = canonical_zones_for(self.event_type)
+        options = [
+            discord.SelectOption(
+                label=z[:100], value=z[:100],
+                default=(z == self.selected_zone),
+            )
+            for z in zones[:25]
+        ]
+        zone_select = discord.ui.Select(
+            placeholder=(
+                f"Pick a zone…  (current: {self.selected_zone})"
+                if self.selected_zone else "Pick a zone…"
+            ),
+            min_values=1, max_values=1, options=options,
+        )
+
+        async def _on_zone(inter: discord.Interaction):
+            if inter.user.id != self.owner_id:
+                await inter.response.send_message(
+                    "⛔ Only the user running setup can pick.",
+                    ephemeral=True,
+                )
+                return
+            self.selected_zone = zone_select.values[0]
+            self._build_components()
+            try:
+                await inter.response.edit_message(view=self)
+            except discord.HTTPException:
+                pass
+
+        zone_select.callback = _on_zone
+        self.add_item(zone_select)
+
+        set_btn = discord.ui.Button(
+            label="⚙️ Set minimum power",
+            style=discord.ButtonStyle.primary,
+            disabled=self.selected_zone is None,
+        )
+
+        async def _on_set(inter: discord.Interaction):
+            if inter.user.id != self.owner_id:
+                await inter.response.send_message(
+                    "⛔ Only the user running setup can pick.",
+                    ephemeral=True,
+                )
+                return
+            if not self.selected_zone:
+                await inter.response.send_message(
+                    "⚠️ Pick a zone first.", ephemeral=True,
+                )
+                return
+            await inter.response.send_modal(
+                _InlinePowerBandPowerModal(self.event_type, self.selected_zone)
+            )
+            # Disable the view so the officer can't fire the modal twice.
+            for child in self.children:
+                child.disabled = True
+            if self.message is not None:
+                try:
+                    await self.message.edit(view=self)
+                except discord.HTTPException:
+                    pass
+            self.stop()
+
+        set_btn.callback = _on_set
+        self.add_item(set_btn)
+
+        cancel_btn = discord.ui.Button(
+            label="↩️ Cancel", style=discord.ButtonStyle.secondary,
+        )
+
+        async def _on_cancel(inter: discord.Interaction):
+            if inter.user.id != self.owner_id:
+                await inter.response.send_message(
+                    "⛔ Only the user running setup can pick.",
+                    ephemeral=True,
+                )
+                return
+            for child in self.children:
+                child.disabled = True
+            try:
+                await inter.response.edit_message(
+                    content="↩️ Cancelled — no rule saved.", view=self,
+                )
+            except discord.HTTPException:
+                pass
+            self.stop()
+
+        cancel_btn.callback = _on_cancel
+        self.add_item(cancel_btn)
+
+    async def on_timeout(self) -> None:
+        for child in self.children:
+            child.disabled = True
+        if self.message is not None:
+            try:
+                await self.message.edit(view=self)
+            except discord.HTTPException:
+                pass

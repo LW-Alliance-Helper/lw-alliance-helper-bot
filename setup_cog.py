@@ -5789,16 +5789,23 @@ class _InlineCreateMemberRuleOffer(discord.ui.View):
         self.choice = "create"
         for child in self.children:
             child.disabled = True
-        # send_modal must be the first response, so we can't edit the
-        # offer message via the interaction. Push the disabled state
-        # via the bot-owned message handle right after, so a fast second
-        # click can't fire a duplicate modal.
+        # Disable the offer message via the bot-owned message handle so a
+        # fast second click can't fire a duplicate picker. The picker
+        # itself sends a fresh ephemeral with its own select + modal.
         try:
-            from storm_member_rules import InlinePowerBandModal
-            await inter.response.send_modal(InlinePowerBandModal(self.event_type))
+            from storm_member_rules import InlinePowerBandView
+            picker = InlinePowerBandView(self.event_type, owner_id=inter.user.id)
+            await inter.response.send_message(
+                content=(
+                    "Pick the zone the rule applies to, then click "
+                    "**Set minimum power** to enter the threshold."
+                ),
+                view=picker, ephemeral=True,
+            )
+            picker.message = await inter.original_response()
         except Exception as e:
             await inter.response.send_message(
-                f"⚠️ Couldn't open the rule modal: {e}. Run "
+                f"⚠️ Couldn't open the rule picker: {e}. Run "
                 f"`/{self.parent} member_rule set_power_band` to retry.",
                 ephemeral=True,
             )

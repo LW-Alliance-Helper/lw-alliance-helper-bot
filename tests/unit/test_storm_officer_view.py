@@ -494,7 +494,7 @@ class TestNonDiscordInferenceNonNumericId(TestNotOnDiscordEnumeration):
 
 class TestStaleIdLogDedup:
     """Audit Major for #139: the stale-ID warning re-logged on every
-    Refresh button click and every on-behalf modal submit. Module-level
+    Refresh button click and every on-behalf picker open. Module-level
     memo prevents the spam."""
 
     def _fake_roster_ws(self, rows):
@@ -562,81 +562,128 @@ class TestStaleIdLogDedup:
         assert any("stale Discord IDs" in e for e in errs2)
 
 
-class TestOnBehalfNumericNameReject:
-    """`storm_signups.target_member_id` UPSERTs on a UNIQUE
-    `(guild, event_type, event_date, target_member_id)` index. Self-votes
-    store `str(discord_user_id)`; on-behalf votes store the roster name.
-    A purely numeric roster name silently collides with a real Discord
-    user's vote. The on-behalf modal rejects numeric names at submit
-    time so the collision can't reach the schema."""
+class TestOnBehalfVoteView:
+    """#168 — the on-behalf flow is now an ephemeral view with Member +
+    Vote selects, no free-text modal. `storm_signups.target_member_id`
+    UPSERTs on a UNIQUE `(guild, event_type, event_date, target_member_id)`
+    index; self-votes store `str(discord_user_id)` and on-behalf votes
+    store the roster name. A purely numeric roster name would collide
+    with a real Discord user's vote on the same event, so the new view
+    filters those names out of the Member Select at construction time —
+    the collision can't reach the schema because the officer can't pick
+    a numeric-name option."""
 
-    def _fake_view(self):
+    def _fake_parent_view(self):
         view = MagicMock()
         view.guild_id = TEST_GUILD_ID
         view.guild = _FakeGuild(TEST_GUILD_ID, [])
         view.event_type = "DS"
         view.event_date = "2026-05-18"
+        view.owner_user_id = 1
         view.message = None
-        # `refresh_buckets` is now async (gspread off-thread); the
-        # on-behalf modal awaits it after the vote records.
+        view.bucket_filter = None
+        view.buckets = {}
+        # refresh_buckets is awaited after submit fires.
         view.refresh_buckets = AsyncMock()
         return view
 
-    def _fake_interaction(self):
+    def _fake_interaction(self, user_id: int = 1):
         interaction = MagicMock()
+        interaction.user.id = user_id
         interaction.response.send_message = AsyncMock()
         interaction.response.edit_message = AsyncMock()
         interaction.response.defer        = AsyncMock()
         interaction.followup.send         = AsyncMock()
         return interaction
 
-    async def test_purely_numeric_name_rejected(self, seeded_db):
-        modal = sov._OnBehalfModal(self._fake_view())
-        # Bypass discord.py's modal-submit machinery by setting the
-        # TextInput values directly. The handler reads from `.value`.
-        modal.member_name = MagicMock(value="1234")
-        modal.vote_label  = MagicMock(value="A")
-        interaction = self._fake_interaction()
-        with patch(
-            "config.record_storm_vote", new=MagicMock(return_value=True),
-        ) as record:
-            await modal.on_submit(interaction)
-        record.assert_not_called()
-        interaction.response.send_message.assert_awaited_once()
-        body = interaction.response.send_message.await_args.args[0]
-        assert "purely numeric" in body or "numeric" in body.lower()
-
-    async def test_alphanumeric_name_passes_through(self, seeded_db):
-        """Sanity — names with any non-digit pass the numeric reject and
-        proceed to the roster-Sheet validation (which will fail in this
-        test because no roster is configured; the point is we get past
-        the up-front numeric reject)."""
-        modal = sov._OnBehalfModal(self._fake_view())
-        modal.member_name = MagicMock(value="Charlie #1234")
-        modal.vote_label  = MagicMock(value="A")
-        interaction = self._fake_interaction()
-        with patch(
-            "storm_officer_view._read_roster_rows", return_value=([], []),
-        ), patch(
-            "config.record_storm_vote", new=MagicMock(return_value=True),
-        ):
-            await modal.on_submit(interaction)
-        # `_read_roster_rows` returned empty so the validation falls
-        # back to permissive — the record_storm_vote path is reached.
-        # The numeric-reject branch did NOT fire (no "purely numeric"
-        # ephemeral). Body messages may land on either send_message or
-        # followup.send depending on whether the response was deferred,
-        # so collect from both.
-        all_ephemerals = [
-            c.args[0] for c in interaction.response.send_message.await_args_list
-            if c.args
-        ] + [
-            c.args[0] for c in interaction.followup.send.await_args_list
-            if c.args
+    def test_numeric_names_filtered_from_member_select(self, seeded_db):
+        """The schema-collision risk vanishes when the picker can't
+        offer a numeric-name option. This is the structural replacement
+        for the old `_OnBehalfModal` numeric-reject branch."""
+        roster = [
+            {"name": "Alice"},
+            {"name": "1234"},           # numeric — must be filtered
+            {"name": "Charlie #1234"},  # non-numeric — kept
         ]
-        assert not any(
-            "purely numeric" in (m or "") for m in all_ephemerals
+        view = sov._OnBehalfVoteView(
+            self._fake_parent_view(), roster, teams_setting="both",
         )
+        names = [m["name"] for m in view.members]
+        assert "Alice" in names
+        assert "Charlie #1234" in names
+        assert "1234" not in names
+
+    def test_members_deduped_and_sorted(self, seeded_db):
+        roster = [
+            {"name": "Charlie"},
+            {"name": "alice"},
+            {"name": "Alice"},  # case-dupe — second one drops
+            {"name": ""},        # blank — drops
+        ]
+        view = sov._OnBehalfVoteView(
+            self._fake_parent_view(), roster, teams_setting="both",
+        )
+        names = [m["name"] for m in view.members]
+        # Sorted case-insensitively; case-dupe collapsed to first seen.
+        assert names == ["alice", "Charlie"]
+
+    def test_vote_options_branch_on_teams_setting(self, seeded_db):
+        roster = [{"name": "Alice"}]
+        # Single-team alliance: only Team A + Cannot are valid options.
+        view_a = sov._OnBehalfVoteView(
+            self._fake_parent_view(), roster, teams_setting="A",
+        )
+        opts_a = sov._vote_select_options("DS", TEST_GUILD_ID, "A")
+        values_a = [o.value for o in opts_a]
+        assert "a" in values_a
+        assert "b" not in values_a
+        assert "either" not in values_a
+        assert "cannot" in values_a
+        # Both-teams alliance: all four options.
+        opts_both = sov._vote_select_options("DS", TEST_GUILD_ID, "both")
+        values_both = [o.value for o in opts_both]
+        assert set(values_both) == {"a", "b", "either", "cannot"}
+        # Touch the constructor to silence the unused-local lint.
+        assert view_a.teams_setting == "A"
+
+    def test_paging_kicks_in_above_25_members(self, seeded_db):
+        roster = [{"name": f"Member{i:03d}"} for i in range(40)]
+        view = sov._OnBehalfVoteView(
+            self._fake_parent_view(), roster, teams_setting="both",
+        )
+        assert view.page_count == 2
+        assert len(view._members_for_page()) == 25
+        view.page = 1
+        assert len(view._members_for_page()) == 15
+
+    def test_submit_disabled_until_both_selects_chosen(self, seeded_db):
+        view = sov._OnBehalfVoteView(
+            self._fake_parent_view(), [{"name": "Alice"}], teams_setting="both",
+        )
+        submit_btns = [
+            c for c in view.children
+            if getattr(c, "label", "").startswith("✅ Submit")
+        ]
+        assert submit_btns and submit_btns[0].disabled is True
+
+    async def test_submit_records_vote_and_refreshes_parent(self, seeded_db):
+        parent = self._fake_parent_view()
+        view = sov._OnBehalfVoteView(
+            parent, [{"name": "Alice"}], teams_setting="both",
+        )
+        view.selected_member = "Alice"
+        view.selected_vote = "a"
+        interaction = self._fake_interaction(user_id=parent.owner_user_id)
+        with patch(
+            "config.record_storm_vote", return_value=True,
+        ) as record:
+            await view._on_submit(interaction)
+        record.assert_called_once()
+        kwargs = record.call_args.kwargs
+        assert kwargs["target_member_id"] == "Alice"
+        assert kwargs["vote"] == "a"
+        assert kwargs["is_on_behalf"] is True
+        parent.refresh_buckets.assert_awaited()
 
 
 class TestOfficerViewTeamsGate:

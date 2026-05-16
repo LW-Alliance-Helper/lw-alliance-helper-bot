@@ -32,12 +32,25 @@ So this is **real code-change work**, not spec drafting. The plan is:
 
 ## 0 — Design decisions locked in (your answers to my catalog questions)
 
+Decisions 1–4 came out of the first catalog pass. Decisions 5–12 came
+out of the section 8–15 review pass.
+
 | # | Decision |
 |---|---|
 | 1 | **Screen 7.14 = bulk move.** Button "🪑 Add all unassigned to Subs" moves every currently-unassigned member into the subs pool. Body copy gets rewritten to match. |
 | 2 | **Screen 6.1 = ephemeral with two selects + Submit.** Officer picks Member (Select 1) and Vote (Select 2), then hits Submit. Roster > 25 names handled via paging. No longer a Discord modal. |
 | 3 | **Screen 7.24 = single primary-picker + sub-picker pair.** One Select for primary, one for sub, an Assign button, repeat. Running pair list rendered above the selects. |
 | 4 | **2.7/2.8 model = poll-day picker, no lead-days knob.** Wizard asks *"What day do you want to send the poll?"* DS event always Friday, CS event always Thursday. Picking the poll day implicitly sets the lead. Schema drops `event_day_of_week` and `signup_lead_days`; gains `poll_day_of_week`. |
+| 5 | **Attendance UI = member-select + ✅/❌ buttons applied in-place.** No status-picker ephemeral. When a member is selected in the dropdown, the buttons read `[✅ Mark as attended]` / `[❌ Mark as did not attend]` and write directly to that member. When no member is selected, the buttons read `[✅ Mark all as attended]` / `[❌ Mark all as did not attend]` and bulk-apply to unrecorded slots. Drops the 🔄 Sub activated status entirely — UI is ✅/❌/— only. |
+| 6 | **Drop "below minimum" override marker from UI rendering.** The internal `Override Below Floor` sheet column stays (the builder still records the override at assignment time), but the per-member `⚠️` glyph and the `_⚠️ Assigned below the zone floor at build time._` footnote disappear from attendance + history views. Officers don't need this surfaced post-event. |
+| 7 | **Per-member rules silently no-op when subject isn't in this event's roster.** Auto-fill summary stops flagging "subject not on roster" as a conflict. A rule means "*if* this member is in tonight's event, do X" — they're not in tonight's event ⇒ nothing to apply ⇒ nothing to report. Applies to `per_member` zone/team rules. |
+| 8 | **User-actionable summaries show every entry — no truncation.** Auto-fill gaps + conflicts lists drop the `(+N more)` truncation. Officers need the complete list to make decisions about who to slot manually. |
+| 9 | **Destructive re-runs need a confirm step.** Clicking 🎯 Auto-fill on a session with manual edits opens a confirm ephemeral first (`This will clobber every manual edit you've made. Confirm?`). New sessions skip the prompt. |
+| 10 | **Phase-aware UIs render per-zone-per-phase.** Each zone header gets its own line, then each phase indents below as its own line with the per-phase capacity + member list. `📊 Filled` line breaks out per-phase counts (e.g. `P1: 30/30, P2: 30/30, P3: 30/30`). Applies to auto-fill summary, preset editor, builder embed phase-aware variant, and history when rendering a phase-aware event. |
+| 11 | **List commands always include inline actions.** `/desertstorm strategy list`, `/canyonstorm strategy list`, `/desertstorm member_rule list`, `/canyonstorm member_rule list`. Both the populated-list and empty states render summary + `[Create]` / `[Edit]` / `[Delete]` buttons. No dead-end summary that forces officers into a second slash command. |
+| 12 | **Walkthrough tour fires for `/canyonstorm signups` too.** Today the tour offer only fires on `/desertstorm signups`. Add the same offer + tour to CS; tour copy branches on `teams` config when describing the team-setup step (Rule A). 14.9 (on-behalf vote step) gets rewritten to describe the new ephemeral view + selects (Decision #2). |
+| 13 | **Preset editor: zones are game-defined — Add Zone modal goes away.** DS_ZONE_STRUCTURE and CS_ZONE_STRUCTURE are the canonical lists; alliances can't add their own. Screen 12.15 + the `[➕ Add zone]` button + `_AddZoneModal` class get deleted. |
+| 14 | **Auto-pair summary lists who-with-whom.** When auto-fill auto-pairs subs, the summary block shows each pairing explicitly (`Alice ↔ Bob, Carol ↔ Dan, …`) instead of just a count. This is the highest-edit candidate from auto-fill, so visibility matters. |
 
 ---
 
@@ -246,6 +259,70 @@ File pointers reference the **dev branch** state.
 - **Files**: `storm_roster_builder.py` view classes (flat builder
   view + phase-aware view + paired-mode view).
 
+### Rule K — Drop 🔄 Sub activated from attendance status (UI-only)
+- Source: Decision #5. Attendance status surface is `✅` / `❌` / `—`
+  only. The `sub_activated` value disappears from `_STATUS_LABELS`,
+  the status picker (which itself gets removed per Decision #5), the
+  footer counts, and the history rendering.
+- **Schema**: the `sub_activated` value in the attendance Sheet column
+  (if any prior alliance recorded it) becomes orphaned data — reader
+  code should tolerate it (render as `—`) but writer code stops
+  producing it. No DROP COLUMN needed; the column is text-cell.
+- **Files**: `storm_attendance.py` (status enum, view, footer render,
+  save path), `storm_history.py` (history footer + per-slot glyph
+  resolution), tests in `test_storm_attendance.py` and
+  `test_storm_history.py`.
+
+### Rule L — Per-zone-per-phase rendering when `phase_count >= 2`
+- Source: Decision #10. Phase-aware rendering breaks each zone into
+  its own header, then one indented line per phase. Replaces the
+  `(P1: 4/4, P2: 4/4, P3: 4/4)` inline format with:
+  ```
+  ✅ Power Tower:
+      Phase 1: 4/4 — Alice, Bob, Carol, Dan
+      Phase 2: 4/4 — Alice, Bob, Carol, Dan
+      Phase 3: 4/4 — Alice, Bob, Carol, Dan
+  ```
+- `📊 Filled` line breaks out per-phase counts:
+  `P1: 30/30, P2: 30/30, P3: 30/30`.
+- **Surfaces**: auto-fill summary (`storm_roster_builder._render_builder_embed`),
+  preset editor flat-vs-phase variants (`storm_strategy._render_editor_embed`),
+  history phase-aware variant (new — `storm_history`).
+- **Files**: `storm_roster_builder.py`, `storm_strategy.py`,
+  `storm_history.py`, tests across each.
+
+### Rule M — Inline actions in list views
+- Source: Decision #11. Listing surfaces always render the summary
+  *plus* actionable buttons. No dead-end summaries.
+- `/desertstorm strategy list` + `/canyonstorm strategy list`: summary
+  embed + `[➕ Create]` `[✏️ Edit]` `[🗑️ Delete]` row (Edit/Delete open
+  a preset Select; Create opens the same modal as the create slash
+  command).
+- `/desertstorm member_rule list` + `/canyonstorm member_rule list`:
+  current per-rule `[🗑 Clear N]` buttons stay; add `[➕ Add rule]`
+  row that opens the same `InlinePowerBandModal` 2.14c will use, or
+  redirects to the slash command for per-member rules. Empty state
+  (Screen 13.27) also surfaces the `[➕ Add rule]` button.
+- **Files**: `storm_strategy.py` (`_StrategyGroup._list` cog method
+  + new `_StrategyListView`), `storm_member_rules.py` (list view + new
+  add-rule button).
+
+### Rule N — Walkthrough tour available for both DS and CS
+- Source: Decision #12. The first-run tour offered today on
+  `/desertstorm signups` also fires on `/canyonstorm signups`.
+  Per-officer dismissal state keys on a walkthrough key (`storm_signups_v1`
+  today); the CS tour shares the same key — dismissing on DS dismisses
+  on CS for that officer, and vice versa.
+- Tour-step copy branches on event type where relevant:
+  - Step 5 (`14.10`) Set-up button copy: DS shows `🅰️ Set up Team A
+    / 🅱️ Set up Team B`; CS shows the same when `teams=both`, single
+    Set-up button when `teams=A` or `teams=B` only.
+  - Step 4 (`14.9`) on-behalf vote: rewrite per Decision #2's new
+    ephemeral view + Member/Vote selects + paging.
+- **Files**: `storm_walkthrough.py` (`maybe_offer_storm_signups_tour`,
+  `_TourStep` content per step), `storm_officer_view.py` (CS cog
+  invokes the same `maybe_offer` helper).
+
 ---
 
 ## 2 — Section-by-section spec edits (sections 1-7)
@@ -415,16 +492,42 @@ Line numbers reference the edited walkthrough on dev
 need to flow into both the doc AND the code on dev.
 
 ### Section 8 — Auto-fill summary (~lines 4087-4429)
-Pure Rule B sweep — no structural changes.
-- **L4104**: "Enforcing **Min A** floors for this team" → "Enforcing
-  **Minimum A**" (and drop the redundant "floors"). (Rule B)
-- **L4117**: "floor **300M**" → "minimum **300M**". (Rule B)
-- **L4225-4226**: "preset floor 300M relaxed by power_band rule" →
-  "preset minimum 300M …". (Rule B)
-- **L4249-4257, 4287, 4322, 4361 + Screen 8.9 body**: every "floor"
-  / "band-relaxed floor" / "below floor" in summary copy → "minimum"
-  / "below minimum". (Rule B)
-- **Code**: `storm_roster_builder.py` auto-fill summary strings.
+Rule B sweep + Decisions 7, 8, 9, 10, 14.
+- **Rule B**: every "floor" / "band-relaxed floor" / "below floor"
+  in summary copy → "minimum" / "below minimum". (L4104, L4117,
+  L4225-4226, L4249-4257, L4287, L4322, L4361 + Screen 8.9 body).
+  Power-band relaxation copy reword (per your 8.4 edit): drop
+  "_(preset floor 300M relaxed by power_band rule)_"; add a
+  free-standing line *"This zone has a power band rule of 300M that
+  is currently being overridden by the local power minimum."*
+- **Decision #7 (per-member rules silently no-op)**: drop the
+  `per_member subject not on roster: <subject>` conflict shape from
+  `_auto_fill_session` entirely. A rule whose subject isn't in
+  tonight's roster ⇒ nothing to apply ⇒ nothing reported. Other
+  conflict shapes (`unknown zone`, `full when pinning`, `pinned to
+  multiple zones`) stay.
+- **Decision #8 (show all)**: drop the `(+N more)` truncation on
+  `Gaps (power unknown, not slotted)` and `Conflicts`. Officers
+  need the full list to act on it. (L4163-4172 gaps shape, L4204-4210
+  conflicts shape.)
+- **Decision #14 (auto-pair listing)**: replace `• Auto-paired
+  subs: **N**` with an explicit list — `• Auto-paired subs: Alice ↔
+  Bob, Carol ↔ Dan, Erin ↔ Frank, …`. The count is preserved as a
+  prefix or the line stays unbulleted-per-pair.
+- **Decision #10 + Rule L (per-zone-per-phase)**: Screen 8.6's
+  phase-aware auto-fill summary now lists each phase's members on
+  its own line under the zone header. `📊 Filled` line breaks into
+  per-phase counts (`P1: 30/30, P2: 30/30, P3: 30/30`).
+- **Decision #9 (confirm destructive)**: Screen 8.8 — clicking 🎯
+  Auto-fill while a session has manual edits opens a confirm
+  ephemeral first ("This will reset every assignment, sub pairing,
+  and override on this team. Confirm?"). New sessions skip the
+  prompt.
+- **Code**: `storm_roster_builder.py` — `_auto_fill_session`
+  (drop the subject-not-on-roster conflict + drop truncation), the
+  summary string renderer (auto-pair listing, per-phase break-out),
+  the auto-fill button callback (confirm gate when
+  `session.has_manual_edits`).
 
 ### Section 9 — Approve & Post + faction roles (~lines 4453-5138)
 The big Rule G deletion + a Rule I sweep.
@@ -453,138 +556,260 @@ The big Rule G deletion + a Rule I sweep.
   class, the post-approve cascade, and all permission/apply paths.
 
 ### Section 10 — Attendance (~lines 5141-5781)
-- **L5328**: "below the zone floor at build time" → "below the zone
-  minimum at build time". (Rule B)
-- **L5245-5252, Screen 10.6**: "Run `/desertstorm post_signup`" —
-  CS variant must say `/canyonstorm post_signup`. (Rule I)
-- **L5278-5280, Screen 10.7a**: "events with a structured roster
-  posted via `/desertstorm signups`" — CS variant must say
-  `/canyonstorm signups`. (Rule I)
-- **L5292-5293**: "rosters tab 'Rosters' doesn't exist yet — post a
-  structured roster first via `/desertstorm signups`" — CS variant
-  must say `/canyonstorm signups`. (Rule I)
-- **Screen 10.9 (CS variant)**: confirm CS attendance also renders
-  per-team when `teams=both` (today's CS code likely treats CS as
-  always single-team — Rule A correction).
-- **Rule D**: any attendance-tab-creation copy follows the
-  "creates and maintains" pattern.
-- **Rule C**: any power-column read in attendance uses the new
+Major UI refactor — Decisions 5, 6 + Rules A, B, C, D, I, K.
+- **Decision #5 (UI pattern)**: replace today's flow (dropdown →
+  click slot → status-picker ephemeral with 4 buttons → ack
+  ephemeral) with: single dropdown + persistent `[✅ Attended]` /
+  `[❌ Did Not Attend]` / `[💾 Save attendance]` row. When no
+  member is selected, the buttons read `Mark all as attended /
+  did not attend` (bulk over unrecorded slots). When a member is
+  selected, they read `Mark as attended / did not attend` and
+  write directly to that member.
+- **Decision #5 (drop 🔄 + status picker)**: delete
+  `_StatusPickerView` entirely. Screens 10.13, 10.14, 10.15, 10.16,
+  10.17 are no longer reachable. Status picker timeout (10.17)
+  goes. Bulk-mark button (10.18) becomes the no-selection state of
+  the always-visible attendance buttons.
+- **Rule K (drop 🔄 Sub activated)**: footer counts collapse from
+  `✅ N · ❌ N · 🔄 N · — N` to `✅ N · ❌ N · — N`. The
+  `sub_activated` value disappears from `_STATUS_LABELS`. Sheet
+  reader tolerates orphaned `sub_activated` rows (renders as `—`).
+- **Decision #6 (drop override marker)**: remove the per-slot ⚠️
+  glyph and the trailing `_⚠️ Assigned below the zone floor at
+  build time._` line. Internal `Override Below Floor` Sheet column
+  stays (the builder still records it at assignment time).
+- **Phase-aware variant (per your 10.8 NOTE)**: when the roster is
+  phase-aware, the per-slot line shows the comma-separated list of
+  zones across phases instead of one zone per row.
+- **10.11 empty state**: hide the action buttons entirely — no
+  selectable members ⇒ no actions to take.
+- **Rule A (CS teams)**: Screen 10.9 needs a `teams=both` variant
+  rendering `**Team A**` / `**Team B**` headers just like DS.
+- **Rule I (CS slash refs)**: L5245-5252 (10.6),
+  L5278-5280 / L5292-5293 (10.7a/b), Screen 10.4 — every
+  CS-variant error pointing at `/desertstorm …` must say
+  `/canyonstorm …`.
+- **Rule B**: L5328 "below the zone floor at build time" → drop
+  entirely per Decision #6.
+- **Rule D**: attendance-tab-creation copy follows
+  "creates and maintains".
+- **Rule C**: any power-column read in attendance uses the
   letter-based field.
-- **Code**: `storm_attendance.py`.
+- **Code**: `storm_attendance.py` — full view rewrite (single
+  member-select + persistent action buttons + bulk-vs-individual
+  branching on selection state), delete `_StatusPickerView`, status
+  enum trimmed, footer renderer simplified, override-marker
+  rendering removed. Tests in `test_storm_attendance.py`
+  rewritten extensively.
 
 ### Section 11 — Strategy commands (~lines 5785-6206)
-- **L5843, 5850, 5876**: hints use `/ds strategy edit` and
-  `/cs strategy edit` shorthands — these aren't real command names
-  (the consolidation in #143 made them `/desertstorm strategy …` /
-  `/canyonstorm strategy …`). Replace shorthand with full name.
-  (Rule I + correctness)
-- **L6128-6129**: code delegates to `open_roster_builder(interaction,
-  "DS", name)` — CS variant must pass `event_type="CS"`. (Rule I)
-- **L5851-5857 vs L5880-5884**: `seed_default_preset("Standard DS",
-  "DS")` vs `seed_default_preset("CS Standard", "CS")` — verify both
-  are wired to their respective parents.
-- **Code**: `storm_strategy.py` cog dispatch.
+Decision #11 (inline list actions, Rule M) + Rule I sweep.
+- **Decision #11 / Rule M (inline actions)**: Screen 11.5 today
+  posts the preset summary embed and stops. Rewrite to also post a
+  view with `[➕ Create]` `[✏️ Edit]` `[🗑️ Delete]` buttons. Edit
+  and Delete open a preset Select (single-pick) that hands off to
+  the editor / delete-confirm flow. Create opens the same modal as
+  `/desertstorm strategy create`. Empty state (11.5a) shows the
+  same buttons with just Create enabled.
+- **Rule I (full command names, not shorthands)**: L5843, L5850,
+  L5876 reword `/ds strategy edit` and `/cs strategy edit` to
+  `/desertstorm strategy edit` / `/canyonstorm strategy edit`.
+- **Rule I (event-type wiring)**: L6128-6129 confirm
+  `open_roster_builder(interaction, "DS", name)` vs
+  `event_type="CS"` for the CS variant; L5851-5857 / L5880-5884
+  confirm `seed_default_preset("Standard DS", "DS")` /
+  `seed_default_preset("CS Standard", "CS")` are wired to their
+  respective parents.
+- **Code**: `storm_strategy.py` cog dispatch + new
+  `_StrategyListView` class for the inline actions.
 
 ### Section 12 — Strategy preset editor (~lines 6210-7191)
-Mostly already clean. The preset editor uses "Min" / "Minimum"
-correctly throughout. No "Floors" page rename needed in this section.
-- **L6252-6262, 6302, 6331, 6382-6403**: confirm all zone-min lines
-  already use "Min A" / "Min B" / "Min" prefix (Rule B already
-  satisfied here).
-- **L6268-6269**: Phase-mode select labels — `Flat (no phases)` /
-  `Yes — 2 Phases` / `Yes — 3 Phases`. Drop the redundant "Yes — ":
-  → `Flat (no phases)` / `2 Phases` / `3 Phases`. (Polish, not a rule.)
-- **L6903-6946, Screen 12.15 (Add Zone modal)**: zone-name is a
-  free-text modal input for ADDING a new zone to a preset. This is
-  fine — it's not picking from a known list. Rule E doesn't apply
-  here (different from member_rule zone Selects).
-- **Code**: `storm_strategy.py`.
+Polish pass + Decisions 10, 13.
+- **Decision #13 (zones are game-defined)**: DELETE the
+  `[➕ Add zone]` button + `_AddZoneModal` class + Screen 12.15.
+  Zones come exclusively from `DS_ZONE_STRUCTURE` /
+  `CS_ZONE_STRUCTURE`. Officers configure max-players / minimum
+  power / priority for the canonical zones only.
+- **Decision #10 / Rule L (per-zone-per-phase rendering)**: Screen
+  12.4 — phase-aware editor breaks each zone into its own line plus
+  one indented line per phase, instead of the inline
+  `(P1: 4, P2: 4, P3: 4)` shape. Screen 12.3 — flat CS editor's
+  zone list is currently flooded (22 canonical zones). Surface
+  phase-mode toggle prominently so officers don't try to scroll
+  through every phase's zone at once.
+- **Button labels (your 12.1 edits)**: `[✏️ Rename]` →
+  `[✏️ Rename preset]`; `[🔙 Abandon]` →
+  `[🔙 Abandon this preset]`. Footer reword: "*Unsaved changes —
+  hit Save Preset to commit.*" → "*Unsaved changes — Save preset
+  to save your changes.*"
+- **Mode-toggle copy (your 12.5/12.6 edits)**:
+  "Stored capacities + assignments are kept — flip back any time
+  without data loss." →
+  "Capacities + assignments are kept. Re-select **N-phase** mode
+  to restore without data loss."
+- **Apply-to-similar copy (your 12.14 edits)**:
+  "Pick any to copy these same settings to, or skip." →
+  "Would you like to apply the same settings to these as well?"
+  `[ ▾ Choose siblings to apply to… ]` →
+  `[ ▾ Select zones ]`.
+- **Phase-aware 3-modal wizard (your 12.9 question)**: investigate
+  whether the 3-page wizard (capacity → floors → priority) can
+  collapse. Discord modals are limited to 5 fields; phase-aware
+  totals up to 8 fields across DS-both-teams + 3 phases. Two-page
+  layouts are achievable (capacity + priority on page 1, minimums
+  on page 2) and remove one "Next" hop. Flag as a sub-task with
+  the editor polish; not a hard requirement to ship together.
+- **Phase-mode dropdown labels**: drop the redundant "Yes — ":
+  `Flat (no phases)` / `2 Phases` / `3 Phases`.
+- **Code**: `storm_strategy.py` — drop Add Zone class + button,
+  re-render phase-aware editor per Rule L, button-label sweep,
+  mode-toggle copy reword, modal collapse investigation.
 
 ### Section 13 — Member rules (~lines 7195-7983)
-Biggest cluster of Rule A + Rule G work.
-- **L7202-7203**: "CS group exposes four (no `set_member_team` —
-  Canyon Storm doesn't have A/B teams)" — **direct contradiction of
-  Rule A.** CS supports `teams=both/A/B` just like DS, so the CS
-  member_rule group must include `set_member_team`. Update both the
-  doc claim and the actual CS command tree. (Rule A)
-- **L7206-7207**: Command-signature lines show DS with all four
-  subcommands and CS missing `set_member_team` — update CS to
-  include it. (Rule A)
-- **L7575-7587, Screen 13.23**: `set_member_role` slash help shows
-  `role *: Commander or Judicator ▾`. With Rule G the whole
-  `set_member_role` subcommand is dropped (per §2.14a decision —
-  drop `set_member_role` from both variants). DELETE this screen.
-- **L7594-7602, Screen 13.24**: Success ack for `set_member_role
-  role:Judicator` — DELETE this screen. (Rule G)
-- **L7614-7617, Screen 13.25**: Invalid-role validation example —
-  DELETE this screen. (Rule G)
-- **L7685, 7714, 7750, 7870, 7936**: `list` command renders include
-  the `🎖️` special-role icon for per-member role rules. With Rule G
-  there are no more role rules — strip the entire `🎖️` rendering
-  branch from `list` output, and remove the special_roles list
-  category from the docstring. (Rule G)
-- **Rule E (zones)**: The `set_member_zone` subcommand takes a free-
-  text `zone` slash-command parameter — that's fine (slash-commands
-  can have autocomplete callbacks, which is the right path for
-  canonical-zone enforcement; not a modal-vs-view issue). If any
-  member-rule modal captures a zone string, convert to Select.
+Biggest cluster of Rule A + Rule G + Rule E work, plus Rule M
+inline-actions for the list view.
+- **Rule A (CS has teams)**:
+  - **L7202-7207** — "CS group exposes four (no `set_member_team` —
+    Canyon Storm doesn't have A/B teams)" directly contradicts
+    Rule A. CS supports `teams=both/A/B`; the CS member_rule group
+    must include `set_member_team`. Update both the doc claim and
+    the actual CS command tree.
+  - **Screen 13.17** ("set_member_team on CS group is rejected"):
+    guard is rewritten to gate on `cfg.teams` (rejected only when
+    `teams != 'both' and teams != 'A' and teams != 'B'` — i.e. an
+    untouched alliance), or drops entirely. The blanket "CS doesn't
+    have teams" framing goes.
+- **Rule G (drop Judicator)**:
+  - **Screens 13.23, 13.24, 13.25** (`set_member_role` slash help
+    + success + validation): DELETE all three. The whole
+    subcommand goes.
+  - **🎖️ list-rendering branch** (L7670, L7714-7715, L7722, L7750,
+    L7807, L7936): strip every `🎖️ <name> → Judicator/Commander
+    candidate` row from `list` output. The `special_role` rule
+    type goes away.
+  - **`MemberRoleRule` dataclass + storage**: delete from
+    `storm_member_rules.py`. The Sheet column survives for legacy
+    rows but the loader filters them out.
+- **Rule E (dropdown for zones)**:
+  - **Screen 13.3** ("`Power Towr` isn't in the canonical zone
+    list … saved anyway") — unreachable with autocomplete. DELETE.
+  - **Screen 13.5** (blank zone validation) — unreachable. DELETE.
+  - **Screen 13.20** ("`Powr Tower` isn't in the canonical zone
+    list … saved anyway") — unreachable. DELETE.
+  - **Screen 13.21** (blank zone) — unreachable. DELETE.
+  - Implementation: the `zone` slash-command parameter gets an
+    autocomplete callback returning `DS_ZONE_STRUCTURE` or
+    `CS_ZONE_STRUCTURE` per parent. Free-text input still
+    technically possible (Discord autocomplete is suggestions, not
+    enforcement) — keep a soft non-canonical warning as a fallback
+    if a typo somehow lands, or treat the autocomplete as
+    authoritative and reject non-canonical at submit.
+- **Decision #11 / Rule M (inline actions)**:
+  - **Screen 13.27** (empty rules list) + **Screen 13.28**
+    (populated list) — add `[➕ Add rule]` row in addition to the
+    existing `[🗑 Clear N]` buttons. Add-rule opens the same
+    `InlinePowerBandModal` 2.14c will use for power-band rules,
+    or surfaces a follow-up choice (power-band via modal vs. per-
+    member via slash) for the per-member rule types.
 - **Code**: `storm_member_rules.py` — delete `set_member_role`
-  subcommand + `MemberRoleRule` dataclass + `🎖️` list-render branch;
-  add `set_member_team` to the CS group's app-command tree.
+  subcommand + `MemberRoleRule` dataclass + `🎖️` list-render
+  branch + 4 unreachable validation screens; add `set_member_team`
+  to the CS group's app-command tree; add zone-autocomplete
+  callback; add the inline `[➕ Add rule]` button to the list
+  view.
 
 ### Section 14 — Walkthrough tour (~lines 7986-8371)
-- **L8097-8098, Screen 14.6**: legend mentions `🅰️ Team A, 🅱️ Team
-  B` for DS — fine. For the CS variant, today's copy probably
-  collapses to single-team; Rule A says CS legend should also
-  surface both teams when `teams=both`. Confirm the tour function
-  branches on `cfg.teams` not just `event_type`. (Rule A)
-- **L8149-8150, Screen 14.9**: copy describes the old on-behalf
-  vote modal — "type the member's roster name (it must match the
+Decision #12 (tour fires for CS) + Rule N + step content rewrites.
+- **Decision #12 / Rule N (tour for CS)**: today
+  `maybe_offer_storm_signups_tour` is called only from
+  `/desertstorm signups`. Add the same call from
+  `/canyonstorm signups`. Walkthrough key stays
+  `storm_signups_v1` — per-officer dismissal applies across both
+  variants. Step copy branches on the invoking event_type where
+  relevant.
+- **Screen 14.6 (Step 1 / 6)**: legend mentions `🅰️ Team A, 🅱️ Team
+  B`. Confirm the tour function reads `cfg.teams` (and event_type)
+  so a CS-with-teams=both alliance's officer sees the A/B legend,
+  not a Roster legend. (Rule A)
+- **Screen 14.9 (Step 4 / 6)**: copy describes the old on-behalf
+  vote modal — *"type the member's roster name (it must match the
   Sheet exactly — typos are rejected), and pick A / B / Either /
-  Cannot." **OUT OF DATE per Decision #2** — rewrite to describe
-  the new ephemeral view (Member Select + Vote Select + Submit,
-  with paging when roster > 25).
-- **L8163-8167, Screen 14.10**: "click 🅰️ Set up Team A or 🅱️ Set
+  Cannot."* OUT OF DATE per Decision #2. Rewrite to describe the
+  new ephemeral view: Member Select sourced from roster (first 25
+  + paging beyond), Vote Select with Team-A/B/Either/Cannot
+  options, Submit + Cancel. The "typos are rejected" framing goes.
+- **Screen 14.10 (Step 5 / 6)**: *"click 🅰️ Set up Team A or 🅱️ Set
   up Team B (Desert Storm) — or 🏜️ Set up Roster (Canyon Storm;
-  one roster per faction)." Update CS portion: "or 🅰️ / 🅱️ /
-  🏜️ Set up Roster (Canyon Storm — one roster per team you've
-  configured)." (Rule A)
-- **Rule G**: Confirm no Judicator step exists in the tour. (Agent
-  did not find one — likely already absent.)
-- **Code**: `storm_walkthrough.py`.
+  one roster per faction)."* CS portion must branch on `teams`:
+  CS with `teams=both` shows A/B; CS with `teams=A` or `teams=B`
+  shows the matching single button. (Rule A)
+  Also: "eligibility floors enforced" → "eligibility minimums
+  enforced" (Rule B).
+- **Rule G**: Confirm no Judicator step exists in the tour. (Likely
+  already absent.)
+- **Code**: `storm_walkthrough.py` (tour-step content branching),
+  `storm_officer_view.py` (CS cog invokes the same `maybe_offer`
+  helper).
 
 ### Section 15 — History browser (~lines 8375-8867)
-- **Screen 15.18 caption (L8788+ region)**: "Single-roster events
-  (CS doesn't have A/B teams) render the field as 'Roster'" —
-  **contradicts Rule A.** CS with `teams=both` produces two rosters
-  and the history detail view should render them as `── Team A ──`
-  / `── Team B ──` (mirroring DS Screen 15.8). Add a new variant
-  showing CS `teams=both` history rendering. (Rule A)
-- **Screen 15.8 (L8520-8542)**: confirm DS Team A/B rendering still
-  correct; no "floor" stragglers in zone-grouped output.
-- **L8559**: "`Override Below Floor`" appears as a sheet-column
-  name reference (internal). Per Rule B, internal column names can
-  stay — but if this column name surfaces in any user-facing
-  tooltip or error, rename. (Audit pass needed.)
-- **L8541, 8811**: attendance footers — no "floor" present.
+Rule A correction + Decision #6 (drop override marker) + Rule K
+(drop 🔄) + open question on phase-aware history.
+- **Rule A (Screen 15.18 CS parity)**: "Single-roster events (CS
+  doesn't have A/B teams) render the field as 'Roster'" directly
+  contradicts Rule A. CS with `teams=both` should render
+  `── Team A ──` / `── Team B ──` (mirroring DS Screen 15.8). Add a
+  `teams=both` CS variant; the existing single-`Roster` rendering
+  becomes the `teams=A` / `teams=B` variant.
+- **Decision #6 (drop override marker)**: Screen 15.8 L8534
+  example `✅ Erin — 300M ⚠️ override` — drop the `⚠️ override`
+  rendering. The entire `⚠️ override` flag description at L8559
+  goes. (The internal `Override Below Floor` Sheet column survives;
+  history just doesn't surface it.)
+- **Rule K (drop 🔄 Sub activated)**: footer
+  `Attendance: ✅ 4 · ❌ 1 · 🔄 1 (recorded 6 of 7 slots)` →
+  `Attendance: ✅ 4 · ❌ 1 (recorded 5 of 7 slots)`. Same fix on
+  Screens 15.13 and 15.18.
+- **Phase-aware history rendering (open question)**: Section 15
+  doesn't address phase-aware events at all. With Rule L
+  (per-zone-per-phase rendering), history detail of a phase-aware
+  event needs the same shape: each zone header, then per-phase
+  member lines. Today's renderer collapses everything into a flat
+  zone list. Worth a sub-task for the history phase-aware variant
+  spec + implementation.
 - **Rule J**: any builder/render buttons surfaced from history must
   match canonical labels.
-- **Code**: `storm_history.py`.
+- **Code**: `storm_history.py` — Rule A team grouping for CS,
+  override-marker rendering removed, footer 🔄 removed, phase-aware
+  variant added.
 
 ### Cross-section summary
 
 | Rule | Count of locations / scope |
 |---|---|
-| Rule A (CS teams) | §13 L7202-7207 contradiction (must add `set_member_team` to CS group); §14 Screens 14.6 + 14.10 tour copy; §15 Screen 15.18 missing CS-both-teams variant; §10 attendance per-team rendering |
-| Rule B (floor → minimum) | ~20 lines in §8 alone (the heaviest §8-§15 cluster); 1 line in §10 (L5328); §12-§15 already mostly clean |
+| Rule A (CS teams) | §13 L7202-7207 contradiction (add `set_member_team` to CS group); §14 Screens 14.6 + 14.10 tour copy branching on `cfg.teams`; §15 Screen 15.18 missing CS-both-teams variant; §10 attendance per-team rendering |
+| Rule B (floor → minimum) | ~20 lines in §8; rendered in attendance L5328 (but L5328 drops entirely per Decision #6); §12-§15 mostly clean |
 | Rule C (column letter) | §10 attendance power-column read |
 | Rule D (tab auto-create) | §10 attendance-tab wording |
-| Rule E (dropdowns) | §13 zone fields if any modal captures them; §12 preset Add-Zone modal is fine (different use case) |
-| Rule G (drop Judicator) | §9 Screens 9.5–9.10 (266 lines DELETED); §13 Screens 13.23–13.25 DELETED + `🎖️` rendering branch removed + `set_member_role` subcommand dropped |
+| Rule E (dropdowns) | §13 zone fields — autocomplete-or-Select on `set_member_zone` + `set_power_band` zone params; Screens 13.3, 13.5, 13.20, 13.21 DELETED as unreachable |
+| Rule G (drop Judicator) | §9 Screens 9.5–9.10 (266 lines DELETED); §13 Screens 13.23–13.25 DELETED + 🎖️ rendering branch removed + `set_member_role` subcommand dropped + `MemberRoleRule` dataclass deleted |
 | Rule I (CS slash refs) | §9 (5+ locations), §10 (3+ locations), §11 (3 locations including `/ds` shorthand fixes) |
 | Rule J (button-label parity) | §9 public-ack buttons (`📄 Mail preview`, `🖼️ Render PNG`) need canonical labels; §15 history-browser action buttons |
+| Rule K (drop 🔄 Sub activated) | §10 attendance status/footer/picker removal; §15 history footer counts |
+| Rule L (per-zone-per-phase rendering) | §8 auto-fill summary line shape; §12 preset editor phase-aware variants (Screen 12.4); §15 history phase-aware variant (new) |
+| Rule M (inline list actions) | §11 strategy list (Screen 11.5); §13 member_rule list (Screens 13.27 + 13.28) |
+| Rule N (tour for both DS and CS) | §14 — invocation from `/canyonstorm signups` + tour copy branching on event_type + `cfg.teams` |
 | Decision #2 (on-behalf vote view) | §14 Screen 14.9 outdated copy — rewrite |
-| Decision #4 (poll-day model) | No §8-§15 surfaces appear to reference `event_day_of_week` / `signup_lead_days` directly — Rule H is largely confined to §1-§2 |
+| Decision #4 (poll-day model) | No §8-§15 surfaces reference `event_day_of_week` / `signup_lead_days` directly — Rule H is confined to §1-§2 |
+| Decision #5 (attendance UI) | §10 entire attendance view rewrite (Screens 10.8–10.18) |
+| Decision #6 (drop override marker) | §10 attendance per-slot + footnote removal; §15 Screen 15.8 + L8559 |
+| Decision #7 (rules silently no-op) | §8 auto-fill summary conflict shapes |
+| Decision #8 (show all entries) | §8 auto-fill summary truncation removal |
+| Decision #9 (confirm destructive) | §8 Screen 8.8 — auto-fill re-run confirm |
+| Decision #10 (per-zone-per-phase) | See Rule L |
+| Decision #11 (inline list actions) | See Rule M |
+| Decision #12 (CS tour) | See Rule N |
+| Decision #13 (zones game-defined) | §12 Screen 12.15 + `[➕ Add zone]` button DELETED |
+| Decision #14 (auto-pair listing) | §8 auto-pair summary line breaks pairs explicit |
 
 ---
 
@@ -690,29 +915,38 @@ Each cross-cutting rule = one feature branch off `dev`, PR'd back to
 have shipped to `dev` and passed staging, batch into the next
 `release/X.Y.Z` branch and PR to `main`.
 
-**Suggested order** (low-blast-radius first):
+**Suggested order** (low-blast-radius first; schema-touching branches
+stage on dev mandatorily):
 
-| # | Rule | Branch slug | Notes |
+| # | Rule / Scope | Branch slug | Notes |
 |---|---|---|---|
 | 1 | I — Slash-ref correctness | `storm-cs-slash-refs` | Pure copy fixes, no schema. Easy warm-up. |
 | 2 | B — Floor → Minimum sweep | `storm-floor-to-minimum` | Big copy sweep, no schema. Update tests that assert UI strings. |
 | 3 | J — Builder button label parity | `storm-builder-button-parity` | Pure copy + view rewiring. No schema. |
 | 4 | D — Tab auto-create | `storm-tab-autocreate` | New `get_or_create_tab` helper + callsite plumbing. No schema. |
 | 5 | F — Required signup_time | `storm-signup-time-required` | Modal validation, no schema. Coupled to #6 — land first or together. |
-| 6 | H — Poll-day model | `storm-poll-day-model` | Schema migration (drop event_day_of_week + signup_lead_days, add poll_day_of_week). Wizard + scheduler + signup_post + officer_view all touched. Dev-branch staging mandatory. |
-| 7 | C — Power column by letter | `storm-power-column-letter` | Schema rename + data migration + wizard rewrite + reader updates. Dev-branch staging mandatory. |
-| 8 | A — CS has teams | `storm-cs-teams` | Largest sweep — touches signup view, officer view, strategy, attendance, history, walkthrough, help, plus reverts much of #148's single-team gate. Dev-branch staging mandatory. |
-| 9 | G — Drop Judicator | `storm-drop-judicator` | Schema drop + wizard removal + faction-roles view deletion + member_rule subcommand removal + lots of test deletions. Dev-branch staging mandatory. |
-| 10 | E — Modal → view conversions | `storm-modal-to-view` | 2.14c + 6.1 + 7.24 rewrites. Persistent-view changes → dev-branch staging mandatory. Coupled to #1-#7 button label parity. |
+| 6 | H — Poll-day model | `storm-poll-day-model` | Schema migration (drop event_day_of_week + signup_lead_days, add poll_day_of_week). Wizard + scheduler + signup_post + officer_view all touched. Dev-staging mandatory. |
+| 7 | C — Power column by letter | `storm-power-column-letter` | Schema rename + data migration + wizard rewrite + reader updates. Dev-staging mandatory. |
+| 8 | A — CS has teams | `storm-cs-teams` | Largest sweep — touches signup view, officer view, strategy, attendance, history, walkthrough, help, member_rule CS group, plus reverts most of #148's single-team gate. Dev-staging mandatory. |
+| 9 | G — Drop Judicator | `storm-drop-judicator` | Schema drop + wizard removal + faction-roles view deletion + `set_member_role` subcommand removal + 🎖️ list-branch removal + lots of test deletions. Dev-staging mandatory. |
+| 10 | E — Modal → view conversions | `storm-modal-to-view` | 2.14c + 6.1 + 7.24 rewrites + zone-autocomplete on member_rule. Persistent-View changes → dev-staging mandatory. |
+| 11 | M — Inline list actions | `storm-list-inline-actions` | New `_StrategyListView` + `_MemberRuleListView` button rows. Couples loosely to #10 (modal → view). No schema. |
+| 12 | N — Walkthrough tour for DS + CS | `storm-walkthrough-cs-tour` | Wire `/canyonstorm signups` to `maybe_offer_storm_signups_tour` + tour-step content branching on event_type + `cfg.teams` + 14.9 rewrite for ephemeral on-behalf view. No schema. |
+| 13 | Decisions 1, 5, 6, 8, 9, 14 — Auto-fill summary + attendance UI bundle | `storm-attendance-and-auto-fill-ui` | Big UI refactor. Bundles (a) attendance view rewrite with member-select + ✅/❌ buttons + bulk-when-empty + drop 🔄 + drop override marker, (b) auto-fill summary changes — show all gaps/conflicts, list auto-paired subs, confirm before destructive re-run, drop subject-not-on-roster conflict shape. Dev-staging mandatory (persistent-View + bot-state changes). |
+| 14 | L — Per-zone-per-phase rendering | `storm-phase-aware-rendering` | Rewrite phase-aware variant in builder embed (Screen 7.23), preset editor (Screen 12.4), auto-fill summary (Screen 8.6), and history detail (new variant). Test coverage for each surface. Couples with #13's auto-fill summary changes. |
+| 15 | Decision #7 — Per-member rules silently no-op when subject absent | `storm-rule-scope-roster-only` | `_auto_fill_session` + `_apply_rules_to_session` audit; the `per_member subject not on roster` conflict shape goes away. Pure logic + tests. No schema. |
+| 16 | Decisions 10, 13 — Preset editor polish | `storm-preset-editor-polish` | Drop `[➕ Add zone]` button + `_AddZoneModal` (Decision #13). Phase-mode dropdown label cleanup. Mode-toggle copy reword. Button-label sweep (Rename preset / Abandon this preset). 12.9 modal-collapse investigation (sub-task — collapse 3-page wizard to 2-page if field-count permits). No schema. |
+| 17 | Storm zone emoji icons (#158) | `storm-zone-emoji-icons` | Application Emojis pipeline + zone-icon prefix helper + 5-file call-site sweep. Lands LAST per #158 dependency order. No schema. |
 
 **Per-branch test coverage**: existing 851-test baseline does not
 regress. Each branch deletes tests for removed flows and adds tests
 for the new flow.
 
 **Issue strategy**: open one GitHub issue per row in the table
-above. Use the Premium-Storm-UX-Overhaul label (new) to group. Each
-issue lists its dev-branch files of interest and the
-walkthrough-doc sections it satisfies.
+above (Issues #1-#16 below + #158 already filed). Use the
+**Premium-Storm-UX-Overhaul** label (new — create when first issue
+opens) to group. Each issue lists its dev-branch files of interest
+and the walkthrough-doc sections it satisfies.
 
 **CHANGELOG strategy**: bundle into a single major release
 (`1.4.0` or similar) per CLAUDE.md's "one CHANGELOG entry per

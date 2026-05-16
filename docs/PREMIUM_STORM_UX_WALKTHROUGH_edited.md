@@ -29,7 +29,7 @@ labelled `(ephemeral — only the clicker sees it)`. DMs are labelled
 3. `/sync_members` — alliance roster sync
 4. `/desertstorm post_signup` + `/canyonstorm post_signup` — manual sign-up post fire
 5. `/desertstorm signups` + `/canyonstorm signups` — officer view
-6. On-behalf vote modal
+6. On-behalf vote picker
 7. Roster builder
 8. Auto-fill summary
 9. Approve & Post + faction roles
@@ -1193,29 +1193,50 @@ not posted.
 
 ---
 
-### Screen 2.14c — InlinePowerBandModal (opened by 2.14b) EDITED
-NOTE: Make the Zone a dropdown
+### Screen 2.14c — InlinePowerBandView (opened by 2.14b)
+
+#168 / Rule E: replaces the original two-field modal with a Zone
+Select + power-modal handoff so a typo can't slip through the zone
+field. Defined in `storm_member_rules.InlinePowerBandView`.
 
 ```
 ┌──────────────────────────────────────────────────────────────────────┐
-│ Desert Storm Power-Band Rule                                         │
+│ Pick the zone the rule applies to, then click **Set minimum power** │
+│ to enter the threshold.                                              │
+└──────────────────────────────────────────────────────────────────────┘
+[ ▾ Pick a zone…                                                    ]
+[⚙️ Set minimum power (disabled)]  [↩️ Cancel]
+(ephemeral — only Kevin sees it)
+```
+
+The Zone Select is sourced from `DS_ZONE_STRUCTURE` (11 zones — fits
+under Discord's 25-option Select cap) or `CS_ZONE_STRUCTURE` (21 zones
+— also under the cap). Picking a zone enables the **Set minimum
+power** button; until then it stays disabled so Kevin can't blank-
+submit.
+
+**Picking a zone → click Set minimum power:**
+
+The view's selection state is preserved in the dropdown placeholder
+("Picked: Power Tower") and the **Set minimum power** button opens a
+one-field modal:
+
+```
+┌──────────────────────────────────────────────────────────────────────┐
+│ Desert Storm Power-Band Rule — Power Tower                           │
 │                                                                      │
-│ Minimum power                                                        │
+│ Minimum power for Power Tower                                        │
 │ ┌─────────────────────────────────────────────────────────────────┐  │
 │ │ e.g. 250M, 1.2B, 300,000,000                                    │  │
-│ └─────────────────────────────────────────────────────────────────┘  │
-│                                                                      │
-│ Zone the rule applies to                                             │
-│ ┌─────────────────────────────────────────────────────────────────┐  │
-│ │ e.g. Power Tower                                                │  │
 │ └─────────────────────────────────────────────────────────────────┘  │
 │                                                                      │
 │                                                  [Cancel]  [Submit]  │
 └──────────────────────────────────────────────────────────────────────┘
 ```
 
-Modal title: `Desert Storm Power-Band Rule` (or `Canyon Storm
-Power-Band Rule` for CS). Both fields are `required`.
+Modal title: `Desert Storm Power-Band Rule — Power Tower` (or `Canyon
+Storm Power-Band Rule — <zone>` for CS). The single Power field is
+`required`; Submit fires `on_submit` against the captured zone.
 
 **Submit — success (saved):**
 
@@ -1227,7 +1248,7 @@ Power-Band Rule` for CS). Both fields are `required`.
 (ephemeral — only Kevin sees it)
 ```
 
-**Submit — unparseable power value (e.g. typed `dunno`):** - Give users the retry if they input something we can't parse - same as others like this.
+**Submit — unparseable power value (e.g. typed `dunno`):**
 
 ```
 ┌──────────────────────────────────────────────────────────────────────┐
@@ -1238,24 +1259,8 @@ Power-Band Rule` for CS). Both fields are `required`.
 (ephemeral — only Kevin sees it)
 ```
 
-**Submit — non-canonical zone (e.g. typed `Powr Twr`):** REMOVE - NOT NEEDED WITH ZONE DROPDOWN
-
-```
-┌──────────────────────────────────────────────────────────────────────┐
-│ ✅ Saved: ≥ 250M → eligible for **Powr Twr**.                        │
-│ Add more rules later via `/desertstorm member_rule …`.               │
-└──────────────────────────────────────────────────────────────────────┘
-(ephemeral — only Kevin sees it)
-```
-
-**Submit — empty zone:**
-
-```
-┌──────────────────────────────────────────────────────────────────────┐
-│ ⚠️ Zone is required.                                                 │
-└──────────────────────────────────────────────────────────────────────┘
-(ephemeral — only Kevin sees it)
-```
+Non-canonical and empty-zone error variants are unreachable now —
+the Zone Select rejects them at pick time.
 
 **Submit — save failed (Sheet write error):**
 
@@ -1264,6 +1269,14 @@ Power-Band Rule` for CS). Both fields are `required`.
 │ ⚠️ <save_rule's failure message — e.g. "couldn't open Sheet">       │
 └──────────────────────────────────────────────────────────────────────┘
 (ephemeral — only Kevin sees it)
+```
+
+**Cancel:**
+
+```
+┌──────────────────────────────────────────────────────────────────────┐
+│ ↩️ Cancelled — no rule saved.                                        │
+└──────────────────────────────────────────────────────────────────────┘
 ```
 
 ---
@@ -2587,113 +2600,90 @@ Kevin types  /desertstorm signups  [event_date:Saturday, May 18, 2026]
 
 ---
 
-## 6. On-behalf vote modal
+## 6. On-behalf vote picker
 
 Triggered when Kevin clicks `🙋 Record on-behalf vote` on the officer
-view. Defined in `storm_officer_view._OnBehalfModal`. Lets him cast
-a vote for a non-Discord member without requiring that member to ever
-sign into Discord.
+view. Per #168 / Rule E + Decision #2, the pre-existing free-text
+modal (`_OnBehalfModal`) is replaced by an ephemeral view-based
+picker — Member Select sourced from the roster Sheet, Vote Select
+that mirrors the sign-up buttons, Submit + Cancel + paging. Defined
+in `storm_officer_view._OnBehalfVoteView`.
 
-### Screen 6.1 — The modal as Discord renders it EDITED
-NOTE: This should have a list of members that the user can vote on behalf of from the roster, as a select menu so that we don't have issues with mistaken text entries. The Vote should also be a dropdown and show the same exact values that we do on the buttons so we know the Team and Time.
+The clicker hits the button. The bot defers, reads the roster off
+the event loop, and sends the picker as a followup ephemeral.
 
-```
-┌──────────────────────────────────────────────────────────────────────┐
-│ Record vote on behalf                                          [X]   │
-│                                                                      │
-│ Member name (must match your roster Sheet)                           │
-│ ┌────────────────────────────────────────────────────────────────┐   │
-│ │ e.g. Alice                                                     │   │
-│ └────────────────────────────────────────────────────────────────┘   │
-│                                                                      │
-│ Vote: A / B / Either / Cannot                                        │
-│ ┌────────────────────────────────────────────────────────────────┐   │
-│ │ A                                                              │   │
-│ └────────────────────────────────────────────────────────────────┘   │
-│                                                                      │
-│                                          [Cancel]    [Submit]        │
-└──────────────────────────────────────────────────────────────────────┘
-```
-
-- Title: `Record vote on behalf` (set via `Modal.title=...`).
-- Field 1 label: `Member name (must match your roster Sheet)`,
-  placeholder `e.g. Alice`, `max_length=80`, required.
-- Field 2 label: `Vote: A / B / Either / Cannot`, placeholder `A`,
-  `max_length=10`, required.
-
-Modal is only visible to Kevin. Cancel closes without firing
-`on_submit`.
-
-The Vote field accepts (case-insensitive) any of:
-`a`, `team a`, `b`, `team b`, `either`, `either time`, `cannot`,
-`cannot participate`, `no` — `vote_map` in `on_submit` does the
-normalisation.
-
----
-
-### Screen 6.2 — Unparseable inputs
-NOTE: Should not happen when we switch to dropdowns.
-
-Kevin submits with empty name or an unknown vote string (e.g. `yes`):
+### Screen 6.1 — The on-behalf picker
 
 ```
 ┌──────────────────────────────────────────────────────────────────────┐
-│ ⚠️ I couldn't read that. Member name and one of `A`, `B`, `Either`,  │
-│ or `Cannot`. Try again.                                              │
+│ 🙋 Pick a member and a vote, then **Submit**. Only roster members   │
+│ are listed — `/sync_members` refreshes the list.                     │
 └──────────────────────────────────────────────────────────────────────┘
-(ephemeral — only Kevin sees it; the modal closes)
-```
-
-Fired before any roster-Sheet lookup. Kevin has to re-click
-`🙋 Record on-behalf vote` to retry.
-
----
-
-### Screen 6.3 — Numeric-name rejection
-NOTE: Should not happen when we switch to dropdowns.
-
-Kevin types `1234` into the name field (or pastes a Discord ID by
-mistake):
-
-```
-┌──────────────────────────────────────────────────────────────────────┐
-│ ⚠️ On-behalf names can't be purely numeric — they collide with       │
-│ Discord IDs in storage. Use a non-numeric roster name (e.g. add an   │
-│ alliance prefix or member tag).                                      │
-└──────────────────────────────────────────────────────────────────────┘
+[ ▾ Pick a member…                                                  ]
+[ ▾ Pick a vote…                                                    ]
+[✅ Submit (disabled)]  [↩️ Cancel]
 (ephemeral — only Kevin sees it)
 ```
 
-Surfaces *before* the gspread read so the schema collision
-(`storm_signups.target_member_id UNIQUE`) is never even attempted.
+The **Member Select** is sourced from the roster Sheet via
+`_read_roster_rows`, de-duped case-insensitively, sorted, and
+filtered of purely-numeric names (those would collide with Discord
+user IDs in `storm_signups.target_member_id` — the schema-collision
+risk vanishes because the picker can't offer the option).
 
----
+The **Vote Select** is built from `get_storm_slot_labels(event_type,
+guild_id)` so its options match the wording members see on the
+sign-up post. Options branch on `cfg.teams`:
 
-### Screen 6.4 — Member-not-found-in-roster
-NOTE: Should not happen when we switch to dropdowns.
+- `teams=both` → `Team A: 4pm EDT (18:00 server time)`,
+  `Team B: 9pm EDT (23:00 server time)`, `Either time works`,
+  `Cannot participate` (4 options for DS — CS uses its own
+  slot times).
+- `teams=A` → `Team A: …`, `Cannot participate`.
+- `teams=B` → `Team B: …`, `Cannot participate`.
 
-Kevin types `Allice` (typo). The roster Sheet had `Alice` only.
-`_read_roster_rows` returns rows, no case-insensitive match is found:
+**Submit** stays disabled until both selects have a value.
+
+### Screen 6.1a — Paging (roster > 25 members)
+
+When the roster carries more than 25 members, a paging row renders
+below the Vote Select:
+
+```
+[ ▾ Pick a member… (page 1)                                         ]
+[ ▾ Pick a vote…                                                    ]
+[◀ Prev (disabled)]  [Page 1 / 3 (disabled)]  [Next ▶]
+[✅ Submit (disabled)]  [↩️ Cancel]
+```
+
+Prev / Next swap the Member Select's options in place. The Page X/Y
+label-only button is disabled — it's a status indicator, not a
+control.
+
+### Screen 6.2 — Submit success
+
+Kevin picks **Erin** + **Cannot participate**, hits Submit. The bot
+defers, calls `config.record_storm_vote(...)` with `is_on_behalf=True`,
+re-reads buckets, edits the parent officer-view embed in place, then
+fires the success ephemeral:
 
 ```
 ┌──────────────────────────────────────────────────────────────────────┐
-│ ⚠️ I don't see **Allice** in your roster Sheet. Check the spelling   │
-│ (it must match the name column on the roster tab) and try again.    │
+│ ✅ Recorded on-behalf vote for **Erin**.                             │
 └──────────────────────────────────────────────────────────────────────┘
-(ephemeral — only Kevin sees it)
+(ephemeral — only Kevin sees it; the picker disables its buttons)
 ```
 
-If the roster Sheet read fails entirely (no rows returned), the
-permissive fallback fires — the modal accepts whatever name Kevin
-typed and records the vote. The `roster_errors` from the
-`/desertstorm signups` invocation surfaced the read failure already.
+Meanwhile, the parent `/desertstorm signups` embed updates: Erin moves
+from the `❓ Not voted yet` bucket into `❌ Voted Cannot` and the entry
+now reads `Erin ¹ _(on behalf)_` (the `¹` from the not-on-Discord
+flag, the italic `(on behalf)` from `is_on_behalf=True`).
 
----
-
-### Screen 6.5 — Vote-write failure
+### Screen 6.3 — Vote-write failure
 
 `config.record_storm_vote` returned False (e.g. DB locked, unique
-constraint hit on a race):
+constraint hit on a race). The bot logs the underlying SQLite error;
+the officer sees the short message:
 
 ```
 ┌──────────────────────────────────────────────────────────────────────┐
@@ -2702,102 +2692,66 @@ constraint hit on a race):
 (ephemeral — only Kevin sees it)
 ```
 
-Bot logs the underlying SQLite error so the maintainer can diagnose;
-the officer only sees this short message.
-
----
-
-### Screen 6.6 — Success EDITED
-
-Kevin typed `Erin`, vote `Cannot`. The roster Sheet has `Erin` in the
-name column. The bot defers (gspread read might be slow), normalises
-the name to `Erin` (the canonical roster spelling), records the row
-with `is_on_behalf=True`, re-reads buckets, edits the parent message
-in place, then fires the success ephemeral:
+### Screen 6.4 — Cancel
 
 ```
 ┌──────────────────────────────────────────────────────────────────────┐
-│ ✅ Recorded vote on behalf of **Erin**.                              │
+│ ↩️ Cancelled — no vote recorded.                                     │
 └──────────────────────────────────────────────────────────────────────┘
-(ephemeral — only Kevin sees it)
 ```
 
-Meanwhile, the parent `/desertstorm signups` embed updates: Erin moves from
-the `❓ Not voted yet` bucket into `❌ Voted Cannot` and the entry now
-reads `Erin ¹ _(on behalf)_` (the `¹` from the not-on-Discord flag,
-the italic `(on behalf)` from `is_on_behalf=True`).
+### Screen 6.5 — Roster read fails entirely
 
----
-
-### Screen 6.7 — Case-normalisation success EDITED
-
-Kevin types `alice` (lowercase). The roster row is `Alice`. The
-canonical name `Alice` from the Sheet is what gets stored. The success
-ephemeral reflects the canonical form:
+The pre-#168 modal had a permissive fallback that accepted any
+free-text name when the roster Sheet read returned no rows. The new
+view-based picker can't populate the Member Select without a roster
+read, so on read failure it surfaces an actionable error and bails:
 
 ```
 ┌──────────────────────────────────────────────────────────────────────┐
-│ ✅ Recorded vote on behalf of **Alice**.                             │
+│ ⚠️ Couldn't read the roster right now. Try `/sync_members` and       │
+│ reopen this view to retry.                                           │
 └──────────────────────────────────────────────────────────────────────┘
+(ephemeral — only Kevin sees it; no picker renders)
 ```
 
----
-
-### Screen 6.8 — Permissive fallback (roster read failed entirely) EDITED
-
-Roster Sheet open / read raised. `_read_roster_rows` returned
-`(rows=[], errors=["roster-sheet read failed: …"])`. With an empty
-rows list, the modal can't do a match check — it stores the name
-verbatim (`canonical_name = raw_member`):
-
-```
-┌──────────────────────────────────────────────────────────────────────┐
-│ ✅ Recorded vote on behalf of **Erin from Apex**.                    │
-└──────────────────────────────────────────────────────────────────────┘
-(ephemeral — only Kevin sees it)
-```
-
-The roster-error prefix would already be visible on the
-`/desertstorm signups` embed (Screen 5.10) so the officer has context.
-
----
+The roster-error prefix is also visible on the `/desertstorm signups`
+embed (Screen 5.10) so the officer has context.
 
 ### Flow at a glance
 
 ```
 Kevin clicks  🙋 Record on-behalf vote  (from Flow 5.7 embed)
                        │
-                       ▼
-            Screen 6.1 — modal opens
-            ┌──────────────────────────┐
-            │ Member name: __________  │
-            │ Vote:        __________  │
-            └──────────────────────────┘
+                       ▼   (defer + threaded gspread read)
+            ┌────────────────────────┐
+            │ roster_rows empty?     │
+            └──────────┬─────────────┘
                        │
-                       ▼  Kevin submits
-            ┌──────────┴──────────────┬─────────────┐
-            ▼                         ▼             ▼
-    Unparseable / blank        Numeric-only   Defer + gspread
-    Screen 6.2                 Screen 6.3     read roster Sheet
-                                                    │
-                                       ┌────────────┼─────────────┐
-                                       ▼            ▼             ▼
-                                 No roster      Match found    Roster read
-                                 match          (canonical     failed
-                                 Screen 6.4     name picked)   (permissive)
-                                                    │              │
-                                                    ▼              ▼
-                                           record_storm_vote   verbatim name
-                                                    │              │
-                                                    ├──────────────┘
-                                                    ▼
-                                       ┌────────────┴───────────┐
-                                       ▼                        ▼
-                                  Write OK                  Write failed
-                                  refresh buckets,          Screen 6.5
-                                  edit parent embed,
-                                  Screen 6.6 / 6.7 / 6.8
-                                  success ephemeral
+              yes ─────┘─── no
+               │              │
+               ▼              ▼
+        Screen 6.5     Screen 6.1 — picker opens
+        Read failed    ┌───────────────────────────┐
+                       │ Member Select: __________ │
+                       │ Vote   Select: __________ │
+                       │ (paging if > 25)          │
+                       │ [Submit (disabled)]       │
+                       │ [Cancel]                  │
+                       └───────────┬───────────────┘
+                                   │
+                  Kevin picks both ┘
+                                   │
+                              clicks Submit
+                                   │
+                                   ▼  (defer + record_storm_vote)
+                       ┌───────────┴───────────┐
+                       ▼                       ▼
+                   Write OK              Write failed
+                   refresh parent        Screen 6.3
+                   embed,
+                   Screen 6.2 success
+                   ephemeral
 ```
 
 ---
@@ -3066,7 +3020,7 @@ embed redraws after every action:
 │ 🛡️ Roster Builder: Standard DS — Team A                              │
 │                                                                      │
 │ 🗺️ Desert Storm                                                      │
-│ ⚖️ Enforcing **Min A** floors for this team                          │
+│ ⚖️ Enforcing **Min A** minimum for this team                         │
 │                                                                      │
 │ **📋 Zones**                                                         │
 │ 🟡 **Power Tower** (2/4): Alice, Bob                                 │
@@ -3732,7 +3686,7 @@ yet:
 │ 🪑 **Subs**: _(none)_                                                │
 │                                                                      │
 │ 📊 **Filled:** 0 / 36                                                │
-│ 🎯 **Active zone:** **Power Tower** — floor **300M**                 │
+│ 🎯 **Active zone:** **Power Tower** — minimum **300M**               │
 └──────────────────────────────────────────────────────────────────────┘
 [Phase 1 •]  [Phase 2]  [Phase 3]
 [Pick a zone to edit…                                                ▾]
@@ -3769,7 +3723,6 @@ Phase 2 counts as the live readout, and Mercenary/Arsenal now show
 ---
 
 ### Screen 7.24 — Paired-mode variant: builder embed
-NOTE: There are only 10 subs and 20 primaries, not all will have a sub paired with them. We should have this so that we can have a button to pair subs. When the user clicks that, open a modal with all currently assigned Primary. Next to each primary should be a dropdown that lists Subs. Make sure we have a Submit/Save button on the modal with that.
 
 Kevin opened a paired-sub preset (sub_mode="paired"). The embed
 header includes a paired-mode hint and zones render with inline sub
@@ -3780,25 +3733,26 @@ annotations:
 │ 🛡️ Roster Builder: Standard DS Paired — Team A                       │
 │                                                                      │
 │ 🗺️ Desert Storm                                                      │
-│ ⚖️ Enforcing **Min A** floors for this team                          │
+│ ⚖️ Enforcing **Min A** minimum for this team                         │
 │                                                                      │
 │ **📋 Zones** _(paired mode — each primary has a dedicated sub)_      │
 │ 🟡 **Power Tower** (2/4): Alice + sub Bob, Carol ⚠️                  │
 │ ⬜ **Nuclear Silo** (0/4): (empty)                                   │
 │ …                                                                    │
 │                                                                      │
-│ ⚠️ **Unpaired primaries (1)**: Carol — pick a sub for each via the   │
-│ picker.                                                              │
-│ 🪑 **Overflow subs (1)**: Erin — pair via the picker or send as      │
-│ bench.                                                               │
+│ ⚠️ **Unpaired primaries (1)**: Carol — click **🔁 Pair subs** to    │
+│ attach a sub to any of them. Subs may not cover every primary —     │
+│ that's expected.                                                     │
+│ 🪑 **Available subs (1)**: Erin — pair via **🔁 Pair subs** or      │
+│ leave as bench.                                                      │
 │                                                                      │
 │ 📊 **Filled:** 2 / 20                                                │
-│ 🎯 **Active zone:** **Power Tower** — floor **300M**                 │
+│ 🎯 **Active zone:** **Power Tower** — minimum **300M**               │
 └──────────────────────────────────────────────────────────────────────┘
 [Pick a zone to edit…                                                ▾]
 [Pick a member for Power Tower…                                      ▾]
-[👁️ Show below-floor]  [↩️ Unassign current zone]  [🪑 Last to subs]
-[🔁 Pair subs]  [🎯 Auto-fill]
+[👁️ Show members below minimum]  [↩️ Remove current zone assignees]
+[🪑 Add all unassigned to Subs]  [🔁 Pair subs]  [🎯 Auto-fill]
 [✅ Approve & Post]  [📄 Preview mail]  [🖼️ Render image]  [❌ Cancel]
 ```
 
@@ -3808,196 +3762,105 @@ Differences vs pool mode:
 - Primary entries render `Alice + sub Bob` when paired, `Carol ⚠️`
   when unpaired (warning glyph signals the missing sub).
 - The flat `🪑 **Subs**: …` line is replaced with two new lines:
-  - `⚠️ **Unpaired primaries (N)**: …` when any primary is unpaired,
-    else `🪑 **Sub pairings**: complete for every primary.`
-  - `🪑 **Overflow subs (N)**: …` for members in `session.subs` (i.e.
-    not paired with any primary).
-- The action row includes an extra `🔁 Re-pair sub` button.
+  - `⚠️ **Unpaired primaries (N)**: …` — only when any primary is
+    unpaired. Copy nudges officers toward the new `🔁 Pair subs`
+    button and explicitly says "Subs may not cover every primary —
+    that's expected" so the 10-subs-vs-20-primaries case doesn't
+    look broken. (Pre-#168 there was a separate "complete for every
+    primary" success line; that's been dropped — silence means
+    everything's paired.)
+  - `🪑 **Available subs (N)**: …` — every member in
+    `session.subs` who isn't yet paired with a primary.
+- The action row includes an extra `🔁 Pair subs` button (pre-#168
+  this was `🔁 Re-pair sub` and only handled the swap case).
 
-When all primaries are paired and no overflow subs exist:
+#168 / Decision #3 retired the auto-fire-after-each-primary sub
+picker. A primary assignment no longer immediately opens a sub
+prompt — officers pair via `🔁 Pair subs` when they're ready,
+which keeps the workflow under their control and matches the
+ratio reality (more primaries than subs is normal).
 
-```
-🪑 **Sub pairings**: complete for every primary.
-```
+### Screen 7.25 — Pair-subs view (opened by 🔁 Pair subs)
 
----
-
-### Screen 7.25 — Paired sub picker (after primary assignment)
-
-Kevin picks Alice for Power Tower. The bot auto-opens the ephemeral
-paired-sub picker:
-
-```
-┌──────────────────────────────────────────────────────────────────────┐
-│ 🪑 Pick a sub for **Alice** at **Power Tower**, or skip and pair    │
-│ them later.                                                          │
-└──────────────────────────────────────────────────────────────────────┘
-[Pick a paired sub…                                                  ▾]
-[↩️ Skip — pair later]
-(ephemeral — only Kevin sees it)
-```
-
-With a truncation hint when >25 candidates qualify:
-
-```
-🪑 Pick a sub for **Alice** at **Power Tower**, or skip and pair them
-later. *(+4 more eligible — not shown; Discord limits the picker to
-25)*
-```
-
-When there are zero eligible subs:
+Clicking `🔁 Pair subs` opens an ephemeral with the full pairing
+workflow on one surface: running pair list at the top, Primary +
+Sub Selects + Assign / Unpair / Done buttons:
 
 ```
 ┌──────────────────────────────────────────────────────────────────────┐
-│ 🪑 No eligible subs found for **Alice** at **Power Tower**. Skip     │
-│ and pair them later, or toggle the below-floor override on the main │
-│ view to widen the pool.                                              │
-└──────────────────────────────────────────────────────────────────────┘
-[↩️ Skip — pair later]
-```
-
-Picking Bob:
-
-```
-┌──────────────────────────────────────────────────────────────────────┐
-│ ✅ Paired **Bob** with **Alice**.                                    │
-└──────────────────────────────────────────────────────────────────────┘
-(buttons disabled)
-```
-
-Skip:
-
-```
-┌──────────────────────────────────────────────────────────────────────┐
-│ ↩️ Skipped — you can pair this primary later.                        │
-└──────────────────────────────────────────────────────────────────────┘
-```
-
-Picker submit failed to read the sub (shouldn't happen — defensive):
-
-```
-┌──────────────────────────────────────────────────────────────────────┐
-│ ⚠️ Couldn't read the picked sub. Try again.                          │
-└──────────────────────────────────────────────────────────────────────┘
-```
-
-Non-owner clicks:
-
-```
-┌──────────────────────────────────────────────────────────────────────┐
-│ ⛔ Only the builder's owner can pair subs.                           │
-└──────────────────────────────────────────────────────────────────────┘
-```
-```
-┌──────────────────────────────────────────────────────────────────────┐
-│ ⛔ Only the builder's owner can skip.                                │
-└──────────────────────────────────────────────────────────────────────┘
-```
-
-Timeout (5 min): the picker disables silently and the main builder
-view is re-rendered so the unpaired-primary ⚠️ marker is visible
-(no extra ephemeral fires).
-
----
-
-### Screen 7.26 — Re-pair sub flow (paired mode only)
-
-Kevin clicks `🔁 Re-pair sub`. The bot opens a primary picker
-(every primary currently in a zone in the selected phase, capped at
-25):
-
-```
-┌──────────────────────────────────────────────────────────────────────┐
-│ 🔁 Pick a primary to re-pair their sub. The current pairing (if     │
-│ any) is shown next to each name.                                    │
-└──────────────────────────────────────────────────────────────────────┘
-[Pick a primary to re-pair…                                          ▾]
-[↩️ Cancel]
-(ephemeral — only Kevin sees it)
-```
-
-Each option's description is `<zone> · sub: <name>` or `<zone> · no
-sub paired`:
-
-```
-┌──────────────────────────────────────────────────────────────────────┐
-│ Pick a primary to re-pair…                                       ▾   │
+│ 🔁 **Pair subs** — Phase 1                                           │
+│ You have **3 subs** and **20 primaries** — not every primary will   │
+│ get a sub.                                                           │
 │                                                                      │
-│ Alice                            Power Tower · sub: Bob              │
-│ Carol                            Power Tower · no sub paired         │
-│ Dan                              Nuclear Silo · sub: Erin            │
+│ **Current pairings (2):**                                            │
+│ • **Alice** → **Bob**  _(Power Tower)_                              │
+│ • **Dan** → **Erin**  _(Nuclear Silo)_                              │
+│                                                                      │
+│ ⚠️ **Unpaired primaries (18):** Carol, Frank, Greg, …               │
 └──────────────────────────────────────────────────────────────────────┘
-```
-
->25 candidates:
-
-```
-🔁 Pick a primary to re-pair their sub. The current pairing (if any)
-is shown next to each name. *(+3 more primaries — not shown; Discord
-limits the picker to 25)*
-```
-
-Empty (no primaries assigned yet):
-
-```
-┌──────────────────────────────────────────────────────────────────────┐
-│ ⚠️ No primaries assigned yet — assign a primary to a zone before     │
-│ re-pairing a sub.                                                    │
-└──────────────────────────────────────────────────────────────────────┘
+[ ▾ Pick an unpaired primary…                                       ]
+[ ▾ Pick a sub…                                                     ]
+[✅ Assign pair (disabled)]  [🔄 Unpair…]  [✔ Done]
 (ephemeral — only Kevin sees it)
 ```
 
-Picking a primary fires `_open_paired_sub_picker` for that primary
-(Screen 7.25's flow runs again — the new pick replaces the old
-pairing). The original primary-picker message stays visible with
-buttons disabled.
+- **Primary Select**: currently-assigned primaries in the SELECTED
+  phase that aren't yet paired. Hides primaries already paired in
+  that phase. Capped at 25 (Discord limit).
+- **Sub Select**: members in `session.subs` minus already-paired
+  subs. Capped at 25.
+- **Assign pair**: writes
+  `session.paired_subs_for_phase(phase)[primary] = sub`, captures
+  the below-minimum override if the sub falls under the zone's
+  threshold, clears both selects, re-renders both the ephemeral
+  and the main builder view.
+- **🔄 Unpair…**: only enabled when at least one pair exists.
+  Switches the ephemeral into unpair mode (Screen 7.26).
+- **✔ Done**: closes the ephemeral; main view is already in sync
+  because Assign re-renders on each click.
 
-Cancel:
+### Screen 7.26 — Unpair mode
 
-```
-┌──────────────────────────────────────────────────────────────────────┐
-│ ↩️ Re-pair cancelled.                                                │
-└──────────────────────────────────────────────────────────────────────┘
-```
-
-Read failure (defensive):
-
-```
-┌──────────────────────────────────────────────────────────────────────┐
-│ ⚠️ Couldn't read the picked primary. Try again.                      │
-└──────────────────────────────────────────────────────────────────────┘
-```
-
-Non-owner click:
+Inside the same ephemeral, clicking `🔄 Unpair…` swaps the Primary +
+Sub selects for a single pair-picker Select. Picking a pair and
+confirming drops the pairing:
 
 ```
 ┌──────────────────────────────────────────────────────────────────────┐
-│ ⛔ Only the builder's owner can re-pair subs.                        │
+│ (same header + pair list as 7.25)                                   │
 └──────────────────────────────────────────────────────────────────────┘
+[ ▾ Pick a pair to unpair…                                          ]
+[🔄 Confirm unpair (disabled)]  [↩️ Back]
 ```
-```
-┌──────────────────────────────────────────────────────────────────────┐
-│ ⛔ Only the builder's owner can cancel.                              │
-└──────────────────────────────────────────────────────────────────────┘
-```
+
+Each Select option labels as `Primary → Sub`; description shows the
+zone. Confirm clears the pairing, re-renders both the ephemeral and
+the main view; Back returns to the Pair-subs view (Screen 7.25).
+
+### Screen 7.27 — Closing the pair-subs view
+
+`✔ Done` disables the buttons; the ephemeral becomes a static record
+of the pairing state at close time. The main builder embed is
+already up to date — every Assign / Unpair edits both surfaces in
+lockstep.
 
 ---
 
-### Screen 7.27 — Roster-error warnings inline in the embed
+### Screen 7.28 — Roster-error warnings inline in the embed
 
 When `session.roster_errors` is non-empty (from the open-time roster
-read OR from `_apply_rules_to_session`'s unmatched per_member rules
-OR from structured-mode signups that didn't match a roster row), the
-embed surfaces the FIRST error inline above the auto-fill summary:
+read OR from structured-mode signups that didn't match a roster
+row), the embed surfaces the FIRST error inline above the auto-fill
+summary:
 
 ```
 …
-🎯 **Active zone:** **Power Tower** — floor **300M**
+🎯 **Active zone:** **Power Tower** — minimum **300M**
 _Members with no parseable power read as 'power unknown'; toggle the
 override to assign them anyway._
 
-⚠️ per_member rule(s) reference roster names that aren't in the
-current roster — rename or remove them: Alyce, Robb
+⚠️ 3 signed-up member(s) couldn't be matched to a roster row:
+Phantom1, Phantom2, Phantom3
 ```
 
 Common error strings the officer might see in this slot:
@@ -4014,10 +3877,15 @@ Common error strings the officer might see in this slot:
   eligibility gate has something to read.`
 - `stale Discord IDs on roster (member likely left the server):
   Alice (id 1234) (+3 more)`
-- `per_member rule(s) reference roster names that aren't in the
-  current roster — rename or remove them: Alyce, Robb`
 - `3 signed-up member(s) couldn't be matched to a roster row:
   Phantom1, Phantom2, …` (structured-mode only)
+
+Decision #7 / #173 retired the per-member-rule subject-not-on-roster
+warning. A rule whose subject isn't in tonight's roster is a silent
+no-op — nothing to apply, nothing to report. Other rule-application
+conflicts (unknown zone, full when pinning, pinned to multiple
+zones) still surface in the auto-fill summary (Section 8), not in
+this roster_errors block.
 
 Only one error shows in the embed at a time; the full list is
 already logged for debugging.
@@ -4057,13 +3925,15 @@ Entry point B:  /desertstorm strategy apply / /canyonstorm strategy apply
                        │
        ┌───────────────┼──────────────────┬─────────────┬──────────────┐
        ▼               ▼                  ▼             ▼              ▼
-   Zone picker     Member picker     ↩️ Unassign    🪑 Last      🎯 Auto-fill
-   → re-renders    → 7.11 zone-full   current        to subs     → Flow 8
-                   → 7.10 empty pool  zone           → 7.14       summary block
+   Zone picker     Member picker     ↩️ Remove     🪑 Add all   🎯 Auto-fill
+   → re-renders    → 7.11 zone-full   current       unassigned  → Flow 8 +
+                   → 7.10 empty pool  zone          to Subs     8.8 confirm
+                                      assignees    → 7.14       if dirty
                    (paired mode)
                      ↓ after primary
-                     7.25 sub picker
-                     (or 🔁 Re-pair via 7.26)
+                     just refreshes — explicit
+                     🔁 Pair subs (7.25) handles
+                     pairing on demand
                        │
                        ▼
        ┌───────────────┼────────────────────┐
@@ -4101,7 +3971,7 @@ no zones are over-full. Kevin clicked `🎯 Auto-fill`:
 │ 🛡️ Roster Builder: Standard DS — Team A                              │
 │                                                                      │
 │ 🗺️ Desert Storm                                                      │
-│ ⚖️ Enforcing **Min A** floors for this team                          │
+│ ⚖️ Enforcing **Min A** minimum for this team                         │
 │                                                                      │
 │ **📋 Zones**                                                         │
 │ ✅ **Power Tower** (4/4) ←: Alice, Bob, Carol, Dan                   │
@@ -4114,7 +3984,7 @@ no zones are over-full. Kevin clicked `🎯 Auto-fill`:
 │ 🪑 **Subs (3)**: Uma, Vic, Wes                                       │
 │                                                                      │
 │ 📊 **Filled:** 20 / 20                                               │
-│ 🎯 **Active zone:** **Power Tower** — floor **300M**                 │
+│ 🎯 **Active zone:** **Power Tower** — minimum **300M**               │
 │                                                                      │
 │ 🎯 **Auto-fill summary**                                             │
 │ • Per-member rules applied: **0**                                    │
@@ -4128,20 +3998,24 @@ The summary surface lines, in order:
 
 1. `• Per-member rules applied: **N**` — count of per_member rules
    that successfully pinned a member.
-2. `• Members slotted via a band-relaxed floor: **N**` — count of
+2. `• Members slotted via a band-relaxed minimum: **N**` — count of
    greedy-fill assignments where a `power_band` rule lowered the
-   floor enough to admit a member who'd otherwise have been excluded
-   by the preset floor.
+   minimum enough to admit a member who'd otherwise have been
+   excluded by the preset minimum.
 3. `• Auto-filled by power: **N**` — count of greedy-fill
    assignments (the count summed across every phase for phase-aware
    presets).
-4. `• Auto-paired subs: **N**` — paired-mode only; suppressed when
-   the count is 0.
-5. `• Gaps (power unknown, not slotted): **N** — Erin, Frank, …
-   (+M more)` — surfaces members with `power=None` who couldn't be
-   slotted. Suppressed when the list is empty.
-6. `• Conflicts: **N** — <preview>` — surfaces rule-application
-   conflicts; `0` when nothing went wrong.
+4. `• Auto-paired subs (N): Primary ↔ Sub, Primary ↔ Sub, …` —
+   paired-mode only; suppressed when no auto-pairs happened. Per
+   Decision #14 (#171), each pair renders explicitly instead of a
+   bare count — pairing is the highest-edit candidate, so visibility
+   matters.
+5. `• Gaps (power unknown, not slotted): **N** — Erin, Frank, …` —
+   surfaces every member with `power=None` who couldn't be slotted.
+   Per Decision #8 (#171), the full list always renders — no
+   `(+M more)` truncation. Suppressed when the list is empty.
+6. `• Conflicts: **N** — <full list>` — surfaces every rule-
+   application conflict, no truncation. `0` when nothing went wrong.
 
 ---
 
@@ -4153,7 +4027,7 @@ garbage). After auto-fill:
 ```
 │ 🎯 **Auto-fill summary**                                             │
 │ • Per-member rules applied: **0**                                    │
-│ • Members slotted via a band-relaxed floor: **0**                    │
+│ • Members slotted via a band-relaxed minimum: **0**                  │
 │ • Auto-filled by power: **17**                                       │
 │ • Gaps (power unknown, not slotted): **3** — Uma, Vic, Wes           │
 │ • Conflicts: **0**                                                   │
@@ -4162,37 +4036,27 @@ garbage). After auto-fill:
 The 3 power-unknown members aren't auto-added to the sub pool — they
 get listed under Gaps so the officer can decide what to do (set their
 power in the Sheet and re-run, or toggle the override and slot
-manually).
-
-With more than 5 gaps:
-
-```
-│ • Gaps (power unknown, not slotted): **8** — Uma, Vic, Wes, Xena,    │
-│ Yale (+3 more)                                                       │
-```
+manually). Per Decision #8 every gap is listed — even at 12 gaps the
+embed renders all twelve names, not a 5-and-`+7-more` truncation.
 
 ---
 
 ### Screen 8.3 — With conflicts (rule application failures)
 
-A `per_member zone` rule named a roster row that doesn't exist
-anymore, plus another rule named a zone the preset doesn't have, plus
+A `per_member zone` rule named a zone the preset doesn't have, plus
 the rule fired for a member who's already pinned elsewhere:
 
 ```
 │ 🎯 **Auto-fill summary**                                             │
 │ • Per-member rules applied: **1**                                    │
-│ • Members slotted via a band-relaxed floor: **0**                    │
+│ • Members slotted via a band-relaxed minimum: **0**                  │
 │ • Auto-filled by power: **19**                                       │
-│ • Conflicts: **3** — per_member subject not on roster: Alyce;        │
-│ per_member rule names unknown zone: Subway; Alice pinned to multiple │
-│ zones                                                                │
+│ • Conflicts: **2** — per_member rule names unknown zone: Subway;     │
+│ Alice pinned to multiple zones                                       │
 ```
 
-Conflict-string shapes (from `_auto_fill_session`):
+Conflict-string shapes that still surface (from `_auto_fill_session`):
 
-- `per_member subject not on roster: <subject>` — rule references a
-  member name the roster Sheet doesn't carry.
 - `per_member rule names unknown zone: <zone>` — rule points to a
   zone name not in the current preset.
 - `<zone> full when pinning <subject>` — zone reached capacity from
@@ -4200,13 +4064,21 @@ Conflict-string shapes (from `_auto_fill_session`):
 - `<subject> pinned to multiple zones` — same member named by two
   rules; only the first wins, the rest log as conflicts.
 
-The conflict preview shows the first 3 separated by `; `, with
-`(+N more)` past 3:
+Per Decision #7 (#173), the pre-existing
+`per_member subject not on roster: <subject>` shape is **removed**.
+A rule whose subject isn't in tonight's roster is a silent no-op —
+nothing to apply, nothing to report. The other three shapes still
+surface because they're cases where the officer can act on the
+information.
+
+Per Decision #8 the conflict preview shows every conflict, no
+truncation:
 
 ```
-│ • Conflicts: **6** — per_member subject not on roster: Alyce;        │
-│ per_member rule names unknown zone: Subway; Alice pinned to multiple │
-│ zones (+3 more)                                                      │
+│ • Conflicts: **6** — per_member rule names unknown zone: Subway;     │
+│ Alice pinned to multiple zones; Power Tower full when pinning Bob;   │
+│ Power Tower full when pinning Carol; Mercenary full when pinning     │
+│ Dan; Erin pinned to multiple zones                                   │
 ```
 
 ---
@@ -4215,24 +4087,24 @@ The conflict preview shows the first 3 separated by `; `, with
 
 Alliance has a `power_band` rule `≥ 180M → Power Tower` that's lower
 than Power Tower's preset Min A of 300M. Auto-fill admitted 2
-members (190M and 220M) via the relaxed floor:
+members (190M and 220M) via the relaxed minimum:
 
 ```
 │ **📋 Zones**                                                         │
 │ ✅ **Power Tower** (4/4) ←: Alice, Bob, Carol, Xena                  │
 │ …                                                                    │
 │                                                                      │
-│ 🎯 **Active zone:** **Power Tower** — floor **180M** _(preset floor  │
-│ 300M relaxed by power_band rule)_                                    │
+│ 🎯 **Active zone:** **Power Tower** — minimum **180M** _(preset      │
+│ minimum 300M relaxed by power_band rule)_                            │
 │                                                                      │
 │ 🎯 **Auto-fill summary**                                             │
 │ • Per-member rules applied: **0**                                    │
-│ • Members slotted via a band-relaxed floor: **2**                    │
+│ • Members slotted via a band-relaxed minimum: **2**                  │
 │ • Auto-filled by power: **20**                                       │
 │ • Conflicts: **0**                                                   │
 ```
 
-Note the Active zone line ends with `_(preset floor 300M relaxed by
+Note the Active zone line ends with `_(preset minimum 300M relaxed by
 power_band rule)_` — that's the embed's own indicator that a band is
 active for the currently-selected zone, separate from the auto-fill
 counter. Both surfaces live independently.
@@ -4241,27 +4113,31 @@ counter. Both surfaces live independently.
 
 ### Screen 8.5 — Paired mode with auto-paired subs
 
-Paired-mode preset, auto-fill placed 6 primaries and auto-paired 6
-subs:
+Paired-mode preset, auto-fill placed 6 primaries and auto-paired
+each with a sub. Per Decision #14 (#171), the summary lists every
+pair explicitly:
 
 ```
 │ 🎯 **Auto-fill summary**                                             │
 │ • Per-member rules applied: **0**                                    │
-│ • Members slotted via a band-relaxed floor: **0**                    │
+│ • Members slotted via a band-relaxed minimum: **0**                  │
 │ • Auto-filled by power: **6**                                        │
-│ • Auto-paired subs: **6**                                            │
+│ • Auto-paired subs (6): Alice ↔ Uma, Bob ↔ Vic, Carol ↔ Wes,         │
+│ Dan ↔ Xena, Erin ↔ Yale, Frank ↔ Zach                                │
 │ • Conflicts: **0**                                                   │
 ```
 
-The Auto-paired subs line only appears when the count is non-zero.
-In pool mode it's always 0 and is suppressed.
+The Auto-paired subs line only appears when at least one pair was
+made. In pool mode the list is always empty and the line is
+suppressed.
 
 ---
 
 ### Screen 8.6 — Phase-aware preset auto-fill
 
 Phase-aware (`CS Standard`, 3 phases) — auto-fill ran across every
-phase. Counts aggregate across phases:
+phase. The zone-rendering shape per Rule L (#172) breaks each zone
+into a header + one indented row per phase:
 
 ```
 ┌──────────────────────────────────────────────────────────────────────┐
@@ -4271,38 +4147,41 @@ phase. Counts aggregate across phases:
 │ 🔀 Editing **Phase 1** _(use the Phase buttons below to switch)_     │
 │                                                                      │
 │ **📋 Zones**                                                         │
-│ ✅ **Power Tower** (P1: 4/4, P2: 4/4, P3: 4/4) ←: Alice, Bob, Carol, │
-│ Dan                                                                  │
-│ ✅ **Nuclear Silo** (P1: 4/4, P2: 4/4, P3: 4/4): Erin, Frank, Greg,  │
-│ Hank                                                                 │
-│ ✅ **Info Center** (P1: 4/4, P2: 4/4, P3: 4/4): Ivan, Jack, Kim, Liam│
-│ ✅ **Field Hospital** (P1: 4/4, P2: 4/4, P3: 4/4): Mona, Nina, Omar, │
-│ Pete                                                                 │
-│ — **Mercenary** (P1: 0/0, P2: 2/2, P3: 4/4): (empty)                 │
-│ — **Arsenal** (P1: 0/0, P2: 2/2, P3: 4/4): (empty)                   │
+│ ✅ **Power Tower** ←                                                 │
+│    └ Phase 1: 4/4 — Alice, Bob, Carol, Dan                           │
+│    └ Phase 2: 4/4 — Alice, Bob, Carol, Dan                           │
+│    └ Phase 3: 4/4 — Alice, Bob, Carol, Dan                           │
+│ ✅ **Nuclear Silo**                                                  │
+│    └ Phase 1: 4/4 — Erin, Frank, Greg, Hank                          │
+│    └ Phase 2: 4/4 — Erin, Frank, Greg, Hank                          │
+│    └ Phase 3: 4/4 — Erin, Frank, Greg, Hank                          │
+│ …                                                                    │
+│ — **Mercenary**                                                      │
+│    └ Phase 1: 0/0 — (empty)                                          │
+│    └ Phase 2: 2/2 — Mike, Nick                                       │
+│    └ Phase 3: 4/4 — Mike, Nick, Owen, Pete                           │
 │                                                                      │
 │ 🪑 **Subs**: _(none)_                                                │
 │                                                                      │
-│ 📊 **Filled:** 60 / 60                                               │
-│ 🎯 **Active zone:** **Power Tower** — floor **300M**                 │
+│ 📊 **Filled:** P1: 16/16, P2: 20/20, P3: 24/24                       │
+│ 🎯 **Active zone:** **Power Tower** — minimum **300M**               │
 │                                                                      │
 │ 🎯 **Auto-fill summary**                                             │
 │ • Per-member rules applied: **0**                                    │
-│ • Members slotted via a band-relaxed floor: **0**                    │
+│ • Members slotted via a band-relaxed minimum: **0**                  │
 │ • Auto-filled by power: **60**                                       │
 │ • Conflicts: **0**                                                   │
 └──────────────────────────────────────────────────────────────────────┘
 ```
 
-The `60` number reflects greedy-fill placements summed across Phase
-1 (4×4 = 16 outer), Phase 2 (4×4 + 2×2 = 20), Phase 3 (4×4 + 2×4 =
-24). Same member can occupy slots in multiple phases (the migration
-case) — they're counted once per slot.
+The zone-header status glyph (`✅` / `🟡` / `⬜` / `—`) reflects the
+SELECTED phase's fill state; switching phases via the Phase nav
+recolors the headers in place. The per-phase rows always render
+every phase's count + member list — officers see all three at a
+glance without phase-switching just to check P3.
 
-When the officer switches to Phase 2 via `[Phase 2]`, the zone-line
-member list updates to show the Phase 2 primaries (which may overlap
-with the Phase 1 list or be entirely different); the summary
-counters stay the same (they're event-level, not phase-scoped).
+`📊 **Filled:**` breaks out per-phase counts on phase-aware
+sessions; flat presets keep the single `X / Y` total.
 
 ---
 
@@ -4319,7 +4198,7 @@ pre-auto-fill display state for those rows:
 │ 🛡️ Roster Builder: Standard DS — Team A                              │
 │                                                                      │
 │ 🗺️ Desert Storm                                                      │
-│ ⚖️ Enforcing **Min A** floors for this team                          │
+│ ⚖️ Enforcing **Min A** minimum for this team                         │
 │                                                                      │
 │ **📋 Zones**                                                         │
 │ 🟡 **Power Tower** (3/4) ←: Alice, Bob, Carol                        │
@@ -4329,22 +4208,38 @@ pre-auto-fill display state for those rows:
 │ 🪑 **Subs (4)**: Uma, Vic, Wes, Dan                                  │
 │                                                                      │
 │ 📊 **Filled:** 19 / 20                                               │
-│ 🎯 **Active zone:** **Power Tower** — floor **300M**                 │
+│ 🎯 **Active zone:** **Power Tower** — minimum **300M**               │
 └──────────────────────────────────────────────────────────────────────┘
 ```
 
 (The summary block is gone — re-click `🎯 Auto-fill` to redo from
-scratch.)
+scratch. Re-clicking now opens a confirm prompt because the session
+holds data; see 8.8.)
 
 ---
 
-### Screen 8.8 — Re-clicking auto-fill is destructive
+### Screen 8.8 — Destructive auto-fill re-run confirm
 
-Auto-fill `_auto_fill_session` resets every phase's assignments,
-clears subs, clears every pairing map, clears every override flag —
-then re-fills from scratch. Kevin's manual tweaks are discarded.
-There's no confirmation modal — the action is officer-correctable
-post-fill (every assignment can be re-tweaked).
+Per Decision #9 (#171), clicking `🎯 Auto-fill` on a session that
+already holds data (any zone assignment, any sub, any pairing) opens
+a confirm ephemeral first. Fresh sessions (no data) skip the prompt
+and run straight away.
+
+```
+┌──────────────────────────────────────────────────────────────────────┐
+│ ⚠️ **Re-run auto-fill?** This will reset every assignment, sub      │
+│ pairing, and override on this team. Manual edits you've made since  │
+│ the last auto-fill will be lost.                                    │
+└──────────────────────────────────────────────────────────────────────┘
+[🎯 Re-run auto-fill]  [↩️ Cancel]
+(ephemeral — only Kevin sees it)
+```
+
+Re-run runs `_auto_fill_session` on the parent session and refreshes
+both the ephemeral (which becomes "🎯 Auto-fill re-run complete —
+main view refreshed.") and the main builder embed in place. Cancel
+leaves everything untouched and acks "↩️ Auto-fill cancelled — your
+edits are intact."
 
 ---
 
@@ -4356,12 +4251,15 @@ rule set and a sloppy roster Sheet:
 ```
 │ 🎯 **Auto-fill summary**                                             │
 │ • Per-member rules applied: **3**                                    │
-│ • Members slotted via a band-relaxed floor: **2**                    │
+│ • Members slotted via a band-relaxed minimum: **2**                  │
 │ • Auto-filled by power: **15**                                       │
-│ • Auto-paired subs: **15**                                           │
+│ • Auto-paired subs (15): Alice ↔ Uma, Bob ↔ Vic, Carol ↔ Wes,        │
+│ Dan ↔ Xena, Erin ↔ Yale, Frank ↔ Zach, Greg ↔ Adam, Hank ↔ Ben,      │
+│ Ivan ↔ Cory, Jack ↔ Dale, Kim ↔ Earl, Liam ↔ Finn, Mona ↔ Gus,       │
+│ Nina ↔ Herb, Omar ↔ Ira                                              │
 │ • Gaps (power unknown, not slotted): **2** — Uma, Vic                │
-│ • Conflicts: **2** — per_member subject not on roster: Alyce; Power  │
-│ Tower full when pinning Bob                                          │
+│ • Conflicts: **2** — per_member rule names unknown zone: Subway;     │
+│ Power Tower full when pinning Bob                                    │
 ```
 
 Every count is independent — a `band-relaxed` member also counts
@@ -4382,9 +4280,11 @@ Kevin clicks  🎯 Auto-fill  on a structured-mode builder
                        ▼
       ┌────────────────┴────────────────┐
       │  1. per_member zone rules pin   │  → Per-member rules applied: N
-      │     (Phase 1 only; cross-phase  │  → Conflicts: rule subject not
-      │     duplicate check)            │    on roster / unknown zone /
-      │                                 │    full / dup-pinned
+      │     (Phase 1 only; cross-phase  │  → Conflicts: unknown zone /
+      │     duplicate check)            │    full when pinning /
+      │                                 │    dup-pinned. Subject-not-on
+      │                                 │    -roster silently no-ops
+      │                                 │    (Decision #7).
       └────────────────┬────────────────┘
                        │
                        ▼
@@ -4422,31 +4322,26 @@ Kevin clicks  🎯 Auto-fill  on a structured-mode builder
        │               │                │
        └───────────────┴────────────────┘
                        ▼
-       Re-clicking 🎯 Auto-fill nukes manual tweaks  → 8.8
-       and refills from scratch
+       Re-clicking 🎯 Auto-fill with existing data → 8.8 confirm
+       prompt first; confirm to nuke + refill, cancel to keep tweaks
 ```
 
 ---
 
-Wrote out flows 5–8 above. Key source files referenced (all absolute
-paths):
+Source files referenced (current, post-#168/#169/#170/#171/#172/#173/#174/#158):
 
-- `c:\Users\Kevin\Documents\GitHub\lw-alliance-helper\lw-alliance-helper-bot\storm_officer_view.py` — `/desertstorm signups` cog, `OfficerView`, `_OnBehalfModal`, `_PresetPickerView`, `_open_team_setup`, all bucket-rendering helpers
-- `c:\Users\Kevin\Documents\GitHub\lw-alliance-helper\lw-alliance-helper-bot\storm_permissions.py` — premium gate + leadership gate copy
-- `c:\Users\Kevin\Documents\GitHub\lw-alliance-helper\lw-alliance-helper-bot\storm_roster_builder.py` — `RosterBuilderView`, `_OnBehalfModal`-style modals (`_SaveAsPresetModal`), `_PairedSubPickerView`, `_RepairPrimaryPickerView`, `_FactionRolesView`, `open_roster_builder`, `_auto_fill_session`, `_finalize_structured_roster`, `_render_builder_embed`
-- `c:\Users\Kevin\Documents\GitHub\lw-alliance-helper\lw-alliance-helper-bot\storm_walkthrough.py` — first-run tour offer copy
-- `c:\Users\Kevin\Documents\GitHub\lw-alliance-helper\lw-alliance-helper-bot\storm_date_helpers.py` — `format_event_date` "Sunday, May 18, 2026" shape used in titles
-- `c:\Users\Kevin\Documents\GitHub\lw-alliance-helper\lw-alliance-helper-bot\storm.py` — `build_ds_mail` / `build_cs_mail` for the mail-preview body shape
-- `c:\Users\Kevin\Documents\GitHub\lw-alliance-helper\lw-alliance-helper-bot\storm_strategy.py` — `format_power` (e.g. `300M`), `total_capacity`, phase semantics
-- `c:\Users\Kevin\Documents\GitHub\lw-alliance-helper\lw-alliance-helper-bot\docs\PREMIUM_STORM_UX_WALKTHROUGH.md` — the existing Flow 1, used as the format template
-
-Notes on the output:
-
-- All screens use the user-supplied placeholder values consistently (Apex, Kevin, May 18 2026, the six DS zones at user-spec'd caps/floors, Alice/Bob/Carol/Dan/Erin and the natural extension Frank/Greg/…/Wes for filling 20-slot rosters, `#storm-signups`, `Standard DS`, `CS Standard`).
-- The doc covers conditional variants flagged in the brief: DS-A-only / DS-B-only / DS-both for the officer-view buttons; flat vs phase-aware for the builder; pool vs paired sub mode; structured vs free-tier for the action row; CS-only faction-roles offer with every preflight/per-member outcome branch.
-- Every owner-guard ephemeral is enumerated (filter, refresh, on-behalf, setup, paired-sub picker, repair-picker, faction-roles apply, faction-roles dismiss, builder children).
-- Flow at a glance diagrams mirror the Flow-1 style at the bottom of each section.
-- Single existing-file consistency check: the user's date "Saturday, May 18, 2026" in the brief is rendered the way the bot actually renders it via `format_event_date` (`%A, %B %d, %Y` → "Sunday, May 18, 2026" since 2026-05-18 is actually a Sunday). Flow 1 already had this discrepancy in the original doc (used Saturday), so the new flows match Flow 1's wording where the user-provided value is verbatim ("Saturday, May 18, 2026" in the intro examples) but use the bot's actual render for embed titles since that's what an officer would see.
+- `storm_officer_view.py` — `/desertstorm signups` cog, `OfficerView`, `_OnBehalfVoteView` (replaces the pre-#168 `_OnBehalfModal`), `_PresetPickerView`, `_open_team_setup`, all bucket-rendering helpers
+- `storm_permissions.py` — premium gate + leadership gate copy
+- `storm_roster_builder.py` — `RosterBuilderView`, `_SaveAsPresetModal`, `_PairSubsView` (replaces the pre-#168 `_PairedSubPickerView` + `_RepairPrimaryPickerView`), `_AutoFillConfirmView` (#171), `open_roster_builder`, `_auto_fill_session`, `_finalize_structured_roster`, `_render_builder_embed`
+- `storm_walkthrough.py` — first-run tour offer copy, now with event-type + teams branching (#170)
+- `storm_date_helpers.py` — `format_event_date` "Sunday, May 18, 2026" shape used in titles
+- `storm.py` — `build_ds_mail` / `build_cs_mail` for the mail-preview body shape (zone-emoji-prefixed per #158)
+- `storm_strategy.py` — `format_power` (e.g. `300M`), `total_capacity`, phase semantics, `_StrategyListView` (#169), `_PresetPickerView` (#169)
+- `storm_attendance.py` — `_AttendanceView` (member select + ✅/❌ in-place per #171), no longer ships `_StatusPickerView`
+- `storm_history.py` — phase-aware variant per Rule L (#172), drops override marker + 🔄 footer per #171
+- `storm_icons.py` — `zone_emoji_prefix` helper (#158), no-op until the upload script runs
+- `storm_member_rules.py` — `InlinePowerBandView` (replaces `InlinePowerBandModal` per #168), `_AddRuleTypePickerView` (#169)
+- `scripts/upload_storm_emojis.py` — one-shot Discord Application Emojis uploader for #158
 
 ---
 
@@ -5308,12 +5203,11 @@ interact with the controls.
 ┌──────────────────────────────────────────────────────────────────────┐
 │ 📋 Desert Storm Attendance — Saturday, May 18, 2026                 │
 │                                                                      │
-│                                                                      │
 │ **Team A**                                                           │
 │ — Alice (Nuclear Silo)                                               │
 │ — Bob (Nuclear Silo)                                                 │
 │ — Carol (Nuclear Silo)                                               │
-│ — Dan (Nuclear Silo) ⚠️                                              │
+│ — Dan (Nuclear Silo)                                                 │
 │ — Erin (Oil Refinery I)                                              │
 │ — Frank (Oil Refinery I)                                             │
 │ — Ghost (sub) 🪑                                                     │
@@ -5322,35 +5216,40 @@ interact with the controls.
 │ — Helena (Info Center)                                               │
 │ — Ivan (Info Center)                                                 │
 │ — Jana (Field Hospital I)                                            │
-│ — Karl (Field Hospital I) ⚠️                                         │
+│ — Karl (Field Hospital I)                                            │
 │ …                                                                    │
 │                                                                      │
-│ _⚠️ Assigned below the zone floor at build time._                   │
-│                                                                      │
 │ ─────────────────────────────────────────                            │
-│ Footer: ✅ 0  ·  ❌ 0  ·  🔄 0  ·  — 14                              │
+│ Footer: ✅ 0  ·  ❌ 0  ·  — 14                                       │
 └──────────────────────────────────────────────────────────────────────┘
-[ ▾ Pick a slot to record attendance…                              ]
-[✅ Mark unrecorded → Attended]
+[ ▾ Pick a slot to record attendance (or use the bulk-mark buttons   ]
+[ below)…                                                            ]
+[✅ Mark all unrecorded as attended]
+[❌ Mark all unrecorded as did not attend]
+[↩️ Clear selection (disabled)]
 [💾 Save attendance]
 ```
 
-Per-slot line shape: `<status icon> <member name> (<zone or "sub">) <role marker> <override marker>`.
+Per-slot line shape (post-#171):
+`<status icon> <member name> (<zone or "sub">) <role marker>`.
 
-- Status icon: ✅/❌/🔄/— from `_STATUS_LABELS[status]`. New
-  session starts with every slot at `—` unless the alliance has
-  prior recorded attendance for this event (carried forward by
+- Status icon: ✅/❌/— from `_STATUS_LABELS[status]`. New session
+  starts with every slot at `—` unless the alliance has prior
+  recorded attendance for this event (carried forward by
   `load_attendance`).
 - Zone part: `(<zone>)` for primaries; `(sub)` for sub-pool
   members whose `zone` cell is blank.
 - Role marker: ` 🪑` appended when `role == "sub"`.
-- Override marker: ` ⚠️` appended when the slot's
-  `Override Below Floor` cell on the rosters_tab is truthy
-  (`yes`/`y`/`1`/`true`/`t`/`x`). The trailing
-  `_⚠️ Assigned below the zone floor at build time._` line only
-  renders when at least one slot has the marker.
+- **Decision #6 (#171)**: the Override Below Floor ⚠️ glyph and
+  the trailing `_⚠️ Assigned below the zone minimum at build time._`
+  footnote are both gone. The rosters_tab Sheet column survives
+  for post-event audit, but officers recording attendance don't
+  need it surfaced.
 
-Footer counts: `✅ <attended>  ·  ❌ <no-show>  ·  🔄 <sub-act>  ·  — <unrecorded>`. Updates in place on every status change.
+Footer counts (Rule K): `✅ <attended>  ·  ❌ <no-show>  ·  — <unrecorded>`.
+🔄 Sub activated is dropped from the UI entirely; any legacy
+`sub_activated` rows still on the Sheet roll into the `—` bucket
+so the math stays correct.
 
 Color: `discord.Color.gold()` for DS, `discord.Color.orange()`
 for CS.
@@ -5359,31 +5258,41 @@ for CS.
 
 ### Screen 10.9 — Attendance view variant: CS shape
 
-CS rosters store all members under team `""` (CS has one slot per
-faction). The team grouping renders as `**Roster**` (the `team
-or "(no team)"` branch resolves to the latter; the embed code
-substitutes `**Roster**` when team is blank). Color flips to
+CS now respects `cfg.teams` (Rule A / #166). When CS runs both
+teams (`teams=both`) the team grouping renders `**Team A**` /
+`**Team B**` headers just like DS. Single-team CS (`teams=A` or
+`teams=B`) still uses the `**Roster**` header. Color flips to
 orange.
+
+**CS, `teams=both`:**
 
 ```
 ┌──────────────────────────────────────────────────────────────────────┐
 │ 📋 Canyon Storm Attendance — Saturday, May 18, 2026                 │
 │                                                                      │
-│ **Roster**                                                           │
+│ **Team A**                                                           │
 │ — Alice (Power Tower)                                                │
 │ — Bob (Power Tower)                                                  │
 │ — Carol (Data Center 1)                                              │
+│                                                                      │
+│ **Team B**                                                           │
 │ — Dan (Sample Warehouse 1)                                           │
 │ — Erin (Defense System 1)                                            │
 │ — Frank (Virus Lab)                                                  │
 │ — Ghost (sub) 🪑                                                     │
 │                                                                      │
-│ ─────────────────────────────────────────                            │
-│ Footer: ✅ 0  ·  ❌ 0  ·  🔄 0  ·  — 7                                │
+│ Footer: ✅ 0  ·  ❌ 0  ·  — 7                                        │
 └──────────────────────────────────────────────────────────────────────┘
-[ ▾ Pick a slot to record attendance…                              ]
-[✅ Mark unrecorded → Attended]
-[💾 Save attendance]
+(controls identical to 10.8)
+```
+
+**CS, single team:**
+
+```
+│ **Roster**                                                           │
+│ — Alice (Power Tower)                                                │
+│ — Bob (Power Tower)                                                  │
+│ …                                                                    │
 ```
 
 ---
@@ -5400,25 +5309,18 @@ dropdown only — the embed always shows every slot.
 ┌──────────────────────────────────────────────────────────────────────┐
 │ 📋 Desert Storm Attendance — Saturday, May 18, 2026                 │
 │ …(all 30 slots in the embed)…                                       │
-│ Footer: ✅ 0  ·  ❌ 0  ·  🔄 0  ·  — 30                              │
+│ Footer: ✅ 0  ·  ❌ 0  ·  — 30                                       │
 └──────────────────────────────────────────────────────────────────────┘
 [ ▾ Pick a slot to record attendance… (slots 1-25)                 ]
-[✅ Mark unrecorded → Attended]
+[✅ Mark all unrecorded as attended]
+[❌ Mark all unrecorded as did not attend]
+[↩️ Clear selection (disabled)]
 [◀ Prev (disabled)]  [Next ▶]
 [💾 Save attendance]
 ```
 
-After clicking `Next ▶`:
-
-```
-[ ▾ Pick a slot to record attendance… (slots 26-30)                ]
-[✅ Mark unrecorded → Attended]
-[◀ Prev]  [Next ▶ (disabled)]
-[💾 Save attendance]
-```
-
-`Prev` is disabled on page 0; `Next` is disabled on the last
-page. Page count derives from `(len(slots) + per_page - 1) // per_page`.
+Switching pages clears `selected_key` so a stale selection
+doesn't follow Kevin across pages.
 
 ---
 
@@ -5427,25 +5329,22 @@ page. Page count derives from `(len(slots) + per_page - 1) // per_page`.
 `load_rostered_slots` came back with `slots=[]` AND no errors —
 e.g. a Sheet header migration scenario where the date column was
 renamed and no rows match. The view still posts but the embed
-description is the empty-state copy.
+description is the empty-state copy and **the action buttons are
+hidden entirely** (per #171 — there's nothing to mark, so
+surfacing dead buttons would be misleading).
 
 ```
 ┌──────────────────────────────────────────────────────────────────────┐
 │ 📋 Desert Storm Attendance — Saturday, May 18, 2026                 │
 │                                                                      │
-│ _No roster slots found for this event. Run `/desertstorm signups` and     │
-│ build a structured roster first; attendance only applies to         │
+│ _No roster slots found for this event. Run `/desertstorm signups`   │
+│ and build a structured roster first; attendance only applies to     │
 │ structured-flow rosters._                                            │
 │                                                                      │
-│ Footer: ✅ 0  ·  ❌ 0  ·  🔄 0  ·  — 0                                │
+│ Footer: ✅ 0  ·  ❌ 0  ·  — 0                                        │
 └──────────────────────────────────────────────────────────────────────┘
-[✅ Mark unrecorded → Attended]
-[💾 Save attendance]
+(no buttons rendered)
 ```
-
-(No dropdown — the Select is only added when `slots` is
-non-empty. The bulk-mark + save buttons still render but have
-nothing to mark.)
 
 ---
 
@@ -5463,9 +5362,7 @@ still record fresh entries below.
 │ 📋 Desert Storm Attendance — Saturday, May 18, 2026                 │
 │ …(slots embed)…                                                     │
 └──────────────────────────────────────────────────────────────────────┘
-[ ▾ Pick a slot to record attendance…                              ]
-[✅ Mark unrecorded → Attended]
-[💾 Save attendance]
+(controls identical to 10.8)
 ```
 
 (Public message; not ephemeral. Other leadership can see the
@@ -5473,70 +5370,73 @@ warning too.)
 
 ---
 
-### Screen 10.13 — Slot selected → status picker (ephemeral)
+### Screen 10.13 — Picker selection (no ephemeral, just label swap)
 
-Kevin picks Alice from the dropdown. The select callback sends
-an ephemeral `_StatusPickerView` with 4 buttons. The parent view
-is left visible (so room can still see the embed); the picker is
-a side-quest ephemeral.
+#171 / Decision #5 retired the pre-existing
+`_StatusPickerView` ephemeral. Kevin picks Alice from the
+dropdown. The view rebuilds in place with the selection captured:
 
-```
-Record attendance for **Alice** (Nuclear Silo):
-[✅ Attended]  [❌ No-show]  [🔄 Sub activated]  [↩️ Clear]
-(ephemeral — only Kevin sees it; 2-min interaction window)
-```
+- The dropdown placeholder updates to `Picked: Alice`.
+- The two action buttons swap labels:
+  - `✅ Mark all unrecorded as attended` → `✅ Mark as attended`
+  - `❌ Mark all unrecorded as did not attend` → `❌ Mark as did not attend`
+- The `↩️ Clear selection` button enables (it was disabled with
+  no selection).
 
-Button styles: ✅ green / ❌ red / 🔄 grey / ↩️ Clear grey.
-
-For a sub-pool member the prompt reads `Record attendance for
-**Ghost** (sub):`.
-
----
-
-### Screen 10.14 — Status recorded ack (the picker's edit-in-place)
-
-Kevin clicks `✅ Attended`. The picker's status callback writes
-the status onto `session.statuses[key]`, disables all 4 buttons
-on the picker, edits the picker message in place with a confirm
-line, then re-renders the parent attendance view's embed so
-the footer counter ticks up.
+No new ephemeral fires — the buttons act on the selected slot
+directly when clicked.
 
 ```
-✅ Alice → **✅ Attended**
-[✅ Attended (disabled)]  [❌ No-show (disabled)]
-[🔄 Sub activated (disabled)]  [↩️ Clear (disabled)]
-(ephemeral)
+[ ▾ Picked: Alice                                                  ]
+[✅ Mark as attended]
+[❌ Mark as did not attend]
+[↩️ Clear selection]
+[💾 Save attendance]
 ```
 
-The parent attendance view's embed updates simultaneously: Alice's
-line flips from `— Alice (Nuclear Silo)` to `✅ Attended Alice (Nuclear Silo)`,
-and the footer ticks from `✅ 0  ·  ❌ 0  ·  🔄 0  ·  — 14` to
-`✅ 1  ·  ❌ 0  ·  🔄 0  ·  — 13`. The dropdown's per-option
-`description` updates too: Alice's option now reads
-`current: ✅ Attended`.
+### Screen 10.14 — Single-slot mark ack
 
-Variants for the other 3 buttons:
+Kevin clicks `✅ Mark as attended`. The callback writes
+`session.statuses[selected_key] = STATUS_ATTENDED`, clears
+`selected_key` (so the next click defaults back to bulk-mark
+mode), and re-renders. No ephemeral — the embed update *is* the
+ack.
 
-- `❌ No-show` → `✅ Alice → **❌ No-show**`
-- `🔄 Sub activated` → `✅ Alice → **🔄 Sub activated**`
-- `↩️ Clear` → `✅ Alice → **—**` (rolls back to unrecorded;
-  dropdown description reverts to `current: —`)
+Embed change: Alice's row flips from `— Alice (Nuclear Silo)` to
+`✅ Attended Alice (Nuclear Silo)`. Footer ticks from
+`✅ 0 · ❌ 0 · — 14` to `✅ 1 · ❌ 0 · — 13`. The dropdown's
+per-option `current:` description updates too.
 
----
+### Screen 10.15 — Clear selection
 
-### Screen 10.15 — Status picker permission denial
+`↩️ Clear selection` resets the picked slot's status to `—` AND
+drops the selection back to no-selection mode (action buttons
+swap back to bulk-mark labels).
 
-Someone other than Kevin clicks a status button on the picker
-(rare; ephemerals are normally only visible to the recipient).
+### Screen 10.16 — Bulk-mark unrecorded → Attended (no selection mode)
+
+With no slot selected, the action buttons are the bulk variants.
+`✅ Mark all unrecorded as attended` walks every slot whose status
+is `STATUS_UNRECORDED` and flips it to `STATUS_ATTENDED`; already-
+recorded slots (✅/❌) are not touched. `❌ Mark all unrecorded as
+did not attend` mirrors that with `STATUS_NO_SHOW`.
+
+Before:
 
 ```
-┌──────────────────────────────────────────────────────────────────────┐
-│ ⛔ Only the officer can record attendance.                          │
-└──────────────────────────────────────────────────────────────────────┘
-(ephemeral)
+Footer: ✅ 2  ·  ❌ 1  ·  — 27
 ```
 
-Mirrored on the dropdown:
+After clicking `✅ Mark all unrecorded as attended`:
+
+```
+Footer: ✅ 29  ·  ❌ 1  ·  — 0
+```
+
+### Screen 10.17 — Permission denial
+
+The view guards every callback on `session.user_id`. Someone
+other than Kevin clicks any button or the dropdown:
 
 ```
 ┌──────────────────────────────────────────────────────────────────────┐
@@ -5545,34 +5445,7 @@ Mirrored on the dropdown:
 (ephemeral)
 ```
 
-On the pagination buttons:
-
-```
-┌──────────────────────────────────────────────────────────────────────┐
-│ ⛔ Only the officer can paginate.                                   │
-└──────────────────────────────────────────────────────────────────────┘
-(ephemeral)
-```
-
-On bulk-mark + save:
-
-```
-┌──────────────────────────────────────────────────────────────────────┐
-│ ⛔ Only the officer can use this view.                              │
-└──────────────────────────────────────────────────────────────────────┘
-(ephemeral)
-```
-
-```
-┌──────────────────────────────────────────────────────────────────────┐
-│ ⛔ Only the officer can save.                                       │
-└──────────────────────────────────────────────────────────────────────┘
-(ephemeral)
-```
-
----
-
-### Screen 10.16 — Status picker internal-error guard (defensive)
+### Screen 10.18 — Internal-error guard (defensive)
 
 The Select's value is encoded as `team|zone|member` (max 100
 chars). If Discord somehow returns a malformed value with the
@@ -5589,47 +5462,6 @@ wrong number of pipe-separated parts:
 
 ---
 
-### Screen 10.17 — Status picker timeout
-
-The picker has a 120-second timeout. After expiry, all 4 buttons
-disable in place (no message body change). The parent attendance
-view stays fully active — Kevin can re-pick the same slot to
-re-open a fresh picker.
-
-```
-Record attendance for **Alice** (Nuclear Silo):
-[✅ Attended (disabled)]  [❌ No-show (disabled)]
-[🔄 Sub activated (disabled)]  [↩️ Clear (disabled)]
-(ephemeral)
-```
-
----
-
-### Screen 10.18 — Bulk-mark unrecorded → Attended
-
-Kevin clicks `✅ Mark unrecorded → Attended`. The button's
-callback walks every slot in `session.statuses`, flips empty-
-string entries to `STATUS_ATTENDED`, and re-renders the embed +
-view. Already-recorded slots (✅/❌/🔄) are not touched.
-
-Before:
-
-```
-Footer: ✅ 2  ·  ❌ 1  ·  🔄 0  ·  — 27
-```
-
-After:
-
-```
-Footer: ✅ 29  ·  ❌ 1  ·  🔄 0  ·  — 0
-```
-
-The dropdown's per-option `current:` descriptions also tick over
-to `current: ✅ Attended` for everything that flipped. No
-ephemeral ack — the view edits itself in place.
-
----
-
 ### Screen 10.19 — Save attendance (happy path)
 
 Kevin hits `💾 Save attendance`. The button's callback defers
@@ -5639,15 +5471,16 @@ disable every button on the view + stop the view.
 
 ```
 ┌──────────────────────────────────────────────────────────────────────┐
-│ ✅ Saved attendance for **Saturday, May 18, 2026** — 30 slot(s)     │
-│ recorded (✅ 28, ❌ 1, 🔄 1).                                        │
+│ ✅ Saved attendance for **Saturday, May 18, 2026** — 29 slot(s)     │
+│ recorded (✅ 28, ❌ 1).                                              │
 └──────────────────────────────────────────────────────────────────────┘
 (ephemeral — only Kevin sees it)
 ```
 
-`recorded` is the sum of attended + no_show + sub_activated.
-Unrecorded slots aren't counted toward `recorded` and aren't
-written to the Sheet (the save path filters them out).
+`recorded` is the sum of attended + no_show (🔄 sub_activated is
+no longer pickable per Rule K). Unrecorded slots aren't counted
+toward `recorded` and aren't written to the Sheet (the save path
+filters them out).
 
 The public attendance view's buttons all disable; the embed body
 stays visible so anyone in the channel can see the final
@@ -5925,20 +5758,25 @@ CS uses.
   (no parameters)
 ```
 
-**11.5a — No presets saved:**
+Per #169 / Rule M, the list view now ships with inline action
+buttons so officers never hit a dead-end summary. Empty + populated
+states share the same view — Edit and Delete are just disabled when
+no presets exist.
+
+**11.5a — No presets saved (empty state):**
 
 ```
 ┌──────────────────────────────────────────────────────────────────────┐
-│ 📋 No Desert Storm strategy presets saved yet. Use the create       │
-│ command to make one.                                                 │
+│ 📋 Desert Storm — Strategy Presets                                  │
+│                                                                      │
+│ *No Desert Storm strategy presets saved yet.* Click **➕ Create**   │
+│ below to make one.                                                   │
 └──────────────────────────────────────────────────────────────────────┘
-(ephemeral)
+[➕ Create]  [✏️ Edit (disabled)]  [🗑️ Delete (disabled)]
+(public — no ephemeral; leadership can see the embed)
 ```
 
-**11.5b — Presets exist (public embed):**
-
-Posted as a non-ephemeral embed — leadership can browse
-together.
+**11.5b — Presets exist (populated state):**
 
 ```
 ┌──────────────────────────────────────────────────────────────────────┐
@@ -5948,27 +5786,28 @@ together.
 │ • **High Power A**                                                   │
 │ • **Both Teams Balanced**                                            │
 └──────────────────────────────────────────────────────────────────────┘
-(public — no buttons; everyone in the channel sees it)
+[➕ Create]  [✏️ Edit]  [🗑️ Delete]
 ```
 
-Color: `discord.Color.blurple()`. The order matches Sheet row
-order; `list_presets` walks the strategies tab top-to-bottom and
-dedupes by name.
+Color: `discord.Color.blurple()`. Action buttons:
+
+- `➕ Create` opens `_CreatePresetNameModal` — a single-field modal
+  for the new preset's name. On submit, validates uniqueness
+  against `list_presets` then opens the editor (Section 12).
+- `✏️ Edit` opens an ephemeral `_PresetPickerView` with a Select
+  listing every preset (sorted case-insensitively, capped at 25
+  for the Discord cap). On pick, loads the preset and opens the
+  editor as a followup.
+- `🗑️ Delete` opens the same picker shape, then routes through the
+  `_ConfirmDeleteView` confirm + delete flow.
 
 ---
 
 ### Screen 11.6 — `/canyonstorm strategy list` slash command
 
-Same shape as 11.5; title renames to `Canyon Storm — Strategy
-Presets`. Empty case:
-
-```
-┌──────────────────────────────────────────────────────────────────────┐
-│ 📋 No Canyon Storm strategy presets saved yet. Use the create       │
-│ command to make one.                                                 │
-└──────────────────────────────────────────────────────────────────────┘
-(ephemeral)
-```
+Identical shape to 11.5; title renames to `Canyon Storm — Strategy
+Presets` and `➕ Create` opens the CS-flavored preset editor on
+submit. Same inline action row.
 
 ---
 
@@ -6262,11 +6101,11 @@ builds a buffer with the 11 canonical DS zones, every zone at
 │ • Mercenary Factory   (Max: 0)  Min A: 0 · Min B: 0                  │
 │                                                                      │
 │ 📊 Capacity: **0** (team size 30; flex room is fine) ⚠️              │
-│ ⚠️ *Unsaved changes — hit Save Preset to commit.*                    │
+│ ⚠️ *Unsaved changes — Save preset to save your changes.*                    │
 └──────────────────────────────────────────────────────────────────────┘
 [ ▾ Edit a zone…                                                  ]
 [ ▾ 🔀 Phase mode: Flat (no phases) (default-selected)             ]
-[➕ Add zone]  [✏️ Rename]  [💾 Save preset]  [🔙 Abandon]
+[✏️ Rename preset]  [💾 Save preset]  [🔙 Abandon this preset]
 ```
 
 Capacity gauge glyph rules:
@@ -6307,7 +6146,7 @@ and the per-zone lines only show `Min A`:
 └──────────────────────────────────────────────────────────────────────┘
 [ ▾ Edit a zone…                                                  ]
 [ ▾ 🔀 Phase mode: Flat (no phases)                                ]
-[➕ Add zone]  [✏️ Rename]  [💾 Save preset (disabled)]  [🔙 Abandon]
+[✏️ Rename preset]  [💾 Save preset (disabled)]  [🔙 Abandon this preset]
 ```
 
 Mirror for `teams=B`: `**Team B only**` and `Min: <Min B value>`.
@@ -6351,11 +6190,11 @@ Team A/B distinction.
 │ • Serum Factory 2     (Max: 0)  Min: 0                               │
 │                                                                      │
 │ 📊 Capacity: **0** (team size 30; flex room is fine) ⚠️              │
-│ ⚠️ *Unsaved changes — hit Save Preset to commit.*                    │
+│ ⚠️ *Unsaved changes — Save preset to save your changes.*                    │
 └──────────────────────────────────────────────────────────────────────┘
 [ ▾ Edit a zone… (truncated to first 25 — Discord cap)            ]
 [ ▾ 🔀 Phase mode: Flat (no phases)                                ]
-[➕ Add zone]  [✏️ Rename]  [💾 Save preset]  [🔙 Abandon]
+[✏️ Rename preset]  [💾 Save preset]  [🔙 Abandon this preset]
 ```
 
 Note: CS has 21 canonical zones — under the 25-option Discord
@@ -6367,8 +6206,8 @@ at 25.)
 
 ### Screen 12.4 — Editor embed variant: 3-phase CS
 
-`buf.phase_count = 3`. Mode line flips and each zone's render
-breaks down per phase.
+`buf.phase_count = 3`. Mode line flips and each zone breaks into a
+header row plus one indented row per phase (per Rule L / #172).
 
 ```
 ┌──────────────────────────────────────────────────────────────────────┐
@@ -6379,33 +6218,29 @@ breaks down per phase.
 │ 🔀 Mode: **3 Phases (P1 + P2 + P3)**                                │
 │                                                                      │
 │ 📋 **Zones:**                                                        │
-│ • Power Tower         (P1: 4, P2: 4, P3: 4)  Min: 300M               │
-│ • Data Center 1       (P1: 4, P2: 0, P3: 4)  Min: 250M               │
-│ • Data Center 2       (P1: 4, P2: 0, P3: 4)  Min: 250M               │
-│ • Sample Warehouse 1  (P1: 4, P2: 0, P3: 0)  Min: 200M [P1: 1]       │
-│ • Sample Warehouse 2  (P1: 4, P2: 0, P3: 0)  Min: 200M [P1: 1]       │
-│ • Sample Warehouse 3  (P1: 4, P2: 0, P3: 0)  Min: 200M               │
-│ • Sample Warehouse 4  (P1: 4, P2: 0, P3: 0)  Min: 200M               │
-│ • Floaters            (P1: 0, P2: 0, P3: 0)  Min: 0                  │
-│ • Defense System 1    (P1: 0, P2: 4, P3: 4)  Min: 250M               │
-│ • Defense System 2    (P1: 0, P2: 4, P3: 4)  Min: 250M               │
-│ • Serum Factory 1     (P1: 0, P2: 2, P3: 2)  Min: 200M               │
-│ • Serum Factory 2     (P1: 0, P2: 2, P3: 2)  Min: 200M               │
-│ • Floaters            (P1: 0, P2: 0, P3: 0)  Min: 0                  │
-│ • Virus Lab           (P1: 0, P2: 0, P3: 4)  Min: 350M [P3: 1]       │
-│ • Power Tower         (P1: 0, P2: 0, P3: 4)  Min: 300M               │
-│ • Data Center 1       (P1: 0, P2: 0, P3: 4)  Min: 250M               │
-│ • Data Center 2       (P1: 0, P2: 0, P3: 4)  Min: 250M               │
-│ • Defense System 1    (P1: 0, P2: 0, P3: 4)  Min: 250M               │
-│ • Defense System 2    (P1: 0, P2: 0, P3: 4)  Min: 250M               │
-│ • Serum Factory 1     (P1: 0, P2: 0, P3: 2)  Min: 200M               │
-│ • Serum Factory 2     (P1: 0, P2: 0, P3: 2)  Min: 200M               │
+│ • **Power Tower** — Min: 300M                                        │
+│    └ Phase 1: cap 4                                                  │
+│    └ Phase 2: cap 4                                                  │
+│    └ Phase 3: cap 4                                                  │
+│ • **Data Center 1** — Min: 250M                                      │
+│    └ Phase 1: cap 4                                                  │
+│    └ Phase 2: cap 0                                                  │
+│    └ Phase 3: cap 4                                                  │
+│ • **Sample Warehouse 1** — Min: 200M                                 │
+│    └ Phase 1: cap 4 (priority 1)                                     │
+│    └ Phase 2: cap 0                                                  │
+│    └ Phase 3: cap 0                                                  │
+│ …                                                                    │
+│ • **Virus Lab** — Min: 350M                                          │
+│    └ Phase 1: cap 0                                                  │
+│    └ Phase 2: cap 0                                                  │
+│    └ Phase 3: cap 4 (priority 1)                                     │
 │                                                                      │
 │ 📊 Capacity: **86** (team size 30; flex room is fine) ℹ️             │
 └──────────────────────────────────────────────────────────────────────┘
 [ ▾ Edit a zone…                                                  ]
-[ ▾ 🔀 Phase mode: Yes — 3 Phases (default-selected)               ]
-[➕ Add zone]  [✏️ Rename]  [💾 Save preset (disabled)]  [🔙 Abandon]
+[ ▾ 🔀 Phase mode: 3 Phases (default-selected)                     ]
+[✏️ Rename preset]  [💾 Save preset (disabled)]  [🔙 Abandon this preset]
 ```
 
 Capacity sums every phase's max for every zone, so a preset that
@@ -6423,22 +6258,22 @@ Kevin opens the Phase mode dropdown:
 ```
 [ ▾ 🔀 Phase mode                                                  ]
   ○ Flat (no phases)               Single per-zone slot — Max Players only.
-  ○ Yes — 2 Phases                 DS-style migration: Phase 1 → Phase 2.
-  ○ Yes — 3 Phases                 CS-style stages: Phase 1 → 2 → 3.
+  ○ 2 Phases                       DS-style migration: Phase 1 → Phase 2.
+  ○ 3 Phases                       CS-style stages: Phase 1 → 2 → 3.
 ```
 
 Default-selected reflects the current `buf.phase_count`. Kevin
-clicks `Yes — 2 Phases`. The callback seeds capacities/priorities
+clicks `2 Phases`. The callback seeds capacities/priorities
 (every zone's `max_phase1 ← max_players`, `max_phase2 ←
 max_phase1`, priorities follow similarly), flips
 `buf.phase_count = 2`, marks dirty, and re-renders the embed
 with a content line.
 
 ```
-🔀 Switched to **2-phase** mode. Stored capacities + assignments
-are kept — flip back any time without data loss. Seeded 22 per-zone
-capacity/priority value(s) from prior values; edit any zone to
-override.
+🔀 Switched to **2-phase** mode. Capacities + assignments are
+kept. Re-select **Flat** mode to restore without data loss. Seeded
+22 per-zone capacity/priority value(s) from prior values; edit any
+zone to override.
 ┌──────────────────────────────────────────────────────────────────────┐
 │ 🛡️ Editing Preset: CS Standard                                       │
 │                                                                      │
@@ -6447,24 +6282,28 @@ override.
 │ 🔀 Mode: **2 Phases (P1 + P2)**                                     │
 │                                                                      │
 │ 📋 **Zones:**                                                        │
-│ • Power Tower         (P1: 4, P2: 4)  Min: 300M                      │
-│ • Data Center 1       (P1: 4, P2: 4)  Min: 250M                      │
+│ • **Power Tower** — Min: 300M                                        │
+│    └ Phase 1: cap 4                                                  │
+│    └ Phase 2: cap 4                                                  │
+│ • **Data Center 1** — Min: 250M                                      │
+│    └ Phase 1: cap 4                                                  │
+│    └ Phase 2: cap 4                                                  │
 │ …                                                                    │
 │                                                                      │
 │ 📊 Capacity: **56** (team size 30; flex room is fine) ℹ️             │
-│ ⚠️ *Unsaved changes — hit Save Preset to commit.*                    │
+│ ⚠️ *Unsaved changes — Save preset to save your changes.*                    │
 └──────────────────────────────────────────────────────────────────────┘
 [ ▾ Edit a zone…                                                  ]
-[ ▾ 🔀 Phase mode: Yes — 2 Phases                                  ]
-[➕ Add zone]  [✏️ Rename]  [💾 Save preset]  [🔙 Abandon]
+[ ▾ 🔀 Phase mode: 2 Phases                                        ]
+[✏️ Rename preset]  [💾 Save preset]  [🔙 Abandon this preset]
 ```
 
 If no values were auto-seeded (every zone already had non-zero
 phase fields), the seeded note is omitted:
 
 ```
-🔀 Switched to **2-phase** mode. Stored capacities + assignments
-are kept — flip back any time without data loss.
+🔀 Switched to **2-phase** mode. Capacities + assignments are
+kept. Re-select **Flat** mode to restore without data loss.
 ```
 
 When re-picking the same mode (no-op), the dropdown silently
@@ -6478,8 +6317,8 @@ Kevin clicks `Flat (no phases)`. `phase_count` flips back to 0;
 no auto-clear of phase data (re-toggling restores it).
 
 ```
-🔀 Switched to **Flat** mode. Stored capacities + assignments
-are kept — flip back any time without data loss.
+🔀 Switched to **Flat** mode. Capacities + assignments are
+kept. Re-select **2-phase** mode to restore without data loss.
 ```
 
 The mode-line now reads `🔀 Mode: **Flat**` and zone lines
@@ -6818,9 +6657,9 @@ preset (e.g. `Sample Warehouse 1` has siblings `Sample Warehouse
 
 ```
 💡 **Sample Warehouse 1** has similar zones in this preset:
-Sample Warehouse 2, Sample Warehouse 3, Sample Warehouse 4.
-Pick any to copy these same settings to, or skip.
-[ ▾ Choose siblings to apply to…                                  ]
+Sample Warehouse 2, Sample Warehouse 3, Sample Warehouse 4. Would
+you like to apply the same settings to these as well?
+[ ▾ Select zones                                                   ]
 [Apply to selected]  [Skip]
 (ephemeral — only Kevin sees it; 5-min timeout)
 ```
@@ -6846,7 +6685,7 @@ view edits to:
 ```
 ✅ Copied **Sample Warehouse 1** settings to 3 sibling(s): Sample
 Warehouse 2, Sample Warehouse 3, Sample Warehouse 4.
-[ ▾ Choose siblings to apply to… (disabled)                       ]
+[ ▾ Select zones (disabled)                                       ]
 [Apply to selected (disabled)]  [Skip (disabled)]
 (ephemeral)
 ```
@@ -6858,7 +6697,7 @@ values.
 
 ```
 OK — only the edited zone was changed.
-[ ▾ Choose siblings to apply to… (disabled)                       ]
+[ ▾ Select zones (disabled)                                       ]
 [Apply to selected (disabled)]  [Skip (disabled)]
 (ephemeral)
 ```
@@ -6900,56 +6739,21 @@ the editor refresh.
 
 ---
 
-### Screen 12.15 — Add Zone modal
+### Screen 12.15 — _(removed — Decision #13 / #174)_
 
-Kevin clicks `➕ Add zone`. `_AddZoneModal` opens.
-
-```
-┌──────────────────────────────────────────────────────────────────────┐
-│ Add Zone to Preset                                                   │
-│ ──────────────────────────────────────────                           │
-│ Zone name                                                            │
-│ ┌────────────────────────────────────────────────────────────────┐   │
-│ │                                                                │   │
-│ └────────────────────────────────────────────────────────────────┘   │
-│   placeholder: e.g. Power Tower                                      │
-└──────────────────────────────────────────────────────────────────────┘
-[Submit]  [Cancel]
-(Discord modal — opens overlay)
-```
-
-**12.15a — Empty name:**
-
-```
-┌──────────────────────────────────────────────────────────────────────┐
-│ ⚠️ Zone name is required.                                            │
-└──────────────────────────────────────────────────────────────────────┘
-(ephemeral)
-```
-
-**12.15b — Duplicate name (case-insensitive):**
-
-```
-┌──────────────────────────────────────────────────────────────────────┐
-│ ⚠️ Zone **Power Tower** is already in this preset.                  │
-└──────────────────────────────────────────────────────────────────────┘
-(ephemeral)
-```
-
-**12.15c — Submit success:**
-
-New zone appended with `max_players=0`; editor refreshes with:
-
-```
-➕ Added **Custom Bunker**.
-```
+The pre-#174 `➕ Add zone` button + `_AddZoneModal` are gone. Zones
+come exclusively from `DS_ZONE_STRUCTURE` / `CS_ZONE_STRUCTURE`
+(the canonical game-defined lists); alliances configure max-players,
+minimum power, and priority for those canonical zones but can't add
+new ones. The button is removed from every editor variant (12.1,
+12.2, 12.3, 12.4) and the modal class is deleted.
 
 ---
 
 ### Screen 12.16 — Rename Preset modal
 
-Kevin clicks `✏️ Rename`. `_RenameModal` opens with the current
-name pre-filled.
+Kevin clicks `✏️ Rename preset`. `_RenameModal` opens with the
+current name pre-filled.
 
 ```
 ┌──────────────────────────────────────────────────────────────────────┐
@@ -7025,8 +6829,8 @@ Editor in-place edit:
 └──────────────────────────────────────────────────────────────────────┘
 [ ▾ Edit a zone… (disabled)                                       ]
 [ ▾ 🔀 Phase mode: Flat (no phases) (disabled)                     ]
-[➕ Add zone (disabled)]  [✏️ Rename (disabled)]
-[💾 Save preset (disabled)]  [🔙 Abandon (disabled)]
+[✏️ Rename preset (disabled)]
+[💾 Save preset (disabled)]  [🔙 Abandon this preset (disabled)]
 ```
 
 ---
@@ -7063,12 +6867,12 @@ view.
 ┌──────────────────────────────────────────────────────────────────────┐
 │ 🛡️ Editing Preset: Standard DS                                       │
 │ …(embed body unchanged — shows the in-progress state for reference)│
-│ ⚠️ *Unsaved changes — hit Save Preset to commit.*                    │
+│ ⚠️ *Unsaved changes — Save preset to save your changes.*                    │
 └──────────────────────────────────────────────────────────────────────┘
 [ ▾ Edit a zone… (disabled)                                       ]
 [ ▾ 🔀 Phase mode (disabled)                                       ]
-[➕ Add zone (disabled)]  [✏️ Rename (disabled)]
-[💾 Save preset (disabled)]  [🔙 Abandon (disabled)]
+[✏️ Rename preset (disabled)]
+[💾 Save preset (disabled)]  [🔙 Abandon this preset (disabled)]
 ```
 
 Nothing written to the Sheet.
@@ -7124,8 +6928,8 @@ the embed.
 name:"Standard DS"`.
 [ ▾ (disabled)                                                    ]
 [ ▾ (disabled)                                                    ]
-[➕ Add zone (disabled)]  [✏️ Rename (disabled)]
-[💾 Save preset (disabled)]  [🔙 Abandon (disabled)]
+[✏️ Rename preset (disabled)]
+[💾 Save preset (disabled)]  [🔙 Abandon this preset (disabled)]
 ```
 
 (Exact stale-notice copy is owned by `expire_view_message`;
@@ -7572,52 +7376,14 @@ errors are identical to Screens 13.13 / 13.14 / 13.15 / 13.6 / 13.8 /
 
 ---
 
-### Screen 13.23 — `/desertstorm member_rule set_member_role` — slash help
+### Screens 13.23 / 13.24 / 13.25 — _(removed — Rule G / #167)_
 
-```
-┌──────────────────────────────────────────────────────────────────────┐
-│ /desertstorm member_rule set_member_role                                      │
-│ Tag a member as a Commander or Judicator candidate                   │
-│                                                                      │
-│   role *        Commander or Judicator   ▾                           │
-│                 (Choice: Commander / Judicator)                      │
-│   member_user   Pick from the server (preferred)                     │
-│   member_name   OR a roster name if the member isn't on Discord      │
-│   notes         Optional free-text notes                             │
-└──────────────────────────────────────────────────────────────────────┘
-```
-
----
-
-### Screen 13.24 — `set_member_role` success
-
-Kevin runs `/desertstorm member_rule set_member_role role:Judicator member_user:@Carol notes:Backup tank slot`.
-
-The `role.value` is lower-cased before storage (`judicator`); the
-ack uses `role_clean.title()` so the rendered name is `Judicator`:
-
-```
-┌──────────────────────────────────────────────────────────────────────┐
-│ ✅ Saved: Carol → Judicator candidate.                               │
-└──────────────────────────────────────────────────────────────────────┘
-```
-
----
-
-### Screen 13.25 — `set_member_role` validation: invalid role
-
-Like `team`, role is a `Choice` so this is unreachable through the
-slash UI. Raw-text fallback:
-
-```
-┌──────────────────────────────────────────────────────────────────────┐
-│ ⚠️ Role must be `commander` or `judicator`. Got `sniper`.            │
-└──────────────────────────────────────────────────────────────────────┘
-(ephemeral)
-```
-
-The subject-validation errors (Screens 13.13–13.15) and storage
-errors (13.6 / 13.7 / 13.8) all apply identically.
+The pre-#167 `set_member_role` subcommand + the `special_role`
+rule type are both gone. The Judicator / Commander tagging
+mechanism was retired across the schema, the cog, the member-rule
+list rendering (no more `🎖️` row), and the post-Approve faction-
+roles offer (Section 9). Per-member rules are now `team` and
+`zone` only.
 
 ---
 
@@ -7642,19 +7408,53 @@ Kevin runs `/desertstorm member_rule list` on a fresh alliance:
 ┌──────────────────────────────────────────────────────────────────────┐
 │ 📋 Desert Storm — Member Rules                                       │
 │                                                                      │
-│ No member rules saved yet.                                           │
+│ *No member rules saved yet.*                                         │
 └──────────────────────────────────────────────────────────────────────┘
+[➕ Add rule]
 ```
 
-No Clear buttons (no rules to clear). No pagination footer (only one
-page).
+Per #169 / Rule M, the empty state still ships the `[➕ Add rule]`
+button so officers can bootstrap their first rule from the list view
+without remembering the slash-subcommand names. Clicking it opens
+the rule-type picker (Screen 13.27a). No Clear buttons (no rules to
+clear). No pagination footer (only one page).
+
+### Screen 13.27a — Add rule type picker
+
+Click on `[➕ Add rule]` opens an ephemeral with two choices:
+
+```
+┌──────────────────────────────────────────────────────────────────────┐
+│ ➕ Pick the rule type to add.                                        │
+└──────────────────────────────────────────────────────────────────────┘
+[⚡ Add a power-band rule]  [👤 Add a per-member rule]  [↩️ Cancel]
+(ephemeral)
+```
+
+- `⚡ Add a power-band rule` → opens the same `InlinePowerBandView`
+  the setup wizard uses (Screen 2.14c) — zone Select gates a
+  one-field power modal.
+- `👤 Add a per-member rule` → ephemeral pointer at the slash
+  commands, since per-member rules need a `discord.Member` picker
+  that Discord modals can't host:
+
+```
+┌──────────────────────────────────────────────────────────────────────┐
+│ 👤 Per-member rules need a server-member picker, which Discord      │
+│ doesn't expose inside a modal. Run one of:                          │
+│ • `/desertstorm member_rule set_member_zone` — pin a member to a    │
+│ specific zone.                                                       │
+│ • `/desertstorm member_rule set_member_team` — pin a member to      │
+│ Team A or Team B.                                                    │
+└──────────────────────────────────────────────────────────────────────┘
+```
 
 ---
 
 ### Screen 13.28 — `list` with a mix of rules
 
-After Kevin has saved the four example rules in this section, plus
-a couple legacy rules, `/desertstorm member_rule list` renders:
+After Kevin has saved the example rules in this section,
+`/desertstorm member_rule list` renders:
 
 ```
 ┌──────────────────────────────────────────────────────────────────────┐
@@ -7667,13 +7467,11 @@ a couple legacy rules, `/desertstorm member_rule list` renders:
 │ ` 3` · 👤  Charlie #42 → plays Team A                                │
 │ ` 4` · 👤  Alice → always at Power Tower                             │
 │      ↳ Tank role                                                     │
-│ ` 5` · 🎖️  Carol → Judicator candidate                               │
-│      ↳ Backup tank slot                                              │
-│ ` 6` · ⚖️  ≥ 250M → eligible for Field Hospital I                    │
-│ ` 7` · 👤  Dan → always at Arsenal                                   │
+│ ` 5` · ⚖️  ≥ 250M → eligible for Field Hospital I                    │
+│ ` 6` · 👤  Dan → always at Arsenal                                   │
 └──────────────────────────────────────────────────────────────────────┘
 [🗑 Clear 1]  [🗑 Clear 2]  [🗑 Clear 3]  [🗑 Clear 4]  [🗑 Clear 5]
-[🗑 Clear 6]  [🗑 Clear 7]
+[🗑 Clear 6]  [➕ Add rule]
 ```
 
 Notes:
@@ -7681,16 +7479,19 @@ Notes:
   (rules_tab top-down, header excluded). Index is stable across reads
   so an officer can re-list and click the same number.
 - Each rule on a separate line with the icon dictated by the rule
-  type: `⚖️` for power-band, `👤` for per-member team/zone, `🎖️` for
-  special_role.
+  type: `⚖️` for power-band, `👤` for per-member team/zone. (Pre-#167
+  there was a `🎖️` row for `set_member_role` rules — that subcommand
+  + the special_role rule type were both retired with Rule G.)
 - Optional `notes` cell renders as a follow-on italic line with `↳ _…_`.
-- Discord-ID subjects (Bob, Alice, Carol, Dan) resolve through
+- Discord-ID subjects (Bob, Alice, Dan) resolve through
   `resolve_subject_display` to the **current** Discord display name.
   If Alice renames to `AliceTank` between rule creation and now, this
   embed shows `AliceTank`. Charlie #42 is stored verbatim (non-Discord
   roster member) and renders as typed.
 - All rules render with bold names (Discord markdown) — the ASCII
   approximation drops the `**…**` formatting.
+- The `[➕ Add rule]` button sits on row 4 alongside any pagination
+  buttons; opens Screen 13.27a.
 
 ---
 
@@ -7985,31 +7786,45 @@ Rules feed into the strategy / roster-builder apply path (#126/#129).
 
 ## 14. Walkthrough tour
 
-A first-run guided tour on `/desertstorm signups`. The bot offers it once
-per (guild, officer, walkthrough-key) tuple — clicking either button
-records the dismissal so the offer never reappears. The walkthrough
-key encodes a version (`storm_signups_v1`) so a future UI rewrite can
-re-offer the tour without losing per-officer dismissals.
+A first-run guided tour on `/desertstorm signups` **and**
+`/canyonstorm signups` (per #170 / Rule N + Decision #12). The bot
+offers it once per (guild, officer, walkthrough-key) tuple — clicking
+either button records the dismissal so the offer never reappears. The
+walkthrough key encodes a version (`storm_signups_v1`) so a future UI
+rewrite can re-offer the tour without losing per-officer dismissals.
+The version key is shared across DS and CS — dismissing on one
+silences the other for that officer.
 
-Lives in `storm_walkthrough.py`. Triggered from the
-`/desertstorm signups` cog via `maybe_offer_storm_signups_tour(interaction)`
-after the officer view embed has been rendered.
+Lives in `storm_walkthrough.py`. Triggered from `handle_storm_signups`
+(which both DS and CS slash commands route through) via
+`maybe_offer_storm_signups_tour(interaction, event_type=..., teams=...)`
+after the officer view embed has been rendered. The `event_type` and
+`teams` params let the tour copy branch on the actual UI the officer
+will see — CS officers don't see a "Desert Storm" pointer in Step 6,
+and single-team alliances don't see both team buttons mentioned in
+Step 5.
 
 ---
 
 ### Screen 14.1 — First-time offer
 
-Kevin runs `/desertstorm signups` for the first time. The officer view
-renders normally, then a second ephemeral followup appears:
+Kevin runs `/desertstorm signups` (or `/canyonstorm signups`) for
+the first time. The officer view renders normally, then a second
+ephemeral followup appears:
 
 ```
 ┌──────────────────────────────────────────────────────────────────────┐
-│ 👋 First time using `/desertstorm signups`? Want a quick walkthrough of    │
-│ what each piece does?                                                │
+│ 👋 First time opening the Desert Storm sign-ups view? Want a quick  │
+│ walkthrough of what each piece does?                                 │
 └──────────────────────────────────────────────────────────────────────┘
 [👋 Walk me through this]  [No thanks]
 (ephemeral — only Kevin sees it)
 ```
+
+The header text branches on `event_type` — CS officers see
+"Canyon Storm sign-ups view" in the header. Per-officer dismissal
+state is shared (`storm_signups_v1`), so dismissing on DS silences
+the offer on CS too.
 
 `[👋 Walk me through this]` is `ButtonStyle.success` (green).
 `[No thanks]` is `ButtonStyle.secondary` (grey). Both record the
@@ -8142,12 +7957,18 @@ Kevin clicks `[Next →]` on Step 1. The Step-1 view is greyed out
 
 ### Screen 14.9 — Tour Step 4 / 6 — Recording on-behalf votes
 
+Per #170 / Decision #12: rewritten for the post-#168 ephemeral
+picker. No more "type the name, typos are rejected" framing — the
+picker sources from the roster Sheet so typos are impossible.
+
 ```
 ┌──────────────────────────────────────────────────────────────────────┐
 │ Step 4 / 6 — Recording on-behalf votes                               │
-│ Open the modal, type the member's roster name (it must match the     │
-│ Sheet exactly — typos are rejected), and pick A / B / Either /       │
-│ Cannot. Each on-behalf vote captures your Discord ID for audit.      │
+│ Click 🙋 Record on-behalf vote to open the picker. Pick the member   │
+│ from the dropdown (sourced from your roster Sheet — no free typing,  │
+│ so typos can't slip through), pick a vote (the options match the     │
+│ team buttons members see on the sign-up post), then hit Submit.      │
+│ Each on-behalf vote captures your Discord ID for audit.              │
 └──────────────────────────────────────────────────────────────────────┘
 [Next →]  [Skip the rest]
 (ephemeral)
@@ -8157,18 +7978,34 @@ Kevin clicks `[Next →]` on Step 1. The Step-1 view is greyed out
 
 ### Screen 14.10 — Tour Step 5 / 6 — Setting up a team
 
+Per #170, the Set-up button copy branches on `cfg.teams` (and the
+event label flows from `event_type`). DS examples below; CS swaps
+in "Canyon Storm" and CS's Set-up buttons.
+
+**DS / CS with `teams=both`:**
+
 ```
 ┌──────────────────────────────────────────────────────────────────────┐
 │ Step 5 / 6 — Setting up a team                                       │
-│ When you're ready to build a roster, click 🅰️ Set up Team A or       │
-│ 🅱️ Set up Team B (Desert Storm) — or 🏜️ Set up Roster (Canyon       │
-│ Storm; one roster per faction). The bot will ask which preset to     │
-│ use, then open the roster builder pre-filtered to members who        │
-│ signed up, with eligibility floors enforced.                         │
+│ When you're ready to build a Desert Storm roster, click 🅰️ Set up   │
+│ Team A or 🅱️ Set up Team B. The bot will ask which preset to use,   │
+│ then open the roster builder pre-filtered to members who signed up,  │
+│ with eligibility minimums enforced.                                  │
 └──────────────────────────────────────────────────────────────────────┘
 [Next →]  [Skip the rest]
 (ephemeral)
 ```
+
+**Single-team alliance (`teams=A`):**
+
+```
+│ When you're ready to build a Desert Storm roster, click 🅰️ Set up   │
+│ Team A. The bot will ask which preset to use, then open the roster  │
+│ builder pre-filtered to members who signed up, with eligibility     │
+│ minimums enforced.                                                  │
+```
+
+**`teams=B`:** identical, swap "Set up Team A" for "Set up Team B".
 
 ---
 
@@ -8176,18 +8013,22 @@ Kevin clicks `[Next →]` on Step 1. The Step-1 view is greyed out
 
 Kevin clicks `[Next →]` on Step 5. Because Step 6 is the final step
 (`is_last=True`), the view renders a single `[Close]` button in
-`ButtonStyle.success` (green) — no Next/Skip:
+`ButtonStyle.success` (green) — no Next/Skip. The pointer at the
+`/help` category branches on `event_type` so CS officers are pointed
+at Canyon Storm, not Desert Storm:
 
 ```
 ┌──────────────────────────────────────────────────────────────────────┐
 │ Step 6 / 6 — That's the tour                                         │
-│ You can run `/help` any time and pick Desert Storm or Canyon Storm   │
-│ from the dropdown to revisit the command list. Closing this message  │
-│ drops you back to the live officer view.                             │
+│ You can run `/help` any time and pick Desert Storm from the          │
+│ dropdown to revisit the command list. Closing this message drops    │
+│ you back to the live officer view.                                   │
 └──────────────────────────────────────────────────────────────────────┘
 [Close]
 (ephemeral)
 ```
+
+CS variant swaps "Desert Storm" for "Canyon Storm" in the body.
 
 ---
 
@@ -8531,14 +8372,14 @@ ephemeral followup carrying the event-detail embed:
 │                                                                      │
 │ ── Team B ────────────────────────────────────────────────────────── │
 │ __Power Tower__                                                      │
-│ ✅ Erin — 300M ⚠️ override                                           │
+│ ✅ Erin — 300M                                                       │
 │ __Mercenary Factory__                                                │
-│ 🔄 Frank — 285M                                                      │
+│ — Frank — 285M                                                       │
 │ __(sub pool)__                                                       │
 │ — Gina (sub) — 260M                                                  │
 │                                                                      │
 │ ───────────────────────────────────────────────────────────────────  │
-│ Attendance: ✅ 4  ·  ❌ 1  ·  🔄 1  (recorded 6 of 7 slots)          │
+│ Attendance: ✅ 4  ·  ❌ 1  (recorded 5 of 7 slots)                   │
 └──────────────────────────────────────────────────────────────────────┘
 (ephemeral — only Kevin sees it)
 ```
@@ -8551,19 +8392,44 @@ Notes:
 - Each slot shows the status glyph from the join:
   - `✅` = `attended`
   - `❌` = `no_show`
-  - `🔄` = `sub_activated`
   - `—` = no attendance recorded yet (or unknown status)
+- **Rule K (#171)**: 🔄 Sub activated is dropped from the UI.
+  Legacy `sub_activated` rows still on the Sheet render as `—` and
+  don't count toward `recorded` so the footer math matches what the
+  officer sees.
+- **Decision #6 (#171)**: the pre-existing `⚠️ override` flag is
+  removed from history rendering. The rosters_tab `Override Below
+  Floor` column still records the flag for post-event audit, but
+  history consumers don't surface it.
 - Power renders as `_format_power_display(slot.power)` — `"412000000"`
   becomes ` — 412M`. The sentinel `"unknown"` and blanks render as
   empty (the slot line collapses to just the name).
-- `⚠️ override` flag appears when `Override Below Floor` is truthy
-  (the officer accepted a sub-floor power assignment in the roster
-  builder).
 - Sub slots labelled. Paired-mode subs show `(sub, paired with
   <primary>)`; pool-mode subs show `(sub)`. Primary slots get no
   marker.
-- Footer summarises attendance: counts of each status + "recorded N
-  of M slots."
+- Footer summarises attendance: counts of attended + no_show +
+  "recorded N of M slots".
+
+**Phase-aware variant (Rule L / #172):** when the rostered event
+was built from a phase-aware preset, each zone breaks into a header
++ per-phase sub-rows. Detection fires when any primary slot carries
+a non-empty Phase cell on the rosters_tab.
+
+```
+│ ── Team A ────────────────────────────────────────────────────────── │
+│ __Power Tower__                                                      │
+│    └ **Phase 1**                                                    │
+│ ✅ Alice — 412M                                                      │
+│ ✅ Bob — 380M                                                        │
+│    └ **Phase 2**                                                    │
+│ ✅ Carol — 350M                                                      │
+│ ❌ Dan — 320M                                                        │
+│    └ **Phase 3**                                                    │
+│ ✅ Erin — 305M                                                       │
+```
+
+Sub-pool rows always render flat regardless of phase-awareness
+(they're event-level, not phase-scoped).
 
 The original list view (Screen 15.6) **stays alive** — the date
 buttons remain clickable so Kevin can hop to other dates without
@@ -8686,7 +8552,7 @@ as Screen 15.8 — no list view, just the detail straight away:
 │ … (rest of the roster) …                                             │
 │                                                                      │
 │ ───────────────────────────────────────────────────────────────────  │
-│ Attendance: ✅ 4  ·  ❌ 1  ·  🔄 1  (recorded 6 of 7 slots)          │
+│ Attendance: ✅ 4  ·  ❌ 1  (recorded 5 of 7 slots)                   │
 └──────────────────────────────────────────────────────────────────────┘
 (ephemeral, no buttons)
 ```
@@ -8787,30 +8653,45 @@ nearest newline boundary and appends a marker:
 
 ### Screen 15.18 — Canyon Storm parity
 
-The CS variant uses the same machinery with two cosmetic differences:
+The CS variant uses the same machinery with three differences:
 - Title says "Canyon Storm Roster — …"
 - Embed colour is `dark_orange` (vs DS `dark_gold`)
-- Single-roster events (CS doesn't have A/B teams) render the field
-  as "Roster" instead of "Team A":
+- Team grouping respects `cfg.teams` (Rule A / #166): CS with
+  `teams=both` renders `── Team A ──` / `── Team B ──` headers
+  exactly like DS; CS with `teams=A` or `teams=B` (single-team)
+  renders a single `── Roster ──` header.
+
+**CS, `teams=both`:**
 
 ```
 ┌──────────────────────────────────────────────────────────────────────┐
 │ 📜 Canyon Storm Roster — Saturday, May 18, 2026                      │
 │                                                                      │
-│ ── Roster ─────────────────────────────────────────────────────────  │
+│ ── Team A ────────────────────────────────────────────────────────── │
 │ __Power Tower__                                                      │
 │ ✅ Alice — 412M                                                      │
-│ __Field Hospital I__                                                 │
-│ ❌ Bob — 380M                                                        │
-│ __Arsenal__                                                          │
+│ __Data Center 1__                                                    │
+│ ✅ Bob — 380M                                                        │
+│                                                                      │
+│ ── Team B ────────────────────────────────────────────────────────── │
+│ __Power Tower__                                                      │
 │ ✅ Carol — 350M                                                      │
 │ __(sub pool)__                                                       │
 │ — Dan (sub) — 320M                                                   │
 │                                                                      │
 │ ───────────────────────────────────────────────────────────────────  │
-│ Attendance: ✅ 2  ·  ❌ 1  (recorded 3 of 4 slots)                   │
+│ Attendance: ✅ 3  ·  ❌ 0  (recorded 3 of 4 slots)                   │
 └──────────────────────────────────────────────────────────────────────┘
 (ephemeral)
+```
+
+**CS, single team:**
+
+```
+│ ── Roster ─────────────────────────────────────────────────────────  │
+│ __Power Tower__                                                      │
+│ ✅ Alice — 412M                                                      │
+│ …                                                                    │
 ```
 
 ---

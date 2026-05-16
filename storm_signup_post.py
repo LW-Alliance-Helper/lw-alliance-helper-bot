@@ -212,7 +212,7 @@ async def post_registration(
 # ── Slash command handler ────────────────────────────────────────────────────
 #
 # The slash command itself is registered by `storm_commands_root` under the
-# `/desertstorm post_signup` and `/canyon_storm post_signup` parents. This
+# `/desertstorm post_signup` and `/canyonstorm post_signup` parents. This
 # module just exposes the handler body so the root cog stays a thin
 # dispatcher.
 

@@ -85,10 +85,10 @@ def _read_roster_powers(
 
     power_col_name = (structured.get("power_column_name") or "").strip()
     if not power_col_name:
+        setup_cmd = "/setup_desertstorm" if event_type == "DS" else "/setup_canyonstorm"
         errors.append(
             "no power metric column configured — every member will read as "
-            "'power unknown'. Run /setup_desertstorm or /setup_canyonstorm "
-            "to set the Power Metric Column."
+            f"'power unknown'. Run {setup_cmd} to set the Power Metric Column."
         )
 
     if not roster_cfg.get("enabled"):
@@ -2335,10 +2335,13 @@ class _RenderActionView(discord.ui.View):
         live in Discord; we just remember where."""
         import config
         if not self.event_date:
+            signups_cmd = (
+                "/desertstorm signups" if self.event_type == "DS"
+                else "/canyonstorm signups"
+            )
             await inter.response.send_message(
                 "⚠️ Can't save to history without an event date — open the "
-                "roster from `/desertstorm signups` / `/canyonstorm signups` "
-                "so the event date is set.",
+                f"roster from `{signups_cmd}` so the event date is set.",
                 ephemeral=True,
             )
             return
@@ -2762,11 +2765,12 @@ async def _finalize_structured_roster(
         summary_lines = ["✅ Roster posted.",
                          f"📬 Mail sent to {posted_to_mention}."]
     elif post_status == "no_channel":
+        setup_cmd = "/setup_desertstorm" if s.event_type == "DS" else "/setup_canyonstorm"
         summary_lines = [
             "✅ Roster recorded.",
             "⚠️ No post channel is configured — mail was built but not "
-            "sent. Run `/setup_desertstorm` (or `/setup_canyonstorm`) to "
-            "pick one, or copy the mail manually below.",
+            f"sent. Run `{setup_cmd}` to pick one, or copy the mail "
+            "manually below.",
         ]
     elif post_status == "channel_gone":
         summary_lines = [

@@ -16,12 +16,13 @@ Storage shape (Sheet, alliance-owned, source of truth):
 Preset names are unique per (guild, event_type). Rows for one preset
 share the Preset Name value.
 
-In-Discord editor flow:
-  /desert_storm strategy create name:"…"  → opens editor seeded with
-                                            canonical DS zones
-  /desert_storm strategy edit name:"…"    → loads from Sheet → editor
-  /desert_storm strategy list             → embed of saved presets
-  /desert_storm strategy delete name:"…"  → confirm → remove
+In-Discord editor flow (DS form shown — CS variants live under
+`/canyonstorm strategy …`):
+  /desertstorm strategy create name:"…"  → opens editor seeded with
+                                           canonical DS zones
+  /desertstorm strategy edit name:"…"    → loads from Sheet → editor
+  /desertstorm strategy list             → embed of saved presets
+  /desertstorm strategy delete name:"…"  → confirm → remove
 
 Editor state is buffered in memory on the View. Discord's interaction
 token expires after 15 minutes; that's a natural session bound, so no

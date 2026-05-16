@@ -599,9 +599,9 @@ async def _pick_storm_template(bot, channel, guild_id: int | None, event_type: s
     )
     await view.wait()
     if view.selected is None:
+        draft_cmd = "/desertstorm draft" if event_type == "DS" else "/canyonstorm draft"
         await channel.send(
-            "⏰ Template picker timed out. "
-            "Run `/desertstorm draft` or `/canyonstorm draft` to start over."
+            f"⏰ Template picker timed out. Run `{draft_cmd}` to start over."
         )
         return False
     return view.selected

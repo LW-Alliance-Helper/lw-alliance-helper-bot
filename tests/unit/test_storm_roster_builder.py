@@ -2250,6 +2250,57 @@ class TestAutoFillPhaseAware:
         assert all(len(v) == 0 for v in s.assignments_p2.values())
 
 
+class TestPhaseAwareEmbedRendering:
+    """#172 / Rule L: phase-aware builder embeds render per-zone-per-phase
+    instead of inline `(P1, P2, P3)` capacity readouts. Each zone gets a
+    header line + one indented row per phase with that phase's count,
+    cap, and member list."""
+
+    def test_phase_aware_zone_line_has_per_phase_rows(self):
+        s = _make_phase_aware_session()
+        s.assignments["Info Center"].append("1")          # Alice in P1
+        s.assignments_p2["Arsenal"].append("2")           # Bob in P2
+        line = srb._render_zone_line(s, "Info Center")
+        assert "Phase 1:" in line
+        assert "Phase 2:" in line
+        # Header row is bold and contains no inline parens.
+        assert "**Info Center**" in line
+        # Old inline P1/P2 syntax must be gone.
+        assert "(P1:" not in line
+        assert "(P2:" not in line
+
+    def test_flat_zone_line_keeps_single_row_shape(self):
+        s = _make_session(team="A", members={
+            "1": {"key": "1", "name": "Alice", "discord_id": "1",
+                  "power": 412_000_000, "not_on_discord": False},
+        })
+        s.assignments["Power Tower"].append("1")
+        line = srb._render_zone_line(s, "Power Tower")
+        # Flat presets stay one-line — no \n inside the zone line.
+        assert "\n" not in line
+        assert "Phase 1:" not in line
+        assert "**Power Tower**" in line
+
+    def test_filled_line_breaks_out_per_phase_when_phase_aware(self):
+        s = _make_phase_aware_session()
+        embed = srb._render_builder_embed(s)
+        # Per-phase breakdown is in the Filled line.
+        assert "Filled:" in embed.description
+        assert "P1:" in embed.description
+        assert "P2:" in embed.description
+
+    def test_filled_line_uses_single_total_when_flat(self):
+        s = _make_session(team="A", members={
+            "1": {"key": "1", "name": "Alice", "discord_id": "1",
+                  "power": 412_000_000, "not_on_discord": False},
+        })
+        s.assignments["Power Tower"].append("1")
+        embed = srb._render_builder_embed(s)
+        assert "Filled:" in embed.description
+        # Flat presets keep the X / Y total shape (no per-phase break-out).
+        assert "P1:" not in embed.description
+
+
 class TestRostersTabPhaseColumn:
     """The Phase column in rosters_tab is the post-event audit trail
     that captures which phase a member played in. Flat presets write

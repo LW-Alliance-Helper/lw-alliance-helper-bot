@@ -266,6 +266,58 @@ class TestRenderEventEmbed:
         field_names = [f.name for f in embed.fields]
         assert field_names == ["Team A", "Team B"]
 
+    def test_phase_aware_event_groups_members_by_phase(self):
+        """#172 / Rule L: when any primary slot carries a Phase value,
+        history renders per-zone-per-phase — each zone header gets sub-
+        rows for Phase 1, Phase 2, etc., and members fall under the
+        phase they were rostered into."""
+        slots = [
+            {"team": "A", "phase": "1", "zone": "Power Tower",
+             "member": "Alice", "role": "primary", "power": "",
+             "discord_id": "1", "override_below_floor": False,
+             "paired_with": ""},
+            {"team": "A", "phase": "2", "zone": "Power Tower",
+             "member": "Bob", "role": "primary", "power": "",
+             "discord_id": "2", "override_below_floor": False,
+             "paired_with": ""},
+            {"team": "A", "phase": "3", "zone": "Power Tower",
+             "member": "Carol", "role": "primary", "power": "",
+             "discord_id": "3", "override_below_floor": False,
+             "paired_with": ""},
+        ]
+        embed = sh.render_event_embed(
+            event_type="DS", event_date="2026-05-18",
+            slots=slots, attendance={},
+        )
+        body = _embed_body(embed)
+        # Phase headers appear, and the per-phase members are listed
+        # under them.
+        assert "**Phase 1**" in body
+        assert "**Phase 2**" in body
+        assert "**Phase 3**" in body
+        # Each phase's member shows up after its phase header.
+        p1 = body.index("**Phase 1**")
+        p2 = body.index("**Phase 2**")
+        p3 = body.index("**Phase 3**")
+        assert "Alice" in body[p1:p2]
+        assert "Bob"   in body[p2:p3]
+        assert "Carol" in body[p3:]
+
+    def test_flat_event_does_not_render_phase_headers(self):
+        slots = [
+            {"team": "A", "phase": "", "zone": "Power Tower",
+             "member": "Alice", "role": "primary", "power": "",
+             "discord_id": "1", "override_below_floor": False,
+             "paired_with": ""},
+        ]
+        embed = sh.render_event_embed(
+            event_type="DS", event_date="2026-05-18",
+            slots=slots, attendance={},
+        )
+        body = _embed_body(embed)
+        assert "Phase 1" not in body
+        assert "Phase 2" not in body
+
     def test_power_rendered_via_format_power(self):
         """Raw `"412000000"` should display as `"412M"` for the human
         readers — the prior renderer showed the digits verbatim."""

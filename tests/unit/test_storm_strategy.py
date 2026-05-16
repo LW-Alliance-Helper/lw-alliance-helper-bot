@@ -573,15 +573,19 @@ class TestPhaseAwarePresets:
         assert "P1:" not in line
         assert "P2:" not in line
 
-    def test_render_line_phase_aware_swaps_to_p1_p2_counts(self):
+    def test_render_line_phase_aware_uses_per_phase_rows(self):
+        """#172 / Rule L: phase-aware presets render the capacity readout
+        per-zone-per-phase — one indented row per phase under the zone
+        header — instead of the pre-#172 inline `(P1: 3, P2: 1)` shape."""
         row = ss.ZoneRow(zone="Info Center", max_players=4,
                          max_phase1=3, max_phase2=1,
                          min_power_a=200_000_000, min_power_b=100_000_000)
         line = row.render_line("DS", phase_count=2)
         assert "Max:" not in line
-        assert "P1: 3" in line
-        assert "P2: 1" in line
-        assert "P3:" not in line
+        # Per-phase rows under the zone header.
+        assert "Phase 1: cap 3" in line
+        assert "Phase 2: cap 1" in line
+        assert "Phase 3" not in line
 
     def test_render_line_three_phase_includes_p3(self):
         row = ss.ZoneRow(zone="Power Tower", max_players=0,
@@ -589,9 +593,9 @@ class TestPhaseAwarePresets:
                          min_power_a=200_000_000)
         line = row.render_line("CS", phase_count=3)
         assert "Max:" not in line
-        assert "P1: 4" in line
-        assert "P2: 2" in line
-        assert "P3: 3" in line
+        assert "Phase 1: cap 4" in line
+        assert "Phase 2: cap 2" in line
+        assert "Phase 3: cap 3" in line
 
     def test_total_capacity_flat_sums_max_players(self):
         buf = ss.PresetBuffer(name="Flat", event_type="DS", zones=[

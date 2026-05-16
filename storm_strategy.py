@@ -242,49 +242,50 @@ class ZoneRow:
 
     def render_line(self, event_type: str, teams: str = "both",
                     phase_count: int = 0) -> str:
-        """One-line summary for the editor embed. Respects the
-        alliance's configured teams (#148 + Rule A / #166) so
-        single-team alliances see only their team's minimum.
+        """Summary for the editor embed. Respects the alliance's
+        configured teams (#148 + Rule A / #166) so single-team alliances
+        see only their team's minimum.
 
-        When `phase_count >= 2`, the capacity readout splits into
-        per-phase counts (P1: x, P2: y, optionally P3: z) instead of
-        a single Max.
+        Flat presets (`phase_count == 0`) render as a single line.
+        Phase-aware presets (#172 / Rule L) break the capacity readout
+        into one indented per-phase row beneath a zone header line so
+        each phase's cap + per-phase priority is visible at a glance.
         """
         del event_type  # Both DS and CS render the same shape per Rule A.
+        if teams == "A":
+            mins = f"Min: {format_power(self.min_power_a)}"
+        elif teams == "B":
+            mins = f"Min: {format_power(self.min_power_b)}"
+        else:
+            mins = (
+                f"Min A: {format_power(self.min_power_a)} · "
+                f"Min B: {format_power(self.min_power_b)}"
+            )
+
         if phase_count >= 2:
-            parts = [f"P1: {self.max_phase1}", f"P2: {self.max_phase2}"]
-            if phase_count >= 3:
-                parts.append(f"P3: {self.max_phase3}")
-            cap = ", ".join(parts)
-            # Per-phase priorities — show as P1[1] / P2[3] etc. only
-            # when at least one phase has a non-zero priority.
+            # Per-zone-per-phase rendering: header line with the zone +
+            # team minimums (which are per-team, not per-phase, so they
+            # belong on the header), then one row per phase showing
+            # capacity and any non-zero per-phase priority.
+            header = f"• **{self.zone}** — {mins}"
+            phase_lines: list[str] = []
             phase_prios = [
                 self.priority_phase1, self.priority_phase2, self.priority_phase3,
             ][:phase_count]
-            if any(phase_prios):
-                prio = " [" + ", ".join(
-                    f"P{i + 1}: {p}" for i, p in enumerate(phase_prios) if p
-                ) + "]"
-            else:
-                prio = ""
-        else:
-            cap = f"Max: {self.max_players}"
-            prio = f" [P{self.priority}]" if self.priority else ""
-        if teams == "A":
-            return (
-                f"• {self.zone:<20} ({cap})  "
-                f"Min: {format_power(self.min_power_a)}{prio}"
-            )
-        if teams == "B":
-            return (
-                f"• {self.zone:<20} ({cap})  "
-                f"Min: {format_power(self.min_power_b)}{prio}"
-            )
-        return (
-            f"• {self.zone:<20} ({cap})  "
-            f"Min A: {format_power(self.min_power_a)} · "
-            f"Min B: {format_power(self.min_power_b)}{prio}"
-        )
+            phase_caps = [
+                self.max_phase1, self.max_phase2, self.max_phase3,
+            ][:phase_count]
+            for idx, (cap, prio) in enumerate(zip(phase_caps, phase_prios), start=1):
+                prio_suffix = f" (priority {prio})" if prio else ""
+                phase_lines.append(
+                    f"   └ Phase {idx}: cap {cap}{prio_suffix}"
+                )
+            return "\n".join([header] + phase_lines)
+
+        # Flat preset — single-line shape unchanged from pre-#172.
+        cap = f"Max: {self.max_players}"
+        prio = f" [P{self.priority}]" if self.priority else ""
+        return f"• {self.zone:<20} ({cap})  {mins}{prio}"
 
 
 class PresetBuffer:

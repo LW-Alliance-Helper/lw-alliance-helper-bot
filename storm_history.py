@@ -291,39 +291,84 @@ def render_event_embed(
     # Per-team `add_field` (each capped at 1024 chars) instead of one
     # giant `embed.description` — a 30+ slot roster with status + power
     # markers can blow Discord's 4096-char description limit.
+    def _render_slot(slot: dict) -> str:
+        """One per-member row inside a zone (or zone-phase) section.
+        Side-effecting on the outer counters via `nonlocal`."""
+        nonlocal total_recorded, total_attended, total_no_show, total_sub_activated
+        key = _attendance_join_key(
+            slot["team"], slot["zone"], slot["member"],
+        )
+        status = attendance.get(key, "")
+        glyph = _STATUS_GLYPH.get(status, "—")
+        if status:
+            total_recorded += 1
+            if status == "attended":
+                total_attended += 1
+            elif status == "no_show":
+                total_no_show += 1
+            elif status == "sub_activated":
+                total_sub_activated += 1
+        power_part = _format_power_display(slot.get("power", ""))
+        override = " ⚠️ override" if slot.get("override_below_floor") else ""
+        # Role marker: a sub paired with a specific primary surfaces
+        # "paired with X" so the pairing is visible in the history; a
+        # pool sub shows the generic "(sub)".
+        if slot.get("role") == "sub":
+            paired = slot.get("paired_with") or ""
+            role_marker = f" (sub, paired with {paired})" if paired else " (sub)"
+        else:
+            role_marker = ""
+        return f"{glyph} {slot['member']}{role_marker}{power_part}{override}"
+
     for team in sorted(teams.keys()):
         zones = teams[team]
+        # Phase-aware detection: a roster is phase-aware iff at least one
+        # primary slot carries a non-empty Phase cell. Sub-pool rows
+        # don't count (they're event-level, not phase-scoped) so they
+        # never flip a flat event to phase-aware.
+        team_is_phase_aware = any(
+            slot.get("phase", "").strip()
+            for zone_slots in zones.values()
+            for slot in zone_slots
+            if slot.get("role", "primary") == "primary"
+        )
+
         team_lines: list[str] = []
         for zone in sorted(zones.keys()):
             members = zones[zone]
             team_lines.append(f"__{zone}__")
+
+            if not team_is_phase_aware or zone == "(sub pool)":
+                # Flat zone — single member list (sub-pool always
+                # renders flat regardless of the event's phase state).
+                for slot in members:
+                    team_lines.append(_render_slot(slot))
+                continue
+
+            # Phase-aware zone (#172 / Rule L). Each phase gets its own
+            # sub-header beneath the zone, then the per-member rows
+            # belonging to that phase. Members with no Phase cell
+            # (legacy data) fall into a "Phase ?" bucket so they're
+            # still visible.
+            by_phase: dict[str, list[dict]] = {}
             for slot in members:
-                key = _attendance_join_key(
-                    slot["team"], slot["zone"], slot["member"],
+                phase = slot.get("phase", "").strip() or "?"
+                by_phase.setdefault(phase, []).append(slot)
+
+            def _phase_sort_key(p: str) -> tuple[int, str]:
+                # Numeric phases (1, 2, 3) sort ahead of "?" / non-numeric.
+                try:
+                    return (0, f"{int(p):03d}")
+                except ValueError:
+                    return (1, p)
+
+            for phase in sorted(by_phase.keys(), key=_phase_sort_key):
+                phase_label = (
+                    f"Phase {phase}" if phase != "?" else "Phase (unspecified)"
                 )
-                status = attendance.get(key, "")
-                glyph = _STATUS_GLYPH.get(status, "—")
-                if status:
-                    total_recorded += 1
-                    if status == "attended":
-                        total_attended += 1
-                    elif status == "no_show":
-                        total_no_show += 1
-                    elif status == "sub_activated":
-                        total_sub_activated += 1
-                power_part = _format_power_display(slot.get("power", ""))
-                override = " ⚠️ override" if slot.get("override_below_floor") else ""
-                # Role marker: a sub paired with a specific primary
-                # surfaces "paired with X" so the pairing is visible
-                # in the history; a pool sub shows the generic "(sub)".
-                if slot.get("role") == "sub":
-                    paired = slot.get("paired_with") or ""
-                    role_marker = f" (sub, paired with {paired})" if paired else " (sub)"
-                else:
-                    role_marker = ""
-                team_lines.append(
-                    f"{glyph} {slot['member']}{role_marker}{power_part}{override}"
-                )
+                team_lines.append(f"   └ **{phase_label}**")
+                for slot in by_phase[phase]:
+                    team_lines.append(_render_slot(slot))
 
         team_name = "Roster" if (team in ("", "(no team)")) else f"Team {team}"
         body = "\n".join(team_lines)

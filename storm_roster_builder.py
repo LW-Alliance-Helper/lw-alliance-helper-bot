@@ -813,47 +813,35 @@ def _format_member_label(member: dict) -> str:
     return f"{name}{suffix}"
 
 
-def _render_zone_line(session: RosterBuilderSession, zone_name: str) -> str:
-    z = session.preset.find_zone(zone_name)
-    if z is None:
-        return f"• {zone_name} (?/?)"
-    # Capacity readout. Phase-aware presets show every phase's count;
-    # flat presets show the single max_players count as before. Walks
-    # `iter_phases()` so 3-phase presets include P3 — hardcoding P1/P2
-    # left CS officers blind to Phase 3 fill state.
-    if session.is_phase_aware:
-        parts = [
-            f"P{p}: {session.zone_member_count(zone_name, phase=p)}/"
-            f"{int(z.max_for_phase(p))}"
-            for p in session.iter_phases()
-        ]
-        cap_readout = ", ".join(parts)
-        # Status reflects the currently-selected phase only — toggling
-        # phases re-colours the row, so officers can see "what's full
-        # in the phase I'm editing right now."
-        sel_count = session.zone_member_count(zone_name)
-        sel_cap = session.zone_capacity(zone_name)
-    else:
-        cap_readout = f"{session.zone_member_count(zone_name)}/{int(z.max_players)}"
-        sel_count = session.zone_member_count(zone_name)
-        sel_cap = int(z.max_players)
-    if sel_cap <= 0 and sel_count == 0:
-        # Zone with no capacity in the current phase (e.g. center zones
-        # in phase 1). Don't flag with the "empty" warning glyph.
-        status = "—"
-    elif sel_count == 0:
-        status = "⬜"
-    elif sel_count < sel_cap:
-        status = "🟡"
-    else:
-        status = "✅"
-    # Member listing is for the SELECTED phase only — showing both
-    # phases inline would double the embed length on phase-aware
-    # presets, and the picker / assign actions operate on the
-    # selected phase anyway so listing the same set is consistent.
-    member_keys = session.assignments_for_phase(session.selected_phase).get(zone_name, [])
-    pairings = session.paired_subs_for_phase(session.selected_phase)
-    names = []
+def _zone_status_glyph(count: int, cap: int) -> str:
+    """Color-coded fill marker for a zone slot.
+      —  zone has no capacity in this phase (e.g. center zones in Phase 1)
+      ⬜ empty
+      🟡 partially filled
+      ✅ at or above capacity
+    """
+    if cap <= 0 and count == 0:
+        return "—"
+    if count == 0:
+        return "⬜"
+    if count < cap:
+        return "🟡"
+    return "✅"
+
+
+def _format_zone_member_list(
+    session: "RosterBuilderSession", member_keys: list[str], phase: int,
+) -> str:
+    """Render the comma-separated member list for one zone in one phase.
+
+    In paired mode, paired primaries render with `+ sub <name>` and
+    unpaired primaries with the `⚠️` glyph so the officer can spot
+    missing pairings at a glance. The pairing lookup is phase-scoped —
+    a primary in Phase 1 with no sub paired for Phase 1 still flags
+    even if Phase 2 has a pairing.
+    """
+    names: list[str] = []
+    pairings = session.paired_subs_for_phase(phase)
     for k in member_keys:
         m = session.members.get(k)
         primary_label = m["name"] if m else f"<unknown:{k}>"
@@ -864,17 +852,57 @@ def _render_zone_line(session: RosterBuilderSession, zone_name: str) -> str:
                 sub_label = sub_m["name"] if sub_m else f"<unknown:{sub_key}>"
                 names.append(f"{primary_label} + sub {sub_label}")
             else:
-                # Unpaired primary in paired mode — flagged so the
-                # officer can see a sub still needs to be picked.
                 names.append(f"{primary_label} ⚠️")
         else:
             names.append(primary_label)
-    if names:
-        names_part = ", ".join(names)
-    else:
-        names_part = "(empty)"
+    return ", ".join(names) if names else "(empty)"
+
+
+def _render_zone_line(session: RosterBuilderSession, zone_name: str) -> str:
+    """Render one zone's row in the builder embed.
+
+    Flat presets render as a single line: `{status} **Zone** (n/cap): names`.
+
+    Phase-aware presets (#172 / Rule L) render per-zone-per-phase: a
+    bolded zone header followed by one indented line per phase, each
+    showing that phase's count, capacity, and member list. The header's
+    status glyph reflects the currently-selected phase so the picker /
+    assign actions match what's coloured red/yellow/green.
+    """
+    z = session.preset.find_zone(zone_name)
+    if z is None:
+        return f"• {zone_name} (?/?)"
+
     marker = " ←" if zone_name == session.selected_zone else ""
-    return f"{status} **{zone_name}** ({cap_readout}){marker}: {names_part}"
+
+    if session.is_phase_aware:
+        # Header status reflects the selected phase. Toggling phases
+        # via the Phase nav recolors the header so the officer can see
+        # "what's full in the phase I'm editing right now."
+        sel_count = session.zone_member_count(zone_name)
+        sel_cap = session.zone_capacity(zone_name)
+        header_status = _zone_status_glyph(sel_count, sel_cap)
+        header = f"{header_status} **{zone_name}**{marker}"
+
+        phase_lines: list[str] = []
+        for p in session.iter_phases():
+            members = session.assignments_for_phase(p).get(zone_name, [])
+            cap = int(z.max_for_phase(p))
+            count = len(members)
+            names = _format_zone_member_list(session, members, phase=p)
+            # Box-drawing prefix ("   └ ") visually nests the phase
+            # row under the zone header without relying on Discord's
+            # inconsistent leading-space rendering in embed bodies.
+            phase_lines.append(f"   └ Phase {p}: {count}/{cap} — {names}")
+        return "\n".join([header] + phase_lines)
+
+    # Flat preset — single-line shape unchanged from pre-#172.
+    sel_count = session.zone_member_count(zone_name)
+    sel_cap = int(z.max_players)
+    status = _zone_status_glyph(sel_count, sel_cap)
+    member_keys = session.assignments_for_phase(session.selected_phase).get(zone_name, [])
+    names_part = _format_zone_member_list(session, member_keys, phase=session.selected_phase)
+    return f"{status} **{zone_name}** ({sel_count}/{sel_cap}){marker}: {names_part}"
 
 
 def _render_builder_embed(session: RosterBuilderSession) -> discord.Embed:
@@ -950,13 +978,27 @@ def _render_builder_embed(session: RosterBuilderSession) -> discord.Embed:
     # per-phase capacities so the readout matches reality (the prior
     # code summed only Phase 1 and divided by `max_players` which is
     # unset for phase-aware zones — produced "Filled: 2 / 0").
-    total_assigned = sum(
-        len(zone_members)
-        for phase in session.iter_phases()
-        for zone_members in session.assignments_for_phase(phase).values()
-    )
-    total_capacity = session.preset.total_capacity()
-    lines.append(f"📊 **Filled:** {total_assigned} / {total_capacity}")
+    # Per Rule L (#172), phase-aware presets surface per-phase counts
+    # so each phase's fill state is visible at a glance.
+    if session.is_phase_aware:
+        per_phase = []
+        for p in session.iter_phases():
+            assigned = sum(
+                len(zone_members)
+                for zone_members in session.assignments_for_phase(p).values()
+            )
+            cap = sum(
+                int(z.max_for_phase(p)) for z in session.preset.zones
+            )
+            per_phase.append(f"P{p}: {assigned}/{cap}")
+        lines.append(f"📊 **Filled:** {', '.join(per_phase)}")
+    else:
+        total_assigned = sum(
+            len(zone_members)
+            for zone_members in session.assignments_for_phase(1).values()
+        )
+        total_capacity = session.preset.total_capacity()
+        lines.append(f"📊 **Filled:** {total_assigned} / {total_capacity}")
 
     selected = session.selected_zone
     if selected:

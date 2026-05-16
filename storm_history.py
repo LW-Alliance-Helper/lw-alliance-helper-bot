@@ -398,7 +398,9 @@ class _RosterImageLinksView(discord.ui.View):
 
         for ref in refs:
             team = ref.get("team") or ""
-            if event_type == "DS" and team:
+            # Two-team events (DS or CS with teams=both) get per-team
+            # labels; single-team events fall back to "View image".
+            if team:
                 label = f"📷 View Team {team} image"
             else:
                 label = "📷 View image"
@@ -478,7 +480,7 @@ class _RosterImageLinksView(discord.ui.View):
                 "[STORM HISTORY] delete_roster_image_ref failed: %s", e,
             )
         parent = "desertstorm" if self.event_type == "DS" else "canyonstorm"
-        team_label = f" for Team {team}" if (self.event_type == "DS" and team) else ""
+        team_label = f" for Team {team}" if team else ""
         what = "channel" if reason == "channel" else "image"
         await inter.response.send_message(
             f"⚠️ The saved roster {what}{team_label} can no longer be "

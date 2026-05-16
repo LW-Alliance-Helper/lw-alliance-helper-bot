@@ -689,21 +689,22 @@ class TestOfficerViewTeamsGate:
         assert any("Set up Team B" in lab for lab in labels)
         assert not any("Set up Team A" in lab for lab in labels)
 
-    def test_cs_event_unaffected_by_teams_setting(self, seeded_db):
-        """CS has no Team A/B concept — `teams` is DS-only.
-        CS guilds get the single 'Set up Roster' button regardless."""
+    def test_cs_respects_teams_setting(self, seeded_db):
+        """Rule A / #166: CS supports teams=both/A/B just like DS.
+        Single-team CS shows just that team's button."""
         import config
         config.save_storm_config(
             TEST_GUILD_ID, "CS",
             tab_name="CS Tab", mail_template="",
             timezone="America/New_York", log_channel_id=0,
-            teams="A",  # Should be ignored
+            teams="A",
         )
         guild = _FakeGuild(TEST_GUILD_ID, [])
         view = sov.OfficerView(guild, owner_user_id=1, event_type="CS",
                                event_date="2026-05-18")
         labels = [getattr(c, "label", "") for c in view.children if hasattr(c, "label")]
-        assert any("Set up Roster" in lab for lab in labels)
+        assert any("Set up Team A" in lab for lab in labels)
+        assert not any("Set up Team B" in lab for lab in labels)
 
 
 class TestOfficerViewTimeout:

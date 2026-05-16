@@ -739,52 +739,41 @@ class OfficerView(discord.ui.View):
         refresh_btn.callback = _refresh
         self.add_item(refresh_btn)
 
-        # Team setup buttons (#129) — opens the structured roster builder
-        # filtered to signed-up members for this team. DS gets up to two
-        # buttons (gated by #148's `teams` field — single-team alliances
-        # only see their team's button); CS has a single "Set up Roster"
-        # since the faction is implicit in the preset.
-        if self.event_type == "DS":
-            from config import get_storm_config
-            ds_cfg = get_storm_config(self.guild_id, "DS") or {}
-            teams_setting = (ds_cfg.get("teams") or "both").strip()
-            if teams_setting not in ("both", "A", "B"):
-                teams_setting = "both"
+        # Team setup buttons (#129 + Rule A / #166) — opens the
+        # structured roster builder filtered to signed-up members for
+        # this team. Gated by `teams` config — applies identically to
+        # DS and CS. teams=both shows A+B; teams=A or teams=B shows
+        # just that team's button.
+        from config import get_storm_config
+        cfg = get_storm_config(self.guild_id, self.event_type) or {}
+        teams_setting = (cfg.get("teams") or "both").strip()
+        if teams_setting not in ("both", "A", "B"):
+            teams_setting = "both"
 
-            show_a = teams_setting in ("both", "A")
-            show_b = teams_setting in ("both", "B")
+        show_a = teams_setting in ("both", "A")
+        show_b = teams_setting in ("both", "B")
 
-            if show_a:
-                a_btn = discord.ui.Button(
-                    label="🅰️ Set up Team A", style=discord.ButtonStyle.success, row=2,
-                )
-
-                async def _setup_a(inter: discord.Interaction):
-                    await _open_team_setup(inter, self, team="A")
-
-                a_btn.callback = _setup_a
-                self.add_item(a_btn)
-
-            if show_b:
-                b_btn = discord.ui.Button(
-                    label="🅱️ Set up Team B", style=discord.ButtonStyle.success, row=2,
-                )
-
-                async def _setup_b(inter: discord.Interaction):
-                    await _open_team_setup(inter, self, team="B")
-
-                b_btn.callback = _setup_b
-                self.add_item(b_btn)
-        else:
-            cs_btn = discord.ui.Button(
-                label="🏜️ Set up Roster", style=discord.ButtonStyle.success, row=2,
+        if show_a:
+            a_btn = discord.ui.Button(
+                label="🅰️ Set up Team A", style=discord.ButtonStyle.success, row=2,
             )
 
-            async def _setup_cs(inter: discord.Interaction):
-                await _open_team_setup(inter, self, team="")
+            async def _setup_a(inter: discord.Interaction):
+                await _open_team_setup(inter, self, team="A")
 
-            cs_btn.callback = _setup_cs
-            self.add_item(cs_btn)
+            a_btn.callback = _setup_a
+            self.add_item(a_btn)
+
+        if show_b:
+            b_btn = discord.ui.Button(
+                label="🅱️ Set up Team B", style=discord.ButtonStyle.success, row=2,
+            )
+
+            async def _setup_b(inter: discord.Interaction):
+                await _open_team_setup(inter, self, team="B")
+
+            b_btn.callback = _setup_b
+            self.add_item(b_btn)
 
 
 async def _open_team_setup(

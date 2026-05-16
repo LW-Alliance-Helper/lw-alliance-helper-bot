@@ -88,8 +88,9 @@ EXPECTED_DS_MEMBER_RULE_SUBCOMMANDS = {
     "set_member_zone", "list",
 }
 EXPECTED_CS_MEMBER_RULE_SUBCOMMANDS = {
-    # CS has no `set_member_team` — Canyon Storm runs one team per faction.
-    "set_power_band",
+    # Rule A / #166: CS supports teams=both/A/B just like DS, so
+    # set_member_team is exposed on the CS group too.
+    "set_power_band", "set_member_team",
     "set_member_zone", "list",
 }
 

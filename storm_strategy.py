@@ -242,14 +242,15 @@ class ZoneRow:
 
     def render_line(self, event_type: str, teams: str = "both",
                     phase_count: int = 0) -> str:
-        """One-line summary for the editor embed. DS rendering respects
-        the alliance's configured teams (#148) so single-team alliances
-        see only their team's floor.
+        """One-line summary for the editor embed. Respects the
+        alliance's configured teams (#148 + Rule A / #166) so
+        single-team alliances see only their team's minimum.
 
         When `phase_count >= 2`, the capacity readout splits into
-        per-phase counts (P1: x, P2: y, optionally P3: z) instead of a
-        single Max.
+        per-phase counts (P1: x, P2: y, optionally P3: z) instead of
+        a single Max.
         """
+        del event_type  # Both DS and CS render the same shape per Rule A.
         if phase_count >= 2:
             parts = [f"P1: {self.max_phase1}", f"P2: {self.max_phase2}"]
             if phase_count >= 3:
@@ -269,11 +270,6 @@ class ZoneRow:
         else:
             cap = f"Max: {self.max_players}"
             prio = f" [P{self.priority}]" if self.priority else ""
-        if event_type == "CS":
-            return (
-                f"• {self.zone:<20} ({cap})  "
-                f"Min: {format_power(self.min_power_a)}{prio}"
-            )
         if teams == "A":
             return (
                 f"• {self.zone:<20} ({cap})  "
@@ -721,17 +717,24 @@ def delete_preset(guild_id: int, event_type: str, name: str) -> bool:
 # ── In-Discord editor ────────────────────────────────────────────────────────
 
 
-def _resolve_ds_teams(guild_id: int) -> str:
-    """Read the alliance's configured DS teams ('both' | 'A' | 'B') from
-    `guild_storm_config`. Falls back to 'both' on a missing row or
-    config-read failure — that's the historical behaviour, so the gate
-    is invisible to alliances that haven't run setup since #148."""
+def _resolve_storm_teams(guild_id: int, event_type: str) -> str:
+    """Read the alliance's configured teams ('both' | 'A' | 'B') from
+    `guild_storm_config` for the given event type. Falls back to 'both'
+    on a missing row or config-read failure — that's the historical
+    behaviour, so the gate is invisible to alliances that haven't run
+    setup since #148. Applies identically to DS and CS per Rule A /
+    #166."""
     try:
         import config
-        saved = (config.get_storm_config(int(guild_id), "DS") or {}).get("teams") or "both"
+        saved = (config.get_storm_config(int(guild_id), event_type) or {}).get("teams") or "both"
     except Exception:
         return "both"
     return saved if saved in ("both", "A", "B") else "both"
+
+
+def _resolve_ds_teams(guild_id: int) -> str:
+    """Back-compat alias — pre-#166 callers."""
+    return _resolve_storm_teams(guild_id, "DS")
 
 
 def _build_editor_embed(buf: PresetBuffer, team_size_hint: int = _TEAM_SIZE_HINT,
@@ -739,10 +742,11 @@ def _build_editor_embed(buf: PresetBuffer, team_size_hint: int = _TEAM_SIZE_HINT
     label = "Desert Storm" if buf.event_type == "DS" else "Canyon Storm"
     title = f"🛡️ Editing Preset: {buf.name}"
     desc_lines = [f"🗺️ Event: {label}"]
-    if buf.event_type == "DS" and teams in ("A", "B"):
+    if teams in ("A", "B"):
         # Surface the gate on the embed too — without this, an officer
-        # opening a single-team preset would see only one floor in the
-        # rows and wonder if their setup is broken.
+        # opening a single-team preset would see only one minimum in
+        # the rows and wonder if their setup is broken. Applies to
+        # both DS and CS per Rule A.
         desc_lines.append(f"👥 Teams: **Team {teams} only** (minimums shown match)")
     if buf.event_type == "CS":
         desc_lines.append(f"⚙️ Faction: {buf.faction}")
@@ -831,37 +835,46 @@ class _ZoneEditModal(discord.ui.Modal):
         # at open time; reading from there keeps modal + embed in sync
         # and avoids a second config read per modal open.
         self._teams = (
-            getattr(view, "teams", "both") if view.buf.event_type == "DS" else "both"
+            getattr(view, "teams", "both")
         )
 
-        if view.buf.event_type == "DS":
-            self.power_a_input = None
-            self.power_b_input = None
-            if self._teams in ("both", "A"):
-                self.power_a_input = discord.ui.TextInput(
-                    label="Min Power Team A",
-                    placeholder="e.g. 300M",
-                    default=format_power(existing.min_power_a) if existing.min_power_a else "",
-                    required=False, max_length=12,
-                )
-                self.add_item(self.power_a_input)
-            if self._teams in ("both", "B"):
-                self.power_b_input = discord.ui.TextInput(
-                    label="Min Power Team B",
-                    placeholder="e.g. 180M",
-                    default=format_power(existing.min_power_b) if existing.min_power_b else "",
-                    required=False, max_length=12,
-                )
-                self.add_item(self.power_b_input)
-            self.power_input = None
-        else:
-            self.power_input = discord.ui.TextInput(
-                label="Min Power",
-                placeholder="e.g. 250M",
+        # Two-team alliances (teams=both) show per-team minimums; the
+        # single-team variants (teams=A or teams=B) show one. Applies
+        # identically to DS and CS per Rule A / #166.
+        self.power_a_input = None
+        self.power_b_input = None
+        self.power_input = None
+        if self._teams == "both":
+            self.power_a_input = discord.ui.TextInput(
+                label="Min Power Team A",
+                placeholder="e.g. 300M",
                 default=format_power(existing.min_power_a) if existing.min_power_a else "",
                 required=False, max_length=12,
             )
-            self.add_item(self.power_input)
+            self.add_item(self.power_a_input)
+            self.power_b_input = discord.ui.TextInput(
+                label="Min Power Team B",
+                placeholder="e.g. 180M",
+                default=format_power(existing.min_power_b) if existing.min_power_b else "",
+                required=False, max_length=12,
+            )
+            self.add_item(self.power_b_input)
+        elif self._teams == "A":
+            self.power_a_input = discord.ui.TextInput(
+                label="Min Power Team A",
+                placeholder="e.g. 300M",
+                default=format_power(existing.min_power_a) if existing.min_power_a else "",
+                required=False, max_length=12,
+            )
+            self.add_item(self.power_a_input)
+        else:  # teams == "B"
+            self.power_b_input = discord.ui.TextInput(
+                label="Min Power Team B",
+                placeholder="e.g. 180M",
+                default=format_power(existing.min_power_b) if existing.min_power_b else "",
+                required=False, max_length=12,
+            )
+            self.add_item(self.power_b_input)
             self.power_a_input = None
             self.power_b_input = None
 
@@ -894,41 +907,29 @@ class _ZoneEditModal(discord.ui.Modal):
             return
 
         # Refuse garbage in the power fields rather than silently zeroing —
-        # a typo would otherwise persist as a "no floor" entry and the
-        # eligibility filter would pass below-floor members through it.
-        # (`existing` resolved above already.)
-        if self._view.buf.event_type == "DS":
-            # Hidden inputs (single-team alliances) preserve the stored
-            # value rather than overwriting to 0 — keeps the door open for
-            # an alliance to flip to two-team mode without losing prior
-            # floor values.
-            if self.power_a_input is not None:
-                min_a, bad_a = _parse_power_cell(self.power_a_input.value or "")
-            else:
-                min_a, bad_a = (existing.min_power_a or 0), False
-            if self.power_b_input is not None:
-                min_b, bad_b = _parse_power_cell(self.power_b_input.value or "")
-            else:
-                min_b, bad_b = (existing.min_power_b or 0), False
-            if bad_a or bad_b:
-                await interaction.response.send_message(
-                    "⚠️ One of the power values didn't parse. "
-                    "Use formats like `300M`, `1.2B`, or `300000000`. "
-                    "Leave blank for no minimum.",
-                    ephemeral=True,
-                )
-                return
+        # a typo would otherwise persist as a "no minimum" entry and
+        # the eligibility filter would pass below-minimum members
+        # through it. Hidden inputs (single-team alliances) preserve
+        # the stored value rather than overwriting to 0 — keeps the
+        # door open for an alliance to flip to two-team mode without
+        # losing prior minimum values. Applies identically to DS + CS
+        # per Rule A / #166.
+        if self.power_a_input is not None:
+            min_a, bad_a = _parse_power_cell(self.power_a_input.value or "")
         else:
-            min_a, bad = _parse_power_cell(self.power_input.value or "")
-            min_b = 0
-            if bad:
-                await interaction.response.send_message(
-                    f"⚠️ Couldn't parse `{self.power_input.value}` as a power "
-                    f"value. Try `250M`, `1.2B`, or `300000000`. Leave blank "
-                    f"for no minimum.",
-                    ephemeral=True,
-                )
-                return
+            min_a, bad_a = (existing.min_power_a or 0), False
+        if self.power_b_input is not None:
+            min_b, bad_b = _parse_power_cell(self.power_b_input.value or "")
+        else:
+            min_b, bad_b = (existing.min_power_b or 0), False
+        if bad_a or bad_b:
+            await interaction.response.send_message(
+                "⚠️ One of the power values didn't parse. "
+                "Use formats like `300M`, `1.2B`, or `300000000`. "
+                "Leave blank for no minimum.",
+                ephemeral=True,
+            )
+            return
 
         try:
             priority = int((self.priority_input.value or "0").strip() or 0)
@@ -1112,88 +1113,64 @@ class _ZonePhaseCapacityModal(discord.ui.Modal):
 
 
 class _ZonePhaseFloorsModal(discord.ui.Modal):
-    """Page 2/3 of the phase-aware wizard — power floors. Same field
-    shape as the flat modal (DS = Min A + Min B, CS = single Min)."""
+    """Page 2/3 of the phase-aware wizard — power minimums. Field
+    shape branches on the alliance's teams config (both = A+B, A
+    only or B only = one input). Applies identically to DS and CS
+    per Rule A / #166."""
 
     def __init__(self, view: "_PresetEditorView", zone_name: str):
         super().__init__(title=f"{zone_name} — Power Minimums"[:45])
         self._view = view
         self._zone_name = zone_name
         pending = _stash_pending_edit(view, zone_name)
-        self._teams = (
-            getattr(view, "teams", "both") if view.buf.event_type == "DS" else "both"
-        )
+        self._teams = getattr(view, "teams", "both")
 
-        if view.buf.event_type == "DS":
-            self.power_input = None
-            self.power_a_input = None
-            self.power_b_input = None
-            if self._teams in ("both", "A"):
-                self.power_a_input = discord.ui.TextInput(
-                    label="Min Power Team A",
-                    placeholder="e.g. 300M",
-                    default=format_power(pending["min_power_a"])
-                            if pending["min_power_a"] else "",
-                    required=False, max_length=12,
-                )
-                self.add_item(self.power_a_input)
-            if self._teams in ("both", "B"):
-                self.power_b_input = discord.ui.TextInput(
-                    label="Min Power Team B",
-                    placeholder="e.g. 180M",
-                    default=format_power(pending["min_power_b"])
-                            if pending["min_power_b"] else "",
-                    required=False, max_length=12,
-                )
-                self.add_item(self.power_b_input)
-        else:
-            self.power_a_input = None
-            self.power_b_input = None
-            self.power_input = discord.ui.TextInput(
-                label="Min Power",
-                placeholder="e.g. 250M",
+        self.power_input = None
+        self.power_a_input = None
+        self.power_b_input = None
+        if self._teams in ("both", "A"):
+            self.power_a_input = discord.ui.TextInput(
+                label="Min Power Team A",
+                placeholder="e.g. 300M",
                 default=format_power(pending["min_power_a"])
                         if pending["min_power_a"] else "",
                 required=False, max_length=12,
             )
-            self.add_item(self.power_input)
+            self.add_item(self.power_a_input)
+        if self._teams in ("both", "B"):
+            self.power_b_input = discord.ui.TextInput(
+                label="Min Power Team B",
+                placeholder="e.g. 180M",
+                default=format_power(pending["min_power_b"])
+                        if pending["min_power_b"] else "",
+                required=False, max_length=12,
+            )
+            self.add_item(self.power_b_input)
 
     async def on_submit(self, interaction: discord.Interaction):
         pending = _stash_pending_edit(self._view, self._zone_name)
-        if self._view.buf.event_type == "DS":
-            if self.power_a_input is not None:
-                val, bad = _parse_power_cell(self.power_a_input.value or "")
-                if bad:
-                    await interaction.response.send_message(
-                        f"⚠️ Min Power Team A didn't parse — got "
-                        f"`{self.power_a_input.value}`. Use `300M`, `1.2B`, or "
-                        f"`300000000`.",
-                        ephemeral=True,
-                    )
-                    return
-                pending["min_power_a"] = val
-            if self.power_b_input is not None:
-                val, bad = _parse_power_cell(self.power_b_input.value or "")
-                if bad:
-                    await interaction.response.send_message(
-                        f"⚠️ Min Power Team B didn't parse — got "
-                        f"`{self.power_b_input.value}`. Use `300M`, `1.2B`, or "
-                        f"`300000000`.",
-                        ephemeral=True,
-                    )
-                    return
-                pending["min_power_b"] = val
-        else:
-            val, bad = _parse_power_cell(self.power_input.value or "")
+        if self.power_a_input is not None:
+            val, bad = _parse_power_cell(self.power_a_input.value or "")
             if bad:
                 await interaction.response.send_message(
-                    f"⚠️ Min Power didn't parse — got "
-                    f"`{self.power_input.value}`. Use `250M`, `1.2B`, or "
-                    f"`250000000`.",
+                    f"⚠️ Min Power Team A didn't parse — got "
+                    f"`{self.power_a_input.value}`. Use `300M`, `1.2B`, or "
+                    f"`300000000`.",
                     ephemeral=True,
                 )
                 return
             pending["min_power_a"] = val
+        if self.power_b_input is not None:
+            val, bad = _parse_power_cell(self.power_b_input.value or "")
+            if bad:
+                await interaction.response.send_message(
+                    f"⚠️ Min Power Team B didn't parse — got "
+                    f"`{self.power_b_input.value}`. Use `300M`, `1.2B`, or "
+                    f"`300000000`.",
+                    ephemeral=True,
+                )
+                return
+            pending["min_power_b"] = val
 
         view = _ZoneWizardNextView(
             self._view, self._zone_name,
@@ -1607,11 +1584,12 @@ class _PresetEditorView(discord.ui.View):
         self.buf      = buf
         self.cancelled = False
         self.message: discord.Message | None = None
-        # Snapshot the alliance's configured-teams choice (#148) at open
-        # time. Used by the embed renderer + zone modal so single-team
-        # alliances see only their team's Min Power floor. Resolved once
-        # rather than re-read on every modal open / refresh.
-        self.teams = _resolve_ds_teams(guild_id) if buf.event_type == "DS" else "both"
+        # Snapshot the alliance's configured-teams choice (#148 +
+        # Rule A / #166) at open time. Used by the embed renderer +
+        # zone modal so single-team alliances see only their team's
+        # Min Power. Resolved once rather than re-read on every modal
+        # open / refresh. Applies identically to DS and CS.
+        self.teams = _resolve_storm_teams(guild_id, buf.event_type)
         self._rebuild_components()
 
     def _rebuild_components(self):

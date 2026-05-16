@@ -99,41 +99,32 @@ class SignupView(discord.ui.View):
         # which side of the poll the time corresponds to. Team-test
         # feedback was clear: showing just the time confuses members
         # who haven't internalised "9pm is Team A, 4pm is Team B."
-        # CS rosters only fight at one time per faction, so the B and
-        # Either buttons are DS-only (meaningless with one slot).
         #
-        # `teams` (#148) gates the rendered buttons for single-team
-        # alliances. "both" (default) → all 4 DS buttons (a, b,
-        # either, cannot). "A" → just a + cannot. "B" → just b +
-        # cannot. CS ignores this — there's no Team B for CS.
+        # `teams` (#148 + Rule A / #166) gates the rendered buttons
+        # for single-team alliances. "both" (default) → 4 buttons
+        # (a, b, either, cannot). "A" → just a + cannot. "B" → just
+        # b + cannot. Applies identically to DS and CS — both events
+        # can be run as one team or both, decided by leadership.
         #
         # `_force_all_buttons` is the back-compat lever for the persistent-
-        # view re-registration path: pre-hotfix CS sign-up posts already
-        # in production have all 4 buttons rendered, and discord.py
+        # view re-registration path: pre-hotfix sign-up posts already
+        # in production may have all 4 buttons rendered, and discord.py
         # routes clicks by matching custom_id against the View's
         # children. If we re-register a 2-button View against a 4-button
         # message, clicks on the stale B / Either buttons fall through
         # to "Interaction failed". `register_persistent_signup_views`
-        # passes True so every persisted CS post (or stale 4-button
-        # DS post created before the alliance switched to single-team)
-        # stays clickable; the click handler
-        # (`_handle_signup_click`) rejects stale wrong-team votes with
-        # a polite toast.
+        # passes True so every persisted post stays clickable; the
+        # click handler (`_handle_signup_click`) rejects stale wrong-team
+        # votes with a polite toast.
         teams_norm = teams if teams in ("both", "A", "B") else "both"
-        # DS gates: skip team's button when alliance opted out; CS
-        # alliance config is ignored (CS has no teams concept).
         show_a = (
-            _force_all_buttons
-            or self.event_type != "ds"
-            or teams_norm in ("both", "A")
+            _force_all_buttons or teams_norm in ("both", "A")
         )
         show_b = (
-            _force_all_buttons
-            or (self.event_type == "ds" and teams_norm in ("both", "B"))
+            _force_all_buttons or teams_norm in ("both", "B")
         )
         show_either = (
-            _force_all_buttons
-            or (self.event_type == "ds" and teams_norm == "both")
+            _force_all_buttons or teams_norm == "both"
         )
         if show_a:
             a_label = f"🅰️ Team A: {time_a_label}" if time_a_label else "🅰️ Team A"
@@ -216,61 +207,39 @@ async def _handle_signup_click(interaction: discord.Interaction, vote_code: str)
             pass
         return
 
-    # Stale-CS-button guard. CS rosters only have one time slot per
-    # faction, so the new SignupView only renders A + Cannot. Pre-hotfix
-    # CS posts in production already have all 4 buttons rendered, and
-    # `register_persistent_signup_views` keeps the click-routing alive
-    # for them via `_force_all_buttons=True`. But the b / either vote
-    # codes are meaningless for CS now — recording one would write a
-    # nonsensical row to storm_signups that downstream code (officer
-    # view, scheduler, faction roles) doesn't know how to interpret.
-    # Reject up front with a polite note.
-    if event_type == "CS" and vote in ("b", "either"):
+    # Single-team guard (#148 + Rule A / #166). If the alliance opted
+    # into Team A only (or Team B only), a vote on the OTHER team is
+    # meaningless. This fires when a stale 4-button post is still live
+    # but the alliance has since flipped `teams` to single-team in
+    # /setup_<event>. New posts on single-team alliances don't render
+    # the wrong-team buttons so this path can only be reached via
+    # stale posts or the `_force_all_buttons` re-registration surface.
+    # Applies identically to DS and CS — both events support
+    # teams=both/A/B.
+    cfg = config.get_storm_config(guild_id, event_type) or {}
+    teams_setting = (cfg.get("teams") or "both").strip()
+    if teams_setting == "A" and vote in ("b", "either"):
         try:
             await interaction.response.send_message(
-                "ℹ️ This sign-up post is from before Canyon Storm switched "
-                "to a single-team format. Team B / Either time aren't valid "
-                "for CS — vote on the next sign-up post (it'll only show "
-                "Team A + Cannot).",
+                "ℹ️ This alliance is configured as **Team A only**. "
+                "Team B / Either aren't valid choices — pick **Team A** "
+                "or **Cannot participate** on the next sign-up post.",
                 ephemeral=True,
             )
         except discord.HTTPException:
             pass
         return
-
-    # Single-team DS guard (#148). If the alliance opted into Team A
-    # only (or Team B only), a vote on the OTHER team is meaningless.
-    # This fires when a stale 4-button DS post is still live but the
-    # alliance has since flipped `teams` to single-team in
-    # /setup_desertstorm. New posts on single-team alliances don't
-    # render the wrong-team button so this path can only be reached
-    # via stale posts or the `_force_all_buttons` re-registration
-    # surface — same defense-in-depth shape as the CS guard above.
-    if event_type == "DS":
-        ds_cfg = config.get_storm_config(guild_id, "DS") or {}
-        teams_setting = (ds_cfg.get("teams") or "both").strip()
-        if teams_setting == "A" and vote in ("b", "either"):
-            try:
-                await interaction.response.send_message(
-                    "ℹ️ This alliance is configured as **Team A only**. "
-                    "Team B / Either aren't valid choices — pick **Team A** "
-                    "or **Cannot participate** on the next sign-up post.",
-                    ephemeral=True,
-                )
-            except discord.HTTPException:
-                pass
-            return
-        if teams_setting == "B" and vote in ("a", "either"):
-            try:
-                await interaction.response.send_message(
-                    "ℹ️ This alliance is configured as **Team B only**. "
-                    "Team A / Either aren't valid choices — pick **Team B** "
-                    "or **Cannot participate** on the next sign-up post.",
-                    ephemeral=True,
-                )
-            except discord.HTTPException:
-                pass
-            return
+    if teams_setting == "B" and vote in ("a", "either"):
+        try:
+            await interaction.response.send_message(
+                "ℹ️ This alliance is configured as **Team B only**. "
+                "Team A / Either aren't valid choices — pick **Team B** "
+                "or **Cannot participate** on the next sign-up post.",
+                ephemeral=True,
+            )
+        except discord.HTTPException:
+            pass
+        return
 
     # Defer first — every storage hop below is slower than the 3-second
     # interaction token allows under Railway disk contention or Sheets

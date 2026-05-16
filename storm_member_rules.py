@@ -598,7 +598,7 @@ class _MemberRuleGroup(app_commands.Group):
         else:
             await interaction.response.send_message(f"⚠️ {msg}", ephemeral=True)
 
-    # ── set_member_team (DS only — `team` doesn't exist for CS) ──────
+    # ── set_member_team (DS + CS with teams=both/A/B) ────────────────
     async def _set_member_team(
         self, interaction: discord.Interaction,
         member_user: discord.Member | None,
@@ -607,10 +607,22 @@ class _MemberRuleGroup(app_commands.Group):
     ):
         if not await _deny_if_not_leader(interaction):
             return
-        if self.event_type == "CS":
+        # Rule A / #166: CS supports teams just like DS. The guard now
+        # checks the alliance's `teams` config — if they configured a
+        # single-team setup, team rules only make sense within that
+        # team's pool.
+        import config as _config
+        cfg = _config.get_storm_config(interaction.guild_id, self.event_type) or {}
+        teams_setting = (cfg.get("teams") or "both").strip()
+        if teams_setting not in ("both", "A", "B"):
+            teams_setting = "both"
+        if teams_setting in ("A", "B"):
+            label = "Desert Storm" if self.event_type == "DS" else "Canyon Storm"
             await interaction.response.send_message(
-                "⚠️ `team` rules only apply to Desert Storm. Use the "
-                "`set_member_zone` command for Canyon Storm.",
+                f"⚠️ `set_member_team` only makes sense when {label} is "
+                f"configured for both teams. Your alliance is set to "
+                f"**Team {teams_setting} only**. Use `set_member_zone` "
+                f"for zone-specific rules instead.",
                 ephemeral=True,
             )
             return
@@ -803,6 +815,29 @@ def build_cs_member_rule_group() -> _MemberRuleGroup:
     )
     async def set_pb(interaction: discord.Interaction, threshold: str, zone: str, notes: str = ""):
         await grp._set_power_band(interaction, threshold, zone, notes)
+
+    @grp.command(name="set_member_team",
+                 description="Lock a specific member to Team A or B (when CS runs both teams)")
+    @app_commands.describe(
+        team="Team A or Team B",
+        member_user="Pick from the server (preferred — keys by Discord ID, survives renames)",
+        member_name="OR a roster name if the member isn't on Discord",
+        notes="Optional free-text notes",
+    )
+    @app_commands.choices(team=[
+        app_commands.Choice(name="Team A", value="A"),
+        app_commands.Choice(name="Team B", value="B"),
+    ])
+    async def set_team_cs(
+        interaction: discord.Interaction,
+        team: app_commands.Choice[str],
+        member_user: discord.Member | None = None,
+        member_name: str | None = None,
+        notes: str = "",
+    ):
+        await grp._set_member_team(
+            interaction, member_user, member_name, team.value, notes,
+        )
 
     @grp.command(name="set_member_zone",
                  description="Lock a specific member to a zone")

@@ -96,15 +96,15 @@ class TestSignupViewConstruction:
         assert any("9pm ET" in lab for lab in labels)
         assert any("4pm ET" in lab for lab in labels)
 
-    def test_cs_default_renders_two_buttons(self):
-        """CS rosters only fight at one time per faction. Team B and
-        Either are meaningless for CS, so they're skipped on a fresh
-        post."""
+    def test_cs_default_renders_four_buttons(self):
+        """Rule A / #166: CS supports teams=both/A/B just like DS. With
+        the default teams="both" CS renders all 4 buttons (a, b,
+        either, cannot)."""
         view = sv.SignupView(12345, "CS", "2026-05-18")
         codes = sorted(
             sv.parse_custom_id(c.custom_id)["vote"] for c in view.children
         )
-        assert codes == ["a", "cannot"]
+        assert codes == ["a", "b", "cannot", "either"]
 
     def test_cs_force_all_buttons_renders_four(self):
         """`_force_all_buttons=True` keeps all 4 button handlers
@@ -155,9 +155,9 @@ class TestSignupViewConstruction:
                              teams="A", _force_all_buttons=True)
         assert len(view.children) == 4
 
-    def test_cs_ignores_teams_setting(self):
-        """CS has no Team B concept; the `teams` field is DS-only.
-        CS construction always renders A + Cannot."""
+    def test_cs_respects_teams_setting(self):
+        """Rule A / #166: CS reads `teams` like DS. teams=A gates the
+        view to a + cannot only; teams=B gates to b + cannot."""
         view = sv.SignupView(1, "CS", "2026-05-18", teams="A")
         codes = sorted(
             sv.parse_custom_id(c.custom_id)["vote"] for c in view.children
@@ -167,7 +167,7 @@ class TestSignupViewConstruction:
         codes = sorted(
             sv.parse_custom_id(c.custom_id)["vote"] for c in view.children
         )
-        assert codes == ["a", "cannot"]
+        assert codes == ["b", "cannot"]
 
     def test_garbage_teams_value_falls_back_to_both(self):
         """A schema-drift sentinel: if `teams` reads as something other
@@ -195,16 +195,22 @@ class TestSignupViewConstruction:
 
 
 class TestCsStaleVoteReject:
-    """Pre-hotfix CS sign-up posts have all 4 buttons rendered.
-    `register_persistent_signup_views` keeps them clickable via
-    `_force_all_buttons=True`, but b/either are meaningless for CS
-    now. The click handler intercepts and politely redirects rather
-    than writing a nonsensical row to storm_signups."""
+    """Single-team CS alliances (teams=A or teams=B) reject votes for
+    the other team — same defense-in-depth shape as the DS guard.
+    Pre-Rule-A behaviour where CS *always* rejected b/either is
+    obsolete; CS with teams=both now accepts every vote like DS."""
 
     @pytest.mark.asyncio
-    async def test_cs_b_vote_is_rejected_before_premium_check(self, seeded_db):
+    async def test_cs_b_vote_rejected_when_team_a_only(self, seeded_db):
         from unittest.mock import AsyncMock, MagicMock, patch
-        # CS post + member clicks the now-stale Team B button.
+        import config
+        # Seed CS config with teams=A so the b vote is invalid.
+        config.save_storm_config(
+            TEST_GUILD_ID, "CS",
+            tab_name="CS Tab", mail_template="",
+            timezone="America/New_York", log_channel_id=0,
+            teams="A",
+        )
         cid = sv.make_custom_id(TEST_GUILD_ID, "CS", "2026-05-18", "b")
         interaction = MagicMock()
         interaction.guild_id = TEST_GUILD_ID
@@ -220,11 +226,18 @@ class TestCsStaleVoteReject:
         record.assert_not_called()
         interaction.response.send_message.assert_awaited_once()
         body = interaction.response.send_message.await_args.args[0]
-        assert "single-team" in body or "Canyon Storm" in body or "CS" in body
+        assert "Team A only" in body
 
     @pytest.mark.asyncio
-    async def test_cs_either_vote_is_rejected(self, seeded_db):
+    async def test_cs_either_vote_rejected_when_single_team(self, seeded_db):
         from unittest.mock import AsyncMock, MagicMock, patch
+        import config
+        config.save_storm_config(
+            TEST_GUILD_ID, "CS",
+            tab_name="CS Tab", mail_template="",
+            timezone="America/New_York", log_channel_id=0,
+            teams="A",
+        )
         cid = sv.make_custom_id(TEST_GUILD_ID, "CS", "2026-05-18", "either")
         interaction = MagicMock()
         interaction.guild_id = TEST_GUILD_ID

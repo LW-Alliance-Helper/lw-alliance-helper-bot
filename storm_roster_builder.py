@@ -430,13 +430,13 @@ class RosterBuilderSession:
         return [1]
 
     def floor_for_zone(self, zone_name: str) -> int:
-        """Per-team min_power for this zone. DS uses min_power_a/b; CS
-        uses min_power_a as the single floor (storm_strategy stores it
-        there for CS too)."""
+        """Per-team min_power for this zone. Team A uses min_power_a;
+        Team B uses min_power_b. Applies identically to DS and CS
+        post-Rule A (#166)."""
         z = self.preset.find_zone(zone_name)
         if z is None:
             return 0
-        if self.event_type == "DS" and self.team == "B":
+        if self.team == "B":
             return int(z.min_power_b or 0)
         return int(z.min_power_a or 0)
 
@@ -3104,22 +3104,32 @@ async def open_roster_builder(
     if not interaction.response.is_done():
         await interaction.response.defer(thinking=True)
 
-    # Team picker for DS — skip if caller already passed team_override.
+    # Team picker — skip if caller already passed team_override, or
+    # if the alliance is configured single-team (the team is implicit).
+    # Applies identically to DS and CS post-Rule A (#166).
     team = team_override or ""
-    if event_type == "DS" and not team:
-        team_view = _TeamPickerView(interaction.user.id)
-        team_view.message = await interaction.followup.send(
-            f"Build roster for **Team A** or **Team B** with preset "
-            f"**{preset_name}**?",
-            view=team_view, ephemeral=True,
-        )
-        await team_view.wait()
-        if team_view.selected is None:
-            await interaction.followup.send(
-                "⏰ Timed out. Run the apply command again.", ephemeral=True,
+    if not team:
+        import config as _config
+        cfg = _config.get_storm_config(interaction.guild_id, event_type) or {}
+        teams_setting = (cfg.get("teams") or "both").strip()
+        if teams_setting == "A":
+            team = "A"
+        elif teams_setting == "B":
+            team = "B"
+        else:
+            team_view = _TeamPickerView(interaction.user.id)
+            team_view.message = await interaction.followup.send(
+                f"Build roster for **Team A** or **Team B** with preset "
+                f"**{preset_name}**?",
+                view=team_view, ephemeral=True,
             )
-            return
-        team = team_view.selected
+            await team_view.wait()
+            if team_view.selected is None:
+                await interaction.followup.send(
+                    "⏰ Timed out. Run the apply command again.", ephemeral=True,
+                )
+                return
+            team = team_view.selected
 
     # Ensure the guild member cache is populated so `guild.get_member`
     # inside `_read_roster_powers` doesn't false-positive-infer real

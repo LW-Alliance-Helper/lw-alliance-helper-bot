@@ -282,9 +282,10 @@ def init_db():
                 log_channel_id           INTEGER DEFAULT 0,
                 post_channel_id          INTEGER DEFAULT 0,
                 dm_reminder_message      TEXT    DEFAULT '',
-                -- Which teams the alliance runs for this event (#148).
-                -- DS: 'both' | 'A' | 'B'. CS only ever runs one team so this
-                -- defaults to 'both' and is unused on CS rows.
+                -- Which teams the alliance runs for this event (#148 +
+                -- Rule A / #166): 'both' | 'A' | 'B'. Applies identically
+                -- to DS and CS — leadership decides whether to run one
+                -- or two teams per event.
                 teams                    TEXT    DEFAULT 'both',
                 -- Structured storm flow (#38 + #54)
                 structured_flow_enabled  INTEGER DEFAULT 0,

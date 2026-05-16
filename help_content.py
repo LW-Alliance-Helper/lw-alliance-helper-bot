@@ -169,12 +169,13 @@ HELP_CATEGORIES: dict[str, dict] = {
              "per-zone power minimums. `apply` opens the roster builder; "
              "`roster_history` browses past structured rosters with "
              "attendance overlay (💎 Premium)."),
-            ("/canyonstorm member_rule <set_power_band | set_member_zone "
-             "| list>",
+            ("/canyonstorm member_rule <set_power_band | set_member_team "
+             "| set_member_zone | list>",
              "Manage member rules: power-band eligibility "
              "(`≥ 250M → Power Tower`) plus per-member overrides "
-             "(`Charlie is always at Power Tower`). CS doesn't have a "
-             "`set_member_team` — Canyon Storm is single-team per faction."),
+             "(`Alice always plays Team A`, `Charlie is always at "
+             "Power Tower`). `set_member_team` only applies when CS is "
+             "configured for both teams in setup."),
             ("/canyonstorm post_signup [event_date]",
              "💎 Post a sign-up message in the configured channel; "
              "members click buttons to register their availability."),

@@ -1874,6 +1874,353 @@ async def open_editor_followup(
     view.message = msg
 
 
+# ── Inline list-view actions (#169 — Rule M) ─────────────────────────────────
+
+
+class _CreatePresetNameModal(discord.ui.Modal, title="Create strategy preset"):
+    """Captures the new preset's name and opens the editor.
+
+    Triggered by the list view's [➕ Create] button — same validation +
+    seeding as the `/<parent> strategy create` slash command but reachable
+    without leaving the list surface.
+    """
+
+    def __init__(self, event_type: str):
+        super().__init__()
+        self.event_type = event_type
+        self.preset_name = discord.ui.TextInput(
+            label="Preset name",
+            placeholder="e.g. Standard Desert",
+            required=True,
+            max_length=60,
+        )
+        self.add_item(self.preset_name)
+
+    async def on_submit(self, interaction: discord.Interaction):
+        if not await _deny_if_not_leader(interaction):
+            return
+        name = (self.preset_name.value or "").strip()
+        parent = "desertstorm" if self.event_type == "DS" else "canyonstorm"
+        if not name:
+            await interaction.response.send_message(
+                "⚠️ Pick a preset name (e.g. `Standard Desert`).", ephemeral=True,
+            )
+            return
+        existing = [
+            p.lower() for p in await asyncio.to_thread(
+                list_presets, interaction.guild_id, self.event_type,
+            )
+        ]
+        if name.lower() in existing:
+            await interaction.response.send_message(
+                f"⚠️ A preset named **{name}** already exists. Use the "
+                f"Edit button on the list (or "
+                f"`/{parent} strategy edit name:\"{name}\"`) to modify it.",
+                ephemeral=True,
+            )
+            return
+        buf = seed_default_preset(name, self.event_type)
+        buf.dirty = True
+        await _open_editor(interaction, self.event_type, buf)
+
+
+class _ConfirmDeleteView(discord.ui.View):
+    """Confirm/cancel buttons for a delete operation. Reused by both the
+    `/<parent> strategy delete` slash command and the list view's Delete
+    flow."""
+
+    def __init__(self, owner_id: int):
+        super().__init__(timeout=60)
+        self.owner_id = owner_id
+        self.confirmed: bool | None = None
+        self.message: discord.Message | None = None
+
+    @discord.ui.button(label="🗑️ Delete preset", style=discord.ButtonStyle.danger)
+    async def yes(self, inter: discord.Interaction, btn: discord.ui.Button):
+        if inter.user.id != self.owner_id:
+            await inter.response.send_message(
+                "⛔ Only the user who ran the command can confirm.",
+                ephemeral=True,
+            )
+            return
+        self.confirmed = True
+        for item in self.children:
+            item.disabled = True
+        await inter.response.edit_message(view=self)
+        self.stop()
+
+    @discord.ui.button(label="Cancel", style=discord.ButtonStyle.secondary)
+    async def no(self, inter: discord.Interaction, btn: discord.ui.Button):
+        if inter.user.id != self.owner_id:
+            await inter.response.send_message(
+                "⛔ Only the user who ran the command can cancel.",
+                ephemeral=True,
+            )
+            return
+        self.confirmed = False
+        for item in self.children:
+            item.disabled = True
+        await inter.response.edit_message(view=self)
+        self.stop()
+
+    async def on_timeout(self) -> None:
+        for item in self.children:
+            item.disabled = True
+        if self.message is not None:
+            try:
+                await self.message.edit(view=self)
+            except discord.HTTPException:
+                pass
+
+
+async def _run_delete_with_confirm(
+    interaction: discord.Interaction,
+    event_type: str,
+    name: str,
+    *,
+    via_followup: bool,
+) -> None:
+    """Confirm-then-delete sequence used by both the slash command (initial
+    response) and the list-view picker (followup). The `via_followup` flag
+    flips between `interaction.response.send_message` and
+    `interaction.followup.send` for the confirm prompt — the rest of the
+    flow uses followup either way."""
+    view = _ConfirmDeleteView(interaction.user.id)
+    prompt = (
+        f"⚠️ Delete preset **{name}**? This removes all rows for this preset "
+        f"from your Sheet. Can't be undone."
+    )
+    if via_followup:
+        view.message = await interaction.followup.send(
+            prompt, view=view, ephemeral=True,
+        )
+    else:
+        await interaction.response.send_message(
+            prompt, view=view, ephemeral=True,
+        )
+        try:
+            view.message = await interaction.original_response()
+        except discord.HTTPException:
+            view.message = None
+    await view.wait()
+    if not view.confirmed:
+        await interaction.followup.send("✅ Delete cancelled.", ephemeral=True)
+        return
+    ok = await asyncio.to_thread(
+        delete_preset, interaction.guild_id, event_type, name,
+    )
+    if ok:
+        await interaction.followup.send(
+            f"🗑️ Deleted preset **{name}**.", ephemeral=False,
+        )
+    else:
+        await interaction.followup.send(
+            f"⚠️ Couldn't find preset **{name}** to delete (or Sheet write failed).",
+            ephemeral=True,
+        )
+
+
+class _StrategyListView(discord.ui.View):
+    """Inline Create / Edit / Delete actions for `/<parent> strategy list`.
+
+    Rule M: every list surface ends with action buttons — no dead-end
+    summary that forces officers to remember the slash subcommand names.
+    Empty state and populated state share the same view; Edit and Delete
+    are just disabled when no presets exist.
+    """
+
+    def __init__(self, owner_id: int, event_type: str, names: list[str]):
+        super().__init__(timeout=600)
+        self.owner_id = owner_id
+        self.event_type = event_type
+        self.names = names
+        self.message: discord.Message | None = None
+        self._build_components()
+
+    def _build_components(self):
+        self.clear_items()
+
+        create_btn = discord.ui.Button(
+            label="➕ Create", style=discord.ButtonStyle.primary, row=0,
+        )
+
+        async def _on_create(inter: discord.Interaction):
+            if not await self._guard_owner(inter):
+                return
+            await inter.response.send_modal(_CreatePresetNameModal(self.event_type))
+
+        create_btn.callback = _on_create
+        self.add_item(create_btn)
+
+        edit_btn = discord.ui.Button(
+            label="✏️ Edit", style=discord.ButtonStyle.secondary, row=0,
+            disabled=not self.names,
+        )
+
+        async def _on_edit(inter: discord.Interaction):
+            if not await self._guard_owner(inter):
+                return
+            picker = _PresetPickerView(
+                owner_id=self.owner_id,
+                event_type=self.event_type,
+                names=self.names,
+                action="edit",
+            )
+            await inter.response.send_message(
+                "✏️ Pick a preset to edit.", view=picker, ephemeral=True,
+            )
+            try:
+                picker.message = await inter.original_response()
+            except discord.HTTPException:
+                pass
+
+        edit_btn.callback = _on_edit
+        self.add_item(edit_btn)
+
+        delete_btn = discord.ui.Button(
+            label="🗑️ Delete", style=discord.ButtonStyle.danger, row=0,
+            disabled=not self.names,
+        )
+
+        async def _on_delete(inter: discord.Interaction):
+            if not await self._guard_owner(inter):
+                return
+            picker = _PresetPickerView(
+                owner_id=self.owner_id,
+                event_type=self.event_type,
+                names=self.names,
+                action="delete",
+            )
+            await inter.response.send_message(
+                "🗑️ Pick a preset to delete.", view=picker, ephemeral=True,
+            )
+            try:
+                picker.message = await inter.original_response()
+            except discord.HTTPException:
+                pass
+
+        delete_btn.callback = _on_delete
+        self.add_item(delete_btn)
+
+    async def _guard_owner(self, inter: discord.Interaction) -> bool:
+        if inter.user.id != self.owner_id:
+            await inter.response.send_message(
+                "⛔ Only the officer who ran the command can use these buttons.",
+                ephemeral=True,
+            )
+            return False
+        return True
+
+    async def on_timeout(self) -> None:
+        for item in self.children:
+            item.disabled = True
+        if self.message is not None:
+            try:
+                await self.message.edit(view=self)
+            except discord.HTTPException:
+                pass
+
+
+class _PresetPickerView(discord.ui.View):
+    """Ephemeral preset Select for the list view's Edit / Delete buttons.
+    Action picks the destination flow — `edit` opens the editor, `delete`
+    runs the confirm + delete sequence. Discord's Select option cap is 25;
+    the picker shows the first 25 alphabetically and warns about overflow."""
+
+    def __init__(
+        self,
+        *,
+        owner_id: int,
+        event_type: str,
+        names: list[str],
+        action: str,
+    ):
+        super().__init__(timeout=300)
+        self.owner_id = owner_id
+        self.event_type = event_type
+        self.action = action
+        self.message: discord.Message | None = None
+        self._build_components(names)
+
+    def _build_components(self, names: list[str]):
+        sorted_names = sorted(names, key=str.lower)
+        capped = sorted_names[:25]
+        options = [
+            discord.SelectOption(label=n[:100], value=n[:100]) for n in capped
+        ]
+        sel = discord.ui.Select(
+            placeholder=f"Pick a preset to {self.action}…",
+            min_values=1, max_values=1, options=options,
+        )
+        sel.callback = self._make_pick_callback(sel)
+        self.add_item(sel)
+
+        cancel_btn = discord.ui.Button(
+            label="↩️ Cancel", style=discord.ButtonStyle.secondary,
+        )
+        cancel_btn.callback = self._on_cancel
+        self.add_item(cancel_btn)
+
+    def _make_pick_callback(self, sel: discord.ui.Select):
+        async def _cb(inter: discord.Interaction):
+            if inter.user.id != self.owner_id:
+                await inter.response.send_message(
+                    "⛔ Only the officer who ran the command can pick.",
+                    ephemeral=True,
+                )
+                return
+            name = sel.values[0]
+            self.stop()
+            for item in self.children:
+                item.disabled = True
+            try:
+                await inter.response.edit_message(view=self)
+            except discord.HTTPException:
+                pass
+            if self.action == "edit":
+                buf = await asyncio.to_thread(
+                    load_preset, inter.guild_id, self.event_type, name,
+                )
+                if buf is None:
+                    await inter.followup.send(
+                        f"⚠️ No preset named **{name}** (it may have been "
+                        f"deleted in another session). Rerun the list "
+                        f"command to refresh.",
+                        ephemeral=True,
+                    )
+                    return
+                await open_editor_followup(inter, self.event_type, buf)
+            elif self.action == "delete":
+                await _run_delete_with_confirm(
+                    inter, self.event_type, name, via_followup=True,
+                )
+        return _cb
+
+    async def _on_cancel(self, inter: discord.Interaction):
+        if inter.user.id != self.owner_id:
+            await inter.response.send_message(
+                "⛔ Only the officer who ran the command can cancel.",
+                ephemeral=True,
+            )
+            return
+        self.stop()
+        for item in self.children:
+            item.disabled = True
+        try:
+            await inter.response.edit_message(view=self)
+        except discord.HTTPException:
+            pass
+
+    async def on_timeout(self) -> None:
+        for item in self.children:
+            item.disabled = True
+        if self.message is not None:
+            try:
+                await self.message.edit(view=self)
+            except discord.HTTPException:
+                pass
+
+
 class _StrategyGroup(app_commands.Group):
     """Shared shape for DS and CS strategy slash command groups."""
 
@@ -1929,96 +2276,34 @@ class _StrategyGroup(app_commands.Group):
         )
         label = "Desert Storm" if self.event_type == "DS" else "Canyon Storm"
         if not names:
-            await interaction.response.send_message(
-                f"📋 No {label} strategy presets saved yet. "
-                f"Use the create command to make one.",
-                ephemeral=True,
+            description = (
+                f"*No {label} strategy presets saved yet.* Click **➕ Create** "
+                f"below to make one."
             )
-            return
+        else:
+            description = "\n".join(f"• **{n}**" for n in names)
         embed = discord.Embed(
             title=f"📋 {label} — Strategy Presets",
-            description="\n".join(f"• **{n}**" for n in names),
+            description=description,
             color=discord.Color.blurple(),
         )
-        await interaction.response.send_message(embed=embed)
-
-    async def _delete(self, interaction: discord.Interaction, name: str):
-        if not await _deny_if_not_leader(interaction):
-            return
-
-        class _ConfirmDelete(discord.ui.View):
-            def __init__(self_, owner_id: int):
-                super().__init__(timeout=60)
-                self_.owner_id = owner_id
-                self_.confirmed = None
-                self_.message: discord.Message | None = None
-
-            @discord.ui.button(label="🗑️ Delete preset", style=discord.ButtonStyle.danger)
-            async def yes(self_, inter: discord.Interaction, btn: discord.ui.Button):
-                if inter.user.id != self_.owner_id:
-                    await inter.response.send_message(
-                        "⛔ Only the user who ran the command can confirm.",
-                        ephemeral=True,
-                    )
-                    return
-                self_.confirmed = True
-                for item in self_.children: item.disabled = True
-                await inter.response.edit_message(view=self_)
-                self_.stop()
-
-            @discord.ui.button(label="Cancel", style=discord.ButtonStyle.secondary)
-            async def no(self_, inter: discord.Interaction, btn: discord.ui.Button):
-                if inter.user.id != self_.owner_id:
-                    await inter.response.send_message(
-                        "⛔ Only the user who ran the command can cancel.",
-                        ephemeral=True,
-                    )
-                    return
-                self_.confirmed = False
-                for item in self_.children: item.disabled = True
-                await inter.response.edit_message(view=self_)
-                self_.stop()
-
-            async def on_timeout(self_) -> None:
-                """Strip the confirm prompt on timeout so the buttons
-                don't surface 'Interaction failed' after the 60-second
-                window. Treats no-decision as cancel."""
-                for item in self_.children:
-                    item.disabled = True
-                if self_.message is not None:
-                    try:
-                        await self_.message.edit(view=self_)
-                    except discord.HTTPException:
-                        pass
-
-        view = _ConfirmDelete(interaction.user.id)
-        await interaction.response.send_message(
-            f"⚠️ Delete preset **{name}**? This removes all rows for this preset from your "
-            f"Sheet. Can't be undone.",
-            view=view,
-            ephemeral=True,
+        view = _StrategyListView(
+            owner_id=interaction.user.id,
+            event_type=self.event_type,
+            names=names,
         )
+        await interaction.response.send_message(embed=embed, view=view)
         try:
             view.message = await interaction.original_response()
         except discord.HTTPException:
             view.message = None
-        await view.wait()
-        if not view.confirmed:
-            await interaction.followup.send("✅ Delete cancelled.", ephemeral=True)
+
+    async def _delete(self, interaction: discord.Interaction, name: str):
+        if not await _deny_if_not_leader(interaction):
             return
-        ok = await asyncio.to_thread(
-            delete_preset, interaction.guild_id, self.event_type, name,
+        await _run_delete_with_confirm(
+            interaction, self.event_type, name, via_followup=False,
         )
-        if ok:
-            await interaction.followup.send(
-                f"🗑️ Deleted preset **{name}**.",
-                ephemeral=False,
-            )
-        else:
-            await interaction.followup.send(
-                f"⚠️ Couldn't find preset **{name}** to delete (or Sheet write failed).",
-                ephemeral=True,
-            )
 
 
 def build_ds_strategy_group() -> _StrategyGroup:

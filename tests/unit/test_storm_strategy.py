@@ -751,3 +751,69 @@ class TestPhaseAwarePresets:
     def test_parse_uses_phases_falsy_strings(self):
         for raw in ("", "FALSE", "false", "no", "n", "0", "off", None, "  "):
             assert ss._parse_uses_phases(raw) is False
+
+
+class TestStrategyListView:
+    """#169 / Rule M: `/<parent> strategy list` now ships an inline
+    Create / Edit / Delete row alongside the preset summary. Empty state
+    surfaces the same row with Edit + Delete disabled."""
+
+    def test_empty_state_enables_only_create(self):
+        view = ss._StrategyListView(owner_id=1, event_type="DS", names=[])
+        labels_disabled = {
+            getattr(c, "label", ""): getattr(c, "disabled", False)
+            for c in view.children
+        }
+        # All three buttons render, but Edit + Delete are disabled when
+        # no presets exist so the officer can't open an empty Select.
+        assert any("Create" in lab for lab in labels_disabled)
+        assert any("Edit" in lab for lab in labels_disabled)
+        assert any("Delete" in lab for lab in labels_disabled)
+        for label, disabled in labels_disabled.items():
+            if "Create" in label:
+                assert disabled is False
+            if "Edit" in label or "Delete" in label:
+                assert disabled is True
+
+    def test_populated_state_enables_all_three(self):
+        view = ss._StrategyListView(
+            owner_id=1, event_type="DS", names=["Standard DS"],
+        )
+        labels_disabled = {
+            getattr(c, "label", ""): getattr(c, "disabled", False)
+            for c in view.children
+        }
+        for label, disabled in labels_disabled.items():
+            if any(action in label for action in ("Create", "Edit", "Delete")):
+                assert disabled is False
+
+
+class TestPresetPickerView:
+    """The Edit / Delete buttons open this picker. Capped at 25 options
+    (Discord Select limit); the action dictates the downstream handler."""
+
+    def test_picker_lists_sorted_names_case_insensitive(self):
+        view = ss._PresetPickerView(
+            owner_id=1, event_type="DS",
+            names=["zeta", "Alpha", "beta"],
+            action="edit",
+        )
+        # First child is the Select.
+        select = view.children[0]
+        labels = [opt.label for opt in select.options]
+        assert labels == ["Alpha", "beta", "zeta"]
+
+    def test_picker_caps_at_25_options(self):
+        names = [f"Preset {i:02d}" for i in range(40)]
+        view = ss._PresetPickerView(
+            owner_id=1, event_type="DS", names=names, action="delete",
+        )
+        select = view.children[0]
+        assert len(select.options) == 25
+
+    def test_picker_placeholder_reflects_action(self):
+        view = ss._PresetPickerView(
+            owner_id=1, event_type="DS", names=["X"], action="delete",
+        )
+        select = view.children[0]
+        assert "delete" in select.placeholder.lower()

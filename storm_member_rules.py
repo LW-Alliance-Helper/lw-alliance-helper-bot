@@ -464,6 +464,34 @@ class _RulesListView(discord.ui.View):
             btn.callback = _make_clear_callback(self, i)
             self.add_item(btn)
 
+        # ➕ Add rule (#169 — Rule M). Always present, even on empty
+        # state — the list view is the canonical place officers reach
+        # for to manage rules, so the add affordance lives here too.
+        add_btn = discord.ui.Button(
+            label="➕ Add rule", style=discord.ButtonStyle.primary, row=4,
+        )
+
+        async def _on_add(inter: discord.Interaction):
+            if inter.user.id != self.user_id:
+                await inter.response.send_message(
+                    "⛔ Only the command owner can add rules from this list.",
+                    ephemeral=True,
+                )
+                return
+            picker = _AddRuleTypePickerView(
+                event_type=self.event_type, owner_id=self.user_id,
+            )
+            await inter.response.send_message(
+                "➕ Pick the rule type to add.", view=picker, ephemeral=True,
+            )
+            try:
+                picker.message = await inter.original_response()
+            except discord.HTTPException:
+                pass
+
+        add_btn.callback = _on_add
+        self.add_item(add_btn)
+
         if self.total_pages > 1:
             prev_btn = discord.ui.Button(
                 label="◀ Prev", style=discord.ButtonStyle.secondary,
@@ -498,6 +526,112 @@ class _RulesListView(discord.ui.View):
             next_btn.callback = _next
             self.add_item(prev_btn)
             self.add_item(next_btn)
+
+
+class _AddRuleTypePickerView(discord.ui.View):
+    """Choice view opened by `_RulesListView`'s [➕ Add rule] button.
+
+    Power-band rules go through the same `InlinePowerBandView` the setup
+    wizard uses (zone Select → power-modal). Per-member rules need a
+    `discord.Member` picker that Discord modals can't host, so this view
+    points the officer at the slash commands instead.
+    """
+
+    def __init__(self, *, event_type: str, owner_id: int):
+        super().__init__(timeout=120)
+        self.event_type = event_type
+        self.owner_id = owner_id
+        self.message: discord.Message | None = None
+        parent = "desertstorm" if event_type == "DS" else "canyonstorm"
+        self.parent = parent
+
+        pb_btn = discord.ui.Button(
+            label="⚡ Add a power-band rule", style=discord.ButtonStyle.primary,
+        )
+        pb_btn.callback = self._on_power_band
+        self.add_item(pb_btn)
+
+        pm_btn = discord.ui.Button(
+            label="👤 Add a per-member rule",
+            style=discord.ButtonStyle.secondary,
+        )
+        pm_btn.callback = self._on_per_member
+        self.add_item(pm_btn)
+
+        cancel_btn = discord.ui.Button(
+            label="↩️ Cancel", style=discord.ButtonStyle.secondary,
+        )
+        cancel_btn.callback = self._on_cancel
+        self.add_item(cancel_btn)
+
+    async def _guard_owner(self, inter: discord.Interaction) -> bool:
+        if inter.user.id != self.owner_id:
+            await inter.response.send_message(
+                "⛔ Only the officer who opened the list can add rules.",
+                ephemeral=True,
+            )
+            return False
+        return True
+
+    async def _on_power_band(self, inter: discord.Interaction):
+        if not await self._guard_owner(inter):
+            return
+        for item in self.children:
+            item.disabled = True
+        self.stop()
+        picker = InlinePowerBandView(self.event_type, owner_id=inter.user.id)
+        try:
+            await inter.response.edit_message(
+                content=(
+                    "Pick the zone the rule applies to, then click "
+                    "**Set minimum power** to enter the threshold."
+                ),
+                view=picker,
+            )
+            picker.message = await inter.original_response()
+        except discord.HTTPException:
+            pass
+
+    async def _on_per_member(self, inter: discord.Interaction):
+        if not await self._guard_owner(inter):
+            return
+        for item in self.children:
+            item.disabled = True
+        self.stop()
+        body = (
+            "👤 Per-member rules need a server-member picker, which Discord "
+            "doesn't expose inside a modal. Run one of:\n"
+            f"• `/{self.parent} member_rule set_member_zone` — pin a member "
+            "to a specific zone.\n"
+            f"• `/{self.parent} member_rule set_member_team` — pin a member "
+            "to Team A or Team B."
+        )
+        try:
+            await inter.response.edit_message(content=body, view=self)
+        except discord.HTTPException:
+            pass
+
+    async def _on_cancel(self, inter: discord.Interaction):
+        if not await self._guard_owner(inter):
+            return
+        for item in self.children:
+            item.disabled = True
+        self.stop()
+        try:
+            await inter.response.edit_message(
+                content="↩️ Cancelled — no rule added.", view=self,
+            )
+        except discord.HTTPException:
+            pass
+
+    async def on_timeout(self) -> None:
+        for item in self.children:
+            item.disabled = True
+        if self.message is not None:
+            try:
+                await self.message.edit(view=self)
+            except discord.HTTPException:
+                pass
 
 
 def _make_clear_callback(view: "_RulesListView", idx: int):

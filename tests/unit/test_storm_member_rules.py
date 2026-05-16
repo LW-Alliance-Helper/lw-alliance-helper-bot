@@ -536,3 +536,49 @@ class TestRenderLabel:
         assert "Charlie" in r.render_label()
         assert "Power Tower" in r.render_label()
 
+
+class TestRulesListAddRuleButton:
+    """#169 (Rule M): the list view surfaces a [➕ Add rule] button
+    alongside the per-rule Clear buttons. Empty state shows the same
+    button so officers can add their first rule from the list."""
+
+    def test_add_rule_button_present_on_empty_list(self):
+        view = smr._RulesListView(
+            guild_id=123, user_id=456, event_type="DS", rules=[],
+        )
+        labels = [getattr(c, "label", "") for c in view.children]
+        assert any("Add rule" in lab for lab in labels)
+
+    def test_add_rule_button_present_with_existing_rules(self):
+        rules = [
+            smr.Rule(rule_type="power_band", subject="250000000", value="Power Tower"),
+            smr.Rule(rule_type="per_member", subject="Alice", sub_type="zone", value="Power Tower"),
+        ]
+        view = smr._RulesListView(
+            guild_id=123, user_id=456, event_type="DS", rules=rules,
+        )
+        labels = [getattr(c, "label", "") for c in view.children]
+        # Both Clear buttons + the Add Rule button.
+        assert any("Clear 1" in lab for lab in labels)
+        assert any("Clear 2" in lab for lab in labels)
+        assert any("Add rule" in lab for lab in labels)
+
+
+class TestAddRuleTypePickerView:
+    """The Add-rule choice view branches into the InlinePowerBandView
+    (zone-Select + power-modal) for power-band rules, or points the
+    officer at the slash command for per-member rules (Discord modals
+    can't host a member picker)."""
+
+    def test_renders_choice_buttons_for_ds(self):
+        view = smr._AddRuleTypePickerView(event_type="DS", owner_id=1)
+        labels = [getattr(c, "label", "") for c in view.children]
+        assert any("power-band" in lab.lower() for lab in labels)
+        assert any("per-member" in lab.lower() for lab in labels)
+        assert any("Cancel" in lab for lab in labels)
+        assert view.parent == "desertstorm"
+
+    def test_renders_choice_buttons_for_cs(self):
+        view = smr._AddRuleTypePickerView(event_type="CS", owner_id=1)
+        assert view.parent == "canyonstorm"
+

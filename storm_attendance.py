@@ -461,6 +461,7 @@ def _render_embed(session: _AttendanceSession) -> discord.Embed:
     for slot in session.slots:
         teams.setdefault(slot["team"] or "(no team)", []).append(slot)
 
+    from storm_icons import zone_emoji_prefix
     lines: list[str] = []
     for team in sorted(teams.keys()):
         team_slots = teams[team]
@@ -468,7 +469,11 @@ def _render_embed(session: _AttendanceSession) -> discord.Embed:
         for slot in team_slots:
             status = session.statuses.get(session.slot_key(slot), STATUS_UNRECORDED)
             label_status = _STATUS_LABELS.get(status, "—")
-            zone_part = f" ({slot['zone']})" if slot.get("zone") else " (sub)"
+            zone = slot.get("zone") or ""
+            # #158: prefix the zone in the per-slot row with its emoji
+            # icon — no-op until the emojis upload. Sub slots have an
+            # empty zone and just show "(sub)".
+            zone_part = f" ({zone_emoji_prefix(zone)}{zone})" if zone else " (sub)"
             role_marker = " 🪑" if slot.get("role") == "sub" else ""
             # Decision #6 (#171): the Override Below Floor glyph + the
             # trailing "Assigned below the zone minimum at build time"

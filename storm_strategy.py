@@ -262,12 +262,15 @@ class ZoneRow:
                 f"Min B: {format_power(self.min_power_b)}"
             )
 
+        from storm_icons import zone_emoji_prefix
+        icon = zone_emoji_prefix(self.zone)  # "" until #158 emojis upload
+
         if phase_count >= 2:
             # Per-zone-per-phase rendering: header line with the zone +
             # team minimums (which are per-team, not per-phase, so they
             # belong on the header), then one row per phase showing
             # capacity and any non-zero per-phase priority.
-            header = f"• **{self.zone}** — {mins}"
+            header = f"• {icon}**{self.zone}** — {mins}"
             phase_lines: list[str] = []
             phase_prios = [
                 self.priority_phase1, self.priority_phase2, self.priority_phase3,
@@ -285,7 +288,7 @@ class ZoneRow:
         # Flat preset — single-line shape unchanged from pre-#172.
         cap = f"Max: {self.max_players}"
         prio = f" [P{self.priority}]" if self.priority else ""
-        return f"• {self.zone:<20} ({cap})  {mins}{prio}"
+        return f"• {icon}{self.zone:<20} ({cap})  {mins}{prio}"
 
 
 class PresetBuffer:

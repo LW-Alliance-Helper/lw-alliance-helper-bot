@@ -344,9 +344,12 @@ def render_event_embed(
         )
 
         team_lines: list[str] = []
+        from storm_icons import zone_emoji_prefix
         for zone in sorted(zones.keys()):
             members = zones[zone]
-            team_lines.append(f"__{zone}__")
+            # #158: prefix every zone header with its emoji icon (no-op
+            # until the bot owner runs `scripts/upload_storm_emojis.py`).
+            team_lines.append(f"{zone_emoji_prefix(zone)}__{zone}__")
 
             if not team_is_phase_aware or zone == "(sub pool)":
                 # Flat zone — single member list (sub-pool always

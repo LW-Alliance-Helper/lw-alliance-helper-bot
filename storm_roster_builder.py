@@ -901,6 +901,8 @@ def _render_zone_line(session: RosterBuilderSession, zone_name: str) -> str:
     if z is None:
         return f"• {zone_name} (?/?)"
 
+    from storm_icons import zone_emoji_prefix
+    icon = zone_emoji_prefix(zone_name)  # "" until #158 emojis upload.
     marker = " ←" if zone_name == session.selected_zone else ""
 
     if session.is_phase_aware:
@@ -910,7 +912,7 @@ def _render_zone_line(session: RosterBuilderSession, zone_name: str) -> str:
         sel_count = session.zone_member_count(zone_name)
         sel_cap = session.zone_capacity(zone_name)
         header_status = _zone_status_glyph(sel_count, sel_cap)
-        header = f"{header_status} **{zone_name}**{marker}"
+        header = f"{header_status} {icon}**{zone_name}**{marker}"
 
         phase_lines: list[str] = []
         for p in session.iter_phases():
@@ -930,7 +932,7 @@ def _render_zone_line(session: RosterBuilderSession, zone_name: str) -> str:
     status = _zone_status_glyph(sel_count, sel_cap)
     member_keys = session.assignments_for_phase(session.selected_phase).get(zone_name, [])
     names_part = _format_zone_member_list(session, member_keys, phase=session.selected_phase)
-    return f"{status} **{zone_name}** ({sel_count}/{sel_cap}){marker}: {names_part}"
+    return f"{status} {icon}**{zone_name}** ({sel_count}/{sel_cap}){marker}: {names_part}"
 
 
 def _render_builder_embed(session: RosterBuilderSession) -> discord.Embed:
@@ -1030,6 +1032,8 @@ def _render_builder_embed(session: RosterBuilderSession) -> discord.Embed:
 
     selected = session.selected_zone
     if selected:
+        from storm_icons import zone_emoji_prefix
+        active_icon = zone_emoji_prefix(selected)
         preset_floor = session.floor_for_zone(selected)
         effective_floor = _effective_floor_for_zone(session, selected)
         from storm_strategy import format_power
@@ -1038,13 +1042,13 @@ def _render_builder_embed(session: RosterBuilderSession) -> discord.Embed:
             # this zone — surface both so leadership can tell at a
             # glance which rule is in play.
             lines.append(
-                f"🎯 **Active zone:** **{selected}** — minimum "
+                f"🎯 **Active zone:** {active_icon}**{selected}** — minimum "
                 f"**{format_power(effective_floor) if effective_floor else '(none)'}** "
                 f"_(preset minimum {format_power(preset_floor)} relaxed by power_band rule)_"
             )
         else:
             lines.append(
-                f"🎯 **Active zone:** **{selected}** — minimum "
+                f"🎯 **Active zone:** {active_icon}**{selected}** — minimum "
                 f"**{format_power(effective_floor) if effective_floor else '(none)'}**"
             )
         if session.show_below_floor:

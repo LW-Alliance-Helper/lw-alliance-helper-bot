@@ -297,8 +297,7 @@ def init_db():
                 attendance_tab           TEXT    DEFAULT '',
                 strategies_tab           TEXT    DEFAULT '',
                 member_rules_tab         TEXT    DEFAULT '',
-                event_day_of_week        INTEGER DEFAULT -1,
-                signup_lead_days         INTEGER DEFAULT 5,
+                poll_day_of_week         INTEGER DEFAULT -1,
                 signup_time              TEXT    DEFAULT '',
                 judicator_role_id        INTEGER DEFAULT 0,
                 power_refresh_dm_enabled INTEGER DEFAULT 0,
@@ -608,13 +607,11 @@ def init_db():
             ("attendance_tab",          "TEXT    DEFAULT ''"),
             ("strategies_tab",          "TEXT    DEFAULT ''"),
             ("member_rules_tab",        "TEXT    DEFAULT ''"),
-            # Auto-scheduler (#131). Day-of-week the event runs on
-            # (0=Monday..6=Sunday); lead time in days; time-of-day to
-            # fire the sign-up post (HH:MM in guild's local timezone).
-            # event_day_of_week = -1 means "scheduling not configured;
-            # use the parent group's manual post_signup subcommand."
-            ("event_day_of_week",       "INTEGER DEFAULT -1"),
-            ("signup_lead_days",        "INTEGER DEFAULT 5"),
+            # Auto-scheduler (#131 + Rule H / #164). Event day is now
+            # game-defined (DS = Friday, CS = Thursday), so we only
+            # store the POLL day-of-week and the post time. -1 means
+            # "manual posting only — use /<parent> post_signup".
+            ("poll_day_of_week",        "INTEGER DEFAULT -1"),
             ("signup_time",             "TEXT    DEFAULT ''"),
             # Faction roles (#137). Premium-only Discord role ID
             # applied to per_member.special_role=judicator candidates
@@ -633,6 +630,33 @@ def init_db():
                 conn.execute(f"ALTER TABLE guild_storm_config ADD COLUMN {col} {definition}")
                 conn.commit()
                 print(f"[CONFIG] Added {col} to guild_storm_config")
+            except Exception:
+                pass
+
+        # ── Poll-day model migration (Rule H / #164) ──────────────────────────
+        # Move alliances who configured event_day_of_week + signup_lead_days
+        # under the old model to poll_day_of_week. Guard on the old columns
+        # still existing (the DROP below runs in the same boot — re-runs
+        # on already-migrated databases hit the except and skip silently).
+        try:
+            conn.execute(
+                "UPDATE guild_storm_config "
+                "SET poll_day_of_week = ((event_day_of_week - signup_lead_days) % 7 + 7) % 7 "
+                "WHERE event_day_of_week >= 0 AND poll_day_of_week = -1"
+            )
+            conn.commit()
+            print("[CONFIG] Migrated event_day_of_week + signup_lead_days "
+                  "-> poll_day_of_week")
+        except Exception:
+            pass
+        # Drop the retired columns in the same boot. SQLite 3.35+ supports
+        # DROP COLUMN; Railway runs 3.40+. Try/except so re-runs (and
+        # local sqlite < 3.35 if anyone forks the bot) don't crash.
+        for col in ("event_day_of_week", "signup_lead_days"):
+            try:
+                conn.execute(f"ALTER TABLE guild_storm_config DROP COLUMN {col}")
+                conn.commit()
+                print(f"[CONFIG] Dropped {col} from guild_storm_config")
             except Exception:
                 pass
 
@@ -1396,8 +1420,7 @@ def get_storm_config(guild_id: int, event_type: str) -> dict:
         "attendance_tab":          "",
         "strategies_tab":          "",
         "member_rules_tab":        "",
-        "event_day_of_week":       -1,
-        "signup_lead_days":        5,
+        "poll_day_of_week":        -1,
         "signup_time":             "",
         "judicator_role_id":       0,
         "power_refresh_dm_enabled": 0,
@@ -1507,10 +1530,11 @@ def get_structured_storm_config(guild_id: int, event_type: str) -> dict:
     cfg = get_storm_config(guild_id, event_type)
     def _tab(key: str) -> str:
         return cfg.get(key) or default_structured_tab(event_type, key)
-    # event_day_of_week stored as -1 (or None on a fallback dict) when
-    # scheduling hasn't been configured. Normalise to -1 so callers can
-    # check `< 0` without worrying about Python's truthy-0 trap.
-    raw_dow = cfg.get("event_day_of_week")
+    # poll_day_of_week stored as -1 (or None on a fallback dict) when
+    # auto-scheduling hasn't been configured. Normalise to -1 so
+    # callers can check `< 0` without worrying about Python's truthy-0
+    # trap.
+    raw_dow = cfg.get("poll_day_of_week")
     if raw_dow is None:
         raw_dow = -1
     return {
@@ -1524,15 +1548,7 @@ def get_structured_storm_config(guild_id: int, event_type: str) -> dict:
         "attendance_tab":          _tab("attendance_tab"),
         "strategies_tab":          _tab("strategies_tab"),
         "member_rules_tab":        _tab("member_rules_tab"),
-        "event_day_of_week":       int(raw_dow),
-        # `cfg.get(...) or 5` would falsy-coerce a legitimate `0` to `5`.
-        # Distinguish "column NULL / missing" from "stored zero" so a
-        # lead_days=0 (post on event day) round-trips correctly.
-        "signup_lead_days":        (
-            int(cfg["signup_lead_days"])
-            if cfg.get("signup_lead_days") is not None
-            else 5
-        ),
+        "poll_day_of_week":        int(raw_dow),
         "signup_time":             cfg.get("signup_time") or "",
         "judicator_role_id":       int(cfg.get("judicator_role_id") or 0),
         "power_refresh_dm_enabled": bool(cfg.get("power_refresh_dm_enabled")),
@@ -1583,17 +1599,16 @@ def parse_storm_signup_time(value: str) -> Optional[str]:
 
 def get_scheduled_storm_rows() -> list[dict]:
     """Return every (guild, event_type) row eligible for the auto-signup
-    scheduler — structured flow on, day-of-week set, and a non-empty
+    scheduler — structured flow on, poll-day set, and a non-empty
     signup_time. Public wrapper around the schema so callers (the
     minute-loop scheduler) don't reach into `_get_conn` directly."""
     rows = []
     with _get_conn() as conn:
         for row in conn.execute(
-            "SELECT guild_id, event_type, event_day_of_week, "
-            "       signup_lead_days, signup_time "
+            "SELECT guild_id, event_type, poll_day_of_week, signup_time "
             "FROM guild_storm_config "
             "WHERE structured_flow_enabled = 1 "
-            "  AND event_day_of_week >= 0 "
+            "  AND poll_day_of_week >= 0 "
             "  AND signup_time != ''",
         ).fetchall():
             rows.append(dict(row))
@@ -1612,8 +1627,7 @@ def save_structured_storm_config(
     attendance_tab: str             = "",
     strategies_tab: str             = "",
     member_rules_tab: str           = "",
-    event_day_of_week: int          = -1,
-    signup_lead_days: int           = 5,
+    poll_day_of_week: int           = -1,
     signup_time: str                = "",
     judicator_role_id: int          = 0,
     power_refresh_dm_enabled: bool  = False,
@@ -1623,39 +1637,27 @@ def save_structured_storm_config(
     not insert. Returns True if a row was updated. Tab name fields are stored
     verbatim — pass '' to fall back to the event-type-aware default at read.
 
-    Auto-scheduler fields (#131):
-      * event_day_of_week — 0=Monday..6=Sunday in the guild's tz.
-        Pass -1 (default) when scheduling is intentionally not
-        configured; the loop treats `< 0` as "skip this guild."
-      * signup_lead_days  — number of days before the event to fire
-        the sign-up post. Defaults to 5 if not set.
+    Auto-scheduler fields (Rule H / #164):
+      * poll_day_of_week — 0=Monday..6=Sunday in the guild's tz. The
+        day the poll-up post fires. Event day is game-defined (DS = Friday,
+        CS = Thursday). Pass -1 (default) when auto-scheduling is
+        intentionally off; the scheduler loop treats `< 0` as "skip
+        this guild."
       * signup_time       — HH:MM in the guild's tz when to fire.
         Empty string disables auto-fire (manual post_signup under the
         parent group remains usable).
     """
     if sub_mode not in ("pool", "paired"):
         sub_mode = "pool"
-    # Day-of-week is either 0-6 or "not configured" (-1). Reject
+    # Poll day-of-week is either 0-6 or "not configured" (-1). Reject
     # anything else rather than silently clipping — the wizard should
     # catch bad input first.
     try:
-        dow = int(event_day_of_week)
+        dow = int(poll_day_of_week)
     except (TypeError, ValueError):
         dow = -1
     if not (-1 <= dow <= 6):
         dow = -1
-    try:
-        lead = int(signup_lead_days)
-    except (TypeError, ValueError):
-        lead = 5
-    if lead < 0:
-        lead = 0
-    if lead > 14:
-        # Mirror the wizard's upper clamp at the storage layer so a
-        # malformed direct call can't smuggle in lead=50 (which would
-        # cause the scheduler to skip events forever — fire date never
-        # equals today).
-        lead = 14
     try:
         jud_role = int(judicator_role_id or 0)
     except (TypeError, ValueError):
@@ -1675,8 +1677,7 @@ def save_structured_storm_config(
             "  attendance_tab = ?, "
             "  strategies_tab = ?, "
             "  member_rules_tab = ?, "
-            "  event_day_of_week = ?, "
-            "  signup_lead_days = ?, "
+            "  poll_day_of_week = ?, "
             "  signup_time = ?, "
             "  judicator_role_id = ?, "
             "  power_refresh_dm_enabled = ? "
@@ -1687,7 +1688,7 @@ def save_structured_storm_config(
                 int(signup_channel_id or 0), signup_schedule_cron,
                 signups_tab, rosters_tab, attendance_tab,
                 strategies_tab, member_rules_tab,
-                dow, lead, signup_time, jud_role,
+                dow, signup_time, jud_role,
                 1 if power_refresh_dm_enabled else 0,
                 guild_id, event_type,
             ),

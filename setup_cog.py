@@ -5045,8 +5045,7 @@ async def run_storm_setup(interaction: discord.Interaction, bot, event_type: str
         attendance_tab         =structured_cfg["attendance_tab"],
         strategies_tab         =structured_cfg["strategies_tab"],
         member_rules_tab       =structured_cfg["member_rules_tab"],
-        event_day_of_week      =structured_cfg.get("event_day_of_week", -1),
-        signup_lead_days       =structured_cfg.get("signup_lead_days", 5),
+        poll_day_of_week       =structured_cfg.get("poll_day_of_week", -1),
         signup_time            =structured_cfg.get("signup_time", ""),
         judicator_role_id      =structured_cfg.get("judicator_role_id", 0),
         power_refresh_dm_enabled=bool(structured_cfg.get("power_refresh_dm_enabled", False)),
@@ -5474,24 +5473,43 @@ _DOW_NAMES = ["Monday", "Tuesday", "Wednesday", "Thursday",
 async def _ask_signup_schedule(
     channel, bot, user, cancel_event, *,
     label: str, cmd_name: str,
-    current_dow: int, current_lead: int, current_time: str,
+    current_dow: int, current_time: str,
     tz_label: str = "",
     event_type: str = "DS",
 ) -> dict | None:
-    """Three-step Premium sub-flow for the auto-scheduler config:
-        * Event day-of-week (dropdown; or "Skip auto-scheduling")
-        * Lead days (modal; defaults to 5)
-        * Sign-up post time (HH:MM in guild timezone; modal)
+    """Two-step Premium sub-flow for the auto-scheduler config:
+        * Poll day-of-week (dropdown; or "Skip auto-scheduling").
+          Event day is game-defined (DS = Friday, CS = Thursday); the
+          dropdown only shows poll days that sit between the previous
+          event and the in-game roster lock.
+        * Sign-up post time (HH:MM in guild timezone; modal). Required
+          when a day is picked — Rule F / #163.
 
-    Returns `{"dow": int, "lead": int, "time": str}`. `dow = -1`
-    indicates the alliance explicitly opted out of auto-scheduling
-    (manual `/<parent> post_signup` remains usable). Returns None on
-    cancel or timeout — callers should propagate the None.
+    Returns `{"dow": int, "time": str}`. `dow = -1` indicates the
+    alliance explicitly opted out of auto-scheduling (manual
+    `/<parent> post_signup` remains usable). Returns None on cancel
+    or timeout — callers should propagate the None.
     """
     parent = "desertstorm" if event_type == "DS" else "canyonstorm"
     import wizard_registry
 
-    # ── Step 1: day of week ──
+    # Per Rule H, valid poll days per event type sit between the day
+    # AFTER the previous event and the day BEFORE the in-game roster
+    # lock. Event days themselves are excluded (game-defined: DS=Fri,
+    # CS=Thu) so same-day poll/event is impossible by construction.
+    # 0=Monday..6=Sunday.
+    if event_type == "DS":
+        # DS event = Friday; roster locks Wednesday before reset.
+        # Valid poll days: Sat, Sun, Mon, Tue, Wed.
+        poll_options = [5, 6, 0, 1, 2]
+        event_label = "Friday"
+    else:
+        # CS event = Thursday; roster locks Monday before reset.
+        # Valid poll days: Fri, Sat, Sun, Mon.
+        poll_options = [4, 5, 6, 0]
+        event_label = "Thursday"
+
+    # ── Step 1: poll day-of-week ──
     class _DowView(discord.ui.View):
         def __init__(self, current: int):
             super().__init__(timeout=300)
@@ -5499,10 +5517,10 @@ async def _ask_signup_schedule(
             self.cancelled = False
             options = [
                 discord.SelectOption(
-                    label=name, value=str(i),
+                    label=_DOW_NAMES[i], value=str(i),
                     default=(i == current),
                 )
-                for i, name in enumerate(_DOW_NAMES)
+                for i in poll_options
             ]
             options.append(discord.SelectOption(
                 label=f"Skip auto-scheduling (use /{parent} post_signup manually)",
@@ -5510,7 +5528,7 @@ async def _ask_signup_schedule(
                 default=(current < 0),
             ))
             sel = discord.ui.Select(
-                placeholder="Which day of the week does this storm event run?",
+                placeholder="When should the bot post the sign-up poll?",
                 min_values=1, max_values=1,
                 options=options,
             )
@@ -5530,7 +5548,7 @@ async def _ask_signup_schedule(
                 else:
                     await wizard_registry.safe_edit_response(
                         inter,
-                        content=f"✅ Event day: **{_DOW_NAMES[self.selected]}**.",
+                        content=f"✅ Poll day: **{_DOW_NAMES[self.selected]}**.",
                         view=self,
                     )
                 self.stop()
@@ -5540,9 +5558,11 @@ async def _ask_signup_schedule(
 
     dow_view = _DowView(int(current_dow if current_dow is not None else -1))
     await channel.send(
-        f"**Auto-Schedule — Event Day (💎 Premium)**\n"
-        f"On which day of the week does **{label}** run for your alliance? "
-        f"The bot will fire the sign-up post `lead days` before that.",
+        f"**Auto-Schedule — Poll Day (💎 Premium)**\n"
+        f"**{label}** runs every **{event_label}** in-game. Which day "
+        f"do you want the bot to post the sign-up poll? (The dropdown "
+        f"shows only days that sit between the previous event and the "
+        f"in-game roster lock.)",
         view=dow_view,
     )
     await wait_view_or_cancel(dow_view, cancel_event)
@@ -5552,33 +5572,8 @@ async def _ask_signup_schedule(
         await channel.send(f"⏰ Timed out. Run `/{cmd_name}` to start again.")
         return None
     if dow_view.selected < 0:
-        # Skipped — return defaults / cleared schedule.
-        return {"dow": -1, "lead": int(current_lead or 5), "time": ""}
-
-    # ── Step 2: lead days ──
-    lead_default = str(int(current_lead) if current_lead else 5)
-    lead_picked = await ask_keep_or_change(
-        channel,
-        f"**Auto-Schedule — Lead Days**\n"
-        f"How many days **before** the event should the sign-up post fire? "
-        f"5 is a common default (post Tuesday for a Sunday event).",
-        default="5",
-        current=lead_default if lead_default != "5" else "",
-        modal_title="Lead Days",
-        modal_label="Days (integer, 0–14)",
-        timeout_cmd=cmd_name,
-        cancel_event=cancel_event,
-    )
-    if lead_picked is None:
-        return None
-    try:
-        lead = int(str(lead_picked).strip())
-    except ValueError:
-        lead = 5
-    if lead < 0:
-        lead = 0
-    if lead > 14:
-        lead = 14
+        # Skipped — return cleared schedule.
+        return {"dow": -1, "time": ""}
 
     # ── Step 3: sign-up time ──
     # The alliance opted into auto-scheduling at Step 1 (`dow >= 0`),
@@ -5623,7 +5618,6 @@ async def _ask_signup_schedule(
 
     return {
         "dow":  dow_view.selected,
-        "lead": lead,
         "time": time_clean,
     }
 
@@ -6141,8 +6135,7 @@ async def _run_structured_flow_setup_step(
     for tab in ("signups_tab", "rosters_tab", "attendance_tab",
                 "strategies_tab", "member_rules_tab"):
         result.setdefault(tab, "")
-    result.setdefault("event_day_of_week", -1)
-    result.setdefault("signup_lead_days", 5)
+    result.setdefault("poll_day_of_week", -1)
     result.setdefault("signup_time", "")
     result.setdefault("judicator_role_id", 0)
     result.setdefault("power_refresh_dm_enabled", False)
@@ -6304,17 +6297,15 @@ async def _run_structured_flow_setup_step(
         sched_result = await _ask_signup_schedule(
             channel, bot, user, cancel_event,
             label=label, cmd_name=cmd_name,
-            current_dow=result.get("event_day_of_week", -1),
-            current_lead=result.get("signup_lead_days", 5),
+            current_dow=result.get("poll_day_of_week", -1),
             current_time=result.get("signup_time", ""),
             tz_label=tz_label,
             event_type=event_type,
         )
         if sched_result is None:
             return None
-        result["event_day_of_week"] = sched_result["dow"]
-        result["signup_lead_days"]  = sched_result["lead"]
-        result["signup_time"]       = sched_result["time"]
+        result["poll_day_of_week"] = sched_result["dow"]
+        result["signup_time"]      = sched_result["time"]
 
         # Sign-ups / rosters / attendance tab names — Premium only
         for tab_key, label_text in (

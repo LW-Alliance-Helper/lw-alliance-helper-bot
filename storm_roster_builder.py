@@ -587,14 +587,13 @@ def _apply_rules_to_session(session: RosterBuilderSession) -> None:
     """Pre-assign members based on Member Rules before the officer
     starts manual work. Only fires at session open.
 
-    Surfaces a soft warning into `session.roster_errors` for per_member
-    rules whose subject doesn't match any roster row — usually a member
-    rename between rule creation and apply. Without this warning the
-    rule silently no-ops and leadership has no idea why their rule isn't
-    firing.
+    Per Decision #7 (#173): a per_member rule whose subject isn't in
+    tonight's roster is a silent no-op — the rule means "if this
+    member is in tonight's event, do X." They're not in tonight's
+    event, so nothing to apply and nothing to report. The prior
+    audit's `roster_errors` warning ("per_member rule(s) reference
+    roster names that aren't in the current roster") is gone.
     """
-    unmatched_subjects: list[str] = []
-
     # per_member zone rules — pin a specific member to a specific zone
     # if they exist on the roster.
     for rule in session.per_member_rules:
@@ -603,8 +602,6 @@ def _apply_rules_to_session(session: RosterBuilderSession) -> None:
         subject = rule.subject.strip()
         match_key = _resolve_per_member_subject(session.members, subject)
         if match_key is None:
-            if subject and subject not in unmatched_subjects:
-                unmatched_subjects.append(subject)
             continue
         zone = rule.value.strip()
         if not session.preset.find_zone(zone):
@@ -615,16 +612,6 @@ def _apply_rules_to_session(session: RosterBuilderSession) -> None:
         if match_key in session.assigned_member_keys():
             continue
         session.assignments[zone].append(match_key)
-
-    # Surface unmatched per_member rules so leadership knows to clean
-    # them up. Cap the list to keep the embed legible.
-    if unmatched_subjects:
-        preview = ", ".join(unmatched_subjects[:5])
-        extra = f" (+{len(unmatched_subjects) - 5} more)" if len(unmatched_subjects) > 5 else ""
-        session.roster_errors.append(
-            f"per_member rule(s) reference roster names that aren't in the "
-            f"current roster — rename or remove them: {preview}{extra}"
-        )
 
 
 # ── Auto-fill (#134) ─────────────────────────────────────────────────────────
@@ -689,6 +676,10 @@ def _auto_fill_session(session: RosterBuilderSession) -> dict:
     original_phase = session.selected_phase
 
     # ── 1. per_member zone rules ── (Phase 1 only on phase-aware)
+    # Per Decision #7 (#173): if the rule's subject isn't in tonight's
+    # roster the rule is a silent no-op — nothing to apply, nothing to
+    # report. Only the other conflict shapes (unknown zone, full zone,
+    # already-pinned-elsewhere) still surface in the summary.
     session.selected_phase = 1
     for rule in session.per_member_rules:
         if rule.sub_type != "zone":
@@ -697,10 +688,6 @@ def _auto_fill_session(session: RosterBuilderSession) -> dict:
         zone = rule.value.strip()
         match_key = _resolve_per_member_subject(session.members, subject)
         if match_key is None:
-            if subject:
-                summary["conflicts"].append(
-                    f"per_member subject not on roster: {subject}"
-                )
             continue
         if not session.preset.find_zone(zone):
             summary["conflicts"].append(

@@ -349,10 +349,12 @@ class TestRulePreApplication:
         # No zone assignments from a team rule.
         assert all(not v for v in session.assignments.values())
 
-    def test_unmatched_per_member_rule_surfaces_warning(self):
-        """A rule whose subject doesn't match any roster member used to
-        silently no-op — leadership had no signal their rule wasn't
-        firing. Now it surfaces a soft warning into roster_errors."""
+    def test_unmatched_per_member_rule_silently_no_ops(self):
+        """Decision #7 (#173): a rule whose subject isn't in tonight's
+        roster is a silent no-op. The rule means 'if this member is
+        in tonight's event, do X' — they're not in tonight's event,
+        so there's nothing to apply and nothing to report. No
+        roster_errors warning surfaces."""
         rule_active = smr.Rule(
             rule_type="per_member", subject="Alice",
             sub_type="zone", value="Power Tower",
@@ -368,8 +370,8 @@ class TestRulePreApplication:
         srb._apply_rules_to_session(session)
         # Active rule still applies.
         assert "1001" in session.assignments["Power Tower"]
-        # Stale rule surfaces a warning naming the unmatched subject.
-        assert any("OldName" in e for e in session.roster_errors)
+        # Stale rule does NOT surface — silent no-op.
+        assert not any("OldName" in e for e in session.roster_errors)
 
 
 class TestPowerBandRuleConsumption:
@@ -918,11 +920,11 @@ class TestAutoFill:
         assert "Alice" in session.assignments["Power Tower"]
         assert summary["per_member_rules_applied"] == 1
 
-    def test_unmatched_per_member_subject_recorded_as_conflict(self):
-        """The audit fix: when a per_member subject doesn't match any
-        roster member, count it as a conflict so the summary's
-        Per-member rules applied count + conflicts count up to the
-        total rule count the officer sees in the editor."""
+    def test_unmatched_per_member_subject_silently_no_ops(self):
+        """Decision #7 (#173): a per_member rule whose subject isn't
+        on tonight's roster is a silent no-op — nothing applied,
+        nothing in conflicts. Other conflict shapes (unknown zone,
+        full when pinning, pinned to multiple zones) still surface."""
         members = self._three_members()
         per_member = [
             smr.Rule(rule_type="per_member", subject="Alice",
@@ -934,7 +936,17 @@ class TestAutoFill:
                                 per_member_rules=per_member)
         summary = srb._auto_fill_session(session)
         assert summary["per_member_rules_applied"] == 1
-        assert any("GhostMember" in c for c in summary["conflicts"])
+        assert not any("GhostMember" in c for c in summary["conflicts"])
+        # Sanity: other conflict shapes still surface — exercise with
+        # a rule that names an unknown zone.
+        per_member_bad_zone = [
+            smr.Rule(rule_type="per_member", subject="Alice",
+                     sub_type="zone", value="No Such Zone"),
+        ]
+        session2 = _make_session(team="A", members=members,
+                                 per_member_rules=per_member_bad_zone)
+        summary2 = srb._auto_fill_session(session2)
+        assert any("unknown zone" in c for c in summary2["conflicts"])
 
     def test_power_unknown_per_member_pin_flagged_as_override(self):
         """A per_member pin of a power-unknown member is an officer

@@ -111,12 +111,15 @@ HELP_CATEGORIES: dict[str, dict] = {
              "channel, schedule, and Sheet tabs."),
             ("/desertstorm",
              "**Event hub.** Opens an embed showing the alliance's current "
-             "config plus buttons for every action: Post sign-up poll, "
-             "View signups + Set up Team A/B (💎), Record attendance (💎), "
-             "Past rosters (💎), DM roster reminder (💎), Manage strategy "
-             "presets, Manage member rules, Generate mail (free), Log "
-             "participation, View past log, Open setup wizard. Premium "
-             "buttons render disabled on the free tier so officers can "
+             "config plus a button grid for every action.\n"
+             "**Event-day row:** Post sign-up poll (💎), View sign-ups + "
+             "set up teams (💎), Record attendance (💎), Fill out "
+             "participation questions.\n"
+             "**Comms + config row:** Send DM reminder to roster (💎), "
+             "Manage strategy presets, Manage member rules, Generate mail.\n"
+             "**Reference row:** View past participation logs, View past "
+             "rosters (💎), Open setup.\n"
+             "💎 buttons render disabled on the free tier so officers can "
              "see at a glance what `/upgrade` unlocks."),
         ],
     },
@@ -136,12 +139,15 @@ HELP_CATEGORIES: dict[str, dict] = {
              "channel, schedule, and Sheet tabs."),
             ("/canyonstorm",
              "**Event hub.** Opens an embed showing the alliance's current "
-             "config plus buttons for every action: Post sign-up poll, "
-             "View signups + Set up Team A/B (💎), Record attendance (💎), "
-             "Past rosters (💎), DM roster reminder (💎), Manage strategy "
-             "presets, Manage member rules, Generate mail (free), Log "
-             "participation, View past log, Open setup wizard. Premium "
-             "buttons render disabled on the free tier."),
+             "config plus a button grid for every action.\n"
+             "**Event-day row:** Post sign-up poll (💎), View sign-ups + "
+             "set up teams (💎), Record attendance (💎), Fill out "
+             "participation questions.\n"
+             "**Comms + config row:** Send DM reminder to roster (💎), "
+             "Manage strategy presets, Manage member rules, Generate mail.\n"
+             "**Reference row:** View past participation logs, View past "
+             "rosters (💎), Open setup.\n"
+             "💎 buttons render disabled on the free tier."),
         ],
     },
     "survey": {

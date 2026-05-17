@@ -582,3 +582,74 @@ class TestAddRuleTypePickerView:
         view = smr._AddRuleTypePickerView(event_type="CS", owner_id=1)
         assert view.parent == "canyonstorm"
 
+
+class TestZoneAutocomplete:
+    """Rule E (#168 follow-up): `set_power_band` and `set_member_zone`
+    slash commands gain an autocomplete callback on their `zone`
+    parameter so officers see canonical zones instead of free-text-ing
+    a typo (which would previously save with a "not in canonical list"
+    warning)."""
+
+    @pytest.mark.asyncio
+    async def test_ds_autocomplete_returns_canonical_zones(self):
+        from unittest.mock import MagicMock
+        cb = smr._make_zone_autocomplete("DS")
+        choices = await cb(MagicMock(), "")
+        labels = [c.name for c in choices]
+        # DS canonical set includes Nuclear Silo; Power Tower is CS.
+        assert "Nuclear Silo" in labels
+        assert "Power Tower" not in labels
+        # Discord caps at 25 — DS has 11 canonical zones, comfortably under.
+        assert len(choices) <= 25
+
+    @pytest.mark.asyncio
+    async def test_cs_autocomplete_returns_canonical_zones(self):
+        """CS canonical_zones_for currently returns internal keys
+        (`s1_power_tower`, `s1_dc1`, etc.) rather than display names —
+        a pre-existing data-modeling inconsistency, not introduced by
+        the autocomplete. The autocomplete is consistent with how
+        canonical_zones_for is used elsewhere
+        (`_set_power_band`, `_set_member_zone` validation,
+        `seed_default_preset`). Surfacing the same shape avoids
+        autocomplete suggesting display names that would then fail
+        find_zone against the preset's internal-key ZoneRows.
+        Flagged as deferred carry-over in AUDIT_storm_ux_overhaul.md."""
+        from unittest.mock import MagicMock
+        cb = smr._make_zone_autocomplete("CS")
+        choices = await cb(MagicMock(), "")
+        labels = [c.name for c in choices]
+        # CS canonical set as currently exposed by canonical_zones_for.
+        assert "s1_power_tower" in labels
+        # DS-only zones absent.
+        assert "Nuclear Silo" not in labels
+        # Cap respected (CS exposes ~21 zone entries; well under 25).
+        assert len(choices) <= 25
+
+    @pytest.mark.asyncio
+    async def test_autocomplete_filters_on_current_substring(self):
+        """Officers typing a partial name (`hosp`) get matching
+        zones (`Field Hospital I/II/III/IV`)."""
+        from unittest.mock import MagicMock
+        cb = smr._make_zone_autocomplete("DS")
+        choices = await cb(MagicMock(), "hosp")
+        labels = [c.name for c in choices]
+        assert all("hosp" in lab.lower() for lab in labels)
+        assert len(labels) >= 1  # at least one Field Hospital matches
+
+    @pytest.mark.asyncio
+    async def test_autocomplete_filter_is_case_insensitive(self):
+        from unittest.mock import MagicMock
+        cb = smr._make_zone_autocomplete("DS")
+        upper = await cb(MagicMock(), "NUCLEAR")
+        lower = await cb(MagicMock(), "nuclear")
+        assert [c.name for c in upper] == [c.name for c in lower]
+        assert any("Nuclear" in c.name for c in upper)
+
+    @pytest.mark.asyncio
+    async def test_autocomplete_empty_current_returns_all(self):
+        from unittest.mock import MagicMock
+        cb = smr._make_zone_autocomplete("DS")
+        choices = await cb(MagicMock(), "")
+        # DS canonical set is 11 zones.
+        assert len(choices) >= 10
+

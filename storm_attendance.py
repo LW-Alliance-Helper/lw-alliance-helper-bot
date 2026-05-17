@@ -127,7 +127,14 @@ def load_rostered_slots(
     member_col = _col("Member")
     role_col = _col("Role")
     id_col = _col("Discord ID")
-    override_col = _col("Override Below Floor")
+    override_col = _col("Override Below Minimum")
+    # Legacy header alias: dev/staging sheets created before the
+    # Rule B header rename still carry "Override Below Floor". Fall
+    # through so existing flagged rows continue to render correctly
+    # until the next rosters_tab write triggers the header migration
+    # in storm_roster_builder._write_rosters_tab.
+    if override_col < 0:
+        override_col = _col("Override Below Floor")
 
     # Truthy values for the override column. Officers occasionally edit
     # the Sheet by hand — accept the usual yes-set rather than only the
@@ -475,7 +482,7 @@ def _render_embed(session: _AttendanceSession) -> discord.Embed:
             # empty zone and just show "(sub)".
             zone_part = f" ({zone_emoji_prefix(zone)}{zone})" if zone else " (sub)"
             role_marker = " 🪑" if slot.get("role") == "sub" else ""
-            # Decision #6 (#171): the Override Below Floor glyph + the
+            # Decision #6 (#171): the Override Below Minimum glyph + the
             # trailing "Assigned below the zone minimum at build time"
             # line are dropped from the attendance UI. The Sheet still
             # records the flag for post-event audit, but officers

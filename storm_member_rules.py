@@ -865,12 +865,38 @@ class _MemberRuleGroup(app_commands.Group):
             view.message = None
 
 
+def _make_zone_autocomplete(event_type: str):
+    """Per-event-type autocomplete callback for the `zone` parameter on
+    `set_power_band` + `set_member_zone` (#168 M1 / Rule E).
+
+    Discord autocomplete returns up to 25 Choice objects; canonical zone
+    lists for DS (11) and CS (12) fit easily under that cap. Filtering
+    is substring-insensitive against the current input so officers who
+    type partial names (`hosp` for `Field Hospital`) still get matches.
+    """
+    async def _callback(
+        _interaction: discord.Interaction, current: str,
+    ) -> list[app_commands.Choice[str]]:
+        _, _, canonical_zones_for = _strategy_helpers()
+        current_lower = (current or "").strip().lower()
+        zones = canonical_zones_for(event_type)
+        if current_lower:
+            zones = [z for z in zones if current_lower in z.lower()]
+        return [
+            app_commands.Choice(name=z[:100], value=z[:100])
+            for z in zones[:25]
+        ]
+    return _callback
+
+
 def build_ds_member_rule_group() -> _MemberRuleGroup:
     grp = _MemberRuleGroup(
         name="member_rule",
         description="Manage Desert Storm member rules (power bands + per-member)",
         event_type="DS",
     )
+
+    _ds_zone_autocomplete = _make_zone_autocomplete("DS")
 
     @grp.command(name="set_power_band",
                  description="Add a power-band eligibility rule for a zone")
@@ -879,6 +905,7 @@ def build_ds_member_rule_group() -> _MemberRuleGroup:
         zone="Zone the band applies to (e.g. Power Tower)",
         notes="Optional free-text notes",
     )
+    @app_commands.autocomplete(zone=_ds_zone_autocomplete)
     async def set_pb(interaction: discord.Interaction, threshold: str, zone: str, notes: str = ""):
         await grp._set_power_band(interaction, threshold, zone, notes)
 
@@ -913,6 +940,7 @@ def build_ds_member_rule_group() -> _MemberRuleGroup:
         zone="Zone they always play",
         notes="Optional free-text notes",
     )
+    @app_commands.autocomplete(zone=_ds_zone_autocomplete)
     async def set_zone(
         interaction: discord.Interaction,
         zone: str,
@@ -940,6 +968,8 @@ def build_cs_member_rule_group() -> _MemberRuleGroup:
         event_type="CS",
     )
 
+    _cs_zone_autocomplete = _make_zone_autocomplete("CS")
+
     @grp.command(name="set_power_band",
                  description="Add a power-band eligibility rule for a zone")
     @app_commands.describe(
@@ -947,6 +977,7 @@ def build_cs_member_rule_group() -> _MemberRuleGroup:
         zone="Zone the band applies to",
         notes="Optional free-text notes",
     )
+    @app_commands.autocomplete(zone=_cs_zone_autocomplete)
     async def set_pb(interaction: discord.Interaction, threshold: str, zone: str, notes: str = ""):
         await grp._set_power_band(interaction, threshold, zone, notes)
 
@@ -981,6 +1012,7 @@ def build_cs_member_rule_group() -> _MemberRuleGroup:
         zone="Zone they always play",
         notes="Optional free-text notes",
     )
+    @app_commands.autocomplete(zone=_cs_zone_autocomplete)
     async def set_zone(
         interaction: discord.Interaction,
         zone: str,

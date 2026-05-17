@@ -128,7 +128,10 @@ def load_event_roster(
     role_col   = _col("Role")
     power_col  = _col("Power at Assignment")
     id_col     = _col("Discord ID")
-    ovr_col    = _col("Override Below Floor")
+    ovr_col    = _col("Override Below Minimum")
+    if ovr_col < 0:
+        # Legacy header alias (dev/staging sheets pre-rename).
+        ovr_col = _col("Override Below Floor")
     paired_col = _col("Paired With")
 
     # Truthy values for the override column. Officers may hand-edit
@@ -298,7 +301,7 @@ def render_event_embed(
         """One per-member row inside a zone (or zone-phase) section.
         Side-effecting on the outer counters via `nonlocal`.
 
-        Per Decision #6 (#171), the Override Below Floor flag is not
+        Per Decision #6 (#171), the Override Below Minimum flag is not
         surfaced in the per-slot rendering anymore — the builder still
         captures it on the Sheet for post-event audit, but history
         consumers don't need to see it. Per Rule K, legacy

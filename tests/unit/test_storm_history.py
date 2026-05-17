@@ -40,11 +40,11 @@ def fake_env(seeded_db):
 
     # Two events on the rosters tab.
     # Header order mirrors storm_roster_builder._ROSTERS_HEADER from
-    # production: `Override Below Floor` comes BEFORE `Posted At (UTC)`,
+    # production: `Override Below Minimum` comes BEFORE `Posted At (UTC)`,
     # not after. The prior fixture order was column-index-fragile.
     rosters = _FakeWorksheet("DS Rosters", [
         ["Event Date", "Team", "Zone", "Member", "Role",
-         "Power at Assignment", "Discord ID", "Override Below Floor",
+         "Power at Assignment", "Discord ID", "Override Below Minimum",
          "Posted At (UTC)"],
         ["2026-05-18", "A", "Power Tower",  "Alice", "primary", "412000000", "1001", "",    ""],
         ["2026-05-18", "A", "Power Tower",  "Bob",   "primary", "350000000", "1002", "",    ""],
@@ -212,7 +212,7 @@ class TestRenderEventEmbed:
         assert "/desertstorm attendance" in (embed.footer.text or "")
 
     def test_below_floor_override_not_rendered(self):
-        """Decision #6 (#171): the Override Below Floor flag stays on
+        """Decision #6 (#171): the Override Below Minimum flag stays on
         the rosters_tab Sheet for post-event audit, but the history
         embed no longer surfaces it — the same drop the attendance UI
         made. Officers reviewing history don't need the build-time

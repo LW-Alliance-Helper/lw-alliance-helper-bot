@@ -90,7 +90,7 @@ def fake_env(seeded_db):
     rosters_ws = fake.add_worksheet("DS Rosters")
     rosters_ws._rows = [
         ["Event Date", "Team", "Zone", "Member", "Role",
-         "Power at Assignment", "Discord ID", "Override Below Floor",
+         "Power at Assignment", "Discord ID", "Override Below Minimum",
          "Posted At (UTC)"],
         ["2026-05-18", "A", "Power Tower",  "Alice", "primary", "412000000", "1001", "",    ""],
         ["2026-05-18", "A", "Power Tower",  "Bob",   "primary", "350000000", "1002", "",    ""],
@@ -397,9 +397,10 @@ class TestAttendanceViewInteractions:
 
 
 class TestOverrideBelowFloorSurface:
-    """The Override Below Floor column from rosters_tab (added in
-    audit commit 15509bb) is surfaced in the attendance view so
-    leadership sees which slots were below-floor at build time when
+    """The Override Below Minimum column from rosters_tab (added in
+    audit commit 15509bb; renamed from `Override Below Floor` in the
+    Rule B header-rename pass) is surfaced in the attendance view so
+    leadership sees which slots were below-minimum at build time when
     recording attendance — same audit lineage as the rosters_tab
     column itself."""
 
@@ -410,8 +411,21 @@ class TestOverrideBelowFloorSurface:
         assert by_name["Carol"]["override_below_floor"] is True
         assert by_name["Alice"]["override_below_floor"] is False
 
+    def test_legacy_override_header_still_readable(self, fake_env):
+        """Dev/staging sheets pre-Rule-B-rename carried the column
+        as `Override Below Floor`. The reader falls through to the
+        legacy name so existing flagged rows continue to surface
+        until `_write_rosters_tab` runs the header migration."""
+        fake, gid = fake_env
+        rosters = fake.worksheet("DS Rosters")
+        rosters._rows[0][7] = "Override Below Floor"  # revert header
+        slots, _errs = sa.load_rostered_slots(gid, "DS", "2026-05-18")
+        by_name = {s["member"]: s for s in slots}
+        assert by_name["Carol"]["override_below_floor"] is True
+        assert by_name["Alice"]["override_below_floor"] is False
+
     def test_override_marker_not_rendered_in_embed(self, fake_env):
-        """Decision #6 (#171): the Override Below Floor ⚠️ glyph + the
+        """Decision #6 (#171): the Override Below Minimum ⚠️ glyph + the
         trailing "Assigned below the zone minimum" footnote are dropped
         from the attendance UI. The Sheet still records the flag for
         post-event audit (see `test_override_flag_read_from_rosters_tab`)

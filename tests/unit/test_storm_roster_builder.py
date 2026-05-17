@@ -661,7 +661,7 @@ class TestOverrideBelowFloorCapture:
     gate is primary-only)."""
 
     def _override_col(self) -> int:
-        return srb._ROSTERS_HEADER.index("Override Below Floor")
+        return srb._ROSTERS_HEADER.index("Override Below Minimum")
 
     def test_assigned_below_floor_member_flagged_yes(self, fake_env):
         fake, gid = fake_env
@@ -746,7 +746,10 @@ class TestOverrideBelowFloorCapture:
         assert "1003" in session.below_floor_overrides
 
     def test_header_includes_override_column(self):
-        assert "Override Below Floor" in srb._ROSTERS_HEADER
+        assert "Override Below Minimum" in srb._ROSTERS_HEADER
+        # Legacy "Override Below Floor" must NOT still be in the
+        # writer's header — it's only kept as a read-side alias.
+        assert "Override Below Floor" not in srb._ROSTERS_HEADER
 
 
 class TestAutoFill:
@@ -1882,6 +1885,44 @@ class TestRostersTabHeaderMigration:
         # Pre-#152 rows get phase "1" so loaders can join on phase
         # without seeing blanks.
         assert prior_row[phase_idx] == "1"
+
+    def test_override_column_renamed_and_data_preserved(self, fake_env):
+        """Rule B follow-up: the rosters_tab column header was renamed
+        from `Override Below Floor` → `Override Below Minimum`. The
+        header migration must (a) emit the new name on rewrite, and
+        (b) carry existing "yes" flags from the old column over into
+        the new column so dev/staging events don't lose their audit
+        data."""
+        fake, gid = fake_env
+        old_rosters = fake.add_worksheet("DS Rosters")
+        old_rosters._rows = [
+            ["Event Date", "Team", "Zone", "Member", "Role",
+             "Power at Assignment", "Discord ID", "Override Below Floor",
+             "Paired With", "Posted At (UTC)"],  # 10-col, no Phase yet
+            ["2026-05-11", "A", "Power Tower", "Old", "primary",
+             "180000000", "9", "yes", "", ""],
+        ]
+        members = {
+            "1001": {"key": "1001", "name": "Alice", "discord_id": "1001",
+                     "power": 412_000_000, "not_on_discord": False},
+        }
+        session = _make_session(team="A", members=members)
+        session.guild_id = gid
+        session.event_date = "2026-05-18"
+        session.assignments["Power Tower"].append("1001")
+        errors = srb._write_rosters_tab(session)
+        assert errors == []
+
+        new_header = old_rosters._rows[0]
+        # New name landed; old name is gone.
+        assert "Override Below Minimum" in new_header
+        assert "Override Below Floor" not in new_header
+
+        # The pre-existing "yes" flag on the legacy column carried into
+        # the new column rather than being lost.
+        override_idx = srb._ROSTERS_HEADER.index("Override Below Minimum")
+        prior_row = old_rosters._rows[1]
+        assert prior_row[override_idx] == "yes"
 
 
 class TestAutoFillSummarySplitsPairedFromPrimary:

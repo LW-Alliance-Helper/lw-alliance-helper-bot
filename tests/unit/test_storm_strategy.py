@@ -877,3 +877,38 @@ class TestPresetPickerView:
         )
         select = view.children[0]
         assert "delete" in select.placeholder.lower()
+
+    def test_overflow_notice_empty_when_under_cap(self):
+        view = ss._PresetPickerView(
+            owner_id=1, event_type="DS",
+            names=[f"P{i}" for i in range(10)],
+            action="edit",
+        )
+        # 10 < 25 → no notice.
+        assert view.overflow_notice == ""
+        assert view.truncated_count == 0
+
+    def test_overflow_notice_at_exactly_25_is_empty(self):
+        view = ss._PresetPickerView(
+            owner_id=1, event_type="DS",
+            names=[f"P{i:02d}" for i in range(25)],
+            action="edit",
+        )
+        # Boundary: 25 fits exactly, no truncation.
+        assert view.overflow_notice == ""
+        assert view.truncated_count == 0
+
+    def test_overflow_notice_surfaces_count_when_over_cap(self):
+        """The picker silently dropped names past 25 before — officers
+        searching for an older preset that didn't appear had no signal.
+        Notice now surfaces the gap."""
+        view = ss._PresetPickerView(
+            owner_id=1, event_type="DS",
+            names=[f"P{i:02d}" for i in range(40)],
+            action="delete",
+        )
+        notice = view.overflow_notice
+        assert notice != ""
+        assert "first 25" in notice
+        assert "40" in notice  # total count surfaced
+        assert view.truncated_count == 15

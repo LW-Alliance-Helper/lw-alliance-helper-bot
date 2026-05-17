@@ -2041,7 +2041,8 @@ class _StrategyListView(discord.ui.View):
                 action="edit",
             )
             await inter.response.send_message(
-                "✏️ Pick a preset to edit.", view=picker, ephemeral=True,
+                "✏️ Pick a preset to edit." + picker.overflow_notice,
+                view=picker, ephemeral=True,
             )
             try:
                 picker.message = await inter.original_response()
@@ -2066,7 +2067,8 @@ class _StrategyListView(discord.ui.View):
                 action="delete",
             )
             await inter.response.send_message(
-                "🗑️ Pick a preset to delete.", view=picker, ephemeral=True,
+                "🗑️ Pick a preset to delete." + picker.overflow_notice,
+                view=picker, ephemeral=True,
             )
             try:
                 picker.message = await inter.original_response()
@@ -2095,6 +2097,9 @@ class _StrategyListView(discord.ui.View):
                 pass
 
 
+_PRESET_PICKER_MAX_OPTIONS = 25
+
+
 class _PresetPickerView(discord.ui.View):
     """Ephemeral preset Select for the list view's Edit / Delete buttons.
     Action picks the destination flow — `edit` opens the editor, `delete`
@@ -2114,11 +2119,36 @@ class _PresetPickerView(discord.ui.View):
         self.event_type = event_type
         self.action = action
         self.message: discord.Message | None = None
+        self.total_count = len(names)
+        self.truncated_count = max(
+            0, self.total_count - _PRESET_PICKER_MAX_OPTIONS,
+        )
         self._build_components(names)
+
+    @property
+    def overflow_notice(self) -> str:
+        """One-line warning suffix when the alliance has more presets
+        than fit in a Discord Select (capped at 25). Empty string
+        otherwise. Callers append it to the prompt content so officers
+        with > 25 presets know why their preset isn't listed.
+
+        Realistically very few alliances will hit this (storm presets
+        are deliberate per-strategy artefacts, not bulk data) but
+        silent truncation is the wrong default — officers searching
+        for a preset that doesn't appear would otherwise have no
+        signal."""
+        if not self.truncated_count:
+            return ""
+        return (
+            f"\n⚠️ Showing the first {_PRESET_PICKER_MAX_OPTIONS} of "
+            f"**{self.total_count}** presets (Discord caps dropdowns at "
+            f"{_PRESET_PICKER_MAX_OPTIONS} options). Rename or delete "
+            f"older presets to bring the one you need into range."
+        )
 
     def _build_components(self, names: list[str]):
         sorted_names = sorted(names, key=str.lower)
-        capped = sorted_names[:25]
+        capped = sorted_names[:_PRESET_PICKER_MAX_OPTIONS]
         options = [
             discord.SelectOption(label=n[:100], value=n[:100]) for n in capped
         ]

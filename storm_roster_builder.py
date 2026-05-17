@@ -3039,17 +3039,26 @@ async def _finalize_structured_roster(
 
 _ROSTERS_HEADER = [
     "Event Date", "Team", "Phase", "Zone", "Member", "Role",
-    "Power at Assignment", "Discord ID", "Override Below Floor",
+    "Power at Assignment", "Discord ID", "Override Below Minimum",
     "Paired With", "Posted At (UTC)",
 ]
+
+# Pre-Rule-B Sheet column names → their post-rename header. The
+# `_write_rosters_tab` header migration uses this to copy data from
+# the old column when a sheet still carries the legacy name. Readers
+# (`storm_attendance` + `storm_history`) also fall through to the
+# legacy name if the new one isn't present.
+_LEGACY_HEADER_ALIASES: dict[str, str] = {
+    "Override Below Minimum": "Override Below Floor",
+}
 
 
 def _write_rosters_tab(session: RosterBuilderSession) -> list[str]:
     """Append one row per slot to the alliance's configured rosters_tab.
     Returns a list of soft error strings (empty on success).
 
-    The `Override Below Floor` column captures whether the officer
-    explicitly assigned the member below the effective zone floor —
+    The `Override Below Minimum` column captures whether the officer
+    explicitly assigned the member below the effective zone minimum —
     so post-event review (attendance, no-show tagging) can flag the
     decision. Subs don't carry the flag (the eligibility gate is
     primary-only). If a previously-flagged member was later unassigned
@@ -3097,17 +3106,23 @@ def _write_rosters_tab(session: RosterBuilderSession) -> list[str]:
         except Exception as e:
             existing = []
             errors.append(f"rosters tab header read failed: {e}")
-        # Two header migrations to handle:
+        # Three header migrations to handle:
         # - "Paired With" column (added in #132)
         # - "Phase" column (added in #152) — inserted at position 2
         #   between Team and Zone, so EVERY existing data row needs a
         #   blank cell shifted in at position 2 to keep header-name
         #   lookups (e.g. `header.index("Zone")` → row[3]) honest.
+        # - "Override Below Floor" → "Override Below Minimum" rename
+        #   (Rule B follow-up). The migration uses _LEGACY_HEADER_ALIASES
+        #   to find the old column's data and re-emit it under the new
+        #   name, so officers don't lose existing "yes" flags.
         # Without the row-rewrite, an old row's Zone string would sit
         # under the new "Phase" column and Zone would read as Member,
         # corrupting every downstream read.
         needs_header_migration = existing and (
-            "Paired With" not in existing or "Phase" not in existing
+            "Paired With" not in existing
+            or "Phase" not in existing
+            or "Override Below Minimum" not in existing
         )
         if needs_header_migration:
             try:
@@ -3127,6 +3142,13 @@ def _write_rosters_tab(session: RosterBuilderSession) -> list[str]:
                             new_row.append("1")
                             continue
                         idx = old_idx.get(col_name, -1)
+                        # Fall through to the legacy column name if the
+                        # new name isn't on the sheet (header rename
+                        # migration — see _LEGACY_HEADER_ALIASES).
+                        if idx < 0:
+                            legacy_name = _LEGACY_HEADER_ALIASES.get(col_name)
+                            if legacy_name:
+                                idx = old_idx.get(legacy_name, -1)
                         if 0 <= idx < len(row):
                             new_row.append(str(row[idx]))
                         else:

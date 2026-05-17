@@ -283,6 +283,16 @@ def list_rules(guild_id: int, event_type: str) -> list[Rule]:
             return ""
         return str(row[idx]).strip()
 
+    # #178 CS-only: translate legacy internal-key zone values
+    # (`s1_power_tower` → `Power Tower`) at read time so existing dev/
+    # staging rules continue to match against the post-#178 display-
+    # name preset zones. Imported lazily to avoid the cog-import-order
+    # coupling the rest of this module is careful about.
+    if event_type == "CS":
+        from storm_strategy import _translate_legacy_cs_zone
+    else:
+        _translate_legacy_cs_zone = None
+
     rules: list[Rule] = []
     for row in values[1:]:
         if not row or not any(c.strip() for c in row):
@@ -290,11 +300,24 @@ def list_rules(guild_id: int, event_type: str) -> list[Rule]:
         rule_type = _cell(row, type_col).lower()
         if rule_type not in (_RULE_TYPE_POWER_BAND, _RULE_TYPE_PER_MEMBER):
             continue
+        sub_type = _cell(row, subtype_col).lower()
+        value = _cell(row, value_col)
+        # Per-member zone rules + power-band rules both carry a zone
+        # name in the Value column. Translate legacy CS keys for
+        # either rule type — the auto-fill apply path does case-
+        # insensitive equality against the preset's ZoneRow.zone (now
+        # display names post-#178), so a stale `s1_power_tower` value
+        # would silently no-op without this translation.
+        if _translate_legacy_cs_zone is not None and value and (
+            rule_type == _RULE_TYPE_POWER_BAND
+            or (rule_type == _RULE_TYPE_PER_MEMBER and sub_type == "zone")
+        ):
+            value = _translate_legacy_cs_zone(value)
         rules.append(Rule(
             rule_type=rule_type,
             subject=_cell(row, subject_col),
-            sub_type=_cell(row, subtype_col).lower(),
-            value=_cell(row, value_col),
+            sub_type=sub_type,
+            value=value,
             notes=_cell(row, notes_col),
         ))
     return rules

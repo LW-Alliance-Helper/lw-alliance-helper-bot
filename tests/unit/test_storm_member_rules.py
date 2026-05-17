@@ -603,26 +603,29 @@ class TestZoneAutocomplete:
         assert len(choices) <= 25
 
     @pytest.mark.asyncio
-    async def test_cs_autocomplete_returns_canonical_zones(self):
-        """CS canonical_zones_for currently returns internal keys
-        (`s1_power_tower`, `s1_dc1`, etc.) rather than display names —
-        a pre-existing data-modeling inconsistency, not introduced by
-        the autocomplete. The autocomplete is consistent with how
-        canonical_zones_for is used elsewhere
-        (`_set_power_band`, `_set_member_zone` validation,
-        `seed_default_preset`). Surfacing the same shape avoids
-        autocomplete suggesting display names that would then fail
-        find_zone against the preset's internal-key ZoneRows.
-        Flagged as deferred carry-over in AUDIT_storm_ux_overhaul.md."""
+    async def test_cs_autocomplete_returns_display_name_zones(self):
+        """Post-#178: CS autocomplete returns display names
+        (`Power Tower`, `Data Center 1`, …) matching what officers see
+        everywhere else in the UI. Pre-#178 this surfaced internal
+        keys (`s1_power_tower`) — a leak of the multi-stage data
+        model that the rest of the UI hides."""
         from unittest.mock import MagicMock
         cb = smr._make_zone_autocomplete("CS")
         choices = await cb(MagicMock(), "")
         labels = [c.name for c in choices]
-        # CS canonical set as currently exposed by canonical_zones_for.
-        assert "s1_power_tower" in labels
+        # Display names surface; internal keys do not.
+        assert "Power Tower" in labels
+        assert "Data Center 1" in labels
+        assert "Virus Lab" in labels
+        assert not any(lab.startswith("s1_") for lab in labels)
+        assert not any(lab.startswith("s2_") for lab in labels)
+        assert not any(lab.startswith("s3_") for lab in labels)
+        # Power Tower appears in CS stages 1 AND 3 — deduped to one
+        # autocomplete option.
+        assert labels.count("Power Tower") == 1
         # DS-only zones absent.
         assert "Nuclear Silo" not in labels
-        # Cap respected (CS exposes ~21 zone entries; well under 25).
+        # Cap respected — 13 unique CS display names, well under 25.
         assert len(choices) <= 25
 
     @pytest.mark.asyncio
@@ -652,4 +655,82 @@ class TestZoneAutocomplete:
         choices = await cb(MagicMock(), "")
         # DS canonical set is 11 zones.
         assert len(choices) >= 10
+
+
+class TestListRulesCsLegacyValueMigration:
+    """#178: per-member zone rules + power-band rules from pre-#178 CS
+    data carry legacy internal-key values (`s1_power_tower`). The
+    rule reader translates them to display names at read time so the
+    auto-fill apply path's `find_zone(rule.value)` lookup matches the
+    new display-name presets.
+
+    DS rules are unaffected (no internal-key shape on DS)."""
+
+    def test_cs_per_member_zone_rule_value_translated(self, fake_sheet):
+        fake, gid = fake_sheet
+        # Simulate pre-#178 alliance data by writing the rule row
+        # directly via the storage path with the internal-key value.
+        ok, _ = smr.save_rule(gid, "CS", smr.Rule(
+            rule_type="per_member", subject="Alice",
+            sub_type="zone", value="s1_power_tower",
+        ))
+        assert ok is True
+        rules = smr.list_rules(gid, "CS")
+        # On read, the value translates to the display name.
+        zone_rules = [r for r in rules if r.sub_type == "zone"]
+        assert len(zone_rules) == 1
+        assert zone_rules[0].value == "Power Tower"
+
+    def test_cs_power_band_rule_value_translated(self, fake_sheet):
+        fake, gid = fake_sheet
+        ok, _ = smr.save_rule(gid, "CS", smr.Rule(
+            rule_type="power_band", subject="250000000",
+            value="s3_virus_lab",
+        ))
+        assert ok is True
+        rules = smr.list_rules(gid, "CS")
+        band_rules = [r for r in rules if r.rule_type == "power_band"]
+        assert len(band_rules) == 1
+        assert band_rules[0].value == "Virus Lab"
+
+    def test_cs_display_name_value_passes_through_unchanged(self, fake_sheet):
+        fake, gid = fake_sheet
+        # New rules saved with display names already — no translation
+        # surprise (translator is idempotent on display names).
+        ok, _ = smr.save_rule(gid, "CS", smr.Rule(
+            rule_type="per_member", subject="Bob",
+            sub_type="zone", value="Power Tower",
+        ))
+        assert ok is True
+        rules = smr.list_rules(gid, "CS")
+        assert rules[0].value == "Power Tower"
+
+    def test_ds_rules_not_translated(self, fake_sheet):
+        """DS doesn't have internal-key shape; the translator only
+        fires on the CS reader branch."""
+        fake, gid = fake_sheet
+        # DS doesn't have "s1_power_tower" as a known internal key,
+        # but even if a DS rule happened to carry that string verbatim
+        # the DS reader leaves it alone.
+        ok, _ = smr.save_rule(gid, "DS", smr.Rule(
+            rule_type="per_member", subject="Carol",
+            sub_type="zone", value="Power Tower",
+        ))
+        assert ok is True
+        rules = smr.list_rules(gid, "DS")
+        assert rules[0].value == "Power Tower"
+
+    def test_non_zone_subtype_team_value_not_translated(self, fake_sheet):
+        """Per-member team rules carry Team A / Team B values, not zone
+        names. The translator skips them so a "B" team value stays
+        "B" (not accidentally matched against the internal-key map)."""
+        fake, gid = fake_sheet
+        ok, _ = smr.save_rule(gid, "CS", smr.Rule(
+            rule_type="per_member", subject="Dan",
+            sub_type="team", value="B",
+        ))
+        assert ok is True
+        rules = smr.list_rules(gid, "CS")
+        team_rules = [r for r in rules if r.sub_type == "team"]
+        assert team_rules[0].value == "B"
 

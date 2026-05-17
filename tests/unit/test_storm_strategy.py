@@ -161,10 +161,28 @@ class TestCanonicalSeed:
         assert [z.zone for z in buf.zones] == list(storm.DS_ZONE_STRUCTURE)
 
     def test_cs_seed_has_canonical_zones(self):
+        """Post-#178: CS seeds with deduped display names (13 unique
+        zones) instead of the pre-#178 21 stage-prefixed internal
+        keys. The preset model carries per-phase capacities on each
+        ZoneRow, so one "Power Tower" entry with `max_phase1` +
+        `max_phase3` cleanly subsumes the old s1+s3 pair."""
         import storm
         buf = ss.seed_default_preset("Test", "CS")
-        cs_names = [name for _, name, _ in storm.CS_ZONE_STRUCTURE]
-        assert [z.zone for z in buf.zones] == cs_names
+        # Build the expected deduped list in the same order
+        # canonical_zones_for / CS_ZONE_STRUCTURE produce.
+        seen: dict[str, None] = {}
+        for _, _key, display in storm.CS_ZONE_STRUCTURE:
+            if display not in seen:
+                seen[display] = None
+        expected = list(seen.keys())
+        assert [z.zone for z in buf.zones] == expected
+        # Spot-check the dedupe actually happened — Power Tower
+        # appears in stages 1 and 3 in CS_ZONE_STRUCTURE, but renders
+        # exactly once in the seeded preset.
+        assert [z.zone for z in buf.zones].count("Power Tower") == 1
+        # Internal keys no longer surface — autocomplete + setup wizard
+        # both render display names now.
+        assert not any(z.zone.startswith("s1_") for z in buf.zones)
 
     def test_seed_zones_have_zero_max_initially(self):
         buf = ss.seed_default_preset("Test", "DS")
@@ -330,6 +348,116 @@ class TestSheetRoundTrip:
         with patch.object(config, "get_spreadsheet", return_value=None):
             assert ss.load_preset(TEST_GUILD_ID, "DS", "Anything") is None
             assert ss.list_presets(TEST_GUILD_ID, "DS") == []
+
+
+# ── #178: CS legacy internal-key migration ──────────────────────────────────
+
+
+class TestLegacyCsZoneTranslator:
+    def test_known_internal_key_translates(self):
+        assert ss._translate_legacy_cs_zone("s1_power_tower") == "Power Tower"
+        assert ss._translate_legacy_cs_zone("s3_power_tower") == "Power Tower"
+        assert ss._translate_legacy_cs_zone("s1_dc1") == "Data Center 1"
+        assert ss._translate_legacy_cs_zone("s3_virus_lab") == "Virus Lab"
+
+    def test_case_insensitive(self):
+        assert ss._translate_legacy_cs_zone("S1_POWER_TOWER") == "Power Tower"
+        assert ss._translate_legacy_cs_zone("S1_Power_Tower") == "Power Tower"
+
+    def test_unknown_string_returns_unchanged(self):
+        assert ss._translate_legacy_cs_zone("Power Tower") == "Power Tower"
+        assert ss._translate_legacy_cs_zone("Custom Bunker") == "Custom Bunker"
+        assert ss._translate_legacy_cs_zone("") == ""
+
+    def test_already_display_name_passes_through(self):
+        # Idempotent: feeding the helper a display name returns the same.
+        assert ss._translate_legacy_cs_zone("Power Tower") == "Power Tower"
+
+
+class TestLoadPresetCsLegacyMigration:
+    """#178: an alliance with pre-#178 CS data has separate rows for
+    `s1_power_tower` and `s3_power_tower` — both surfacing as the
+    same "Power Tower" zone in the post-#178 model. load_preset
+    translates each row's Zone cell at read time and merges duplicate
+    display names by taking max() of every numeric field."""
+
+    def _seed_cs_legacy_rows(self, fake, gid, header=None):
+        """Write a CS preset with the pre-#178 stage-prefixed key
+        schema. Stage 1 carries Power Tower at max_phase1=4 / priority 1;
+        Stage 3 carries it at max_phase3=4 / priority 3. After load
+        they should merge into one "Power Tower" zone with both phase
+        caps + the higher priority preserved."""
+        import config
+        ws = fake.add_worksheet("CS Strategies")
+        ws._rows = [
+            list(ss._CS_HEADER),
+            # s1_power_tower row — phase 1 data only
+            [
+                "Legacy", "s1_power_tower", "0",
+                "4", "0", "0",   # max_players, max_p1, max_p2, max_p3
+                "300000000",      # min_power
+                "0",              # priority
+                "1", "0", "0",    # priority_p1, p2, p3
+                "Either", "3",    # faction, phase_count
+            ],
+            # s3_power_tower row — phase 3 data only
+            [
+                "Legacy", "s3_power_tower", "0",
+                "0", "0", "4",
+                "300000000",
+                "0",
+                "0", "0", "3",
+                "Either", "3",
+            ],
+            # An untouched zone alongside (single-stage)
+            [
+                "Legacy", "s3_virus_lab", "0",
+                "0", "0", "2",
+                "350000000",
+                "0",
+                "0", "0", "1",
+                "Either", "3",
+            ],
+        ]
+        return ws
+
+    def test_legacy_keys_translate_and_merge_on_load(self, fake_sheet_factory):
+        fake, gid = fake_sheet_factory
+        self._seed_cs_legacy_rows(fake, gid)
+
+        loaded = ss.load_preset(gid, "CS", "Legacy")
+        assert loaded is not None
+        # The two Power Tower rows collapse to one zone.
+        zone_names = [z.zone for z in loaded.zones]
+        assert zone_names.count("Power Tower") == 1
+        # And Virus Lab survives translation as its own row.
+        assert "Virus Lab" in zone_names
+        # Internal keys do NOT leak through.
+        assert "s1_power_tower" not in zone_names
+        assert "s3_power_tower" not in zone_names
+        # Merged Power Tower carries BOTH phase-1 + phase-3 caps /
+        # priorities (max() merge).
+        pt = next(z for z in loaded.zones if z.zone == "Power Tower")
+        assert pt.max_phase1 == 4
+        assert pt.max_phase3 == 4
+        assert pt.priority_phase1 == 1
+        assert pt.priority_phase3 == 3
+        assert pt.min_power_a == 300_000_000
+
+    def test_already_migrated_preset_loads_unchanged(self, fake_sheet_factory):
+        fake, gid = fake_sheet_factory
+        # Display-name rows round-trip cleanly (no translation needed).
+        buf = ss.PresetBuffer(name="Post178", event_type="CS",
+                              phase_count=3, zones=[
+            ss.ZoneRow(zone="Power Tower", max_players=0,
+                       max_phase1=4, max_phase3=4,
+                       min_power_a=300_000_000,
+                       priority_phase1=1, priority_phase3=3),
+        ])
+        ss.save_preset(gid, "CS", buf)
+        loaded = ss.load_preset(gid, "CS", "Post178")
+        assert loaded is not None
+        assert [z.zone for z in loaded.zones] == ["Power Tower"]
 
 
 # ── #148: configured-teams gate ─────────────────────────────────────────────

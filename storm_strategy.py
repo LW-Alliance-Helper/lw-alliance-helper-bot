@@ -397,13 +397,76 @@ class PresetBuffer:
 
 
 def canonical_zones_for(event_type: str) -> list[str]:
-    """Canonical zone list per event type (#35). DS is a flat list, CS
-    is grouped by stage but we flatten for preset purposes."""
+    """Canonical zone DISPLAY NAMES per event type (#35 + #178).
+
+    DS is a flat list of distinct zones — return as-is.
+
+    CS's `CS_ZONE_STRUCTURE` is `[(stage_num, internal_key, display_name)]`
+    where the same building can appear across stages (e.g. Power Tower
+    in Stage 1 AND Stage 3 → `s1_power_tower` + `s3_power_tower` both
+    surfacing as "Power Tower"). Pre-#178 this helper returned the
+    internal keys, which leaked into the autocomplete dropdown +
+    seed_default_preset + InlinePowerBandView's Zone Select as
+    `s1_power_tower`-style strings that don't match what officers see
+    anywhere else in the UI.
+
+    Post-#178: return DEDUPED display names. The preset model carries
+    per-phase capacities (`max_phase1` / `max_phase2` / `max_phase3`)
+    so one "Power Tower" ZoneRow with per-phase data subsumes the two
+    pre-#178 entries cleanly.
+    """
     import storm
     if event_type == "DS":
         return list(storm.DS_ZONE_STRUCTURE)
-    # CS: [(stage_num, zone_name, faction)]
-    return [name for _, name, _ in storm.CS_ZONE_STRUCTURE]
+    # Dedupe by display name, preserving insertion order (Stage 1 entries
+    # come first; later-stage repeats are dropped).
+    seen: dict[str, None] = {}
+    for _, _key, display in storm.CS_ZONE_STRUCTURE:
+        if display not in seen:
+            seen[display] = None
+    return list(seen.keys())
+
+
+# Pre-#178 alliances stored CS preset Zone cells (and `per_member`
+# zone-rule Value cells) as internal keys like `s1_power_tower`. Post-
+# #178 the canonical form is display names. This translation map +
+# helper let the readers fall through legacy values to the new form
+# at load time so existing dev-staged data keeps working without a
+# Sheet rewrite. Built from `CS_ZONE_STRUCTURE` lazily so the import
+# stays one-way (storm_strategy → storm; not back).
+_LEGACY_CS_ZONE_TRANSLATION: dict[str, str] | None = None
+
+
+def _legacy_cs_zone_translation() -> dict[str, str]:
+    """`{internal_key: display_name}` for every CS zone. Cached on first
+    call. Lower-cased keys for case-insensitive lookups in
+    `_translate_legacy_cs_zone`."""
+    global _LEGACY_CS_ZONE_TRANSLATION
+    if _LEGACY_CS_ZONE_TRANSLATION is None:
+        import storm
+        _LEGACY_CS_ZONE_TRANSLATION = {
+            key.lower(): display
+            for _, key, display in storm.CS_ZONE_STRUCTURE
+        }
+    return _LEGACY_CS_ZONE_TRANSLATION
+
+
+def _translate_legacy_cs_zone(name: str) -> str:
+    """If `name` matches a CS internal key (`s1_power_tower` etc.),
+    return the canonical display name (`Power Tower`). Otherwise
+    return `name` unchanged.
+
+    Pre-#178 alliance Sheet data may carry internal keys in the Zone
+    column on `strategies_tab` and in the Value column of per_member
+    zone rules. This helper is the single translation point at every
+    read boundary — `load_preset` for CS presets, `list_rules` for CS
+    per-member zone rules. Once the translated data is re-saved (next
+    Save Preset or set_member_zone), the Sheet carries the canonical
+    display name and the translator becomes a no-op for that row.
+    """
+    if not name:
+        return name
+    return _legacy_cs_zone_translation().get(name.strip().lower(), name)
 
 
 def seed_default_preset(name: str, event_type: str) -> PresetBuffer:
@@ -519,11 +582,22 @@ def load_preset(guild_id: int, event_type: str, name: str) -> PresetBuffer | Non
     rows = [r for r in records if str(r.get("Preset Name", "")).strip().lower() == name.lower()]
     if not rows:
         return None
+    # CS legacy-key migration (#178): existing dev/staging alliances
+    # carry rows like `s1_power_tower`/`s3_power_tower` that both
+    # surface as the same display name "Power Tower". Translate per
+    # row at read time, then merge per-display-name rows by taking the
+    # max of every numeric field so the per-phase data from the old
+    # multi-row shape collapses cleanly into one ZoneRow.
     zones: list[ZoneRow] = []
+    zones_by_name: dict[str, ZoneRow] = {}  # key = display name lower-case
     faction = "Either"
     phase_count = 0
     for r in rows:
-        zone_name = str(r.get("Zone", "")).strip()
+        raw_zone = str(r.get("Zone", "")).strip()
+        if event_type == "CS":
+            zone_name = _translate_legacy_cs_zone(raw_zone)
+        else:
+            zone_name = raw_zone
         src = f"preset={name!r} zone={zone_name!r} event={event_type}"
         # `Phase Count` (or legacy `Use Phases`) is denormalised across
         # every row of a preset. Take the max seen so partial-edit
@@ -532,7 +606,7 @@ def load_preset(guild_id: int, event_type: str, name: str) -> PresetBuffer | Non
         if event_type == "DS":
             min_a, _ = _parse_power_cell(r.get("Min Power A", ""), source=src + " col=Min Power A")
             min_b, _ = _parse_power_cell(r.get("Min Power B", ""), source=src + " col=Min Power B")
-            zones.append(ZoneRow(
+            zr = ZoneRow(
                 zone=zone_name,
                 max_players=_safe_int(r.get("Max Players", 0)),
                 max_phase1=_safe_int(r.get("Max Phase 1", 0)),
@@ -544,10 +618,11 @@ def load_preset(guild_id: int, event_type: str, name: str) -> PresetBuffer | Non
                 priority_phase1=_safe_int(r.get("Priority Phase 1", 0)),
                 priority_phase2=_safe_int(r.get("Priority Phase 2", 0)),
                 priority_phase3=_safe_int(r.get("Priority Phase 3", 0)),
-            ))
+            )
+            zones.append(zr)
         else:
             min_p, _ = _parse_power_cell(r.get("Min Power", ""), source=src + " col=Min Power")
-            zones.append(ZoneRow(
+            zr = ZoneRow(
                 zone=zone_name,
                 max_players=_safe_int(r.get("Max Players", 0)),
                 max_phase1=_safe_int(r.get("Max Phase 1", 0)),
@@ -559,7 +634,30 @@ def load_preset(guild_id: int, event_type: str, name: str) -> PresetBuffer | Non
                 priority_phase1=_safe_int(r.get("Priority Phase 1", 0)),
                 priority_phase2=_safe_int(r.get("Priority Phase 2", 0)),
                 priority_phase3=_safe_int(r.get("Priority Phase 3", 0)),
-            ))
+            )
+            # Merge-on-load: when two legacy rows translate to the
+            # same display name, fold the second into the first by
+            # taking max() of every numeric field. The pre-#178 model
+            # stored separate rows for `s1_power_tower` (Phase 1 data)
+            # and `s3_power_tower` (Phase 3 data); after translation
+            # both surface as "Power Tower" and need to land in one
+            # ZoneRow that carries BOTH phases' caps + priorities.
+            key = zone_name.strip().lower()
+            existing = zones_by_name.get(key)
+            if existing is None:
+                zones_by_name[key] = zr
+                zones.append(zr)
+            else:
+                existing.max_players = max(existing.max_players, zr.max_players)
+                existing.max_phase1  = max(existing.max_phase1,  zr.max_phase1)
+                existing.max_phase2  = max(existing.max_phase2,  zr.max_phase2)
+                existing.max_phase3  = max(existing.max_phase3,  zr.max_phase3)
+                existing.min_power_a = max(existing.min_power_a, zr.min_power_a)
+                # min_power_b unused on CS; left at 0.
+                existing.priority         = max(existing.priority,         zr.priority)
+                existing.priority_phase1  = max(existing.priority_phase1,  zr.priority_phase1)
+                existing.priority_phase2  = max(existing.priority_phase2,  zr.priority_phase2)
+                existing.priority_phase3  = max(existing.priority_phase3,  zr.priority_phase3)
             row_faction = str(r.get("Faction", "")).strip()
             if row_faction:
                 faction = row_faction

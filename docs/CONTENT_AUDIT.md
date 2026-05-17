@@ -1414,14 +1414,12 @@ Sample Warehouse 1: {…}
 Sample Warehouse 2: {…}
 Sample Warehouse 3: {…}
 Sample Warehouse 4: {…}
-Floaters: {…}
 
 STAGE 2
 Defense System 1: {…}
 Defense System 2: {…}
 Serum Factory 1: {…}
 Serum Factory 2: {…}
-Floaters: {…}
 
 STAGE 3
 Virus Lab: {…}

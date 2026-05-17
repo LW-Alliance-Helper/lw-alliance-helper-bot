@@ -95,18 +95,12 @@ manually (Section 4).
 ┌──────────────────────────────────────────────────────────────────────┐
 │ ⚔️ Desert Storm — Sign Up for Saturday, May 18, 2026                 │
 │                                                                      │
-│ Pick one option below. Changing your vote replaces the previous      │
-│ one — feel free to update if your availability shifts before the     │
-│ event.                                                               │
+│ Select your availability for Desert Storm!                           │
+│ Only 1 vote can be recorded. If you select a 2nd one, it will        │
+│ replace the first vote you cast.                                     │
 │                                                                      │
-│ Available time slots                                                 │
-│ • **4pm ET (18:00 server time)**                                     │
-│ • **9pm ET (23:00 server time)**                                     │
-│                                                                      │
-│ Vote recorded with timestamp — leadership uses /desertstorm signups  │
-│ to review.                                                           │
 └──────────────────────────────────────────────────────────────────────┘
-[🅰️ Team A: 4pm ET (18:00 server time)]  [🅱️ Team B: 9pm ET (23:00 server time)]
+[🅰️ Team A: 9pm ET (18:00 server time)]  [🅱️ Team B: 4pm ET (13:00 server time)]
 [🔄 Either time works]  [❌ Cannot participate]
 ```
 
@@ -116,89 +110,81 @@ Embed colour is gold for DS, orange for CS. Title format
 `Saturday, May 18, 2026` (no leading zero on the day, full weekday
 name, full month name).
 
+> **Code vs. doc divergence on this screen.** The current
+> `_build_registration_embed` in [storm_signup_post.py](../storm_signup_post.py)
+> emits a different description ("Pick one option below. Changing your
+> vote replaces the previous one — feel free to update if your
+> availability shifts before the event."), an `Available time slots`
+> field below the description, and a footer line ("Vote recorded with
+> timestamp — leadership uses /desertstorm signups to review."). The
+> box above reflects Kevin's first-sweep `_edited.md` shape — keep it
+> as the spec if the code should be simplified, or update the doc to
+> mirror the code if the extra field + footer are the intended state.
+
 **Variant B — Desert Storm, Team A only alliance (`teams=A`):**
 
 ```
 ┌──────────────────────────────────────────────────────────────────────┐
 │ ⚔️ Desert Storm — Sign Up for Saturday, May 18, 2026                 │
 │                                                                      │
-│ Pick one option below. Changing your vote replaces the previous      │
-│ one — feel free to update if your availability shifts before the     │
-│ event.                                                               │
+│ Select your availability for Desert Storm!                           │
+│ Only 1 vote can be recorded. If you select a 2nd one, it will        │
+│ replace the first vote you cast.                                     │
 │                                                                      │
-│ Available time slots                                                 │
-│ • **4pm ET (18:00 server time)**                                     │
-│                                                                      │
-│ Vote recorded with timestamp — leadership uses /desertstorm signups  │
-│ to review.                                                           │
 └──────────────────────────────────────────────────────────────────────┘
-[🅰️ Team A: 4pm ET (18:00 server time)]  [❌ Cannot participate]
+[🅰️ Team A: 9pm ET (18:00 server time)]  [❌ Cannot participate]
 ```
 
-Mirror for `teams=B`: `🅱️ Team B: 9pm ET (23:00 server time)` instead.
+Mirror for `teams=B`: `🅱️ Team B: 4pm ET (13:00 server time)` instead.
 The `🔄 Either time works` button is omitted in either single-team
 variant — there's nothing to be "either" between.
 
 **Variant C — Canyon Storm:**
 
-> **⚠️ Known drift from #166.** CS was supposed to support
-> `teams=both/A/B` end-to-end (same as DS) but the `storm_signup_post.py`
-> rewrite was missed. Today CS posts always render single-team Team A
-> regardless of the alliance's `teams` setting. See
-> `notes/AUDIT_walkthrough_179.md` § B1 for the three code sites that
-> need to follow `storm_signup_view.py`'s lead.
-
-What CS currently emits (single-team-hardcoded):
+Per Rule A / #166 + the PR #183 follow-up, CS now mimics DS exactly
+with its own game-defined times. `teams=both` renders the 4-button
+shape; `teams=A` / `teams=B` collapses to the single-team layout.
 
 ```
 ┌──────────────────────────────────────────────────────────────────────┐
 │ 🏜️ Canyon Storm — Sign Up for Saturday, May 18, 2026                 │
 │                                                                      │
-│ Pick one option below. Changing your vote replaces the previous      │
-│ one — feel free to update if your availability shifts before the     │
-│ event.                                                               │
+│ Select your availability for Canyon Storm!                           │
+│ Only 1 vote can be recorded. If you select a 2nd one, it will        │
+│ replace the first vote you cast.                                     │
 │                                                                      │
-│ Available time slots                                                 │
-│ • **10am ET (12:00 server time)**                                    │
-│                                                                      │
-│ Vote recorded with timestamp — leadership uses /canyonstorm signups  │
-│ to review.                                                           │
 └──────────────────────────────────────────────────────────────────────┘
-[🅰️ Team A: 10am ET (12:00 server time)]  [🅱️ Team B]  [🔄 Either time works]  [❌ Cannot participate]
+[🅰️ Team A: 10am ET (12:00 server time)]  [🅱️ Team B: 9pm ET (23:00 server time)]
+[🔄 Either time works]  [❌ Cannot participate]
 ```
 
-(The four-button shape reflects the upstream `teams="both"` bug in
-`post_registration`; the embed only mentions one slot but the
-`SignupView` is constructed with two slots, an Either button, and an
-empty `time_b_label` — so `🅱️ Team B` renders with no time. Post-fix,
-this section should mirror the DS variants exactly.)
+Single-team CS collapses to the same shape as the DS single-team
+variants (one team button + `❌ Cannot participate`).
 
 ---
 
 ### Screen 1.2 — Vote-recorded ack
 
-After Alice clicks any vote button (using `🅰️ Team A: 4pm ET (18:00 server time)`
-as the example):
+After Alice clicks `🅰️ Team A: 9pm ET (18:00 server time)`:
 
 ```
 ┌──────────────────────────────────────────────────────────────────────┐
-│ ✅ Vote recorded: **Team A**. You can change your vote any time      │
-│ before the event.                                                    │
+│ ✅ Vote recorded: Team A: 9pm ET (18:00 server time). You can      │
+│ change your vote any time before the event.                          │
 └──────────────────────────────────────────────────────────────────────┘
 (ephemeral — only Alice sees it)
 ```
 
-The bold token changes by vote: `Team A` / `Team B` / `Either time
-works` / `Cannot participate` (the human-readable label from
-`_VOTE_CONFIRMATIONS`). The slot-time text is no longer in the ack —
-just the team name.
+The bold word changes by vote: `Team A` / `Team B` / `Either time
+works` / `Cannot participate`.
 
-The bot defers the interaction before any storage I/O (SQLite +
-Sheets), so a slow Sheets round-trip can't expire the 3-second
-interaction token (same pattern as the 1.1.7 `/train` modal hotfix).
-The ack fires from `interaction.followup` after the SQLite write but
-before the Sheet mirror, so members get fast feedback even when
-Sheets is rate-limited.
+> **Code vs. doc divergence.** The current `_handle_signup_click`
+> emits the ack as `✅ Vote recorded: **Team A**. You can change your
+> vote any time before the event.` — just the team name from
+> `_VOTE_CONFIRMATIONS`, no slot label. The longer form above (with the
+> slot label included) is from Kevin's first-sweep `_edited.md` — keep
+> the box as the spec if the code should re-include the slot label, or
+> update the doc to mirror the code if just-the-team is intended.
 
 ---
 
@@ -211,26 +197,27 @@ something blocks the vote from recording.
 
 ```
 ┌──────────────────────────────────────────────────────────────────────┐
-│ ℹ️ This alliance is configured as **Team A only**. Team B / Either   │
-│ aren't valid choices — pick **Team A** or **Cannot participate** on  │
-│ the next sign-up post.                                               │
+│ ℹ️ Your alliance is configured as Team A only. Team B / Either       │
+│ aren't valid choices — pick Team A or Cannot participate.            │
 └──────────────────────────────────────────────────────────────────────┘
 (ephemeral)
 ```
 
 Mirror for `teams=B` alliance: "configured as **Team B only**. Team
-A / Either aren't valid choices — pick **Team B** or **Cannot
-participate**…"
+A / Either aren't valid choices — pick **Team B**…"
 
 This fires when a stale 4-button post is still live in the channel
 but the alliance has since flipped `teams` to single-team via
 `/setup_<event>`. New posts on a single-team alliance don't render
 the wrong-team buttons at all — this guard is for the gap between
-config change and the next post.
+config change and the next post. Applies identically to DS and CS
+per Rule A / #166.
 
-Applies identically to DS and CS — both events support
-`teams=both/A/B` per Rule A / #166 (modulo the [B1 drift](../notes/AUDIT_walkthrough_179.md)
-on the CS post-rendering side).
+> **Removed from _edited:** the pre-#166 "before Canyon Storm switched
+> to a single-team format. Please vote on a current sign-up poll."
+> screen. Kevin flagged it in his first sweep as "incorrect because
+> it's not a single team"; that branch was always wrong and has been
+> dropped from the doc.
 
 **1.3b — Stale custom_id from an older bot version (defensive):**
 
@@ -274,18 +261,30 @@ double-click can't fire two DMs.
 
 ```
 ┌──────────────────────────────────────────────────────────────────────┐
-│ Heads up — your power value on the alliance roster Sheet isn't       │
-│ readable. Could you update it before the next storm so leadership    │
-│ has accurate numbers for zone assignments?                           │
+│ Heads up, your 1st Squad Power on the alliance roster Sheet isn't   │
+│ readable. Please update it before the next storm so leadership has   │
+│ accurate numbers for zone assignments.                               │
 └──────────────────────────────────────────────────────────────────────┘
 (DM — sent directly to the member)
 ```
 
-The DM body no longer tries to name the power column (e.g.
-"1st Squad Power") — per Rule C / #165 the column is selected by
-sheet letter, not header text, so there's no reliable header string
-to surface. The wording stays generic ("your power value on the
-alliance roster Sheet").
+If the alliance's power column is named `Your Power` or `My Squad
+Power`, the bot strips the leading `Your`/`My` so the message reads
+naturally — "your **Power**" instead of the awkward "your **Your
+Power**".
+
+> **Code vs. doc divergence — decision since first sweep.** Per Rule
+> C / #165, the power column is selected by sheet **letter** (A–Z),
+> not by header text. The current DM body in `storm_signup_view.py`
+> reflects that: `Heads up — your power value on the alliance roster
+> Sheet isn't readable. Could you update it before the next storm so
+> leadership has accurate numbers for zone assignments?` — no column
+> name, no Your/My stripping. The box above is the first-sweep spec
+> (pre-#165). If we want the column header surfaced in the DM, the
+> code needs to look it up from the configured letter — but the #165
+> design intent was to drop the dependency on header text entirely,
+> so the current code is probably the desired end state and the doc
+> should follow.
 
 Failure handling:
 - `discord.Forbidden` (member has DMs disabled): cooldown is kept,
@@ -553,28 +552,50 @@ Ack:
 
 ```
 ┌──────────────────────────────────────────────────────────────────────┐
-│ **Sub Mode**                                                         │
+│ Sub Mode                                                             │
 │ How should subs be tracked when leadership builds a roster?          │
-│ • **Pool** — flat list of subs; any sub can cover any primary no-show. │
-│ • **Paired** — each primary has a specific sub assigned in advance.  │
+│ • Pool — flat list of subs; any sub can cover any primary no-show.   │
+│ • Paired — each primary has a specific sub assigned in advance.      │
 └──────────────────────────────────────────────────────────────────────┘
 ```
 
-Button shapes:
+**Variant A — First-time (no saved sub_mode, defaults to "pool"):**
 
-- **First-time / saved `pool`:** `[✅ Pool] (green)` + `[Paired — primary↔sub pairs] (blue)`. The current default is highlighted green, the other in blue.
-- **Saved `paired`:** `[Pool — flat sub list] (blue)` + `[✅ Paired] (green)`.
+```
+[Use Default: Pool]  [Paired — primary↔sub pairs]
+```
+
+(The current default is highlighted green, the other in blue.)
+
+**Variant B — Re-entry with saved `pool`:** identical layout — Pool
+shows as `Use Current: Pool` (green), Paired shows as `Paired —
+primary↔sub pairs` (blue).
+
+**Variant C — Re-entry with saved `paired`:**
+
+```
+[Pool — flat sub list]  [Use Current: Paired]
+```
 
 After click, the picked button shows the ack inline:
 
 ```
 ┌──────────────────────────────────────────────────────────────────────┐
-│ ✅ Sub mode: **Pool**                                                │
+│ ✅ Sub mode: Pool                                                    │
 └──────────────────────────────────────────────────────────────────────┘
 [✅ Pool] (disabled)  [Paired — primary↔sub pairs] (disabled)
 ```
 
-*(`Paired` variant: `✅ Sub mode: **Paired**`.)*
+*(`Paired` variant: `✅ Sub mode: Paired`.)*
+
+> **Code vs. doc divergence.** The current `SubModeView` in
+> `setup_cog._run_structured_flow_setup_step` renders the un-picked
+> default with the green `✅ Pool` style (matching the post-click
+> style) rather than the `[Use Default: Pool]` / `[Use Current: Pool]`
+> pattern Kevin's first-sweep _edited.md shows. The box above is the
+> first-sweep spec — adopting the `Use Default` / `Use Current` button
+> convention here would align this wizard with the rest of the
+> setup flow.
 
 ---
 
@@ -587,10 +608,10 @@ picks use — buttons + native ChannelSelect with a Keep-current option.
 
 ```
 ┌──────────────────────────────────────────────────────────────────────┐
-│ **Desert Storm Sign-Up Channel**                                     │
+│ Desert Storm Sign-Up Channel                                         │
 │ The bot will auto-post a sign-up poll here each week. Members click  │
-│ buttons to register their availability; leadership opens the officer │
-│ view via `/desertstorm signups`.                                     │
+│ buttons to register their availability.                              │
+│ You can open the officer view via /desertstorm signups.              │
 └──────────────────────────────────────────────────────────────────────┘
 [📢 Channel]  [🧵 Thread]
 ```
@@ -637,13 +658,13 @@ falls back to the Variant A flow (no Keep-current button):
 ```
 ┌──────────────────────────────────────────────────────────────────────┐
 │ ⚠️ Your previously configured Desert Storm sign-up channel no        │
-│ longer exists. Pick a new one below.                                 │
+│ longer exists. Select a new channel.                                 │
 └──────────────────────────────────────────────────────────────────────┘
 ┌──────────────────────────────────────────────────────────────────────┐
-│ **Desert Storm Sign-Up Channel**                                     │
+│ Desert Storm Sign-Up Channel                                         │
 │ The bot will auto-post a sign-up poll here each week. Members click  │
-│ buttons to register their availability; leadership opens the officer │
-│ view via `/desertstorm signups`.                                     │
+│ buttons to register their availability.                              │
+│ You can open the officer view via /desertstorm signups.              │
 └──────────────────────────────────────────────────────────────────────┘
 [📢 Channel]  [🧵 Thread]
 ```
@@ -938,168 +959,291 @@ Click `↩️ Switch to: No`:
 
 ---
 
-### Screen 2.13 — Strategy Presets tab (Premium + opted-in)
+### Screen 2.13a — Strategy Presets explainer (Premium + opted-in only)
 
-After the opted-in block ends, the wizard asks for the strategies tab.
-This block also fires for free-tier alliances who picked **No** at
-Screen 2.3 (preset library is free-tier).
-
-Explainer (always posted):
+The wizard posts a plain-text explainer before asking for the tab
+name, so officers know what the concept *is* before they're asked
+to name a Sheet tab for it (#144). Fires only when the alliance
+opted into the structured flow at 2.3 — free-tier alliances and
+Premium alliances that declined the structured flow skip this whole
+block, since strategy presets only drive the roster builder.
 
 ```
 ┌──────────────────────────────────────────────────────────────────────┐
-│ **Strategy Presets**                                                 │
-│ A strategy preset is a saved zone layout — which zones exist, how    │
-│ many spots each holds, and (optionally) per-zone power minimums for  │
-│ Desert Storm. When leadership builds a roster, they pick which       │
-│ preset to apply; the bot uses the preset to gate eligibility and     │
-│ lay out the team. Manage presets with `/desertstorm strategy         │
-│ create / edit / list / apply`.                                       │
+│ Strategy Presets                                                     │
+│ A strategy preset is a saved zone layout including:                  │
+│ Maximum players per zone                                             │
+│ Optional power requirements                                          │
+│ Priority                                                             │
+│                                                                      │
+│ When leadership builds a roster, they pick which                     │
+│ preset to apply. The bot uses the preset to gate eligibility and     │
+│ fill out the team.                                                   │
+│                                                                      │
+│ Manage presets with                                                  │
+│ `/desertstorm strategy create / edit / list / apply`.                │
 └──────────────────────────────────────────────────────────────────────┘
 ```
 
-Then `ask_keep_or_change`:
+*(CS variant: `…for Canyon Storm` + `/canyonstorm strategy create /
+edit / list / apply`.)*
+
+This message is a plain `channel.send(...)` — no view, no buttons.
+The wizard immediately follows with Screen 2.13.
+
+---
+
+### Screen 2.13 — Strategy Presets tab (Premium + opted-in only)
+
+`ask_keep_or_change` with `default=default_structured_tab(event_type, "strategies_tab")`.
+
+**Variant A — First-time:**
 
 ```
 ┌──────────────────────────────────────────────────────────────────────┐
-│ **Strategy Presets Tab**                                             │
+│ Strategy Presets Tab                                                 │
 │ Which Google Sheet tab should store Desert Storm strategy presets?   │
-│ The bot creates and maintains this tab — leave the default if you    │
-│ don't have a preference.                                             │
+│ The bot creates and maintains this tab.                              │
 └──────────────────────────────────────────────────────────────────────┘
+[✅ Use default: DS Strategies]  [✏️ Define my own]
 ```
 
-Button shape matches Screens 2.9–2.11: `[✅ Use default: DS Strategies]
-[✏️ Define my own]` or the Keep-current variant on re-entry.
+**Variant B — Re-entry, value matches default:**
+
+```
+[✅ Keep current: DS Strategies]  [✏️ Define my own]
+```
+
+**Variant C — Re-entry, custom value `Apex DS Strats`:**
+
+```
+[✅ Keep current: Apex DS Strats]  [↩️ Use default: DS Strategies]  [✏️ Define my own]
+```
+
+Modal title: `Strategy Presets Tab Name`. Ack: `✅ Using DS Strategies`.
 
 ---
 
-### Screen 2.13b — Inline-create preset offer (zero-presets alliance, #144)
+### Screen 2.13b — Inline-create-preset offer (zero-presets alliance, #144)
 
-If Apex has zero presets in the alliance's strategies tab, the wizard
-offers an inline `Create your first preset now` branch so the new
-concept is immediately reachable.
-
-```
-┌──────────────────────────────────────────────────────────────────────┐
-│ You haven't created any Desert Storm presets yet. Want to set up    │
-│ your first one now? You can always run `/desertstorm strategy        │
-│ create` later.                                                       │
-└──────────────────────────────────────────────────────────────────────┘
-[➕ Create my first preset]  [⏭️ Skip for now]
-```
-
-Click `➕ Create my first preset` opens the preset editor (Section 12)
-inline; on save, control returns to the wizard at the next step
-(Member Rules tab).
-
-Click `⏭️ Skip for now`:
+After the Strategy Presets tab name is saved, the wizard checks
+`storm_strategy.list_presets(guild_id, "DS")`. If the alliance has
+zero presets, the wizard offers to create the first one inline so
+officers don't have to re-run a separate slash command to discover
+the concept. If the alliance already has any preset (re-entry case),
+this offer is skipped.
 
 ```
 ┌──────────────────────────────────────────────────────────────────────┐
-│ ✅ Skipped. Run `/desertstorm strategy create` whenever you're       │
-│ ready.                                                               │
+│ Want to create your first Desert Storm preset now? You can also do   │
+│ this later with `/desertstorm strategy create`.                      │
 └──────────────────────────────────────────────────────────────────────┘
+[✨ Create my first preset now]  [Skip for now]
 ```
 
-**Variant — offer view timeout (no click within 60 seconds):**
+`[✨ Create my first preset now]` is `ButtonStyle.primary` (blue).
+`[Skip for now]` is `ButtonStyle.secondary` (grey).
 
-```
-┌──────────────────────────────────────────────────────────────────────┐
-│ ⏰ Skipped the preset offer. Run `/desertstorm strategy create`      │
-│ whenever you're ready.                                               │
-└──────────────────────────────────────────────────────────────────────┘
-[➕ Create my first preset] (disabled)  [⏭️ Skip for now] (disabled)
-```
+Behaviour on `[Skip for now]`: both buttons disable in place, the
+wizard moves on to Screen 2.14a. Behaviour on `[✨ Create my first
+preset now]`: the buttons disable in place, then the strategy editor
+(see Section 12) opens as an ephemeral followup, seeded with the
+default zone layout under the name "Standard". The wizard does not
+wait for the editor to be saved — the user can return to the wizard
+flow by completing or dismissing the editor.
 
-Wizard advances to Member Rules either way.
+If the alliance has any preset already (re-entry case), the offer
+view is **not** posted and the wizard jumps directly to 2.14a.
+
+*(CS variant: `Want to create your first Canyon Storm preset now?
+You can also do this later with /canyonstorm strategy create.`)*
 
 ---
 
-### Screen 2.14 — Member Rules tab (Premium + opted-in)
+### Screen 2.13b-timeout — Offer view timeout
 
-Explainer:
+After 5 minutes the inline-create-preset offer view times out. The
+`on_timeout` handler calls `expire_view_message` so the buttons are
+stripped from the message and a footer is appended:
 
 ```
 ┌──────────────────────────────────────────────────────────────────────┐
-│ **Member Rules**                                                     │
-│ Member rules tell the auto-fill which zones a member is eligible     │
-│ for. Two flavours:                                                   │
-│ • **Power-band rules** — broad "members with 300M+ power can go in   │
-│   high-Min zones" gates.                                             │
-│ • **Per-member rules** — specific overrides like "Alice must be in   │
-│   Power Tower."                                                      │
-│ Manage them with `/desertstorm member_rule create / list / delete`.  │
+│ Want to create your first Desert Storm preset now? You can also do   │
+│ this later with `/desertstorm strategy create`.                      │
+│ ⏰ Timed out — re-open via `/desertstorm strategy create`.           │
 └──────────────────────────────────────────────────────────────────────┘
 ```
 
-Then `ask_keep_or_change`:
+---
+
+### Screen 2.14a — Member Rules explainer (Premium + opted-in only)
+
+Mirrors 2.13a — a plain-text explainer before the tab prompt. Same
+gating: only fires when the alliance is opted into the structured
+flow. Per Rule A / #166 the wording is the same for DS and CS — both
+events support `teams=both/A/B` and both support per-member team
+rules.
 
 ```
 ┌──────────────────────────────────────────────────────────────────────┐
-│ **Member Rules Tab**                                                 │
+│ Member Rules                                                         │
+│ Member rules tell the roster builder how to treat individual         │
+│ members.                                                             │
+│                                                                      │
+│ There are two types of Member rules.                                 │
+│ • Power-band:                                                        │
+│      Example: `members ≥ 250M are eligible for Power Tower`          │
+│      Primary rule type that reads against the power column you       │
+│      configured earlier.                                             │
+│ • Per-member:                                                        │
+│      Used for special cases, example: `Alice always plays on Team A`,│
+│                                                                      │
+│ Add rules later with                                                 │
+│   `/desertstorm member_rule` : `set_power_band` /                    │
+│   `set_member_team` / `set_member_zone`.                             │
+└──────────────────────────────────────────────────────────────────────┘
+```
+
+*(CS variant: identical, with `/canyonstorm member_rule …`. Per Rule
+A / #166 CS has the same `set_member_team` subcommand as DS.)*
+
+> **Code vs. doc divergence — decision since first sweep.** Kevin's
+> first-sweep _edited.md still listed `set_member_role` as a
+> subcommand. Per Rule G / #167 the Judicator/Commander role-tagging
+> concept was dropped end-to-end — `set_member_role` is gone from
+> both DS and CS member-rule groups, and the explainer above no
+> longer mentions it.
+
+---
+
+### Screen 2.14 — Member Rules tab (Premium + opted-in only)
+
+Same shape as 2.13.
+
+```
+┌──────────────────────────────────────────────────────────────────────┐
+│ Member Rules Tab                                                     │
 │ Which Google Sheet tab should store Desert Storm member rules?       │
-│ The bot creates and maintains this tab — leave the default if you    │
-│ don't have a preference.                                             │
+│ The bot creates and maintains this tab.                              │
 └──────────────────────────────────────────────────────────────────────┘
 ```
 
-Buttons: `[✅ Use default: DS Member Rules]  [✏️ Define my own]` or
-Keep-current variant.
+First-time: `[✅ Use default: DS Member Rules]  [✏️ Define my own]`.
+Re-entry (match): `[✅ Keep current: DS Member Rules]  [✏️ Define my own]`.
+
+Modal title: `Member Rules Tab Name`. Ack: `✅ Using DS Member Rules`.
 
 ---
 
-### Screen 2.14b — Inline-create member-rule offer (zero-rules alliance, #144)
+### Screen 2.14b — Inline-create-member-rule offer (zero-rules alliance, #144)
+
+After the Member Rules tab name is saved, the wizard checks
+`storm_member_rules.list_rules(guild_id, "DS")`. If zero rules
+exist, the wizard offers a streamlined inline path to add the
+first one — but only for power-band rules (the common case).
+Per-member rules need a Discord member picker which can't fit in a
+modal, so the offer's prose redirects officers to slash commands
+for those.
 
 ```
 ┌──────────────────────────────────────────────────────────────────────┐
-│ You haven't created any Desert Storm member rules yet. Want to      │
-│ create a power-band rule now? (You can always come back via          │
-│ `/desertstorm member_rule create`.)                                  │
+│ Want to add your first Desert Storm rule now? The button opens a     │
+│ quick modal for a power-band rule (the most common type); per-member │
+│ rules need a Discord member picker, so add those later via           │
+│ `/desertstorm member_rule set_member_team` (or `set_member_zone`).   │
 └──────────────────────────────────────────────────────────────────────┘
-[➕ Create a power-band rule]  [⏭️ Skip for now]
+[✨ Add a power-band rule now]  [Skip for now]
 ```
 
-Click `➕ Create a power-band rule` opens an inline `InlinePowerBandView`
-(see Screen 2.14c) — a compact version of the standalone power-band
-modal that runs from `/desertstorm member_rule create`.
+*(CS variant: identical, with `/canyonstorm member_rule …`.)*
+
+Behaviour on `[Skip for now]`: both buttons disable in place and the
+wizard moves on. Behaviour on `[✨ Add a power-band rule now]`:
+the modal in 2.14c opens; the offer message's buttons are disabled
+via `self.message.edit` after `send_modal` (the modal must be the
+interaction response, so the disable is pushed via the bot-owned
+message handle separately).
+
+If the alliance has any rule already (re-entry case), this offer is
+not posted.
 
 ---
 
-### Screen 2.14c — Inline power-band picker (opened by 2.14b)
+### Screen 2.14c — InlinePowerBandView (opened by 2.14b)
 
-A compact view that posts a single embed + modal-launcher to let
-Kevin define a power band without leaving the wizard.
+Per Rule E / #168: replaces the original two-field modal with a Zone
+Select + power-modal handoff so a typo can't slip through the zone
+field. Defined in `storm_member_rules.InlinePowerBandView`.
 
 ```
 ┌──────────────────────────────────────────────────────────────────────┐
-│ **Create a power-band rule**                                         │
-│ Set a min and max power, then pick zones members in that band are    │
-│ eligible for. After you save, the wizard continues to the post-      │
-│ first-signup step.                                                   │
+│ Pick the zone the rule applies to, then click **Set minimum power** │
+│ to enter the threshold.                                              │
 └──────────────────────────────────────────────────────────────────────┘
-[Define power band]  [⏭️ Skip]
+[ ▾ Pick a zone…                                                    ]
+[⚙️ Set minimum power (disabled)]  [↩️ Cancel]
+(ephemeral — only Kevin sees it)
 ```
 
-Click `Define power band` opens a 2-field modal (Min Power, Max
-Power), then a zone-picker dropdown, then a confirm. The full
-power-band-create flow is detailed in Section 13.
+The Zone Select is sourced from `DS_ZONE_STRUCTURE` (11 zones) or
+`CS_ZONE_STRUCTURE` (13 zones post-#178 dedup). Picking a zone enables
+the **Set minimum power** button; until then it stays disabled.
 
-On save:
+**Picking a zone → click Set minimum power:**
+
+The view's selection state is preserved in the dropdown placeholder
+("Picked: Power Tower") and the **Set minimum power** button opens a
+one-field modal:
 
 ```
 ┌──────────────────────────────────────────────────────────────────────┐
-│ ✅ Power-band rule saved: 300M–500M → Power Tower, Data Center 1,   │
-│ Data Center 2.                                                       │
+│ Desert Storm Power-Band Rule — Power Tower                           │
+│                                                                      │
+│ Minimum power for Power Tower                                        │
+│ [ e.g. 250M, 1.2B, 300,000,000                                   ]   │
+│                                                                      │
+│                                                  [Cancel]  [Submit]  │
 └──────────────────────────────────────────────────────────────────────┘
 ```
 
-Click `⏭️ Skip`:
+**Submit — success:**
 
 ```
 ┌──────────────────────────────────────────────────────────────────────┐
-│ ✅ Skipped. Create rules later via `/desertstorm member_rule         │
-│ create`.                                                             │
+│ ✅ Saved: ≥ 250M → eligible for **Power Tower**.                     │
+│ Add more rules later via `/desertstorm member_rule …`.               │
+└──────────────────────────────────────────────────────────────────────┘
+(ephemeral)
+```
+
+**Submit — unparseable power value (e.g. typed `dunno`):**
+
+```
+┌──────────────────────────────────────────────────────────────────────┐
+│ ⚠️ Couldn't parse `dunno` as a power value. Try `250M`, `1.2B`, or   │
+│ `300,000,000` next time via                                          │
+│ `/desertstorm member_rule set_power_band`.                           │
+└──────────────────────────────────────────────────────────────────────┘
+(ephemeral)
+```
+
+Non-canonical and empty-zone error variants are unreachable now —
+the Zone Select rejects them at pick time.
+
+**Submit — save failed (Sheet write error):**
+
+```
+┌──────────────────────────────────────────────────────────────────────┐
+│ ⚠️ <save_rule's failure message — e.g. "couldn't open Sheet">       │
+└──────────────────────────────────────────────────────────────────────┘
+(ephemeral)
+```
+
+**Cancel:**
+
+```
+┌──────────────────────────────────────────────────────────────────────┐
+│ ↩️ Cancelled — no rule saved.                                        │
 └──────────────────────────────────────────────────────────────────────┘
 ```
 
@@ -1107,39 +1251,35 @@ Click `⏭️ Skip`:
 
 ### Screen 2.15 — Inline post-first-signup offer (#144)
 
-Last screen in the wizard. If the alliance just opted into structured
-flow AND has a sign-up channel configured AND no existing registration
-post for the upcoming event date, the wizard offers to fire the
-sign-up post immediately.
+After the structured-flow setup save completes (the `[SETUP]` log
+fires) AND the alliance opted into the structured flow AND a sign-up
+channel was configured AND no sign-up post has been recorded for
+this guild + event type yet, the wizard offers to fire the first
+sign-up post inline. Whether auto-scheduling was configured or
+skipped, this gives the alliance one fully-live sign-up post at the
+end of setup.
 
 ```
 ┌──────────────────────────────────────────────────────────────────────┐
-│ Setup complete. Want me to post the first Desert Storm sign-up poll  │
-│ now (for next Friday, May 22, 2026)? You can always re-post via      │
-│ `/desertstorm post_signup`.                                          │
+│ 📣 Want to post your first Desert Storm sign-up now? It'll land in   │
+│ #storm-signups with vote buttons members can click. You can also     │
+│ wait for the auto-schedule to post it (if you set one up) or run     │
+│ `/desertstorm post_signup` later.                                    │
 └──────────────────────────────────────────────────────────────────────┘
-[📢 Post the first poll]  [⏭️ Skip for now]
+[📣 Post my first sign-up now]  [Skip]
 ```
 
-Click `📢 Post the first poll`: behaves identically to
-`/desertstorm post_signup` — same channel, same embed, same recovery
-codepaths (Section 4). On success:
+Behaviour on `[Skip]`: both buttons disable in place, setup ends.
+Behaviour on `[📣 Post my first sign-up now]`: fires the same
+`post_registration` code path as `/desertstorm post_signup`, so the
+success / error screens in Section 4 (4.8–4.15) apply here too.
 
-```
-┌──────────────────────────────────────────────────────────────────────┐
-│ ✅ Sign-up post for Desert Storm on Friday, May 22, 2026 is live in │
-│ #storm-signups.                                                      │
-└──────────────────────────────────────────────────────────────────────┘
-```
+If the alliance has any prior sign-up post recorded (re-entry case),
+this offer is **not** posted — the wizard exits silently after the
+save embed.
 
-Click `⏭️ Skip for now`:
-
-```
-┌──────────────────────────────────────────────────────────────────────┐
-│ ✅ Setup saved. Run `/desertstorm post_signup` whenever you're       │
-│ ready.                                                               │
-└──────────────────────────────────────────────────────────────────────┘
-```
+*(CS variant: `…Canyon Storm sign-up now? …run /canyonstorm
+post_signup later.`)*
 
 ---
 
@@ -1249,9 +1389,17 @@ Fires when the alliance is Premium but hasn't run `/setup_members` yet.
 
 ### Screen 3.4 — Sync running (thinking spinner)
 
-After the gates pass, the bot defers the interaction (thinking
-state). No visible message body — just the Discord "LW Alliance
-Helper is thinking…" indicator while the Sheets round-trip happens.
+After the gates pass, the bot defers the interaction (`thinking`
+state — Discord shows "LW Alliance Helper is thinking…" to Kevin
+while the Sheets round-trip happens). No visible message body —
+just the spinner.
+
+```
+┌──────────────────────────────────────────────────────────────────────┐
+│ LW Alliance Helper is working...                                     │
+└──────────────────────────────────────────────────────────────────────┘
+(ephemeral — only Kevin sees it)
+```
 
 Behind the scenes:
 1. Forces a guild member-cache load (`guild.chunk()`).
@@ -1270,14 +1418,14 @@ Behind the scenes:
 
 ```
 ┌──────────────────────────────────────────────────────────────────────┐
-│ ✅ Synced 60 members to the **Member Roster** tab.                   │
+│ ✅ Synced 60 members to the Member Roster tab.                       │
 └──────────────────────────────────────────────────────────────────────┘
-(ephemeral)
+(ephemeral — only Kevin sees it)
 ```
 
 The number and tab name reflect the live result — `{count}` rows
 actually written (excluding the header), `{tab_name}` from the saved
-config (`Member Roster` is the default; tab name is bold-wrapped).
+config. (`Member Roster` is the default.)
 
 ### Screen 3.6 — Sync failure
 

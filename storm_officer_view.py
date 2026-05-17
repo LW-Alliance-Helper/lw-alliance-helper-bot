@@ -1297,26 +1297,7 @@ async def handle_storm_signups(
         )
     view.message = await interaction.followup.send(**followup_args)
 
-    # First-run walkthrough offer (#130 + #170). Fires after the main
-    # view lands so the officer sees the actual command output even
-    # if they decline the tour. No-op if already dismissed. Failures
-    # here must not crash the main flow — the officer view is the
-    # critical path; the tour is a nice-to-have.
-    # Tour copy branches on event_type + cfg.teams so a CS officer
-    # sees CS-flavored steps and a single-team officer sees only
-    # their team's Set-Up button mentioned.
-    try:
-        from storm_walkthrough import maybe_offer_storm_signups_tour
-        import config as _config
-        cfg = _config.get_storm_config(interaction.guild_id, et) or {}
-        teams_setting = (cfg.get("teams") or "both").strip()
-        if teams_setting not in ("both", "A", "B"):
-            teams_setting = "both"
-        await maybe_offer_storm_signups_tour(
-            interaction, event_type=et, teams=teams_setting,
-        )
-    except Exception as e:
-        logger.warning(
-            "[STORM OFFICER VIEW] walkthrough offer failed for guild=%s: %s",
-            interaction.guild_id, e,
-        )
+    # First-run tour offer moved to `storm_event_hub.handle_event_hub`
+    # post-#190 (the hub is the front door for the storm flow now).
+    # The officer view is reached via the hub's "View sign-ups + set
+    # up teams" button; the tour fires upstream at hub entry instead.

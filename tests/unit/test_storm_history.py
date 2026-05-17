@@ -40,11 +40,11 @@ def fake_env(seeded_db):
 
     # Two events on the rosters tab.
     # Header order mirrors storm_roster_builder._ROSTERS_HEADER from
-    # production: `Override Below Floor` comes BEFORE `Posted At (UTC)`,
+    # production: `Override Below Minimum` comes BEFORE `Posted At (UTC)`,
     # not after. The prior fixture order was column-index-fragile.
     rosters = _FakeWorksheet("DS Rosters", [
         ["Event Date", "Team", "Zone", "Member", "Role",
-         "Power at Assignment", "Discord ID", "Override Below Floor",
+         "Power at Assignment", "Discord ID", "Override Below Minimum",
          "Posted At (UTC)"],
         ["2026-05-18", "A", "Power Tower",  "Alice", "primary", "412000000", "1001", "",    ""],
         ["2026-05-18", "A", "Power Tower",  "Bob",   "primary", "350000000", "1002", "",    ""],
@@ -211,17 +211,24 @@ class TestRenderEventEmbed:
         # Footer hints how to record under the new parent-group command tree.
         assert "/desertstorm attendance" in (embed.footer.text or "")
 
-    def test_below_floor_override_visible(self):
+    def test_below_floor_override_not_rendered(self):
+        """Decision #6 (#171): the Override Below Minimum flag stays on
+        the rosters_tab Sheet for post-event audit, but the history
+        embed no longer surfaces it — the same drop the attendance UI
+        made. Officers reviewing history don't need the build-time
+        override flagged."""
         slots = [
-            {"team": "A", "zone": "Power Tower", "member": "Erin",
+            {"team": "A", "phase": "", "zone": "Power Tower", "member": "Erin",
              "role": "primary", "power": "190000000",
-             "discord_id": "5", "override_below_floor": True},
+             "discord_id": "5", "override_below_floor": True,
+             "paired_with": ""},
         ]
         embed = sh.render_event_embed(
             event_type="DS", event_date="2026-05-11",
             slots=slots, attendance={},
         )
-        assert "override" in _embed_body(embed).lower()
+        assert "override" not in _embed_body(embed).lower()
+        assert "⚠️" not in _embed_body(embed)
 
     def test_empty_slots_message(self):
         embed = sh.render_event_embed(
@@ -265,6 +272,58 @@ class TestRenderEventEmbed:
         )
         field_names = [f.name for f in embed.fields]
         assert field_names == ["Team A", "Team B"]
+
+    def test_phase_aware_event_groups_members_by_phase(self):
+        """#172 / Rule L: when any primary slot carries a Phase value,
+        history renders per-zone-per-phase — each zone header gets sub-
+        rows for Phase 1, Phase 2, etc., and members fall under the
+        phase they were rostered into."""
+        slots = [
+            {"team": "A", "phase": "1", "zone": "Power Tower",
+             "member": "Alice", "role": "primary", "power": "",
+             "discord_id": "1", "override_below_floor": False,
+             "paired_with": ""},
+            {"team": "A", "phase": "2", "zone": "Power Tower",
+             "member": "Bob", "role": "primary", "power": "",
+             "discord_id": "2", "override_below_floor": False,
+             "paired_with": ""},
+            {"team": "A", "phase": "3", "zone": "Power Tower",
+             "member": "Carol", "role": "primary", "power": "",
+             "discord_id": "3", "override_below_floor": False,
+             "paired_with": ""},
+        ]
+        embed = sh.render_event_embed(
+            event_type="DS", event_date="2026-05-18",
+            slots=slots, attendance={},
+        )
+        body = _embed_body(embed)
+        # Phase headers appear, and the per-phase members are listed
+        # under them.
+        assert "**Phase 1**" in body
+        assert "**Phase 2**" in body
+        assert "**Phase 3**" in body
+        # Each phase's member shows up after its phase header.
+        p1 = body.index("**Phase 1**")
+        p2 = body.index("**Phase 2**")
+        p3 = body.index("**Phase 3**")
+        assert "Alice" in body[p1:p2]
+        assert "Bob"   in body[p2:p3]
+        assert "Carol" in body[p3:]
+
+    def test_flat_event_does_not_render_phase_headers(self):
+        slots = [
+            {"team": "A", "phase": "", "zone": "Power Tower",
+             "member": "Alice", "role": "primary", "power": "",
+             "discord_id": "1", "override_below_floor": False,
+             "paired_with": ""},
+        ]
+        embed = sh.render_event_embed(
+            event_type="DS", event_date="2026-05-18",
+            slots=slots, attendance={},
+        )
+        body = _embed_body(embed)
+        assert "Phase 1" not in body
+        assert "Phase 2" not in body
 
     def test_power_rendered_via_format_power(self):
         """Raw `"412000000"` should display as `"412M"` for the human
@@ -313,11 +372,15 @@ class TestRenderEventEmbed:
             event_type="DS", event_date="2026-05-18",
             slots=slots, attendance=attendance,
         )
+        # Rule K (#171): footer drops 🔄 Sub activated. Legacy
+        # `sub_activated` rows render as `—` and don't count toward
+        # the recorded total, so `recorded` matches ✅ + ❌.
         footer = embed.footer.text or ""
         assert "✅ 1" in footer
         assert "❌ 1" in footer
-        assert "🔄 1" in footer
-        assert "recorded 3 of 3" in footer
+        assert "🔄" not in footer
+        assert "sub_activated" not in footer
+        assert "recorded 2 of 3" in footer
 
 
 class TestRenderHistoryListEmbed:

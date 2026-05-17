@@ -781,7 +781,8 @@ def roster_from_session(session) -> RosterData:
     event_full = "Desert Storm" if session.event_type == "DS" else "Canyon Storm"
     team_label = ""
     team_suffix = ""
-    if session.event_type == "DS" and session.team:
+    if session.team:
+        # Two-team events (DS or CS with teams=both) suffix with the team.
         team_label = f"Team {session.team}"
         team_suffix = f" — {team_label}"
     elif session.preset.faction and session.preset.faction != "Either":

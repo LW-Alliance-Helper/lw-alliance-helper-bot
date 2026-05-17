@@ -9,6 +9,14 @@ records the choice so the offer never re-appears for that officer.
 The walkthrough key encodes a version (`storm_signups_v1`) so a major
 UI rewrite can re-offer the tour without losing per-officer dismissal
 records — just bump the key.
+
+Per Decision #12 / Rule N (#170), the tour fires for both
+`/desertstorm signups` and `/canyonstorm signups`. Per-officer
+dismissals share the same `storm_signups_v1` key — dismissing on DS
+silences CS for that officer too. Step copy branches on `event_type`
++ the alliance's `teams` config so the on-behalf vote section
+(Step 4) and Set-Up section (Step 5) describe the actual UI the
+officer will see, not a DS-default that misleads CS officers.
 """
 
 from __future__ import annotations
@@ -24,46 +32,92 @@ logger = logging.getLogger(__name__)
 # and [Skip the rest] buttons. Six steps tracks the design spec.
 STORM_SIGNUPS_TOUR_KEY = "storm_signups_v1"
 
-_STORM_SIGNUPS_TOUR_STEPS: list[str] = [
-    "**Step 1 / 6 — The buckets**\n"
-    "The embed groups everyone by their current vote: 🅰️ Team A, "
-    "🅱️ Team B, 🔄 Either, ❌ Cannot, and ❓ Not voted yet. The "
-    "counter in the title tells you the total members you're tracking.",
 
-    "**Step 2 / 6 — Who's already assigned**\n"
-    "Members already slotted into a roster for this event render with "
-    "strikethrough. That way you can scan at a glance for who's left "
-    "to place when you're building out a team.",
+def _build_storm_signups_tour_steps(
+    event_type: str = "DS", teams: str = "both",
+) -> list[str]:
+    """Build the per-event-type, per-team-config tour copy.
 
-    "**Step 3 / 6 — Members who aren't on Discord**\n"
-    "If your roster Sheet flags a row with `not_on_discord`, that "
-    "member surfaces in the buckets just like everyone else (marked "
-    "with ¹). They won't vote themselves — you cast their vote with "
-    "**🙋 Record on-behalf vote**, and the bot logs that you recorded it.",
+    DS and CS share the bucket / strikethrough / not-on-Discord
+    structure (steps 1-3) so those are identical. Steps 4-6 branch:
+      * Step 4 wording references the post-#168 ephemeral view with
+        Member + Vote selects (no more free-text modal).
+      * Step 5 lists only the Set-Up button(s) the officer will
+        actually see — both A + B when `teams=both`, just the single
+        team's button when `teams=A` or `teams=B`. Event-type label
+        + game-defined times naturally flow from the click target.
+      * Step 6 points at the right /help category for the officer's
+        event type (Desert Storm vs Canyon Storm) instead of a
+        both-category mention.
+    """
+    teams_norm = (teams or "both").strip()
+    if teams_norm not in ("both", "A", "B"):
+        teams_norm = "both"
 
-    "**Step 4 / 6 — Recording on-behalf votes**\n"
-    "Open the modal, type the member's roster name (it must match the "
-    "Sheet exactly — typos are rejected), and pick A / B / Either / "
-    "Cannot. Each on-behalf vote captures your Discord ID for audit.",
+    label = "Desert Storm" if event_type == "DS" else "Canyon Storm"
+    help_category = label  # `/help` category names match this exactly.
 
-    "**Step 5 / 6 — Setting up a team**\n"
-    "When you're ready to build a roster, click **🅰️ Set up Team A** "
-    "or **🅱️ Set up Team B** (Desert Storm) — or **🏜️ Set up Roster** "
-    "(Canyon Storm; one roster per faction). The bot will ask which "
-    "preset to use, then open the roster builder pre-filtered to "
-    "members who signed up, with eligibility floors enforced.",
+    # Step 5 — branch on teams config so the copy matches the buttons.
+    if teams_norm == "both":
+        setup_phrase = (
+            "click **🅰️ Set up Team A** or **🅱️ Set up Team B**"
+        )
+    elif teams_norm == "A":
+        setup_phrase = "click **🅰️ Set up Team A**"
+    else:
+        setup_phrase = "click **🅱️ Set up Team B**"
 
-    "**Step 6 / 6 — That's the tour**\n"
-    "You can run `/help` any time and pick **Desert Storm** or "
-    "**Canyon Storm** from the dropdown to revisit the command list. "
-    "Closing this message drops you back to the live officer view.",
-]
+    return [
+        "**Step 1 / 6 — The buckets**\n"
+        "The embed groups everyone by their current vote: 🅰️ Team A, "
+        "🅱️ Team B, 🔄 Either, ❌ Cannot, and ❓ Not voted yet. The "
+        "counter in the title tells you the total members you're tracking.",
+
+        "**Step 2 / 6 — Who's already assigned**\n"
+        "Members already slotted into a roster for this event render with "
+        "strikethrough. That way you can scan at a glance for who's left "
+        "to place when you're building out a team.",
+
+        "**Step 3 / 6 — Members who aren't on Discord**\n"
+        "If your roster Sheet flags a row with `not_on_discord`, that "
+        "member surfaces in the buckets just like everyone else (marked "
+        "with ¹). They won't vote themselves — you cast their vote with "
+        "**🙋 Record on-behalf vote**, and the bot logs that you recorded it.",
+
+        "**Step 4 / 6 — Recording on-behalf votes**\n"
+        "Click **🙋 Record on-behalf vote** to open the picker. Pick the "
+        "member from the dropdown (sourced from your roster Sheet — no "
+        "free typing, so typos can't slip through), pick a vote (the "
+        "options match the team buttons members see on the sign-up post), "
+        "then hit **Submit**. Each on-behalf vote captures your Discord "
+        "ID for audit.",
+
+        "**Step 5 / 6 — Setting up a team**\n"
+        f"When you're ready to build a {label} roster, {setup_phrase}. "
+        "The bot will ask which preset to use, then open the roster builder "
+        "pre-filtered to members who signed up, with eligibility minimums "
+        "enforced.",
+
+        "**Step 6 / 6 — That's the tour**\n"
+        f"You can run `/help` any time and pick **{help_category}** "
+        "from the dropdown to revisit the command list. Closing this "
+        "message drops you back to the live officer view.",
+    ]
+
+
+# Backwards-compat alias: tests and any external callers that imported
+# the constant continue to work against the DS+both default. New
+# in-process callers go through `_build_storm_signups_tour_steps` via
+# `maybe_offer_storm_signups_tour`.
+_STORM_SIGNUPS_TOUR_STEPS: list[str] = _build_storm_signups_tour_steps("DS", "both")
 
 
 async def maybe_offer_storm_signups_tour(
     interaction: discord.Interaction,
     *,
     walkthrough_key: str = STORM_SIGNUPS_TOUR_KEY,
+    event_type: str = "DS",
+    teams: str = "both",
 ) -> None:
     """If the officer hasn't seen the walkthrough yet, send an ephemeral
     offer message. Records the dismissal on either choice — accept (the
@@ -71,7 +125,10 @@ async def maybe_offer_storm_signups_tour(
     offer doesn't reappear).
 
     No-op if the walkthrough was already dismissed. Safe to call once
-    per storm sign-ups view invocation.
+    per storm sign-ups view invocation. `event_type` + `teams` shape
+    the tour copy (Step 4 on-behalf flow, Step 5 Set-Up button list,
+    Step 6 `/help` category pointer) so a CS officer sees CS-flavored
+    steps and a single-team officer sees their single button.
     """
     import config
     guild_id = interaction.guild_id
@@ -81,12 +138,16 @@ async def maybe_offer_storm_signups_tour(
     if config.is_walkthrough_dismissed(guild_id, user_id, walkthrough_key):
         return
 
-    view = _OfferView(guild_id=guild_id, user_id=user_id,
-                      walkthrough_key=walkthrough_key)
+    view = _OfferView(
+        guild_id=guild_id, user_id=user_id,
+        walkthrough_key=walkthrough_key,
+        event_type=event_type, teams=teams,
+    )
+    label = "Desert Storm" if event_type == "DS" else "Canyon Storm"
     try:
         msg = await interaction.followup.send(
-            "👋 First time opening the storm sign-ups view? Want a quick "
-            "walkthrough of what each piece does?",
+            f"👋 First time opening the {label} sign-ups view? Want a "
+            "quick walkthrough of what each piece does?",
             view=view,
             ephemeral=True,
             wait=True,
@@ -105,11 +166,16 @@ class _OfferView(discord.ui.View):
     """First-run offer: [Walk me through this] / [No thanks]. Both
     record the dismissal — the bot only ever offers once."""
 
-    def __init__(self, *, guild_id: int, user_id: int, walkthrough_key: str):
+    def __init__(
+        self, *, guild_id: int, user_id: int, walkthrough_key: str,
+        event_type: str = "DS", teams: str = "both",
+    ):
         super().__init__(timeout=300)
         self.guild_id = guild_id
         self.user_id  = user_id
         self.walkthrough_key = walkthrough_key
+        self.event_type = event_type
+        self.teams = teams
         self.message: discord.Message | discord.WebhookMessage | None = None
 
     @discord.ui.button(label="👋 Walk me through this", style=discord.ButtonStyle.success)
@@ -136,7 +202,8 @@ class _OfferView(discord.ui.View):
             )
         except discord.HTTPException:
             pass
-        await _send_tour_step(inter, _STORM_SIGNUPS_TOUR_STEPS, index=0)
+        steps = _build_storm_signups_tour_steps(self.event_type, self.teams)
+        await _send_tour_step(inter, steps, index=0)
 
     @discord.ui.button(label="No thanks", style=discord.ButtonStyle.secondary)
     async def decline(self, inter: discord.Interaction, btn: discord.ui.Button):

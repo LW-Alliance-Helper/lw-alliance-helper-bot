@@ -6,10 +6,9 @@ Two rule types complement the strategy preset library (#126):
   * power_band — "Members with power ≥ X (in the configured power column)
     are eligible for Zone Y." Primary rule type; surfaces by default in
     `/desertstorm member_rule list` (and the CS equivalent).
-  * per_member — Escape hatch for special cases. Three sub-types:
+  * per_member — Escape hatch for special cases. Two sub-types:
         team           e.g. "Alice always plays Team A"
         zone           e.g. "Charlie is always at Power Tower"
-        special_role   e.g. "Bob is our Judicator candidate"
 
 Sheet shape (`DS Member Rules` / `CS Member Rules`):
     Rule Type | Subject | Sub-Type | Value | Notes
@@ -18,7 +17,7 @@ Where:
   power_band rows:  Rule Type=power_band | Subject=<int power> | Sub-Type='' |
                     Value=<zone name>    | Notes=<free text>
   per_member rows:  Rule Type=per_member | Subject=<member name> |
-                    Sub-Type=<team|zone|special_role> | Value=<…> | Notes=<…>
+                    Sub-Type=<team|zone> | Value=<…> | Notes=<…>
 
 Stored Subject for power_band is the raw integer (e.g. "250000000") so
 sorting works at the Sheet level. The slash command accepts shorthand
@@ -50,8 +49,7 @@ _HEADER = ["Rule Type", "Subject", "Sub-Type", "Value", "Notes"]
 _RULE_TYPE_POWER_BAND = "power_band"
 _RULE_TYPE_PER_MEMBER = "per_member"
 
-_PER_MEMBER_SUB_TYPES = ("team", "zone", "special_role")
-_SPECIAL_ROLES        = ("commander", "judicator")
+_PER_MEMBER_SUB_TYPES = ("team", "zone")
 _TEAMS                = ("A", "B")
 
 
@@ -165,12 +163,10 @@ def _get_or_create_rules_worksheet(guild_id: int, event_type: str):
     tab_name = _rules_tab_name(guild_id, event_type)
     if not tab_name:
         return None
-    try:
-        ws = sh.worksheet(tab_name)
-    except Exception:
-        ws = sh.add_worksheet(title=tab_name, rows=500, cols=max(8, len(_HEADER)))
-        ws.append_row(_HEADER, value_input_option="RAW")
-    return ws
+    return config.get_or_create_worksheet(
+        sh, tab_name, header_row=_HEADER, rows=500,
+        cols=max(8, len(_HEADER)),
+    )
 
 
 class Rule:
@@ -208,8 +204,6 @@ class Rule:
             return f"👤  **{display}** → plays **Team {self.value}**"
         if self.sub_type == "zone":
             return f"👤  **{display}** → always at **{self.value}**"
-        if self.sub_type == "special_role":
-            return f"🎖️  **{display}** → **{self.value.title()}** candidate"
         return f"👤  **{display}** → {self.sub_type}={self.value}"
 
     def _resolve_display_name(self, guild) -> str:
@@ -289,6 +283,16 @@ def list_rules(guild_id: int, event_type: str) -> list[Rule]:
             return ""
         return str(row[idx]).strip()
 
+    # #178 CS-only: translate legacy internal-key zone values
+    # (`s1_power_tower` → `Power Tower`) at read time so existing dev/
+    # staging rules continue to match against the post-#178 display-
+    # name preset zones. Imported lazily to avoid the cog-import-order
+    # coupling the rest of this module is careful about.
+    if event_type == "CS":
+        from storm_strategy import _translate_legacy_cs_zone
+    else:
+        _translate_legacy_cs_zone = None
+
     rules: list[Rule] = []
     for row in values[1:]:
         if not row or not any(c.strip() for c in row):
@@ -296,11 +300,24 @@ def list_rules(guild_id: int, event_type: str) -> list[Rule]:
         rule_type = _cell(row, type_col).lower()
         if rule_type not in (_RULE_TYPE_POWER_BAND, _RULE_TYPE_PER_MEMBER):
             continue
+        sub_type = _cell(row, subtype_col).lower()
+        value = _cell(row, value_col)
+        # Per-member zone rules + power-band rules both carry a zone
+        # name in the Value column. Translate legacy CS keys for
+        # either rule type — the auto-fill apply path does case-
+        # insensitive equality against the preset's ZoneRow.zone (now
+        # display names post-#178), so a stale `s1_power_tower` value
+        # would silently no-op without this translation.
+        if _translate_legacy_cs_zone is not None and value and (
+            rule_type == _RULE_TYPE_POWER_BAND
+            or (rule_type == _RULE_TYPE_PER_MEMBER and sub_type == "zone")
+        ):
+            value = _translate_legacy_cs_zone(value)
         rules.append(Rule(
             rule_type=rule_type,
             subject=_cell(row, subject_col),
-            sub_type=_cell(row, subtype_col).lower(),
-            value=_cell(row, value_col),
+            sub_type=sub_type,
+            value=value,
             notes=_cell(row, notes_col),
         ))
     return rules
@@ -470,6 +487,34 @@ class _RulesListView(discord.ui.View):
             btn.callback = _make_clear_callback(self, i)
             self.add_item(btn)
 
+        # ➕ Add rule (#169 — Rule M). Always present, even on empty
+        # state — the list view is the canonical place officers reach
+        # for to manage rules, so the add affordance lives here too.
+        add_btn = discord.ui.Button(
+            label="➕ Add rule", style=discord.ButtonStyle.primary, row=4,
+        )
+
+        async def _on_add(inter: discord.Interaction):
+            if inter.user.id != self.user_id:
+                await inter.response.send_message(
+                    "⛔ Only the command owner can add rules from this list.",
+                    ephemeral=True,
+                )
+                return
+            picker = _AddRuleTypePickerView(
+                event_type=self.event_type, owner_id=self.user_id,
+            )
+            await inter.response.send_message(
+                "➕ Pick the rule type to add.", view=picker, ephemeral=True,
+            )
+            try:
+                picker.message = await inter.original_response()
+            except discord.HTTPException:
+                pass
+
+        add_btn.callback = _on_add
+        self.add_item(add_btn)
+
         if self.total_pages > 1:
             prev_btn = discord.ui.Button(
                 label="◀ Prev", style=discord.ButtonStyle.secondary,
@@ -504,6 +549,112 @@ class _RulesListView(discord.ui.View):
             next_btn.callback = _next
             self.add_item(prev_btn)
             self.add_item(next_btn)
+
+
+class _AddRuleTypePickerView(discord.ui.View):
+    """Choice view opened by `_RulesListView`'s [➕ Add rule] button.
+
+    Power-band rules go through the same `InlinePowerBandView` the setup
+    wizard uses (zone Select → power-modal). Per-member rules need a
+    `discord.Member` picker that Discord modals can't host, so this view
+    points the officer at the slash commands instead.
+    """
+
+    def __init__(self, *, event_type: str, owner_id: int):
+        super().__init__(timeout=120)
+        self.event_type = event_type
+        self.owner_id = owner_id
+        self.message: discord.Message | None = None
+        parent = "desertstorm" if event_type == "DS" else "canyonstorm"
+        self.parent = parent
+
+        pb_btn = discord.ui.Button(
+            label="⚡ Add a power-band rule", style=discord.ButtonStyle.primary,
+        )
+        pb_btn.callback = self._on_power_band
+        self.add_item(pb_btn)
+
+        pm_btn = discord.ui.Button(
+            label="👤 Add a per-member rule",
+            style=discord.ButtonStyle.secondary,
+        )
+        pm_btn.callback = self._on_per_member
+        self.add_item(pm_btn)
+
+        cancel_btn = discord.ui.Button(
+            label="↩️ Cancel", style=discord.ButtonStyle.secondary,
+        )
+        cancel_btn.callback = self._on_cancel
+        self.add_item(cancel_btn)
+
+    async def _guard_owner(self, inter: discord.Interaction) -> bool:
+        if inter.user.id != self.owner_id:
+            await inter.response.send_message(
+                "⛔ Only the officer who opened the list can add rules.",
+                ephemeral=True,
+            )
+            return False
+        return True
+
+    async def _on_power_band(self, inter: discord.Interaction):
+        if not await self._guard_owner(inter):
+            return
+        for item in self.children:
+            item.disabled = True
+        self.stop()
+        picker = InlinePowerBandView(self.event_type, owner_id=inter.user.id)
+        try:
+            await inter.response.edit_message(
+                content=(
+                    "Pick the zone the rule applies to, then click "
+                    "**Set minimum power** to enter the threshold."
+                ),
+                view=picker,
+            )
+            picker.message = await inter.original_response()
+        except discord.HTTPException:
+            pass
+
+    async def _on_per_member(self, inter: discord.Interaction):
+        if not await self._guard_owner(inter):
+            return
+        for item in self.children:
+            item.disabled = True
+        self.stop()
+        body = (
+            "👤 Per-member rules need a server-member picker, which Discord "
+            "doesn't expose inside a modal. Run one of:\n"
+            f"• `/{self.parent} member_rule set_member_zone` — pin a member "
+            "to a specific zone.\n"
+            f"• `/{self.parent} member_rule set_member_team` — pin a member "
+            "to Team A or Team B."
+        )
+        try:
+            await inter.response.edit_message(content=body, view=self)
+        except discord.HTTPException:
+            pass
+
+    async def _on_cancel(self, inter: discord.Interaction):
+        if not await self._guard_owner(inter):
+            return
+        for item in self.children:
+            item.disabled = True
+        self.stop()
+        try:
+            await inter.response.edit_message(
+                content="↩️ Cancelled — no rule added.", view=self,
+            )
+        except discord.HTTPException:
+            pass
+
+    async def on_timeout(self) -> None:
+        for item in self.children:
+            item.disabled = True
+        if self.message is not None:
+            try:
+                await self.message.edit(view=self)
+            except discord.HTTPException:
+                pass
 
 
 def _make_clear_callback(view: "_RulesListView", idx: int):
@@ -604,7 +755,7 @@ class _MemberRuleGroup(app_commands.Group):
         else:
             await interaction.response.send_message(f"⚠️ {msg}", ephemeral=True)
 
-    # ── set_member_team (DS only — `team` doesn't exist for CS) ──────
+    # ── set_member_team (DS + CS with teams=both/A/B) ────────────────
     async def _set_member_team(
         self, interaction: discord.Interaction,
         member_user: discord.Member | None,
@@ -613,10 +764,22 @@ class _MemberRuleGroup(app_commands.Group):
     ):
         if not await _deny_if_not_leader(interaction):
             return
-        if self.event_type == "CS":
+        # Rule A / #166: CS supports teams just like DS. The guard now
+        # checks the alliance's `teams` config — if they configured a
+        # single-team setup, team rules only make sense within that
+        # team's pool.
+        import config as _config
+        cfg = _config.get_storm_config(interaction.guild_id, self.event_type) or {}
+        teams_setting = (cfg.get("teams") or "both").strip()
+        if teams_setting not in ("both", "A", "B"):
+            teams_setting = "both"
+        if teams_setting in ("A", "B"):
+            label = "Desert Storm" if self.event_type == "DS" else "Canyon Storm"
             await interaction.response.send_message(
-                "⚠️ `team` rules only apply to Desert Storm. Use the zone or special_role "
-                "commands for Canyon Storm.",
+                f"⚠️ `set_member_team` only makes sense when {label} is "
+                f"configured for both teams. Your alliance is set to "
+                f"**Team {teams_setting} only**. Use `set_member_zone` "
+                f"for zone-specific rules instead.",
                 ephemeral=True,
             )
             return
@@ -689,43 +852,6 @@ class _MemberRuleGroup(app_commands.Group):
         else:
             await interaction.response.send_message(f"⚠️ {msg}", ephemeral=True)
 
-    # ── set_member_role ──────────────────────────────────────────────
-    async def _set_member_role(
-        self, interaction: discord.Interaction,
-        member_user: discord.Member | None,
-        member_name: str | None,
-        role: str, notes: str = "",
-    ):
-        if not await _deny_if_not_leader(interaction):
-            return
-        subject, display = _resolve_subject(
-            member_user, member_name, guild=interaction.guild,
-        )
-        if subject is None:
-            await interaction.response.send_message(
-                _SUBJECT_REQUIRED_MSG, ephemeral=True,
-            )
-            return
-        role_clean = (role or "").strip().lower()
-        if role_clean not in _SPECIAL_ROLES:
-            await interaction.response.send_message(
-                f"⚠️ Role must be `commander` or `judicator`. Got `{role}`.",
-                ephemeral=True,
-            )
-            return
-        ok, msg = await asyncio.to_thread(save_rule,
-            interaction.guild_id, self.event_type,
-            Rule(rule_type=_RULE_TYPE_PER_MEMBER,
-                 subject=subject, sub_type="special_role",
-                 value=role_clean, notes=notes),
-        )
-        if ok:
-            await interaction.response.send_message(
-                f"✅ Saved: **{display}** → **{role_clean.title()}** candidate.",
-            )
-        else:
-            await interaction.response.send_message(f"⚠️ {msg}", ephemeral=True)
-
     # ── list ─────────────────────────────────────────────────────────
     async def _list(self, interaction: discord.Interaction, member: str | None = None):
         if not await _deny_if_not_leader(interaction):
@@ -762,12 +888,38 @@ class _MemberRuleGroup(app_commands.Group):
             view.message = None
 
 
+def _make_zone_autocomplete(event_type: str):
+    """Per-event-type autocomplete callback for the `zone` parameter on
+    `set_power_band` + `set_member_zone` (#168 M1 / Rule E).
+
+    Discord autocomplete returns up to 25 Choice objects; canonical zone
+    lists for DS (11) and CS (12) fit easily under that cap. Filtering
+    is substring-insensitive against the current input so officers who
+    type partial names (`hosp` for `Field Hospital`) still get matches.
+    """
+    async def _callback(
+        _interaction: discord.Interaction, current: str,
+    ) -> list[app_commands.Choice[str]]:
+        _, _, canonical_zones_for = _strategy_helpers()
+        current_lower = (current or "").strip().lower()
+        zones = canonical_zones_for(event_type)
+        if current_lower:
+            zones = [z for z in zones if current_lower in z.lower()]
+        return [
+            app_commands.Choice(name=z[:100], value=z[:100])
+            for z in zones[:25]
+        ]
+    return _callback
+
+
 def build_ds_member_rule_group() -> _MemberRuleGroup:
     grp = _MemberRuleGroup(
         name="member_rule",
         description="Manage Desert Storm member rules (power bands + per-member)",
         event_type="DS",
     )
+
+    _ds_zone_autocomplete = _make_zone_autocomplete("DS")
 
     @grp.command(name="set_power_band",
                  description="Add a power-band eligibility rule for a zone")
@@ -776,6 +928,7 @@ def build_ds_member_rule_group() -> _MemberRuleGroup:
         zone="Zone the band applies to (e.g. Power Tower)",
         notes="Optional free-text notes",
     )
+    @app_commands.autocomplete(zone=_ds_zone_autocomplete)
     async def set_pb(interaction: discord.Interaction, threshold: str, zone: str, notes: str = ""):
         await grp._set_power_band(interaction, threshold, zone, notes)
 
@@ -810,6 +963,7 @@ def build_ds_member_rule_group() -> _MemberRuleGroup:
         zone="Zone they always play",
         notes="Optional free-text notes",
     )
+    @app_commands.autocomplete(zone=_ds_zone_autocomplete)
     async def set_zone(
         interaction: discord.Interaction,
         zone: str,
@@ -819,29 +973,6 @@ def build_ds_member_rule_group() -> _MemberRuleGroup:
     ):
         await grp._set_member_zone(
             interaction, member_user, member_name, zone, notes,
-        )
-
-    @grp.command(name="set_member_role",
-                 description="Tag a member as a Commander or Judicator candidate")
-    @app_commands.describe(
-        member_user="Pick from the server (preferred)",
-        member_name="OR a roster name if the member isn't on Discord",
-        role="Commander or Judicator",
-        notes="Optional free-text notes",
-    )
-    @app_commands.choices(role=[
-        app_commands.Choice(name="Commander", value="commander"),
-        app_commands.Choice(name="Judicator", value="judicator"),
-    ])
-    async def set_role(
-        interaction: discord.Interaction,
-        role: app_commands.Choice[str],
-        member_user: discord.Member | None = None,
-        member_name: str | None = None,
-        notes: str = "",
-    ):
-        await grp._set_member_role(
-            interaction, member_user, member_name, role.value, notes,
         )
 
     @grp.command(name="list",
@@ -860,6 +991,8 @@ def build_cs_member_rule_group() -> _MemberRuleGroup:
         event_type="CS",
     )
 
+    _cs_zone_autocomplete = _make_zone_autocomplete("CS")
+
     @grp.command(name="set_power_band",
                  description="Add a power-band eligibility rule for a zone")
     @app_commands.describe(
@@ -867,8 +1000,32 @@ def build_cs_member_rule_group() -> _MemberRuleGroup:
         zone="Zone the band applies to",
         notes="Optional free-text notes",
     )
+    @app_commands.autocomplete(zone=_cs_zone_autocomplete)
     async def set_pb(interaction: discord.Interaction, threshold: str, zone: str, notes: str = ""):
         await grp._set_power_band(interaction, threshold, zone, notes)
+
+    @grp.command(name="set_member_team",
+                 description="Lock a specific member to Team A or B (when CS runs both teams)")
+    @app_commands.describe(
+        team="Team A or Team B",
+        member_user="Pick from the server (preferred — keys by Discord ID, survives renames)",
+        member_name="OR a roster name if the member isn't on Discord",
+        notes="Optional free-text notes",
+    )
+    @app_commands.choices(team=[
+        app_commands.Choice(name="Team A", value="A"),
+        app_commands.Choice(name="Team B", value="B"),
+    ])
+    async def set_team_cs(
+        interaction: discord.Interaction,
+        team: app_commands.Choice[str],
+        member_user: discord.Member | None = None,
+        member_name: str | None = None,
+        notes: str = "",
+    ):
+        await grp._set_member_team(
+            interaction, member_user, member_name, team.value, notes,
+        )
 
     @grp.command(name="set_member_zone",
                  description="Lock a specific member to a zone")
@@ -878,6 +1035,7 @@ def build_cs_member_rule_group() -> _MemberRuleGroup:
         zone="Zone they always play",
         notes="Optional free-text notes",
     )
+    @app_commands.autocomplete(zone=_cs_zone_autocomplete)
     async def set_zone(
         interaction: discord.Interaction,
         zone: str,
@@ -887,29 +1045,6 @@ def build_cs_member_rule_group() -> _MemberRuleGroup:
     ):
         await grp._set_member_zone(
             interaction, member_user, member_name, zone, notes,
-        )
-
-    @grp.command(name="set_member_role",
-                 description="Tag a member as a Commander or Judicator candidate")
-    @app_commands.describe(
-        member_user="Pick from the server (preferred)",
-        member_name="OR a roster name if the member isn't on Discord",
-        role="Commander or Judicator",
-        notes="Optional free-text notes",
-    )
-    @app_commands.choices(role=[
-        app_commands.Choice(name="Commander", value="commander"),
-        app_commands.Choice(name="Judicator", value="judicator"),
-    ])
-    async def set_role(
-        interaction: discord.Interaction,
-        role: app_commands.Choice[str],
-        member_user: discord.Member | None = None,
-        member_name: str | None = None,
-        notes: str = "",
-    ):
-        await grp._set_member_role(
-            interaction, member_user, member_name, role.value, notes,
         )
 
     @grp.command(name="list",
@@ -927,36 +1062,42 @@ def build_cs_member_rule_group() -> _MemberRuleGroup:
 # for that root cog to call; no slash commands are registered here directly.
 
 
-# ── Inline power-band rule modal (#144 — setup wizard inline create) ──────
+# ── Inline power-band rule view (#144 / #168 — setup wizard inline create) ──
 #
 # Streamlined `set_power_band` flow for the /setup_desertstorm and
 # /setup_canyonstorm wizard's 'add your first rule now?' branch. The full
 # slash command (`/<parent> member_rule set_power_band`) takes threshold +
-# zone + optional notes; the modal omits notes for brevity — alliances
-# can edit later via the slash command if they want to add notes.
+# zone + optional notes; this inline flow omits notes for brevity —
+# alliances can edit later via the slash command if they want to add notes.
+#
+# Shape (#168 — Rule E): zone is a Select sourced from
+# DS_ZONE_STRUCTURE / CS_ZONE_STRUCTURE so a typo can't slip through; the
+# power threshold stays a free-text TextInput (values are open-ended
+# magnitudes like `250M` / `1.2B` / `300,000,000`). The view captures the
+# picked zone, then a [Set minimum power] button opens a single-field
+# modal for the power value. Submit on the modal writes the rule.
 
-class InlinePowerBandModal(discord.ui.Modal):
-    def __init__(self, event_type: str):
+
+class _InlinePowerBandPowerModal(discord.ui.Modal):
+    """Single-field modal that captures the power threshold for the picked
+    zone and writes the rule. Opened from `InlinePowerBandView` after the
+    officer has chosen a zone via the Select."""
+
+    def __init__(self, event_type: str, zone: str):
         label = "Desert Storm" if event_type == "DS" else "Canyon Storm"
-        super().__init__(title=f"{label} Power-Band Rule")
+        super().__init__(title=f"{label} Power-Band Rule — {zone}"[:45])
         self.event_type = event_type
+        self.zone = zone
         self.threshold = discord.ui.TextInput(
-            label="Minimum power",
+            label=f"Minimum power for {zone}"[:45],
             placeholder="e.g. 250M, 1.2B, 300,000,000",
             required=True,
             max_length=20,
         )
-        self.zone = discord.ui.TextInput(
-            label="Zone the rule applies to",
-            placeholder="e.g. Power Tower",
-            required=True,
-            max_length=80,
-        )
         self.add_item(self.threshold)
-        self.add_item(self.zone)
 
     async def on_submit(self, interaction: discord.Interaction):
-        parse_power, format_power, canonical_zones_for = _strategy_helpers()
+        parse_power, format_power, _ = _strategy_helpers()
         n = parse_power(self.threshold.value)
         parent = "desertstorm" if self.event_type == "DS" else "canyonstorm"
         if n is None or n < 0:
@@ -967,26 +1108,15 @@ class InlinePowerBandModal(discord.ui.Modal):
                 ephemeral=True,
             )
             return
-        zone = (self.zone.value or "").strip()
-        if not zone:
-            await interaction.response.send_message(
-                "⚠️ Zone is required.", ephemeral=True,
-            )
-            return
-        canonical = {z.lower() for z in canonical_zones_for(self.event_type)}
-        zone_warning = "" if zone.lower() in canonical else (
-            f"\n⚠️ `{zone}` isn't in the canonical zone list — saved "
-            "anyway; double-check the spelling."
-        )
         ok, msg = await asyncio.to_thread(save_rule,
             interaction.guild_id, self.event_type,
             Rule(rule_type=_RULE_TYPE_POWER_BAND,
-                 subject=str(int(n)), value=zone),
+                 subject=str(int(n)), value=self.zone),
         )
         if ok:
             await interaction.response.send_message(
                 f"✅ Saved: ≥ {format_power(int(n))} → eligible for "
-                f"**{zone}**.{zone_warning}\n"
+                f"**{self.zone}**.\n"
                 f"Add more rules later via `/{parent} member_rule …`.",
                 ephemeral=True,
             )
@@ -994,3 +1124,124 @@ class InlinePowerBandModal(discord.ui.Modal):
             await interaction.response.send_message(
                 f"⚠️ {msg}", ephemeral=True,
             )
+
+
+class InlinePowerBandView(discord.ui.View):
+    """Zone-picker view that gates the power-threshold modal.
+
+    Sent ephemerally from the setup wizard's "Add a rule now?" offer. The
+    officer picks a canonical zone from the Select, which enables the
+    [Set minimum power] button; clicking it opens a one-field modal for
+    the threshold. The whole flow stays ephemeral.
+    """
+
+    def __init__(self, event_type: str, owner_id: int):
+        super().__init__(timeout=300)
+        self.event_type = event_type
+        self.owner_id = owner_id
+        self.selected_zone: str | None = None
+        self.message: discord.Message | None = None
+        self._build_components()
+
+    def _build_components(self):
+        self.clear_items()
+        _, _, canonical_zones_for = _strategy_helpers()
+        zones = canonical_zones_for(self.event_type)
+        options = [
+            discord.SelectOption(
+                label=z[:100], value=z[:100],
+                default=(z == self.selected_zone),
+            )
+            for z in zones[:25]
+        ]
+        zone_select = discord.ui.Select(
+            placeholder=(
+                f"Pick a zone…  (current: {self.selected_zone})"
+                if self.selected_zone else "Pick a zone…"
+            ),
+            min_values=1, max_values=1, options=options,
+        )
+
+        async def _on_zone(inter: discord.Interaction):
+            if inter.user.id != self.owner_id:
+                await inter.response.send_message(
+                    "⛔ Only the user running setup can pick.",
+                    ephemeral=True,
+                )
+                return
+            self.selected_zone = zone_select.values[0]
+            self._build_components()
+            try:
+                await inter.response.edit_message(view=self)
+            except discord.HTTPException:
+                pass
+
+        zone_select.callback = _on_zone
+        self.add_item(zone_select)
+
+        set_btn = discord.ui.Button(
+            label="⚙️ Set minimum power",
+            style=discord.ButtonStyle.primary,
+            disabled=self.selected_zone is None,
+        )
+
+        async def _on_set(inter: discord.Interaction):
+            if inter.user.id != self.owner_id:
+                await inter.response.send_message(
+                    "⛔ Only the user running setup can pick.",
+                    ephemeral=True,
+                )
+                return
+            if not self.selected_zone:
+                await inter.response.send_message(
+                    "⚠️ Pick a zone first.", ephemeral=True,
+                )
+                return
+            await inter.response.send_modal(
+                _InlinePowerBandPowerModal(self.event_type, self.selected_zone)
+            )
+            # Disable the view so the officer can't fire the modal twice.
+            for child in self.children:
+                child.disabled = True
+            if self.message is not None:
+                try:
+                    await self.message.edit(view=self)
+                except discord.HTTPException:
+                    pass
+            self.stop()
+
+        set_btn.callback = _on_set
+        self.add_item(set_btn)
+
+        cancel_btn = discord.ui.Button(
+            label="↩️ Cancel", style=discord.ButtonStyle.secondary,
+        )
+
+        async def _on_cancel(inter: discord.Interaction):
+            if inter.user.id != self.owner_id:
+                await inter.response.send_message(
+                    "⛔ Only the user running setup can pick.",
+                    ephemeral=True,
+                )
+                return
+            for child in self.children:
+                child.disabled = True
+            try:
+                await inter.response.edit_message(
+                    content="↩️ Cancelled — no rule saved.", view=self,
+                )
+            except discord.HTTPException:
+                pass
+            self.stop()
+
+        cancel_btn.callback = _on_cancel
+        self.add_item(cancel_btn)
+
+    async def on_timeout(self) -> None:
+        for child in self.children:
+            child.disabled = True
+        if self.message is not None:
+            try:
+                await self.message.edit(view=self)
+            except discord.HTTPException:
+                pass

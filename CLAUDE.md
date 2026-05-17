@@ -49,9 +49,12 @@ repo `../lw-alliance-helper.github.io` (the website) has its own
   Shipped` based on where its linked PR lives (PR opened → In progress;
   push to `dev` → In review; push to `release/*` → Ready for Release;
   push to `main` → Shipped). Manual statuses still work for `Backlog`,
-  `Up Next`, and `Canceled`. Driver: `closingIssuesReferences` on the
-  PR — the issue must appear as `Closes #N` (or markdown-linked
-  variant) in the PR body. Requires a `PROJECT_TOKEN` repo secret —
+  `Up Next`, and `Canceled`. Driver: the PR body — the script merges
+  GitHub's `closingIssuesReferences` (which only auto-populates for
+  PRs into `main`) with a direct regex scan for `Closes / Fixes /
+  Resolves #N` and markdown-linked variants. The body has to contain
+  one of those keywords against each issue you want walked.
+  Requires a `PROJECT_TOKEN` repo secret —
   fine-grained PAT with org-level `Projects: Read and Write` (the
   default `GITHUB_TOKEN` can't touch org Project v2). For one-off
   bootstraps, run `scripts/sync_project_status.py --issue N --status

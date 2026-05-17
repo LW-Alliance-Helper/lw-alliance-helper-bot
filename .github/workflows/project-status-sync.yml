@@ -9,9 +9,17 @@ name: Project status sync
 #   Push to release/X.Y.Z           ->  Ready for Release
 #   Push to main                    ->  Shipped
 #
-# All transitions are driven by `closingIssuesReferences` on the PR, so
-# the issue ref needs to be in the PR body as `Closes #N` (markdown link
-# wrapping is fine — the GitHub parser handles it).
+# Issue refs are pulled from two sources, merged:
+#   - GitHub's `closingIssuesReferences` (auto-inferred from the PR
+#     body — but ONLY for PRs into the default branch, main).
+#   - A regex scan of the PR body for `Closes / Fixes / Resolves #N`
+#     (plus the markdown-linked `Closes [#N](url)` variant). This is
+#     what carries the In progress / In review / Ready for Release
+#     transitions, since GitHub does not populate
+#     `closingIssuesReferences` for PRs into dev or release/*.
+#
+# Either way the issue ref needs to appear in the PR body as `Closes
+# #N` (or Fixes / Resolves) — no sidebar linking required.
 #
 # Requires a `PROJECT_TOKEN` secret with read+write on org-level Project
 # v2. The auto-injected GITHUB_TOKEN cannot touch org projects.

@@ -854,33 +854,51 @@ class _MemberRuleGroup(app_commands.Group):
 
     # ── list ─────────────────────────────────────────────────────────
     async def _list(self, interaction: discord.Interaction, member: str | None = None):
-        if not await _deny_if_not_leader(interaction):
-            return
-        # gspread off the event loop.
-        rules = await asyncio.to_thread(
-            list_rules, interaction.guild_id, self.event_type,
-        )
-        if member:
-            # Filter matches either the raw subject (works for non-Discord
-            # name subjects) OR the resolved display name (works for
-            # Discord-ID-keyed rules whose member has since been renamed).
-            mlow = member.strip().lower()
-            filtered = []
-            for r in rules:
-                if r.rule_type != _RULE_TYPE_PER_MEMBER:
-                    continue
-                if r.subject.strip().lower() == mlow:
-                    filtered.append(r)
-                    continue
-                display = resolve_subject_display(r.subject, interaction.guild)
-                if display.strip().lower() == mlow:
-                    filtered.append(r)
-            rules = filtered
-        view = _RulesListView(
-            interaction.guild_id, interaction.user.id,
-            self.event_type, rules,
-            guild=interaction.guild,
-        )
+        await open_member_rule_list(interaction, self.event_type, member_filter=member)
+
+
+async def open_member_rule_list(
+    interaction: discord.Interaction,
+    event_type: str,
+    *,
+    member_filter: str | None = None,
+) -> None:
+    """Public entry point for the member-rule list view (#187 hub
+    + the legacy `/<event> member_rule list` subcommand both call this).
+    Posts the inline-action list view with [➕ Add rule] + [🗑 Clear N]
+    buttons per Rule M / #169.
+    """
+    if not await _deny_if_not_leader(interaction):
+        return
+    # gspread off the event loop.
+    rules = await asyncio.to_thread(
+        list_rules, interaction.guild_id, event_type,
+    )
+    if member_filter:
+        # Filter matches either the raw subject (works for non-Discord
+        # name subjects) OR the resolved display name (works for
+        # Discord-ID-keyed rules whose member has since been renamed).
+        mlow = member_filter.strip().lower()
+        filtered = []
+        for r in rules:
+            if r.rule_type != _RULE_TYPE_PER_MEMBER:
+                continue
+            if r.subject.strip().lower() == mlow:
+                filtered.append(r)
+                continue
+            display = resolve_subject_display(r.subject, interaction.guild)
+            if display.strip().lower() == mlow:
+                filtered.append(r)
+        rules = filtered
+    view = _RulesListView(
+        interaction.guild_id, interaction.user.id,
+        event_type, rules,
+        guild=interaction.guild,
+    )
+    if interaction.response.is_done():
+        sent = await interaction.followup.send(embed=view.render_embed(), view=view)
+        view.message = sent
+    else:
         await interaction.response.send_message(embed=view.render_embed(), view=view)
         try:
             view.message = await interaction.original_response()

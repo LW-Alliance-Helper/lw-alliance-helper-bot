@@ -2091,6 +2091,47 @@ async def _run_delete_with_confirm(
         )
 
 
+async def open_strategy_list(
+    interaction: discord.Interaction, event_type: str,
+) -> None:
+    """Public entry point for the strategy-preset list view (#187 hub
+    + the legacy `/<event> strategy list` subcommand both call this).
+    Posts the inline-action list view with Create/Edit/Delete buttons
+    per Rule M / #169."""
+    if not await _deny_if_not_leader(interaction):
+        return
+    names = await asyncio.to_thread(
+        list_presets, interaction.guild_id, event_type,
+    )
+    label = "Desert Storm" if event_type == "DS" else "Canyon Storm"
+    if not names:
+        description = (
+            f"*No {label} strategy presets saved yet.* Click **➕ Create** "
+            f"below to make one."
+        )
+    else:
+        description = "\n".join(f"• **{n}**" for n in names)
+    embed = discord.Embed(
+        title=f"📋 {label} — Strategy Presets",
+        description=description,
+        color=discord.Color.blurple(),
+    )
+    view = _StrategyListView(
+        owner_id=interaction.user.id,
+        event_type=event_type,
+        names=names,
+    )
+    if interaction.response.is_done():
+        sent = await interaction.followup.send(embed=embed, view=view)
+        view.message = sent
+    else:
+        await interaction.response.send_message(embed=embed, view=view)
+        try:
+            view.message = await interaction.original_response()
+        except discord.HTTPException:
+            view.message = None
+
+
 class _StrategyListView(discord.ui.View):
     """Inline Create / Edit / Delete actions for `/<parent> strategy list`.
 
@@ -2370,34 +2411,7 @@ class _StrategyGroup(app_commands.Group):
         await _open_editor(interaction, self.event_type, buf)
 
     async def _list(self, interaction: discord.Interaction):
-        if not await _deny_if_not_leader(interaction):
-            return
-        names = await asyncio.to_thread(
-            list_presets, interaction.guild_id, self.event_type,
-        )
-        label = "Desert Storm" if self.event_type == "DS" else "Canyon Storm"
-        if not names:
-            description = (
-                f"*No {label} strategy presets saved yet.* Click **➕ Create** "
-                f"below to make one."
-            )
-        else:
-            description = "\n".join(f"• **{n}**" for n in names)
-        embed = discord.Embed(
-            title=f"📋 {label} — Strategy Presets",
-            description=description,
-            color=discord.Color.blurple(),
-        )
-        view = _StrategyListView(
-            owner_id=interaction.user.id,
-            event_type=self.event_type,
-            names=names,
-        )
-        await interaction.response.send_message(embed=embed, view=view)
-        try:
-            view.message = await interaction.original_response()
-        except discord.HTTPException:
-            view.message = None
+        await open_strategy_list(interaction, self.event_type)
 
     async def _delete(self, interaction: discord.Interaction, name: str):
         if not await _deny_if_not_leader(interaction):

@@ -27,6 +27,7 @@ import os
 from unittest.mock import patch, MagicMock, AsyncMock
 
 import pytest
+from discord import app_commands
 
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__)))))
 
@@ -73,26 +74,10 @@ EXPECTED_COG_COMMANDS = {
 # Storm commands consolidated under `/desertstorm` and `/canyonstorm` parent
 # groups (#143). The root cog owns both groups and dispatches into the
 # per-feature modules; nothing else registers storm slash commands.
-EXPECTED_STORM_PARENTS = {"desertstorm", "canyonstorm"}
-EXPECTED_STORM_SUBCOMMANDS = {
-    "overview", "draft", "remind", "participation", "log",
-    "post_signup", "signups", "attendance",
-    # Nested subgroups — enumerated separately below:
-    "strategy", "member_rule",
-}
-EXPECTED_STRATEGY_SUBCOMMANDS = {
-    "create", "edit", "list", "delete", "apply", "roster_history",
-}
-EXPECTED_DS_MEMBER_RULE_SUBCOMMANDS = {
-    "set_power_band", "set_member_team",
-    "set_member_zone", "list",
-}
-EXPECTED_CS_MEMBER_RULE_SUBCOMMANDS = {
-    # Rule A / #166: CS supports teams=both/A/B just like DS, so
-    # set_member_team is exposed on the CS group too.
-    "set_power_band", "set_member_team",
-    "set_member_zone", "list",
-}
+# Post-#187: /desertstorm and /canyonstorm are single top-level
+# commands (no subcommand tree). Every storm action lives behind a
+# button in the event-hub view (storm_event_hub.py).
+EXPECTED_STORM_TOP_LEVEL_COMMANDS = {"desertstorm", "canyonstorm"}
 
 # Module-level slash commands defined directly in bot.py (not on a cog).
 EXPECTED_MODULE_COMMANDS = {"growth", "events", "events_log", "help"}
@@ -136,32 +121,28 @@ class TestCogRegistration:
             # SetupCog doesn't start tasks; nothing to tear down
             pass
 
-    def test_storm_commands_root_cog_registers_parent_groups(self, seeded_db):
-        """`/desertstorm` and `/canyonstorm` parent groups host every
-        consolidated storm subcommand. Each parent advertises the same
-        eight verbs plus the two nested subgroups (`strategy`,
-        `member_rule`). Asserts the exact set so an accidentally-dropped
-        subcommand surfaces immediately."""
+    def test_storm_commands_root_cog_registers_two_top_level_commands(self, seeded_db):
+        """Post-#187: `/desertstorm` and `/canyonstorm` are single
+        top-level slash commands, not parent groups. Each opens the
+        event-hub view. Every action that used to be a subcommand is
+        now a button on the hub view."""
         from storm_commands_root import StormCommandsRootCog
         cog = _make_cog(StormCommandsRootCog)
-        for parent_name, parent in (
-            ("desertstorm", cog.desertstorm_group),
-            ("canyonstorm", cog.canyonstorm_group),
-        ):
-            actual = {c.name for c in parent.commands}
-            assert actual == EXPECTED_STORM_SUBCOMMANDS, (
-                f"/{parent_name} subcommand set mismatch — "
-                f"missing: {EXPECTED_STORM_SUBCOMMANDS - actual}, "
-                f"unexpected: {actual - EXPECTED_STORM_SUBCOMMANDS}"
+        # The cog stashes the registered Command objects on instance
+        # attributes so the test can find them without poking through
+        # `bot.tree`.
+        assert cog.desertstorm_cmd.name == "desertstorm"
+        assert cog.canyonstorm_cmd.name == "canyonstorm"
+        # Neither command has any subcommands.
+        for cmd in (cog.desertstorm_cmd, cog.canyonstorm_cmd):
+            # Commands are not Groups; they don't expose a `.commands`
+            # property. Defensive check: if the cog accidentally
+            # registered a Group, this would either fail at construction
+            # or expose subcommands here.
+            assert not isinstance(cmd, app_commands.Group), (
+                f"/{cmd.name} should be a single command after #187, "
+                f"got a Group instead."
             )
-            strategy = parent.get_command("strategy")
-            assert strategy is not None, f"/{parent_name} strategy subgroup missing"
-            assert {c.name for c in strategy.commands} == EXPECTED_STRATEGY_SUBCOMMANDS
-
-        ds_rules = cog.desertstorm_group.get_command("member_rule")
-        cs_rules = cog.canyonstorm_group.get_command("member_rule")
-        assert {c.name for c in ds_rules.commands} == EXPECTED_DS_MEMBER_RULE_SUBCOMMANDS
-        assert {c.name for c in cs_rules.commands} == EXPECTED_CS_MEMBER_RULE_SUBCOMMANDS
 
     @pytest.mark.asyncio
     async def test_survey_cog_registers_expected_commands(self, seeded_db):
@@ -377,84 +358,65 @@ class TestMemberRosterCommandsGate:
 
 # ── Storm command gates (under the consolidated parent groups) ──────────────
 
-def _resolve_storm_subcommand(parent_name: str, *path: str):
-    """Walk the StormCommandsRootCog's parent group tree and return the
-    leaf command's callback. `path` is the sequence of subcommand names
-    — e.g. `("draft",)` or `("strategy", "create")` or `("member_rule",
-    "set_power_band")`. Returns the bound callback that takes
-    `(interaction, *args)` directly."""
+def _resolve_storm_top_level(name: str):
+    """Return the callback of the `/desertstorm` or `/canyonstorm`
+    top-level command (post-#187: each is a single Command, no Group)."""
     from storm_commands_root import StormCommandsRootCog
     cog = _make_cog(StormCommandsRootCog)
-    parent = (
-        cog.desertstorm_group if parent_name == "desertstorm"
-        else cog.canyonstorm_group
-    )
-    node = parent
-    for name in path:
-        node = node.get_command(name)
-        assert node is not None, (
-            f"Storm command tree is missing /{parent_name} "
-            f"{' '.join(path)} (failed at `{name}`)"
-        )
-    return node.callback
+    cmd = cog.desertstorm_cmd if name == "desertstorm" else cog.canyonstorm_cmd
+    return cmd.callback
 
 
 class TestStormCommandsGate:
-    """Every subcommand on `/desertstorm` and `/canyonstorm` rejects a
-    caller without the leadership role. Walks the actual command tree
-    rather than asserting against handler functions so a regression in
-    the parent-group wiring (#143) surfaces here too."""
-
-    # Subcommands that take no positional args beyond `interaction`.
-    _NO_ARG_SUBS = ("overview", "draft", "remind", "participation")
-
-    # Subcommands that accept an optional `event_date` / `date` arg.
-    _DATE_SUBS = ("log", "post_signup", "signups", "attendance")
+    """Post-#187: `/desertstorm` and `/canyonstorm` are single top-level
+    commands that open the event-hub view (storm_event_hub.handle_event_hub).
+    The hub itself runs the leadership-or-admin check before rendering
+    any buttons. These tests confirm the gate fires for non-leadership
+    callers."""
 
     @pytest.mark.asyncio
-    @pytest.mark.parametrize("parent", ["desertstorm", "canyonstorm"])
-    @pytest.mark.parametrize("sub", _NO_ARG_SUBS + _DATE_SUBS)
-    async def test_rejects_caller_without_leadership_role(
-        self, seeded_db, parent, sub,
+    @pytest.mark.parametrize("name", ["desertstorm", "canyonstorm"])
+    async def test_hub_rejects_caller_without_leadership_role(
+        self, seeded_db, name,
     ):
-        callback = _resolve_storm_subcommand(parent, sub)
+        callback = _resolve_storm_top_level(name)
         interaction = make_mock_interaction()
         interaction.user.roles = []   # no leadership role
 
-        # Date-taking subcommands accept `event_date: str | None = None`;
-        # the gate runs first, so passing the default is fine. Branch on
-        # the known shape.
-        if sub in self._DATE_SUBS:
-            await callback(interaction, None)
-        else:
-            await callback(interaction)
+        await callback(interaction)
 
         content, _ = _last_message(interaction)
         assert "leadership" in (content or "").lower(), (
-            f"/{parent} {sub} should reject non-leadership caller, "
+            f"/{name} should reject non-leadership caller, "
             f"got: {content!r}"
         )
 
     @pytest.mark.asyncio
-    @pytest.mark.parametrize("parent", ["desertstorm", "canyonstorm"])
-    async def test_strategy_list_rejects_non_leadership(self, seeded_db, parent):
-        """Spot-check a nested-subgroup subcommand to confirm the parent →
-        subgroup → command dispatch chain still enforces the gate."""
-        callback = _resolve_storm_subcommand(parent, "strategy", "list")
+    @pytest.mark.parametrize("event_type", ["DS", "CS"])
+    async def test_strategy_list_helper_rejects_non_leadership(
+        self, seeded_db, event_type,
+    ):
+        """The hub's `🧮 Manage strategy presets` button calls
+        `open_strategy_list`. Confirm that path enforces the same
+        leadership gate the legacy `/<event> strategy list` subcommand
+        did."""
+        from storm_strategy import open_strategy_list
         interaction = make_mock_interaction()
         interaction.user.roles = []
-        await callback(interaction)
+        await open_strategy_list(interaction, event_type)
         content, _ = _last_message(interaction)
         assert "leadership" in (content or "").lower()
 
     @pytest.mark.asyncio
-    @pytest.mark.parametrize("parent", ["desertstorm", "canyonstorm"])
-    async def test_member_rule_list_rejects_non_leadership(self, seeded_db, parent):
-        callback = _resolve_storm_subcommand(parent, "member_rule", "list")
+    @pytest.mark.parametrize("event_type", ["DS", "CS"])
+    async def test_member_rule_list_helper_rejects_non_leadership(
+        self, seeded_db, event_type,
+    ):
+        """Same idea for the `👤 Manage member rules` button."""
+        from storm_member_rules import open_member_rule_list
         interaction = make_mock_interaction()
         interaction.user.roles = []
-        # `list` accepts an optional `member: str | None` filter.
-        await callback(interaction, None)
+        await open_member_rule_list(interaction, event_type, member_filter=None)
         content, _ = _last_message(interaction)
         assert "leadership" in (content or "").lower()
 

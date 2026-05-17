@@ -101,112 +101,47 @@ HELP_CATEGORIES: dict[str, dict] = {
         "description": (
             "Run weekly Desert Storm with mail drafts, strategy presets, "
             "structured sign-ups + roster builder (💎 Premium), and "
-            "configurable participation tracking."
+            "configurable participation tracking. Open `/desertstorm` to "
+            "see every action in one place."
         ),
         "commands": [
             ("/setup_desertstorm",
              "Configure Team rosters, log channel, public post channel, "
              "mail template, and (💎 Premium) the structured-flow sign-up "
              "channel, schedule, and Sheet tabs."),
-            ("/desertstorm overview",
-             "Show current rosters and the active mail template."),
-            ("/desertstorm draft",
-             "**Free-tier text mail template only.** Step through team → "
-             "time → template, preview, and post the mail blurb. **Does "
-             "not** open the roster builder — for assigning members to "
-             "zones and Approve & Post, use `/desertstorm signups` "
-             "instead (💎 Premium)."),
-            ("/desertstorm strategy <create | edit | list | delete | "
-             "apply | roster_history>",
-             "Manage strategy presets — saved zone layouts with optional "
-             "per-zone power minimums. `apply` opens the roster builder "
-             "against your full roster (free tier). `roster_history` "
-             "browses past structured rosters with attendance overlay "
-             "(💎 Premium)."),
-            ("/desertstorm member_rule <set_power_band | set_member_team "
-             "| set_member_zone | list>",
-             "Manage member rules: power-band eligibility "
-             "(`≥ 250M → Power Tower`) plus per-member overrides "
-             "(`Alice always plays Team A`, `Bob always plays Power "
-             "Tower`)."),
-            ("/desertstorm post_signup [event_date]",
-             "💎 Post a sign-up message in the configured channel; "
-             "members click buttons to register Team A / Team B / Either "
-             "/ Cannot."),
-            ("/desertstorm signups [event_date]",
-             "💎 **Main hub for structured-flow events.** Leadership view "
-             "of who's signed up; record on-behalf votes for non-Discord "
-             "roster members; click **Set up Team A** / **Set up Team B** "
-             "to open the roster builder filtered to that team's signed-"
-             "up members; Approve & Post posts the finished mail."),
-            ("/desertstorm attendance [event_date]",
-             "💎 Record who attended each assigned slot after the event; "
-             "writes to the attendance Sheet tab."),
-            ("/desertstorm participation",
-             "Run this week's participation log using your configured "
-             "questions."),
-            ("/desertstorm log [date]",
-             "View a saved log entry (free: 4 most recent / 💎 Premium: "
-             "full history)."),
-            ("/desertstorm remind",
-             "💎 DM the roster to participate this week."),
+            ("/desertstorm",
+             "**Event hub.** Opens an embed showing the alliance's current "
+             "config plus buttons for every action: Post sign-up poll, "
+             "View signups + Set up Team A/B (💎), Record attendance (💎), "
+             "Past rosters (💎), DM roster reminder (💎), Manage strategy "
+             "presets, Manage member rules, Generate mail (free), Log "
+             "participation, View past log, Open setup wizard. Premium "
+             "buttons render disabled on the free tier so officers can "
+             "see at a glance what `/upgrade` unlocks."),
         ],
     },
     "canyonstorm": {
         "emoji": "🏜️",
         "label": "Canyon Storm",
         "description": (
-            "Same shape as Desert Storm — mail drafts, strategy presets, "
+            "Same shape as Desert Storm: mail drafts, strategy presets, "
             "structured sign-ups + roster builder (💎 Premium), and "
-            "configurable participation."
+            "configurable participation. Open `/canyonstorm` to see "
+            "every action in one place."
         ),
         "commands": [
             ("/setup_canyonstorm",
              "Configure Team rosters, log channel, public post channel, "
-             "mail template, and the structured-flow sign-up channel, "
-             "schedule, and Sheet tabs."),
-            ("/canyonstorm overview",
-             "Show current rosters and the active mail template."),
-            ("/canyonstorm draft",
-             "**Free-tier text mail template only.** Step through team → "
-             "time → template, preview, and post the mail blurb. **Does "
-             "not** open the roster builder — for assigning members to "
-             "zones and Approve & Post, use `/canyonstorm signups` "
-             "instead (💎 Premium)."),
-            ("/canyonstorm strategy <create | edit | list | delete | "
-             "apply | roster_history>",
-             "Manage strategy presets — saved zone layouts with optional "
-             "per-zone power minimums. `apply` opens the roster builder "
-             "against your full roster (free tier). `roster_history` "
-             "browses past structured rosters with attendance overlay "
-             "(💎 Premium)."),
-            ("/canyonstorm member_rule <set_power_band | set_member_team "
-             "| set_member_zone | list>",
-             "Manage member rules: power-band eligibility "
-             "(`≥ 250M → Power Tower`) plus per-member overrides "
-             "(`Alice always plays Team A`, `Charlie is always at "
-             "Power Tower`). `set_member_team` only applies when CS is "
-             "configured for both teams in setup."),
-            ("/canyonstorm post_signup [event_date]",
-             "💎 Post a sign-up message in the configured channel; "
-             "members click buttons to register their availability."),
-            ("/canyonstorm signups [event_date]",
-             "💎 **Main hub for structured-flow events.** Leadership view "
-             "of who's signed up; record on-behalf votes for non-Discord "
-             "roster members; click **Set up Team A** / **Set up Team B** "
-             "to open the roster builder; Approve & Post finalises the "
-             "roster."),
-            ("/canyonstorm attendance [event_date]",
-             "💎 Record who attended each assigned slot after the event; "
-             "writes to the attendance Sheet tab."),
-            ("/canyonstorm participation",
-             "Run this week's participation log using your configured "
-             "questions."),
-            ("/canyonstorm log [date]",
-             "View a saved log entry (free: 4 most recent / 💎 Premium: "
-             "full history)."),
-            ("/canyonstorm remind",
-             "💎 DM the roster to participate this week."),
+             "mail template, and (💎 Premium) the structured-flow sign-up "
+             "channel, schedule, and Sheet tabs."),
+            ("/canyonstorm",
+             "**Event hub.** Opens an embed showing the alliance's current "
+             "config plus buttons for every action: Post sign-up poll, "
+             "View signups + Set up Team A/B (💎), Record attendance (💎), "
+             "Past rosters (💎), DM roster reminder (💎), Manage strategy "
+             "presets, Manage member rules, Generate mail (free), Log "
+             "participation, View past log, Open setup wizard. Premium "
+             "buttons render disabled on the free tier."),
         ],
     },
     "survey": {

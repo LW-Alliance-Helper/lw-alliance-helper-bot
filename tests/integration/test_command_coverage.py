@@ -68,7 +68,9 @@ EXPECTED_COG_COMMANDS = {
         "donate", "upgrade", "premium",
     },
     "ExportImportCog": {
-        "export_config", "import_config",
+        # Top-level: /config group. Subcommands (overview / export /
+        # import) are introspected in `test_export_import_cog_config_group_has_expected_subcommands`.
+        "config",
     },
 }
 
@@ -208,6 +210,16 @@ class TestCogRegistration:
         from export_import_cog import ExportImportCog
         cog = _make_cog(ExportImportCog)
         assert _commands_on(cog) == EXPECTED_COG_COMMANDS["ExportImportCog"]
+
+    def test_export_import_cog_config_group_has_expected_subcommands(self, seeded_db):
+        """/config is a top-level Group containing overview / export /
+        import — the data-portability hub. Subcommands are introspected
+        here rather than via `_commands_on`."""
+        from export_import_cog import ExportImportCog
+        cog = _make_cog(ExportImportCog)
+        assert _subcommands_on(cog.config_group) == {
+            "overview", "export", "import",
+        }
 
     def test_module_level_commands_registered_on_bot_tree(self, seeded_db):
         """bot.py defines a handful of commands directly on `bot.tree`

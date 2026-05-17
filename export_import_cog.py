@@ -1,13 +1,15 @@
 """
-export_import_cog.py — Discord-side surface for /export_config and
-/import_config (issue #42).
+export_import_cog.py — Discord-side surface for the /config slash
+command group (issue #42, consolidated into a group in #194).
 
-`/export_config` collects a serializable view of the guild's bot config
-across the categories the leader selects, then DMs the result as a JSON
-attachment. `/import_config` reverses the process: parse the attached
-file, walk leadership through a remap wizard for every channel and role
-referenced in the export, then write the imported config to the
-destination guild's tables.
+`/config export` collects a serializable view of the guild's bot
+config across the categories the leader selects, then DMs the result
+as a JSON attachment. `/config import` reverses the process: parse
+the attached file, walk leadership through a remap wizard for every
+channel and role referenced in the export, then write the imported
+config to the destination guild's tables. `/config overview` is the
+default summary leaf — shows which categories the guild has data
+for, with pointers into the two action sub-commands.
 
 The data-layer logic (serialization, validation, applying to SQLite)
 lives in ``config_export.py`` and is unit-testable without any Discord
@@ -345,19 +347,83 @@ class ExportImportCog(commands.Cog):
     """Slash commands for moving a guild's bot config between Discord
     servers (or backing up + restoring within the same server)."""
 
+    # /config is a top-level slash-command group containing overview /
+    # export / import. discord.py 2.x auto-registers the Group + its
+    # subcommands when the cog is added.
+    config_group = app_commands.Group(
+        name="config",
+        description="Export and import this alliance's bot configuration",
+    )
+
     def __init__(self, bot):
         self.bot = bot
 
-    # ── /export_config ────────────────────────────────────────────────────
+    # ── /config overview ──────────────────────────────────────────────────
 
-    @app_commands.command(
-        name="export_config",
-        description="Export your alliance's bot config to a JSON file you can re-import to another server",
+    @config_group.command(
+        name="overview",
+        description="What this guild has saved + pointers into /config export and /config import",
     )
-    async def export_config(self, interaction: discord.Interaction):
+    async def config_overview(self, interaction: discord.Interaction):
         if not _has_leadership_or_admin(interaction):
             await interaction.response.send_message(
-                "⛔ You need the leadership role (or admin) to run `/export_config`.",
+                "⛔ You need the leadership role (or admin) to run `/config overview`.",
+                ephemeral=True,
+            )
+            return
+
+        guild = interaction.guild
+        guild_id = interaction.guild_id
+        channel_lookup = _build_channel_lookup(guild)
+        role_lookup    = _build_role_lookup(guild)
+
+        available = config_export.collect_available_categories(
+            guild_id,
+            channel_lookup=channel_lookup,
+            role_lookup=role_lookup,
+        )
+
+        embed = discord.Embed(
+            title="🗂️ Config portability",
+            description=(
+                "Move this alliance's bot configuration between Discord servers, "
+                "or back it up and restore it later. Channel and role IDs are "
+                "guild-specific, so the import wizard walks every channel and "
+                "role slot through a remap step.\n\n"
+                "**Sub-commands:**\n"
+                "• `/config export` — Pick categories and DM yourself a JSON file\n"
+                "• `/config import` — Attach a JSON file and walk the remap wizard"
+            ),
+            color=discord.Color.blurple(),
+        )
+
+        if available:
+            labels = [config_export.CATEGORY_LABELS[k] for k in available]
+            embed.add_field(
+                name=f"Available to export ({len(available)} categor"
+                     f"{'y' if len(available) == 1 else 'ies'})",
+                value="\n".join(f"• {l}" for l in labels),
+                inline=False,
+            )
+        else:
+            embed.add_field(
+                name="Available to export",
+                value="*(nothing yet — run `/setup` first to configure something)*",
+                inline=False,
+            )
+
+        await interaction.response.send_message(embed=embed, ephemeral=True)
+
+    # ── /config export ────────────────────────────────────────────────────
+
+    @config_group.command(
+        name="export",
+        description="Export your alliance's bot config to a JSON file you can re-import to another server",
+    )
+    async def config_export_cmd(self, interaction: discord.Interaction):
+        if not _has_leadership_or_admin(interaction):
+            await interaction.response.send_message(
+                "⛔ You need the leadership role (or admin) to run `/config export`.",
                 ephemeral=True,
             )
             return
@@ -386,7 +452,7 @@ class ExportImportCog(commands.Cog):
             "📦 **Export Config**\n"
             "Pick the categories you want to export. Categories with no saved "
             "data are hidden. After confirming, the bot will DM you a JSON "
-            "file that you (or another officer) can attach to `/import_config` "
+            "file that you (or another officer) can attach to `/config import` "
             "in another server.",
             view=view,
             ephemeral=True,
@@ -414,7 +480,7 @@ class ExportImportCog(commands.Cog):
             await dm.send(
                 "📦 **Your alliance's bot config export** — keep this file "
                 "private (it contains your sheet ID and channel/role IDs). "
-                "Attach it to `/import_config` in the destination server.",
+                "Attach it to `/config import` in the destination server.",
                 file=discord.File(io.BytesIO(payload), filename=filename),
             )
             await interaction.followup.send(
@@ -426,27 +492,27 @@ class ExportImportCog(commands.Cog):
         except discord.Forbidden:
             await interaction.followup.send(
                 "⚠️ Couldn't DM you the file — you have DMs from server members "
-                "disabled. Re-enable DMs for this server and run `/export_config` again.",
+                "disabled. Re-enable DMs for this server and run `/config export` again.",
                 ephemeral=True,
             )
 
-    # ── /import_config ────────────────────────────────────────────────────
+    # ── /config import ────────────────────────────────────────────────────
 
-    @app_commands.command(
-        name="import_config",
+    @config_group.command(
+        name="import",
         description="Import a JSON config export from another server (or restore your own backup)",
     )
     @app_commands.describe(
-        file="The JSON file produced by /export_config",
+        file="The JSON file produced by /config export",
     )
-    async def import_config(
+    async def config_import_cmd(
         self,
         interaction: discord.Interaction,
         file: discord.Attachment,
     ):
         if not _has_leadership_or_admin(interaction):
             await interaction.response.send_message(
-                "⛔ You need the leadership role (or admin) to run `/import_config`.",
+                "⛔ You need the leadership role (or admin) to run `/config import`.",
                 ephemeral=True,
             )
             return
@@ -601,7 +667,7 @@ class ExportImportCog(commands.Cog):
                 wizard_registry.unregister(user.id, cancel_event)
                 return
             if view.decision is None:
-                await channel.send("⏰ Timed out. Run `/import_config` again with the same file.")
+                await channel.send("⏰ Timed out. Run `/config import` again with the same file.")
                 wizard_registry.unregister(user.id, cancel_event)
                 return
             channel_decisions[grp.source_id] = view.decision
@@ -622,7 +688,7 @@ class ExportImportCog(commands.Cog):
                 wizard_registry.unregister(user.id, cancel_event)
                 return
             if view.decision is None:
-                await channel.send("⏰ Timed out. Run `/import_config` again with the same file.")
+                await channel.send("⏰ Timed out. Run `/config import` again with the same file.")
                 wizard_registry.unregister(user.id, cancel_event)
                 return
             role_decisions[grp.source_id] = view.decision

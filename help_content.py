@@ -214,12 +214,15 @@ HELP_CATEGORIES: dict[str, dict] = {
             "alongside it."
         ),
         "commands": [
-            ("/export_config",
+            ("/config overview",
+             "What this guild has saved + pointers into /config export and "
+             "/config import."),
+            ("/config export",
              "DMs you a JSON file with the categories you select "
              "(core setup, events, DS, CS, train, birthday, growth, "
              "surveys, shiny tasks, member roster)."),
-            ("/import_config <file>",
-             "Apply a /export_config JSON to this server. The bot walks "
+            ("/config import <file>",
+             "Apply a /config export JSON to this server. The bot walks "
              "you through remapping each old channel and role to its new "
              "equivalent, then writes the imported config to your tables."),
         ],

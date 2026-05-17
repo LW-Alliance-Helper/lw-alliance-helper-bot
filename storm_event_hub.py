@@ -148,14 +148,21 @@ class _EventHubView(discord.ui.View):
     handler. Premium-gated buttons render disabled on the free tier.
 
     Layout (3 rows, 11 buttons total):
-        Row 0 (Premium event flow):
-          📣 Post sign-up poll | 👁️ View signups + Set up teams |
-          📋 Record attendance | 📜 Past rosters | 🔔 DM roster reminder
-        Row 1 (Configuration + free-tier flows):
-          🧮 Manage strategy presets | 👤 Manage member rules |
-          📄 Generate mail | 📊 Log participation | 📜 View past log
-        Row 2 (Setup):
-          ⚙️ Open setup wizard
+        Row 0 (active event-day actions):
+          📣 Post sign-up poll (blue) | 👁️ View sign-ups + set up teams (green) |
+          📋 Record attendance | 📊 Fill out participation questions
+        Row 1 (Communications + configuration):
+          🔔 Send DM reminder to roster | 🧮 Manage strategy presets |
+          👤 Manage member rules | 📄 Generate mail
+        Row 2 (Reference + setup):
+          📜 View past participation logs | 📜 View past rosters |
+          ⚙️ Open setup
+
+    Only the two primary action buttons in Row 0 use a coloured style
+    (Post sign-up poll → primary blue, View sign-ups + set up teams →
+    success green). Everything else is `ButtonStyle.secondary` so the
+    visual hierarchy points officers at "what do I do RIGHT NOW for
+    this event" without competing with the reference / config rows.
 
     `owner_user_id` is the leadership member who ran `/desertstorm`.
     Discord caps the View at 25 components; 11 well under.
@@ -200,47 +207,57 @@ class _EventHubView(discord.ui.View):
         return not self.is_premium
 
     def _build_buttons(self) -> None:
-        parent = _PARENT_CMD[self.event_type]
-        label_event = _EVENT_LABEL[self.event_type]
+        premium_off = self._premium_disabled()
 
-        # ── Row 0: Premium event flow ────────────────────────────────────
+        # ── Row 0: active event-day actions ──────────────────────────────
+        # Post sign-up poll (Premium): blue, the "start the cycle"
+        # action. Most events begin with this button click.
         self._add_button(
-            label="💎 Post sign-up poll" if self._premium_disabled() else "📣 Post sign-up poll",
+            label="💎 Post sign-up poll" if premium_off else "📣 Post sign-up poll",
             style=discord.ButtonStyle.primary,
-            disabled=self._premium_disabled(),
+            disabled=premium_off,
             row=0,
             callback=self._on_post_signup,
         )
+        # View sign-ups + set up teams (Premium): green, the "build
+        # the roster" action. Highest-traffic button once the poll is
+        # up — gets the most visual weight after Post.
         self._add_button(
-            label="💎 View signups + Set up teams" if self._premium_disabled() else "👁️ View signups + Set up teams",
+            label="💎 View sign-ups + set up teams" if premium_off else "👁️ View sign-ups + set up teams",
             style=discord.ButtonStyle.success,
-            disabled=self._premium_disabled(),
+            disabled=premium_off,
             row=0,
             callback=self._on_view_signups,
         )
+        # Record attendance (Premium): secondary — same row because
+        # it's part of the event-day flow, but visually deprioritised
+        # so officers don't click it mid-build by accident.
         self._add_button(
-            label="💎 Record attendance" if self._premium_disabled() else "📋 Record attendance",
-            style=discord.ButtonStyle.primary,
-            disabled=self._premium_disabled(),
+            label="💎 Record attendance" if premium_off else "📋 Record attendance",
+            style=discord.ButtonStyle.secondary,
+            disabled=premium_off,
             row=0,
             callback=self._on_attendance,
         )
+        # Fill out participation questions (free tier): same row
+        # because participation logs are an event-day chore.
         self._add_button(
-            label="💎 Past rosters" if self._premium_disabled() else "📜 Past rosters",
+            label="📊 Fill out participation questions",
             style=discord.ButtonStyle.secondary,
-            disabled=self._premium_disabled(),
+            disabled=False,
             row=0,
-            callback=self._on_past_rosters,
-        )
-        self._add_button(
-            label="💎 DM roster reminder" if self._premium_disabled() else "🔔 DM roster reminder",
-            style=discord.ButtonStyle.secondary,
-            disabled=self._premium_disabled(),
-            row=0,
-            callback=self._on_remind,
+            callback=self._on_participation,
         )
 
-        # ── Row 1: Configuration + free-tier flows ───────────────────────
+        # ── Row 1: Communications + configuration ────────────────────────
+        # DM roster reminder (Premium): leads the comms/config row.
+        self._add_button(
+            label="💎 Send DM reminder to roster" if premium_off else "🔔 Send DM reminder to roster",
+            style=discord.ButtonStyle.secondary,
+            disabled=premium_off,
+            row=1,
+            callback=self._on_remind,
+        )
         self._add_button(
             label="🧮 Manage strategy presets",
             style=discord.ButtonStyle.secondary,
@@ -254,27 +271,28 @@ class _EventHubView(discord.ui.View):
             callback=self._on_manage_rules,
         )
         self._add_button(
-            label="📄 Generate mail (free tier)",
+            label="📄 Generate mail",
             style=discord.ButtonStyle.secondary,
             disabled=False, row=1,
             callback=self._on_draft,
         )
+
+        # ── Row 2: Reference + setup ─────────────────────────────────────
         self._add_button(
-            label="📊 Log participation",
+            label="📜 View past participation logs",
             style=discord.ButtonStyle.secondary,
-            disabled=False, row=1,
-            callback=self._on_participation,
-        )
-        self._add_button(
-            label="📜 View past log",
-            style=discord.ButtonStyle.secondary,
-            disabled=False, row=1,
+            disabled=False, row=2,
             callback=self._on_log,
         )
-
-        # ── Row 2: Setup ─────────────────────────────────────────────────
         self._add_button(
-            label="⚙️ Open setup wizard",
+            label="💎 View past rosters" if premium_off else "📜 View past rosters",
+            style=discord.ButtonStyle.secondary,
+            disabled=premium_off,
+            row=2,
+            callback=self._on_past_rosters,
+        )
+        self._add_button(
+            label="⚙️ Open setup",
             style=discord.ButtonStyle.secondary,
             disabled=False, row=2,
             callback=self._on_setup,

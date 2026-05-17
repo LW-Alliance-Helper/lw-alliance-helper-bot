@@ -445,3 +445,21 @@ async def handle_event_hub(
         await interaction.response.send_message(embed=embed, view=view)
         sent = await interaction.original_response()
     view.message = sent
+
+    # First-run tour offer (#190): the hub is now the front door for
+    # the storm flow, so the tour fires here instead of the legacy
+    # `/<event> signups` officer-view trigger. Sent as an ephemeral
+    # followup so only the officer who opened the hub sees it. The
+    # offer no-ops if the officer has already dismissed it.
+    try:
+        from storm_walkthrough import maybe_offer_storm_hub_tour
+        await maybe_offer_storm_hub_tour(
+            interaction, event_type=event_type,
+        )
+    except Exception as e:
+        # Walkthrough offer is non-essential; don't let a tour-side
+        # failure (DB error, ephemeral send fail) take down the hub.
+        logger.warning(
+            "[STORM HUB] tour offer failed for guild=%s event=%s: %s",
+            guild.id, event_type, e,
+        )

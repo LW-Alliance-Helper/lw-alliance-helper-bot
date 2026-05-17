@@ -1,9 +1,10 @@
 """
 Tests for storm_walkthrough.py + the walkthrough_dismissals layer (#130).
 
-Covers the dismissal table, the tour content shape, and the View-flow
-state machine — the last of these is what the prior round was missing,
-which let a "Next button re-renders step 1 forever" bug ship.
+Post-#190 the tour fires from the event hub (`/desertstorm`,
+`/canyonstorm`) rather than the legacy `/<event> signups` officer
+view. The 5-step content walks the weekly cycle, strategy presets +
+member rules, free vs Premium gating, and a /help pointer.
 """
 
 from unittest.mock import AsyncMock, MagicMock
@@ -36,152 +37,156 @@ class TestWalkthroughDismissals:
     def test_unseen_returns_false(self, seeded_db):
         import config
         assert config.is_walkthrough_dismissed(
-            TEST_GUILD_ID, 42, sw.STORM_SIGNUPS_TOUR_KEY,
+            TEST_GUILD_ID, 42, sw.STORM_HUB_TOUR_KEY,
         ) is False
 
     def test_dismiss_then_check(self, seeded_db):
         import config
-        config.dismiss_walkthrough(TEST_GUILD_ID, 42, sw.STORM_SIGNUPS_TOUR_KEY)
+        config.dismiss_walkthrough(TEST_GUILD_ID, 42, sw.STORM_HUB_TOUR_KEY)
         assert config.is_walkthrough_dismissed(
-            TEST_GUILD_ID, 42, sw.STORM_SIGNUPS_TOUR_KEY,
+            TEST_GUILD_ID, 42, sw.STORM_HUB_TOUR_KEY,
         ) is True
 
     def test_dismiss_idempotent(self, seeded_db):
         import config
-        config.dismiss_walkthrough(TEST_GUILD_ID, 42, sw.STORM_SIGNUPS_TOUR_KEY)
-        config.dismiss_walkthrough(TEST_GUILD_ID, 42, sw.STORM_SIGNUPS_TOUR_KEY)
+        config.dismiss_walkthrough(TEST_GUILD_ID, 42, sw.STORM_HUB_TOUR_KEY)
+        config.dismiss_walkthrough(TEST_GUILD_ID, 42, sw.STORM_HUB_TOUR_KEY)
         # Still just one record; still dismissed.
         assert config.is_walkthrough_dismissed(
-            TEST_GUILD_ID, 42, sw.STORM_SIGNUPS_TOUR_KEY,
+            TEST_GUILD_ID, 42, sw.STORM_HUB_TOUR_KEY,
         ) is True
 
     def test_per_user_isolation(self, seeded_db):
         import config
-        config.dismiss_walkthrough(TEST_GUILD_ID, 42, sw.STORM_SIGNUPS_TOUR_KEY)
+        config.dismiss_walkthrough(TEST_GUILD_ID, 42, sw.STORM_HUB_TOUR_KEY)
         # A different user in the same guild still gets offered the tour.
         assert config.is_walkthrough_dismissed(
-            TEST_GUILD_ID, 99, sw.STORM_SIGNUPS_TOUR_KEY,
+            TEST_GUILD_ID, 99, sw.STORM_HUB_TOUR_KEY,
         ) is False
 
     def test_per_guild_isolation(self, seeded_db):
         import config
-        config.dismiss_walkthrough(TEST_GUILD_ID, 42, sw.STORM_SIGNUPS_TOUR_KEY)
+        config.dismiss_walkthrough(TEST_GUILD_ID, 42, sw.STORM_HUB_TOUR_KEY)
         # The same user in a different guild still gets offered the tour.
         assert config.is_walkthrough_dismissed(
-            TEST_GUILD_ID + 1, 42, sw.STORM_SIGNUPS_TOUR_KEY,
+            TEST_GUILD_ID + 1, 42, sw.STORM_HUB_TOUR_KEY,
         ) is False
 
-    def test_versioned_key_isolates_dismissals(self, seeded_db):
+    def test_hub_version_key_re_offers_after_v1_signups_dismissal(self, seeded_db):
+        """The pre-#190 tour used `storm_signups_v1`; the hub tour
+        uses `storm_hub_v1`. An officer who dismissed the old tour
+        should still see the new hub-flow offer once."""
         import config
-        config.dismiss_walkthrough(TEST_GUILD_ID, 42, "storm_signups_v0")
-        # A v1 walkthrough should NOT be auto-dismissed just because v0 was.
+        config.dismiss_walkthrough(TEST_GUILD_ID, 42, "storm_signups_v1")
         assert config.is_walkthrough_dismissed(
-            TEST_GUILD_ID, 42, "storm_signups_v1",
+            TEST_GUILD_ID, 42, sw.STORM_HUB_TOUR_KEY,
         ) is False
 
 
 class TestTourContent:
-    def test_tour_has_at_least_three_steps(self):
-        # The design spec calls for ~6 steps; lock in a floor so a
-        # future content edit can't accidentally drop the tour to a
-        # single message.
-        assert len(sw._STORM_SIGNUPS_TOUR_STEPS) >= 3
+    def test_tour_has_five_steps(self):
+        # Hub tour is intentionally 5 steps: the hub itself, the weekly
+        # cycle, strategy presets + member rules, free vs Premium, and
+        # a wrap-up pointer at /help.
+        assert len(sw._STORM_HUB_TOUR_STEPS) == 5
 
     def test_first_step_starts_with_step_label(self):
         # Each step in the tour body starts with a bolded "Step N / M"
         # so the user can tell where they are.
-        assert sw._STORM_SIGNUPS_TOUR_STEPS[0].startswith("**Step 1 ")
+        assert sw._STORM_HUB_TOUR_STEPS[0].startswith("**Step 1 ")
 
     def test_steps_are_individually_short(self):
         # Discord ephemeral messages render best at a few sentences each.
-        # 800 chars is a soft cap that still lets us write paragraphs.
-        for step in sw._STORM_SIGNUPS_TOUR_STEPS:
-            assert len(step) < 800, f"Step too long ({len(step)} chars):\n{step}"
+        # 1200 chars accommodates the bullet-list style without forcing
+        # a sub-step split.
+        for step in sw._STORM_HUB_TOUR_STEPS:
+            assert len(step) < 1200, f"Step too long ({len(step)} chars):\n{step}"
 
-    def test_step_5_mentions_team_setup_buttons(self):
-        # Post Rule A / #166: CS reads the same `teams=both/A/B` config
-        # as DS does, so both event types render "🅰️ Set up Team A" /
-        # "🅱️ Set up Team B" (or just the configured single team).
-        # The pre-#166 CS-only "🏜️ Set up Roster" button is gone.
-        step_5 = sw._STORM_SIGNUPS_TOUR_STEPS[4]
-        assert "Team A" in step_5 and "Team B" in step_5
+    def test_step_1_describes_hub_overview(self):
+        step_1 = sw._STORM_HUB_TOUR_STEPS[0]
+        # Step 1 introduces the embed body + button rows.
+        assert "hub" in step_1.lower() or "home base" in step_1.lower()
+        assert "buttons" in step_1.lower() or "button" in step_1.lower()
+
+    def test_step_2_describes_weekly_cycle(self):
+        step_2 = sw._STORM_HUB_TOUR_STEPS[1]
+        # Step 2 walks the cycle: post poll -> view signups -> attendance.
+        assert "Post sign-up poll" in step_2
+        assert "set up teams" in step_2.lower()
+        assert "attendance" in step_2.lower()
+
+    def test_step_3_describes_presets_and_rules(self):
+        step_3 = sw._STORM_HUB_TOUR_STEPS[2]
+        assert "strategy presets" in step_3.lower()
+        assert "member rules" in step_3.lower()
+
+    def test_step_4_describes_premium_gating(self):
+        step_4 = sw._STORM_HUB_TOUR_STEPS[3]
+        assert "Premium" in step_4 or "premium" in step_4
+        # Mentions specific Premium buttons and free-tier buttons so
+        # officers see what falls on each side.
+        assert "Post sign-up poll" in step_4
+        assert "Manage strategy presets" in step_4 or "presets" in step_4.lower()
+
+    def test_step_5_points_at_help(self):
+        step_5 = sw._STORM_HUB_TOUR_STEPS[4]
+        assert "/help" in step_5
 
 
 class TestTourBuilderBranching:
-    """#170 / Rule N + Decision #12: the tour now branches on event_type
-    + the alliance's `teams` config so the on-behalf flow (Step 4), the
-    Set-Up button copy (Step 5), and the /help category pointer (Step 6)
-    describe the actual UI the officer will see."""
+    """Tour copy branches on event_type so DS officers see DS-flavoured
+    copy + event day, and CS officers see CS."""
 
-    def test_step_4_describes_view_picker_not_modal(self):
-        """Post-#168 the on-behalf flow is a Member + Vote select view,
-        not a free-text modal. Step 4 copy must reflect that."""
-        steps = sw._build_storm_signups_tour_steps("DS", "both")
-        step_4 = steps[3]
-        # New flow vocabulary.
-        assert "picker" in step_4.lower() or "dropdown" in step_4.lower()
-        assert "Submit" in step_4
-        # Old free-text framing is gone.
-        assert "modal" not in step_4.lower()
-        assert "typos are rejected" not in step_4
+    def test_ds_event_label(self):
+        ds_step1 = sw._build_storm_hub_tour_steps("DS")[0]
+        assert "Desert Storm" in ds_step1
+        assert "Canyon Storm" not in ds_step1
 
-    def test_step_5_both_teams_lists_both_buttons(self):
-        steps = sw._build_storm_signups_tour_steps("DS", "both")
-        step_5 = steps[4]
-        assert "Set up Team A" in step_5
-        assert "Set up Team B" in step_5
+    def test_cs_event_label(self):
+        cs_step1 = sw._build_storm_hub_tour_steps("CS")[0]
+        assert "Canyon Storm" in cs_step1
+        assert "Desert Storm" not in cs_step1
 
-    def test_step_5_team_a_only_lists_only_a_button(self):
-        steps = sw._build_storm_signups_tour_steps("DS", "A")
-        step_5 = steps[4]
-        assert "Set up Team A" in step_5
-        assert "Set up Team B" not in step_5
+    def test_ds_event_day_is_friday(self):
+        ds_step2 = sw._build_storm_hub_tour_steps("DS")[1]
+        assert "Friday" in ds_step2
 
-    def test_step_5_team_b_only_lists_only_b_button(self):
-        steps = sw._build_storm_signups_tour_steps("CS", "B")
-        step_5 = steps[4]
-        assert "Set up Team B" in step_5
-        assert "Set up Team A" not in step_5
+    def test_cs_event_day_is_thursday(self):
+        cs_step2 = sw._build_storm_hub_tour_steps("CS")[1]
+        assert "Thursday" in cs_step2
 
-    def test_step_5_event_label_matches_event_type(self):
-        ds_step5 = sw._build_storm_signups_tour_steps("DS", "both")[4]
-        cs_step5 = sw._build_storm_signups_tour_steps("CS", "both")[4]
-        assert "Desert Storm" in ds_step5
-        assert "Canyon Storm" in cs_step5
+    def test_step_5_parent_command_matches_event_type(self):
+        ds_step5 = sw._build_storm_hub_tour_steps("DS")[4]
+        cs_step5 = sw._build_storm_hub_tour_steps("CS")[4]
+        assert "/desertstorm" in ds_step5
+        assert "/canyonstorm" in cs_step5
 
-    def test_step_6_help_category_matches_event_type(self):
+    def test_step_5_help_category_matches_event_type(self):
         """The /help dropdown has separate Desert Storm + Canyon Storm
         categories. A CS officer shouldn't be told to pick Desert Storm."""
-        ds_step6 = sw._build_storm_signups_tour_steps("DS", "both")[5]
-        cs_step6 = sw._build_storm_signups_tour_steps("CS", "both")[5]
-        assert "Desert Storm" in ds_step6
-        assert "Canyon Storm" not in ds_step6
-        assert "Canyon Storm" in cs_step6
-        assert "Desert Storm" not in cs_step6
+        ds_step5 = sw._build_storm_hub_tour_steps("DS")[4]
+        cs_step5 = sw._build_storm_hub_tour_steps("CS")[4]
+        assert "Desert Storm" in ds_step5
+        assert "Canyon Storm" not in ds_step5
+        assert "Canyon Storm" in cs_step5
+        assert "Desert Storm" not in cs_step5
 
-    def test_unknown_teams_value_falls_back_to_both(self):
-        steps = sw._build_storm_signups_tour_steps("DS", "garbage")
-        step_5 = steps[4]
-        assert "Set up Team A" in step_5
-        assert "Set up Team B" in step_5
-
-    def test_offer_view_carries_event_type_and_teams(self):
+    def test_offer_view_carries_event_type(self):
         view = sw._OfferView(
             guild_id=TEST_GUILD_ID, user_id=42,
-            walkthrough_key=sw.STORM_SIGNUPS_TOUR_KEY,
-            event_type="CS", teams="A",
+            walkthrough_key=sw.STORM_HUB_TOUR_KEY,
+            event_type="CS",
         )
         assert view.event_type == "CS"
-        assert view.teams == "A"
 
 
 class TestTourStepProgression:
-    """The tour is six steps; each Next click must advance the index.
+    """The tour is five steps; each Next click must advance the index.
 
-    Before the fix, the Next callback bumped a state-dict index, then
-    re-entered `_start_tour`, which built a fresh state at 0 — so the
-    tour rendered "Step 1 / 6" forever. This class drives the View
-    callbacks directly and asserts the index advances.
+    Before the earlier fix, the Next callback bumped a state-dict index
+    but then re-entered a start function that built fresh state at 0,
+    so the tour rendered "Step 1 / N" forever. This class drives the
+    View callbacks directly and asserts the index advances.
     """
 
     @pytest.mark.asyncio
@@ -208,7 +213,7 @@ class TestTourStepProgression:
     async def test_full_walkthrough_reaches_final_step(self):
         """Chain Next → Next → … through every non-final step and
         verify the followup.send contents walk 0 → N-1 in order."""
-        steps = sw._STORM_SIGNUPS_TOUR_STEPS
+        steps = sw._STORM_HUB_TOUR_STEPS
         observed: list[str] = []
 
         async def _record_followup_send(**kwargs):
@@ -301,7 +306,7 @@ class TestOfferViewDoubleClick:
     async def test_double_accept_only_starts_one_tour(self, seeded_db):
         view = sw._OfferView(
             guild_id=TEST_GUILD_ID, user_id=42,
-            walkthrough_key=sw.STORM_SIGNUPS_TOUR_KEY,
+            walkthrough_key=sw.STORM_HUB_TOUR_KEY,
         )
         # discord.ui.button decorates the method into a Button on the View;
         # `button.callback` is a discord.py `_ItemCallback` that takes just

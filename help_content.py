@@ -111,13 +111,18 @@ HELP_CATEGORIES: dict[str, dict] = {
             ("/desertstorm overview",
              "Show current rosters and the active mail template."),
             ("/desertstorm draft",
-             "Step through team → time → template, preview, and post."),
+             "**Free-tier text mail template only.** Step through team → "
+             "time → template, preview, and post the mail blurb. **Does "
+             "not** open the roster builder — for assigning members to "
+             "zones and Approve & Post, use `/desertstorm signups` "
+             "instead (💎 Premium)."),
             ("/desertstorm strategy <create | edit | list | delete | "
              "apply | roster_history>",
              "Manage strategy presets — saved zone layouts with optional "
-             "per-zone power minimums. `apply` opens the roster builder; "
-             "`roster_history` browses past structured rosters with "
-             "attendance overlay (💎 Premium)."),
+             "per-zone power minimums. `apply` opens the roster builder "
+             "against your full roster (free tier). `roster_history` "
+             "browses past structured rosters with attendance overlay "
+             "(💎 Premium)."),
             ("/desertstorm member_rule <set_power_band | set_member_team "
              "| set_member_zone | list>",
              "Manage member rules: power-band eligibility "
@@ -129,9 +134,11 @@ HELP_CATEGORIES: dict[str, dict] = {
              "members click buttons to register Team A / Team B / Either "
              "/ Cannot."),
             ("/desertstorm signups [event_date]",
-             "💎 Leadership view of who's signed up; record on-behalf "
-             "votes for non-Discord roster members; open the roster "
-             "builder per team."),
+             "💎 **Main hub for structured-flow events.** Leadership view "
+             "of who's signed up; record on-behalf votes for non-Discord "
+             "roster members; click **Set up Team A** / **Set up Team B** "
+             "to open the roster builder filtered to that team's signed-"
+             "up members; Approve & Post posts the finished mail."),
             ("/desertstorm attendance [event_date]",
              "💎 Record who attended each assigned slot after the event; "
              "writes to the attendance Sheet tab."),
@@ -161,13 +168,18 @@ HELP_CATEGORIES: dict[str, dict] = {
             ("/canyonstorm overview",
              "Show current rosters and the active mail template."),
             ("/canyonstorm draft",
-             "Step through team → time → template, preview, and post."),
+             "**Free-tier text mail template only.** Step through team → "
+             "time → template, preview, and post the mail blurb. **Does "
+             "not** open the roster builder — for assigning members to "
+             "zones and Approve & Post, use `/canyonstorm signups` "
+             "instead (💎 Premium)."),
             ("/canyonstorm strategy <create | edit | list | delete | "
              "apply | roster_history>",
              "Manage strategy presets — saved zone layouts with optional "
-             "per-zone power minimums. `apply` opens the roster builder; "
-             "`roster_history` browses past structured rosters with "
-             "attendance overlay (💎 Premium)."),
+             "per-zone power minimums. `apply` opens the roster builder "
+             "against your full roster (free tier). `roster_history` "
+             "browses past structured rosters with attendance overlay "
+             "(💎 Premium)."),
             ("/canyonstorm member_rule <set_power_band | set_member_team "
              "| set_member_zone | list>",
              "Manage member rules: power-band eligibility "
@@ -179,9 +191,11 @@ HELP_CATEGORIES: dict[str, dict] = {
              "💎 Post a sign-up message in the configured channel; "
              "members click buttons to register their availability."),
             ("/canyonstorm signups [event_date]",
-             "💎 Leadership view of who's signed up; record on-behalf "
-             "votes for non-Discord roster members; open the roster "
-             "builder; Approve & Post finalises the roster."),
+             "💎 **Main hub for structured-flow events.** Leadership view "
+             "of who's signed up; record on-behalf votes for non-Discord "
+             "roster members; click **Set up Team A** / **Set up Team B** "
+             "to open the roster builder; Approve & Post finalises the "
+             "roster."),
             ("/canyonstorm attendance [event_date]",
              "💎 Record who attended each assigned slot after the event; "
              "writes to the attendance Sheet tab."),

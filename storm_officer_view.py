@@ -548,7 +548,15 @@ class _OnBehalfVoteView(discord.ui.View):
         super().__init__(timeout=300)
         self.parent_view = parent_view
         self.teams_setting = teams_setting
-        # Sort + de-dupe roster (case-insensitive on name).
+        # Sort + de-dupe roster (case-insensitive on name). Each entry
+        # carries both the display `name` and the row's `discord_id`
+        # (when present) so submit can choose the right
+        # `target_member_id`: Discord ID for actual Discord members
+        # (matches the self-vote key shape from SignupView), or the
+        # name verbatim for non-Discord roster rows. Pre-fix every
+        # on-behalf vote stored the name regardless, which left
+        # Discord-member targets in the "Not voted yet" bucket
+        # alongside their actual vote.
         seen: set[str] = set()
         cleaned: list[dict] = []
         for m in members:
@@ -564,9 +572,28 @@ class _OnBehalfVoteView(discord.ui.View):
             if key in seen:
                 continue
             seen.add(key)
-            cleaned.append({"name": name})
+            discord_id = (m.get("discord_id") or "").strip()
+            not_on_discord = bool(m.get("not_on_discord"))
+            # Discord-ID lookup keys the bucket-builder uses for live
+            # members. Empty when the row is non-Discord (or the
+            # alliance hasn't synced Discord IDs into the roster yet);
+            # in that case submit falls back to the name.
+            target_id = (
+                discord_id if (discord_id and not not_on_discord)
+                else name
+            )
+            cleaned.append({
+                "name": name,
+                "target_id": target_id,
+            })
         cleaned.sort(key=lambda r: r["name"].lower())
         self.members = cleaned
+        # Cache a name→target_id map so the submit handler can resolve
+        # without re-walking the list. Keys are lowercased to match the
+        # case-insensitive picker dedup.
+        self._target_by_name = {
+            r["name"].lower(): r["target_id"] for r in cleaned
+        }
         self.page = 0
         self.selected_member: str | None = None
         self.selected_vote: str | None = None
@@ -738,13 +765,25 @@ class _OnBehalfVoteView(discord.ui.View):
         except discord.HTTPException:
             pass
 
+        # Resolve picked display name → bucket-builder target_id. For
+        # Discord-member targets this is the Discord ID (matches the
+        # self-vote shape from SignupView); for non-Discord roster
+        # rows this is the name verbatim. Without this resolution,
+        # on-behalf votes for Discord members landed in a phantom
+        # name-keyed bucket and the original Discord-ID-keyed
+        # "Not voted yet" entry never moved.
+        target_member_id = (
+            self._target_by_name.get(self.selected_member.lower())
+            or self.selected_member
+        )
+
         import config
         ok = config.record_storm_vote(
             self.parent_view.guild_id,
             self.parent_view.event_type,
             self.parent_view.event_date,
             voter_user_id=inter.user.id,
-            target_member_id=self.selected_member,
+            target_member_id=target_member_id,
             vote=self.selected_vote,
             is_on_behalf=True,
         )

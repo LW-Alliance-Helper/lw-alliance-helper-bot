@@ -6321,7 +6321,7 @@ async def _run_structured_flow_setup_step(
         "\n"
         "There are two types of Member rules.\n"
         "• Power-band:\n"
-        "     Example: `members ≥ 250M are eligible for Power Tower`\n"
+        "     Example: `members ≥ 80M are eligible for Power Tower`\n"
         "     Primary rule type that reads against the power column "
         "you configured earlier.\n"
         "• Per-member:\n"

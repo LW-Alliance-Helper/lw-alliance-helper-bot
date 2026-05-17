@@ -950,14 +950,14 @@ class _ZoneEditModal(discord.ui.Modal):
         if self._teams == "both":
             self.power_a_input = discord.ui.TextInput(
                 label="Min Power Team A",
-                placeholder="e.g. 300M",
+                placeholder="e.g. 80M",
                 default=format_power(existing.min_power_a) if existing.min_power_a else "",
                 required=False, max_length=12,
             )
             self.add_item(self.power_a_input)
             self.power_b_input = discord.ui.TextInput(
                 label="Min Power Team B",
-                placeholder="e.g. 180M",
+                placeholder="e.g. 60M",
                 default=format_power(existing.min_power_b) if existing.min_power_b else "",
                 required=False, max_length=12,
             )
@@ -965,7 +965,7 @@ class _ZoneEditModal(discord.ui.Modal):
         elif self._teams == "A":
             self.power_a_input = discord.ui.TextInput(
                 label="Min Power Team A",
-                placeholder="e.g. 300M",
+                placeholder="e.g. 80M",
                 default=format_power(existing.min_power_a) if existing.min_power_a else "",
                 required=False, max_length=12,
             )
@@ -973,7 +973,7 @@ class _ZoneEditModal(discord.ui.Modal):
         else:  # teams == "B"
             self.power_b_input = discord.ui.TextInput(
                 label="Min Power Team B",
-                placeholder="e.g. 180M",
+                placeholder="e.g. 60M",
                 default=format_power(existing.min_power_b) if existing.min_power_b else "",
                 required=False, max_length=12,
             )
@@ -983,7 +983,7 @@ class _ZoneEditModal(discord.ui.Modal):
 
         self.priority_input = discord.ui.TextInput(
             label="Priority (1 = highest; ties OK)",
-            placeholder="e.g. 1 — same number across zones is fine",
+            placeholder="e.g. 1; same number across zones is fine",
             default=str(existing.priority or ""),
             required=False, max_length=3,
         )
@@ -1028,7 +1028,7 @@ class _ZoneEditModal(discord.ui.Modal):
         if bad_a or bad_b:
             await interaction.response.send_message(
                 "⚠️ One of the power values didn't parse. "
-                "Use formats like `300M`, `1.2B`, or `300000000`. "
+                "Use formats like `80M` or `80,000,000`. "
                 "Leave blank for no minimum.",
                 ephemeral=True,
             )
@@ -1194,7 +1194,7 @@ class _ZonePhaseCapacityAndFloorsModal(discord.ui.Modal):
             if self._teams in ("both", "A"):
                 self.power_a_input = discord.ui.TextInput(
                     label="Min Power Team A",
-                    placeholder="e.g. 300M",
+                    placeholder="e.g. 80M",
                     default=format_power(pending["min_power_a"])
                             if pending["min_power_a"] else "",
                     required=False, max_length=12,
@@ -1203,7 +1203,7 @@ class _ZonePhaseCapacityAndFloorsModal(discord.ui.Modal):
             if self._teams in ("both", "B"):
                 self.power_b_input = discord.ui.TextInput(
                     label="Min Power Team B",
-                    placeholder="e.g. 180M",
+                    placeholder="e.g. 60M",
                     default=format_power(pending["min_power_b"])
                             if pending["min_power_b"] else "",
                     required=False, max_length=12,
@@ -1214,7 +1214,7 @@ class _ZonePhaseCapacityAndFloorsModal(discord.ui.Modal):
             self.power_b_input = None
             self.power_input = discord.ui.TextInput(
                 label="Min Power",
-                placeholder="e.g. 250M",
+                placeholder="e.g. 70M",
                 default=format_power(pending["min_power_a"])
                         if pending["min_power_a"] else "",
                 required=False, max_length=12,
@@ -1248,8 +1248,7 @@ class _ZonePhaseCapacityAndFloorsModal(discord.ui.Modal):
                 if bad:
                     await interaction.response.send_message(
                         f"⚠️ Min Power Team A didn't parse — got "
-                        f"`{self.power_a_input.value}`. Use `300M`, `1.2B`, or "
-                        f"`300000000`.",
+                        f"`{self.power_a_input.value}`. Use `80M` or `80,000,000`.",
                         ephemeral=True,
                     )
                     return
@@ -1259,8 +1258,7 @@ class _ZonePhaseCapacityAndFloorsModal(discord.ui.Modal):
                 if bad:
                     await interaction.response.send_message(
                         f"⚠️ Min Power Team B didn't parse — got "
-                        f"`{self.power_b_input.value}`. Use `300M`, `1.2B`, or "
-                        f"`300000000`.",
+                        f"`{self.power_b_input.value}`. Use `60M` or `60,000,000`.",
                         ephemeral=True,
                     )
                     return
@@ -1270,8 +1268,7 @@ class _ZonePhaseCapacityAndFloorsModal(discord.ui.Modal):
             if bad:
                 await interaction.response.send_message(
                     f"⚠️ Min Power didn't parse — got "
-                    f"`{self.power_input.value}`. Use `250M`, `1.2B`, or "
-                    f"`250000000`.",
+                    f"`{self.power_input.value}`. Use `70M` or `70,000,000`.",
                     ephemeral=True,
                 )
                 return

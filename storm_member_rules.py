@@ -19,9 +19,9 @@ Where:
   per_member rows:  Rule Type=per_member | Subject=<member name> |
                     Sub-Type=<team|zone> | Value=<…> | Notes=<…>
 
-Stored Subject for power_band is the raw integer (e.g. "250000000") so
+Stored Subject for power_band is the raw integer (e.g. "80000000") so
 sorting works at the Sheet level. The slash command accepts shorthand
-("250M") via the same parser as #126.
+("80M") via the same parser as #126.
 """
 
 from __future__ import annotations
@@ -728,7 +728,7 @@ class _MemberRuleGroup(app_commands.Group):
         if n is None or n < 0:
             await interaction.response.send_message(
                 f"⚠️ Couldn't parse `{threshold}` as a power value. "
-                "Try formats like `250M`, `1.2B`, or `300,000,000`.",
+                "Try formats like `80M` or `80,000,000`.",
                 ephemeral=True,
             )
             return
@@ -924,7 +924,7 @@ def build_ds_member_rule_group() -> _MemberRuleGroup:
     @grp.command(name="set_power_band",
                  description="Add a power-band eligibility rule for a zone")
     @app_commands.describe(
-        threshold="Minimum power (e.g. 250M, 1.2B, 300,000,000)",
+        threshold="Minimum power for the zone (e.g. 80M, 80,000,000)",
         zone="Zone the band applies to (e.g. Power Tower)",
         notes="Optional free-text notes",
     )
@@ -935,7 +935,7 @@ def build_ds_member_rule_group() -> _MemberRuleGroup:
     @grp.command(name="set_member_team",
                  description="Lock a specific member to Team A or B")
     @app_commands.describe(
-        member_user="Pick from the server (preferred — keys by Discord ID, survives renames)",
+        member_user="Pick from the server (preferred; keys by Discord ID, survives renames)",
         member_name="OR a roster name if the member isn't on Discord",
         team="Team A or Team B",
         notes="Optional free-text notes",
@@ -996,7 +996,7 @@ def build_cs_member_rule_group() -> _MemberRuleGroup:
     @grp.command(name="set_power_band",
                  description="Add a power-band eligibility rule for a zone")
     @app_commands.describe(
-        threshold="Minimum power (e.g. 250M)",
+        threshold="Minimum power for the zone (e.g. 70M)",
         zone="Zone the band applies to",
         notes="Optional free-text notes",
     )
@@ -1008,7 +1008,7 @@ def build_cs_member_rule_group() -> _MemberRuleGroup:
                  description="Lock a specific member to Team A or B (when CS runs both teams)")
     @app_commands.describe(
         team="Team A or Team B",
-        member_user="Pick from the server (preferred — keys by Discord ID, survives renames)",
+        member_user="Pick from the server (preferred; keys by Discord ID, survives renames)",
         member_name="OR a roster name if the member isn't on Discord",
         notes="Optional free-text notes",
     )
@@ -1070,10 +1070,10 @@ def build_cs_member_rule_group() -> _MemberRuleGroup:
 # zone + optional notes; this inline flow omits notes for brevity —
 # alliances can edit later via the slash command if they want to add notes.
 #
-# Shape (#168 — Rule E): zone is a Select sourced from
+# Shape (#168, Rule E): zone is a Select sourced from
 # DS_ZONE_STRUCTURE / CS_ZONE_STRUCTURE so a typo can't slip through; the
 # power threshold stays a free-text TextInput (values are open-ended
-# magnitudes like `250M` / `1.2B` / `300,000,000`). The view captures the
+# magnitudes like `80M` / `80,000,000`). The view captures the
 # picked zone, then a [Set minimum power] button opens a single-field
 # modal for the power value. Submit on the modal writes the rule.
 
@@ -1090,7 +1090,7 @@ class _InlinePowerBandPowerModal(discord.ui.Modal):
         self.zone = zone
         self.threshold = discord.ui.TextInput(
             label=f"Minimum power for {zone}"[:45],
-            placeholder="e.g. 250M, 1.2B, 300,000,000",
+            placeholder="e.g. 80M or 80,000,000",
             required=True,
             max_length=20,
         )
@@ -1103,8 +1103,8 @@ class _InlinePowerBandPowerModal(discord.ui.Modal):
         if n is None or n < 0:
             await interaction.response.send_message(
                 f"⚠️ Couldn't parse `{self.threshold.value}` as a power "
-                f"value. Try `250M`, `1.2B`, or `300,000,000` next time "
-                f"via `/{parent} member_rule set_power_band`.",
+                f"value. Try `80M` or `80,000,000` next time via "
+                f"`/{parent} member_rule set_power_band`.",
                 ephemeral=True,
             )
             return

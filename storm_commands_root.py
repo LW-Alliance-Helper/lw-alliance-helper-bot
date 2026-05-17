@@ -50,7 +50,7 @@ def _build_desertstorm_group(bot: commands.Bot) -> app_commands.Group:
         await handle_storm_overview(bot, interaction, "DS")
 
     @grp.command(name="draft",
-                 description="Free-tier text mail template — for Team building + Approve & Post use /desertstorm signups instead")
+                 description="Free text mail template. For team setup, use /desertstorm signups instead")
     async def draft(interaction: discord.Interaction):
         from storm import handle_storm_draft
         await handle_storm_draft(bot, interaction, "DS")
@@ -84,7 +84,7 @@ def _build_desertstorm_group(bot: commands.Bot) -> app_commands.Group:
         await handle_post_signup(bot, interaction, "DS", event_date)
 
     @grp.command(name="signups",
-                 description="💎 Leadership view of who's signed up for an upcoming Desert Storm event + entry point to building Team A/B rosters (Premium)")
+                 description="💎 View signups + Set up Team A/B rosters for a Desert Storm event (Premium)")
     @app_commands.describe(
         event_date="Optional — defaults to the next configured event day. Accepts e.g. May 18, 5/18, Sunday.",
     )
@@ -124,7 +124,7 @@ def _build_canyonstorm_group(bot: commands.Bot) -> app_commands.Group:
         await handle_storm_overview(bot, interaction, "CS")
 
     @grp.command(name="draft",
-                 description="Free-tier text mail template — for Team building + Approve & Post use /canyonstorm signups instead")
+                 description="Free text mail template. For team setup, use /canyonstorm signups instead")
     async def draft(interaction: discord.Interaction):
         from storm import handle_storm_draft
         await handle_storm_draft(bot, interaction, "CS")
@@ -158,7 +158,7 @@ def _build_canyonstorm_group(bot: commands.Bot) -> app_commands.Group:
         await handle_post_signup(bot, interaction, "CS", event_date)
 
     @grp.command(name="signups",
-                 description="💎 Leadership view of who's signed up for an upcoming Canyon Storm event + entry point to building Team A/B rosters (Premium)")
+                 description="💎 View signups + Set up Team A/B rosters for a Canyon Storm event (Premium)")
     @app_commands.describe(
         event_date="Optional — defaults to the next configured event day. Accepts e.g. May 18, 5/18, Sunday.",
     )

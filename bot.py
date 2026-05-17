@@ -263,6 +263,21 @@ async def on_ready():
         print(f"[STORM SIGNUP] Failed to re-register sign-up views: {e}")
         sentry_sdk.capture_exception(e)
 
+    # Refresh zone emoji IDs from the bot's own Application Emojis
+    # (#177). Each environment (dev, prod) ships its own Discord
+    # Application with its own emoji set; the bot reads them at boot
+    # so source carries no per-env IDs and storm renders pick up new
+    # icons automatically once `scripts/upload_storm_emojis.py` runs.
+    # Failure (or no-emojis-yet) falls through to plain-text zone
+    # names — never blocks startup.
+    try:
+        from storm_icons import refresh_zone_emoji_ids
+        count = await refresh_zone_emoji_ids(bot)
+        print(f"[STORM ICONS] Loaded {count} application emoji ID(s)")
+    except Exception as e:
+        print(f"[STORM ICONS] Refresh failed: {e}")
+        sentry_sdk.capture_exception(e)
+
     # Only start background tasks once — they persist across reconnects
     if not hasattr(bot, "_tasks_started"):
         bot._tasks_started = True

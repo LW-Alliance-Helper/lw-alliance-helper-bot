@@ -1,21 +1,22 @@
 """
-One-shot upload of storm zone icons to Discord Application Emojis (#158).
+One-shot upload of storm zone icons to Discord Application Emojis (#158 + #177).
 
 Discord caps application emojis at 256 KB. Several PNGs in
 `assets/storm_icons/` ship above that, so this script resizes each to
 a target side-length before upload until it's under the cap.
 
-Run once per environment (prod + dev have separate application IDs and
+Run once per environment (prod + dev have separate Application IDs and
 need their own upload). The bot's existing application emojis are
 fetched first and re-used by name — re-running is idempotent.
 
 Usage:
     DISCORD_TOKEN=<bot token> py scripts/upload_storm_emojis.py
 
-Output: a Python dict literal you paste into `storm_icons.ZONE_EMOJI_IDS`
-(replacing the empty stub). The script never writes to source — printing
-is deliberate so the human runner can review what mapped to what before
-shipping it.
+Output: the script prints `{name: id}` mappings for verification, then
+exits. **No source edit needed** — `storm_icons.refresh_zone_emoji_ids`
+reads the IDs directly from Discord at `on_ready`, so each environment
+resolves its own emoji set from the token its bot ships with. Restart
+the bot (or wait for the next reconnect) to pick up the new icons.
 """
 
 from __future__ import annotations
@@ -126,11 +127,14 @@ def main() -> int:
         return 1
     mapping = asyncio.run(_upload_all(token))
     print()
-    print("# Paste into storm_icons.ZONE_EMOJI_IDS:")
-    print("ZONE_EMOJI_IDS: dict[str, int] = {")
+    print(f"[done] {len(mapping)} application emoji(s) registered for this bot.")
+    print("The bot reads these IDs from Discord at on_ready via")
+    print("storm_icons.refresh_zone_emoji_ids — no source edit required.")
+    print("Restart the bot (or wait for the next reconnect) to pick them up.")
+    print()
+    print("Mappings (for verification):")
     for name in sorted(mapping):
-        print(f'    "{name}": {mapping[name]},')
-    print("}")
+        print(f"  {name:<22} → {mapping[name]}")
     return 0
 
 

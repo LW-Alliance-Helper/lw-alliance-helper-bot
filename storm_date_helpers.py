@@ -206,6 +206,13 @@ def _next_weekday(
 # ── Inference (per-command default when officer omits event_date) ──────────
 
 
+# Event day-of-week is game-defined per Rule H (#164):
+# DS runs Friday (weekday 4); CS runs Thursday (weekday 3).
+# `next_event_date` returns the next such weekday regardless of
+# guild config — alliances can't shift the in-game schedule.
+_FIXED_EVENT_DOW = {"DS": 4, "CS": 3}
+
+
 def next_event_date(
     guild_id: int, event_type: str, *,
     today: Optional[_dt.date] = None,
@@ -214,28 +221,13 @@ def next_event_date(
     `event_date` on a pre-event command (`post_signup`, `signups` under
     the storm parent groups).
 
-    Inference order:
-      1. Structured-flow `event_day_of_week` if configured — the
-         alliance has already told us when they run this event type.
-      2. Convention fallback: next Sunday (matches the pre-existing
-         `storm_officer_view._next_event_date` behaviour).
+    Returns the next Friday (DS) / Thursday (CS) on or after `today`.
+    `guild_id` is accepted for signature stability but ignored — the
+    event day is game-defined, not per-alliance.
     """
+    del guild_id  # signature-only; event day is fixed per Rule H.
     today = today or _dt.date.today()
-    dow = -1
-    try:
-        import config
-        cfg = config.get_structured_storm_config(int(guild_id), event_type)
-        raw = cfg.get("event_day_of_week", -1)
-        dow = int(raw) if raw is not None else -1
-    except Exception as e:
-        logger.debug(
-            "[STORM DATE] next_event_date config lookup failed for "
-            "guild=%s event=%s: %s",
-            guild_id, event_type, e,
-        )
-        dow = -1
-    if dow < 0 or dow > 6:
-        dow = 6  # Sunday fallback — the historical default
+    dow = _FIXED_EVENT_DOW.get(event_type.upper(), 6)
     return _next_weekday(today, dow, same_day_rolls=True).isoformat()
 
 

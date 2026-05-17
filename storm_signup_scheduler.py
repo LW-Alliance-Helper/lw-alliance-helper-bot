@@ -1,12 +1,14 @@
 """
-Auto-scheduler for the storm sign-up post (#131).
+Auto-scheduler for the storm sign-up post (#131 + Rule H / #164).
 
 Every minute, checks each guild with structured_flow_enabled=1 AND a
-configured (event_day_of_week, signup_lead_days, signup_time) schedule.
-When today's date + signup_lead_days lands on the next event day AND
-the current minute matches signup_time (in the alliance's local
-timezone), it fires the sign-up post via the shared
-`storm_signup_post.post_registration` helper.
+configured (poll_day_of_week, signup_time) schedule. When today's
+weekday in the alliance's tz matches `poll_day_of_week` AND the
+current minute matches `signup_time`, it fires the sign-up post via
+the shared `storm_signup_post.post_registration` helper.
+
+Event day is game-defined (DS = Friday, CS = Thursday); the event
+date in the post comes from `storm_date_helpers.next_event_date`.
 
 Idempotence is preserved by `storm_registration_posts` — the post
 helper itself short-circuits if a registration already exists for
@@ -17,7 +19,6 @@ from __future__ import annotations
 
 import datetime as _dt
 import logging
-import sqlite3
 from typing import Optional
 
 import discord
@@ -43,13 +44,6 @@ def _guild_today_and_now(tz_name: str | None) -> tuple[_dt.date, _dt.time]:
     return now_local.date(), now_local.time().replace(microsecond=0)
 
 
-def _next_event_date(today: _dt.date, event_dow: int) -> _dt.date:
-    """Date of the next occurrence of `event_dow` (0=Monday..6=Sunday)
-    on or after `today`."""
-    days_ahead = (event_dow - today.weekday()) % 7
-    return today + _dt.timedelta(days=days_ahead)
-
-
 def _parse_hhmm(value: str) -> Optional[_dt.time]:
     """Parse a stored signup_time string into a `datetime.time`.
 
@@ -65,62 +59,28 @@ def _parse_hhmm(value: str) -> Optional[_dt.time]:
     return _dt.time(int(h), int(m))
 
 
-# Track skipped-this-week warnings per (guild, event_type, target_event)
-# so the minute-loop doesn't spam the log every tick for the same skip.
-# Cleared naturally — entries are tagged with the target_event date, so
-# next week's event gets its own slot.
-_skip_warned: set[tuple[int, str, str]] = set()
-
-
 def _should_fire_now(
     *,
     today: _dt.date,
     now: _dt.time,
-    event_dow: int,
-    lead_days: int,
+    poll_dow: int,
     signup_time: _dt.time,
-) -> tuple[bool, Optional[_dt.date], bool]:
+) -> bool:
     """Decide whether the scheduler should fire for this guild right
-    now. Returns `(should_fire, event_date, week_skipped)`.
+    now.
 
-    `event_date` is the upcoming event the post would be for — populated
-    whether we fire or not so the caller can log.
-    `week_skipped` is True iff lead_days is large enough that this
-    week's event already passed its fire window, and the bot is now
-    targeting next week's event. Lets the caller surface a one-shot
-    warning so leadership knows they missed an auto-fire.
-
-    Fires when:
-      * today + lead_days == event_date
-      * hour:minute of `now` matches `signup_time`
-
-    The minute match is exact — the loop runs once per minute, so we
-    rely on the loop cadence rather than a wider window (which would
-    risk double-fires).
+    Fires when today's weekday matches `poll_dow` AND hour:minute of
+    `now` matches `signup_time`. The minute match is exact — the loop
+    runs once per minute, so we rely on the loop cadence rather than
+    a wider window (which would risk double-fires).
     """
-    if event_dow < 0 or event_dow > 6:
-        return False, None, False
-    if lead_days < 0:
-        return False, None, False
-
-    # Pick the upcoming event so leadership's choice of "post 5 days
-    # ahead of Sunday" works whether today is Tuesday-of-this-week or
-    # Tuesday-of-next-week.
-    target_event = _next_event_date(today, event_dow)
-    week_skipped = False
-    # If lead_days is large enough that today+lead_days > target event
-    # (i.e. we've already passed the fire window for this week's event),
-    # bump to the NEXT week's event.
-    while target_event - today < _dt.timedelta(days=lead_days):
-        target_event = target_event + _dt.timedelta(days=7)
-        week_skipped = True
-
-    fire_date = target_event - _dt.timedelta(days=lead_days)
-    if fire_date != today:
-        return False, target_event, week_skipped
+    if poll_dow < 0 or poll_dow > 6:
+        return False
+    if today.weekday() != poll_dow:
+        return False
     if now.hour != signup_time.hour or now.minute != signup_time.minute:
-        return False, target_event, week_skipped
-    return True, target_event, week_skipped
+        return False
+    return True
 
 
 def _scheduled_storm_rows() -> list[dict]:
@@ -136,6 +96,7 @@ async def _run_one_tick(bot: discord.Client) -> int:
     actually fired this tick. Exposed for tests."""
     import premium
     from config import get_config, get_structured_storm_config
+    from storm_date_helpers import next_event_date
     from storm_signup_post import post_registration
 
     fired = 0
@@ -155,36 +116,11 @@ async def _run_one_tick(bot: discord.Client) -> int:
         if signup_time is None:
             continue
 
-        should, event_date, week_skipped = _should_fire_now(
+        if not _should_fire_now(
             today=today, now=now,
-            event_dow=int(row["event_day_of_week"]),
-            lead_days=int(row.get("signup_lead_days") or 0),
+            poll_dow=int(row["poll_day_of_week"]),
             signup_time=signup_time,
-        )
-        if event_date is not None and week_skipped:
-            # The configured lead is longer than days-remaining to this
-            # week's event — the fire window already passed. Warn once
-            # per (guild, event_type, skipped_event_date) so leadership
-            # has a signal in logs that an auto-post didn't go out.
-            # The skipped event is today + (event_date - today) - 7 days,
-            # i.e. the THIS-week occurrence we just bypassed.
-            skipped_event = event_date - _dt.timedelta(days=7)
-            skip_key = (guild_id, event_type, skipped_event.isoformat())
-            if skip_key not in _skip_warned:
-                _skip_warned.add(skip_key)
-                logger.warning(
-                    "[STORM SCHEDULER] guild=%s event=%s/%s — auto-post "
-                    "window for this week's event already passed "
-                    "(lead=%s days, days-remaining=%s); next auto-post "
-                    "targets %s. Run the parent group's post_signup "
-                    "subcommand manually if you need to post for the "
-                    "skipped event.",
-                    guild_id, event_type, skipped_event.isoformat(),
-                    row.get("signup_lead_days"),
-                    (skipped_event - today).days,
-                    event_date.isoformat(),
-                )
-        if not should or event_date is None:
+        ):
             continue
 
         # Resolve the guild from the bot cache. Bot must be ready and
@@ -206,15 +142,18 @@ async def _run_one_tick(bot: discord.Client) -> int:
         # scheduler would keep auto-posting for downgraded guilds.
         if not await premium.is_premium(guild_id, bot=bot):
             logger.info(
-                "[STORM SCHEDULER] guild=%s event=%s/%s — skipping auto-post "
+                "[STORM SCHEDULER] guild=%s event=%s — skipping auto-post "
                 "because guild is no longer Premium (structured_flow_enabled "
                 "still on disk).",
-                guild_id, event_type, event_date.isoformat(),
+                guild_id, event_type,
             )
             continue
 
+        # The post's event_date is the next occurrence of the
+        # game-defined event day (DS=Friday, CS=Thursday).
+        event_date = next_event_date(guild_id, event_type, today=today)
         result = await post_registration(
-            bot, guild, event_type, event_date.isoformat(),
+            bot, guild, event_type, event_date,
             structured=structured,
         )
         status = result.get("status")
@@ -223,7 +162,7 @@ async def _run_one_tick(bot: discord.Client) -> int:
             logger.info(
                 "[STORM SCHEDULER] auto-posted sign-up for guild=%s event=%s/%s "
                 "channel=%s message=%s",
-                guild_id, event_type, event_date.isoformat(),
+                guild_id, event_type, event_date,
                 result.get("channel_id"), result.get("message_id"),
             )
         elif status == "already_posted":
@@ -234,7 +173,7 @@ async def _run_one_tick(bot: discord.Client) -> int:
             logger.warning(
                 "[STORM SCHEDULER] auto-post for guild=%s event=%s/%s returned %s "
                 "(details=%s)",
-                guild_id, event_type, event_date.isoformat(), status, result,
+                guild_id, event_type, event_date, status, result,
             )
     return fired
 

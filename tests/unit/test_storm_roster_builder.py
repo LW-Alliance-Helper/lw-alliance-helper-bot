@@ -7,7 +7,7 @@ view + modal are integration territory and not unit-tested here.
 """
 
 import pytest
-from unittest.mock import patch
+from unittest.mock import MagicMock, patch
 
 import storm_roster_builder as srb
 import storm_strategy as ss
@@ -117,7 +117,8 @@ def fake_env(seeded_db):
         config.save_structured_storm_config(
             TEST_GUILD_ID, et,
             structured_flow_enabled=True,
-            power_column_name="1st Squad Power",
+            # Fake roster sheet has "1st Squad Power" at column F (index 5).
+            power_metric_column="F",
         )
 
     # Patch both get_spreadsheet AND get_member_roster_sheet to return our fake.
@@ -167,32 +168,34 @@ class TestReadRosterPowers:
         assert "Dave" in members
         assert members["Dave"]["discord_id"] == ""
 
-    def test_missing_power_column_surfaces_error(self, fake_env):
+    def test_power_column_letter_past_header_surfaces_error(self, fake_env):
         fake, gid = fake_env
         import config
-        # Re-save structured config with a power column that doesn't exist.
+        # Fake roster sheet has 7 columns (A-G). Picking column Z (past
+        # the header) surfaces a soft error + every power reads None.
         config.save_structured_storm_config(
             gid, "DS",
             structured_flow_enabled=True,
-            power_column_name="Nonexistent Column",
+            power_metric_column="Z",
         )
         members, errs = srb._read_roster_powers(gid, "DS")
-        # Members still read, but every power is None and an error is
-        # surfaced for leadership to see.
-        assert any("Nonexistent Column" in e for e in errs)
+        assert any("power column Z doesn't exist" in e.lower() or
+                   "power column z doesn't exist" in e.lower()
+                   for e in errs)
         assert all(m["power"] is None for m in members.values())
 
-    def test_unconfigured_power_column_surfaces_error(self, fake_env):
+    def test_power_column_letter_at_non_power_column_reads_none(self, fake_env):
         fake, gid = fake_env
         import config
+        # Pointing at the Name column (B) — every cell parses as None
+        # (not a power value), no soft error.
         config.save_structured_storm_config(
             gid, "DS",
             structured_flow_enabled=True,
-            power_column_name="",  # not set
+            power_metric_column="B",
         )
-        members, errs = srb._read_roster_powers(gid, "DS")
-        assert any("no power metric column" in e.lower() for e in errs)
-        # All powers read as None.
+        members, _errs = srb._read_roster_powers(gid, "DS")
+        # Name cells like "alice" can't parse as power -> None.
         assert all(m["power"] is None for m in members.values())
 
 
@@ -346,10 +349,12 @@ class TestRulePreApplication:
         # No zone assignments from a team rule.
         assert all(not v for v in session.assignments.values())
 
-    def test_unmatched_per_member_rule_surfaces_warning(self):
-        """A rule whose subject doesn't match any roster member used to
-        silently no-op — leadership had no signal their rule wasn't
-        firing. Now it surfaces a soft warning into roster_errors."""
+    def test_unmatched_per_member_rule_silently_no_ops(self):
+        """Decision #7 (#173): a rule whose subject isn't in tonight's
+        roster is a silent no-op. The rule means 'if this member is
+        in tonight's event, do X' — they're not in tonight's event,
+        so there's nothing to apply and nothing to report. No
+        roster_errors warning surfaces."""
         rule_active = smr.Rule(
             rule_type="per_member", subject="Alice",
             sub_type="zone", value="Power Tower",
@@ -365,8 +370,8 @@ class TestRulePreApplication:
         srb._apply_rules_to_session(session)
         # Active rule still applies.
         assert "1001" in session.assignments["Power Tower"]
-        # Stale rule surfaces a warning naming the unmatched subject.
-        assert any("OldName" in e for e in session.roster_errors)
+        # Stale rule does NOT surface — silent no-op.
+        assert not any("OldName" in e for e in session.roster_errors)
 
 
 class TestPowerBandRuleConsumption:
@@ -498,8 +503,8 @@ class TestEmbedRendering:
         session = _make_session(team="A")
         session.show_below_floor = True
         embed = srb._render_builder_embed(session)
-        assert "below-floor" in embed.description.lower() or \
-               "below floor" in embed.description.lower()
+        assert "below minimum" in embed.description.lower() or \
+               "below-minimum" in embed.description.lower()
 
     def test_capacity_summary_present(self):
         session = _make_session(team="A")
@@ -656,7 +661,7 @@ class TestOverrideBelowFloorCapture:
     gate is primary-only)."""
 
     def _override_col(self) -> int:
-        return srb._ROSTERS_HEADER.index("Override Below Floor")
+        return srb._ROSTERS_HEADER.index("Override Below Minimum")
 
     def test_assigned_below_floor_member_flagged_yes(self, fake_env):
         fake, gid = fake_env
@@ -741,7 +746,10 @@ class TestOverrideBelowFloorCapture:
         assert "1003" in session.below_floor_overrides
 
     def test_header_includes_override_column(self):
-        assert "Override Below Floor" in srb._ROSTERS_HEADER
+        assert "Override Below Minimum" in srb._ROSTERS_HEADER
+        # Legacy "Override Below Floor" must NOT still be in the
+        # writer's header — it's only kept as a read-side alias.
+        assert "Override Below Floor" not in srb._ROSTERS_HEADER
 
 
 class TestAutoFill:
@@ -915,11 +923,11 @@ class TestAutoFill:
         assert "Alice" in session.assignments["Power Tower"]
         assert summary["per_member_rules_applied"] == 1
 
-    def test_unmatched_per_member_subject_recorded_as_conflict(self):
-        """The audit fix: when a per_member subject doesn't match any
-        roster member, count it as a conflict so the summary's
-        Per-member rules applied count + conflicts count up to the
-        total rule count the officer sees in the editor."""
+    def test_unmatched_per_member_subject_silently_no_ops(self):
+        """Decision #7 (#173): a per_member rule whose subject isn't
+        on tonight's roster is a silent no-op — nothing applied,
+        nothing in conflicts. Other conflict shapes (unknown zone,
+        full when pinning, pinned to multiple zones) still surface."""
         members = self._three_members()
         per_member = [
             smr.Rule(rule_type="per_member", subject="Alice",
@@ -931,7 +939,17 @@ class TestAutoFill:
                                 per_member_rules=per_member)
         summary = srb._auto_fill_session(session)
         assert summary["per_member_rules_applied"] == 1
-        assert any("GhostMember" in c for c in summary["conflicts"])
+        assert not any("GhostMember" in c for c in summary["conflicts"])
+        # Sanity: other conflict shapes still surface — exercise with
+        # a rule that names an unknown zone.
+        per_member_bad_zone = [
+            smr.Rule(rule_type="per_member", subject="Alice",
+                     sub_type="zone", value="No Such Zone"),
+        ]
+        session2 = _make_session(team="A", members=members,
+                                 per_member_rules=per_member_bad_zone)
+        summary2 = srb._auto_fill_session(session2)
+        assert any("unknown zone" in c for c in summary2["conflicts"])
 
     def test_power_unknown_per_member_pin_flagged_as_override(self):
         """A per_member pin of a power-unknown member is an officer
@@ -1172,256 +1190,6 @@ class TestNonDiscordAutoDetect:
         assert members["Dave"]["not_on_discord"] is True
 
 
-class TestFindJudicatorCandidates:
-    """#137 — `_find_judicator_candidates` returns assigned member keys
-    whose per_member.special_role rule is `judicator`. Used by the
-    CS Apply Faction Roles button to know who gets the role."""
-
-    def test_assigned_judicator_returned(self):
-        members = {
-            "1001": {"key": "1001", "name": "Alice", "discord_id": "1001",
-                     "power": 412_000_000, "not_on_discord": False},
-            "1002": {"key": "1002", "name": "Bob",   "discord_id": "1002",
-                     "power": 350_000_000, "not_on_discord": False},
-        }
-        rules = [
-            smr.Rule(rule_type="per_member", subject="Alice",
-                     sub_type="special_role", value="judicator"),
-        ]
-        sess = _make_session(team="A", members=members, per_member_rules=rules)
-        sess.assignments["Power Tower"].append("1001")
-        assert srb._find_judicator_candidates(sess) == ["1001"]
-
-    def test_unassigned_judicator_excluded(self):
-        members = {
-            "1001": {"key": "1001", "name": "Alice", "discord_id": "1001",
-                     "power": 412_000_000, "not_on_discord": False},
-        }
-        rules = [
-            smr.Rule(rule_type="per_member", subject="Alice",
-                     sub_type="special_role", value="judicator"),
-        ]
-        sess = _make_session(team="A", members=members, per_member_rules=rules)
-        # Alice is on the roster but NOT assigned anywhere.
-        assert srb._find_judicator_candidates(sess) == []
-
-    def test_paired_subs_included(self):
-        """Paired subs are designated participants the moment the
-        primary no-shows. Apply Faction Roles fires AFTER matchmaking
-        reveals the faction, so a paired sub who's a Judicator
-        candidate is a legitimate target — the officer wouldn't click
-        the button if the sub hadn't actually taken the slot."""
-        members = {
-            "1001": {"key": "1001", "name": "Alice", "discord_id": "1001",
-                     "power": 412_000_000, "not_on_discord": False},
-            "1002": {"key": "1002", "name": "Bob",   "discord_id": "1002",
-                     "power": 350_000_000, "not_on_discord": False},
-        }
-        rules = [
-            smr.Rule(rule_type="per_member", subject="Bob",
-                     sub_type="special_role", value="judicator"),
-        ]
-        sess = _make_session(
-            team="A", members=members, per_member_rules=rules, sub_mode="paired",
-        )
-        sess.assignments["Power Tower"].append("1001")
-        sess.paired_subs["1001"] = "1002"
-        # Bob is the paired sub → included as a candidate.
-        assert srb._find_judicator_candidates(sess) == ["1002"]
-
-    def test_flat_sub_pool_excluded(self):
-        """Flat sub pool ≠ paired sub. Members in session.subs are
-        the bench; they're not designated to take any specific slot,
-        so they're not Judicator candidates by virtue of being subs."""
-        members = {
-            "1001": {"key": "1001", "name": "Alice", "discord_id": "1001",
-                     "power": 412_000_000, "not_on_discord": False},
-            "1002": {"key": "1002", "name": "Bob",   "discord_id": "1002",
-                     "power": 350_000_000, "not_on_discord": False},
-        }
-        rules = [
-            smr.Rule(rule_type="per_member", subject="Bob",
-                     sub_type="special_role", value="judicator"),
-        ]
-        sess = _make_session(team="A", members=members, per_member_rules=rules)
-        sess.assignments["Power Tower"].append("1001")
-        sess.subs.append("1002")
-        # Bob is in the bench pool only, not a designated paired sub.
-        assert srb._find_judicator_candidates(sess) == []
-
-    def test_commander_rule_does_not_match(self):
-        members = {
-            "1001": {"key": "1001", "name": "Alice", "discord_id": "1001",
-                     "power": 412_000_000, "not_on_discord": False},
-        }
-        rules = [
-            smr.Rule(rule_type="per_member", subject="Alice",
-                     sub_type="special_role", value="commander"),
-        ]
-        sess = _make_session(team="A", members=members, per_member_rules=rules)
-        sess.assignments["Power Tower"].append("1001")
-        # commander != judicator → no candidate
-        assert srb._find_judicator_candidates(sess) == []
-
-    def test_discord_id_subject_resolves(self):
-        """Per [#136](https://github.com/LW-Alliance-Helper/lw-alliance-helper-bot/issues/136), per_member subjects may be Discord IDs.
-        The candidate finder accepts either form."""
-        members = {
-            "1001": {"key": "1001", "name": "Alice", "discord_id": "1001",
-                     "power": 412_000_000, "not_on_discord": False},
-        }
-        rules = [
-            smr.Rule(rule_type="per_member", subject="1001",  # discord_id form
-                     sub_type="special_role", value="judicator"),
-        ]
-        sess = _make_session(team="A", members=members, per_member_rules=rules)
-        sess.assignments["Power Tower"].append("1001")
-        assert srb._find_judicator_candidates(sess) == ["1001"]
-
-
-class TestFactionRolesPermsPreflight:
-    """Audit Major for #137: applying the Judicator role with the bot
-    missing Manage Roles, or sitting below the target role in the
-    hierarchy, produced N identical Forbidden rows. Now caught up-front
-    with a single explanatory ephemeral."""
-
-    def _make_view(self, *, manage_roles: bool, bot_top_pos: int,
-                   role_pos: int):
-        from unittest.mock import AsyncMock, MagicMock
-        members = {
-            "1001": {"key": "1001", "name": "Alice", "discord_id": "1001",
-                     "power": 412_000_000, "not_on_discord": False},
-        }
-        preset = ss.PresetBuffer(
-            name="P", event_type="CS", faction="Rulebringers",
-            zones=[ss.ZoneRow(zone="Z", max_players=4)],
-        )
-        sess = srb.RosterBuilderSession(
-            guild_id=1, user_id=42, event_type="CS", team="",
-            preset=preset, members=members,
-            per_member_rules=[], power_band_rules=[],
-            event_date="2026-05-18",
-        )
-        sess.assignments["Z"].append("1001")
-        view = srb._FactionRolesView(
-            session=sess, judicator_role_id=12345, candidate_keys=["1001"],
-        )
-
-        # Fake guild that returns a role with `role_pos`, and a `me`
-        # with the given top-role position + perms.
-        role = MagicMock()
-        role.id = 12345
-        role.position = role_pos
-
-        me = MagicMock()
-        me.guild_permissions.manage_roles = manage_roles
-        me.top_role.position = bot_top_pos
-
-        guild = MagicMock()
-        guild.get_role.return_value = role
-        guild.me = me
-
-        inter = MagicMock()
-        inter.guild = guild
-        inter.user = MagicMock()
-        inter.user.id = 42  # match session.user_id so the owner-lock passes
-        inter.message = MagicMock()
-        inter.message.edit = AsyncMock()
-        inter.response = MagicMock()
-        inter.response.defer = AsyncMock()
-        inter.response.send_message = AsyncMock()
-        inter.followup = MagicMock()
-        inter.followup.send = AsyncMock()
-        return view, inter
-
-    @pytest.mark.asyncio
-    async def test_missing_manage_roles_aborts_before_loop(self):
-        view, inter = self._make_view(
-            manage_roles=False, bot_top_pos=100, role_pos=50,
-        )
-        await view.children[0].callback(inter)  # Rulebringers button
-        sent = inter.followup.send.await_args.args[0]
-        assert "Manage Roles" in sent
-        # We surface ONE clear message, not N per-member errors.
-        assert inter.followup.send.await_count == 1
-
-    @pytest.mark.asyncio
-    async def test_role_above_bot_aborts_before_loop(self):
-        view, inter = self._make_view(
-            manage_roles=True, bot_top_pos=50, role_pos=100,
-        )
-        await view.children[0].callback(inter)
-        sent = inter.followup.send.await_args.args[0]
-        assert "above my own role" in sent
-        assert inter.followup.send.await_count == 1
-
-    @pytest.mark.asyncio
-    async def test_role_at_same_position_aborts(self):
-        # Discord requires STRICTLY above — equal positions still fail.
-        view, inter = self._make_view(
-            manage_roles=True, bot_top_pos=50, role_pos=50,
-        )
-        await view.children[0].callback(inter)
-        sent = inter.followup.send.await_args.args[0]
-        assert "above my own role" in sent
-
-    @pytest.mark.asyncio
-    async def test_apply_summary_says_nothing_to_apply_when_zero_applied(self):
-        """The summary header lied — it said '✅ Judicator role applied:'
-        even when every candidate was already-had / off-Discord. Now
-        gated on `applied` being non-empty."""
-        from unittest.mock import AsyncMock, MagicMock
-        members = {
-            "1001": {"key": "1001", "name": "Alice", "discord_id": "1001",
-                     "power": 412_000_000, "not_on_discord": False},
-        }
-        preset = ss.PresetBuffer(
-            name="P", event_type="CS", faction="Rulebringers",
-            zones=[ss.ZoneRow(zone="Z", max_players=4)],
-        )
-        sess = srb.RosterBuilderSession(
-            guild_id=1, user_id=42, event_type="CS", team="",
-            preset=preset, members=members,
-            per_member_rules=[], power_band_rules=[],
-            event_date="2026-05-18",
-        )
-        sess.assignments["Z"].append("1001")
-        view = srb._FactionRolesView(
-            session=sess, judicator_role_id=12345, candidate_keys=["1001"],
-        )
-
-        role = MagicMock(); role.id = 12345; role.position = 1
-        target_member = MagicMock()
-        target_member.roles = [role]  # already has it
-
-        me = MagicMock()
-        me.guild_permissions.manage_roles = True
-        me.top_role.position = 100
-
-        guild = MagicMock()
-        guild.get_role.return_value = role
-        guild.get_member.return_value = target_member
-        guild.me = me
-
-        inter = MagicMock()
-        inter.guild = guild
-        inter.message = MagicMock()
-        inter.message.edit = AsyncMock()
-        inter.response = MagicMock()
-        inter.response.defer = AsyncMock()
-        inter.followup = MagicMock()
-        inter.followup.send = AsyncMock()
-        inter.user = MagicMock(); inter.user.id = 42  # owner
-
-        await view.children[0].callback(inter)
-        sent = inter.followup.send.await_args.args[0]
-        # The misleading "✅ applied" header is gone when nothing applied.
-        assert "✅ Judicator role applied:" not in sent
-        assert "nothing to apply" in sent
-        # The "already had" line still surfaces for context.
-        assert "Already had the role" in sent
-
-
 class TestPairedSubMode:
     """#132 — paired sub mode keeps each primary partnered with a
     specific sub. Auto-fill pairs greedy-style after primary placement;
@@ -1522,32 +1290,32 @@ class TestPairedSubMode:
         assert "⚠️" in embed.description
         assert "Unpaired primaries" in embed.description
 
-    def test_render_embed_paired_mode_surfaces_overflow_subs(self):
-        """Paired mode's flat sub list (overflow pool) used to be
-        invisible from the embed — only primaries with their inline
-        subs rendered. The fix adds an Overflow subs line so the
-        officer knows extra subs exist."""
+    def test_render_embed_paired_mode_surfaces_available_subs(self):
+        """Paired mode's flat sub list used to be invisible from the
+        embed — only primaries with their inline subs rendered. The
+        Available subs line surfaces subs that haven't been paired yet
+        so the officer knows there are members to attach via 🔁 Pair
+        subs."""
         members = self._three_members()
         sess = _make_session(team="A", members=members, sub_mode="paired")
         sess.assignments["Power Tower"].append("1001")
         sess.paired_subs["1001"] = "1002"
-        # Carol ends up in the overflow pool (every primary already
-        # has a paired sub, no zone seat left).
+        # Carol sits in the available pool — not yet paired.
         sess.subs.append("1003")
         embed = srb._render_builder_embed(sess)
-        assert "Overflow subs" in embed.description
+        assert "Available subs" in embed.description
         assert "Carol" in embed.description
 
-    def test_render_embed_paired_mode_no_overflow_line_when_empty(self):
-        """Embed must not render the Overflow subs line when there
+    def test_render_embed_paired_mode_no_subs_line_when_empty(self):
+        """Embed must not render the Available subs line when there
         aren't any — keeps the embed compact in the typical case."""
         members = self._three_members()
         sess = _make_session(team="A", members=members, sub_mode="paired")
         sess.assignments["Power Tower"].append("1001")
         sess.paired_subs["1001"] = "1002"
-        # No overflow.
+        # No available subs.
         embed = srb._render_builder_embed(sess)
-        assert "Overflow subs" not in embed.description
+        assert "Available subs" not in embed.description
 
     def test_zone_of_primary_returns_zone_for_assigned(self):
         members = self._three_members()
@@ -1669,7 +1437,10 @@ class TestSessionStateLock:
         assert ok_2 is True
 
     def test_cs_uses_empty_team_field(self, seeded_db):
-        # CS has one roster per faction per event; team field is "".
+        # Legacy pre-#166 CS rosters used team="" for the single-roster
+        # shape. The claim/release helpers still accept that key shape
+        # so historical Sheet data round-trips cleanly. Post-#166, new
+        # CS sessions use "A"/"B" the same as DS does.
         import config
         ok_1, _ = config.claim_storm_session(
             TEST_GUILD_ID, "CS", "2026-05-18", "", user_id=42,
@@ -2115,59 +1886,43 @@ class TestRostersTabHeaderMigration:
         # without seeing blanks.
         assert prior_row[phase_idx] == "1"
 
+    def test_override_column_renamed_and_data_preserved(self, fake_env):
+        """Rule B follow-up: the rosters_tab column header was renamed
+        from `Override Below Floor` → `Override Below Minimum`. The
+        header migration must (a) emit the new name on rewrite, and
+        (b) carry existing "yes" flags from the old column over into
+        the new column so dev/staging events don't lose their audit
+        data."""
+        fake, gid = fake_env
+        old_rosters = fake.add_worksheet("DS Rosters")
+        old_rosters._rows = [
+            ["Event Date", "Team", "Zone", "Member", "Role",
+             "Power at Assignment", "Discord ID", "Override Below Floor",
+             "Paired With", "Posted At (UTC)"],  # 10-col, no Phase yet
+            ["2026-05-11", "A", "Power Tower", "Old", "primary",
+             "180000000", "9", "yes", "", ""],
+        ]
+        members = {
+            "1001": {"key": "1001", "name": "Alice", "discord_id": "1001",
+                     "power": 412_000_000, "not_on_discord": False},
+        }
+        session = _make_session(team="A", members=members)
+        session.guild_id = gid
+        session.event_date = "2026-05-18"
+        session.assignments["Power Tower"].append("1001")
+        errors = srb._write_rosters_tab(session)
+        assert errors == []
 
-class TestFactionRolesSchemaAndApply:
-    """Audit Critical for #137: `CREATE TABLE guild_storm_config` was
-    missing the `judicator_role_id` column — only the ALTER TABLE
-    migration block added it. Fresh installs would fail on the first
-    save. Audit Major: no up-front Manage Roles / hierarchy check.
-    """
+        new_header = old_rosters._rows[0]
+        # New name landed; old name is gone.
+        assert "Override Below Minimum" in new_header
+        assert "Override Below Floor" not in new_header
 
-    def test_create_table_has_judicator_column(self, seeded_db):
-        import config
-        # Fresh seeded_db went through init_db's CREATE TABLE. The
-        # column must be present even without the ALTER fallback firing.
-        # (Fresh installs only hit CREATE TABLE.)
-        with config._get_conn() as conn:
-            cols = [
-                row[1] for row in conn.execute(
-                    "PRAGMA table_info(guild_storm_config)"
-                ).fetchall()
-            ]
-        assert "judicator_role_id" in cols
-        # Defense in depth — the #138 column too, since it had the
-        # same gap and was added in the same CREATE TABLE fix.
-        assert "power_refresh_dm_enabled" in cols
-
-    def test_judicator_round_trip(self, seeded_db):
-        import config
-        config.save_storm_config(
-            TEST_GUILD_ID, "CS",
-            tab_name="CS Tab", mail_template="",
-            timezone="America/New_York", log_channel_id=0,
-        )
-        config.save_structured_storm_config(
-            TEST_GUILD_ID, "CS",
-            structured_flow_enabled=True,
-            judicator_role_id=99887766,
-        )
-        cfg = config.get_structured_storm_config(TEST_GUILD_ID, "CS")
-        assert cfg["judicator_role_id"] == 99887766
-
-    def test_negative_judicator_role_id_clamped(self, seeded_db):
-        import config
-        config.save_storm_config(
-            TEST_GUILD_ID, "CS",
-            tab_name="CS Tab", mail_template="",
-            timezone="America/New_York", log_channel_id=0,
-        )
-        config.save_structured_storm_config(
-            TEST_GUILD_ID, "CS",
-            structured_flow_enabled=True,
-            judicator_role_id=-1,
-        )
-        cfg = config.get_structured_storm_config(TEST_GUILD_ID, "CS")
-        assert cfg["judicator_role_id"] == 0
+        # The pre-existing "yes" flag on the legacy column carried into
+        # the new column rather than being lost.
+        override_idx = srb._ROSTERS_HEADER.index("Override Below Minimum")
+        prior_row = old_rosters._rows[1]
+        assert prior_row[override_idx] == "yes"
 
 
 class TestAutoFillSummarySplitsPairedFromPrimary:
@@ -2176,7 +1931,10 @@ class TestAutoFillSummarySplitsPairedFromPrimary:
     read 'Auto-filled by power: 8' even though only 4 primaries were
     auto-filled. Now `auto_paired_subs` is a separate count."""
 
-    def test_paired_mode_summary_has_separate_paired_count(self):
+    def test_paired_mode_summary_has_separate_paired_list(self):
+        """Decision #14 (#171): `auto_paired_subs` is now a list of
+        `Primary ↔ Sub` strings rather than a bare count, so the
+        summary can render the explicit pairings."""
         members = {
             f"100{i}": {"key": f"100{i}", "name": f"M{i}", "discord_id": f"100{i}",
                         "power": 400_000_000 - i * 10_000_000,
@@ -2188,11 +1946,14 @@ class TestAutoFillSummarySplitsPairedFromPrimary:
         session = _make_session(team="A", members=members,
                                 preset_zones=zones, sub_mode="paired")
         summary = srb._auto_fill_session(session)
-        # 4 primaries auto-filled + 4 paired subs.
+        # 4 primaries auto-filled + 4 paired subs (each rendered as
+        # "PrimaryName ↔ SubName").
         assert summary["auto_filled_by_power"] == 4
-        assert summary["auto_paired_subs"] == 4
+        assert len(summary["auto_paired_subs"]) == 4
+        for pair in summary["auto_paired_subs"]:
+            assert "↔" in pair
 
-    def test_pool_mode_paired_count_is_zero(self):
+    def test_pool_mode_paired_list_is_empty(self):
         members = {
             "1001": {"key": "1001", "name": "Alice", "discord_id": "1001",
                      "power": 412_000_000, "not_on_discord": False},
@@ -2200,7 +1961,121 @@ class TestAutoFillSummarySplitsPairedFromPrimary:
         session = _make_session(team="A", members=members, sub_mode="pool")
         summary = srb._auto_fill_session(session)
         # Pool mode never pairs.
-        assert summary["auto_paired_subs"] == 0
+        assert summary["auto_paired_subs"] == []
+
+
+class TestAutoFillSummaryRenderingNoTruncation:
+    """Decision #8 (#171): the auto-fill summary lists every gap +
+    every conflict — no `(+N more)` truncation. Officers need the full
+    list to act on it. Decision #14: auto-pair listing renders the
+    explicit `Primary ↔ Sub` pairs instead of a bare count."""
+
+    def test_gaps_list_is_not_truncated(self):
+        members = {
+            f"100{i}": {"key": f"100{i}", "name": f"Ghost{i}", "discord_id": f"100{i}",
+                        "power": None, "not_on_discord": False}
+            for i in range(10)
+        }
+        session = _make_session(team="A", members=members)
+        srb._auto_fill_session(session)
+        embed = srb._render_builder_embed(session)
+        body = embed.description or ""
+        # All 10 names should appear; no truncation marker.
+        for i in range(10):
+            assert f"Ghost{i}" in body
+        assert "more)" not in body
+
+    def test_conflicts_list_is_not_truncated(self):
+        members = self._three_members()
+        # 4 per-member rules pointing at an unknown zone — each triggers
+        # a conflict.
+        per_member = [
+            smr.Rule(rule_type="per_member", subject="Alice",
+                     sub_type="zone", value=f"No Such Zone {i}")
+            for i in range(4)
+        ]
+        session = _make_session(team="A", members=members,
+                                per_member_rules=per_member)
+        srb._auto_fill_session(session)
+        embed = srb._render_builder_embed(session)
+        body = embed.description or ""
+        # Every unknown-zone conflict surfaces.
+        for i in range(4):
+            assert f"No Such Zone {i}" in body
+        assert "more)" not in body
+
+    def test_auto_paired_listing_shows_explicit_pairs(self):
+        members = {
+            f"100{i}": {"key": f"100{i}", "name": f"M{i}", "discord_id": f"100{i}",
+                        "power": 400_000_000 - i * 10_000_000,
+                        "not_on_discord": False}
+            for i in range(4)
+        }
+        zones = [ss.ZoneRow(zone="Power Tower", max_players=2,
+                            min_power_a=100_000_000, priority=1)]
+        session = _make_session(team="A", members=members,
+                                preset_zones=zones, sub_mode="paired")
+        srb._auto_fill_session(session)
+        embed = srb._render_builder_embed(session)
+        body = embed.description or ""
+        # Pair line uses the ↔ marker between each pair.
+        assert "Auto-paired subs (" in body
+        assert "↔" in body
+
+    def _three_members(self):
+        return {
+            "1001": {"key": "1001", "name": "Alice", "discord_id": "1001",
+                     "power": 412_000_000, "not_on_discord": False},
+            "1002": {"key": "1002", "name": "Bob", "discord_id": "1002",
+                     "power": 380_000_000, "not_on_discord": False},
+            "1003": {"key": "1003", "name": "Carol", "discord_id": "1003",
+                     "power": 350_000_000, "not_on_discord": False},
+        }
+
+
+class TestAutoFillConfirmDestructive:
+    """Decision #9 (#171): clicking auto-fill on a session that already
+    holds data prompts a confirm view. Fresh sessions skip the prompt
+    and run directly."""
+
+    def test_fresh_session_has_no_existing_assignments(self):
+        members = {
+            "1001": {"key": "1001", "name": "Alice", "discord_id": "1001",
+                     "power": 412_000_000, "not_on_discord": False},
+        }
+        session = _make_session(team="A", members=members)
+        assert session.has_existing_assignments() is False
+
+    def test_session_with_assignment_reports_existing(self):
+        members = {
+            "1001": {"key": "1001", "name": "Alice", "discord_id": "1001",
+                     "power": 412_000_000, "not_on_discord": False},
+        }
+        session = _make_session(team="A", members=members)
+        session.assignments["Power Tower"].append("1001")
+        assert session.has_existing_assignments() is True
+
+    def test_session_with_sub_reports_existing(self):
+        members = {
+            "1001": {"key": "1001", "name": "Alice", "discord_id": "1001",
+                     "power": 412_000_000, "not_on_discord": False},
+        }
+        session = _make_session(team="A", members=members)
+        session.subs.append("1001")
+        assert session.has_existing_assignments() is True
+
+    def test_session_with_phase_two_assignment_reports_existing(self):
+        s = _make_phase_aware_session()
+        s.assignments_p2["Arsenal"].append("1")
+        assert s.has_existing_assignments() is True
+
+    def test_confirm_view_renders_confirm_and_cancel_buttons(self):
+        parent_view = MagicMock()
+        parent_view.session.user_id = 42
+        view = srb._AutoFillConfirmView(parent_view=parent_view)
+        labels = [getattr(c, "label", "") for c in view.children]
+        assert any("Re-run auto-fill" in lab for lab in labels)
+        assert any("Cancel" in lab for lab in labels)
 
 
 # ── #152: phase-aware roster session ────────────────────────────────────────
@@ -2534,6 +2409,57 @@ class TestAutoFillPhaseAware:
         # Phase 2 dict stays empty for flat presets even with members
         # available.
         assert all(len(v) == 0 for v in s.assignments_p2.values())
+
+
+class TestPhaseAwareEmbedRendering:
+    """#172 / Rule L: phase-aware builder embeds render per-zone-per-phase
+    instead of inline `(P1, P2, P3)` capacity readouts. Each zone gets a
+    header line + one indented row per phase with that phase's count,
+    cap, and member list."""
+
+    def test_phase_aware_zone_line_has_per_phase_rows(self):
+        s = _make_phase_aware_session()
+        s.assignments["Info Center"].append("1")          # Alice in P1
+        s.assignments_p2["Arsenal"].append("2")           # Bob in P2
+        line = srb._render_zone_line(s, "Info Center")
+        assert "Phase 1:" in line
+        assert "Phase 2:" in line
+        # Header row is bold and contains no inline parens.
+        assert "**Info Center**" in line
+        # Old inline P1/P2 syntax must be gone.
+        assert "(P1:" not in line
+        assert "(P2:" not in line
+
+    def test_flat_zone_line_keeps_single_row_shape(self):
+        s = _make_session(team="A", members={
+            "1": {"key": "1", "name": "Alice", "discord_id": "1",
+                  "power": 412_000_000, "not_on_discord": False},
+        })
+        s.assignments["Power Tower"].append("1")
+        line = srb._render_zone_line(s, "Power Tower")
+        # Flat presets stay one-line — no \n inside the zone line.
+        assert "\n" not in line
+        assert "Phase 1:" not in line
+        assert "**Power Tower**" in line
+
+    def test_filled_line_breaks_out_per_phase_when_phase_aware(self):
+        s = _make_phase_aware_session()
+        embed = srb._render_builder_embed(s)
+        # Per-phase breakdown is in the Filled line.
+        assert "Filled:" in embed.description
+        assert "P1:" in embed.description
+        assert "P2:" in embed.description
+
+    def test_filled_line_uses_single_total_when_flat(self):
+        s = _make_session(team="A", members={
+            "1": {"key": "1", "name": "Alice", "discord_id": "1",
+                  "power": 412_000_000, "not_on_discord": False},
+        })
+        s.assignments["Power Tower"].append("1")
+        embed = srb._render_builder_embed(s)
+        assert "Filled:" in embed.description
+        # Flat presets keep the X / Y total shape (no per-phase break-out).
+        assert "P1:" not in embed.description
 
 
 class TestRostersTabPhaseColumn:

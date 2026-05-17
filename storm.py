@@ -365,18 +365,21 @@ def build_ds_mail(team: str, zones: dict, subs: list, time_key: str,
             zone_lines.append(str(members))
         zone_lines.append("")
 
+    from storm_icons import zone_emoji_prefix
     for zone in DS_ZONE_STRUCTURE:
         members = zones.get(zone)
         if not members or members == "(open)":
             rendered.add(zone)
             continue
-        zone_lines.append(f"**{zone}**")
+        # #158: prefix the zone header with its emoji. No-op until the
+        # emojis upload; safe to land before art for every zone exists.
+        zone_lines.append(f"{zone_emoji_prefix(zone)}**{zone}**")
         _emit_members(members)
         rendered.add(zone)
 
     extra = [(k, v) for k, v in zones.items() if k not in rendered and v and v != "(open)"]
     for key, members in extra:
-        zone_lines.append(f"**{key}**")
+        zone_lines.append(f"{zone_emoji_prefix(key)}**{key}**")
         _emit_members(members)
 
     zones_block = "\n".join(zone_lines).strip()
@@ -599,9 +602,9 @@ async def _pick_storm_template(bot, channel, guild_id: int | None, event_type: s
     )
     await view.wait()
     if view.selected is None:
+        draft_cmd = "/desertstorm draft" if event_type == "DS" else "/canyonstorm draft"
         await channel.send(
-            "⏰ Template picker timed out. "
-            "Run `/desertstorm draft` or `/canyonstorm draft` to start over."
+            f"⏰ Template picker timed out. Run `{draft_cmd}` to start over."
         )
         return False
     return view.selected
@@ -1190,6 +1193,7 @@ def build_cs_mail(team: str, z: dict, time_key: str, guild_id: int = None,
             zone_lines.append(str(members))
         zone_lines.append("")
 
+    from storm_icons import zone_emoji_prefix
     for stage, key, label in CS_ZONE_STRUCTURE:
         members = z.get(key)
         if not members or members == "(open)":
@@ -1200,7 +1204,9 @@ def build_cs_mail(team: str, z: dict, time_key: str, guild_id: int = None,
             # only needs one extra blank — no double-blank between stages.
             zone_lines.append(f"**Stage {stage}**")
             last_stage = stage
-        zone_lines.append(f"**{label}**")
+        # #158: prefix the zone header with its emoji. No-op until the
+        # emojis upload.
+        zone_lines.append(f"{zone_emoji_prefix(label)}**{label}**")
         _emit_members(members)
         rendered.add(key)
 
@@ -1211,7 +1217,7 @@ def build_cs_mail(team: str, z: dict, time_key: str, guild_id: int = None,
         if zone_lines:
             zone_lines.append("")
         for key, members in extra:
-            zone_lines.append(f"**{key}**")
+            zone_lines.append(f"{zone_emoji_prefix(key)}**{key}**")
             _emit_members(members)
 
     zones_block = "\n".join(zone_lines).strip()

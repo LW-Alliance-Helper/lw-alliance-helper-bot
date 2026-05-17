@@ -55,7 +55,7 @@ def _read_tab_values(guild_id: int, tab_name: str) -> tuple[list[list[str]], lis
     if sh is None:
         return [], []
     try:
-        ws = sh.worksheet(tab_name)
+        ws = config.get_or_create_worksheet(sh, tab_name)
     except Exception:
         return [], []
     try:
@@ -128,7 +128,10 @@ def load_event_roster(
     role_col   = _col("Role")
     power_col  = _col("Power at Assignment")
     id_col     = _col("Discord ID")
-    ovr_col    = _col("Override Below Floor")
+    ovr_col    = _col("Override Below Minimum")
+    if ovr_col < 0:
+        # Legacy header alias (dev/staging sheets pre-rename).
+        ovr_col = _col("Override Below Floor")
     paired_col = _col("Paired With")
 
     # Truthy values for the override column. Officers may hand-edit
@@ -224,10 +227,14 @@ def load_event_attendance(
 # ── Renderers ────────────────────────────────────────────────────────────────
 
 
+# Rule K (#171): 🔄 Sub activated is dropped from the UI everywhere. The
+# Sheet may still carry legacy `sub_activated` rows from before the
+# decision; the reader keeps them mapped to `—` so officers see "not
+# recorded" rather than a crashing/unknown status.
 _STATUS_GLYPH = {
     "attended":      "✅",
     "no_show":       "❌",
-    "sub_activated": "🔄",
+    "sub_activated": "—",
     "":              "—",
 }
 
@@ -286,44 +293,98 @@ def render_event_embed(
     total_recorded = 0
     total_attended = 0
     total_no_show = 0
-    total_sub_activated = 0
 
     # Per-team `add_field` (each capped at 1024 chars) instead of one
     # giant `embed.description` — a 30+ slot roster with status + power
     # markers can blow Discord's 4096-char description limit.
+    def _render_slot(slot: dict) -> str:
+        """One per-member row inside a zone (or zone-phase) section.
+        Side-effecting on the outer counters via `nonlocal`.
+
+        Per Decision #6 (#171), the Override Below Minimum flag is not
+        surfaced in the per-slot rendering anymore — the builder still
+        captures it on the Sheet for post-event audit, but history
+        consumers don't need to see it. Per Rule K, legacy
+        `sub_activated` rows render as `—` and don't get their own
+        counter."""
+        nonlocal total_recorded, total_attended, total_no_show
+        key = _attendance_join_key(
+            slot["team"], slot["zone"], slot["member"],
+        )
+        status = attendance.get(key, "")
+        glyph = _STATUS_GLYPH.get(status, "—")
+        if status == "attended":
+            total_recorded += 1
+            total_attended += 1
+        elif status == "no_show":
+            total_recorded += 1
+            total_no_show += 1
+        # `sub_activated` legacy rows surface as `—` and don't count
+        # toward `total_recorded` so the footer math matches what the
+        # officer sees (✅ + ❌).
+        power_part = _format_power_display(slot.get("power", ""))
+        # Role marker: a sub paired with a specific primary surfaces
+        # "paired with X" so the pairing is visible in the history; a
+        # pool sub shows the generic "(sub)".
+        if slot.get("role") == "sub":
+            paired = slot.get("paired_with") or ""
+            role_marker = f" (sub, paired with {paired})" if paired else " (sub)"
+        else:
+            role_marker = ""
+        return f"{glyph} {slot['member']}{role_marker}{power_part}"
+
     for team in sorted(teams.keys()):
         zones = teams[team]
+        # Phase-aware detection: a roster is phase-aware iff at least one
+        # primary slot carries a non-empty Phase cell. Sub-pool rows
+        # don't count (they're event-level, not phase-scoped) so they
+        # never flip a flat event to phase-aware.
+        team_is_phase_aware = any(
+            slot.get("phase", "").strip()
+            for zone_slots in zones.values()
+            for slot in zone_slots
+            if slot.get("role", "primary") == "primary"
+        )
+
         team_lines: list[str] = []
+        from storm_icons import zone_emoji_prefix
         for zone in sorted(zones.keys()):
             members = zones[zone]
-            team_lines.append(f"__{zone}__")
+            # #158: prefix every zone header with its emoji icon (no-op
+            # until the bot owner runs `scripts/upload_storm_emojis.py`).
+            team_lines.append(f"{zone_emoji_prefix(zone)}__{zone}__")
+
+            if not team_is_phase_aware or zone == "(sub pool)":
+                # Flat zone — single member list (sub-pool always
+                # renders flat regardless of the event's phase state).
+                for slot in members:
+                    team_lines.append(_render_slot(slot))
+                continue
+
+            # Phase-aware zone (#172 / Rule L). Each phase gets its own
+            # sub-header beneath the zone, then the per-member rows
+            # belonging to that phase. Members with no Phase cell
+            # (legacy data) fall into a "Phase ?" bucket so they're
+            # still visible.
+            by_phase: dict[str, list[dict]] = {}
             for slot in members:
-                key = _attendance_join_key(
-                    slot["team"], slot["zone"], slot["member"],
+                phase = slot.get("phase", "").strip() or "?"
+                by_phase.setdefault(phase, []).append(slot)
+
+            def _phase_sort_key(p: str) -> tuple[int, str]:
+                # Numeric phases (1, 2, 3) sort ahead of "?" / non-numeric.
+                try:
+                    return (0, f"{int(p):03d}")
+                except ValueError:
+                    return (1, p)
+
+            for phase in sorted(by_phase.keys(), key=_phase_sort_key):
+                phase_label = (
+                    f"Phase {phase}" if phase != "?" else "Phase (unspecified)"
                 )
-                status = attendance.get(key, "")
-                glyph = _STATUS_GLYPH.get(status, "—")
-                if status:
-                    total_recorded += 1
-                    if status == "attended":
-                        total_attended += 1
-                    elif status == "no_show":
-                        total_no_show += 1
-                    elif status == "sub_activated":
-                        total_sub_activated += 1
-                power_part = _format_power_display(slot.get("power", ""))
-                override = " ⚠️ override" if slot.get("override_below_floor") else ""
-                # Role marker: a sub paired with a specific primary
-                # surfaces "paired with X" so the pairing is visible
-                # in the history; a pool sub shows the generic "(sub)".
-                if slot.get("role") == "sub":
-                    paired = slot.get("paired_with") or ""
-                    role_marker = f" (sub, paired with {paired})" if paired else " (sub)"
-                else:
-                    role_marker = ""
-                team_lines.append(
-                    f"{glyph} {slot['member']}{role_marker}{power_part}{override}"
-                )
+                team_lines.append(f"   └ **{phase_label}**")
+                for slot in by_phase[phase]:
+                    team_lines.append(_render_slot(slot))
 
         team_name = "Roster" if (team in ("", "(no team)")) else f"Team {team}"
         body = "\n".join(team_lines)
@@ -337,8 +398,7 @@ def render_event_embed(
         embed.set_footer(
             text=(
                 f"Attendance: ✅ {total_attended}  ·  "
-                f"❌ {total_no_show}  ·  "
-                f"🔄 {total_sub_activated}  "
+                f"❌ {total_no_show}  "
                 f"(recorded {total_recorded} of {len(slots)} slots)"
             )
         )
@@ -398,7 +458,9 @@ class _RosterImageLinksView(discord.ui.View):
 
         for ref in refs:
             team = ref.get("team") or ""
-            if event_type == "DS" and team:
+            # Two-team events (DS or CS with teams=both) get per-team
+            # labels; single-team events fall back to "View image".
+            if team:
                 label = f"📷 View Team {team} image"
             else:
                 label = "📷 View image"
@@ -478,7 +540,7 @@ class _RosterImageLinksView(discord.ui.View):
                 "[STORM HISTORY] delete_roster_image_ref failed: %s", e,
             )
         parent = "desertstorm" if self.event_type == "DS" else "canyonstorm"
-        team_label = f" for Team {team}" if (self.event_type == "DS" and team) else ""
+        team_label = f" for Team {team}" if team else ""
         what = "channel" if reason == "channel" else "image"
         await inter.response.send_message(
             f"⚠️ The saved roster {what}{team_label} can no longer be "

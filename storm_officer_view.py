@@ -25,8 +25,9 @@ Buckets:
 
 The "Vote on behalf" button captures the casting officer's Discord
 ID alongside the vote, so audit history shows who recorded what. The
-on-behalf modal validates names against the roster Sheet so typos
-don't create phantom signup rows that haunt every future officer view.
+on-behalf picker view (#168) sources its Member Select from the roster
+Sheet so typos can't create phantom signup rows — the officer can only
+pick names that already exist on the roster.
 """
 
 from __future__ import annotations
@@ -45,9 +46,10 @@ logger = logging.getLogger(__name__)
 
 # Per-process stale-roster-ID warning dedupe — keyed on
 # `(guild_id, frozenset(stale_ids))`. The View's refresh button and
-# the on-behalf modal both call `_read_roster_rows`; without dedup,
-# every click re-logged the same stale-ID list. The set is bounded by
-# the number of stale-ID combinations across reachable guilds.
+# the on-behalf picker view both call `_read_roster_rows`; without
+# dedup, every click re-logged the same stale-ID list. The set is
+# bounded by the number of stale-ID combinations across reachable
+# guilds.
 _STALE_ID_LOG_MEMO: set[tuple[int, frozenset]] = set()
 
 
@@ -229,7 +231,7 @@ def _read_roster_rows(
             "stale Discord IDs on roster (member likely left the server): "
             f"{preview}{extra}"
         )
-        # Dedup the log — refresh button + on-behalf modal re-call this
+        # Dedup the log — refresh button + on-behalf picker re-call this
         # function on every click. Without the memo, a 5-stale-ID
         # roster would log 5 entries × every click. Memo key includes
         # the stale-ID set so a roster cleanup naturally clears it
@@ -483,130 +485,331 @@ _VOTE_CHOICES = [
 ]
 
 
-class _OnBehalfModal(discord.ui.Modal, title="Record vote on behalf"):
-    """Modal for casting a vote for a non-Discord member.
+_ON_BEHALF_PAGE_SIZE = 25
 
-    Validates the member name against the roster Sheet so a typo doesn't
-    create a phantom signup row that haunts every future officer view.
+
+def _vote_select_options(
+    event_type: str, guild_id: int, teams_setting: str,
+) -> list[discord.SelectOption]:
+    """Build the on-behalf Vote-select options to match the sign-up buttons.
+
+    Reads the event's slot labels via `get_storm_slot_labels` so the wording
+    surfaces *the same* `<local> (HH:MM server time)` strings members see on
+    the sign-up post. The set of options branches on `teams_setting` to match
+    the sign-up Variants A/B/C — single-team alliances only see their team
+    + Cannot; both-teams alliances see all four choices.
+    """
+    from config import get_storm_slot_labels
+    try:
+        slot_labels = get_storm_slot_labels(event_type, guild_id)
+    except Exception:
+        slot_labels = ["", ""]
+    slot_a = slot_labels[0] if len(slot_labels) > 0 else ""
+    slot_b = slot_labels[1] if len(slot_labels) > 1 else ""
+
+    label_a = f"Team A: {slot_a}" if slot_a else "Team A"
+    label_b = f"Team B: {slot_b}" if slot_b else "Team B"
+
+    teams = (teams_setting or "both").strip()
+    if teams not in ("both", "A", "B"):
+        teams = "both"
+
+    options: list[discord.SelectOption] = []
+    if teams in ("both", "A"):
+        options.append(discord.SelectOption(label=label_a[:100], value="a"))
+    if teams in ("both", "B"):
+        options.append(discord.SelectOption(label=label_b[:100], value="b"))
+    if teams == "both":
+        options.append(discord.SelectOption(label="Either time works", value="either"))
+    options.append(discord.SelectOption(label="Cannot participate", value="cannot"))
+    return options
+
+
+class _OnBehalfVoteView(discord.ui.View):
+    """Ephemeral on-behalf vote picker (#168).
+
+    Replaces the old `_OnBehalfModal` free-text flow with structured
+    selects: Member Select sourced from the roster Sheet + Vote Select
+    that mirrors the sign-up post's button labels. Both selects must be
+    populated before Submit fires — there's no free-text path, so typo
+    members and unparseable votes are unreachable.
+
+    Roster lists longer than 25 paginate via Prev/Next buttons + a
+    `Page X / Y` label-only indicator. The Member Select's options are
+    rebuilt on every page change while the picked-vote value sticks.
     """
 
-    def __init__(self, view: "OfficerView"):
-        super().__init__()
-        self._view = view
-        self.member_name = discord.ui.TextInput(
-            label="Member name (must match your roster Sheet)",
-            placeholder="e.g. Alice",
-            required=True, max_length=80,
-        )
-        self.vote_label = discord.ui.TextInput(
-            label="Vote: A / B / Either / Cannot",
-            placeholder="A",
-            required=True, max_length=10,
-        )
-        self.add_item(self.member_name)
-        self.add_item(self.vote_label)
+    def __init__(
+        self,
+        parent_view: "OfficerView",
+        members: list[dict],
+        teams_setting: str,
+    ):
+        super().__init__(timeout=300)
+        self.parent_view = parent_view
+        self.teams_setting = teams_setting
+        # Sort + de-dupe roster (case-insensitive on name).
+        seen: set[str] = set()
+        cleaned: list[dict] = []
+        for m in members:
+            name = (m.get("name") or "").strip()
+            if not name:
+                continue
+            # Discord stores numeric-name on-behalf targets in the same
+            # column as Discord user IDs — surface that here so the user
+            # never picks a name that would collide.
+            if name.isdigit():
+                continue
+            key = name.lower()
+            if key in seen:
+                continue
+            seen.add(key)
+            cleaned.append({"name": name})
+        cleaned.sort(key=lambda r: r["name"].lower())
+        self.members = cleaned
+        self.page = 0
+        self.selected_member: str | None = None
+        self.selected_vote: str | None = None
+        self.message: discord.Message | None = None
+        self._build_components()
 
-    async def on_submit(self, interaction: discord.Interaction):
-        raw_member = (self.member_name.value or "").strip()
-        raw_vote   = (self.vote_label.value  or "").strip().lower()
-        vote_map = {
-            "a": "a", "team a": "a",
-            "b": "b", "team b": "b",
-            "either": "either", "either time": "either",
-            "cannot": "cannot", "cannot participate": "cannot", "no": "cannot",
-        }
-        vote = vote_map.get(raw_vote)
-        if not raw_member or not vote:
-            await interaction.response.send_message(
-                "⚠️ I couldn't read that. Member name and one of `A`, `B`, "
-                "`Either`, or `Cannot`. Try again.",
+    @property
+    def page_count(self) -> int:
+        if not self.members:
+            return 1
+        return (len(self.members) + _ON_BEHALF_PAGE_SIZE - 1) // _ON_BEHALF_PAGE_SIZE
+
+    def _members_for_page(self) -> list[dict]:
+        start = self.page * _ON_BEHALF_PAGE_SIZE
+        return self.members[start:start + _ON_BEHALF_PAGE_SIZE]
+
+    def _build_components(self):
+        self.clear_items()
+
+        page_members = self._members_for_page()
+        if page_members:
+            member_options = [
+                discord.SelectOption(
+                    label=m["name"][:100],
+                    value=m["name"][:100],
+                    default=(m["name"] == self.selected_member),
+                )
+                for m in page_members
+            ]
+            member_select = discord.ui.Select(
+                placeholder=(
+                    f"Picked: {self.selected_member}"
+                    if self.selected_member else "Pick a member…"
+                ),
+                min_values=1, max_values=1,
+                options=member_options,
+                row=0,
+            )
+
+            async def _on_member(inter: discord.Interaction):
+                if not await self._guard_owner(inter):
+                    return
+                self.selected_member = member_select.values[0]
+                self._build_components()
+                try:
+                    await inter.response.edit_message(view=self)
+                except discord.HTTPException:
+                    pass
+
+            member_select.callback = _on_member
+            self.add_item(member_select)
+
+        vote_options = _vote_select_options(
+            self.parent_view.event_type,
+            self.parent_view.guild_id,
+            self.teams_setting,
+        )
+        for opt in vote_options:
+            opt.default = (opt.value == self.selected_vote)
+        vote_select = discord.ui.Select(
+            placeholder=(
+                f"Picked: {dict((o.value, o.label) for o in vote_options).get(self.selected_vote, '')}"
+                if self.selected_vote else "Pick a vote…"
+            ),
+            min_values=1, max_values=1,
+            options=vote_options,
+            row=1,
+        )
+
+        async def _on_vote(inter: discord.Interaction):
+            if not await self._guard_owner(inter):
+                return
+            self.selected_vote = vote_select.values[0]
+            self._build_components()
+            try:
+                await inter.response.edit_message(view=self)
+            except discord.HTTPException:
+                pass
+
+        vote_select.callback = _on_vote
+        self.add_item(vote_select)
+
+        # Paging row — only rendered when the roster is bigger than the
+        # 25-option Select cap.
+        if self.page_count > 1:
+            prev_btn = discord.ui.Button(
+                label="◀ Prev", style=discord.ButtonStyle.secondary,
+                disabled=(self.page == 0), row=2,
+            )
+
+            async def _on_prev(inter: discord.Interaction):
+                if not await self._guard_owner(inter):
+                    return
+                if self.page > 0:
+                    self.page -= 1
+                    self._build_components()
+                    try:
+                        await inter.response.edit_message(view=self)
+                    except discord.HTTPException:
+                        pass
+                else:
+                    await inter.response.defer()
+
+            prev_btn.callback = _on_prev
+            self.add_item(prev_btn)
+
+            page_label = discord.ui.Button(
+                label=f"Page {self.page + 1} / {self.page_count}",
+                style=discord.ButtonStyle.secondary,
+                disabled=True, row=2,
+            )
+            self.add_item(page_label)
+
+            next_btn = discord.ui.Button(
+                label="Next ▶", style=discord.ButtonStyle.secondary,
+                disabled=(self.page >= self.page_count - 1), row=2,
+            )
+
+            async def _on_next(inter: discord.Interaction):
+                if not await self._guard_owner(inter):
+                    return
+                if self.page < self.page_count - 1:
+                    self.page += 1
+                    self._build_components()
+                    try:
+                        await inter.response.edit_message(view=self)
+                    except discord.HTTPException:
+                        pass
+                else:
+                    await inter.response.defer()
+
+            next_btn.callback = _on_next
+            self.add_item(next_btn)
+
+        submit_btn = discord.ui.Button(
+            label="✅ Submit", style=discord.ButtonStyle.primary,
+            disabled=not (self.selected_member and self.selected_vote),
+            row=3,
+        )
+        submit_btn.callback = self._on_submit
+        self.add_item(submit_btn)
+
+        cancel_btn = discord.ui.Button(
+            label="↩️ Cancel", style=discord.ButtonStyle.secondary, row=3,
+        )
+        cancel_btn.callback = self._on_cancel
+        self.add_item(cancel_btn)
+
+    async def _guard_owner(self, inter: discord.Interaction) -> bool:
+        if inter.user.id != self.parent_view.owner_user_id:
+            await inter.response.send_message(
+                "⛔ Only the officer who opened this view can record on-behalf votes here.",
+                ephemeral=True,
+            )
+            return False
+        return True
+
+    async def _on_submit(self, inter: discord.Interaction):
+        if not await self._guard_owner(inter):
+            return
+        if not (self.selected_member and self.selected_vote):
+            await inter.response.send_message(
+                "⚠️ Pick a member and a vote before submitting.",
                 ephemeral=True,
             )
             return
-
-        # Reject all-numeric names. `storm_signups.target_member_id`
-        # is a UNIQUE index over `(guild, event, date, target_id)` and
-        # stores `str(discord_user_id)` for self-votes; a roster row
-        # named "1234" would silently overwrite Discord user 1234's
-        # vote on the same event. Reject up front so the collision
-        # never reaches the schema.
-        if raw_member.isdigit():
-            await interaction.response.send_message(
-                "⚠️ On-behalf names can't be purely numeric — they collide "
-                "with Discord IDs in storage. Use a non-numeric roster name "
-                "(e.g. add an alliance prefix or member tag).",
-                ephemeral=True,
-            )
-            return
-
-        # Resolve the member name against the roster Sheet (case-insensitive)
-        # so typos don't create phantom signup rows. If the roster doesn't
-        # have a `not_on_discord` column yet (or the Sheet read failed), we
-        # fall back to permissive behaviour to keep the command useful.
-        # Defer first so the gspread round-trip below doesn't blow the
-        # 3-second initial-response token.
         try:
-            await interaction.response.defer(ephemeral=True)
+            await inter.response.defer(ephemeral=True)
         except discord.HTTPException:
             pass
-        roster_rows, _errors = await asyncio.to_thread(
-            _read_roster_rows,
-            self._view.guild_id, guild=self._view.guild,
-        )
-        canonical_name = raw_member
-        if roster_rows:
-            match = next(
-                (r for r in roster_rows
-                 if r["name"].strip().lower() == raw_member.lower()),
-                None,
-            )
-            if match is None:
-                await interaction.followup.send(
-                    f"⚠️ I don't see **{raw_member}** in your roster Sheet. "
-                    f"Check the spelling (it must match the name column on "
-                    f"the roster tab) and try again.",
-                    ephemeral=True,
-                )
-                return
-            canonical_name = match["name"]
 
         import config
         ok = config.record_storm_vote(
-            self._view.guild_id, self._view.event_type, self._view.event_date,
-            voter_user_id=interaction.user.id,
-            target_member_id=canonical_name,
-            vote=vote,
+            self.parent_view.guild_id,
+            self.parent_view.event_type,
+            self.parent_view.event_date,
+            voter_user_id=inter.user.id,
+            target_member_id=self.selected_member,
+            vote=self.selected_vote,
             is_on_behalf=True,
         )
         if not ok:
-            await interaction.followup.send(
+            await inter.followup.send(
                 "⚠️ Couldn't record that vote. Check the bot logs.",
                 ephemeral=True,
             )
             return
 
-        # Refresh the view in place. `refresh_buckets` is async (gspread
-        # off the event loop) — re-renders the parent's posted message
-        # via `view.message.edit` since we deferred.
-        await self._view.refresh_buckets()
+        # Refresh the parent view in place so the new vote shows up.
+        await self.parent_view.refresh_buckets()
         try:
-            if self._view.message is not None:
-                await self._view.message.edit(
+            if self.parent_view.message is not None:
+                await self.parent_view.message.edit(
                     embed=_render_embed(
-                        self._view.guild, self._view.event_type, self._view.event_date,
-                        self._view.buckets, self._view.bucket_filter,
+                        self.parent_view.guild, self.parent_view.event_type,
+                        self.parent_view.event_date,
+                        self.parent_view.buckets, self.parent_view.bucket_filter,
                     ),
-                    view=self._view,
+                    view=self.parent_view,
+                )
+        except discord.HTTPException:
+            pass
+
+        for item in self.children:
+            item.disabled = True
+        self.stop()
+        try:
+            if self.message is not None:
+                await self.message.edit(
+                    content=f"✅ Recorded on-behalf vote for **{self.selected_member}**.",
+                    view=self,
                 )
         except discord.HTTPException:
             pass
         try:
-            await interaction.followup.send(
-                f"✅ Recorded on-behalf vote for **{canonical_name}**.",
+            await inter.followup.send(
+                f"✅ Recorded on-behalf vote for **{self.selected_member}**.",
                 ephemeral=True,
             )
         except discord.HTTPException:
             pass
+
+    async def _on_cancel(self, inter: discord.Interaction):
+        if not await self._guard_owner(inter):
+            return
+        for item in self.children:
+            item.disabled = True
+        self.stop()
+        try:
+            await inter.response.edit_message(
+                content="↩️ Cancelled — no vote recorded.", view=self,
+            )
+        except discord.HTTPException:
+            pass
+
+    async def on_timeout(self) -> None:
+        for item in self.children:
+            item.disabled = True
+        if self.message is not None:
+            try:
+                await self.message.edit(view=self)
+            except discord.HTTPException:
+                pass
 
 
 class OfficerView(discord.ui.View):
@@ -706,7 +909,45 @@ class OfficerView(discord.ui.View):
                     ephemeral=True,
                 )
                 return
-            await inter.response.send_modal(_OnBehalfModal(self))
+            # Defer first — `_read_roster_rows` is a gspread round-trip
+            # that can take seconds under rate-limit pressure, and the
+            # 3-second initial-response token would otherwise expire.
+            try:
+                await inter.response.defer(ephemeral=True)
+            except discord.HTTPException:
+                pass
+            roster_rows, _errs = await asyncio.to_thread(
+                _read_roster_rows, self.guild_id, guild=self.guild,
+            )
+            if not roster_rows:
+                # Permissive fallback path. Without a roster read, we can't
+                # populate the Member Select — surface the same actionable
+                # error so the officer knows to retry after /sync_members.
+                try:
+                    await inter.followup.send(
+                        "⚠️ Couldn't read the roster right now. Try "
+                        "`/sync_members` and reopen this view to retry.",
+                        ephemeral=True,
+                    )
+                except discord.HTTPException:
+                    pass
+                return
+            import config
+            cfg = config.get_storm_config(self.guild_id, self.event_type) or {}
+            teams_setting = (cfg.get("teams") or "both").strip()
+            picker = _OnBehalfVoteView(self, roster_rows, teams_setting)
+            try:
+                msg = await inter.followup.send(
+                    content=(
+                        "🙋 Pick a member and a vote, then **Submit**. "
+                        "Only roster members are listed — `/sync_members` "
+                        "refreshes the list."
+                    ),
+                    view=picker, ephemeral=True,
+                )
+                picker.message = msg
+            except discord.HTTPException:
+                pass
         on_behalf_btn.callback = _on_behalf
         self.add_item(on_behalf_btn)
 
@@ -739,52 +980,41 @@ class OfficerView(discord.ui.View):
         refresh_btn.callback = _refresh
         self.add_item(refresh_btn)
 
-        # Team setup buttons (#129) — opens the structured roster builder
-        # filtered to signed-up members for this team. DS gets up to two
-        # buttons (gated by #148's `teams` field — single-team alliances
-        # only see their team's button); CS has a single "Set up Roster"
-        # since the faction is implicit in the preset.
-        if self.event_type == "DS":
-            from config import get_storm_config
-            ds_cfg = get_storm_config(self.guild_id, "DS") or {}
-            teams_setting = (ds_cfg.get("teams") or "both").strip()
-            if teams_setting not in ("both", "A", "B"):
-                teams_setting = "both"
+        # Team setup buttons (#129 + Rule A / #166) — opens the
+        # structured roster builder filtered to signed-up members for
+        # this team. Gated by `teams` config — applies identically to
+        # DS and CS. teams=both shows A+B; teams=A or teams=B shows
+        # just that team's button.
+        from config import get_storm_config
+        cfg = get_storm_config(self.guild_id, self.event_type) or {}
+        teams_setting = (cfg.get("teams") or "both").strip()
+        if teams_setting not in ("both", "A", "B"):
+            teams_setting = "both"
 
-            show_a = teams_setting in ("both", "A")
-            show_b = teams_setting in ("both", "B")
+        show_a = teams_setting in ("both", "A")
+        show_b = teams_setting in ("both", "B")
 
-            if show_a:
-                a_btn = discord.ui.Button(
-                    label="🅰️ Set up Team A", style=discord.ButtonStyle.success, row=2,
-                )
-
-                async def _setup_a(inter: discord.Interaction):
-                    await _open_team_setup(inter, self, team="A")
-
-                a_btn.callback = _setup_a
-                self.add_item(a_btn)
-
-            if show_b:
-                b_btn = discord.ui.Button(
-                    label="🅱️ Set up Team B", style=discord.ButtonStyle.success, row=2,
-                )
-
-                async def _setup_b(inter: discord.Interaction):
-                    await _open_team_setup(inter, self, team="B")
-
-                b_btn.callback = _setup_b
-                self.add_item(b_btn)
-        else:
-            cs_btn = discord.ui.Button(
-                label="🏜️ Set up Roster", style=discord.ButtonStyle.success, row=2,
+        if show_a:
+            a_btn = discord.ui.Button(
+                label="🅰️ Set up Team A", style=discord.ButtonStyle.success, row=2,
             )
 
-            async def _setup_cs(inter: discord.Interaction):
-                await _open_team_setup(inter, self, team="")
+            async def _setup_a(inter: discord.Interaction):
+                await _open_team_setup(inter, self, team="A")
 
-            cs_btn.callback = _setup_cs
-            self.add_item(cs_btn)
+            a_btn.callback = _setup_a
+            self.add_item(a_btn)
+
+        if show_b:
+            b_btn = discord.ui.Button(
+                label="🅱️ Set up Team B", style=discord.ButtonStyle.success, row=2,
+            )
+
+            async def _setup_b(inter: discord.Interaction):
+                await _open_team_setup(inter, self, team="B")
+
+            b_btn.callback = _setup_b
+            self.add_item(b_btn)
 
 
 async def _open_team_setup(
@@ -988,14 +1218,24 @@ async def handle_storm_signups(
         )
     view.message = await interaction.followup.send(**followup_args)
 
-    # First-run walkthrough offer (#130). Fires after the main view
-    # lands so the officer sees the actual command output even if
-    # they decline the tour. No-op if already dismissed. Failures
+    # First-run walkthrough offer (#130 + #170). Fires after the main
+    # view lands so the officer sees the actual command output even
+    # if they decline the tour. No-op if already dismissed. Failures
     # here must not crash the main flow — the officer view is the
     # critical path; the tour is a nice-to-have.
+    # Tour copy branches on event_type + cfg.teams so a CS officer
+    # sees CS-flavored steps and a single-team officer sees only
+    # their team's Set-Up button mentioned.
     try:
         from storm_walkthrough import maybe_offer_storm_signups_tour
-        await maybe_offer_storm_signups_tour(interaction)
+        import config as _config
+        cfg = _config.get_storm_config(interaction.guild_id, et) or {}
+        teams_setting = (cfg.get("teams") or "both").strip()
+        if teams_setting not in ("both", "A", "B"):
+            teams_setting = "both"
+        await maybe_offer_storm_signups_tour(
+            interaction, event_type=et, teams=teams_setting,
+        )
     except Exception as e:
         logger.warning(
             "[STORM OFFICER VIEW] walkthrough offer failed for guild=%s: %s",

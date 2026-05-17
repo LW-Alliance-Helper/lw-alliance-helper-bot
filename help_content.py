@@ -115,15 +115,15 @@ HELP_CATEGORIES: dict[str, dict] = {
             ("/desertstorm strategy <create | edit | list | delete | "
              "apply | roster_history>",
              "Manage strategy presets — saved zone layouts with optional "
-             "per-zone power floors. `apply` opens the roster builder; "
+             "per-zone power minimums. `apply` opens the roster builder; "
              "`roster_history` browses past structured rosters with "
              "attendance overlay (💎 Premium)."),
             ("/desertstorm member_rule <set_power_band | set_member_team "
-             "| set_member_zone | set_member_role | list>",
+             "| set_member_zone | list>",
              "Manage member rules: power-band eligibility "
              "(`≥ 250M → Power Tower`) plus per-member overrides "
-             "(`Alice always plays Team A`, `Bob is our Judicator "
-             "candidate`)."),
+             "(`Alice always plays Team A`, `Bob always plays Power "
+             "Tower`)."),
             ("/desertstorm post_signup [event_date]",
              "💎 Post a sign-up message in the configured channel; "
              "members click buttons to register Team A / Team B / Either "
@@ -151,14 +151,13 @@ HELP_CATEGORIES: dict[str, dict] = {
         "description": (
             "Same shape as Desert Storm — mail drafts, strategy presets, "
             "structured sign-ups + roster builder (💎 Premium), and "
-            "configurable participation. CS adds an Apply-Faction-Roles "
-            "step after matchmaking reveals Rulebringers."
+            "configurable participation."
         ),
         "commands": [
             ("/setup_canyonstorm",
              "Configure Team rosters, log channel, public post channel, "
-             "mail template, the Judicator role (💎 Premium), and the "
-             "structured-flow sign-up channel, schedule, and Sheet tabs."),
+             "mail template, and the structured-flow sign-up channel, "
+             "schedule, and Sheet tabs."),
             ("/canyonstorm overview",
              "Show current rosters and the active mail template."),
             ("/canyonstorm draft",
@@ -166,24 +165,23 @@ HELP_CATEGORIES: dict[str, dict] = {
             ("/canyonstorm strategy <create | edit | list | delete | "
              "apply | roster_history>",
              "Manage strategy presets — saved zone layouts with optional "
-             "per-zone power floors. `apply` opens the roster builder; "
+             "per-zone power minimums. `apply` opens the roster builder; "
              "`roster_history` browses past structured rosters with "
              "attendance overlay (💎 Premium)."),
-            ("/canyonstorm member_rule <set_power_band | set_member_zone "
-             "| set_member_role | list>",
+            ("/canyonstorm member_rule <set_power_band | set_member_team "
+             "| set_member_zone | list>",
              "Manage member rules: power-band eligibility "
              "(`≥ 250M → Power Tower`) plus per-member overrides "
-             "(`Charlie is always at Power Tower`, `Bob is our Judicator "
-             "candidate`). CS doesn't have a `set_member_team` — Canyon "
-             "Storm is single-team per faction."),
+             "(`Alice always plays Team A`, `Charlie is always at "
+             "Power Tower`). `set_member_team` only applies when CS is "
+             "configured for both teams in setup."),
             ("/canyonstorm post_signup [event_date]",
              "💎 Post a sign-up message in the configured channel; "
              "members click buttons to register their availability."),
             ("/canyonstorm signups [event_date]",
              "💎 Leadership view of who's signed up; record on-behalf "
              "votes for non-Discord roster members; open the roster "
-             "builder. Approve & Post offers the Apply-Faction-Roles "
-             "step if matchmaking puts you on Rulebringers."),
+             "builder; Approve & Post finalises the roster."),
             ("/canyonstorm attendance [event_date]",
              "💎 Record who attended each assigned slot after the event; "
              "writes to the attendance Sheet tab."),

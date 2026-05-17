@@ -199,7 +199,7 @@ class TestStructuredStormConfig:
         cfg = config.get_structured_storm_config(TEST_GUILD_ID, "DS")
         assert cfg["structured_flow_enabled"] is False
         assert cfg["sub_mode"]                == "pool"
-        assert cfg["power_column_name"]       == ""
+        assert cfg["power_metric_column"]     == "B"
 
     def test_tab_defaults_are_event_type_aware(self, temp_db):
         import config
@@ -239,7 +239,7 @@ class TestStructuredStormConfig:
         updated = config.save_structured_storm_config(
             TEST_GUILD_ID, "DS",
             structured_flow_enabled=True,
-            power_column_name="1st Squad Power",
+            power_metric_column="F",
             sub_mode="paired",
             signup_channel_id=12345,
             signup_schedule_cron="0 14 * * 0",
@@ -253,7 +253,7 @@ class TestStructuredStormConfig:
 
         cfg = config.get_structured_storm_config(TEST_GUILD_ID, "DS")
         assert cfg["structured_flow_enabled"] is True
-        assert cfg["power_column_name"]       == "1st Squad Power"
+        assert cfg["power_metric_column"]     == "F"
         assert cfg["sub_mode"]                == "paired"
         assert cfg["signup_channel_id"]       == 12345
         assert cfg["signup_schedule_cron"]    == "0 14 * * 0"
@@ -306,19 +306,19 @@ class TestStructuredStormConfig:
         config.save_structured_storm_config(
             TEST_GUILD_ID, "DS",
             structured_flow_enabled=True,
-            power_column_name="1st Squad Power",
+            power_metric_column="F",
         )
         config.save_structured_storm_config(
             TEST_GUILD_ID, "CS",
             structured_flow_enabled=False,
-            power_column_name="Total Power",
+            power_metric_column="G",
         )
         ds = config.get_structured_storm_config(TEST_GUILD_ID, "DS")
         cs = config.get_structured_storm_config(TEST_GUILD_ID, "CS")
         assert ds["structured_flow_enabled"] is True
         assert cs["structured_flow_enabled"] is False
-        assert ds["power_column_name"] == "1st Squad Power"
-        assert cs["power_column_name"] == "Total Power"
+        assert ds["power_metric_column"] == "F"
+        assert cs["power_metric_column"] == "G"
 
     def test_default_structured_tab_helper(self):
         import config
@@ -329,9 +329,8 @@ class TestStructuredStormConfig:
         assert config.default_structured_tab("DS", "unknown_field") == ""
 
     def test_schedule_fields_round_trip(self, temp_db):
-        """#131 auto-scheduler fields: event_day_of_week, signup_lead_days,
-        signup_time. Stored on guild_storm_config; surfaced via
-        get_structured_storm_config."""
+        """Auto-scheduler fields (post-Rule H / #164): poll_day_of_week +
+        signup_time. Event day is game-defined, no longer stored."""
         import config
         config.save_storm_config(
             TEST_GUILD_ID, "DS",
@@ -341,12 +340,11 @@ class TestStructuredStormConfig:
         config.save_structured_storm_config(
             TEST_GUILD_ID, "DS",
             structured_flow_enabled=True,
-            event_day_of_week=6, signup_lead_days=5, signup_time="14:00",
+            poll_day_of_week=2, signup_time="14:00",
         )
         cfg = config.get_structured_storm_config(TEST_GUILD_ID, "DS")
-        assert cfg["event_day_of_week"] == 6
-        assert cfg["signup_lead_days"]  == 5
-        assert cfg["signup_time"]       == "14:00"
+        assert cfg["poll_day_of_week"] == 2
+        assert cfg["signup_time"]      == "14:00"
 
     def test_schedule_dow_out_of_range_normalises_to_negative_one(self, temp_db):
         """Save should reject DOW > 6 or < -1 by normalising to -1 — wizard
@@ -360,18 +358,17 @@ class TestStructuredStormConfig:
         config.save_structured_storm_config(
             TEST_GUILD_ID, "DS",
             structured_flow_enabled=True,
-            event_day_of_week=42, signup_lead_days=5, signup_time="14:00",
+            poll_day_of_week=42, signup_time="14:00",
         )
         cfg = config.get_structured_storm_config(TEST_GUILD_ID, "DS")
-        assert cfg["event_day_of_week"] == -1
+        assert cfg["poll_day_of_week"] == -1
 
     def test_schedule_default_unconfigured(self, temp_db):
-        """Never-configured schedule reads as dow=-1, lead=5, time=''."""
+        """Never-configured schedule reads as poll_dow=-1, time=''."""
         import config
         cfg = config.get_structured_storm_config(TEST_GUILD_ID, "DS")
-        assert cfg["event_day_of_week"] == -1
-        assert cfg["signup_lead_days"]  == 5
-        assert cfg["signup_time"]       == ""
+        assert cfg["poll_day_of_week"] == -1
+        assert cfg["signup_time"]      == ""
 
 
 class TestPowerRefreshDmCooldown:

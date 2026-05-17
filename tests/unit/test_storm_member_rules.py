@@ -114,18 +114,6 @@ class TestSaveAndList:
         assert rules[0].sub_type == "zone"
         assert rules[0].value    == "Power Tower"
 
-    def test_save_per_member_special_role(self, fake_sheet):
-        fake, gid = fake_sheet
-        ok, _ = smr.save_rule(gid, "DS", smr.Rule(
-            rule_type="per_member", subject="Bob",
-            sub_type="special_role", value="judicator",
-        ))
-        assert ok is True
-        rules = smr.list_rules(gid, "DS")
-        assert rules[0].sub_type == "special_role"
-        assert rules[0].value    == "judicator"
-
-
 class TestDuplicateDetection:
     def test_power_band_duplicate_rejected(self, fake_sheet):
         fake, gid = fake_sheet
@@ -548,9 +536,201 @@ class TestRenderLabel:
         assert "Charlie" in r.render_label()
         assert "Power Tower" in r.render_label()
 
-    def test_per_member_special_role_label(self):
-        r = smr.Rule(rule_type="per_member", subject="Bob",
-                     sub_type="special_role", value="judicator")
-        label = r.render_label()
-        assert "Bob" in label
-        assert "Judicator" in label
+
+class TestRulesListAddRuleButton:
+    """#169 (Rule M): the list view surfaces a [➕ Add rule] button
+    alongside the per-rule Clear buttons. Empty state shows the same
+    button so officers can add their first rule from the list."""
+
+    def test_add_rule_button_present_on_empty_list(self):
+        view = smr._RulesListView(
+            guild_id=123, user_id=456, event_type="DS", rules=[],
+        )
+        labels = [getattr(c, "label", "") for c in view.children]
+        assert any("Add rule" in lab for lab in labels)
+
+    def test_add_rule_button_present_with_existing_rules(self):
+        rules = [
+            smr.Rule(rule_type="power_band", subject="250000000", value="Power Tower"),
+            smr.Rule(rule_type="per_member", subject="Alice", sub_type="zone", value="Power Tower"),
+        ]
+        view = smr._RulesListView(
+            guild_id=123, user_id=456, event_type="DS", rules=rules,
+        )
+        labels = [getattr(c, "label", "") for c in view.children]
+        # Both Clear buttons + the Add Rule button.
+        assert any("Clear 1" in lab for lab in labels)
+        assert any("Clear 2" in lab for lab in labels)
+        assert any("Add rule" in lab for lab in labels)
+
+
+class TestAddRuleTypePickerView:
+    """The Add-rule choice view branches into the InlinePowerBandView
+    (zone-Select + power-modal) for power-band rules, or points the
+    officer at the slash command for per-member rules (Discord modals
+    can't host a member picker)."""
+
+    def test_renders_choice_buttons_for_ds(self):
+        view = smr._AddRuleTypePickerView(event_type="DS", owner_id=1)
+        labels = [getattr(c, "label", "") for c in view.children]
+        assert any("power-band" in lab.lower() for lab in labels)
+        assert any("per-member" in lab.lower() for lab in labels)
+        assert any("Cancel" in lab for lab in labels)
+        assert view.parent == "desertstorm"
+
+    def test_renders_choice_buttons_for_cs(self):
+        view = smr._AddRuleTypePickerView(event_type="CS", owner_id=1)
+        assert view.parent == "canyonstorm"
+
+
+class TestZoneAutocomplete:
+    """Rule E (#168 follow-up): `set_power_band` and `set_member_zone`
+    slash commands gain an autocomplete callback on their `zone`
+    parameter so officers see canonical zones instead of free-text-ing
+    a typo (which would previously save with a "not in canonical list"
+    warning)."""
+
+    @pytest.mark.asyncio
+    async def test_ds_autocomplete_returns_canonical_zones(self):
+        from unittest.mock import MagicMock
+        cb = smr._make_zone_autocomplete("DS")
+        choices = await cb(MagicMock(), "")
+        labels = [c.name for c in choices]
+        # DS canonical set includes Nuclear Silo; Power Tower is CS.
+        assert "Nuclear Silo" in labels
+        assert "Power Tower" not in labels
+        # Discord caps at 25 — DS has 11 canonical zones, comfortably under.
+        assert len(choices) <= 25
+
+    @pytest.mark.asyncio
+    async def test_cs_autocomplete_returns_display_name_zones(self):
+        """Post-#178: CS autocomplete returns display names
+        (`Power Tower`, `Data Center 1`, …) matching what officers see
+        everywhere else in the UI. Pre-#178 this surfaced internal
+        keys (`s1_power_tower`) — a leak of the multi-stage data
+        model that the rest of the UI hides."""
+        from unittest.mock import MagicMock
+        cb = smr._make_zone_autocomplete("CS")
+        choices = await cb(MagicMock(), "")
+        labels = [c.name for c in choices]
+        # Display names surface; internal keys do not.
+        assert "Power Tower" in labels
+        assert "Data Center 1" in labels
+        assert "Virus Lab" in labels
+        assert not any(lab.startswith("s1_") for lab in labels)
+        assert not any(lab.startswith("s2_") for lab in labels)
+        assert not any(lab.startswith("s3_") for lab in labels)
+        # Power Tower appears in CS stages 1 AND 3 — deduped to one
+        # autocomplete option.
+        assert labels.count("Power Tower") == 1
+        # DS-only zones absent.
+        assert "Nuclear Silo" not in labels
+        # Cap respected — 13 unique CS display names, well under 25.
+        assert len(choices) <= 25
+
+    @pytest.mark.asyncio
+    async def test_autocomplete_filters_on_current_substring(self):
+        """Officers typing a partial name (`hosp`) get matching
+        zones (`Field Hospital I/II/III/IV`)."""
+        from unittest.mock import MagicMock
+        cb = smr._make_zone_autocomplete("DS")
+        choices = await cb(MagicMock(), "hosp")
+        labels = [c.name for c in choices]
+        assert all("hosp" in lab.lower() for lab in labels)
+        assert len(labels) >= 1  # at least one Field Hospital matches
+
+    @pytest.mark.asyncio
+    async def test_autocomplete_filter_is_case_insensitive(self):
+        from unittest.mock import MagicMock
+        cb = smr._make_zone_autocomplete("DS")
+        upper = await cb(MagicMock(), "NUCLEAR")
+        lower = await cb(MagicMock(), "nuclear")
+        assert [c.name for c in upper] == [c.name for c in lower]
+        assert any("Nuclear" in c.name for c in upper)
+
+    @pytest.mark.asyncio
+    async def test_autocomplete_empty_current_returns_all(self):
+        from unittest.mock import MagicMock
+        cb = smr._make_zone_autocomplete("DS")
+        choices = await cb(MagicMock(), "")
+        # DS canonical set is 11 zones.
+        assert len(choices) >= 10
+
+
+class TestListRulesCsLegacyValueMigration:
+    """#178: per-member zone rules + power-band rules from pre-#178 CS
+    data carry legacy internal-key values (`s1_power_tower`). The
+    rule reader translates them to display names at read time so the
+    auto-fill apply path's `find_zone(rule.value)` lookup matches the
+    new display-name presets.
+
+    DS rules are unaffected (no internal-key shape on DS)."""
+
+    def test_cs_per_member_zone_rule_value_translated(self, fake_sheet):
+        fake, gid = fake_sheet
+        # Simulate pre-#178 alliance data by writing the rule row
+        # directly via the storage path with the internal-key value.
+        ok, _ = smr.save_rule(gid, "CS", smr.Rule(
+            rule_type="per_member", subject="Alice",
+            sub_type="zone", value="s1_power_tower",
+        ))
+        assert ok is True
+        rules = smr.list_rules(gid, "CS")
+        # On read, the value translates to the display name.
+        zone_rules = [r for r in rules if r.sub_type == "zone"]
+        assert len(zone_rules) == 1
+        assert zone_rules[0].value == "Power Tower"
+
+    def test_cs_power_band_rule_value_translated(self, fake_sheet):
+        fake, gid = fake_sheet
+        ok, _ = smr.save_rule(gid, "CS", smr.Rule(
+            rule_type="power_band", subject="250000000",
+            value="s3_virus_lab",
+        ))
+        assert ok is True
+        rules = smr.list_rules(gid, "CS")
+        band_rules = [r for r in rules if r.rule_type == "power_band"]
+        assert len(band_rules) == 1
+        assert band_rules[0].value == "Virus Lab"
+
+    def test_cs_display_name_value_passes_through_unchanged(self, fake_sheet):
+        fake, gid = fake_sheet
+        # New rules saved with display names already — no translation
+        # surprise (translator is idempotent on display names).
+        ok, _ = smr.save_rule(gid, "CS", smr.Rule(
+            rule_type="per_member", subject="Bob",
+            sub_type="zone", value="Power Tower",
+        ))
+        assert ok is True
+        rules = smr.list_rules(gid, "CS")
+        assert rules[0].value == "Power Tower"
+
+    def test_ds_rules_not_translated(self, fake_sheet):
+        """DS doesn't have internal-key shape; the translator only
+        fires on the CS reader branch."""
+        fake, gid = fake_sheet
+        # DS doesn't have "s1_power_tower" as a known internal key,
+        # but even if a DS rule happened to carry that string verbatim
+        # the DS reader leaves it alone.
+        ok, _ = smr.save_rule(gid, "DS", smr.Rule(
+            rule_type="per_member", subject="Carol",
+            sub_type="zone", value="Power Tower",
+        ))
+        assert ok is True
+        rules = smr.list_rules(gid, "DS")
+        assert rules[0].value == "Power Tower"
+
+    def test_non_zone_subtype_team_value_not_translated(self, fake_sheet):
+        """Per-member team rules carry Team A / Team B values, not zone
+        names. The translator skips them so a "B" team value stays
+        "B" (not accidentally matched against the internal-key map)."""
+        fake, gid = fake_sheet
+        ok, _ = smr.save_rule(gid, "CS", smr.Rule(
+            rule_type="per_member", subject="Dan",
+            sub_type="team", value="B",
+        ))
+        assert ok is True
+        rules = smr.list_rules(gid, "CS")
+        team_rules = [r for r in rules if r.sub_type == "team"]
+        assert team_rules[0].value == "B"
+

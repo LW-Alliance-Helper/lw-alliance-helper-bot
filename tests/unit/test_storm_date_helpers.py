@@ -189,41 +189,38 @@ class TestParseEventDateIso:
 
 
 class TestNextEventDate:
+    """Post-Rule H (#164): event day is game-defined. DS = Friday (4),
+    CS = Thursday (3). `guild_id` is accepted for signature stability
+    but ignored. No config lookup happens."""
+
     TODAY = _dt.date(2026, 5, 13)  # Wednesday
 
-    def test_uses_configured_event_day_of_week(self):
-        # 5 = Saturday
-        with patch("config.get_structured_storm_config") as m:
-            m.return_value = {"event_day_of_week": 5}
-            iso = sdh.next_event_date(123, "DS", today=self.TODAY)
-        # Next Saturday after a Wednesday is 3 days later
-        assert iso == "2026-05-16"
+    def test_ds_returns_next_friday(self):
+        iso = sdh.next_event_date(123, "DS", today=self.TODAY)
+        # Next Friday after Wednesday is 2 days later
+        assert iso == "2026-05-15"
 
-    def test_falls_back_to_sunday_when_unconfigured(self):
-        with patch("config.get_structured_storm_config") as m:
-            m.return_value = {"event_day_of_week": -1}
-            iso = sdh.next_event_date(123, "DS", today=self.TODAY)
-        # Sunday is 4 days after Wednesday
+    def test_cs_returns_next_thursday(self):
+        iso = sdh.next_event_date(123, "CS", today=self.TODAY)
+        # Next Thursday after Wednesday is 1 day later
+        assert iso == "2026-05-14"
+
+    def test_ds_today_is_friday_rolls_to_next_week(self):
+        # Friday 2026-05-15 -> next Friday is 2026-05-22 (same_day_rolls=True)
+        friday = _dt.date(2026, 5, 15)
+        iso = sdh.next_event_date(123, "DS", today=friday)
+        assert iso == "2026-05-22"
+
+    def test_cs_today_is_thursday_rolls_to_next_week(self):
+        thursday = _dt.date(2026, 5, 14)
+        iso = sdh.next_event_date(123, "CS", today=thursday)
+        assert iso == "2026-05-21"
+
+    def test_unknown_event_type_falls_back_to_sunday(self):
+        # Defensive: anything other than DS/CS uses Sunday (6).
+        iso = sdh.next_event_date(123, "XX", today=self.TODAY)
+        # Sunday after Wednesday is 4 days later
         assert iso == "2026-05-17"
-
-    def test_falls_back_to_sunday_when_config_missing_key(self):
-        with patch("config.get_structured_storm_config") as m:
-            m.return_value = {}
-            iso = sdh.next_event_date(123, "DS", today=self.TODAY)
-        assert iso == "2026-05-17"
-
-    def test_falls_back_to_sunday_when_config_raises(self):
-        with patch("config.get_structured_storm_config", side_effect=RuntimeError("db down")):
-            iso = sdh.next_event_date(123, "DS", today=self.TODAY)
-        assert iso == "2026-05-17"
-
-    def test_today_is_event_day_rolls_to_next_week(self):
-        # event_day = 2 (Wednesday) and today is Wednesday
-        with patch("config.get_structured_storm_config") as m:
-            m.return_value = {"event_day_of_week": 2}
-            iso = sdh.next_event_date(123, "DS", today=self.TODAY)
-        # +7 days -> 2026-05-20
-        assert iso == "2026-05-20"
 
 
 # ── most_recent_event_date ──────────────────────────────────────────────────

@@ -652,18 +652,20 @@ Polish pass + Decisions 10, 13.
   "Would you like to apply the same settings to these as well?"
   `[ ▾ Choose siblings to apply to… ]` →
   `[ ▾ Select zones ]`.
-- **Phase-aware 3-modal wizard (your 12.9 question)**: investigate
-  whether the 3-page wizard (capacity → floors → priority) can
-  collapse. Discord modals are limited to 5 fields; phase-aware
-  totals up to 8 fields across DS-both-teams + 3 phases. Two-page
-  layouts are achievable (capacity + priority on page 1, minimums
-  on page 2) and remove one "Next" hop. Flag as a sub-task with
-  the editor polish; not a hard requirement to ship together.
+- **Phase-aware 3-modal wizard (your 12.9 question)**: shipped as
+  a 2-page collapse. Field-count math at the 5-component Discord
+  cap: capacity + priority on page 1 would be 3 + 3 = 6 fields
+  for 3-phase, so the originally-floated partition isn't viable.
+  Capacity + minimums on page 1 is 3 + 2 = exactly 5 (worst case:
+  DS both teams + 3 phases) and leaves priority on page 2 (up to
+  3 fields). Implementation lands the new
+  `_ZonePhaseCapacityAndFloorsModal` and removes the old floors
+  modal; the priority modal is unchanged.
 - **Phase-mode dropdown labels**: drop the redundant "Yes — ":
   `Flat (no phases)` / `2 Phases` / `3 Phases`.
 - **Code**: `storm_strategy.py` — drop Add Zone class + button,
   re-render phase-aware editor per Rule L, button-label sweep,
-  mode-toggle copy reword, modal collapse investigation.
+  mode-toggle copy reword, phase-wizard collapsed to 2 pages.
 
 ### Section 13 — Member rules (~lines 7195-7983)
 Biggest cluster of Rule A + Rule G + Rule E work, plus Rule M

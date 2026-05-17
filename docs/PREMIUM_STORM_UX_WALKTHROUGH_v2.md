@@ -108,18 +108,8 @@ Embed colour is gold for DS, orange for CS. Title format
 `{emoji} {event_label} — Sign Up for {date_pretty}` where
 `{date_pretty}` flows through `format_event_date()` and renders as
 `Saturday, May 18, 2026` (no leading zero on the day, full weekday
-name, full month name).
-
-> **Code vs. doc divergence on this screen.** The current
-> `_build_registration_embed` in [storm_signup_post.py](../storm_signup_post.py)
-> emits a different description ("Pick one option below. Changing your
-> vote replaces the previous one — feel free to update if your
-> availability shifts before the event."), an `Available time slots`
-> field below the description, and a footer line ("Vote recorded with
-> timestamp — leadership uses /desertstorm signups to review."). The
-> box above reflects Kevin's first-sweep `_edited.md` shape — keep it
-> as the spec if the code should be simplified, or update the doc to
-> mirror the code if the extra field + footer are the intended state.
+name, full month name). The slot times live on the buttons only —
+the embed body is the simpler description + vote-rules disclaimer.
 
 **Variant B — Desert Storm, Team A only alliance (`teams=A`):**
 
@@ -175,16 +165,9 @@ After Alice clicks `🅰️ Team A: 9pm ET (18:00 server time)`:
 (ephemeral — only Alice sees it)
 ```
 
-The bold word changes by vote: `Team A` / `Team B` / `Either time
-works` / `Cannot participate`.
-
-> **Code vs. doc divergence.** The current `_handle_signup_click`
-> emits the ack as `✅ Vote recorded: **Team A**. You can change your
-> vote any time before the event.` — just the team name from
-> `_VOTE_CONFIRMATIONS`, no slot label. The longer form above (with the
-> slot label included) is from Kevin's first-sweep `_edited.md` — keep
-> the box as the spec if the code should re-include the slot label, or
-> update the doc to mirror the code if just-the-team is intended.
+The token changes by vote:
+- `Team A: <slot a>` / `Team B: <slot b>` — team votes include the slot label so the ack matches the button members clicked.
+- `Either time works` / `Cannot participate` — no slot label.
 
 ---
 
@@ -273,18 +256,13 @@ Power`, the bot strips the leading `Your`/`My` so the message reads
 naturally — "your **Power**" instead of the awkward "your **Your
 Power**".
 
-> **Code vs. doc divergence — decision since first sweep.** Per Rule
-> C / #165, the power column is selected by sheet **letter** (A–Z),
-> not by header text. The current DM body in `storm_signup_view.py`
-> reflects that: `Heads up — your power value on the alliance roster
-> Sheet isn't readable. Could you update it before the next storm so
-> leadership has accurate numbers for zone assignments?` — no column
-> name, no Your/My stripping. The box above is the first-sweep spec
-> (pre-#165). If we want the column header surfaced in the DM, the
-> code needs to look it up from the configured letter — but the #165
-> design intent was to drop the dependency on header text entirely,
-> so the current code is probably the desired end state and the doc
-> should follow.
+The header is **looked up from the configured letter at DM time**
+(`storm_roster_builder._read_power_column_header`): leadership picks
+the column by letter on the setup side (Rule C / #165 — header text
+can drift), but members see the current header label so they know
+what to update on the sheet. If the header can't be resolved (sheet
+not configured, column out of range, transient gspread failure) the
+DM falls back to the generic "your power value" wording.
 
 Failure handling:
 - `discord.Forbidden` (member has DMs disabled): cooldown is kept,
@@ -587,15 +565,6 @@ After click, the picked button shows the ack inline:
 ```
 
 *(`Paired` variant: `✅ Sub mode: Paired`.)*
-
-> **Code vs. doc divergence.** The current `SubModeView` in
-> `setup_cog._run_structured_flow_setup_step` renders the un-picked
-> default with the green `✅ Pool` style (matching the post-click
-> style) rather than the `[Use Default: Pool]` / `[Use Current: Pool]`
-> pattern Kevin's first-sweep _edited.md shows. The box above is the
-> first-sweep spec — adopting the `Use Default` / `Use Current` button
-> convention here would align this wizard with the rest of the
-> setup flow.
 
 ---
 

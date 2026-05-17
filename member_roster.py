@@ -481,7 +481,7 @@ class MemberRosterCog(commands.Cog):
             return
 
         await interaction.followup.send(
-            f"✅ Synced **{count}** members to the **{cfg['tab_name']}** tab.",
+            f"✅ Synced {count} members to the {cfg['tab_name']} tab.",
             ephemeral=True,
         )
 

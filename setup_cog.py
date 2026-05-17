@@ -5129,7 +5129,7 @@ async def run_storm_setup(interaction: discord.Interaction, bot, event_type: str
                 f"📣 Want to post your first {label} sign-up now? "
                 f"It'll land in <#{structured_cfg['signup_channel_id']}> "
                 f"with vote buttons members can click. You can also wait "
-                f"for the auto-schedule to fire it (if you set one up) "
+                f"for the auto-schedule to post it (if you set one up) "
                 f"or run `/{parent} post_signup` later.",
                 view=post_offer,
             )
@@ -6018,22 +6018,34 @@ async def _run_structured_flow_setup_step(
             cleaned = "B"
         result["power_metric_column"] = cleaned
 
-        # Sub mode
+        # Sub mode — Kevin's first-sweep _edited convention: the
+        # green/default button reads `Use Default: <X>` on first run
+        # (no saved value) or `Use Current: <X>` on re-entry. The
+        # other button shows its descriptive label. Matches the
+        # `ask_keep_or_change` pattern the rest of the setup flow
+        # uses so officers learn one button-label idiom across the
+        # whole wizard.
+        _saved_sub_mode = result.get("sub_mode")
+        _has_saved_sub_mode = _saved_sub_mode in ("pool", "paired")
+        _effective_mode = _saved_sub_mode if _has_saved_sub_mode else "pool"
+
         class SubModeView(discord.ui.View):
-            def __init__(self, current_mode: str):
+            def __init__(self, current_mode: str, has_saved: bool):
                 super().__init__(timeout=120)
                 self.selected = None
                 self.cancelled = False
-                pool_style = (
-                    discord.ButtonStyle.success if current_mode == "pool"
-                    else discord.ButtonStyle.primary
-                )
-                paired_style = (
-                    discord.ButtonStyle.success if current_mode == "paired"
-                    else discord.ButtonStyle.secondary
-                )
-                pool_label = "✅ Pool" if current_mode == "pool" else "Pool — flat sub list"
-                paired_label = "✅ Paired" if current_mode == "paired" else "Paired — primary↔sub pairs"
+                if current_mode == "pool":
+                    pool_label = (
+                        "Use Current: Pool" if has_saved else "Use Default: Pool"
+                    )
+                    pool_style = discord.ButtonStyle.success
+                    paired_label = "Paired — primary↔sub pairs"
+                    paired_style = discord.ButtonStyle.primary
+                else:
+                    pool_label = "Pool — flat sub list"
+                    pool_style = discord.ButtonStyle.primary
+                    paired_label = "Use Current: Paired"
+                    paired_style = discord.ButtonStyle.success
 
                 pool_btn = discord.ui.Button(label=pool_label, style=pool_style)
                 paired_btn = discord.ui.Button(label=paired_label, style=paired_style)
@@ -6042,7 +6054,7 @@ async def _run_structured_flow_setup_step(
                     self.selected = "pool"
                     for item in self.children: item.disabled = True
                     await wizard_registry.safe_edit_response(
-                        inter, content="✅ Sub mode: **Pool**", view=self
+                        inter, content="✅ Sub mode: Pool", view=self
                     )
                     self.stop()
 
@@ -6050,7 +6062,7 @@ async def _run_structured_flow_setup_step(
                     self.selected = "paired"
                     for item in self.children: item.disabled = True
                     await wizard_registry.safe_edit_response(
-                        inter, content="✅ Sub mode: **Paired**", view=self
+                        inter, content="✅ Sub mode: Paired", view=self
                     )
                     self.stop()
 
@@ -6059,7 +6071,7 @@ async def _run_structured_flow_setup_step(
                 self.add_item(pool_btn)
                 self.add_item(paired_btn)
 
-        sub_view = SubModeView(result.get("sub_mode") or "pool")
+        sub_view = SubModeView(_effective_mode, _has_saved_sub_mode)
         await channel.send(
             "**Sub Mode**\n"
             "How should subs be tracked when leadership builds a roster?\n"
@@ -6086,14 +6098,14 @@ async def _run_structured_flow_setup_step(
         if signup_ch_view.is_current_stale:
             await channel.send(
                 f"⚠️ Your previously configured {label} sign-up channel no longer "
-                "exists. Pick a new one below."
+                "exists. Select a new channel."
             )
         parent_cmd = "desertstorm" if event_type == "DS" else "canyonstorm"
         await channel.send(
             f"**{label} Sign-Up Channel**\n"
             "The bot will auto-post a sign-up poll here each week. Members click "
-            "buttons to register their availability; leadership opens the officer "
-            f"view via `/{parent_cmd} signups`.",
+            "buttons to register their availability.\n"
+            f"You can open the officer view via `/{parent_cmd} signups`.",
             view=signup_ch_view,
         )
         await wait_view_or_cancel(signup_ch_view, cancel_event)
@@ -6144,8 +6156,8 @@ async def _run_structured_flow_setup_step(
                 channel,
                 f"**{label_text} Tab**\n"
                 f"Which Google Sheet tab should store {label} "
-                f"{label_text.lower()}? The bot creates and maintains this "
-                f"tab — leave the default if you don't have a preference.",
+                f"{label_text.lower()}? The bot creates and maintains "
+                f"this tab.",
                 default=tab_default,
                 current=result.get(tab_key, ""),
                 modal_title=f"{label_text} Tab Name",
@@ -6236,21 +6248,28 @@ async def _run_structured_flow_setup_step(
     from config import default_structured_tab
 
     # ── Strategy Presets ────────────────────────────────────────────────
+    # Bullet-list explainer per Kevin's first-sweep _edited.md spec:
+    # leadership sees a structured "what's in a preset" breakdown before
+    # being asked to name a Sheet tab for it (#144).
     await channel.send(
         "**Strategy Presets**\n"
-        "A strategy preset is a saved zone layout — which zones exist, "
-        "how many spots each holds, and (optionally) per-zone power minimums "
-        f"for {label}. When leadership builds a roster, they pick which "
-        "preset to apply; the bot uses the preset to gate eligibility and "
-        "lay out the team. Manage presets with "
+        "A strategy preset is a saved zone layout including:\n"
+        "Maximum players per zone\n"
+        "Optional power requirements\n"
+        "Priority\n"
+        "\n"
+        f"When leadership builds a roster, they pick which preset to "
+        f"apply. The bot uses the preset to gate eligibility and fill "
+        f"out the team.\n"
+        f"\n"
+        f"Manage presets with\n"
         f"`/{parent} strategy create / edit / list / apply`."
     )
     picked = await ask_keep_or_change(
         channel,
         f"**Strategy Presets Tab**\n"
         f"Which Google Sheet tab should store {label} strategy presets? "
-        f"The bot creates and maintains this tab — leave the default if "
-        f"you don't have a preference.",
+        f"The bot creates and maintains this tab.",
         default=default_structured_tab(event_type, "strategies_tab"),
         current=result.get("strategies_tab", ""),
         modal_title="Strategy Presets Tab Name",
@@ -6291,31 +6310,32 @@ async def _run_structured_flow_setup_step(
         # proceeds; the on_timeout hook strips the buttons.
 
     # ── Member Rules ────────────────────────────────────────────────────
-    # Per-member rule list differs by event type: DS has teams, CS doesn't.
-    if event_type == "DS":
-        per_member_example = "`Alice always plays Team A`"
-        per_member_subcmds = "`set_member_team` / `set_member_zone`"
-    else:
-        per_member_example = "`Carol always plays Power Tower`"
-        per_member_subcmds = "`set_member_zone`"
+    # Per Rule A / #166 both DS and CS support `teams=both/A/B`, so the
+    # per-member rule list (and the example) is the same for both event
+    # types. Kevin's first-sweep _edited spec uses a structured Power-
+    # band + Per-member breakdown with explicit "Example:" lines.
     await channel.send(
         "**Member Rules**\n"
         "Member rules tell the roster builder how to treat individual "
-        "members. Two types:\n"
-        "• **Power-band** — `members ≥ 250M are eligible for Power Tower`. "
-        "Primary rule type; reads against the power column you configured "
-        "earlier.\n"
-        "• **Per-member** — escape hatch for special cases: "
-        f"{per_member_example}. "
-        f"Add rules later with `/{parent} member_rule set_power_band` "
-        f"/ {per_member_subcmds}."
+        "members.\n"
+        "\n"
+        "There are two types of Member rules.\n"
+        "• Power-band:\n"
+        "     Example: `members ≥ 250M are eligible for Power Tower`\n"
+        "     Primary rule type that reads against the power column "
+        "you configured earlier.\n"
+        "• Per-member:\n"
+        "     Used for special cases, example: `Alice always plays on Team A`,\n"
+        "\n"
+        f"Add rules later with\n"
+        f"  `/{parent} member_rule` : `set_power_band` /\n"
+        f"  `set_member_team` / `set_member_zone`."
     )
     picked = await ask_keep_or_change(
         channel,
         f"**Member Rules Tab**\n"
         f"Which Google Sheet tab should store {label} member rules? "
-        f"The bot creates and maintains this tab — leave the default if "
-        f"you don't have a preference.",
+        f"The bot creates and maintains this tab.",
         default=default_structured_tab(event_type, "member_rules_tab"),
         current=result.get("member_rules_tab", ""),
         modal_title="Member Rules Tab Name",
@@ -6338,16 +6358,13 @@ async def _run_structured_flow_setup_step(
         rule_offer = _InlineCreateMemberRuleOffer(
             owner_id=user.id, event_type=event_type, parent=parent,
         )
-        # Per-member subcommands differ by event type (CS has no teams).
-        if event_type == "DS":
-            per_member_pointer = (
-                f"`/{parent} member_rule set_member_team` (or "
-                f"`set_member_zone`)"
-            )
-        else:
-            per_member_pointer = (
-                f"`/{parent} member_rule set_member_zone`"
-            )
+        # Per Rule A / #166 both DS and CS support `set_member_team` —
+        # CS gained the subcommand when the single-team framing was
+        # reverted. Pointer text is identical for both event types.
+        per_member_pointer = (
+            f"`/{parent} member_rule set_member_team` (or "
+            f"`set_member_zone`)"
+        )
         rule_offer.message = await channel.send(
             f"Want to add your first {label} rule now? The button opens "
             f"a quick modal for a power-band rule (the most common type); "

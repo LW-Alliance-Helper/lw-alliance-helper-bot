@@ -9,6 +9,8 @@ rendering and registration-embed construction.
 import datetime as _dt
 from unittest.mock import MagicMock, patch
 
+import pytest
+
 import storm_signup_post as ssp
 
 from tests.unit.test_config import TEST_GUILD_ID
@@ -49,26 +51,40 @@ class TestRegistrationEmbed:
         assert "Desert Storm" in embed.title
         assert "May" in embed.title or "2026" in embed.title
 
-    def test_embed_includes_both_time_options_for_ds(self):
+    def test_embed_describes_vote_rules(self):
+        """Per Kevin's first-sweep _edited preference, the embed body
+        is the simpler 'Select your availability!' + vote-replacement
+        disclaimer. The slot times live on the buttons (SignupView),
+        not in the embed body."""
         embed = ssp._build_registration_embed("DS", "2026-05-18", "9pm ET", "4pm ET")
-        # Description or fields should reference both times.
-        body = "\n".join([embed.description or ""] +
-                         [f.value or "" for f in embed.fields])
-        assert "9pm ET" in body
-        assert "4pm ET" in body
+        assert "Select your availability for Desert Storm" in embed.description
+        assert "Only 1 vote can be recorded" in embed.description
+        assert "replace the first vote" in embed.description
 
-    def test_embed_skips_empty_time_options(self):
-        embed = ssp._build_registration_embed("CS", "2026-05-18", "9pm ET", "")
-        body = "\n".join([f.value or "" for f in embed.fields])
-        assert "9pm ET" in body
-        # No stray empty bullet
-        assert "**\n" not in body
+    def test_embed_does_not_include_time_field(self):
+        """The slot labels are rendered on the SignupView's buttons
+        only — they don't appear in the embed body or fields anymore.
+        Drop confirms Kevin's first-sweep preferred shape."""
+        embed = ssp._build_registration_embed("DS", "2026-05-18", "9pm ET", "4pm ET")
+        # No fields at all on the post-realignment embed.
+        assert embed.fields == []
+        body = embed.description or ""
+        assert "9pm ET" not in body
+        assert "4pm ET" not in body
+
+    def test_embed_does_not_include_footer(self):
+        """Kevin's first-sweep preferred shape drops the "Vote
+        recorded with timestamp — leadership uses /<parent> signups"
+        footer. Officers learn about the signups command from setup
+        prose + the walkthrough tour."""
+        embed = ssp._build_registration_embed("DS", "2026-05-18", "9pm ET", "4pm ET")
+        assert embed.footer.text is None or embed.footer.text == ""
 
     def test_cs_uses_orange_color(self):
         # Just a sanity check that the two events have distinct visual
         # treatments. Not strictly required, but loud-failure surface.
         ds = ssp._build_registration_embed("DS", "2026-05-18", "9pm ET", "4pm ET")
-        cs = ssp._build_registration_embed("CS", "2026-05-18", "9pm ET", "")
+        cs = ssp._build_registration_embed("CS", "2026-05-18", "10am ET", "9pm ET")
         assert ds.color != cs.color
 
 
@@ -125,60 +141,32 @@ class TestTodayInGuildTz:
 
 
 class TestRegistrationEmbedTeamsGate:
-    """#148 + Rule A / #166 — the embed's "Available time slots" lines
-    only render the slot(s) the alliance actually runs. A `teams=A`
-    alliance with a Team B time configured shouldn't surface Team B in
-    the embed. Applies to both DS and CS."""
+    """The teams-gate now lives on `SignupView` (button rendering),
+    not the embed body — Kevin's first-sweep _edited preferred shape
+    keeps the embed minimal. These tests confirm the embed accepts
+    every `teams` value without crashing; the actual `teams` gating
+    of which buttons render lives in `test_storm_signup_view.py`."""
 
-    def test_teams_a_omits_team_b_line(self):
+    @pytest.mark.parametrize("teams", ["both", "A", "B"])
+    def test_embed_accepts_teams_arg_without_emitting_times(self, teams):
         embed = ssp._build_registration_embed(
-            "DS", "2026-05-18", "9pm ET", "4pm ET", teams="A",
+            "DS", "2026-05-18", "9pm ET", "4pm ET", teams=teams,
         )
-        body = "\n".join(f.value or "" for f in embed.fields)
-        assert "9pm ET" in body
+        body = (embed.description or "") + "\n".join(
+            f.value or "" for f in embed.fields
+        )
+        assert "9pm ET" not in body
         assert "4pm ET" not in body
+        assert "Select your availability for Desert Storm" in embed.description
 
-    def test_teams_b_omits_team_a_line(self):
+    @pytest.mark.parametrize("teams", ["both", "A", "B"])
+    def test_cs_embed_accepts_teams_arg(self, teams):
         embed = ssp._build_registration_embed(
-            "DS", "2026-05-18", "9pm ET", "4pm ET", teams="B",
+            "CS", "2026-05-18", "10am ET", "9pm ET", teams=teams,
         )
-        body = "\n".join(f.value or "" for f in embed.fields)
-        assert "4pm ET" in body
-        assert "9pm ET" not in body
-
-    def test_teams_both_renders_both_lines(self):
-        """Default behaviour — same as before #148."""
-        embed = ssp._build_registration_embed(
-            "DS", "2026-05-18", "9pm ET", "4pm ET", teams="both",
+        body = (embed.description or "") + "\n".join(
+            f.value or "" for f in embed.fields
         )
-        body = "\n".join(f.value or "" for f in embed.fields)
-        assert "9pm ET" in body
-        assert "4pm ET" in body
-
-    def test_cs_teams_both_renders_both_lines(self):
-        """Post Rule A / #166 — CS supports two teams + two time slots
-        when the alliance opts into `teams=both` (the default)."""
-        embed = ssp._build_registration_embed(
-            "CS", "2026-05-18", "10am ET", "9pm ET", teams="both",
-        )
-        body = "\n".join(f.value or "" for f in embed.fields)
-        assert "10am ET" in body
-        assert "9pm ET" in body
-
-    def test_cs_teams_a_omits_team_b_line(self):
-        """Post Rule A / #166 — CS respects `teams=A` like DS."""
-        embed = ssp._build_registration_embed(
-            "CS", "2026-05-18", "10am ET", "9pm ET", teams="A",
-        )
-        body = "\n".join(f.value or "" for f in embed.fields)
-        assert "10am ET" in body
-        assert "9pm ET" not in body
-
-    def test_cs_teams_b_omits_team_a_line(self):
-        """Post Rule A / #166 — CS respects `teams=B` like DS."""
-        embed = ssp._build_registration_embed(
-            "CS", "2026-05-18", "10am ET", "9pm ET", teams="B",
-        )
-        body = "\n".join(f.value or "" for f in embed.fields)
-        assert "9pm ET" in body
         assert "10am ET" not in body
+        assert "9pm ET" not in body
+        assert "Select your availability for Canyon Storm" in embed.description

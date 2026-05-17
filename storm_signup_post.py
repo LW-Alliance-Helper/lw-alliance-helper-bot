@@ -68,36 +68,23 @@ def _build_registration_embed(event_type: str, event_date_iso: str,
                               teams: str = "both") -> discord.Embed:
     from storm_date_helpers import format_event_date
 
+    # `time_a` / `time_b` / `teams` are accepted on the signature so
+    # the caller (`post_registration`) can pass the configured slot
+    # labels through to the SignupView's button labels (the view
+    # surfaces the time on each button). The embed itself stays
+    # minimal: title, one-line ask, and the vote-replacement disclaimer.
     label = "Desert Storm" if event_type == "DS" else "Canyon Storm"
     emoji = "⚔️" if event_type == "DS" else "🏜️"
     date_pretty = format_event_date(event_date_iso)
     desc = (
-        f"Pick one option below. Changing your vote replaces the previous "
-        f"one — feel free to update if your availability shifts before the event."
+        f"Select your availability for {label}!\n"
+        f"Only 1 vote can be recorded. If you select a 2nd one, it will "
+        f"replace the first vote you cast."
     )
     embed = discord.Embed(
         title=f"{emoji} {label} — Sign Up for {date_pretty}",
         description=desc,
         color=discord.Color.gold() if event_type == "DS" else discord.Color.orange(),
-    )
-    # Single-team alliances see only their team's time slot — the
-    # opposite team's button doesn't render in SignupView, so the
-    # embed line would point at a slot members can't select. Applies
-    # to both DS and CS per Rule A / #166: both events can run one or
-    # two teams, decided by the alliance's `teams` config.
-    teams_norm = teams if teams in ("both", "A", "B") else "both"
-    show_a = teams_norm in ("both", "A")
-    show_b = teams_norm in ("both", "B")
-    if (show_a and time_a) or (show_b and time_b):
-        time_lines = []
-        if show_a and time_a:
-            time_lines.append(f"• **{time_a}**")
-        if show_b and time_b:
-            time_lines.append(f"• **{time_b}**")
-        embed.add_field(name="Available time slots", value="\n".join(time_lines), inline=False)
-    parent = "desertstorm" if event_type == "DS" else "canyonstorm"
-    embed.set_footer(
-        text=f"Vote recorded with timestamp — leadership uses /{parent} signups to review."
     )
     return embed
 

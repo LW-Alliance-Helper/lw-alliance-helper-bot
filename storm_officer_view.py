@@ -284,6 +284,18 @@ def _build_bucket_map(
     import config
     rows = config.get_storm_signups(guild.id, event_type, event_date) if guild else []
     by_target: dict[str, dict] = {r["target_member_id"]: r for r in rows}
+    # Lenient lookup: on-behalf votes stored before the picker's
+    # Discord-ID resolution landed (or for guilds where the picker
+    # fell back to name because of a roster mis-classification) are
+    # keyed by display name. Build a case-insensitive name index so
+    # the Discord-members loop below can re-attribute those rows to
+    # their live member rather than leaking them into the
+    # "phantom non-Discord" leftover bucket.
+    by_target_name_ci: dict[str, dict] = {
+        r["target_member_id"].lower(): r
+        for r in rows
+        if r["target_member_id"] and not r["target_member_id"].isdigit()
+    }
 
     buckets: dict[str, list[dict]] = {k: [] for k in _BUCKET_ORDER}
 
@@ -294,6 +306,16 @@ def _build_bucket_map(
         target_id = str(m.id)
         seen_targets.add(target_id)
         row = by_target.get(target_id)
+        # Stale-vote fallback: if no row keyed by Discord ID, try the
+        # case-insensitive display-name index. Catches on-behalf votes
+        # for this Discord member stored when the picker couldn't
+        # resolve to an ID. Mark the matched row as "consumed" so the
+        # leftover-rows loop below doesn't re-add it as a phantom.
+        if row is None:
+            matched_by_name = by_target_name_ci.get(m.display_name.lower())
+            if matched_by_name is not None:
+                row = matched_by_name
+                seen_targets.add(matched_by_name["target_member_id"])
         bucket = row["vote"] if row else "not_voted"
         if bucket not in buckets:
             bucket = "not_voted"
@@ -553,10 +575,23 @@ class _OnBehalfVoteView(discord.ui.View):
         # (when present) so submit can choose the right
         # `target_member_id`: Discord ID for actual Discord members
         # (matches the self-vote key shape from SignupView), or the
-        # name verbatim for non-Discord roster rows. Pre-fix every
-        # on-behalf vote stored the name regardless, which left
-        # Discord-member targets in the "Not voted yet" bucket
-        # alongside their actual vote.
+        # name verbatim for non-Discord roster rows.
+        #
+        # We ALSO cross-reference each picked name against the live
+        # guild membership. The roster Sheet's `not_on_discord`
+        # inference can mis-flag a Discord member on a cold cache or
+        # when the presence column header drifts; without this fallback
+        # an on-behalf vote for a real Discord member would end up
+        # keyed by name and never join back to the bucket-builder's
+        # Discord-ID-keyed lookup. The Discord membership is the most
+        # authoritative signal: if the picked name matches a live
+        # member's display name, use their Discord ID regardless of
+        # what the roster row says.
+        guild = parent_view.guild if parent_view is not None else None
+        discord_by_name = {}
+        if guild is not None:
+            for gm in _discord_member_pool(guild):
+                discord_by_name[gm.display_name.lower()] = str(gm.id)
         seen: set[str] = set()
         cleaned: list[dict] = []
         for m in members:
@@ -564,7 +599,7 @@ class _OnBehalfVoteView(discord.ui.View):
             if not name:
                 continue
             # Discord stores numeric-name on-behalf targets in the same
-            # column as Discord user IDs — surface that here so the user
+            # column as Discord user IDs; surface that here so the user
             # never picks a name that would collide.
             if name.isdigit():
                 continue
@@ -574,14 +609,19 @@ class _OnBehalfVoteView(discord.ui.View):
             seen.add(key)
             discord_id = (m.get("discord_id") or "").strip()
             not_on_discord = bool(m.get("not_on_discord"))
-            # Discord-ID lookup keys the bucket-builder uses for live
-            # members. Empty when the row is non-Discord (or the
-            # alliance hasn't synced Discord IDs into the roster yet);
-            # in that case submit falls back to the name.
-            target_id = (
-                discord_id if (discord_id and not not_on_discord)
-                else name
-            )
+            # Resolution priority for `target_member_id`:
+            #   1. Live Discord member with matching display_name. Most
+            #      authoritative; survives roster-row misclassification.
+            #   2. Roster row's discord_id when the row isn't flagged
+            #      not_on_discord.
+            #   3. The picked name verbatim (non-Discord roster member).
+            live_id = discord_by_name.get(key)
+            if live_id:
+                target_id = live_id
+            elif discord_id and not not_on_discord:
+                target_id = discord_id
+            else:
+                target_id = name
             cleaned.append({
                 "name": name,
                 "target_id": target_id,

@@ -3438,10 +3438,33 @@ async def open_roster_builder(
             interaction.guild_id, event_type, event_date, team,
         )
         before_count = len(members)
-        members = {k: v for k, v in members.items() if k in signup_keys}
-        # Surface members who voted but aren't on the roster (likely
-        # spelling drift between roster and on-behalf vote).
-        missing = signup_keys - set(members.keys())
+        # Lenient match: an on-behalf vote's target_member_id may be a
+        # Discord ID (`str(member.id)`) when the picker resolved the
+        # picked name to a live member, OR the picked name itself when
+        # the row was misclassified as not_on_discord. The roster's
+        # `members` dict keys by Discord ID for Discord members and by
+        # name for non-Discord rows. Match a signup against either
+        # form: a key match (the normal case) OR a name match against
+        # the member's display name. Without the name-match leg, a
+        # stale name-keyed vote for a Discord member leaks past the
+        # filter and the builder reports "no signed-up members" even
+        # though the bucket-map embed shows the vote.
+        signup_keys_ci = {k.lower() for k in signup_keys if k}
+        def _is_signed_up(key: str, m: dict) -> bool:
+            if key in signup_keys:
+                return True
+            mname = (m.get("name") or "").strip().lower()
+            return bool(mname and mname in signup_keys_ci)
+        members = {k: v for k, v in members.items() if _is_signed_up(k, v)}
+        # Surface signup keys we couldn't reconcile to any roster row.
+        matched_names_ci = {
+            (m.get("name") or "").strip().lower()
+            for m in members.values()
+        }
+        missing = {
+            sk for sk in signup_keys
+            if sk not in members and sk.lower() not in matched_names_ci
+        }
         if missing:
             roster_errors.append(
                 f"{len(missing)} signed-up member(s) couldn't be matched to a "

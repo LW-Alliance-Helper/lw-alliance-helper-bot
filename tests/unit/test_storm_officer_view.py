@@ -113,6 +113,45 @@ class TestBucketMap:
         charlie = next(e for e in buckets["b"] if e["label"] == "Charlie")
         assert charlie["is_on_behalf"] is True
 
+    def test_stale_name_keyed_vote_attributes_to_discord_member(self, seeded_db):
+        """Regression for the screenshot bug: an on-behalf vote stored
+        with `target_member_id=<display_name>` (because the picker
+        couldn't resolve to a Discord ID at write time) should still
+        attribute to the live Discord member instead of leaking into
+        the phantom-leftover loop with a `not_on_discord=True` marker
+        AND a duplicate entry in "Not voted yet" for the same member."""
+        import config
+        config.record_storm_vote(
+            TEST_GUILD_ID, "DS", "2026-05-18",
+            voter_user_id=999, target_member_id="Kevin", vote="a",
+            is_on_behalf=True,
+        )
+        # Live Discord member named "Kevin" — should attract the vote.
+        guild = _FakeGuild(
+            TEST_GUILD_ID,
+            [_FakeMember(1234567890, "Kevin"),
+             _FakeMember(2, "Other")],
+        )
+        buckets, _errs = sov._build_bucket_map(guild, "DS", "2026-05-18")
+        # Kevin appears EXACTLY once, in the "Voted Team A" bucket,
+        # keyed by his Discord ID (not the name string), and NOT
+        # flagged not_on_discord.
+        kevin_entries = [
+            e for b in buckets.values() for e in b
+            if e["label"] == "Kevin"
+        ]
+        assert len(kevin_entries) == 1, (
+            f"Kevin should appear once total, got {len(kevin_entries)}: "
+            f"{[(e['label'], e['target_id'], e['not_on_discord']) for e in kevin_entries]}"
+        )
+        kevin = kevin_entries[0]
+        assert kevin["target_id"] == "1234567890"
+        assert kevin["not_on_discord"] is False
+        assert kevin["is_on_behalf"] is True
+        # And he's in the "a" bucket, not "not_voted".
+        assert kevin in buckets["a"]
+        assert kevin not in buckets["not_voted"]
+
 
 class TestEmbedRendering:
     def test_renders_total_count_in_title(self, seeded_db):

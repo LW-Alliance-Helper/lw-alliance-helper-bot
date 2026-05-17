@@ -44,6 +44,56 @@ logger = logging.getLogger(__name__)
 # under "Power Metric Column" — falling back to the design rule of
 # "exclude unknown power, never silently coerce to zero."
 
+def _read_power_column_header(guild_id: int, event_type: str) -> str:
+    """Return the human-readable header text for the configured power
+    column (row 1 of the roster Sheet at the configured letter), with
+    the Your/My-stripping rule applied so `Your Power` reads naturally
+    in DMs as `your Power` (not `your Your Power`).
+
+    Used by the power-refresh DM (#138) to tell members which power
+    value the bot is checking — leadership picks the column by letter
+    (Rule C / #165) but members need to see the header label so they
+    know what to update on the sheet.
+
+    Returns `""` when the sheet/config isn't readable, the column is
+    out of range, or the header cell is blank. Callers fall back to
+    generic wording in that case.
+    """
+    import config
+    try:
+        roster_cfg = config.get_member_roster_config(guild_id)
+    except Exception:
+        return ""
+    if not roster_cfg.get("enabled"):
+        return ""
+    try:
+        structured = config.get_structured_storm_config(guild_id, event_type)
+    except Exception:
+        return ""
+    power_letter = (structured.get("power_metric_column") or "B").strip().upper()
+    power_col = config.power_column_letter_to_index(power_letter)
+    try:
+        ws = config.get_member_roster_sheet(
+            guild_id, roster_cfg.get("tab_name") or "Member Roster",
+        )
+        header_row = ws.row_values(1)
+    except Exception:
+        return ""
+    if not (0 <= power_col < len(header_row)):
+        return ""
+    raw = header_row[power_col].strip()
+    if not raw:
+        return ""
+    # Strip leading "Your"/"My" so the DM reads "your Power" not
+    # "your Your Power" / "your My Squad Power".
+    lowered = raw.lower()
+    if lowered.startswith("your "):
+        raw = raw[5:].strip()
+    elif lowered.startswith("my "):
+        raw = raw[3:].strip()
+    return raw
+
+
 def _read_roster_powers(
     guild_id: int, event_type: str, *, guild=None,
 ) -> tuple[dict[str, dict], list[str]]:

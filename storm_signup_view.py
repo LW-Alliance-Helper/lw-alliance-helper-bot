@@ -221,9 +221,9 @@ async def _handle_signup_click(interaction: discord.Interaction, vote_code: str)
     if teams_setting == "A" and vote in ("b", "either"):
         try:
             await interaction.response.send_message(
-                "ℹ️ This alliance is configured as **Team A only**. "
-                "Team B / Either aren't valid choices — pick **Team A** "
-                "or **Cannot participate** on the next sign-up post.",
+                "ℹ️ Your alliance is configured as Team A only. "
+                "Team B / Either aren't valid choices — pick Team A "
+                "or Cannot participate.",
                 ephemeral=True,
             )
         except discord.HTTPException:
@@ -232,9 +232,9 @@ async def _handle_signup_click(interaction: discord.Interaction, vote_code: str)
     if teams_setting == "B" and vote in ("a", "either"):
         try:
             await interaction.response.send_message(
-                "ℹ️ This alliance is configured as **Team B only**. "
-                "Team A / Either aren't valid choices — pick **Team B** "
-                "or **Cannot participate** on the next sign-up post.",
+                "ℹ️ Your alliance is configured as Team B only. "
+                "Team A / Either aren't valid choices — pick Team B "
+                "or Cannot participate.",
                 ephemeral=True,
             )
         except discord.HTTPException:
@@ -286,10 +286,29 @@ async def _handle_signup_click(interaction: discord.Interaction, vote_code: str)
 
     # Ephemeral ack BEFORE the Sheet write so the user gets fast feedback
     # even if Sheets is rate-limited or slow.
+    #
+    # For Team A / Team B votes, append the configured slot label so
+    # the ack matches the button the member clicked ("Team A: 9pm ET
+    # (18:00 server time)") rather than just naming the team. For
+    # Either / Cannot, no slot label applies — the team-name suffix
+    # is dropped.
     label = _VOTE_CONFIRMATIONS.get(vote, vote)
+    if vote in ("a", "b"):
+        try:
+            from config import get_storm_slot_labels
+            slot_labels = get_storm_slot_labels(event_type, guild_id) or []
+        except Exception:
+            slot_labels = []
+        slot_label = ""
+        if vote == "a" and len(slot_labels) >= 1:
+            slot_label = slot_labels[0]
+        elif vote == "b" and len(slot_labels) >= 2:
+            slot_label = slot_labels[1]
+        if slot_label:
+            label = f"{label}: {slot_label}"
     try:
         await interaction.followup.send(
-            f"✅ Vote recorded: **{label}**. You can change your vote any time before the event.",
+            f"✅ Vote recorded: {label}. You can change your vote any time before the event.",
             ephemeral=True,
         )
     except discord.HTTPException as e:
@@ -415,16 +434,38 @@ async def _maybe_send_power_refresh_dm(
     if not inserted:
         return
 
-    # Post-Rule C (#165): the power column is configured as a letter,
-    # not a header string. The DM doesn't try to surface the exact
-    # column name — it points the member at "the power column on the
-    # roster" and lets the alliance's screenshots / setup conversation
-    # cover the rest.
-    body = (
-        "Heads up — your power value on the alliance roster Sheet "
-        "isn't readable. Could you update it before the next storm "
-        "so leadership has accurate numbers for zone assignments?"
-    )
+    # Surface the column **header** (not the configured letter) so the
+    # member knows which power value the bot is checking. Per Rule C
+    # / #165 leadership picks the column by letter on the setup side
+    # (header text can drift over time) — but on the DM side we look
+    # up the current header from the configured letter so members see
+    # the same label they see on the sheet. Falls back to generic
+    # wording if the header can't be resolved (sheet not configured,
+    # column out of range, etc.).
+    try:
+        from storm_roster_builder import _read_power_column_header
+        header = await asyncio.to_thread(
+            _read_power_column_header, guild_id, event_type,
+        )
+    except Exception as e:
+        logger.warning(
+            "[STORM SIGNUP] power-refresh DM header lookup failed for "
+            "guild=%s event=%s: %s",
+            guild_id, event_type, e,
+        )
+        header = ""
+    if header:
+        body = (
+            f"Heads up, your **{header}** on the alliance roster Sheet "
+            f"isn't readable. Please update it before the next storm "
+            f"so leadership has accurate numbers for zone assignments."
+        )
+    else:
+        body = (
+            "Heads up — your power value on the alliance roster Sheet "
+            "isn't readable. Could you update it before the next storm "
+            "so leadership has accurate numbers for zone assignments?"
+        )
 
     user = interaction.user
     try:

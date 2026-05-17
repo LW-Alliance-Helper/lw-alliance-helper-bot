@@ -653,7 +653,7 @@ Dispatches on `roster.event_type`:
 | Zone count | 11 canonical zones in a diamond around Nuclear Silo | 12 canonical zones in 3 rows (Stage 1 top, Stage 2 middle, Stage 3 bottom) |
 | Phase headers in member pill | `Stage/Phase {N}:` bold (8 pt Inter Bold) | Same |
 | Member name | 8 pt Inter Regular, auto-shrinks when content overflows |  Same |
-| Missing icon (Arsenal / Mercenary Factory, blocked on game-bug fix) | Grey placeholder circle | N/A — CS icon set is complete |
+| Missing icon (defensive guard for zones that ship before their art) | Grey placeholder circle — all 11 DS slots have art today | Same — all 12 CS slots have art today |
 | Subs column | Flat list when `paired_subs` empty; two-column `Primary` / `Sub` table with row dividers when populated | Same |
 
 `roster_from_session` plumbs:

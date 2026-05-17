@@ -314,22 +314,28 @@ class TestMapBasedRender:
         assert png[:8] == b"\x89PNG\r\n\x1a\n"
 
     def test_missing_icon_falls_back_to_placeholder(self):
-        # Arsenal + Mercenary Factory icons are blocked on a game-bug
-        # fix that adds them back to the in-game Rules > Structures
-        # menu. The renderer must draw a placeholder circle for those
-        # slots, not crash.
-        roster = sr.RosterData(
-            title="Missing icon", event_type="DS",
-            zones=[
-                sr.RosterZone(name="Arsenal", canonical_zone="Arsenal",
-                              max_players=4, members=["Alice"]),
-                sr.RosterZone(name="Mercenary Factory",
-                              canonical_zone="Mercenary Factory",
-                              max_players=4, members=["Bob"]),
-            ],
-        )
-        png = sr.render(roster)
-        assert png[:8] == b"\x89PNG\r\n\x1a\n"
+        # The renderer must draw a grey placeholder circle (not crash)
+        # for any zone whose icon entry is `None` or whose file is
+        # absent on disk. Patch the dict to simulate a zone that
+        # shipped before its art did. (All DS slots have art today —
+        # this is a defensive guard for the next zone the game adds.)
+        from unittest.mock import patch
+        patched = dict(sr._DS_ICON_FILES)
+        patched["Arsenal"] = None
+        patched["Mercenary Factory"] = None
+        with patch.object(sr, "_DS_ICON_FILES", patched):
+            roster = sr.RosterData(
+                title="Missing icon", event_type="DS",
+                zones=[
+                    sr.RosterZone(name="Arsenal", canonical_zone="Arsenal",
+                                  max_players=4, members=["Alice"]),
+                    sr.RosterZone(name="Mercenary Factory",
+                                  canonical_zone="Mercenary Factory",
+                                  max_players=4, members=["Bob"]),
+                ],
+            )
+            png = sr.render(roster)
+            assert png[:8] == b"\x89PNG\r\n\x1a\n"
 
     def test_event_type_defaults_to_ds_layout(self):
         # Unknown / empty event_type falls back to DS — protects

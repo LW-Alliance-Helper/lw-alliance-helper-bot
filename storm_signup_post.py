@@ -30,15 +30,18 @@ logger = logging.getLogger(__name__)
 # sign-up message and the draft show consistent time labels.
 
 def _slot_labels(event_type: str, guild_id: int) -> tuple[str, str]:
-    """Return (label_a, label_b) for the two DS time slots, or
-    (label_a, '') for CS (which uses a single slot per faction)."""
+    """Return (label_a, label_b) for the two game-defined time slots.
+
+    Both DS and CS have two slots (DS_SERVER_TIMES / CS_SERVER_TIMES per
+    `config.py`); the alliance's `teams` config gates which slot(s) the
+    post actually surfaces. Pre-Rule A / #166 the CS branch hardcoded
+    single-slot, which contradicted #166's revert.
+    """
     from config import get_storm_slot_labels
     try:
         labels = get_storm_slot_labels(event_type, guild_id)
     except Exception:
         labels = []
-    if event_type == "CS":
-        return ((labels[0] if labels else ""), "")
     label_a = labels[0] if len(labels) > 0 else ""
     label_b = labels[1] if len(labels) > 1 else ""
     return (label_a, label_b)
@@ -77,12 +80,14 @@ def _build_registration_embed(event_type: str, event_date_iso: str,
         description=desc,
         color=discord.Color.gold() if event_type == "DS" else discord.Color.orange(),
     )
-    # Single-team DS alliances see only their team's time slot — the
+    # Single-team alliances see only their team's time slot — the
     # opposite team's button doesn't render in SignupView, so the
-    # embed line would point at a slot members can't select.
+    # embed line would point at a slot members can't select. Applies
+    # to both DS and CS per Rule A / #166: both events can run one or
+    # two teams, decided by the alliance's `teams` config.
     teams_norm = teams if teams in ("both", "A", "B") else "both"
-    show_a = event_type != "DS" or teams_norm in ("both", "A")
-    show_b = event_type == "DS" and teams_norm in ("both", "B")
+    show_a = teams_norm in ("both", "A")
+    show_b = teams_norm in ("both", "B")
     if (show_a and time_a) or (show_b and time_b):
         time_lines = []
         if show_a and time_a:
@@ -147,23 +152,22 @@ async def post_registration(
     if config.has_registration_post(guild.id, event_type, event_date):
         return {"status": "already_posted", "channel_id": channel_id}
 
-    # Read the per-alliance team gate (#148). DS-only field; CS
-    # ignores it because CS has no Team B concept.
-    ds_cfg = config.get_storm_config(guild.id, "DS") if event_type == "DS" else {}
-    teams_setting = (ds_cfg.get("teams") or "both").strip() if ds_cfg else "both"
+    # Read the per-alliance team gate (#148 + Rule A / #166). Applies
+    # identically to DS and CS — both events can be run as one team or
+    # both, decided by leadership. Pre-#166 fix this path read DS config
+    # for the CS event, which clobbered CS's own `teams` setting.
+    cfg = config.get_storm_config(guild.id, event_type) or {}
+    teams_setting = (cfg.get("teams") or "both").strip()
     if teams_setting not in ("both", "A", "B"):
         teams_setting = "both"
 
     time_a, time_b = _slot_labels(event_type, guild.id)
     # Slot-label validation gates only the slots an alliance actually
-    # uses. A `teams=A` alliance with no Team B time configured is
-    # fine; their post only needs the Team A label.
-    if event_type == "DS":
-        needs_a = teams_setting in ("both", "A")
-        needs_b = teams_setting in ("both", "B")
-        if (needs_a and not time_a) or (needs_b and not time_b):
-            return {"status": "missing_slot_labels", "channel_id": channel_id}
-    elif event_type == "CS" and not time_a:
+    # uses. A `teams=A` alliance with no Team B time configured is fine;
+    # their post only needs the Team A label.
+    needs_a = teams_setting in ("both", "A")
+    needs_b = teams_setting in ("both", "B")
+    if (needs_a and not time_a) or (needs_b and not time_b):
         return {"status": "missing_slot_labels", "channel_id": channel_id}
 
     view = SignupView(

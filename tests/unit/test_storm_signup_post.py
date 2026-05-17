@@ -26,10 +26,14 @@ class TestSlotLabels:
         assert "server time" in a
         assert "server time" in b
 
-    def test_cs_returns_only_first_label(self):
+    def test_cs_returns_two_non_empty_labels(self):
+        """Post Rule A / #166 — CS supports two time slots just like DS.
+        Pre-#166 fix this returned (label, "") which contradicted the
+        revert in storm_signup_view."""
         a, b = ssp._slot_labels("CS", guild_id=12345)
-        assert a
-        assert b == ""
+        assert a and b
+        assert "server time" in a
+        assert "server time" in b
 
     def test_unknown_event_returns_safe_default(self):
         a, b = ssp._slot_labels("XX", guild_id=12345)
@@ -121,9 +125,10 @@ class TestTodayInGuildTz:
 
 
 class TestRegistrationEmbedTeamsGate:
-    """#148 — the embed's "Available time slots" lines only render the
-    slot(s) the alliance actually runs. A `teams=A` alliance with a
-    Team B time configured shouldn't surface Team B in the embed."""
+    """#148 + Rule A / #166 — the embed's "Available time slots" lines
+    only render the slot(s) the alliance actually runs. A `teams=A`
+    alliance with a Team B time configured shouldn't surface Team B in
+    the embed. Applies to both DS and CS."""
 
     def test_teams_a_omits_team_b_line(self):
         embed = ssp._build_registration_embed(
@@ -150,10 +155,30 @@ class TestRegistrationEmbedTeamsGate:
         assert "9pm ET" in body
         assert "4pm ET" in body
 
-    def test_cs_ignores_teams_setting(self):
-        """CS has no Team B concept — the field is DS-only."""
+    def test_cs_teams_both_renders_both_lines(self):
+        """Post Rule A / #166 — CS supports two teams + two time slots
+        when the alliance opts into `teams=both` (the default)."""
         embed = ssp._build_registration_embed(
-            "CS", "2026-05-18", "9pm ET", "", teams="A",
+            "CS", "2026-05-18", "10am ET", "9pm ET", teams="both",
+        )
+        body = "\n".join(f.value or "" for f in embed.fields)
+        assert "10am ET" in body
+        assert "9pm ET" in body
+
+    def test_cs_teams_a_omits_team_b_line(self):
+        """Post Rule A / #166 — CS respects `teams=A` like DS."""
+        embed = ssp._build_registration_embed(
+            "CS", "2026-05-18", "10am ET", "9pm ET", teams="A",
+        )
+        body = "\n".join(f.value or "" for f in embed.fields)
+        assert "10am ET" in body
+        assert "9pm ET" not in body
+
+    def test_cs_teams_b_omits_team_a_line(self):
+        """Post Rule A / #166 — CS respects `teams=B` like DS."""
+        embed = ssp._build_registration_embed(
+            "CS", "2026-05-18", "10am ET", "9pm ET", teams="B",
         )
         body = "\n".join(f.value or "" for f in embed.fields)
         assert "9pm ET" in body
+        assert "10am ET" not in body

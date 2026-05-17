@@ -6066,10 +6066,13 @@ The editor branches **heavily** on `buf.phase_count`:
   single-page `_ZoneEditModal`. Zone lines render with `(Max:
   N)`.
 - `phase_count == 2` or `phase_count == 3` → **phase-aware**.
-  Picking a zone routes through a 3-page wizard
-  (`_ZonePhaseCapacityModal` → `_ZonePhaseFloorsModal` →
-  `_ZonePhasePriorityModal`). Zone lines render with `(P1: N,
-  P2: M[, P3: K])` plus optional per-phase priority brackets.
+  Picking a zone routes through a 2-page wizard
+  (`_ZonePhaseCapacityAndFloorsModal` →
+  `_ZonePhasePriorityModal`). Page 1 packs phase capacities and
+  power minimums together at the 5-field Discord cap (3 caps + 2
+  DS-both mins); page 2 holds per-phase priority. Zone lines
+  render with `(P1: N, P2: M[, P3: K])` plus optional per-phase
+  priority brackets.
 
 ---
 
@@ -6434,15 +6437,17 @@ content line:
 
 ---
 
-### Screen 12.9 — Phase-aware zone edit: page 1 of 3 (capacity)
+### Screen 12.9 — Phase-aware zone edit: page 1 of 2 (capacity + minimums)
 
 `buf.phase_count == 3`. Kevin picks `Power Tower` from the zone
-dropdown. `_ZonePhaseCapacityModal` opens. Title is truncated to
-45 chars: `Power Tower — Capacity (3P)`.
+dropdown. `_ZonePhaseCapacityAndFloorsModal` opens. Title is
+truncated to 45 chars: `Power Tower — Caps + Min (3P)`. Worst
+case is DS-both + 3 phases — 3 caps + 2 min fields = exactly 5
+Discord-modal components.
 
 ```
 ┌──────────────────────────────────────────────────────────────────────┐
-│ Power Tower — Capacity (3P)                                          │
+│ Power Tower — Caps + Min (3P)                                        │
 │ ──────────────────────────────────────────                           │
 │ Max Phase 1                                                          │
 │ ┌────────────────────────────────────────────────────────────────┐   │
@@ -6461,58 +6466,7 @@ dropdown. `_ZonePhaseCapacityModal` opens. Title is truncated to
 │ │ 4                                                              │   │
 │ └────────────────────────────────────────────────────────────────┘   │
 │   placeholder: e.g. 3 (leave 0 to skip Phase 3 at this zone)         │
-└──────────────────────────────────────────────────────────────────────┘
-[Submit]  [Cancel]
-(Discord modal — opens overlay)
-```
-
-For `phase_count == 2`: the Max Phase 3 field is omitted (2
-fields shown).
-
----
-
-### Screen 12.10 — Phase-aware capacity: submit + bridge
-
-Submit success. Bridge ephemeral with a one-button Next view:
-
-```
-┌──────────────────────────────────────────────────────────────────────┐
-│ ✅ Capacities recorded for **Power Tower**. Click **Next** to set   │
-│ the power floors.                                                    │
-└──────────────────────────────────────────────────────────────────────┘
-[Next → Power Floors]
-(ephemeral — only Kevin sees it; 5-min timeout)
-```
-
-Kevin clicks Next. The button disables in place (so a double-
-click doesn't open two modals), then `_ZonePhaseFloorsModal`
-opens. If submit raised a parse error (any field non-int):
-
-```
-┌──────────────────────────────────────────────────────────────────────┐
-│ ⚠️ Max Phase 1 must be a number — got `four`. Reopen the zone to   │
-│ retry.                                                               │
-└──────────────────────────────────────────────────────────────────────┘
-(ephemeral)
-```
-
-(Wording surfaces the specific field name — `Max Phase 1` /
-`Max Phase 2` / `Max Phase 3` — based on which field failed.
-The wizard does NOT auto-reopen; officer goes back to the
-editor embed and picks the zone again. Already-validated fields
-in the pending stash persist.)
-
----
-
-### Screen 12.11 — Phase-aware zone edit: page 2 of 3 (floors)
-
-`_ZonePhaseFloorsModal`. Same shape as the flat modal's power
-fields, with no capacity or priority. DS-both:
-
-```
-┌──────────────────────────────────────────────────────────────────────┐
-│ Power Tower — Power Floors                                           │
-│ ──────────────────────────────────────────                           │
+│                                                                      │
 │ Min Power Team A                                                     │
 │ ┌────────────────────────────────────────────────────────────────┐   │
 │ │ 300M                                                           │   │
@@ -6529,10 +6483,29 @@ fields, with no capacity or priority. DS-both:
 (Discord modal — opens overlay)
 ```
 
-CS variant: single `Min Power` field with placeholder `e.g.
-250M`.  DS-A-only / DS-B-only: only the relevant Min field.
+For `phase_count == 2`: the Max Phase 3 field is omitted (4
+fields shown). CS variant: single `Min Power` field with
+placeholder `e.g. 250M` instead of the two Team A / Team B
+fields. DS-A-only / DS-B-only: only the relevant Min field.
 
-Submit validation surfaces the specific field that failed:
+---
+
+### Screen 12.10 — Page 1 submit: validation + bridge
+
+Submit validates each capacity field, then each minimum-power
+field. Capacity parse error (any field non-int):
+
+```
+┌──────────────────────────────────────────────────────────────────────┐
+│ ⚠️ Max Phase 1 must be a number — got `four`. Reopen the zone to   │
+│ retry.                                                               │
+└──────────────────────────────────────────────────────────────────────┘
+(ephemeral)
+```
+
+Wording surfaces the specific field name — `Max Phase 1` /
+`Max Phase 2` / `Max Phase 3` — based on which field failed.
+Power-field parse errors surface field-by-field:
 
 ```
 ┌──────────────────────────────────────────────────────────────────────┐
@@ -6560,20 +6533,36 @@ CS variant:
 (ephemeral)
 ```
 
-Submit success → bridge ephemeral:
+The wizard does NOT auto-reopen on parse failure; officer goes
+back to the editor embed and picks the zone again. Already-
+validated fields in the pending stash persist.
+
+Submit success → bridge ephemeral with a one-button Next view:
 
 ```
 ┌──────────────────────────────────────────────────────────────────────┐
-│ ✅ Floors recorded for **Power Tower**. Click **Next** to set the   │
-│ per-phase auto-fill priorities.                                      │
+│ ✅ Capacities + minimums recorded for **Power Tower**. Click        │
+│ **Next** to set the per-phase auto-fill priorities.                  │
 └──────────────────────────────────────────────────────────────────────┘
 [Next → Priority Per Phase]
-(ephemeral)
+(ephemeral — only Kevin sees it; 5-min timeout)
 ```
+
+Kevin clicks Next. The button disables in place (so a double-
+click doesn't open two modals), then `_ZonePhasePriorityModal`
+opens.
 
 ---
 
-### Screen 12.12 — Phase-aware zone edit: page 3 of 3 (priority)
+### Screen 12.11 — (removed)
+
+Page 1's capacity + minimums folded into Screen 12.9 to drop a
+"Next" hop, per UX plan §12.9. Numbering stays at 12.x to avoid
+churning every cross-reference; 12.11 is intentionally empty.
+
+---
+
+### Screen 12.12 — Phase-aware zone edit: page 2 of 2 (priority)
 
 `_ZonePhasePriorityModal`. Final page; submission finalises the
 edit and refreshes the editor embed.
@@ -6617,9 +6606,9 @@ Submit validation per field:
 ```
 
 Submit success: `upsert_zone` lands all accumulated values
-(capacity from page 1 stash + floors from page 2 stash +
-priorities from page 3) onto the buffer. `_clear_pending_edit`
-flushes the stash. Editor embed re-renders with content line:
+(capacity + minimums from page 1 stash + priorities from this
+page) onto the buffer. `_clear_pending_edit` flushes the stash.
+Editor embed re-renders with content line:
 
 ```
 ✏️ Updated **Power Tower** (3-phase).
@@ -6957,16 +6946,10 @@ bot.)
                 │       │       ├── parse error → 12.8a/b/c/d
                 │       │       └── ok          → 12.8e + 12.14 apply-to-similar?
                 │       │
-                │       └── phase_count >= 2 → 12.9 capacity modal
+                │       └── phase_count >= 2 → 12.9 caps + min modal
                 │               │
                 │               ├── parse error in any field → 12.10 error
-                │               └── ok → 12.10 Next bridge
-                │                       │
-                │                       ▼
-                │                   12.11 floors modal
-                │                       │
-                │                       ├── parse error → 12.11 error
-                │                       └── ok → Next bridge → 12.12 priority modal
+                │               └── ok → 12.10 Next bridge → 12.12 priority modal
                 │                                              │
                 │                                              ├── parse error
                 │                                              └── ok → upsert_zone +

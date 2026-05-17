@@ -95,9 +95,9 @@ _INTER_BOLD = os.path.join(_HERE, "assets", "fonts", "Inter-Bold.ttf")
 _ICONS_DS_DIR = os.path.join(_HERE, "assets", "storm_icons", "ds")
 _ICONS_CS_DIR = os.path.join(_HERE, "assets", "storm_icons", "cs")
 
-# Icon filename per canonical zone. Some DS slots map to a missing
-# icon (Arsenal + Mercenary Factory blocked on a game bug); render a
-# grey placeholder circle for those instead of crashing.
+# Icon filename per canonical zone. A `None` entry falls back to the
+# grey placeholder circle, intended for any future zone that ships
+# before its icon does. All DS slots currently have art.
 _DS_ICON_FILES: dict[str, Optional[str]] = {
     "Nuclear Silo":         "Nuclear Silo.png",
     "Oil Refinery I":       "Oil Refinery.png",
@@ -108,8 +108,8 @@ _DS_ICON_FILES: dict[str, Optional[str]] = {
     "Field Hospital II":    "Field Hospital.png",
     "Field Hospital III":   "Field Hospital.png",
     "Field Hospital IV":    "Field Hospital.png",
-    "Arsenal":              None,
-    "Mercenary Factory":    None,
+    "Arsenal":              "Arsenal.png",
+    "Mercenary Factory":    "Mercenary Factory.png",
 }
 _CS_ICON_FILES: dict[str, Optional[str]] = {
     "Power Tower":          "Power Tower.png",
@@ -560,9 +560,8 @@ def _draw_centered_text(draw, b: Box, text: str, font, fill) -> None:
 def _draw_icon(canvas, draw, zlayout: ZoneLayout, canonical: str,
                icon_files: dict, icons_dir: str) -> None:
     """Place the zone icon at its layout position. Falls back to a
-    grey placeholder circle if the icon file is missing (Arsenal +
-    Mercenary Factory on DS, blocked on the game-bug fix that adds
-    them back to the in-game Rules > Structures menu)."""
+    grey placeholder circle if the icon file is missing — a defensive
+    guard for any future zone that ships before its art does."""
     from PIL import Image
     x0, y0, x1, y1 = _s_box(zlayout.icon)
     icon_name = icon_files.get(canonical)

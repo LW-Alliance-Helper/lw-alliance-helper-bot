@@ -5711,8 +5711,8 @@ The duplicate-name hint adjusts:
 ```
 
 Happy path: `seed_default_preset("CS Standard", "CS")` builds a
-buffer pre-populated with the 22 zones in `CS_ZONE_STRUCTURE`
-(Power Tower, Data Center 1/2, Sample Warehouse 1–4, Floaters,
+buffer pre-populated with the canonical zones in `CS_ZONE_STRUCTURE`
+(Power Tower, Data Center 1/2, Sample Warehouse 1–4,
 Defense System 1/2, Serum Factory 1/2, plus the stage-3 set
 including Virus Lab) at capacity 0. Editor opens.
 
@@ -6177,12 +6177,10 @@ Team A/B distinction.
 │ • Sample Warehouse 2  (Max: 0)  Min: 0                               │
 │ • Sample Warehouse 3  (Max: 0)  Min: 0                               │
 │ • Sample Warehouse 4  (Max: 0)  Min: 0                               │
-│ • Floaters            (Max: 0)  Min: 0                               │
 │ • Defense System 1    (Max: 0)  Min: 0                               │
 │ • Defense System 2    (Max: 0)  Min: 0                               │
 │ • Serum Factory 1     (Max: 0)  Min: 0                               │
 │ • Serum Factory 2     (Max: 0)  Min: 0                               │
-│ • Floaters            (Max: 0)  Min: 0                               │
 │ • Virus Lab           (Max: 0)  Min: 0                               │
 │ • Power Tower         (Max: 0)  Min: 0                               │
 │ • Data Center 1       (Max: 0)  Min: 0                               │
@@ -6200,7 +6198,7 @@ Team A/B distinction.
 [✏️ Rename preset]  [💾 Save preset]  [🔙 Abandon this preset]
 ```
 
-Note: CS has 21 canonical zones — under the 25-option Discord
+Note: CS has 19 canonical zones — under the 25-option Discord
 cap, so all zones are pickable. (A custom-zone alliance with 26+
 zones would see truncation; the editor's zone select hard-caps
 at 25.)

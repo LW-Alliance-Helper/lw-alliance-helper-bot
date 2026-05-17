@@ -52,7 +52,7 @@ Every feature works on the **free tier** with sensible caps for a typical allian
 
 Full comparison + complete premium-only feature list: [pricing page](https://lw-alliance-helper.github.io/pricing.html).
 
-A subscription is **per-user** and applies to **one server at a time** — use `/premium_assign` to switch which alliance it's active in. Cancel anytime through Discord; saved data and assignment are preserved so you can resume later.
+A subscription is **per-user** and applies to **one server at a time** — use `/premium assign` to switch which alliance it's active in, or `/premium overview` to see where it's currently active. Cancel anytime through Discord; saved data and assignment are preserved so you can resume later.
 
 ---
 

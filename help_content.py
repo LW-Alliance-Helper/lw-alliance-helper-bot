@@ -32,9 +32,9 @@ ALWAYS_HANDY = (
     "`/help` — Show this menu\n"
     "`/donate` — 💖 Tip-jar links\n"
     "`/upgrade` — 💎 Subscribe and pin Premium here\n"
-    "`/premium_assign` — 💎 Move Premium to this server\n"
-    "`/premium_status` — 💎 Subscription state and assigned server\n"
-    "`/premium_unassign` — 💎 Release the pin (subscription stays)"
+    "`/premium overview` — 💎 Subscription state (doubles as upsell on free tier)\n"
+    "`/premium assign` — 💎 Move Premium to this server\n"
+    "`/premium unassign` — 💎 Release the pin (subscription stays)"
 )
 
 

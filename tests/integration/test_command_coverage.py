@@ -62,8 +62,10 @@ EXPECTED_COG_COMMANDS = {
         "sync_members", "setup_members",
     },
     "DonateCog": {
-        "donate", "upgrade",
-        "premium_assign", "premium_status", "premium_unassign",
+        # Top-level commands: /donate, /upgrade, and the /premium group.
+        # Subcommands of the /premium group are introspected separately
+        # in `test_donate_cog_premium_group_has_expected_subcommands`.
+        "donate", "upgrade", "premium",
     },
     "ExportImportCog": {
         "export_config", "import_config",
@@ -94,17 +96,28 @@ def _make_cog(cog_class):
 
 
 def _commands_on(cog) -> set[str]:
-    """All slash command names registered on a cog instance."""
+    """All top-level slash command names registered on a cog instance.
+
+    Covers both `@app_commands.command` leaves and `app_commands.Group`
+    class attributes — Groups appear in the slash picker as a single
+    top-level entry. Subcommands of a Group also surface as class
+    attributes (with `.parent = the_group`), but they're NOT top-level
+    commands; filter them out and let each cog's dedicated test inspect
+    the Group's `.commands` directly."""
     out: set[str] = set()
-    # Cogs in this codebase use @app_commands.command at class level; the
-    # commands appear as `app_commands.Command` attributes. Search the
-    # instance's class for them.
     import discord.app_commands as _ac
     for attr_name in dir(cog):
         attr = getattr(cog, attr_name, None)
-        if isinstance(attr, _ac.Command):
+        if isinstance(attr, (_ac.Command, _ac.Group)):
+            if getattr(attr, "parent", None) is not None:
+                continue  # sub-command of a Group — surfaced via that Group
             out.add(attr.name)
     return out
+
+
+def _subcommands_on(group) -> set[str]:
+    """Names of the subcommands attached to a given app_commands.Group."""
+    return {c.name for c in group.commands}
 
 
 # ── 1. Registration audit ─────────────────────────────────────────────────────
@@ -179,6 +192,17 @@ class TestCogRegistration:
         from donate import DonateCog
         cog = _make_cog(DonateCog)
         assert _commands_on(cog) == EXPECTED_COG_COMMANDS["DonateCog"]
+
+    def test_donate_cog_premium_group_has_expected_subcommands(self, seeded_db):
+        """/premium is a top-level Group containing overview / assign /
+        unassign — split out from `_commands_on` because Groups surface
+        as a single top-level entry, with subcommands hanging off the
+        Group's `.commands` property."""
+        from donate import DonateCog
+        cog = _make_cog(DonateCog)
+        assert _subcommands_on(cog.premium_group) == {
+            "overview", "assign", "unassign",
+        }
 
     def test_export_import_cog_registers_expected_commands(self, seeded_db):
         from export_import_cog import ExportImportCog

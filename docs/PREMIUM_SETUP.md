@@ -123,12 +123,15 @@ table; see `premium.py` and issue #41):
   premium button, the bot remembers which guild they ran `/upgrade` in.
   Once the checkout completes, `on_entitlement_create` consumes that
   context and writes the assignment row.
-- **`/premium_assign` moves the pin.** A subscriber runs it from the
+- **`/premium assign` moves the pin.** A subscriber runs it from the
   guild they want Premium in. The bot rejects with the existing
   subscriber's username if the guild is already pinned by someone else.
-- **`/premium_status`** surfaces the current state (active sub +
-  assigned guild, lapsed sub with preserved assignment, etc.).
-- **`/premium_unassign`** releases the pin without canceling the
+- **`/premium overview`** surfaces the current state (active sub +
+  assigned guild, lapsed sub with preserved assignment, etc.). On a
+  free-tier guild with no active subscription it also doubles as the
+  upsell surface, rendering the same pitch + Discord premium button
+  `/upgrade` does.
+- **`/premium unassign`** releases the pin without canceling the
   Discord subscription — useful for "park it and reassign later."
 - **Lapse is not destructive.** When a subscription ends, the
   assignment row stays. If the user resubscribes, Premium auto-resumes

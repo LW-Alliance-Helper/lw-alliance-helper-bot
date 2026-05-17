@@ -72,9 +72,9 @@ Premium is a **per-user** subscription that applies to **one server at
 a time**. When you run `/upgrade`, the bot pins your subscription to the
 server you're in. To move it to a different alliance:
 
-- Run **`/premium_assign`** in the alliance you want Premium in.
-- Run **`/premium_status`** to see where it's currently active.
-- Run **`/premium_unassign`** to release the pin without canceling the
+- Run **`/premium assign`** in the alliance you want Premium in.
+- Run **`/premium overview`** to see where it's currently active.
+- Run **`/premium unassign`** to release the pin without canceling the
   subscription (useful for "park it and come back later").
 
 If a server already has Premium from another subscriber, the bot will

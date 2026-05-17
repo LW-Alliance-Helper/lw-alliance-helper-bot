@@ -680,10 +680,54 @@ class TestOnBehalfVoteView:
             await view._on_submit(interaction)
         record.assert_called_once()
         kwargs = record.call_args.kwargs
+        # Roster row without a Discord ID — target stays as the name.
         assert kwargs["target_member_id"] == "Alice"
         assert kwargs["vote"] == "a"
         assert kwargs["is_on_behalf"] is True
         parent.refresh_buckets.assert_awaited()
+
+    async def test_submit_resolves_discord_member_to_discord_id(self, seeded_db):
+        """Regression for the on-behalf "Submit appears to work but no
+        change" bug. Pre-fix the picker stored the picked NAME as
+        `target_member_id` regardless of whether the row was a Discord
+        member or a non-Discord roster entry. `_build_bucket_map` keys
+        Discord-member buckets by `str(member.id)` (matching SignupView's
+        self-vote shape), so a name-keyed on-behalf vote landed in a
+        separate phantom bucket and the original "Not voted yet" entry
+        for the Discord member never moved.
+
+        Fix: when the picked row carries a `discord_id` and isn't flagged
+        `not_on_discord`, use the Discord ID as `target_member_id` so the
+        bucket-builder rejoins it to the live member."""
+        parent = self._fake_parent_view()
+        roster = [
+            {"name": "Kevin", "discord_id": "1501975127200501840", "not_on_discord": False},
+        ]
+        view = sov._OnBehalfVoteView(parent, roster, teams_setting="both")
+        view.selected_member = "Kevin"
+        view.selected_vote = "a"
+        interaction = self._fake_interaction(user_id=parent.owner_user_id)
+        with patch("config.record_storm_vote", return_value=True) as record:
+            await view._on_submit(interaction)
+        kwargs = record.call_args.kwargs
+        assert kwargs["target_member_id"] == "1501975127200501840"
+
+    async def test_submit_keeps_name_for_non_discord_roster_member(self, seeded_db):
+        """Roster row flagged `not_on_discord=True` keeps the name as
+        the target_member_id — those rows are bucket-builder-keyed by
+        name in `_build_bucket_map`'s tier-2 loop."""
+        parent = self._fake_parent_view()
+        roster = [
+            {"name": "Frank", "discord_id": "", "not_on_discord": True},
+        ]
+        view = sov._OnBehalfVoteView(parent, roster, teams_setting="both")
+        view.selected_member = "Frank"
+        view.selected_vote = "b"
+        interaction = self._fake_interaction(user_id=parent.owner_user_id)
+        with patch("config.record_storm_vote", return_value=True) as record:
+            await view._on_submit(interaction)
+        kwargs = record.call_args.kwargs
+        assert kwargs["target_member_id"] == "Frank"
 
 
 class TestOfficerViewTeamsGate:

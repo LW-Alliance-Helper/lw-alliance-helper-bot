@@ -50,7 +50,7 @@ def _build_desertstorm_group(bot: commands.Bot) -> app_commands.Group:
         await handle_storm_overview(bot, interaction, "DS")
 
     @grp.command(name="draft",
-                 description="Generate a Desert Storm mail draft for Team A or Team B")
+                 description="Free-tier text mail template — for Team building + Approve & Post use /desertstorm signups instead")
     async def draft(interaction: discord.Interaction):
         from storm import handle_storm_draft
         await handle_storm_draft(bot, interaction, "DS")
@@ -75,7 +75,7 @@ def _build_desertstorm_group(bot: commands.Bot) -> app_commands.Group:
         await handle_storm_log(bot, interaction, "DS", date)
 
     @grp.command(name="post_signup",
-                 description="Post a sign-up message for an upcoming Desert Storm event")
+                 description="💎 Post a sign-up message for an upcoming Desert Storm event (Premium)")
     @app_commands.describe(
         event_date="Optional — defaults to the next configured event day. Accepts e.g. May 18, 5/18, 2026-05-18, Sunday.",
     )
@@ -84,7 +84,7 @@ def _build_desertstorm_group(bot: commands.Bot) -> app_commands.Group:
         await handle_post_signup(bot, interaction, "DS", event_date)
 
     @grp.command(name="signups",
-                 description="Leadership view of who's signed up for an upcoming Desert Storm event")
+                 description="💎 Leadership view of who's signed up for an upcoming Desert Storm event + entry point to building Team A/B rosters (Premium)")
     @app_commands.describe(
         event_date="Optional — defaults to the next configured event day. Accepts e.g. May 18, 5/18, Sunday.",
     )
@@ -93,7 +93,7 @@ def _build_desertstorm_group(bot: commands.Bot) -> app_commands.Group:
         await handle_storm_signups(bot, interaction, "DS", event_date)
 
     @grp.command(name="attendance",
-                 description="Record who showed for an assigned Desert Storm event")
+                 description="💎 Record who showed for an assigned Desert Storm event (Premium)")
     @app_commands.describe(
         event_date="Optional — defaults to the most recent posted event. Accepts e.g. May 18, 5/18, yesterday.",
     )
@@ -124,7 +124,7 @@ def _build_canyonstorm_group(bot: commands.Bot) -> app_commands.Group:
         await handle_storm_overview(bot, interaction, "CS")
 
     @grp.command(name="draft",
-                 description="Generate a Canyon Storm mail draft for Team A or Team B")
+                 description="Free-tier text mail template — for Team building + Approve & Post use /canyonstorm signups instead")
     async def draft(interaction: discord.Interaction):
         from storm import handle_storm_draft
         await handle_storm_draft(bot, interaction, "CS")
@@ -149,7 +149,7 @@ def _build_canyonstorm_group(bot: commands.Bot) -> app_commands.Group:
         await handle_storm_log(bot, interaction, "CS", date)
 
     @grp.command(name="post_signup",
-                 description="Post a sign-up message for an upcoming Canyon Storm event")
+                 description="💎 Post a sign-up message for an upcoming Canyon Storm event (Premium)")
     @app_commands.describe(
         event_date="Optional — defaults to the next configured event day. Accepts e.g. May 18, 5/18, 2026-05-18, Sunday.",
     )
@@ -158,7 +158,7 @@ def _build_canyonstorm_group(bot: commands.Bot) -> app_commands.Group:
         await handle_post_signup(bot, interaction, "CS", event_date)
 
     @grp.command(name="signups",
-                 description="Leadership view of who's signed up for an upcoming Canyon Storm event")
+                 description="💎 Leadership view of who's signed up for an upcoming Canyon Storm event + entry point to building Team A/B rosters (Premium)")
     @app_commands.describe(
         event_date="Optional — defaults to the next configured event day. Accepts e.g. May 18, 5/18, Sunday.",
     )
@@ -167,7 +167,7 @@ def _build_canyonstorm_group(bot: commands.Bot) -> app_commands.Group:
         await handle_storm_signups(bot, interaction, "CS", event_date)
 
     @grp.command(name="attendance",
-                 description="Record who showed for an assigned Canyon Storm event")
+                 description="💎 Record who showed for an assigned Canyon Storm event (Premium)")
     @app_commands.describe(
         event_date="Optional — defaults to the most recent posted event. Accepts e.g. May 18, 5/18, yesterday.",
     )

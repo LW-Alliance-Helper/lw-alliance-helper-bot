@@ -401,42 +401,24 @@ class _EventHubView(discord.ui.View):
         await handle_storm_log(self.bot, inter, self.event_type, None)
 
     async def _on_setup(self, inter: discord.Interaction) -> None:
-        # Open the setup wizard inline. Mirrors the /growth Edit Config
-        # pattern (bot.py): the wizard's channel.send + wait_for cycle
-        # works fine with a button-interaction as the entry point — the
-        # interaction carries the same guild/channel/user context a
-        # slash invocation would. Disabling the hub buttons here keeps
-        # the officer from double-firing the wizard.
+        # Post-#201: the per-feature setup wizards moved behind the
+        # /setup hub buttons, with their bodies exposed as standalone
+        # launcher helpers. Dispatch into `_launch_storm_setup`
+        # directly so the storm hub's ⚙️ Open setup button opens
+        # the wizard inline instead of telling officers to type
+        # another slash command. Disable the hub buttons first so
+        # officers can't double-fire the wizard by clicking again
+        # mid-flow (matches the /growth Edit Config pattern).
         import wizard_registry
-        from setup_cog import (
-            _has_leadership_or_admin,
-            _check_wizard_can_run,
-            run_storm_setup,
-        )
-
-        if not _has_leadership_or_admin(inter):
-            await inter.response.send_message(
-                "⛔ You need the leadership role (or admin) to edit storm config.",
-                ephemeral=True,
-            )
-            return
-
-        setup_cmd = (
-            "setup_desertstorm" if self.event_type == "DS"
-            else "setup_canyonstorm"
-        )
+        from setup_cog import _launch_storm_setup
         for item in self.children:
             item.disabled = True
-        await wizard_registry.safe_edit_response(inter, view=self)
-        if not await _check_wizard_can_run(inter, setup_cmd):
-            self.stop()
-            return
-        await inter.followup.send(
-            f"⚙️ Starting storm setup. Check the channel for prompts!",
-            ephemeral=True,
-        )
+        try:
+            await wizard_registry.safe_edit_response(inter, view=self)
+        except Exception:
+            pass
         self.stop()
-        await run_storm_setup(inter, self.bot, self.event_type)
+        await _launch_storm_setup(inter, self.bot, self.event_type)
 
 
 # ── Entry point ──────────────────────────────────────────────────────────────

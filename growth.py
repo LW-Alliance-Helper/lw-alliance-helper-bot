@@ -1,7 +1,7 @@
 """
 growth.py — Configurable per-guild growth snapshots.
 
-Snapshots fire at 22:00 ET on the day picked in `/setup_growth`
+Snapshots fire at 22:00 ET on the day picked in `the growth setup wizard`
 (monthly day-of-month, or every-N-days from a fixed anchor). The
 snapshot reads each member's metric values (one column per metric,
 configured per guild) from the source tab and appends them as a new
@@ -269,7 +269,7 @@ def run_growth_snapshot():
         except Exception as e:
             err_str = str(e)
             if "WorksheetNotFound" in type(e).__name__ or "WorksheetNotFound" in err_str:
-                print(f"[GROWTH] Skipping guild {gid} — sheet tab not found. Configure via /setup_growth.")
+                print(f"[GROWTH] Skipping guild {gid} — sheet tab not found. Configure via the growth setup wizard.")
             else:
                 print(f"[GROWTH] Snapshot failed for guild {gid}: {e}")
                 print(f"[GROWTH] Traceback:\n{traceback.format_exc()}")
@@ -287,7 +287,7 @@ def _run_growth_snapshot_inner(guild_id: int = None):
         print(f"[GROWTH] Skipping guild {guild_id} — no sheet configured")
         return
     if not gcfg.get("tab_source") or not gcfg.get("tab_growth") or not gcfg.get("metrics"):
-        print(f"[GROWTH] Skipping guild {guild_id} — growth tracking not fully configured. Run /setup_growth.")
+        print(f"[GROWTH] Skipping guild {guild_id} — growth tracking not fully configured. Run the growth setup wizard.")
         return
 
     import gspread
@@ -792,9 +792,10 @@ def format_breakdown_embed(*, metric_labels: list[str],
                            label_overrides: dict | None = None,
                            bucket_filter: list[str] | None = None):
     """Render the breakdown summary as a Discord embed. Shared by the
-    Premium auto-post and the `/growth` button so both views read the
-    same. `bucket_filter` is a list of canonical bucket keys to include;
-    empty list = include every bucket (the typical case).
+    Premium auto-post, the `/growth overview` "📊 See most recent Breakdown"
+    button, and the standalone `/growth breakdown` leaf so all three views
+    read the same. `bucket_filter` is a list of canonical bucket keys to
+    include; empty list = include every bucket (the typical case).
     """
     import discord
     label_overrides = label_overrides or {}

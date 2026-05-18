@@ -308,8 +308,7 @@ def load_roster_from_config(guild_id: int, event_type: str) -> tuple[list[str], 
     """
     Read the configured roster source for the given (guild, event_type) and
     return (names, alias_map). Every alliance configures their own roster
-    tab + name column + optional alias column via /setup_desertstorm or
-    /setup_canyonstorm.
+    tab + name column + optional alias column via the storm setup wizard.
     """
     from config import get_participation_config
     pcfg = get_participation_config(guild_id, event_type)
@@ -392,14 +391,15 @@ async def run_log_flow(bot, channel, user, event_type):
     """
     Walk leadership through the participation log flow. The questions
     asked are read from the per-guild participation config saved by
-    /setup_desertstorm or /setup_canyonstorm. The date is always asked
+    the storm setup wizard (`/setup → ⚔️ Desert Storm` or `/setup → 🏜️ Canyon Storm`). The date is always asked
     first (mandatory, never configurable).
     """
     is_ds        = event_type.upper() == "DS"
     event_label  = "Desert Storm" if is_ds else "Canyon Storm"
     hub_cmd      = HUB_COMMAND["DS"] if is_ds else HUB_COMMAND["CS"]
     log_hint     = f"`{hub_cmd}` → **{HUB_BTN_PARTICIPATION}**"
-    setup_cmd    = "/setup_desertstorm" if is_ds else "/setup_canyonstorm"
+    # Post-#201: storm setup wizards live behind /setup hub buttons.
+    setup_cmd    = "/setup → ⚔️ Desert Storm" if is_ds else "/setup → 🏜️ Canyon Storm"
     guild_id     = channel.guild.id if hasattr(channel, "guild") and channel.guild else None
     cancel_event = asyncio.Event()
     active_logs[user.id] = cancel_event
@@ -892,7 +892,7 @@ async def _send_storm_reminder(bot, interaction: discord.Interaction, event_type
                 feature_label="Storm participation DMs",
                 description=(
                     "Storm participation reminders are part of Alliance Helper "
-                    "Premium and require Member Roster Sync (`/setup_members`). "
+                    "Premium and require Member Roster Sync (`/setup` → 👥 Members). "
                     "Run `/upgrade` to unlock."
                 ),
             ),
@@ -904,7 +904,7 @@ async def _send_storm_reminder(bot, interaction: discord.Interaction, event_type
     roster_cfg = get_member_roster_config(interaction.guild_id)
     if not roster_cfg.get("enabled"):
         await interaction.response.send_message(
-            "⚙️ Member Roster Sync isn't configured yet. Run `/setup_members` first.",
+            "⚙️ Member Roster Sync isn't configured yet. Run `/setup` → 👥 Members first.",
             ephemeral=True,
         )
         return
@@ -962,7 +962,7 @@ async def _send_storm_reminder(bot, interaction: discord.Interaction, event_type
 # ── Default DM body + safe template rendering ────────────────────────────────
 
 # Hardcoded fallback when a guild hasn't configured its own DM body via
-# /setup_desertstorm or /setup_canyonstorm. `{label}` is substituted at
+# the storm setup wizard (`/setup → ⚔️ Desert Storm` or `/setup → 🏜️ Canyon Storm`). `{label}` is substituted at
 # call time from the event_type so DS and CS share one default. The only
 # user-supplied placeholder is `{name}` (member's roster name).
 DEFAULT_STORM_REMINDER_DM = (

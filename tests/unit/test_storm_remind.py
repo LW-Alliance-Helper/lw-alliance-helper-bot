@@ -144,7 +144,11 @@ class TestStormReminderRosterDisabled:
             await _send_storm_reminder(MagicMock(), interaction, "DS")
 
         msg = interaction.response.send_message.call_args.args[0]
-        assert "setup_members" in msg
+        # Post-#201: the /setup_members slash command folded into the
+        # /setup hub's `👥 Members` button. The reminder copy now points
+        # there.
+        assert "Members" in msg
+        assert "/setup" in msg
 
 
 # ── Happy path ───────────────────────────────────────────────────────────────

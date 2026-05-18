@@ -48,7 +48,7 @@ logger = logging.getLogger(__name__)
 #
 # Pulls each member's configured power value off the alliance roster
 # Sheet so the eligibility gate has something to filter against. Reads
-# the column header configured at `/setup_desertstorm` (or canyon)
+# the column header configured by the storm setup wizard
 # under "Power Metric Column" — falling back to the design rule of
 # "exclude unknown power, never silently coerce to zero."
 
@@ -146,7 +146,7 @@ def _read_roster_powers(
 
     if not roster_cfg.get("enabled"):
         errors.append(
-            "member-roster sync isn't enabled — without /sync_members the "
+            "member-roster sync isn't enabled — without /members sync the "
             "builder can't see your alliance's roster."
         )
         return {}, errors
@@ -3045,7 +3045,7 @@ async def _finalize_structured_roster(
         summary_lines = ["✅ Roster posted.",
                          f"📬 Mail sent to {posted_to_mention}."]
     elif post_status == "no_channel":
-        setup_cmd = "/setup_desertstorm" if s.event_type == "DS" else "/setup_canyonstorm"
+        setup_cmd = "/setup → ⚔️ Desert Storm" if s.event_type == "DS" else "/setup → 🏜️ Canyon Storm"
         summary_lines = [
             "✅ Roster recorded.",
             "⚠️ No post channel is configured. Mail was built but not "

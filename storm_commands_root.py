@@ -24,9 +24,12 @@ roster building lived under `/desertstorm signups`). The hub puts
 every action behind a labeled button so the verb is visible on every
 clickable element.
 
-Setup wizards (`/setup_desertstorm`, `/setup_canyonstorm`) intentionally
-stay at the top level — matches the `/setup_<feature>` convention shared
-by train, growth, birthdays, survey, etc.
+Setup wizards collapsed into the `/setup` event-hub in #201 — the
+storm wizards live behind `/setup → ⚔️ Desert Storm` and `/setup →
+🏜️ Canyon Storm` buttons, alongside every other feature wizard.
+The storm hub view's `⚙️ Open setup wizard` button dispatches into
+the same `_launch_storm_setup` helper that the /setup hub button
+uses, so both entry points share gating + ack copy.
 """
 
 from __future__ import annotations

@@ -25,16 +25,15 @@ OVERVIEW_DESCRIPTION = (
 )
 
 ALWAYS_HANDY = (
-    "`/setup`: Roles, leadership channel, timezone, Google Sheet\n"
-    "`/view_configuration`: View all configured settings\n"
-    "`/setup_reset`: Clear configuration and start over\n"
+    "`/setup`: Setup hub. Foundations, every feature wizard, plus "
+    "buttons to view full configuration or reset everything\n"
     "`/cancel`: Cancel any active wizard\n"
     "`/help`: Show this menu\n"
     "`/donate`: 💖 Tip-jar links\n"
     "`/upgrade`: 💎 Subscribe and pin Premium here\n"
-    "`/premium_assign`: 💎 Move Premium to this server\n"
-    "`/premium_status`: 💎 Subscription state and assigned server\n"
-    "`/premium_unassign`: 💎 Release the pin (subscription stays)"
+    "`/premium overview`: 💎 Subscription state (doubles as upsell on free tier)\n"
+    "`/premium assign`: 💎 Move Premium to this server\n"
+    "`/premium unassign`: 💎 Release the pin (subscription stays)"
 )
 
 
@@ -50,13 +49,15 @@ HELP_CATEGORIES: dict[str, dict] = {
             "Drafts post to leadership for review, then to your public channel."
         ),
         "commands": [
-            ("/setup_events",
+            ("/setup → 📣 Events",
              "Configure events, leadership and public channels, daily draft "
              "time, and the 5-min warning."),
-            ("/events [date]",
+            ("/events overview",
+             "Configured event types + next firing dates at a glance."),
+            ("/events show [date]",
              "Open the event editor for today or a chosen date. Edit, "
              "approve, and post."),
-            ("/events_log",
+            ("/events log",
              "Show approved event posts (free: 7 days / 💎 Premium: 30 days)."),
         ],
     },
@@ -68,14 +69,14 @@ HELP_CATEGORIES: dict[str, dict] = {
             "generate a personalised ChatGPT blurb prompt."
         ),
         "commands": [
-            ("/setup_train",
+            ("/setup → 🚂 Train",
              "Configure the train tab, blurb generation, and reminders."),
-            ("/train",
+            ("/train overview",
              "View the schedule with Add / Update / Generate Prompt / Clear "
              "buttons."),
-            ("/train_log [date]",
+            ("/train log [date]",
              "Recent prompt log entries (free: 7 days / 💎 Premium: 30 days)."),
-            ("/train_addbirthdays",
+            ("/train birthdays",
              "Manually run the birthday → train auto-population now."),
         ],
     },
@@ -87,7 +88,7 @@ HELP_CATEGORIES: dict[str, dict] = {
             "announcements and auto-assign the train."
         ),
         "commands": [
-            ("/setup_birthdays",
+            ("/setup → 🎂 Birthdays",
              "Configure birthday tracking, train integration, and "
              "announcement template."),
             ("/birthdays",
@@ -105,7 +106,7 @@ HELP_CATEGORIES: dict[str, dict] = {
             "see every action in one place."
         ),
         "commands": [
-            ("/setup_desertstorm",
+            ("/setup → ⚔️ Desert Storm",
              "Configure Team rosters, log channel, public post channel, "
              "mail template, and (💎 Premium) the structured-flow sign-up "
              "channel, schedule, and Sheet tabs."),
@@ -133,7 +134,7 @@ HELP_CATEGORIES: dict[str, dict] = {
             "every action in one place."
         ),
         "commands": [
-            ("/setup_canyonstorm",
+            ("/setup → 🏜️ Canyon Storm",
              "Configure Team rosters, log channel, public post channel, "
              "mail template, and (💎 Premium) the structured-flow sign-up "
              "channel, schedule, and Sheet tabs."),
@@ -158,14 +159,14 @@ HELP_CATEGORIES: dict[str, dict] = {
             "land in your sheet; leadership gets a notification per submission."
         ),
         "commands": [
-            ("/setup_survey",
+            ("/setup → 📋 Survey",
              "Configure questions, channels, sheet tabs, and the intro."),
-            ("/survey",
+            ("/survey overview",
              "View configured surveys. 💎 Premium gets Add / Edit / Remove "
              "for managing multiple."),
-            ("/survey_post",
+            ("/survey post",
              "Post or repost the answer button."),
-            ("/survey_remind",
+            ("/survey remind",
              "Send now or schedule. Free: channel post. 💎 Premium: also DM "
              "via roster."),
         ],
@@ -176,18 +177,21 @@ HELP_CATEGORIES: dict[str, dict] = {
         "description": (
             "Periodic snapshots of member stats, written to your sheet. "
             "Each snapshot also classifies members into growth buckets. "
-            "click **📊 See most recent Breakdown** on `/growth` to see who's climbing and "
+            "Click **📊 See most recent Breakdown** on `/growth overview` (or run `/growth breakdown` directly) to see who's climbing and "
             "who's stalled."
         ),
         "commands": [
-            ("/setup_growth",
+            ("/setup → 📈 Growth",
              "Configure source tab, metrics, and snapshot schedule."),
-            ("/setup_growth_breakdown",
+            ("/setup → 📊 Growth Breakdown",
              "💎 Configure the breakdown auto-post, bucket thresholds, "
              "and bucket labels."),
-            ("/growth",
+            ("/growth overview",
              "Show status with options to snapshot, view the breakdown, "
              "or edit config."),
+            ("/growth breakdown",
+             "Jump straight to the most-recent bucket breakdown "
+             "(Increased / Steady / Low / None / Decline)."),
         ],
     },
     "shiny_tasks": {
@@ -198,7 +202,7 @@ HELP_CATEGORIES: dict[str, dict] = {
             "that have shiny tasks today."
         ),
         "commands": [
-            ("/setup_shiny_tasks",
+            ("/setup → 🌟 Shiny Tasks",
              "Configure the announcement channel, server range, post "
              "time, and message body."),
         ],
@@ -214,12 +218,15 @@ HELP_CATEGORIES: dict[str, dict] = {
             "alongside it."
         ),
         "commands": [
-            ("/export_config",
+            ("/config overview",
+             "What this guild has saved + pointers into /config export and "
+             "/config import."),
+            ("/config export",
              "DMs you a JSON file with the categories you select "
              "(core setup, events, DS, CS, train, birthday, growth, "
              "surveys, shiny tasks, member roster)."),
-            ("/import_config <file>",
-             "Apply a /export_config JSON to this server. The bot walks "
+            ("/config import <file>",
+             "Apply a /config export JSON to this server. The bot walks "
              "you through remapping each old channel and role to its new "
              "equivalent, then writes the imported config to your tables."),
         ],
@@ -232,15 +239,17 @@ HELP_CATEGORIES: dict[str, dict] = {
             "Unlock with `/upgrade`."
         ),
         "commands": [
-            ("/setup_members",
+            ("/setup → 👥 Members",
              "Configure Member Roster Sync. Writes Discord IDs to your "
              "sheet so other features find members by name."),
-            ("/sync_members",
+            ("/members overview",
+             "Roster source, last-sync time, and current state at a glance."),
+            ("/members sync",
              "Manually re-sync the roster now."),
             ("Multiple named surveys",
-             "Manage from `/survey` directly via Add / Edit / Remove."),
+             "Manage from `/survey overview` directly via Add / Edit / Remove."),
             ("DM-mode reminders",
-             "`/survey_remind` plus the **🔔 Send DM reminder to roster** "
+             "`/survey remind` plus the **🔔 Send DM reminder to roster** "
              "button on `/desertstorm` and `/canyonstorm` all gain "
              "DM-via-roster delivery; survey reminders can also schedule "
              "recurring DMs."),

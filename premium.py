@@ -102,7 +102,7 @@ _entitlement_cache: dict[int, tuple[bool, float]] = {}
 # Per-user subscription cache. Discord's User Subscription SKU returns the
 # same answer regardless of which guild we're querying for, so caching by
 # user_id avoids re-fetching when the same subscriber is checked across
-# multiple guilds (or when /premium_status and /premium_assign run in quick
+# multiple guilds (or when /premium overview and /premium assign run in quick
 # succession).
 _user_subscription_cache: dict[int, tuple[bool, float]] = {}
 

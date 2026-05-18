@@ -4,7 +4,7 @@ Unit tests for member_roster.py — Member Roster Sync (Premium feature).
 Covers row-building (column placement, role filtering, bot exclusion,
 sorting, role-string formatting) and the sheet-write contract via a
 spy worksheet. The sync command's premium-gating is also exercised so
-free-tier guilds can't bypass /sync_members.
+free-tier guilds can't bypass /members sync.
 """
 
 import os
@@ -237,7 +237,7 @@ class TestWriteRoster:
 
 
 class TestPreserveUnknownColumns:
-    """`/sync_members` must preserve alliance-owned columns (the custom
+    """`/members sync` must preserve alliance-owned columns (the custom
     Power column the structured-flow eligibility filter reads, the
     `not_on_discord` flag the officer view reads, etc.). The prior
     `ws.clear()` + write-bot-cols path silently destroyed them on
@@ -538,7 +538,7 @@ class TestDiscordPresenceColumn:
 # ── Cache-population safety net ──────────────────────────────────────────────
 
 class TestEnsureMemberCache:
-    """Regression tests for the bug where /sync_members wrote 0 rows because
+    """Regression tests for the bug where /members sync wrote 0 rows because
     `Intents.default()` doesn't request the privileged members intent and
     `guild.members` was therefore the cached subset. The fix sets
     `intents.members = True` in bot.py and chunks the guild before each
@@ -650,9 +650,11 @@ class TestBotIntents:
         assert bot_module.intents.members is True
 
 
-# ── /sync_members premium gate ────────────────────────────────────────────────
+# ── /members sync premium gate ───────────────────────────────────────────────
 
 class TestSyncMembersGate:
+    """Renamed in #195: `/sync_members` is now `/members sync`. The Python
+    method on the cog is `members_sync`."""
 
     @pytest.mark.asyncio
     async def test_free_tier_sees_premium_locked(self, seeded_db):
@@ -670,7 +672,7 @@ class TestSyncMembersGate:
         interaction.user.guild_permissions.administrator = True
         interaction.response.send_message = AsyncMock()
 
-        await cog.sync_members.callback(cog, interaction)
+        await cog.members_sync.callback(cog, interaction)
 
         call  = interaction.response.send_message.call_args
         embed = call.kwargs.get("embed")
@@ -693,7 +695,7 @@ class TestSyncMembersGate:
         interaction.user.guild_permissions.administrator = False
         interaction.response.send_message = AsyncMock()
 
-        await cog.sync_members.callback(cog, interaction)
+        await cog.members_sync.callback(cog, interaction)
 
         call    = interaction.response.send_message.call_args
         content = call.args[0] if call.args else call.kwargs.get("content")
@@ -704,7 +706,8 @@ class TestSyncMembersGate:
 
     @pytest.mark.asyncio
     async def test_premium_admin_with_unconfigured_roster_gets_setup_hint(self, seeded_db):
-        """Guild is premium but roster_config.enabled=0 → asks them to /setup_members."""
+        """Guild is premium but roster_config.enabled=0 → wizard hint
+        points at the /setup hub's 👥 Members button (post-#201)."""
         from member_roster import MemberRosterCog
         import premium
         premium.clear_cache()
@@ -719,11 +722,12 @@ class TestSyncMembersGate:
         interaction.user.guild_permissions.administrator = True
         interaction.response.send_message = AsyncMock()
 
-        await cog.sync_members.callback(cog, interaction)
+        await cog.members_sync.callback(cog, interaction)
 
         call    = interaction.response.send_message.call_args
         content = call.args[0] if call.args else call.kwargs.get("content")
-        assert "setup_members" in (content or "")
+        assert "/setup" in (content or "")
+        assert "Members" in (content or "")
 
 
 # ── Discord ID lookup ─────────────────────────────────────────────────────────

@@ -388,7 +388,7 @@ code edit is most of the work.
   zone" submit-error variants.
 - **2.15 Inline post-first-signup offer**: Canonical in doc.
 
-### Section 3 — `/sync_members`
+### Section 3 — `/members sync`
 
 - **3.4 Sync running**: To customise the "is thinking…" indicator
   (per the EDITED copy "is working..."), send a placeholder ephemeral
@@ -432,7 +432,7 @@ code edit is most of the work.
 - **6.6 Success**: Canonical.
 - **6.7 Case-normalisation success**: **DELETE** (Rule E).
 - **6.8 Permissive fallback**: Rewrite — if roster read fails, show
-  "Couldn't read the roster right now; try `/sync_members` and try
+  "Couldn't read the roster right now; try `/members sync` and try
   again" error ephemeral instead of opening the picker. No free-text
   fallback.
 
@@ -544,9 +544,9 @@ The big Rule G deletion + a Rule I sweep.
   - 9.10 Faction-roles offer timeout
   (Rule G)
 - **L4545, 4569, 4582, 4595, 4607-4609, 4613-4616**: hardcoded
-  `/setup_desertstorm` in error copy — CS variants must say
-  `/setup_canyonstorm`. (Rule I)
-- **L4560-4561**: "Run `/setup_desertstorm`" needs event-type
+  `/setup → ⚔️ Desert Storm` in error copy — CS variants must say
+  `/setup → 🏜️ Canyon Storm`. (Rule I)
+- **L4560-4561**: "Run `/setup → ⚔️ Desert Storm`" needs event-type
   substitution. (Rule I)
 - **L4490-4491, 4506-4507**: Public-ack button labels
   `[📄 Mail preview (disabled)]` and `[🖼️ Render PNG (disabled)]` —

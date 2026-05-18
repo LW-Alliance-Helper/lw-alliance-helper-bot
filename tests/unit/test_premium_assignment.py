@@ -6,8 +6,11 @@ single guild at a time. These tests cover:
 
 - The data-layer helpers (`config.set_premium_assignment`, etc.)
 - The premium.py wrappers that invalidate caches on changes
-- The four slash commands (`/upgrade`, `/premium_assign`, `/premium_status`,
-  `/premium_unassign`) across their state-aware branches
+- The four slash commands (`/upgrade`, `/premium assign`, `/premium overview`,
+  `/premium unassign`) across their state-aware branches. `/premium overview`
+  doubles as the free-tier upsell surface — for a caller with no active
+  subscription and no preserved assignment, it sends the same upgrade pitch
+  `/upgrade` does.
 - The `on_entitlement_create` / `on_entitlement_delete` listeners that
   auto-assign on first checkout and refresh caches on lapse
 """
@@ -255,7 +258,7 @@ class TestLapseAndResume:
             _premium.clear_cache()
 
 
-# ── /premium_assign ───────────────────────────────────────────────────────────
+# ── /premium assign ───────────────────────────────────────────────────────────
 
 class TestPremiumAssignCommand:
 
@@ -309,7 +312,7 @@ class TestPremiumAssignCommand:
 
     @pytest.mark.asyncio
     async def test_fresh_assignment_confirms_then_assigns(self, monkeypatch):
-        """Fresh /premium_assign now prompts for confirmation naming the
+        """Fresh /premium assign now prompts for confirmation naming the
         target guild — only writes the assignment after the user confirms."""
         monkeypatch.setenv("PREMIUM_SKU_ID", "12345")
         import premium as _premium
@@ -409,13 +412,20 @@ class TestPremiumAssignCommand:
         assert "OtherSubscriber" in embed.description
 
 
-# ── /premium_status ───────────────────────────────────────────────────────────
+# ── /premium overview ─────────────────────────────────────────────────────────
 
-class TestPremiumStatusCommand:
+class TestPremiumOverviewCommand:
 
     @pytest.mark.asyncio
-    async def test_no_subscription_no_assignment(self, monkeypatch):
+    async def test_no_subscription_no_assignment_sends_upgrade_pitch(self, monkeypatch):
+        """When the caller has no active subscription and no preserved
+        assignment, /premium overview doubles as the free-tier upsell —
+        rendering the same pitch + Discord premium button `/upgrade`
+        would, and registering the current guild for auto-assign on
+        post-checkout entitlement creation."""
         monkeypatch.setenv("PREMIUM_SKU_ID", "12345")
+        import premium as _premium
+        importlib.reload(_premium)
         cog, _ = _make_donate_cog()
         async def empty_iter(**kw):
             if False:
@@ -425,13 +435,20 @@ class TestPremiumStatusCommand:
 
         interaction = AsyncMock()
         interaction.user.id  = 111
+        interaction.guild_id = TEST_GUILD_ID
         interaction.response.send_message = AsyncMock()
 
-        await cog.premium_status.callback(cog, interaction)
+        await cog.premium_overview.callback(cog, interaction)
 
         call = interaction.response.send_message.call_args
         embed = call.kwargs.get("embed") or call.args[0]
-        assert "no active subscription" in embed.title.lower()
+        # Pitch title — same as /upgrade's no-sub branch.
+        assert "premium" in embed.title.lower()
+        assert "$4.99" in embed.description
+        # And the upgrade button surface was offered (SKU was set, so
+        # upgrade_view() returned a real View), which means the caller's
+        # guild was registered for auto-assign on checkout.
+        assert cog._pending_upgrade_guilds.get(111) == TEST_GUILD_ID
 
     @pytest.mark.asyncio
     async def test_subscription_active_assigned_here(self, monkeypatch):
@@ -453,7 +470,7 @@ class TestPremiumStatusCommand:
         interaction.user.id = 111
         interaction.response.send_message = AsyncMock()
 
-        await cog.premium_status.callback(cog, interaction)
+        await cog.premium_overview.callback(cog, interaction)
         call = interaction.response.send_message.call_args
         embed = call.kwargs.get("embed") or call.args[0]
         assert "AssignedGuild" in embed.description
@@ -480,7 +497,7 @@ class TestPremiumStatusCommand:
         interaction.user.id = 111
         interaction.response.send_message = AsyncMock()
 
-        await cog.premium_status.callback(cog, interaction)
+        await cog.premium_overview.callback(cog, interaction)
         call = interaction.response.send_message.call_args
         embed = call.kwargs.get("embed") or call.args[0]
         # Preserved-assignment message should mention re-subscription resumes
@@ -490,7 +507,7 @@ class TestPremiumStatusCommand:
                "resume" in embed.description.lower()
 
 
-# ── /premium_unassign ─────────────────────────────────────────────────────────
+# ── /premium unassign ─────────────────────────────────────────────────────────
 
 class TestPremiumUnassignCommand:
 
@@ -508,7 +525,7 @@ class TestPremiumUnassignCommand:
 
     @pytest.mark.asyncio
     async def test_with_assignment_confirms_then_releases(self, monkeypatch):
-        """/premium_unassign now prompts for confirmation naming the
+        """/premium unassign now prompts for confirmation naming the
         guild that's about to revert — only releases after the user confirms."""
         monkeypatch.setenv("PREMIUM_SKU_ID", "12345")
         import premium as _premium
@@ -572,7 +589,7 @@ class TestUpgradeAutoAssign:
 
     @pytest.mark.asyncio
     async def test_subscriber_in_unassigned_guild_auto_assigns(self, monkeypatch):
-        """A subscriber who's already paying but has never run /premium_assign:
+        """A subscriber who's already paying but has never run /premium assign:
         running /upgrade in any guild auto-assigns it there with clear
         messaging."""
         monkeypatch.setenv("PREMIUM_SKU_ID", "12345")
@@ -600,7 +617,7 @@ class TestUpgradeAutoAssign:
     @pytest.mark.asyncio
     async def test_subscriber_in_other_assigned_guild_prompts_switch(self, monkeypatch):
         """If the caller's subscription is pinned to a *different* guild,
-        /upgrade explains they need to use /premium_assign here to switch."""
+        /upgrade explains they need to use /premium assign here to switch."""
         monkeypatch.setenv("PREMIUM_SKU_ID", "12345")
         import premium as _premium
         importlib.reload(_premium)
@@ -675,7 +692,7 @@ class TestEntitlementListeners:
     @pytest.mark.asyncio
     async def test_create_with_no_pending_dms_user(self, monkeypatch):
         """Subscribed via Discord app store (no /upgrade context) — bot
-        DMs them prompting a manual /premium_assign rather than guessing."""
+        DMs them prompting a manual /premium assign rather than guessing."""
         monkeypatch.setenv("PREMIUM_SKU_ID", "12345")
         import premium as _premium
         importlib.reload(_premium)

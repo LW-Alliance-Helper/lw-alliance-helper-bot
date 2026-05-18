@@ -86,12 +86,16 @@ class TestFormatCommandError:
         assert "Discord blocked" in msg
         assert "99999" in msg
 
-    def test_not_found_suggests_view_configuration(self):
+    def test_not_found_suggests_setup_view_configuration_button(self):
+        """Post-#201: /view_configuration folded into the /setup hub's
+        🗂️ View configuration button — the NotFound rescue copy now
+        points users at that nav path instead of the bare slash."""
         from bot import _format_command_error
         err = self._make_not_found()
         msg = _format_command_error(err, "abc123")
         assert "Discord couldn't find" in msg
-        assert "/view_configuration" in msg
+        assert "/setup" in msg
+        assert "View configuration" in msg
 
     def test_http_exception_includes_status_and_code(self):
         from bot import _format_command_error

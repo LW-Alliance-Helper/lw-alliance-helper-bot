@@ -249,7 +249,7 @@ async def refresh_servers() -> int:
 
     Returns the number of rows upserted on success. Called from the
     weekly background loop, on first startup when the table is empty,
-    and (manually) via `/admin_*` if a fast resync is ever needed.
+    and (manually) via the `/admin` group if a fast resync is ever needed.
 
     Errors are propagated to the caller — the scheduler loop catches
     them and routes to Sentry / logs. Don't swallow here; a silent
@@ -265,7 +265,7 @@ def resolve_announcement_template(saved_template: str) -> str:
     """Return the template to use for rendering: the guild's saved
     value, or the hardcoded default if empty / whitespace-only.
 
-    Centralised so the scheduler loop, the /view_configuration embed,
+    Centralised so the scheduler loop, the setup hub's 🗂️ View configuration embed,
     and any future preview command all resolve the same way.
     """
     from defaults import DEFAULT_SHINY_TASKS_MESSAGE

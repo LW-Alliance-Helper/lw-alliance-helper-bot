@@ -12,12 +12,12 @@ them as "roster members not on Discord". Every storm surface that
 reads the roster will see them; nothing tries to look them up via
 Discord's API.
 
-`/sync_members` will **overwrite this data** (it rebuilds the roster
+`/members sync` will **overwrite this data** (it rebuilds the roster
 from Discord + the configured roster source). Run this script:
   - On the dev guild only (`--guild-id` must match the dev guild)
-  - After `/setup_members` is configured (so we know which Sheet +
+  - After `the /setup → 👥 Members wizard` is configured (so we know which Sheet +
     tab to write to)
-  - WITHOUT running `/sync_members` afterwards (it'll wipe the synthetic
+  - WITHOUT running `/members sync` afterwards (it'll wipe the synthetic
     rows). If you need both real members + synthetic ones, run sync
     first, then this script (it appends; doesn't clear).
 
@@ -66,7 +66,7 @@ _DEFAULT_NAMES = [
 
 
 def _build_rows(count: int, power_tiers_m: list[int]) -> list[list[str]]:
-    """Build `count` synthetic roster rows in the canonical `/sync_members`
+    """Build `count` synthetic roster rows in the canonical `/members sync`
     column order: Discord ID, Name, Display Name, Joined, Roles, Is this
     user in Discord?, then a power column. We leave Discord ID blank
     and set "Is this user in Discord?" to "No" so the bot treats every
@@ -132,7 +132,7 @@ def main() -> int:
 
     roster_cfg = config.get_member_roster_config(args.guild_id)
     if not roster_cfg.get("enabled"):
-        print(f"⚠️ Guild {args.guild_id} hasn't run /setup_members yet, so "
+        print(f"⚠️ Guild {args.guild_id} hasn't run the /setup → 👥 Members wizard yet, so "
               f"the bot doesn't know which Sheet/tab to write to. Run "
               f"setup, then re-run this script.",
               file=sys.stderr)
@@ -175,9 +175,9 @@ def main() -> int:
     print(f"✅ Seeded {len(rows)} synthetic non-Discord roster row(s) into "
           f"'{tab_name}' for guild {args.guild_id}.")
     print(f"\nNext steps:")
-    print(f"  - In /setup_desertstorm (or /setup_canyonstorm), set Power")
+    print(f"  - In /setup → ⚔️ Desert Storm (or /setup → 🏜️ Canyon Storm), set Power")
     print(f"    Metric Column to G (the column this script writes power to).")
-    print(f"  - Do NOT run /sync_members on this guild. It'll wipe these")
+    print(f"  - Do NOT run /members sync on this guild. It'll wipe these")
     print(f"    rows. Re-seed via this script after a sync if you want both")
     print(f"    real members + synthetic ones.")
     return 0

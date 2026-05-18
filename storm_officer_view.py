@@ -1032,11 +1032,11 @@ class OfficerView(discord.ui.View):
             if not roster_rows:
                 # Permissive fallback path. Without a roster read, we can't
                 # populate the Member Select — surface the same actionable
-                # error so the officer knows to retry after /sync_members.
+                # error so the officer knows to retry after /members sync.
                 try:
                     await inter.followup.send(
                         "⚠️ Couldn't read the roster right now. Try "
-                        "`/sync_members` and reopen this view to retry.",
+                        "`/members sync` and reopen this view to retry.",
                         ephemeral=True,
                     )
                 except discord.HTTPException:
@@ -1050,7 +1050,7 @@ class OfficerView(discord.ui.View):
                 msg = await inter.followup.send(
                     content=(
                         "🙋 Pick a member and a vote, then **Submit**. "
-                        "Only roster members are listed. `/sync_members` "
+                        "Only roster members are listed. `/members sync` "
                         "refreshes the list."
                     ),
                     view=picker, ephemeral=True,

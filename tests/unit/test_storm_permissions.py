@@ -105,7 +105,9 @@ class TestEnsurePremiumStructured:
         assert ok is False
         assert structured is None
         sent = inter.response.send_message.await_args.args[0]
-        assert "/setup_desertstorm" in sent
+        # Post-#201: storm setup wizards live behind /setup hub buttons.
+        assert "Desert Storm" in sent
+        assert "/setup" in sent
 
     @pytest.mark.asyncio
     async def test_premium_and_flag_on_returns_structured_cfg(self, seeded_db):

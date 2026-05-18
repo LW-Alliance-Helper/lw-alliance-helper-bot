@@ -2,11 +2,11 @@
 train.py — Train schedule blurb generator + schedule management
 
 Slash commands (leadership role + channel only):
-  /train              — View the schedule with Add / Update / Generate Prompt / Clear buttons
-  /train_log [date]   — Show recent prompt log entries (defaults to last 14 days)
-  /train_addbirthdays — Manually run the birthday check now
-  /birthdays          — Show upcoming birthdays in the next 14 days
-  /cancel             — Cancel any active wizard session
+  /train overview     — View the schedule with Add / Update / Generate Prompt / Clear buttons
+  /train log [date]   — Show recent prompt log entries (defaults to last 14 days)
+  /train birthdays    — Manually run the birthday check now
+  /birthdays          — Show upcoming birthdays in the next 14 days (standalone)
+  /cancel             — Cancel any active wizard session (standalone)
 
 Schedule reminder:
   - At the configured reminder_time the bot pings leadership that it's
@@ -495,7 +495,7 @@ class ReminderView(discord.ui.View):
         it. Without this, the button looks live for an hour after the
         view stopped listening — clicks fail with 'Interaction failed'."""
         from wizard_registry import expire_view_message
-        await expire_view_message(self.message, command_hint="`/train`")
+        await expire_view_message(self.message, command_hint="/train overview")
 
     @discord.ui.button(label="📋 View & Get Prompt", style=discord.ButtonStyle.success)
     async def launch(self, interaction: discord.Interaction, button: discord.ui.Button):

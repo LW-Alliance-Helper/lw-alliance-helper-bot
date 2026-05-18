@@ -48,7 +48,7 @@ data stays. You just can't add more until you subscribe or trim.
 These features are new with the Premium launch — there's no "before"
 state to migrate:
 
-- **Member Roster Sync** (`/setup_members`, `/members sync`) — writes
+- **Member Roster Sync** (`/setup` → 👥 Members, `/members sync`) — writes
   every member's Discord ID to a sheet tab so other premium features
   can find them.
 - **Birthday DMs** — a personal DM in addition to the channel post.

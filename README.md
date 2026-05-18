@@ -61,7 +61,7 @@ A subscription is **per-user** and applies to **one server at a time** — use `
 1. **[Invite the bot to your server](https://discord.com/oauth2/authorize?client_id=1488378654709780510&permissions=397284699328&integration_type=0&scope=applications.commands+bot)**
 2. **Create a Google Sheet** and share it with the bot's service account (the email address is shown in `/setup`)
 3. **Run `/setup`** in your leadership channel — walks through member role, leadership role, leadership channel, timezone, and sheet ID
-4. **Configure the features you want** — `/setup_events`, `/setup_train`, `/setup_birthdays`, `/setup_desertstorm`, `/setup_canyonstorm`, `/setup_survey`, `/setup_growth`. Each is independent; skip any you don't need.
+4. **Configure the features you want** — re-run `/setup` to open the hub and click whichever feature buttons you'd like to enable (Events, Train, Birthdays, Desert Storm, Canyon Storm, Survey, Growth, Shiny Tasks, plus Premium-gated Members + Survey extras + Growth Breakdown). Each is independent; skip any you don't need.
 
 → Full step-by-step setup, including the sheet structure each feature expects: [setup page](https://lw-alliance-helper.github.io/setup.html)
 

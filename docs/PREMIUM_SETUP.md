@@ -154,7 +154,7 @@ Once the env var is set and the bot has restarted:
 3. Once subscribed, run **`/help`** — the title should now show
    "💎 Premium" instead of "Free tier", and the embed color should be
    gold instead of blurple.
-4. Run **`/setup_members`** — it should run the wizard instead of
+4. Run **`/setup`** and click **👥 Members** — it should run the wizard instead of
    showing the premium-locked embed.
 
 ## 4. Customer-facing rollout

@@ -706,7 +706,8 @@ class TestSyncMembersGate:
 
     @pytest.mark.asyncio
     async def test_premium_admin_with_unconfigured_roster_gets_setup_hint(self, seeded_db):
-        """Guild is premium but roster_config.enabled=0 → asks them to /setup_members."""
+        """Guild is premium but roster_config.enabled=0 → wizard hint
+        points at the /setup hub's 👥 Members button (post-#201)."""
         from member_roster import MemberRosterCog
         import premium
         premium.clear_cache()
@@ -725,7 +726,8 @@ class TestSyncMembersGate:
 
         call    = interaction.response.send_message.call_args
         content = call.args[0] if call.args else call.kwargs.get("content")
-        assert "setup_members" in (content or "")
+        assert "/setup" in (content or "")
+        assert "Members" in (content or "")
 
 
 # ── Discord ID lookup ─────────────────────────────────────────────────────────

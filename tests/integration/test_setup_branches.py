@@ -135,23 +135,25 @@ class TestStormSetupWithParticipation:
         assert gcfg.cs_log_channel_id == 666111
 
 
-# ── /setup_reset ──────────────────────────────────────────────────────────────
+# ── /setup hub: reset flow + view-configuration helper (post-#201) ───────────
 
 class TestSetupResetBranches:
-    """Both confirm and cancel paths of /setup_reset."""
+    """Both confirm and cancel paths of the reset flow, which is now
+    reachable from the `/setup` hub's 🗑️ Reset configuration button.
+    The flow itself is exposed as the module-level `_run_reset_flow`
+    helper — same logic, same gates."""
 
     @pytest.mark.asyncio
-    async def test_setup_reset_confirm_clears_config(self, seeded_db):
+    async def test_reset_flow_confirm_clears_config(self, seeded_db):
         import config
-        from setup_cog import SetupCog
+        import setup_cog
 
-        cog = SetupCog(MagicMock())
         interaction = make_mock_interaction(is_admin=True)
 
-        # ConfirmResetView is defined inline. Drive it by short-circuiting
-        # response.send_message: when the view is passed in, set
-        # confirmed=True and stop() it so the wizard's `await view.wait()`
-        # returns immediately.
+        # _ConfirmResetView is defined inline inside _run_reset_flow.
+        # Drive it by short-circuiting response.send_message: when the
+        # view is passed in, set confirmed=True and stop() it so the
+        # helper's `await view.wait()` returns immediately.
         async def _send(content=None, embed=None, view=None, **kw):
             if view is not None:
                 view.confirmed = True
@@ -160,32 +162,28 @@ class TestSetupResetBranches:
             return MagicMock(id=1)
         interaction.response.send_message = AsyncMock(side_effect=_send)
 
-        await cog.setup_reset.callback(cog, interaction)
+        await setup_cog._run_reset_flow(interaction)
 
         # After reset, the row should be reset to defaults (setup_complete=0)
         cfg = config.get_config(TEST_GUILD_ID)
         assert cfg.setup_complete == 0, (
             "Setup should be cleared after confirm — saw setup_complete still set"
         )
-        # Followup should mention the reset succeeded
         followup_call = interaction.followup.send.call_args
         assert followup_call is not None
         sent_msg = followup_call.args[0] if followup_call.args else followup_call.kwargs.get("content", "")
         assert "reset" in sent_msg.lower()
 
     @pytest.mark.asyncio
-    async def test_setup_reset_cancel_keeps_config(self, seeded_db):
-        """Clicking Cancel (or timing out) preserves the existing config
-        and surfaces the explicit 'Reset cancelled' message."""
+    async def test_reset_flow_cancel_keeps_config(self, seeded_db):
+        """Clicking Cancel preserves the existing config and surfaces the
+        explicit 'Reset cancelled' message."""
         import config
-        from setup_cog import SetupCog
+        import setup_cog
 
-        cog = SetupCog(MagicMock())
         interaction = make_mock_interaction(is_admin=True)
-
         original_tz = config.get_config(TEST_GUILD_ID).timezone
 
-        # Drive the inline ConfirmResetView with confirmed=False (cancel).
         async def _send(content=None, embed=None, view=None, **kw):
             if view is not None:
                 view.confirmed = False
@@ -194,15 +192,12 @@ class TestSetupResetBranches:
             return MagicMock(id=1)
         interaction.response.send_message = AsyncMock(side_effect=_send)
 
-        await cog.setup_reset.callback(cog, interaction)
+        await setup_cog._run_reset_flow(interaction)
 
-        # Config should be preserved
         cfg_after = config.get_config(TEST_GUILD_ID)
         assert cfg_after.setup_complete == 1
         assert cfg_after.timezone       == original_tz
 
-        # The followup message should explicitly mention "cancelled" so
-        # the user knows nothing was reset.
         followup_call = interaction.followup.send.call_args
         assert followup_call is not None
         sent_msg = followup_call.args[0] if followup_call.args else followup_call.kwargs.get("content", "")
@@ -210,44 +205,58 @@ class TestSetupResetBranches:
         assert "still active" in sent_msg.lower()
 
 
-# ── /view_configuration ───────────────────────────────────────────────────────
+# ── /setup → 🗂️ View configuration (post-#201) ───────────────────────────────
 
 class TestViewConfiguration:
+    """Post-#201: the bare `/view_configuration` slash command is gone;
+    its body now sits behind the setup hub's 🗂️ View configuration
+    button, which calls `setup_cog._send_view_configuration`. The
+    button is wired via setup_hub.py; here we exercise the underlying
+    helper directly to cover the same after-setup / before-setup
+    branches the old slash test did."""
 
     @pytest.mark.asyncio
-    async def test_view_configuration_after_setup(self, seeded_db):
-        """Once setup_complete=1, /view_configuration should respond with
-        an embed (not the 'not set up yet' message)."""
-        from setup_cog import SetupCog
-        cog = SetupCog(MagicMock())
+    async def test_view_configuration_after_setup_renders_embed(self, seeded_db):
+        """Once setup_complete=1, the helper renders the configuration
+        embed (not the 'not set up yet' message)."""
+        from setup_cog import _send_view_configuration
+        from config import get_config
 
         interaction = make_mock_interaction(is_admin=True)
-        await cog.view_configuration.callback(cog, interaction)
+        cfg = get_config(TEST_GUILD_ID)
+        assert cfg is not None and cfg.setup_complete
 
-        # Either response.send_message OR followup.send received an embed
+        await _send_view_configuration(interaction, cfg)
+
         sent = (
             interaction.response.send_message.call_args
             or interaction.followup.send.call_args
         )
         assert sent is not None, (
-            "/view_configuration didn't reply at all"
+            "_send_view_configuration didn't reply at all"
         )
-        embed = sent.kwargs.get("embed")
-        # Some pathways send raw text first; either is acceptable as long
-        # as something got sent.
 
     @pytest.mark.asyncio
-    async def test_view_configuration_before_setup(self, temp_db):
-        """If setup isn't complete, /view_configuration should respond
-        with a friendly 'run /setup' message rather than crashing."""
-        from setup_cog import SetupCog
+    async def test_setup_hub_view_button_before_setup_says_not_set_up(self, temp_db):
+        """When setup isn't complete, the hub's 🗂️ View configuration
+        button replies with the friendly 'run /setup' redirect rather
+        than crashing or rendering a half-empty embed. The button's
+        not-set-up guard sits inline in setup_hub.py; we exercise the
+        unbound callback function discord.py stashed on the Button
+        item so we don't have to drive a real Discord interaction."""
+        import setup_hub
+        from unittest.mock import MagicMock as _M
         import config
         # Create a row but don't mark setup_complete
         config.get_or_create_config(TEST_GUILD_ID)
 
-        cog = SetupCog(MagicMock())
         interaction = make_mock_interaction(is_admin=True)
-        await cog.view_configuration.callback(cog, interaction)
+        bot = _M()
+        view = setup_hub._SetupHubView(bot, TEST_GUILD_ID, 1, is_premium=False)
+        # discord.py wraps the decorated coroutine on the Button item.
+        # `Button.callback` is set to a partial bound to the view, so
+        # invoking `view.btn_view_config.callback(interaction)` works.
+        await view.btn_view_config.callback(interaction)
 
         sent = interaction.response.send_message.call_args
         msg = sent.args[0] if sent.args else sent.kwargs.get("content", "")

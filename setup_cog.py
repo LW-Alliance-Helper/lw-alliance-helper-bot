@@ -1519,7 +1519,7 @@ class SetupCog(commands.Cog):
         if not await premium.is_premium(interaction.guild_id, interaction=interaction):
             await interaction.response.send_message(
                 "💎 `/setup_growth_breakdown` is a Premium feature. The "
-                "**📊 See most recent Breakdown** button on `/growth` works on every tier — "
+                "**📊 See most recent Breakdown** button on `/growth overview` (and `/growth breakdown`) works on every tier — "
                 "this command configures the auto-post and the customizable "
                 "thresholds and labels. Run `/upgrade` to subscribe.",
                 ephemeral=True,
@@ -2689,10 +2689,10 @@ async def run_growth_setup(interaction: discord.Interaction, bot):
         next_value = (
             f"<t:{ts}:F> (<t:{ts}:R>)\n"
             f"*Want to start tracking from today instead? "
-            f"Run `/growth` and click **📸 Run Snapshot Now**.*"
+            f"Run `/growth overview` and click **📸 Run Snapshot Now**.*"
         )
     else:
-        next_value = "*Could not compute — check `/growth` for status.*"
+        next_value = "*Could not compute — check `/growth overview` for status.*"
 
     embed = discord.Embed(title="✅ Growth Tracking Configured", color=discord.Color.green())
     embed.add_field(name="Source Tab",        value=tab_source,           inline=False)
@@ -2711,8 +2711,8 @@ async def run_growth_setup(interaction: discord.Interaction, bot):
 async def run_growth_breakdown_setup(interaction: discord.Interaction, bot):
     """Premium-only wizard for the Growth Breakdown auto-post + customization.
 
-    The bucket-classification math itself ships free (the `/growth`
-    **📊 See most recent Breakdown** button reads the breakdown tab for any guild that's
+    The bucket-classification math itself ships free (`/growth breakdown`,
+    and the **📊 See most recent Breakdown** button on `/growth overview`, both read the breakdown tab for any guild that's
     enabled growth tracking). This wizard configures the Premium layer:
 
       * sheet tab name for the breakdown
@@ -2820,7 +2820,7 @@ async def run_growth_breakdown_setup(interaction: discord.Interaction, bot):
     await channel.send(
         "**Step 2 of 5 — Auto-Post After Snapshots?**\n"
         "Each time the bot finishes a snapshot, post the breakdown summary "
-        "to a channel so leadership doesn't have to click `/growth` to see "
+        "to a channel so leadership doesn't have to run `/growth breakdown` to see "
         "who's slowing down.",
         view=autopost_view,
     )
@@ -3208,7 +3208,7 @@ async def run_growth_breakdown_setup(interaction: discord.Interaction, bot):
         embed.add_field(name="Auto-Post Channel", value=f"<#{post_channel_id}>", inline=False)
         embed.add_field(name="Bucket Filter",     value=bf_text,                inline=False)
     else:
-        embed.add_field(name="Auto-Post", value="❌ Off — use `/growth` → 📊 See most recent Breakdown to view on demand.", inline=False)
+        embed.add_field(name="Auto-Post", value="❌ Off — use `/growth breakdown` (or `/growth overview` → 📊 See most recent Breakdown) to view on demand.", inline=False)
     if thresholds:
         t_text = (
             f"Increased ≥ {thresholds['increased']:g}%, "

@@ -178,7 +178,7 @@ HELP_CATEGORIES: dict[str, dict] = {
         "description": (
             "Periodic snapshots of member stats, written to your sheet. "
             "Each snapshot also classifies members into growth buckets — "
-            "click **📊 See most recent Breakdown** on `/growth` to see who's climbing and "
+            "click **📊 See most recent Breakdown** on `/growth overview` (or run `/growth breakdown` directly) to see who's climbing and "
             "who's stalled."
         ),
         "commands": [
@@ -187,9 +187,12 @@ HELP_CATEGORIES: dict[str, dict] = {
             ("/setup_growth_breakdown",
              "💎 Configure the breakdown auto-post, bucket thresholds, "
              "and bucket labels."),
-            ("/growth",
+            ("/growth overview",
              "Show status with options to snapshot, view the breakdown, "
              "or edit config."),
+            ("/growth breakdown",
+             "Jump straight to the most-recent bucket breakdown "
+             "(Increased / Steady / Low / None / Decline)."),
         ],
     },
     "shiny_tasks": {

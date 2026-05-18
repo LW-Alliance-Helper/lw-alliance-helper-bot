@@ -172,7 +172,8 @@ The squad-powers survey: members click a button and submit their stats in a priv
 
 Periodic stat snapshots so the alliance can track progress over time.
 
-- [ ] Run `/growth`. Review the status display and available actions. The status should include a **Next Snapshot** date — note whether it's clear when the next automatic snapshot will fire.
+- [ ] Run `/growth overview`. Review the status display and available actions. The status should include a **Next Snapshot** date — note whether it's clear when the next automatic snapshot will fire.
+- [ ] Run `/growth breakdown`. Note whether the bucket counts (Increased / Steady / Low / None / Decline) render correctly, or whether the "no breakdown data yet" message points you at the right next step.
 - [ ] Take a manual snapshot via the **📸 Run Snapshot Now** button. Note whether the success message communicates what was captured.
 - [ ] Run `/setup_growth` and pick a custom interval (e.g. every 14 days). The confirmation embed should tell you exactly when the next snapshot will fire and offer a one-click way to start tracking from today instead.
 

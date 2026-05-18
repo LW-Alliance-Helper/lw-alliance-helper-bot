@@ -721,9 +721,23 @@ async def on_message(message):
     await bot.process_commands(message)
 
 
-@bot.tree.command(
+# ── /growth command group ─────────────────────────────────────────────────────
+#
+# `/growth overview` keeps the embed + action buttons leadership has
+# always reached via bare `/growth`. The new `/growth breakdown` leaf
+# surfaces the bucket-classification view that previously lived only
+# behind the "📊 See most recent Breakdown" button on the overview
+# embed — so officers can jump straight to it from the slash picker.
+
+growth_group = app_commands.Group(
     name="growth",
-    description="Show growth tracking status with options to run a snapshot or edit config",
+    description="Member-growth snapshots and bucket breakdown",
+)
+
+
+@growth_group.command(
+    name="overview",
+    description="Growth tracking status; buttons for snapshot, breakdown, and config edit",
 )
 async def growth_slash(interaction: discord.Interaction):
     if not await guard(interaction):
@@ -848,6 +862,49 @@ async def growth_slash(interaction: discord.Interaction):
             await run_growth_setup(inter, bot)
 
     await interaction.response.send_message(embed=embed, view=GrowthActionView(), ephemeral=True)
+
+
+@growth_group.command(
+    name="breakdown",
+    description="Most-recent bucket breakdown (Increased / Steady / Low / None / Decline)",
+)
+async def growth_breakdown_slash(interaction: discord.Interaction):
+    if not await guard(interaction):
+        return
+    from config import get_growth_config
+    from growth import read_latest_breakdown, format_breakdown_embed
+
+    guild_id = interaction.guild_id
+    gcfg = get_growth_config(guild_id)
+
+    await interaction.response.defer(ephemeral=True)
+    try:
+        data = await asyncio.to_thread(read_latest_breakdown, guild_id)
+    except Exception as e:
+        await interaction.followup.send(
+            f"⚠️ Could not load breakdown: {e}", ephemeral=True,
+        )
+        return
+
+    if not data.get("has_data"):
+        await interaction.followup.send(
+            "📊 No breakdown data yet. Run `/growth overview` and click "
+            "**📸 Run Snapshot Now** (or wait for the next scheduled "
+            "snapshot). The breakdown classifies each member's percent "
+            "change between snapshots, so it needs at least two snapshots' "
+            "worth of data before any classification can render.",
+            ephemeral=True,
+        )
+        return
+
+    embed = format_breakdown_embed(
+        metric_labels=data["metric_labels"],
+        breakdown_summary=data["summary"],
+        prev_period_label=data["prev_period_label"],
+        curr_period_label=data["curr_period_label"],
+        label_overrides=gcfg.get("breakdown_labels") or {},
+    )
+    await interaction.followup.send(embed=embed, ephemeral=True)
 
 
 # ── /events command group ─────────────────────────────────────────────────────
@@ -1530,6 +1587,11 @@ async def admin_forget_guild_slash(interaction: discord.Interaction, guild_id: s
 
 # Alias so date_cls doesn't conflict with the `date` parameter name in events_slash
 date_cls = date
+
+
+# Register the /growth Group on the tree once every subcommand has
+# been attached above. Global registration.
+bot.tree.add_command(growth_group)
 
 
 # Register the /events Group on the tree once every subcommand has

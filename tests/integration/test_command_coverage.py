@@ -100,6 +100,7 @@ EXPECTED_STORM_TOP_LEVEL_COMMANDS = {"desertstorm", "canyonstorm"}
 # `tests/unit/test_guild_install_metadata.py`.
 EXPECTED_MODULE_COMMANDS = {"growth", "events", "help"}
 EXPECTED_EVENTS_SUBCOMMANDS = {"overview", "show", "log"}
+EXPECTED_GROWTH_SUBCOMMANDS = {"overview", "breakdown"}
 
 
 # ── Cog instantiation helpers ─────────────────────────────────────────────────
@@ -300,6 +301,15 @@ class TestCogRegistration:
         assert sub_names == EXPECTED_EVENTS_SUBCOMMANDS, (
             f"/events subcommands mismatch: got {sub_names}, "
             f"expected {EXPECTED_EVENTS_SUBCOMMANDS}"
+        )
+
+        # /growth is also a Group post-#200.
+        growth_grp = registered.get("growth")
+        assert growth_grp is not None
+        growth_subs = _subcommands_on(growth_grp)
+        assert growth_subs == EXPECTED_GROWTH_SUBCOMMANDS, (
+            f"/growth subcommands mismatch: got {growth_subs}, "
+            f"expected {EXPECTED_GROWTH_SUBCOMMANDS}"
         )
 
     @pytest.mark.asyncio

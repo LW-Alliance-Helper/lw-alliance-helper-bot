@@ -381,15 +381,28 @@ async def is_premium(
 
 
 def _entitlement_matches(ent) -> bool:
-    """True if the entitlement is for the configured premium SKU and active."""
+    """True if the entitlement is for the configured premium SKU and active.
+
+    `bot.entitlements(exclude_ended=True)` is supposed to filter ended
+    entitlements server-side, but check both `deleted` and `ends_at`
+    locally as defense-in-depth — a discord.py change or a Discord API
+    quirk shouldn't be the only thing standing between "subscription
+    ended" and "guild keeps Premium."
+    """
     if PREMIUM_SKU_ID is None:
         return False
     sku_id = getattr(ent, "sku_id", None)
     if sku_id != PREMIUM_SKU_ID:
         return False
-    # discord.py uses `deleted` and (since 2.4) `ends_at` to indicate state
     if getattr(ent, "deleted", False):
         return False
+    # discord.py 2.4+ exposes ends_at; if set and in the past, the
+    # entitlement has ended even if `deleted` is False.
+    ends_at = getattr(ent, "ends_at", None)
+    if ends_at is not None:
+        from datetime import datetime, timezone
+        if ends_at < datetime.now(timezone.utc):
+            return False
     return True
 
 

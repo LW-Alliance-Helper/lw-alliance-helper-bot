@@ -83,10 +83,11 @@ def _isolate_premium_env(monkeypatch, temp_db):
     _premium.clear_cache()
 
 
-def _make_entitlement(sku_id: int, deleted: bool = False):
+def _make_entitlement(sku_id: int, deleted: bool = False, ends_at=None):
     ent = MagicMock()
     ent.sku_id  = sku_id
     ent.deleted = deleted
+    ent.ends_at = ends_at
     return ent
 
 
@@ -381,6 +382,77 @@ class TestPremiumCaching:
             # Caller passes only interaction, not bot. Should still resolve
             # to True because is_premium falls back to interaction.client.
             assert await _premium.is_premium(TEST_GUILD_ID, interaction=interaction) is True
+        finally:
+            _premium.clear_cache()
+
+
+# ── _entitlement_matches (ends_at defense-in-depth) ───────────────────────────
+
+class TestEntitlementEndsAt:
+    """bot.entitlements(exclude_ended=True) is supposed to filter ended
+    subscriptions server-side, but if Discord or discord.py ever stops
+    honoring that flag, _entitlement_matches must still reject ended ones.
+    """
+
+    @pytest.mark.asyncio
+    async def test_past_ends_at_treated_as_ended(self, monkeypatch):
+        from datetime import datetime, timezone, timedelta
+        monkeypatch.setenv("PREMIUM_SKU_ID", "12345")
+        import premium as _premium
+        importlib.reload(_premium)
+        try:
+            _premium.assign(555000111, TEST_GUILD_ID)
+            past = datetime.now(timezone.utc) - timedelta(days=1)
+
+            async def fake_iter(**kw):
+                yield _make_entitlement(sku_id=12345, ends_at=past)
+
+            bot = MagicMock()
+            bot.entitlements = MagicMock(side_effect=lambda **kw: fake_iter(**kw))
+
+            # Entitlement has ends_at in the past — must NOT grant premium.
+            assert await _premium.is_premium(TEST_GUILD_ID, bot=bot) is False
+        finally:
+            _premium.clear_cache()
+
+    @pytest.mark.asyncio
+    async def test_future_ends_at_still_active(self, monkeypatch):
+        from datetime import datetime, timezone, timedelta
+        monkeypatch.setenv("PREMIUM_SKU_ID", "12345")
+        import premium as _premium
+        importlib.reload(_premium)
+        try:
+            _premium.assign(555000111, TEST_GUILD_ID)
+            future = datetime.now(timezone.utc) + timedelta(days=14)
+
+            async def fake_iter(**kw):
+                yield _make_entitlement(sku_id=12345, ends_at=future)
+
+            bot = MagicMock()
+            bot.entitlements = MagicMock(side_effect=lambda **kw: fake_iter(**kw))
+
+            assert await _premium.is_premium(TEST_GUILD_ID, bot=bot) is True
+        finally:
+            _premium.clear_cache()
+
+    @pytest.mark.asyncio
+    async def test_missing_ends_at_treated_as_active(self, monkeypatch):
+        """Older entitlements / SKU types without an ends_at attribute
+        must still resolve to active when otherwise valid. The check
+        should only reject when ends_at is set AND in the past."""
+        monkeypatch.setenv("PREMIUM_SKU_ID", "12345")
+        import premium as _premium
+        importlib.reload(_premium)
+        try:
+            _premium.assign(555000111, TEST_GUILD_ID)
+
+            async def fake_iter(**kw):
+                yield _make_entitlement(sku_id=12345, ends_at=None)
+
+            bot = MagicMock()
+            bot.entitlements = MagicMock(side_effect=lambda **kw: fake_iter(**kw))
+
+            assert await _premium.is_premium(TEST_GUILD_ID, bot=bot) is True
         finally:
             _premium.clear_cache()
 

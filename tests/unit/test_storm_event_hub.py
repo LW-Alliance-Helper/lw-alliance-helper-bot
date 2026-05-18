@@ -184,12 +184,7 @@ class TestBuildEventHubEmbedPopulated:
             "config.get_structured_storm_config",
             return_value={
                 "signup_channel_id": 555000000000000001,
-                # Friday on purpose — Monday (`0`) trips a latent
-                # truthiness bug in `_build_event_hub_embed` where
-                # `int(structured.get("poll_day_of_week", -1) or -1)`
-                # collapses 0 to -1 and silently drops this line.
-                # Worth a separate ticket; not in this PR's scope.
-                "poll_day_of_week": 4,
+                "poll_day_of_week": 4,   # Friday
                 "signup_time": "20:00",
                 "structured_flow_enabled": False,
             },
@@ -200,6 +195,45 @@ class TestBuildEventHubEmbedPopulated:
         # `auto-posted Friday at 20:00 server time` rides below the
         # channel mention.
         assert "auto-posted Friday at 20:00 server time" in embed.description
+
+    def test_poll_auto_schedule_line_renders_for_monday(self, seeded_db):
+        """Regression for the `or -1` truthiness trap: Monday is
+        `poll_day_of_week == 0`, which is falsy. An earlier shape
+        used `int(structured.get("poll_day_of_week", -1) or -1)`,
+        collapsing Monday to -1 and silently dropping the schedule
+        line for Monday-poll alliances. The fix uses an explicit
+        `is None` check; this test pins it."""
+        with patch(
+            "config.get_structured_storm_config",
+            return_value={
+                "signup_channel_id": 555000000000000001,
+                "poll_day_of_week": 0,   # Monday — falsy on purpose
+                "signup_time": "12:00",
+                "structured_flow_enabled": False,
+            },
+        ):
+            embed = seh._build_event_hub_embed(
+                _make_guild(), "DS", is_premium=True,
+            )
+        assert "auto-posted Monday at 12:00 server time" in embed.description
+
+    def test_poll_auto_schedule_line_omitted_when_day_missing(self, seeded_db):
+        """Counterpart to the Monday regression: a totally missing
+        `poll_day_of_week` (no auto-schedule configured) must NOT
+        render the schedule line, even though the fix removed `or -1`."""
+        with patch(
+            "config.get_structured_storm_config",
+            return_value={
+                "signup_channel_id": 555000000000000001,
+                # poll_day_of_week omitted entirely.
+                "signup_time": "20:00",
+                "structured_flow_enabled": False,
+            },
+        ):
+            embed = seh._build_event_hub_embed(
+                _make_guild(), "DS", is_premium=True,
+            )
+        assert "auto-posted" not in embed.description
 
     def test_structured_flow_enabled_includes_power_column(self, seeded_db):
         with patch(

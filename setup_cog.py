@@ -15,7 +15,7 @@ from discord import app_commands
 from discord.ext import commands
 from config import (
     get_config, get_or_create_config, save_config, update_config_field,
-    GuildConfig,
+    GuildConfig, normalize_spreadsheet_id,
 )
 import premium
 import wizard_registry
@@ -2039,7 +2039,8 @@ async def run_setup(interaction: discord.Interaction, bot):
     await channel.send(
         "**Step 5 of 6 — Google Sheet ID**\n"
         "Enter your Google Sheet ID — the long string from your sheet's URL:\n"
-        "`https://docs.google.com/spreadsheets/d/`**`YOUR_SHEET_ID`**`/edit`"
+        "`https://docs.google.com/spreadsheets/d/`**`YOUR_SHEET_ID`**`/edit`\n"
+        "*(You can paste the whole URL and I'll pull the ID out.)*"
     )
     modal   = TextInputModal("Google Sheet ID", "Sheet ID", placeholder="Paste your Sheet ID here...")
     # Truncate long sheet ids for the Keep-current button label —
@@ -2062,7 +2063,7 @@ async def run_setup(interaction: discord.Interaction, bot):
     if not modal_v.confirmed:
         await channel.send("⏰ Setup timed out. Run `/setup` to start again.")
         return
-    sheet_id = modal.value
+    sheet_id = normalize_spreadsheet_id(modal.value)
 
     # ── Step 6: Share sheet ────────────────────────────────────────────────────
     SERVICE_ACCOUNT_EMAIL = "sheet-connector@lw-alliance-helper.iam.gserviceaccount.com"

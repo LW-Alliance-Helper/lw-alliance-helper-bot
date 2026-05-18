@@ -424,6 +424,92 @@ class TestSyncMembersGate:
         assert "setup_members" in (content or "")
 
 
+# ── /sync_members error-message clarity (regression: opaque <Response [404]>) ─
+
+class TestSyncMembersErrorMessage:
+    """When write_roster raises a gspread error, the user-facing followup
+    must surface `config.describe_sheet_error`'s diagnosis instead of the
+    raw exception repr (which printed `<Response [404]>` and stranded the
+    user with no idea what to fix). Matches the 1.1.1 fix that landed for
+    storm and train; member_roster was missed at the time.
+    """
+
+    @pytest.mark.asyncio
+    async def test_404_apierror_surfaces_diagnosis_not_raw_repr(self, seeded_db):
+        import config
+        import gspread
+        from member_roster import MemberRosterCog
+        import premium
+        premium.clear_cache()
+
+        config.save_member_roster_config(
+            PREMIUM_TEST_GUILD_ID, enabled=1, tab_name="Member Roster",
+        )
+
+        cog = MemberRosterCog(MagicMock())
+
+        interaction = AsyncMock()
+        interaction.guild_id     = PREMIUM_TEST_GUILD_ID
+        interaction.entitlements = []
+        interaction.user         = MagicMock()
+        interaction.user.guild_permissions.administrator = True
+        interaction.guild        = MagicMock()
+        interaction.guild.members        = []
+        interaction.guild.chunk          = AsyncMock()
+        interaction.guild.fetch_members  = MagicMock()
+
+        resp = MagicMock()
+        resp.status_code = 404
+        resp.json = MagicMock(return_value={})
+        resp.__repr__ = lambda self: "<Response [404]>"
+        err = gspread.exceptions.APIError(resp)
+
+        with patch("member_roster.write_roster", side_effect=err):
+            await cog.sync_members.callback(cog, interaction)
+
+        call    = interaction.followup.send.call_args
+        content = call.args[0] if call.args else call.kwargs.get("content")
+        # The actionable diagnosis from describe_sheet_error must be there;
+        # the raw `<Response [404]>` repr must NOT.
+        assert "spreadsheet 404" in content
+        assert "service account" in content
+        assert "<Response [404]>" not in content
+
+    @pytest.mark.asyncio
+    async def test_worksheet_not_found_surfaces_tab_name(self, seeded_db):
+        import config
+        import gspread
+        from member_roster import MemberRosterCog
+        import premium
+        premium.clear_cache()
+
+        config.save_member_roster_config(
+            PREMIUM_TEST_GUILD_ID, enabled=1, tab_name="Member Roster",
+        )
+
+        cog = MemberRosterCog(MagicMock())
+
+        interaction = AsyncMock()
+        interaction.guild_id     = PREMIUM_TEST_GUILD_ID
+        interaction.entitlements = []
+        interaction.user         = MagicMock()
+        interaction.user.guild_permissions.administrator = True
+        interaction.guild        = MagicMock()
+        interaction.guild.members        = []
+        interaction.guild.chunk          = AsyncMock()
+        interaction.guild.fetch_members  = MagicMock()
+
+        err = gspread.exceptions.WorksheetNotFound("Member Roster")
+
+        with patch("member_roster.write_roster", side_effect=err):
+            await cog.sync_members.callback(cog, interaction)
+
+        call    = interaction.followup.send.call_args
+        content = call.args[0] if call.args else call.kwargs.get("content")
+        assert "Member Roster" in content
+        assert "not found" in content
+
+
 # ── Discord ID lookup ─────────────────────────────────────────────────────────
 
 class TestLookupDiscordId:

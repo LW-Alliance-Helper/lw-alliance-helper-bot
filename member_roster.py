@@ -184,7 +184,11 @@ class MemberRosterCog(commands.Cog):
                 None, write_roster, guild, cfg,
             )
         except Exception as e:
-            print(f"[ROSTER] Auto-sync failed for guild {guild.id}: {e}")
+            from config import describe_sheet_error
+            print(
+                f"[ROSTER] Auto-sync failed: "
+                f"{describe_sheet_error(e, guild_id=guild.id, tab=cfg.get('tab_name'))}"
+            )
             # Auto-sync runs on every member-join/leave/role-change, so a
             # transient error gets re-tried naturally. But unexpected bugs
             # (template typos, schema drift) should land in Sentry instead
@@ -243,8 +247,14 @@ class MemberRosterCog(commands.Cog):
                 None, write_roster, guild, cfg,
             )
         except Exception as e:
+            from config import describe_sheet_error
+            diagnosis = describe_sheet_error(e, tab=cfg["tab_name"])
+            print(
+                f"[ROSTER] /sync_members failed: "
+                f"{describe_sheet_error(e, guild_id=interaction.guild_id, tab=cfg['tab_name'])}"
+            )
             await interaction.followup.send(
-                f"⚠️ Sync failed: {e}\nMake sure the bot has access to your sheet "
+                f"⚠️ Sync failed: {diagnosis}\nMake sure the bot has access to your sheet "
                 f"and that the **{cfg['tab_name']}** tab can be written to.",
                 ephemeral=True,
             )
@@ -414,8 +424,14 @@ async def run_member_roster_setup(interaction: discord.Interaction, bot):
             None, write_roster, guild, cfg,
         )
     except Exception as e:
+        from config import describe_sheet_error
+        diagnosis = describe_sheet_error(e, tab=cfg["tab_name"])
+        print(
+            f"[ROSTER] /setup_members initial sync failed: "
+            f"{describe_sheet_error(e, guild_id=guild_id, tab=cfg['tab_name'])}"
+        )
         await channel.send(
-            f"✅ Saved configuration but the initial sync failed: {e}\n"
+            f"✅ Saved configuration but the initial sync failed: {diagnosis}\n"
             f"Try running `/sync_members` once you've fixed the issue."
         )
         wizard_registry.unregister(user.id, cancel_event)

@@ -269,7 +269,12 @@ async def _lookup_user_subscription(
                   "will resolve to free tier. Subscriptions cannot be detected "
                   "until this is configured.")
             _warned_no_sku = True
-        return False
+        # Return None (transient), not False, matching the bot=None branch
+        # below. PREMIUM_SKU_ID is module-level so in practice it won't
+        # change at runtime, but treating "we can't check" as transient
+        # avoids the cache-poisoning class of bug if config reload or
+        # hot-reload ever flips that assumption.
+        return None
     if bot is None:
         global _warned_no_bot
         if not _warned_no_bot:

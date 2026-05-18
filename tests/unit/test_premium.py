@@ -241,10 +241,13 @@ class TestAssignmentLayeredIsPremium:
     @pytest.mark.asyncio
     async def test_no_sku_means_not_premium_even_with_assignment(self, fresh_premium):
         """Without PREMIUM_SKU_ID, user_has_active_subscription returns
-        False, so the assigned guild can't resolve premium."""
+        None (transient), so is_premium returns False without caching.
+        The next call with a configured environment can still resolve True."""
         fresh_premium.assign(555000111, TEST_GUILD_ID)
         bot = MagicMock()
         assert await fresh_premium.is_premium(TEST_GUILD_ID, bot=bot) is False
+        # Cache must NOT have been poisoned by the SKU-missing path.
+        assert fresh_premium._cache_get(TEST_GUILD_ID) is None
 
 
 # ── Caching of is_premium / user-subscription ────────────────────────────────

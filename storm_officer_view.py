@@ -592,11 +592,22 @@ class _OnBehalfVoteView(discord.ui.View):
         # authoritative signal: if the picked name matches a live
         # member's display name, use their Discord ID regardless of
         # what the roster row says.
+        #
+        # Display-name collisions: alliances sometimes have two Discord
+        # members with the same server nickname (e.g. two "Phoenix"
+        # alts). A single-key lookup would let one ID silently overwrite
+        # the other and the officer would cast a vote for the wrong
+        # member with no signal. Multi-value lookup so colliding names
+        # surface ALL matching Discord IDs; the picker then disambiguates
+        # by appending `(@username)` for each colliding entry.
         guild = parent_view.guild if parent_view is not None else None
-        discord_by_name = {}
+        discord_members_by_name: dict[str, list[tuple[str, str]]] = {}
         if guild is not None:
             for gm in _discord_member_pool(guild):
-                discord_by_name[gm.display_name.lower()] = str(gm.id)
+                key = gm.display_name.lower()
+                discord_members_by_name.setdefault(key, []).append(
+                    (str(gm.id), gm.name)
+                )
         seen: set[str] = set()
         cleaned: list[dict] = []
         for m in members:
@@ -614,23 +625,38 @@ class _OnBehalfVoteView(discord.ui.View):
             seen.add(key)
             discord_id = (m.get("discord_id") or "").strip()
             not_on_discord = bool(m.get("not_on_discord"))
+            live_matches = discord_members_by_name.get(key, [])
             # Resolution priority for `target_member_id`:
-            #   1. Live Discord member with matching display_name. Most
-            #      authoritative; survives roster-row misclassification.
-            #   2. Roster row's discord_id when the row isn't flagged
-            #      not_on_discord.
-            #   3. The picked name verbatim (non-Discord roster member).
-            live_id = discord_by_name.get(key)
-            if live_id:
-                target_id = live_id
-            elif discord_id and not not_on_discord:
-                target_id = discord_id
-            else:
-                target_id = name
-            cleaned.append({
-                "name": name,
-                "target_id": target_id,
-            })
+            #   1. Roster row's discord_id when filled in and not flagged
+            #      not_on_discord. The roster is explicit about which
+            #      user this row represents, so no Discord-side
+            #      disambiguation is needed even if multiple Discord
+            #      members share the display name.
+            #   2. Single live Discord member with matching display_name
+            #      — use their ID directly.
+            #   3. Multiple live Discord members share the display name
+            #      AND the roster row didn't pre-commit to an ID — emit
+            #      ONE picker entry per colliding member, suffixed
+            #      `(@username)`, so the officer can tell them apart.
+            #   4. The picked name verbatim (genuine non-Discord roster
+            #      member, or no live match at all).
+            if discord_id and not not_on_discord:
+                cleaned.append({"name": name, "target_id": discord_id})
+                continue
+            if not_on_discord or not live_matches:
+                cleaned.append({"name": name, "target_id": name})
+                continue
+            if len(live_matches) == 1:
+                cleaned.append({"name": name, "target_id": live_matches[0][0]})
+                continue
+            # Collision: expand into one disambiguated entry per
+            # Discord match. Sort by username for a stable order across
+            # picker rebuilds.
+            for member_id, username in sorted(live_matches, key=lambda p: p[1].lower()):
+                cleaned.append({
+                    "name": f"{name} (@{username})",
+                    "target_id": member_id,
+                })
         cleaned.sort(key=lambda r: r["name"].lower())
         self.members = cleaned
         # Cache a name→target_id map so the submit handler can resolve

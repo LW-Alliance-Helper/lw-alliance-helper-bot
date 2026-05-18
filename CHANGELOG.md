@@ -9,6 +9,13 @@ Each entry is a slim summary — heavier context (root cause, what we
 tried, design rationale) lives in the corresponding commit message
 and PR description.
 
+## [1.3.1] — 2026-05-18
+
+### Fixed
+- Prefix-command `CommandNotFound` no longer logs at ERROR (and no longer ships to Sentry as noise) when members type `!mute`, `!muterole`, or other prefix commands aimed at moderation bots that share the `!` prefix. The bot is slash-only; `command_prefix="!"` exists only because `commands.Bot` requires one.
+
+Hotfix released direct to main per CLAUDE.md's hotfix exception.
+
 ## [1.3.0] — 2026-05-12
 
 ### Added

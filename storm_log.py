@@ -926,8 +926,9 @@ async def _send_storm_reminder(bot, interaction: discord.Interaction, event_type
         get_member_roster_config, get_member_roster_sheet, get_storm_config,
     )
 
-    if not await premium.is_premium(
-        interaction.guild_id, interaction=interaction, bot=bot,
+    if not await premium.feature_gate(
+        "storm_participation_dm", interaction.guild_id,
+        interaction=interaction, bot=bot,
     ):
         await interaction.response.send_message(
             embed=premium.premium_locked_embed(

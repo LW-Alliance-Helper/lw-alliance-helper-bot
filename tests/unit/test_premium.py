@@ -426,6 +426,85 @@ class TestIsPremiumFeature:
         assert fresh_premium.is_premium_feature("not_a_feature") is False
         assert fresh_premium.is_premium_feature("")              is False
 
+    def test_survey_numeric_is_not_premium_anymore(self, fresh_premium):
+        """1.1.5 promoted numeric survey questions to free tier. The
+        PREMIUM_FEATURES set must reflect that — leaving the name in
+        the set would be misleading documentation and would cause
+        feature_gate('survey_numeric', ...) to actually gate it.
+        """
+        assert fresh_premium.is_premium_feature("survey_numeric") is False
+        assert "survey_numeric" not in fresh_premium.PREMIUM_FEATURES
+
+
+# ── feature_gate ──────────────────────────────────────────────────────────────
+
+class TestFeatureGate:
+    """feature_gate is the canonical premium check for named features.
+    It validates the name against PREMIUM_FEATURES (KeyError on unknown)
+    and delegates to is_premium for the entitlement lookup.
+    """
+
+    @pytest.mark.asyncio
+    async def test_known_feature_returns_true_for_premium_guild(
+        self, fresh_premium_with_bypass,
+    ):
+        # Bypass guild → is_premium True → feature_gate True.
+        assert await fresh_premium_with_bypass.feature_gate(
+            "member_sync", PREMIUM_TEST_GUILD_ID,
+        ) is True
+
+    @pytest.mark.asyncio
+    async def test_known_feature_returns_false_for_free_guild(
+        self, fresh_premium_with_bypass,
+    ):
+        # Non-bypass guild with no assignment → is_premium False.
+        assert await fresh_premium_with_bypass.feature_gate(
+            "storm_participation_dm", TEST_GUILD_ID,
+        ) is False
+
+    @pytest.mark.asyncio
+    async def test_unknown_feature_raises_keyerror(self, fresh_premium):
+        with pytest.raises(KeyError) as excinfo:
+            await fresh_premium.feature_gate("not_a_feature", TEST_GUILD_ID)
+        # Error should hint at the fix.
+        assert "PREMIUM_FEATURES" in str(excinfo.value)
+
+    @pytest.mark.asyncio
+    async def test_survey_numeric_no_longer_gates(self, fresh_premium):
+        """Regression: survey_numeric was removed from PREMIUM_FEATURES
+        when 1.1.5 promoted numeric questions to free. Calling
+        feature_gate('survey_numeric', ...) must now raise so any
+        leftover gate call site fails loudly instead of silently
+        locking free-tier users out of a free feature.
+        """
+        with pytest.raises(KeyError):
+            await fresh_premium.feature_gate("survey_numeric", TEST_GUILD_ID)
+
+    @pytest.mark.asyncio
+    async def test_delegates_to_is_premium_with_bot(
+        self, fresh_premium, monkeypatch,
+    ):
+        """feature_gate must thread bot= through so the per-guild
+        entitlement check sees the real subscription state — same
+        contract as is_premium itself."""
+        monkeypatch.setenv("PREMIUM_SKU_ID", "12345")
+        import premium as _premium
+        importlib.reload(_premium)
+        try:
+            _premium.assign(555000111, TEST_GUILD_ID)
+
+            async def fake_iter(**kw):
+                yield _make_entitlement(sku_id=12345)
+
+            bot = MagicMock()
+            bot.entitlements = MagicMock(side_effect=lambda **kw: fake_iter(**kw))
+
+            assert await _premium.feature_gate(
+                "member_sync", TEST_GUILD_ID, bot=bot,
+            ) is True
+        finally:
+            _premium.clear_cache()
+
 
 # ── Messaging helpers ─────────────────────────────────────────────────────────
 

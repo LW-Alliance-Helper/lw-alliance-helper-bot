@@ -35,6 +35,7 @@ Public API:
   - `unassign(user_id)`                                → int | None  (guild freed)
   - `get_limit(feature, guild_id, ...)`                → int | None  (None = unlimited)
   - `is_premium_feature(name)`                         → bool        (declarative whitelist)
+  - `feature_gate(name, guild_id, ...)`                → bool        (KeyError on unknown name)
   - `limit_reached_embed(...)`, `premium_locked_embed(...)`, `upgrade_view(...)`
 """
 
@@ -79,6 +80,16 @@ LIMITS: dict[str, dict[str, Optional[int]]] = {
 }
 
 # Premium-only features (boolean gates, not counts).
+#
+# Source of truth for "this named feature requires an active premium
+# subscription." Every gate that's named should run through
+# `feature_gate(name, guild_id, ...)`, which validates the name against
+# this set and raises KeyError on unknown names. That forces new premium
+# features to register here up front instead of silently shipping ungated.
+#
+# `survey_numeric` was moved off this list when 1.1.5 promoted numeric
+# survey questions to the free tier (min/max bounds on numeric questions
+# remain the differentiator and are gated separately).
 PREMIUM_FEATURES: set[str] = {
     "member_sync",
     "birthday_dm",
@@ -87,7 +98,6 @@ PREMIUM_FEATURES: set[str] = {
     "auto_mention",
     "storm_participation_dm",
     "growth_custom_interval",
-    "survey_numeric",
     "survey_multi_select",
     "survey_date",
     "multiple_surveys",
@@ -401,8 +411,40 @@ async def get_limit(
 
 
 def is_premium_feature(name: str) -> bool:
-    """True if `name` is a fully-gated premium-only feature."""
+    """True if `name` is a fully-gated premium-only feature.
+
+    Cheap predicate that doesn't touch the entitlement cache or the
+    assignment table — use `feature_gate(...)` when you actually need
+    to know whether a specific guild has access.
+    """
     return name in PREMIUM_FEATURES
+
+
+async def feature_gate(
+    feature_name: str,
+    guild_id: int,
+    *,
+    interaction: Optional[discord.Interaction] = None,
+    bot: Optional[discord.Client] = None,
+) -> bool:
+    """Canonical gate for a named premium feature.
+
+    Returns True iff this guild has access to `feature_name`. The name
+    must be a member of `PREMIUM_FEATURES`; an unknown name raises
+    KeyError. That contract forces newly added premium features to
+    register themselves in the set up front, so a missed gate becomes a
+    test failure or a crash instead of a silently-free feature.
+
+    Resolution delegates to `is_premium` (same cache, same assignment
+    lookup, same env-var short-circuits), so the gate is consistent with
+    every other premium check in the codebase.
+    """
+    if feature_name not in PREMIUM_FEATURES:
+        raise KeyError(
+            f"Unknown premium feature: {feature_name!r}. "
+            f"Add it to PREMIUM_FEATURES in premium.py before gating on it."
+        )
+    return await is_premium(guild_id, interaction=interaction, bot=bot)
 
 
 # ── User-facing messaging ─────────────────────────────────────────────────────

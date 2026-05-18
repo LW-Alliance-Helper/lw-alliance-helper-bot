@@ -16,13 +16,11 @@ Storage shape (Sheet, alliance-owned, source of truth):
 Preset names are unique per (guild, event_type). Rows for one preset
 share the Preset Name value.
 
-In-Discord editor flow (DS form shown — CS variants live under
-`/canyonstorm strategy …`):
-  /desertstorm strategy create name:"…"  → opens editor seeded with
-                                           canonical DS zones
-  /desertstorm strategy edit name:"…"    → loads from Sheet → editor
-  /desertstorm strategy list             → embed of saved presets
-  /desertstorm strategy delete name:"…"  → confirm → remove
+Reached via the `🧮 Manage strategy presets` button on `/desertstorm`
+and `/canyonstorm` (hub-restructure #187; legacy
+`/desertstorm strategy create / edit / list / delete` subcommands
+pre-#126). The button opens the preset list, which carries inline
+buttons for create / edit / delete and exposes a per-preset editor.
 
 Editor state is buffered in memory on the View. Discord's interaction
 token expires after 15 minutes; that's a natural session bound, so no
@@ -544,8 +542,9 @@ def _get_or_create_strategies_worksheet(guild_id: int, event_type: str):
     raised opening it — unconfigured / bad creds / deleted spreadsheet)."""
     import config
     # `config.get_spreadsheet` raises rather than returning None for
-    # unconfigured guilds. Catch broadly so /desertstorm strategy commands
-    # don't die with an unhandled traceback on a guild that hasn't run setup.
+    # unconfigured guilds. Catch broadly so the strategy preset surface
+    # doesn't die with an unhandled traceback on a guild that hasn't
+    # run setup.
     try:
         sh = config.get_spreadsheet(guild_id)
     except Exception as e:
@@ -1904,8 +1903,9 @@ class _PresetEditorView(discord.ui.View):
         window; without this hook, buttons silently 404 with
         'Interaction failed' after timeout."""
         from wizard_registry import expire_view_message
-        parent = "desertstorm" if self.buf.event_type == "DS" else "canyonstorm"
-        await expire_view_message(self.message, command_hint=f"/{parent} strategy edit")
+        from storm_event_hub import HUB_COMMAND, HUB_BTN_PRESETS
+        hint = f"`{HUB_COMMAND[self.buf.event_type]}` → **{HUB_BTN_PRESETS}**"
+        await expire_view_message(self.message, command_hint=hint)
 
 
 # ── Cog + slash command groups ───────────────────────────────────────────────
@@ -1985,8 +1985,7 @@ class _CreatePresetNameModal(discord.ui.Modal, title="Create strategy preset"):
         if name.lower() in existing:
             await interaction.response.send_message(
                 f"⚠️ A preset named **{name}** already exists. Use the "
-                f"Edit button on the list (or "
-                f"`/{parent} strategy edit name:\"{name}\"`) to modify it.",
+                f"Edit button on the list to modify it.",
                 ephemeral=True,
             )
             return
@@ -2385,10 +2384,9 @@ class _StrategyGroup(app_commands.Group):
             )
         ]
         if name.lower() in existing:
-            parent = "desertstorm" if self.event_type == "DS" else "canyonstorm"
             await interaction.response.send_message(
                 f"⚠️ A preset named **{name}** already exists. "
-                f"Use `/{parent} strategy edit name:\"{name}\"` to modify it.",
+                f"Use the Edit button on the preset list to modify it.",
                 ephemeral=True,
             )
             return

@@ -1,7 +1,10 @@
 """
-`/desertstorm signups` and `/canyonstorm signups` officer view (#125).
+Officer view for storm sign-ups — reached via the
+`👁️ View sign-ups + set up teams` button on `/desertstorm` and
+`/canyonstorm` (hub-restructure #187; legacy `/desertstorm signups`
+subcommand pre-#125).
 
-Leadership-only command that surfaces who's voted for an event,
+Leadership-only surface that displays who's voted for an event,
 grouped by vote bucket, with a path to cast on-behalf votes for
 members who don't use Discord.
 
@@ -38,6 +41,8 @@ import logging
 from typing import Optional
 
 import discord
+
+from storm_event_hub import HUB_COMMAND, HUB_BTN_VIEW_SIGNUPS, HUB_BTN_PRESETS
 
 logger = logging.getLogger(__name__)
 
@@ -927,8 +932,8 @@ class OfficerView(discord.ui.View):
         officers know the buttons are dead. Matches the auto-post-view
         cleanup contract in CLAUDE.md."""
         from wizard_registry import expire_view_message
-        parent = "desertstorm" if self.event_type == "DS" else "canyonstorm"
-        await expire_view_message(self.message, command_hint=f"/{parent} signups")
+        hint = f"{HUB_COMMAND[self.event_type]} → **{HUB_BTN_VIEW_SIGNUPS}**"
+        await expire_view_message(self.message, command_hint=hint)
 
     async def refresh_buckets(self) -> None:
         """Re-read the alliance roster Sheet + storm_signups SQLite
@@ -1111,11 +1116,11 @@ async def _open_team_setup(
     import storm_strategy as ss
     preset_names = ss.list_presets(officer_view.guild_id, officer_view.event_type)
     if not preset_names:
-        parent = "desertstorm" if officer_view.event_type == "DS" else "canyonstorm"
+        hub_cmd = HUB_COMMAND[officer_view.event_type]
         await inter.response.send_message(
             f"⚠️ No strategy presets defined yet for "
             f"{'Desert Storm' if officer_view.event_type == 'DS' else 'Canyon Storm'}. "
-            f"Run `/{parent} strategy create` first.",
+            f"Run `{hub_cmd}` and click **{HUB_BTN_PRESETS}** first.",
             ephemeral=True,
         )
         return
@@ -1201,9 +1206,10 @@ class _PresetPickerView(discord.ui.View):
 
 # ── Slash command handler ────────────────────────────────────────────────────
 #
-# Registered by `storm_commands_root` under `/desertstorm signups` and
-# `/canyon_storm signups`. This module exposes the handler body so the
-# root cog stays a thin dispatcher.
+# Wired from the `👁️ View sign-ups + set up teams` button on the
+# `/desertstorm` and `/canyonstorm` event hubs (storm_event_hub.py).
+# This module exposes the handler body so the hub stays a thin
+# dispatcher.
 
 
 async def handle_storm_signups(

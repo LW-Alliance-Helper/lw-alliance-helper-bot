@@ -19,6 +19,12 @@ from config import (
 )
 import premium
 import wizard_registry
+from storm_event_hub import (
+    HUB_COMMAND,
+    HUB_BTN_POST_SIGNUP,
+    HUB_BTN_PRESETS,
+    HUB_BTN_RULES,
+)
 from wizard_registry import wait_view_or_cancel
 
 WIZARD_TIMEOUT = 120  # 2 minutes per step
@@ -1066,7 +1072,7 @@ async def ask_disable_with_clear(
 
         async def on_timeout(self):
             await wizard_registry.expire_view_message(
-                self.message, command_hint=setup_command,
+                self.message, command_hint=f"`/{setup_command}`",
             )
 
     view = ClearConfigView()
@@ -5130,7 +5136,8 @@ async def run_storm_setup(interaction: discord.Interaction, bot, event_type: str
                 f"It'll land in <#{structured_cfg['signup_channel_id']}> "
                 f"with vote buttons members can click. You can also wait "
                 f"for the auto-schedule to post it (if you set one up) "
-                f"or run `/{parent} post_signup` later.",
+                f"or run `{HUB_COMMAND[event_type]}` and click "
+                f"**{HUB_BTN_POST_SIGNUP}** later.",
                 view=post_offer,
             )
             await wait_view_or_cancel(post_offer, cancel_event)
@@ -5524,7 +5531,7 @@ async def _ask_signup_schedule(
                 for i in poll_options
             ]
             options.append(discord.SelectOption(
-                label=f"Skip auto-scheduling (use /{parent} post_signup manually)",
+                label="Skip auto-scheduling (post manually from the hub)",
                 value="-1",
                 default=(current < 0),
             ))
@@ -5543,7 +5550,11 @@ async def _ask_signup_schedule(
                 if self.selected < 0:
                     await wizard_registry.safe_edit_response(
                         inter,
-                        content=f"✅ Auto-scheduling skipped — `/{parent} post_signup` will still work manually.",
+                        content=(
+                            f"✅ Auto-scheduling skipped — post manually "
+                            f"via `{HUB_COMMAND[event_type]}` → "
+                            f"**{HUB_BTN_POST_SIGNUP}** when you're ready."
+                        ),
                         view=self,
                     )
                 else:
@@ -5739,7 +5750,8 @@ class _InlineCreatePresetOffer(discord.ui.View):
         except Exception as e:
             await inter.followup.send(
                 f"⚠️ Couldn't open the preset editor inline: {e}. "
-                f"Run `/{self.parent} strategy create` to retry.",
+                f"Run `{HUB_COMMAND[self.event_type]}` and click "
+                f"**{HUB_BTN_PRESETS}** to retry.",
                 ephemeral=True,
             )
         self.stop()
@@ -5756,7 +5768,7 @@ class _InlineCreatePresetOffer(discord.ui.View):
         from wizard_registry import expire_view_message
         await expire_view_message(
             self.message,
-            command_hint=f"/{self.parent} strategy create",
+            command_hint=f"`{HUB_COMMAND[self.event_type]}` → **{HUB_BTN_PRESETS}**",
         )
 
 
@@ -5806,7 +5818,8 @@ class _InlineCreateMemberRuleOffer(discord.ui.View):
         except Exception as e:
             await inter.response.send_message(
                 f"⚠️ Couldn't open the rule picker: {e}. Run "
-                f"`/{self.parent} member_rule set_power_band` to retry.",
+                f"`{HUB_COMMAND[self.event_type]}` and click "
+                f"**{HUB_BTN_RULES}** to retry.",
                 ephemeral=True,
             )
         if self.message is not None:
@@ -5828,7 +5841,7 @@ class _InlineCreateMemberRuleOffer(discord.ui.View):
         from wizard_registry import expire_view_message
         await expire_view_message(
             self.message,
-            command_hint=f"/{self.parent} member_rule set_power_band",
+            command_hint=f"`{HUB_COMMAND[self.event_type]}` → **{HUB_BTN_RULES}**",
         )
 
 
@@ -5876,7 +5889,8 @@ class _InlinePostFirstSignupOffer(discord.ui.View):
             if guild is None:
                 await inter.followup.send(
                     "⚠️ The bot can't see this guild right now. Try again "
-                    f"with `/{self.parent} post_signup`.",
+                    f"via `{HUB_COMMAND[self.event_type]}` → "
+                    f"**{HUB_BTN_POST_SIGNUP}**.",
                     ephemeral=True,
                 )
                 return
@@ -5891,7 +5905,8 @@ class _InlinePostFirstSignupOffer(discord.ui.View):
         except Exception as e:
             await inter.followup.send(
                 f"⚠️ Sign-up post failed: {e}. Run "
-                f"`/{self.parent} post_signup` to retry.",
+                f"`{HUB_COMMAND[self.event_type]}` and click "
+                f"**{HUB_BTN_POST_SIGNUP}** to retry.",
                 ephemeral=True,
             )
         self.stop()
@@ -5908,7 +5923,7 @@ class _InlinePostFirstSignupOffer(discord.ui.View):
         from wizard_registry import expire_view_message
         await expire_view_message(
             self.message,
-            command_hint=f"/{self.parent} post_signup",
+            command_hint=f"`{HUB_COMMAND[self.event_type]}` → **{HUB_BTN_POST_SIGNUP}**",
         )
 
 
@@ -6262,8 +6277,8 @@ async def _run_structured_flow_setup_step(
         f"apply. The bot uses the preset to gate eligibility and fill "
         f"out the team.\n"
         f"\n"
-        f"Manage presets with\n"
-        f"`/{parent} strategy create / edit / list / apply`."
+        f"Manage presets via `{HUB_COMMAND[event_type]}` → "
+        f"**{HUB_BTN_PRESETS}**."
     )
     picked = await ask_keep_or_change(
         channel,
@@ -6300,7 +6315,8 @@ async def _run_structured_flow_setup_step(
         )
         preset_offer.message = await channel.send(
             f"Want to create your first {label} preset now? You can also "
-            f"do this later with `/{parent} strategy create`.",
+            f"do this later via `{HUB_COMMAND[event_type]}` → "
+            f"**{HUB_BTN_PRESETS}**.",
             view=preset_offer,
         )
         await wait_view_or_cancel(preset_offer, cancel_event)
@@ -6327,9 +6343,8 @@ async def _run_structured_flow_setup_step(
         "• Per-member:\n"
         "     Used for special cases, example: `Alice always plays on Team A`,\n"
         "\n"
-        f"Add rules later with\n"
-        f"  `/{parent} member_rule` : `set_power_band` /\n"
-        f"  `set_member_team` / `set_member_zone`."
+        f"Add rules later via `{HUB_COMMAND[event_type]}` → "
+        f"**{HUB_BTN_RULES}**."
     )
     picked = await ask_keep_or_change(
         channel,
@@ -6358,18 +6373,13 @@ async def _run_structured_flow_setup_step(
         rule_offer = _InlineCreateMemberRuleOffer(
             owner_id=user.id, event_type=event_type, parent=parent,
         )
-        # Per Rule A / #166 both DS and CS support `set_member_team` —
-        # CS gained the subcommand when the single-team framing was
-        # reverted. Pointer text is identical for both event types.
-        per_member_pointer = (
-            f"`/{parent} member_rule set_member_team` (or "
-            f"`set_member_zone`)"
-        )
+        # Per Rule A / #166 both DS and CS support per-member rules.
+        # Pointer text is identical for both event types.
         rule_offer.message = await channel.send(
             f"Want to add your first {label} rule now? The button opens "
             f"a quick modal for a power-band rule (the most common type); "
             f"per-member rules need a Discord member picker, so add those "
-            f"later via {per_member_pointer}.",
+            f"later via `{HUB_COMMAND[event_type]}` → **{HUB_BTN_RULES}**.",
             view=rule_offer,
         )
         await wait_view_or_cancel(rule_offer, cancel_event)

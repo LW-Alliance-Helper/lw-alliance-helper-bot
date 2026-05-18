@@ -852,7 +852,9 @@ class TestOfficerViewTimeout:
         with patch("wizard_registry.expire_view_message", new=AsyncMock()) as ex:
             await view.on_timeout()
         ex.assert_awaited_once()
-        # Command hint points at the parent-group `signups` subcommand —
-        # event-type aware so DS officers see the DS path and vice versa.
+        # Command hint points at the hub button — event-type aware so DS
+        # officers see the DS hub and vice versa.
         kwargs = ex.await_args.kwargs
-        assert kwargs.get("command_hint") == "/desertstorm signups"
+        hint = kwargs.get("command_hint", "")
+        assert "/desertstorm" in hint
+        assert "View sign-ups" in hint

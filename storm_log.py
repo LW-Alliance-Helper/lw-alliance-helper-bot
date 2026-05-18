@@ -1,11 +1,9 @@
 """
 storm_log.py — DS and CS event logging
 
-Slash commands:
-  /desertstorm participation — Log Desert Storm participation data
-  /canyonstorm participation — Log Canyon Storm participation data
-  /desertstorm log [date]    — View a Desert Storm log entry
-  /canyonstorm log [date]    — View a Canyon Storm log entry
+Reached via the `📊 Fill out participation questions` button (log
+write) and the `📜 View past participation logs` button (read) on
+`/desertstorm` and `/canyonstorm` (hub-restructure #187).
 
 Writes to the "DS-CS Sit-outs" tab in Google Sheets and posts a
 summary to the dedicated log thread configured for this guild.
@@ -23,6 +21,7 @@ import os
 from datetime import date
 
 import discord
+from storm_event_hub import HUB_COMMAND, HUB_BTN_PARTICIPATION
 from config import get_config
 import wizard_registry
 
@@ -398,8 +397,9 @@ async def run_log_flow(bot, channel, user, event_type):
     """
     is_ds        = event_type.upper() == "DS"
     event_label  = "Desert Storm" if is_ds else "Canyon Storm"
-    log_cmd      = "/desertstorm participation" if is_ds else "/canyonstorm participation"
-    setup_cmd    = "/setup_desertstorm"          if is_ds else "/setup_canyonstorm"
+    hub_cmd      = HUB_COMMAND["DS"] if is_ds else HUB_COMMAND["CS"]
+    log_hint     = f"`{hub_cmd}` → **{HUB_BTN_PARTICIPATION}**"
+    setup_cmd    = "/setup_desertstorm" if is_ds else "/setup_canyonstorm"
     guild_id     = channel.guild.id if hasattr(channel, "guild") and channel.guild else None
     cancel_event = asyncio.Event()
     active_logs[user.id] = cancel_event
@@ -449,7 +449,7 @@ async def run_log_flow(bot, channel, user, event_type):
                 pass
             return reply.content.strip()
         except asyncio.TimeoutError:
-            await channel.send(f"⏰ Timed out. Run `{log_cmd}` to start again.")
+            await channel.send(f"⏰ Timed out. Run {log_hint} to start again.")
             return None
 
     async def wait_for_view(view, prompt_msg):
@@ -472,7 +472,7 @@ async def run_log_flow(bot, channel, user, event_type):
                 await prompt_msg.delete()
             except discord.HTTPException:
                 pass
-            await channel.send(f"⏰ Timed out. Run `{log_cmd}` to start again.")
+            await channel.send(f"⏰ Timed out. Run {log_hint} to start again.")
             return False
         return True
 
@@ -501,7 +501,7 @@ async def run_log_flow(bot, channel, user, event_type):
             if not parsed_d:
                 await channel.send(
                     f"⚠️ Could not parse `{raw_date}` as a date. "
-                    f"Run `{log_cmd}` to start again."
+                    f"Run {log_hint} to start again."
                 )
                 return
             log_date = parsed_d
@@ -581,7 +581,7 @@ async def run_log_flow(bot, channel, user, event_type):
                 if value is None:
                     await channel.send(
                         "⚠️ Too many invalid attempts. Cancelling the log — "
-                        f"run `{log_cmd}` when you're ready to try again."
+                        f"run {log_hint} when you're ready to try again."
                     )
                     return
                 answers[qkey] = value
@@ -591,7 +591,7 @@ async def run_log_flow(bot, channel, user, event_type):
                 if not names:
                     await channel.send(
                         "⚠️ The configured roster tab is empty or unreachable. "
-                        f"Run `{log_cmd.replace('_participation', '').replace('/', '/setup')}` "
+                        f"Run `{setup_cmd}` "
                         f"to update the roster source, then try again."
                     )
                     return

@@ -1,9 +1,9 @@
 """
 Roster history browser (#135 — Step 8 of #38).
 
-`/desertstorm strategy roster_history [date]` and `/canyonstorm strategy roster_history
-[date]` (registered via storm_strategy's existing app_commands.Group)
-let leadership browse past structured rosters with attendance overlaid.
+Reached via the `📜 View past rosters` button on `/desertstorm` and
+`/canyonstorm` (hub-restructure #187). Leadership browses past
+structured rosters with attendance overlaid.
 
 Without `date`, lists the most recent 8 events with `[View]` buttons.
 With `date`, renders that event's roster directly.
@@ -272,12 +272,13 @@ def render_event_embed(
               else discord.Color.dark_orange(),
     )
 
-    parent = "desertstorm" if event_type == "DS" else "canyonstorm"
     if not slots:
+        from storm_event_hub import HUB_COMMAND, HUB_BTN_VIEW_SIGNUPS
+        hub_cmd = HUB_COMMAND[event_type]
         embed.description = (
             "_No structured roster found for this date. Check the date "
-            f"format or run `/{parent} signups` + Approve & Post to build "
-            "a roster for this event._"
+            f"format or run `{hub_cmd}` → **{HUB_BTN_VIEW_SIGNUPS}** + "
+            f"Approve & Post to build a roster for this event._"
         )
         return embed
 
@@ -403,8 +404,13 @@ def render_event_embed(
             )
         )
     else:
+        from storm_event_hub import HUB_COMMAND, HUB_BTN_ATTENDANCE
         embed.set_footer(
-            text=f"Attendance not yet recorded. Run /{parent} attendance to add it."
+            text=(
+                f"Attendance not yet recorded. Run "
+                f"{HUB_COMMAND[event_type]} and click "
+                f"{HUB_BTN_ATTENDANCE} to add it."
+            )
         )
     return embed
 
@@ -418,11 +424,13 @@ def render_history_list_embed(
         color=discord.Color.dark_gold() if event_type == "DS"
               else discord.Color.dark_orange(),
     )
-    parent = "desertstorm" if event_type == "DS" else "canyonstorm"
     if not dates:
+        from storm_event_hub import HUB_COMMAND, HUB_BTN_VIEW_SIGNUPS
         embed.description = (
-            f"_No structured rosters posted yet. Use `/{parent} signups` to build "
-            "a roster + Approve & Post, and it'll show up here._"
+            f"_No structured rosters posted yet. Run "
+            f"`{HUB_COMMAND[event_type]}` and click "
+            f"**{HUB_BTN_VIEW_SIGNUPS}** to build a roster + Approve & "
+            f"Post, and it'll show up here._"
         )
         return embed
     embed.description = "Click a date below to view the roster + attendance."
@@ -539,7 +547,6 @@ class _RosterImageLinksView(discord.ui.View):
             logger.warning(
                 "[STORM HISTORY] delete_roster_image_ref failed: %s", e,
             )
-        parent = "desertstorm" if self.event_type == "DS" else "canyonstorm"
         team_label = f" for Team {team}" if team else ""
         what = "channel" if reason == "channel" else "image"
         await inter.response.send_message(
@@ -657,10 +664,10 @@ async def open_history(
             "⚠️ This command must be used inside a server.", ephemeral=True,
         )
         return
-    parent = "desertstorm" if event_type == "DS" else "canyonstorm"
+    from storm_event_hub import HUB_COMMAND, HUB_BTN_PAST_ROSTERS
     ok, _structured = await ensure_premium_structured(
         interaction, event_type,
-        feature_label=f"`/{parent} strategy roster_history`",
+        feature_label=f"the **{HUB_BTN_PAST_ROSTERS}** button on `{HUB_COMMAND[event_type]}`",
     )
     if not ok:
         return

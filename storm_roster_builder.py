@@ -1,10 +1,12 @@
 """
 Manual roster builder for Desert Storm and Canyon Storm (#128).
 
-`/desertstorm strategy apply name:<preset>` (and the CS equivalent) opens an
-interactive roster builder. Leadership picks the team, the bot loads
-the named preset + member rules + roster powers, and the builder
-enforces per-zone power floors as members are assigned.
+Opened from the `👁️ View sign-ups + set up teams` officer view via
+its "Apply preset" picker (hub-restructure #187; legacy
+`/desertstorm strategy apply` slash subcommand pre-#125). Leadership
+picks the team, the bot loads the named preset + member rules + roster
+powers, and the builder enforces per-zone power floors as members are
+assigned.
 
 v1 scope:
   * Manual assignment via zone + member dropdowns (no auto-fill)
@@ -32,6 +34,12 @@ import logging
 from typing import Optional
 
 import discord
+
+from storm_event_hub import (
+    HUB_COMMAND,
+    HUB_BTN_VIEW_SIGNUPS,
+    HUB_BTN_PAST_ROSTERS,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -2610,13 +2618,10 @@ class _RenderActionView(discord.ui.View):
         live in Discord; we just remember where."""
         import config
         if not self.event_date:
-            signups_cmd = (
-                "/desertstorm signups" if self.event_type == "DS"
-                else "/canyonstorm signups"
-            )
             await inter.response.send_message(
                 "⚠️ Can't save to history without an event date — open the "
-                f"roster from `{signups_cmd}` so the event date is set.",
+                f"roster via `{HUB_COMMAND[self.event_type]}` → "
+                f"**{HUB_BTN_VIEW_SIGNUPS}** so the event date is set.",
                 ephemeral=True,
             )
             return
@@ -2636,10 +2641,10 @@ class _RenderActionView(discord.ui.View):
                 ephemeral=True,
             )
             return
-        parent = "desertstorm" if self.event_type == "DS" else "canyonstorm"
         await inter.response.send_message(
             f"💾 Saved. The image is now linked from "
-            f"`/{parent} strategy roster_history` for this event date "
+            f"`{HUB_COMMAND[self.event_type]}` → **{HUB_BTN_PAST_ROSTERS}** "
+            f"for this event date "
             f"(stays available until the original message is deleted).",
             ephemeral=True,
         )
@@ -3472,12 +3477,13 @@ async def open_roster_builder(
             )
         if not members:
             from storm_date_helpers import format_event_date
-            parent = "desertstorm" if event_type == "DS" else "canyonstorm"
             await interaction.followup.send(
                 f"⚠️ No signed-up members match team **{team or 'A'}** for "
-                f"event **{format_event_date(event_date)}**. Check `/{parent} signups` to see who's "
-                f"voted, or run the apply flow without an event date to use "
-                f"the full roster.",
+                f"event **{format_event_date(event_date)}**. Run "
+                f"`{HUB_COMMAND[event_type]}` and click "
+                f"**{HUB_BTN_VIEW_SIGNUPS}** to see who's voted, or run "
+                f"the apply flow without an event date to use the full "
+                f"roster.",
                 ephemeral=True,
             )
             return

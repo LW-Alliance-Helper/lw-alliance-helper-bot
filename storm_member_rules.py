@@ -1,11 +1,15 @@
 """
 Member Rules editor for Desert Storm and Canyon Storm (#127).
 
+Reached via the `👤 Manage member rules` button on `/desertstorm` and
+`/canyonstorm` (hub-restructure #187; legacy `/desertstorm member_rule list`
+subcommand pre-#127).
+
 Two rule types complement the strategy preset library (#126):
 
   * power_band — "Members with power ≥ X (in the configured power column)
-    are eligible for Zone Y." Primary rule type; surfaces by default in
-    `/desertstorm member_rule list` (and the CS equivalent).
+    are eligible for Zone Y." Primary rule type; surfaces by default on
+    the list view.
   * per_member — Escape hatch for special cases. Two sub-types:
         team           e.g. "Alice always plays Team A"
         zone           e.g. "Charlie is always at Power Tower"
@@ -31,6 +35,8 @@ import logging
 
 import discord
 from discord import app_commands
+
+from storm_event_hub import HUB_COMMAND, HUB_BTN_RULES
 
 logger = logging.getLogger(__name__)
 
@@ -623,11 +629,11 @@ class _AddRuleTypePickerView(discord.ui.View):
         self.stop()
         body = (
             "👤 Per-member rules need a server-member picker, which Discord "
-            "doesn't expose inside a modal. Run one of:\n"
-            f"• `/{self.parent} member_rule set_member_zone` — pin a member "
-            "to a specific zone.\n"
-            f"• `/{self.parent} member_rule set_member_team` — pin a member "
-            "to Team A or Team B."
+            "doesn't expose inside a modal. Close this view and re-open "
+            f"the rules surface via `{HUB_COMMAND[self.event_type]}` → "
+            f"**{HUB_BTN_RULES}** — the per-member options (pin to a "
+            "specific zone, or pin to Team A / Team B) live there "
+            "alongside the member picker."
         )
         try:
             await inter.response.edit_message(content=body, view=self)
@@ -1117,12 +1123,12 @@ class _InlinePowerBandPowerModal(discord.ui.Modal):
     async def on_submit(self, interaction: discord.Interaction):
         parse_power, format_power, _ = _strategy_helpers()
         n = parse_power(self.threshold.value)
-        parent = "desertstorm" if self.event_type == "DS" else "canyonstorm"
+        hub_cmd = HUB_COMMAND[self.event_type]
         if n is None or n < 0:
             await interaction.response.send_message(
                 f"⚠️ Couldn't parse `{self.threshold.value}` as a power "
                 f"value. Try `80M` or `80,000,000` next time via "
-                f"`/{parent} member_rule set_power_band`.",
+                f"`{hub_cmd}` → **{HUB_BTN_RULES}**.",
                 ephemeral=True,
             )
             return
@@ -1135,7 +1141,7 @@ class _InlinePowerBandPowerModal(discord.ui.Modal):
             await interaction.response.send_message(
                 f"✅ Saved: ≥ {format_power(int(n))} → eligible for "
                 f"**{self.zone}**.\n"
-                f"Add more rules later via `/{parent} member_rule …`.",
+                f"Add more rules later via `{hub_cmd}` → **{HUB_BTN_RULES}**.",
                 ephemeral=True,
             )
         else:

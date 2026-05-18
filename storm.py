@@ -1,9 +1,9 @@
 """
-storm.py — Desert Storm mail generation
+storm.py — Desert Storm + Canyon Storm mail generation
 
-Commands (Leadership only, leadership channel only):
-  /desertstorm draft — Generate a Desert Storm mail draft for Team A or Team B
-  /canyonstorm draft — Generate a Canyon Storm mail draft for Team A or Team B
+Reached via the `📄 Generate mail` button on `/desertstorm` and
+`/canyonstorm` (hub-restructure #187). Pre-#187 this was a top-level
+slash subcommand (`/desertstorm draft`).
 
 Flow:
   1. Pick Team (A or B)
@@ -28,14 +28,16 @@ import json
 import os
 import discord
 from config import get_config
+from storm_event_hub import HUB_COMMAND, HUB_BTN_DRAFT
 import wizard_registry
 
 WIZARD_TIMEOUT = 600  # 10 minutes
 
 
 # ── Default assignments ────────────────────────────────────────────────────────
-# DS rosters start empty per team. Leadership fills them in via
-# `/desertstorm draft`; the saved sheet is the source of truth thereafter.
+# DS rosters start empty per team. Leadership fills them in via the
+# `📄 Generate mail` button on `/desertstorm`; the saved sheet is the
+# source of truth thereafter.
 
 DEFAULTS = {
     "A": ({}, []),
@@ -602,9 +604,9 @@ async def _pick_storm_template(bot, channel, guild_id: int | None, event_type: s
     )
     await view.wait()
     if view.selected is None:
-        draft_cmd = "/desertstorm draft" if event_type == "DS" else "/canyonstorm draft"
         await channel.send(
-            f"⏰ Template picker timed out. Run `{draft_cmd}` to start over."
+            f"⏰ Template picker timed out. Run `{HUB_COMMAND[event_type]}` "
+            f"and click **{HUB_BTN_DRAFT}** to start over."
         )
         return False
     return view.selected
@@ -613,7 +615,7 @@ async def _pick_storm_template(bot, channel, guild_id: int | None, event_type: s
 async def run_ds_draft_flow(bot, channel, user, team: str,
                              current_zones: dict, current_subs: list):
     """
-    Step 2-4 of /desertstorm draft:
+    Step 2-4 of the `📄 Generate mail` flow (DS):
 
       Step 2 — Pick Time
       Step 3 — Show template, choose Use as-is / Edit
@@ -637,7 +639,10 @@ async def run_ds_draft_flow(bot, channel, user, team: str,
     except discord.HTTPException:
         pass
     if time_view.selected is None:
-        await channel.send("⏰ Timed out. Use `/desertstorm draft` to start again.")
+        await channel.send(
+            f"⏰ Timed out. Run `{HUB_COMMAND['DS']}` and click "
+            f"**{HUB_BTN_DRAFT}** to start again."
+        )
         return
     time_key = time_view.selected
 
@@ -664,7 +669,10 @@ async def run_ds_draft_flow(bot, channel, user, team: str,
     )
     await use_view.wait()
     if use_view.choice is None:
-        await channel.send("⏰ Timed out. Use `/desertstorm draft` to start again.")
+        await channel.send(
+            f"⏰ Timed out. Run `{HUB_COMMAND['DS']}` and click "
+            f"**{HUB_BTN_DRAFT}** to start again."
+        )
         return
 
     zones, subs = current_zones, current_subs
@@ -680,7 +688,10 @@ async def run_ds_draft_flow(bot, channel, user, team: str,
         try:
             reply = await bot.wait_for("message", check=check, timeout=WIZARD_TIMEOUT)
         except asyncio.TimeoutError:
-            await channel.send("⏰ Timed out. Use `/desertstorm draft` to start again.")
+            await channel.send(
+            f"⏰ Timed out. Run `{HUB_COMMAND['DS']}` and click "
+            f"**{HUB_BTN_DRAFT}** to start again."
+        )
             try:
                 await prompt.delete()
             except discord.HTTPException:
@@ -700,7 +711,8 @@ async def run_ds_draft_flow(bot, channel, user, team: str,
         if not edited_zones:
             await channel.send(
                 "⚠️ Could not parse any zone assignments. "
-                "Make sure the format matches the template and try `/desertstorm draft` again."
+                "Make sure the format matches the template and re-run "
+                f"`{HUB_COMMAND['DS']}` → **{HUB_BTN_DRAFT}** to try again."
             )
             return
         if errors:
@@ -765,9 +777,9 @@ async def _guard(interaction: discord.Interaction) -> bool:
 
 # ── Slash command handlers ────────────────────────────────────────────────────
 #
-# Registered by `storm_commands_root` under the `/desertstorm` and
-# `/canyonstorm` parent groups. This module exposes the handler bodies
-# so the root cog stays a thin dispatcher.
+# Wired from the `📄 Generate mail` button on the `/desertstorm` and
+# `/canyonstorm` event hubs (storm_event_hub.py). This module exposes
+# the handler bodies so the hub stays a thin dispatcher.
 
 
 async def handle_storm_draft(bot, interaction: discord.Interaction, event_type: str) -> None:
@@ -799,7 +811,11 @@ async def handle_storm_draft(bot, interaction: discord.Interaction, event_type: 
         pass
 
     if team_view.selected is None:
-        await channel.send(f"⏰ Timed out. Use `/{parent} draft` to start again.")
+        event_type = "DS" if is_ds else "CS"
+        await channel.send(
+            f"⏰ Timed out. Run `{HUB_COMMAND[event_type]}` and click "
+            f"**{HUB_BTN_DRAFT}** to start again."
+        )
         await interaction.followup.send("⏰ Timed out.", ephemeral=True)
         return
 
@@ -885,7 +901,8 @@ async def _show_storm_overview(interaction: discord.Interaction, event_type: str
 
 # ── CS Defaults ───────────────────────────────────────────────────────────────
 
-# Empty placeholders — alliances fill these via `/canyonstorm draft`.
+# Empty placeholders — alliances fill these via the `📄 Generate mail`
+# button on `/canyonstorm`.
 # Keys must match the canonical CS_ZONE_STRUCTURE (defined later in this
 # file) plus the CS_SUBS_KEY for {subs}; the existing test suite asserts
 # that property, so any key drift will fail loudly in CI.
@@ -1284,7 +1301,7 @@ class CSApprovalView(discord.ui.View):
 
 async def run_cs_draft_flow(bot, channel, user, team: str, current_zones: dict):
     """
-    Step 2-4 of /canyonstorm draft: Time → Template (Use as-is / Edit) →
+    Step 2-4 of the `📄 Generate mail` flow (CS): Time → Template (Use as-is / Edit) →
     Preview (Post & Copy). See `run_ds_draft_flow` for the shape.
     """
     guild_id = getattr(getattr(channel, "guild", None), "id", None)
@@ -1299,7 +1316,10 @@ async def run_cs_draft_flow(bot, channel, user, team: str, current_zones: dict):
     except discord.HTTPException:
         pass
     if time_view.selected is None:
-        await channel.send("⏰ Timed out. Use `/canyonstorm draft` to start again.")
+        await channel.send(
+            f"⏰ Timed out. Run `{HUB_COMMAND['CS']}` and click "
+            f"**{HUB_BTN_DRAFT}** to start again."
+        )
         return
     time_key = time_view.selected
 
@@ -1326,7 +1346,10 @@ async def run_cs_draft_flow(bot, channel, user, team: str, current_zones: dict):
     )
     await use_view.wait()
     if use_view.choice is None:
-        await channel.send("⏰ Timed out. Use `/canyonstorm draft` to start again.")
+        await channel.send(
+            f"⏰ Timed out. Run `{HUB_COMMAND['CS']}` and click "
+            f"**{HUB_BTN_DRAFT}** to start again."
+        )
         return
 
     zones = current_zones
@@ -1342,7 +1365,10 @@ async def run_cs_draft_flow(bot, channel, user, team: str, current_zones: dict):
         try:
             reply = await bot.wait_for("message", check=check, timeout=WIZARD_TIMEOUT)
         except asyncio.TimeoutError:
-            await channel.send("⏰ Timed out. Use `/canyonstorm draft` to start again.")
+            await channel.send(
+            f"⏰ Timed out. Run `{HUB_COMMAND['CS']}` and click "
+            f"**{HUB_BTN_DRAFT}** to start again."
+        )
             try:
                 await prompt.delete()
             except discord.HTTPException:
@@ -1362,7 +1388,8 @@ async def run_cs_draft_flow(bot, channel, user, team: str, current_zones: dict):
         if not edited_zones:
             await channel.send(
                 "⚠️ Could not parse any assignments. "
-                "Make sure the format matches the template and try `/canyonstorm draft` again."
+                "Make sure the format matches the template and re-run "
+                f"`{HUB_COMMAND['CS']}` → **{HUB_BTN_DRAFT}** to try again."
             )
             return
         if errors:

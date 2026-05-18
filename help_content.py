@@ -240,9 +240,10 @@ HELP_CATEGORIES: dict[str, dict] = {
             ("Multiple named surveys",
              "Manage from `/survey` directly via Add / Edit / Remove."),
             ("DM-mode reminders",
-             "`/survey_remind`, `/desertstorm remind`, `/canyonstorm remind` "
-             "all gain DM-via-roster delivery; survey reminders can also "
-             "schedule recurring DMs."),
+             "`/survey_remind` plus the **🔔 Send DM reminder to roster** "
+             "button on `/desertstorm` and `/canyonstorm` all gain "
+             "DM-via-roster delivery; survey reminders can also schedule "
+             "recurring DMs."),
             ("✨ More",
              "Personal birthday DMs, train-assignment DMs, auto-mention "
              "members in train reminders, threads as destinations, "

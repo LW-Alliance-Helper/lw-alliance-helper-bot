@@ -208,8 +208,10 @@ class TestRenderEventEmbed:
         )
         # Renders an unrecorded marker, not crash.
         assert "—" in _embed_body(embed)
-        # Footer hints how to record under the new parent-group command tree.
-        assert "/desertstorm attendance" in (embed.footer.text or "")
+        # Footer hints how to record via the hub button.
+        footer = embed.footer.text or ""
+        assert "/desertstorm" in footer
+        assert "Record attendance" in footer
 
     def test_below_floor_override_not_rendered(self):
         """Decision #6 (#171): the Override Below Minimum flag stays on

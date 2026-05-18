@@ -1,10 +1,12 @@
 """
 Post-event attendance tracking (#133 — Step 7 of the #38 8-step flow).
 
-`/desertstorm attendance event_date:YYYY-MM-DD` (and the CS equivalent) opens an
-officer view that lets leadership mark who actually showed for each
-assigned slot. Writes one row per slot to the alliance's configured
-`attendance_tab` Sheet.
+Reached via the `📋 Record attendance` button on `/desertstorm` and
+`/canyonstorm` (hub-restructure #187; legacy
+`/desertstorm attendance event_date:YYYY-MM-DD` subcommand pre-#187).
+Opens an officer view that lets leadership mark who actually showed
+for each assigned slot. Writes one row per slot to the alliance's
+configured `attendance_tab` Sheet.
 
 Without this, the structured-flow data ([#129](https://github.com/LW-Alliance-Helper/lw-alliance-helper-bot/issues/129)) never closes the loop —
 the bot knows who was *assigned* but not who *showed*. Blocks the
@@ -20,6 +22,13 @@ import logging
 from typing import Optional
 
 import discord
+
+from storm_event_hub import (
+    HUB_COMMAND,
+    HUB_BTN_VIEW_SIGNUPS,
+    HUB_BTN_POST_SIGNUP,
+    HUB_BTN_ATTENDANCE,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -452,12 +461,13 @@ def _render_embed(session: _AttendanceSession) -> discord.Embed:
               else discord.Color.orange(),
     )
 
-    parent = "desertstorm" if session.event_type == "DS" else "canyonstorm"
     if not session.slots:
+        hub_cmd = HUB_COMMAND[session.event_type]
         embed.description = (
-            f"_No roster slots found for this event. Run `/{parent} signups` "
-            "and build a structured roster first; attendance only applies "
-            "to structured-flow rosters._"
+            f"_No roster slots found for this event. Run `{hub_cmd}` "
+            f"and click **{HUB_BTN_VIEW_SIGNUPS}** to build a structured "
+            f"roster first; attendance only applies to structured-flow "
+            f"rosters._"
         )
         return embed
 
@@ -765,11 +775,11 @@ class _AttendanceView(discord.ui.View):
 # ── Slash command ────────────────────────────────────────────────────────────
 
 
-# ── Slash command handler ────────────────────────────────────────────────────
+# ── Hub button handler ───────────────────────────────────────────────────────
 #
-# Registered by `storm_commands_root` under `/desertstorm attendance` and
-# `/canyon_storm attendance`. This module exposes the handler body so the
-# root cog stays a thin dispatcher.
+# Wired from the `📋 Record attendance` button on the `/desertstorm`
+# and `/canyonstorm` event hubs (storm_event_hub.py). This module
+# exposes the handler body so the hub stays a thin dispatcher.
 
 
 async def handle_storm_attendance(
@@ -789,15 +799,16 @@ async def handle_storm_attendance(
         return
 
     et = event_type
-    parent = "desertstorm" if et == "DS" else "canyonstorm"
+    hub_cmd = HUB_COMMAND[et]
     raw_input = (event_date or "").strip()
     if not raw_input:
         date_clean = most_recent_event_date(interaction.guild_id, et)
         if not date_clean:
             await interaction.response.send_message(
                 f"⚠️ No posted {('Desert Storm' if et == 'DS' else 'Canyon Storm')} "
-                f"events on record. Run `/{parent} post_signup` and build a roster "
-                f"before recording attendance, or pass `event_date` explicitly.",
+                f"events on record. Run `{hub_cmd}` and click "
+                f"**{HUB_BTN_POST_SIGNUP}** to build a roster before "
+                f"recording attendance, or pass `event_date` explicitly.",
                 ephemeral=True,
             )
             return
@@ -815,7 +826,7 @@ async def handle_storm_attendance(
     ok, _structured = await ensure_premium_structured(
         interaction, et,
         bot=bot,
-        feature_label=f"`/{parent} attendance`",
+        feature_label=f"the **{HUB_BTN_ATTENDANCE}** button on `{hub_cmd}`",
     )
     if not ok:
         return
@@ -845,7 +856,8 @@ async def handle_storm_attendance(
         else:
             msg_lines.append(
                 "Attendance is only recordable for events with a "
-                f"structured roster posted via `/{parent} signups`."
+                f"structured roster posted via the **{HUB_BTN_VIEW_SIGNUPS}** "
+                f"button on `{hub_cmd}`."
             )
         await interaction.followup.send("\n".join(msg_lines), ephemeral=True)
         return

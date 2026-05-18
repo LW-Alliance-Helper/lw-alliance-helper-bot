@@ -97,7 +97,7 @@ Other supported environment variables:
 | `PREMIUM_SKU_ID` | Subscription SKU ID | **Required** for real billing |
 | `FORCE_PREMIUM` | `1` / `true` flags every guild as premium | Local dev / staging only |
 | `PREMIUM_BYPASS_GUILD_IDS` | Comma-separated guild IDs that always resolve as premium without a subscription | The bot owner's home server, internal test servers, beta testers |
-| `BOT_ADMIN_GUILD_IDS` | Comma-separated guild IDs where owner-only admin slash commands (`/admin_guild_info`, `/admin_forget_guild`) are registered. Unset = global registration (local dev only) | Set in production to your support / dev guild ID(s) so admin commands don't appear in alliance command pickers |
+| `BOT_ADMIN_GUILD_IDS` | Comma-separated guild IDs where the owner-only `/admin` slash-command group (`/admin overview`, `/admin guild_info`, `/admin forget_guild`) is registered. Unset = global registration (local dev only) | Set in production to your support / dev guild ID(s) so admin commands don't appear in alliance command pickers |
 
 `PREMIUM_BYPASS_GUILD_IDS` is the canonical way to grant a specific
 guild permanent premium status without a Discord subscription — used in

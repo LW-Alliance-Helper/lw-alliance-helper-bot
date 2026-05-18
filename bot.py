@@ -1191,10 +1191,102 @@ def _parse_guild_id(raw: str) -> int | None:
         return None
 
 
-@bot.tree.command(
-    name="admin_guild_info",
+# /admin command group — owner-only, scoped to BOT_ADMIN_GUILD_IDS.
+# Defined as a module-level Group rather than via a cog because the
+# bookkeeping (env-var guild scoping, bot.is_owner check) needs the
+# already-instantiated `bot` here in bot.py. Registered on the tree
+# at the bottom of this admin section so the @admin_group.command
+# decorators below can attach to it.
+admin_group = app_commands.Group(
+    name="admin",
+    description="(Bot owner only) Support + data-removal utilities",
+)
+
+
+@admin_group.command(
+    name="overview",
+    description="(Bot owner only) Fleet snapshot — total guilds, Premium counts, recent installs, stragglers",
+)
+async def admin_overview_slash(interaction: discord.Interaction):
+    if not await _require_bot_owner(interaction):
+        return
+
+    from config import _get_conn  # noqa: PLC0415 — module-level imports already loaded
+    with _get_conn() as conn:
+        total_guilds = conn.execute(
+            "SELECT COUNT(*) FROM guild_install_metadata"
+        ).fetchone()[0]
+        with_setup_complete = conn.execute(
+            "SELECT COUNT(*) FROM guild_configs WHERE setup_complete = 1"
+        ).fetchone()[0]
+        premium_assignments = conn.execute(
+            "SELECT COUNT(*) FROM premium_assignments"
+        ).fetchone()[0]
+        # Recent installs: last 7 days. Use ISO timestamp comparison
+        # (TEXT-sorted, ISO-8601 is lexicographically ordered).
+        cutoff_recent = (datetime.now(timezone.utc) - timedelta(days=7)).isoformat()
+        recent_rows = conn.execute(
+            "SELECT guild_id, guild_name, installed_at FROM guild_install_metadata "
+            "WHERE installed_at >= ? ORDER BY installed_at DESC LIMIT 10",
+            (cutoff_recent,),
+        ).fetchall()
+        # Stale stragglers: no on_ready ping in 14+ days.
+        cutoff_stale = (datetime.now(timezone.utc) - timedelta(days=14)).isoformat()
+        stale_rows = conn.execute(
+            "SELECT guild_id, guild_name, last_seen_at FROM guild_install_metadata "
+            "WHERE last_seen_at < ? ORDER BY last_seen_at ASC LIMIT 10",
+            (cutoff_stale,),
+        ).fetchall()
+
+    embed = discord.Embed(
+        title="🛠️ Admin Overview",
+        color=discord.Color.blurple(),
+    )
+    embed.add_field(
+        name="Fleet",
+        value=(
+            f"**Installed guilds:** {total_guilds}\n"
+            f"**Completed setup:** {with_setup_complete}\n"
+            f"**Premium assignments:** {premium_assignments}"
+        ),
+        inline=False,
+    )
+    if recent_rows:
+        lines = [
+            f"• **{r['guild_name'] or '(unnamed)'}** (`{r['guild_id']}`) — {r['installed_at'][:10]}"
+            for r in recent_rows
+        ]
+        embed.add_field(
+            name=f"Recent installs (last 7 days, top {len(recent_rows)})",
+            value="\n".join(lines)[:1024],
+            inline=False,
+        )
+    else:
+        embed.add_field(
+            name="Recent installs (last 7 days)",
+            value="*(none)*",
+            inline=False,
+        )
+    if stale_rows:
+        lines = [
+            f"• **{r['guild_name'] or '(unnamed)'}** (`{r['guild_id']}`) — last seen {r['last_seen_at'][:10]}"
+            for r in stale_rows
+        ]
+        embed.add_field(
+            name=f"No on_ready in 14+ days (top {len(stale_rows)})",
+            value="\n".join(lines)[:1024],
+            inline=False,
+        )
+    embed.set_footer(
+        text="Use /admin guild_info <id> to drill into one guild, "
+             "or /admin forget_guild <id> to remove install metadata for a data-removal request."
+    )
+    await interaction.response.send_message(embed=embed, ephemeral=True)
+
+
+@admin_group.command(
+    name="guild_info",
     description="(Bot owner only) Look up stored metadata + config for a guild_id.",
-    **_admin_command_kwargs,
 )
 @app_commands.describe(guild_id="Discord guild ID — paste from log line / Sentry tag")
 async def admin_guild_info_slash(interaction: discord.Interaction, guild_id: str):
@@ -1268,7 +1360,7 @@ async def admin_guild_info_slash(interaction: discord.Interaction, guild_id: str
 
 
 class _ForgetGuildConfirm(discord.ui.View):
-    """Two-button confirm for /admin_forget_guild. Auto-cancels on timeout."""
+    """Two-button confirm for /admin forget_guild. Auto-cancels on timeout."""
 
     def __init__(self, guild_id: int, owner_id: int):
         super().__init__(timeout=60)
@@ -1309,10 +1401,9 @@ class _ForgetGuildConfirm(discord.ui.View):
         self.stop()
 
 
-@bot.tree.command(
-    name="admin_forget_guild",
+@admin_group.command(
+    name="forget_guild",
     description="(Bot owner only) Delete the install-metadata row for a guild_id (data-removal request).",
-    **_admin_command_kwargs,
 )
 @app_commands.describe(guild_id="Discord guild ID to forget")
 async def admin_forget_guild_slash(interaction: discord.Interaction, guild_id: str):
@@ -1346,6 +1437,13 @@ async def admin_forget_guild_slash(interaction: discord.Interaction, guild_id: s
 
 # Alias so date_cls doesn't conflict with the `date` parameter name in events_slash
 date_cls = date
+
+
+# Register the /admin Group on the tree once every subcommand has been
+# attached above. The Group-level guilds= kwarg propagates to all its
+# subcommands, so `BOT_ADMIN_GUILD_IDS` scoping still hides the
+# entire group from every non-admin guild's slash picker.
+bot.tree.add_command(admin_group, **_admin_command_kwargs)
 
 
 # Guard the runtime entry so `import bot` doesn't try to start the bot

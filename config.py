@@ -329,7 +329,7 @@ def init_db():
         # from the audit log on join and is best-effort (the audit log only
         # retains 45 days); `owner_id` is the always-available fallback
         # contact path. Rows are deleted in `on_guild_remove` and on
-        # `/admin_forget_guild` so kicked guilds aren't retained.
+        # `/admin forget_guild` so kicked guilds aren't retained.
         conn.execute("""
             CREATE TABLE IF NOT EXISTS guild_install_metadata (
                 guild_id          INTEGER PRIMARY KEY,

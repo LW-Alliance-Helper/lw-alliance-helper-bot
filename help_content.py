@@ -72,12 +72,12 @@ HELP_CATEGORIES: dict[str, dict] = {
         "commands": [
             ("/setup_train",
              "Configure the train tab, blurb generation, and reminders."),
-            ("/train",
+            ("/train overview",
              "View the schedule with Add / Update / Generate Prompt / Clear "
              "buttons."),
-            ("/train_log [date]",
+            ("/train log [date]",
              "Recent prompt log entries (free: 7 days / 💎 Premium: 30 days)."),
-            ("/train_addbirthdays",
+            ("/train birthdays",
              "Manually run the birthday → train auto-population now."),
         ],
     },

@@ -55,8 +55,11 @@ EXPECTED_COG_COMMANDS = {
         "survey_post", "survey", "survey_remind",
     },
     "TrainCog": {
-        "train_addbirthdays", "birthdays", "train_log",
-        "cancel", "train",
+        # Top-level: /train group + the standalone /birthdays
+        # (member-facing list) and /cancel (wizard exit). Subcommands
+        # of /train (overview / log / birthdays) are introspected
+        # separately.
+        "train", "birthdays", "cancel",
     },
     "MemberRosterCog": {
         # Top-level: /members group + the legacy /setup_members wizard.
@@ -189,6 +192,23 @@ class TestCogRegistration:
         cog = _make_cog(TrainCog)
         try:
             assert _commands_on(cog) == EXPECTED_COG_COMMANDS["TrainCog"]
+        finally:
+            try:
+                cog.check_reminder.cancel()
+            except Exception:
+                pass
+
+    @pytest.mark.asyncio
+    async def test_train_cog_train_group_has_expected_subcommands(self, seeded_db):
+        """/train is a top-level Group containing overview / log /
+        birthdays. /birthdays (standalone member-facing list) and
+        /cancel stay top-level and aren't part of the group."""
+        from train_cog import TrainCog
+        cog = _make_cog(TrainCog)
+        try:
+            assert _subcommands_on(cog.train_group) == {
+                "overview", "log", "birthdays",
+            }
         finally:
             try:
                 cog.check_reminder.cancel()
@@ -519,23 +539,27 @@ class TestSurveyCommandsGate:
 # ── Train commands ────────────────────────────────────────────────────────────
 
 class TestTrainCommandsGate:
+    """Post-#198: the train commands live under the /train group as
+    `train_overview`, `train_log`, and `train_birthdays` on the cog;
+    /birthdays remains a standalone top-level command (member-facing
+    list of upcoming birthdays)."""
 
     @pytest.mark.asyncio
-    @pytest.mark.parametrize("command_name", [
-        "train", "train_log", "train_addbirthdays", "birthdays",
+    @pytest.mark.parametrize("command_attr", [
+        "train_overview", "train_log", "train_birthdays", "birthdays",
     ])
-    async def test_rejects_caller_without_leadership_role(self, seeded_db, command_name):
+    async def test_rejects_caller_without_leadership_role(self, seeded_db, command_attr):
         from train_cog import TrainCog
         cog = _make_cog(TrainCog)
         try:
             interaction = make_mock_interaction()
             interaction.user.roles = []   # no leadership role
 
-            cmd = getattr(cog, command_name)
+            cmd = getattr(cog, command_attr)
             try:
                 await cmd.callback(cog, interaction)
             except TypeError:
-                await cmd.callback(cog, interaction, None)  # /train_log [date]
+                await cmd.callback(cog, interaction, None)  # /train log [date]
 
             content, _ = _last_message(interaction)
             assert "leadership" in (content or "").lower()

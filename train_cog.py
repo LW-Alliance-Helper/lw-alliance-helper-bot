@@ -2,7 +2,8 @@
 train_cog.py — TrainCog (slash commands + reminder loop) for the train module.
 
 Hosts:
-  /train, /train_log, /train_addbirthdays, /birthdays, /cancel
+  /train overview, /train log, /train birthdays   (the /train group)
+  /birthdays, /cancel                             (standalone top-level)
   + check_reminder background task
 
 Kept separate from train.py to keep that file at a manageable size.
@@ -68,6 +69,15 @@ date_cls = date
 # ── Cog ────────────────────────────────────────────────────────────────────────
 
 class TrainCog(commands.Cog):
+    # /train is a top-level slash-command group containing overview /
+    # log / birthdays. `/birthdays` (the standalone member list) and
+    # `/cancel` (the wizard-cancellation hatch) stay top-level — they
+    # serve different intent surfaces.
+    train_group = app_commands.Group(
+        name="train",
+        description="Alliance train schedule + birthday integration",
+    )
+
     def __init__(self, bot):
         self.bot                = bot
         # Initialise to today's ET date so the first tick after deploy
@@ -85,13 +95,13 @@ class TrainCog(commands.Cog):
     def cog_unload(self):
         self.check_reminder.cancel()
 
-    # ── /train_addbirthdays ────────────────────────────────────────────────────
+    # ── /train birthdays ───────────────────────────────────────────────────────
 
-    @app_commands.command(
-        name="train_addbirthdays",
-        description="Manually run the birthday check and add upcoming birthdays to the schedule",
+    @train_group.command(
+        name="birthdays",
+        description="Run the birthday check and add upcoming birthdays to the schedule",
     )
-    async def train_addbirthdays(self, interaction: discord.Interaction):
+    async def train_birthdays(self, interaction: discord.Interaction):
         if not await _guard(interaction):
             return
 
@@ -218,10 +228,10 @@ class TrainCog(commands.Cog):
         embed.set_footer(text=f"Source: {tab_name} · Run /setup_birthdays to change settings")
         await interaction.followup.send(embed=embed, ephemeral=True)
 
-    # ── /train_log ─────────────────────────────────────────────────────────────
+    # ── /train log ─────────────────────────────────────────────────────────────
 
-    @app_commands.command(
-        name="train_log",
+    @train_group.command(
+        name="log",
         description="Show the train prompt log (window depends on your tier; pass a date to filter)",
     )
     @app_commands.describe(date="Optional date, e.g. 'April 14' or '4/14'")
@@ -338,13 +348,13 @@ class TrainCog(commands.Cog):
                 "ℹ️ You don't have an active session running.", ephemeral=True
             )
 
-    # ── /train ─────────────────────────────────────────────────────────────────
+    # ── /train overview ────────────────────────────────────────────────────────
 
-    @app_commands.command(
-        name="train",
+    @train_group.command(
+        name="overview",
         description="View the train schedule with Add / Update / Generate Prompt / Clear buttons",
     )
-    async def train(self, interaction: discord.Interaction):
+    async def train_overview(self, interaction: discord.Interaction):
         if not await _guard(interaction):
             return
 
@@ -400,7 +410,7 @@ class TrainCog(commands.Cog):
                 # lines up with 00:00 server time, the alliance's nightly
                 # reset. Exact-minute trigger matches the Discord birthday
                 # announcement pattern below; if Railway is restarting
-                # across that minute, /train_addbirthdays is the manual
+                # across that minute, /train birthdays is the manual
                 # escape hatch. Dedup persists in
                 # `guild_birthday_config.last_train_population_date` so
                 # Railway redeploys at 22:00 don't re-fire — the previous
@@ -439,7 +449,7 @@ class TrainCog(commands.Cog):
                                         await alert_channel.send(alert)
                             # Stamp *after* a successful run so a mid-fire
                             # crash leaves the day un-stamped and a manual
-                            # `/train_addbirthdays` (or the next deploy)
+                            # `/train birthdays` (or the next deploy)
                             # can retry.
                             mark_birthday_population_fired(guild.id, today_iso)
                         except Exception as e:
@@ -581,7 +591,7 @@ class TrainCog(commands.Cog):
                     f"🚂 **Reset! Today's train is for {display}.**\n\n"
                     f"Click below whenever you're ready to get the ChatGPT prompt — "
                     f"no rush, run it when the team is available.\n\n"
-                    f"⚠️ *If the button stops working after a bot restart, use `/train` → 📋 Generate Prompt instead.*"
+                    f"⚠️ *If the button stops working after a bot restart, use `/train overview` → 📋 Generate Prompt instead.*"
                 )
                 view.message = await channel.send(msg, view=view)
             else:

@@ -101,11 +101,11 @@ The bot can post in-game event reminders (Plague Marauder, Zombie Siege, etc.) o
 
 The bot tracks the daily alliance train assignment and (when configured) generates a ChatGPT prompt for an announcement blurb.
 
-- [ ] Run `/train`. Review the schedule view and inline buttons.
+- [ ] Run `/train overview`. Review the schedule view and inline buttons.
 - [ ] **Add a member to today's or tomorrow's slot.** Walk through the wizard. Note any prompts that required guesswork.
 - [ ] If a blurb template is configured, test the **Generate Prompt** button. Note whether the resulting prompt is usable as-is.
 - [ ] Try the **Clear** button and cancel out of the confirmation. Note whether the cancel-result message is clear.
-- [ ] Run `/train_log` to see past entries. Note whether the rendered output is easy to scan.
+- [ ] Run `/train log` to see past entries. Note whether the rendered output is easy to scan.
 - [ ] Run `/setup_train`. The final step is **Step 8 of 8 — Train DM Body (💎 Premium)** with `{name}` as a placeholder. Note whether the prompt makes clear that this fires alongside the channel reminder when the assigned member is on Premium + Member Roster Sync.
 
 ---
@@ -115,7 +115,7 @@ The bot tracks the daily alliance train assignment and (when configured) generat
 If birthdays are configured, the bot can announce them and (optionally) add them to the train schedule.
 
 - [ ] Run `/birthdays`. Review the lookahead window and list format.
-- [ ] If birthday → train integration is enabled, run `/train_addbirthdays` and verify the train schedule shows the resulting additions.
+- [ ] If birthday → train integration is enabled, run `/train birthdays` and verify the train schedule shows the resulting additions.
 - [ ] Run `/setup_birthdays` (only if reminders are enabled). The final step is **Step 9 of 9 — Birthday DM Body (💎 Premium)** with `{name}` as a placeholder. Try **Use default** and **Define my own** to see how each lands.
 
 ---

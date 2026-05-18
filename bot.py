@@ -1040,7 +1040,7 @@ async def events_log_slash(interaction: discord.Interaction):
         )
         return
 
-    days   = await premium.get_limit("events_log_days", interaction.guild_id, interaction=interaction)
+    days   = await premium.get_limit("events_log_days", interaction.guild_id, interaction=interaction, bot=bot)
     days   = days or 30  # safety; LIMITS always returns int here
     cutoff = datetime.now(tz=timezone.utc) - timedelta(days=days)
     matches = []

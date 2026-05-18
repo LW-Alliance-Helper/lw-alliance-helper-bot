@@ -1055,7 +1055,8 @@ async def _show_storm_log(interaction: discord.Interaction, event: str, date: st
     # Free tier sees only the most recent N storm participation log entries.
     import premium
     recent_cap = await premium.get_limit(
-        "storm_log_recent", interaction.guild_id, interaction=interaction,
+        "storm_log_recent", interaction.guild_id,
+        interaction=interaction, bot=interaction.client,
     )
     if recent_cap is not None:
         recent_dates = await asyncio.get_event_loop().run_in_executor(

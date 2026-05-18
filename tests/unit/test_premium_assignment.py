@@ -53,11 +53,16 @@ def fresh_premium():
     _premium.clear_cache()
 
 
-def _make_entitlement(sku_id: int, user_id: int = 555000111, deleted: bool = False):
+def _make_entitlement(sku_id: int, user_id: int = 555000111,
+                       deleted: bool = False, ends_at=None):
     ent = MagicMock()
     ent.sku_id  = sku_id
     ent.user_id = user_id
     ent.deleted = deleted
+    # Set explicitly so _entitlement_matches' ends_at check sees None
+    # rather than an auto-MagicMock attribute, which would fail the
+    # `ends_at < datetime.now(...)` comparison with a TypeError.
+    ent.ends_at = ends_at
     return ent
 
 

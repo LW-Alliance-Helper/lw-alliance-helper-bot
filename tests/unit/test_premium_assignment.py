@@ -124,20 +124,33 @@ class TestAssignmentHelpers:
         assert get_premium_assignment_for_guild(333) == 111
         assert get_premium_assignment_for_user(111) == 333
 
-    def test_assign_displaces_prior_subscriber_on_same_guild(self, fresh_premium):
-        """The data layer enforces UNIQUE(guild_id) by displacing the prior
-        holder. The slash-command surface should reject this case before
-        calling assign(), but the underlying primitive must not crash."""
+    def test_assign_refuses_to_displace_prior_subscriber(self, fresh_premium):
+        """Race-safety: assign() must refuse when another subscriber
+        already holds the target guild. The donate.py slash-command
+        surfaces pre-check via get_premium_assignment_for_guild, but the
+        narrow window between that check and assign() can still race —
+        the data layer is the last line of defense and must not silently
+        displace.
+        """
         from config import (
             get_premium_assignment_for_guild,
             get_premium_assignment_for_user,
         )
         fresh_premium.assign(user_id=111, guild_id=222)
-        displaced = fresh_premium.assign(user_id=999, guild_id=222)
-        assert displaced == 111
-        assert get_premium_assignment_for_guild(222) == 999
-        assert get_premium_assignment_for_user(111) is None
-        assert get_premium_assignment_for_user(999) == 222
+        result = fresh_premium.assign(user_id=999, guild_id=222)
+        # Refused — 111 still holds, 999 has no assignment.
+        assert result is False
+        assert get_premium_assignment_for_guild(222) == 111
+        assert get_premium_assignment_for_user(111) == 222
+        assert get_premium_assignment_for_user(999) is None
+
+    def test_assign_returns_true_on_fresh_and_move(self, fresh_premium):
+        # Fresh assignment → True.
+        assert fresh_premium.assign(user_id=111, guild_id=222) is True
+        # Same user moving to a new (empty) guild → True.
+        assert fresh_premium.assign(user_id=111, guild_id=333) is True
+        # Same user re-assigning to the same guild → True (no-op upsert).
+        assert fresh_premium.assign(user_id=111, guild_id=333) is True
 
     def test_unassign_removes_row_and_returns_freed_guild(self, fresh_premium):
         from config import get_premium_assignment_for_guild

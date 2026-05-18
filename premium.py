@@ -199,22 +199,31 @@ def get_assigned_user(guild_id: int) -> Optional[int]:
     return get_premium_assignment_for_guild(guild_id)
 
 
-def assign(user_id: int, guild_id: int) -> Optional[int]:
-    """Pin this user's license to `guild_id`. Invalidates the premium cache
-    for the old guild (if any) and the new guild. Returns the user_id of a
-    prior subscriber whose claim on this guild was displaced, or None.
+def assign(user_id: int, guild_id: int) -> bool:
+    """Pin this user's license to `guild_id`.
+
+    Returns True if the assignment was applied, or False if another
+    subscriber already holds `guild_id` (race-safe: refuses to silently
+    displace). On True, invalidates the premium cache for both the
+    user's old guild (if any) and the new guild. On False, no state
+    changes — caches untouched.
+
+    Callers in `donate.py` pre-check the guild's holder before calling
+    and surface a "race occurred" message to the user on False.
     """
     from config import (
         get_premium_assignment_for_user,
         set_premium_assignment,
     )
     prior_guild = get_premium_assignment_for_user(user_id)
-    displaced_user = set_premium_assignment(user_id, guild_id)
+    assigned = set_premium_assignment(user_id, guild_id)
+    if not assigned:
+        return False
     if prior_guild is not None:
         _cache_invalidate_guild(prior_guild)
     _cache_invalidate_guild(guild_id)
     _user_cache_invalidate(user_id)
-    return displaced_user
+    return True
 
 
 def unassign(user_id: int) -> Optional[int]:

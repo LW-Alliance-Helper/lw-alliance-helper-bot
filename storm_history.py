@@ -122,7 +122,7 @@ def load_event_roster(
 
     date_col   = _col("Event Date")
     team_col   = _col("Team")
-    phase_col  = _col("Phase")        # #152 — empty for sub-pool rows
+    phase_col  = _col("Stage")        # #152 — empty for sub-pool rows
     zone_col   = _col("Zone")
     member_col = _col("Member")
     role_col   = _col("Role")
@@ -380,7 +380,7 @@ def render_event_embed(
 
             for phase in sorted(by_phase.keys(), key=_phase_sort_key):
                 phase_label = (
-                    f"Phase {phase}" if phase != "?" else "Phase (unspecified)"
+                    f"Stage {phase}" if phase != "?" else "Stage (unspecified)"
                 )
                 team_lines.append(f"   └ **{phase_label}**")
                 for slot in by_phase[phase]:

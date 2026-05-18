@@ -299,13 +299,13 @@ class TestRenderEventEmbed:
         body = _embed_body(embed)
         # Phase headers appear, and the per-phase members are listed
         # under them.
-        assert "**Phase 1**" in body
-        assert "**Phase 2**" in body
-        assert "**Phase 3**" in body
+        assert "**Stage 1**" in body
+        assert "**Stage 2**" in body
+        assert "**Stage 3**" in body
         # Each phase's member shows up after its phase header.
-        p1 = body.index("**Phase 1**")
-        p2 = body.index("**Phase 2**")
-        p3 = body.index("**Phase 3**")
+        p1 = body.index("**Stage 1**")
+        p2 = body.index("**Stage 2**")
+        p3 = body.index("**Stage 3**")
         assert "Alice" in body[p1:p2]
         assert "Bob"   in body[p2:p3]
         assert "Carol" in body[p3:]
@@ -322,8 +322,8 @@ class TestRenderEventEmbed:
             slots=slots, attendance={},
         )
         body = _embed_body(embed)
-        assert "Phase 1" not in body
-        assert "Phase 2" not in body
+        assert "Stage 1" not in body
+        assert "Stage 2" not in body
 
     def test_power_rendered_via_format_power(self):
         """Raw `"412000000"` should display as `"412M"` for the human

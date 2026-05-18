@@ -281,7 +281,7 @@ class ZoneRow:
             for idx, (cap, prio) in enumerate(zip(phase_caps, phase_prios), start=1):
                 prio_suffix = f" (priority {prio})" if prio else ""
                 phase_lines.append(
-                    f"   └ Phase {idx}: cap {cap}{prio_suffix}"
+                    f"   └ Stage {idx}: cap {cap}{prio_suffix}"
                 )
             return "\n".join([header] + phase_lines)
 
@@ -479,17 +479,17 @@ def seed_default_preset(name: str, event_type: str) -> PresetBuffer:
 
 
 _DS_HEADER = ["Preset Name", "Zone", "Max Players",
-              "Max Phase 1", "Max Phase 2", "Max Phase 3",
+              "Max Stage 1", "Max Stage 2", "Max Stage 3",
               "Min Power A", "Min Power B",
               "Priority",
-              "Priority Phase 1", "Priority Phase 2", "Priority Phase 3",
-              "Phase Count"]
+              "Priority Stage 1", "Priority Stage 2", "Priority Stage 3",
+              "Stage Count"]
 _CS_HEADER = ["Preset Name", "Zone", "Max Players",
-              "Max Phase 1", "Max Phase 2", "Max Phase 3",
+              "Max Stage 1", "Max Stage 2", "Max Stage 3",
               "Min Power",
               "Priority",
-              "Priority Phase 1", "Priority Phase 2", "Priority Phase 3",
-              "Faction", "Phase Count"]
+              "Priority Stage 1", "Priority Stage 2", "Priority Stage 3",
+              "Faction", "Stage Count"]
 
 # Truthy strings the legacy `Use Phases` column might carry. Used only
 # to read pre-3-phase preset data — new writes always use the
@@ -498,10 +498,10 @@ _TRUE_STRINGS = {"true", "yes", "1", "y", "on", "phases"}
 
 
 def _parse_phase_count(row: dict) -> int:
-    """Resolve a row's phase_count from the new Phase Count column,
-    falling back to the legacy Use Phases boolean if Phase Count is
+    """Resolve a row's phase_count from the new Stage Count column,
+    falling back to the legacy Use Phases boolean if Stage Count is
     missing. Unknown / unparseable values clamp to 0 (flat)."""
-    raw = row.get("Phase Count", "")
+    raw = row.get("Stage Count", "")
     if raw not in ("", None):
         try:
             val = int(str(raw).strip())
@@ -609,15 +609,15 @@ def load_preset(guild_id: int, event_type: str, name: str) -> PresetBuffer | Non
             zr = ZoneRow(
                 zone=zone_name,
                 max_players=_safe_int(r.get("Max Players", 0)),
-                max_phase1=_safe_int(r.get("Max Phase 1", 0)),
-                max_phase2=_safe_int(r.get("Max Phase 2", 0)),
-                max_phase3=_safe_int(r.get("Max Phase 3", 0)),
+                max_phase1=_safe_int(r.get("Max Stage 1", 0)),
+                max_phase2=_safe_int(r.get("Max Stage 2", 0)),
+                max_phase3=_safe_int(r.get("Max Stage 3", 0)),
                 min_power_a=min_a,
                 min_power_b=min_b,
                 priority=_safe_int(r.get("Priority", 0)),
-                priority_phase1=_safe_int(r.get("Priority Phase 1", 0)),
-                priority_phase2=_safe_int(r.get("Priority Phase 2", 0)),
-                priority_phase3=_safe_int(r.get("Priority Phase 3", 0)),
+                priority_phase1=_safe_int(r.get("Priority Stage 1", 0)),
+                priority_phase2=_safe_int(r.get("Priority Stage 2", 0)),
+                priority_phase3=_safe_int(r.get("Priority Stage 3", 0)),
             )
             zones.append(zr)
         else:
@@ -625,15 +625,15 @@ def load_preset(guild_id: int, event_type: str, name: str) -> PresetBuffer | Non
             zr = ZoneRow(
                 zone=zone_name,
                 max_players=_safe_int(r.get("Max Players", 0)),
-                max_phase1=_safe_int(r.get("Max Phase 1", 0)),
-                max_phase2=_safe_int(r.get("Max Phase 2", 0)),
-                max_phase3=_safe_int(r.get("Max Phase 3", 0)),
+                max_phase1=_safe_int(r.get("Max Stage 1", 0)),
+                max_phase2=_safe_int(r.get("Max Stage 2", 0)),
+                max_phase3=_safe_int(r.get("Max Stage 3", 0)),
                 min_power_a=min_p,
                 min_power_b=0,
                 priority=_safe_int(r.get("Priority", 0)),
-                priority_phase1=_safe_int(r.get("Priority Phase 1", 0)),
-                priority_phase2=_safe_int(r.get("Priority Phase 2", 0)),
-                priority_phase3=_safe_int(r.get("Priority Phase 3", 0)),
+                priority_phase1=_safe_int(r.get("Priority Stage 1", 0)),
+                priority_phase2=_safe_int(r.get("Priority Stage 2", 0)),
+                priority_phase3=_safe_int(r.get("Priority Stage 3", 0)),
             )
             # Merge-on-load: when two legacy rows translate to the
             # same display name, fold the second into the first by
@@ -720,7 +720,7 @@ def save_preset(guild_id: int, event_type: str, buf: PresetBuffer) -> bool:
         `_safe_int` / `_parse_phase_count` fall through to their
         defaults (0 / 0). Legacy `Use Phases` (truthy → phase_count
         = 2) is honoured here too so an interim 2-phase preset
-        round-trips into the new `Phase Count` column on the next
+        round-trips into the new `Stage Count` column on the next
         save."""
         out: list[str] = []
         legacy_uses_phases = (
@@ -730,7 +730,7 @@ def save_preset(guild_id: int, event_type: str, buf: PresetBuffer) -> bool:
             else False
         )
         for col_name in header:
-            if col_name == "Phase Count" and "Phase Count" not in old_header_idx:
+            if col_name == "Stage Count" and "Stage Count" not in old_header_idx:
                 out.append("2" if legacy_uses_phases else "0")
                 continue
             idx = old_header_idx.get(col_name, -1)
@@ -858,11 +858,11 @@ def _build_editor_embed(buf: PresetBuffer, team_size_hint: int = _TEAM_SIZE_HINT
     if buf.phase_count == 0:
         mode_label = "Flat"
     elif buf.phase_count == 2:
-        mode_label = "2 Phases (P1 + P2)"
+        mode_label = "2 Stages (S1 + S2)"
     elif buf.phase_count == 3:
-        mode_label = "3 Phases (P1 + P2 + P3)"
+        mode_label = "3 Stages (S1 + S2 + S3)"
     else:
-        mode_label = f"{buf.phase_count} Phases"
+        mode_label = f"{buf.phase_count} Stages"
     desc_lines.append(f"🔀 Mode: **{mode_label}**")
     desc_lines.append("")
     if buf.zones:
@@ -1153,7 +1153,7 @@ class _ZonePhaseCapacityAndFloorsModal(discord.ui.Modal):
 
     def __init__(self, view: "_PresetEditorView", zone_name: str):
         phase_count = int(getattr(view.buf, "phase_count", 2) or 2)
-        super().__init__(title=f"{zone_name} — Caps + Min ({phase_count}P)"[:45])
+        super().__init__(title=f"{zone_name} — Caps + Min ({phase_count}S)"[:45])
         self._view = view
         self._zone_name = zone_name
         self._phase_count = phase_count
@@ -1163,23 +1163,23 @@ class _ZonePhaseCapacityAndFloorsModal(discord.ui.Modal):
         )
 
         self.max_phase1_input = discord.ui.TextInput(
-            label="Max Phase 1",
-            placeholder="e.g. 4 (leave 0 to skip Phase 1 at this zone)",
+            label="Max Stage 1",
+            placeholder="e.g. 4 (leave 0 to skip Stage 1 at this zone)",
             default=str(pending["max_phase1"] or ""),
             required=False, max_length=4,
         )
         self.add_item(self.max_phase1_input)
         self.max_phase2_input = discord.ui.TextInput(
-            label="Max Phase 2",
-            placeholder="e.g. 2 (leave 0 to skip Phase 2 at this zone)",
+            label="Max Stage 2",
+            placeholder="e.g. 2 (leave 0 to skip Stage 2 at this zone)",
             default=str(pending["max_phase2"] or ""),
             required=False, max_length=4,
         )
         self.add_item(self.max_phase2_input)
         if phase_count >= 3:
             self.max_phase3_input = discord.ui.TextInput(
-                label="Max Phase 3",
-                placeholder="e.g. 3 (leave 0 to skip Phase 3 at this zone)",
+                label="Max Stage 3",
+                placeholder="e.g. 3 (leave 0 to skip Stage 3 at this zone)",
                 default=str(pending["max_phase3"] or ""),
                 required=False, max_length=4,
             )
@@ -1277,12 +1277,12 @@ class _ZonePhaseCapacityAndFloorsModal(discord.ui.Modal):
         view = _ZoneWizardNextView(
             self._view, self._zone_name,
             next_page="priority",
-            label="Next → Priority Per Phase",
+            label="Next → Priority Per Stage",
         )
         await interaction.response.send_message(
             content=(
                 f"✅ Capacities + minimums recorded for **{self._zone_name}**. "
-                f"Click **Next** to set the per-phase auto-fill priorities."
+                f"Click **Next** to set the per-stage auto-fill priorities."
             ),
             view=view, ephemeral=True,
         )
@@ -1297,21 +1297,21 @@ class _ZonePhasePriorityModal(discord.ui.Modal):
 
     def __init__(self, view: "_PresetEditorView", zone_name: str):
         phase_count = int(getattr(view.buf, "phase_count", 2) or 2)
-        super().__init__(title=f"{zone_name} — Priority ({phase_count}P)"[:45])
+        super().__init__(title=f"{zone_name} — Priority ({phase_count}S)"[:45])
         self._view = view
         self._zone_name = zone_name
         self._phase_count = phase_count
         pending = _stash_pending_edit(view, zone_name)
 
         self.prio_p1_input = discord.ui.TextInput(
-            label="Priority Phase 1 (1 = highest)",
+            label="Priority Stage 1 (1 = highest)",
             placeholder="leave blank for no priority",
             default=str(pending["priority_phase1"] or ""),
             required=False, max_length=3,
         )
         self.add_item(self.prio_p1_input)
         self.prio_p2_input = discord.ui.TextInput(
-            label="Priority Phase 2",
+            label="Priority Stage 2",
             placeholder="leave blank for no priority",
             default=str(pending["priority_phase2"] or ""),
             required=False, max_length=3,
@@ -1319,7 +1319,7 @@ class _ZonePhasePriorityModal(discord.ui.Modal):
         self.add_item(self.prio_p2_input)
         if phase_count >= 3:
             self.prio_p3_input = discord.ui.TextInput(
-                label="Priority Phase 3",
+                label="Priority Stage 3",
                 placeholder="leave blank for no priority",
                 default=str(pending["priority_phase3"] or ""),
                 required=False, max_length=3,
@@ -1368,7 +1368,7 @@ class _ZonePhasePriorityModal(discord.ui.Modal):
         siblings = _sibling_zone_names(self._view.buf.zones, self._zone_name)
         await self._view.refresh(
             interaction,
-            message=f"✏️ Updated **{self._zone_name}** ({self._phase_count}-phase).",
+            message=f"✏️ Updated **{self._zone_name}** ({self._phase_count}-stage).",
         )
         # Apply-to-similar follow-up — same offer as the flat flow.
         if siblings:
@@ -1703,25 +1703,25 @@ class _PresetEditorView(discord.ui.View):
         # phase capacities + assignments aren't touched on a mode flip
         # so an officer can move between modes without losing data.
         phase_mode_select = discord.ui.Select(
-            placeholder="🔀 Phase mode",
+            placeholder="🔀 Stage mode",
             min_values=1, max_values=1,
             options=[
                 discord.SelectOption(
-                    label="Flat (no phases)",
+                    label="Flat (no stages)",
                     value="0",
                     description="Single per-zone slot — Max Players only.",
                     default=self.buf.phase_count == 0,
                 ),
                 discord.SelectOption(
-                    label="2 Phases",
+                    label="2 Stages",
                     value="2",
-                    description="DS-style migration: Phase 1 → Phase 2.",
+                    description="DS-style migration: Stage 1 → Stage 2.",
                     default=self.buf.phase_count == 2,
                 ),
                 discord.SelectOption(
-                    label="3 Phases",
+                    label="3 Stages",
                     value="3",
-                    description="CS-style stages: Phase 1 → 2 → 3.",
+                    description="CS-style: Stage 1 → 2 → 3.",
                     default=self.buf.phase_count == 3,
                 ),
             ],
@@ -1779,7 +1779,7 @@ class _PresetEditorView(discord.ui.View):
                     seeded += 1
             self.buf.phase_count = new_count
             self.buf.dirty = True
-            label = "Flat" if new_count == 0 else f"{new_count}-phase"
+            label = "Flat" if new_count == 0 else f"{new_count}-stage"
             seeded_note = (
                 f" Seeded {seeded} per-zone capacity/priority value(s) "
                 f"from prior values; edit any zone to override."
@@ -1789,7 +1789,7 @@ class _PresetEditorView(discord.ui.View):
             # "flip back any time" (vague) to "re-select the same mode"
             # (concrete) per #174 / Decision #13's polish notes.
             restore_label = (
-                "Flat" if old_count == 0 else f"{old_count}-phase"
+                "Flat" if old_count == 0 else f"{old_count}-stage"
             )
             await self.refresh(
                 inter,

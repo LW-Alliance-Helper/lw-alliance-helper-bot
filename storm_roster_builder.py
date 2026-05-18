@@ -973,7 +973,7 @@ def _render_zone_line(session: RosterBuilderSession, zone_name: str) -> str:
             # Box-drawing prefix ("   └ ") visually nests the phase
             # row under the zone header without relying on Discord's
             # inconsistent leading-space rendering in embed bodies.
-            phase_lines.append(f"   └ Phase {p}: {count}/{cap} — {names}")
+            phase_lines.append(f"   └ Stage {p}: {count}/{cap} — {names}")
         return "\n".join([header] + phase_lines)
 
     # Flat preset — single-line shape unchanged from pre-#172.
@@ -1005,8 +1005,8 @@ def _render_builder_embed(session: RosterBuilderSession) -> discord.Embed:
     # buttons will mutate.
     if session.is_phase_aware:
         lines.append(
-            f"🔀 Editing **Phase {session.selected_phase}** "
-            f"_(use the Phase buttons below to switch)_"
+            f"🔀 Editing **Stage {session.selected_phase}** "
+            f"_(use the Stage buttons below to switch)_"
         )
     lines.append("")
     if session.is_paired:
@@ -1070,7 +1070,7 @@ def _render_builder_embed(session: RosterBuilderSession) -> discord.Embed:
             cap = sum(
                 int(z.max_for_phase(p)) for z in session.preset.zones
             )
-            per_phase.append(f"P{p}: {assigned}/{cap}")
+            per_phase.append(f"S{p}: {assigned}/{cap}")
         lines.append(f"📊 **Filled:** {', '.join(per_phase)}")
     else:
         total_assigned = sum(
@@ -1280,7 +1280,7 @@ class RosterBuilderView(discord.ui.View):
         if s.is_phase_aware:
             for phase in s.iter_phases():
                 btn = discord.ui.Button(
-                    label=f"Phase {phase}"
+                    label=f"Stage {phase}"
                           + (" •" if phase == s.selected_phase else ""),
                     style=(discord.ButtonStyle.primary
                            if phase == s.selected_phase
@@ -1308,7 +1308,7 @@ class RosterBuilderView(discord.ui.View):
                 count = s.zone_member_count(z.zone)
                 cap = s.zone_capacity(z.zone)
                 if s.is_phase_aware:
-                    return f"P{s.selected_phase}: {z.zone} ({count}/{cap})"[:100]
+                    return f"S{s.selected_phase}: {z.zone} ({count}/{cap})"[:100]
                 return f"{z.zone} ({count}/{cap})"[:100]
             zone_options = [
                 discord.SelectOption(
@@ -1995,7 +1995,7 @@ class _PairSubsView(discord.ui.View):
         primary_count = len(self._phase_assignments_flat())
         sub_pool = len(s.subs)
         header = (
-            f"🔁 **Pair subs** — Phase {s.selected_phase}\n"
+            f"🔁 **Pair subs** — Stage {s.selected_phase}\n"
             f"You have **{sub_pool} sub{'s' if sub_pool != 1 else ''}** "
             f"and **{primary_count} primar{'ies' if primary_count != 1 else 'y'}** — "
             f"not every primary will get a sub."
@@ -2889,7 +2889,7 @@ def _build_mail_body(session: RosterBuilderSession) -> str:
     blocks: list[str] = []
     for phase in session.iter_phases():
         body = _build_mail_for_phase(session, phase=phase)
-        blocks.append(f"**Phase {phase}**\n\n{body}")
+        blocks.append(f"**Stage {phase}**\n\n{body}")
     return "\n\n".join(blocks)
 
 
@@ -3088,7 +3088,7 @@ async def _finalize_structured_roster(
 
 
 _ROSTERS_HEADER = [
-    "Event Date", "Team", "Phase", "Zone", "Member", "Role",
+    "Event Date", "Team", "Stage", "Zone", "Member", "Role",
     "Power at Assignment", "Discord ID", "Override Below Minimum",
     "Paired With", "Posted At (UTC)",
 ]
@@ -3171,7 +3171,7 @@ def _write_rosters_tab(session: RosterBuilderSession) -> list[str]:
         # corrupting every downstream read.
         needs_header_migration = existing and (
             "Paired With" not in existing
-            or "Phase" not in existing
+            or "Stage" not in existing
             or "Override Below Minimum" not in existing
         )
         if needs_header_migration:
@@ -3184,7 +3184,7 @@ def _write_rosters_tab(session: RosterBuilderSession) -> list[str]:
                 for row in (all_values[1:] if all_values else []):
                     new_row: list[str] = []
                     for col_name in _ROSTERS_HEADER:
-                        if col_name == "Phase" and "Phase" not in old_idx:
+                        if col_name == "Stage" and "Stage" not in old_idx:
                             # Old rows pre-date phase support — they
                             # represent a flat (single-phase) roster.
                             # Write "1" so loaders can join on phase

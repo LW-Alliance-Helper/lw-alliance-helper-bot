@@ -1869,16 +1869,16 @@ class TestRostersTabHeaderMigration:
 
         new_header = old_rosters._rows[0]
         assert "Paired With" in new_header
-        assert "Phase" in new_header
+        assert "Stage" in new_header
         # Migrated header matches the canonical shape.
         assert new_header == srb._ROSTERS_HEADER
         # Prior data row preserved AND re-aligned to the new column
-        # order. `Member` is at index 4 in the new shape (after Phase
+        # order. `Member` is at index 4 in the new shape (after Stage
         # was inserted at idx 2); without the row shift the migration
         # would silently corrupt every column-name read.
         member_idx = srb._ROSTERS_HEADER.index("Member")
         zone_idx = srb._ROSTERS_HEADER.index("Zone")
-        phase_idx = srb._ROSTERS_HEADER.index("Phase")
+        phase_idx = srb._ROSTERS_HEADER.index("Stage")
         prior_row = old_rosters._rows[1]
         assert prior_row[member_idx] == "Old"
         assert prior_row[zone_idx] == "Power Tower"
@@ -2257,8 +2257,8 @@ class TestMailBodyPhaseAware:
         })
         s.assignments["Power Tower"].append("1")
         body = srb._build_mail_body(s)
-        assert "Phase 1" not in body
-        assert "Phase 2" not in body
+        assert "Stage 1" not in body
+        assert "Stage 2" not in body
         assert "Alice" in body
 
     def test_phase_aware_mail_emits_phase_headers(self):
@@ -2266,11 +2266,11 @@ class TestMailBodyPhaseAware:
         s.assignments["Info Center"].append("1")          # Alice in P1
         s.assignments_p2["Arsenal"].append("2")           # Bob in P2
         body = srb._build_mail_body(s)
-        assert "**Phase 1**" in body
-        assert "**Phase 2**" in body
+        assert "**Stage 1**" in body
+        assert "**Stage 2**" in body
         # Both members appear, each under its phase block.
-        p1_start = body.index("**Phase 1**")
-        p2_start = body.index("**Phase 2**")
+        p1_start = body.index("**Stage 1**")
+        p2_start = body.index("**Stage 2**")
         assert "Alice" in body[p1_start:p2_start]
         assert "Bob"   in body[p2_start:]
 
@@ -2282,8 +2282,8 @@ class TestMailBodyPhaseAware:
         body = srb._build_mail_body(s)
         # Phase 1 block carries the subs line (Cyrus); phase 2 doesn't
         # double-print them.
-        p1_start = body.index("**Phase 1**")
-        p2_start = body.index("**Phase 2**")
+        p1_start = body.index("**Stage 1**")
+        p2_start = body.index("**Stage 2**")
         p1_block = body[p1_start:p2_start]
         p2_block = body[p2_start:]
         assert "Cyrus" in p1_block
@@ -2422,8 +2422,8 @@ class TestPhaseAwareEmbedRendering:
         s.assignments["Info Center"].append("1")          # Alice in P1
         s.assignments_p2["Arsenal"].append("2")           # Bob in P2
         line = srb._render_zone_line(s, "Info Center")
-        assert "Phase 1:" in line
-        assert "Phase 2:" in line
+        assert "Stage 1:" in line
+        assert "Stage 2:" in line
         # Header row is bold and contains no inline parens.
         assert "**Info Center**" in line
         # Old inline P1/P2 syntax must be gone.
@@ -2439,7 +2439,7 @@ class TestPhaseAwareEmbedRendering:
         line = srb._render_zone_line(s, "Power Tower")
         # Flat presets stay one-line — no \n inside the zone line.
         assert "\n" not in line
-        assert "Phase 1:" not in line
+        assert "Stage 1:" not in line
         assert "**Power Tower**" in line
 
     def test_filled_line_breaks_out_per_phase_when_phase_aware(self):
@@ -2447,8 +2447,8 @@ class TestPhaseAwareEmbedRendering:
         embed = srb._render_builder_embed(s)
         # Per-phase breakdown is in the Filled line.
         assert "Filled:" in embed.description
-        assert "P1:" in embed.description
-        assert "P2:" in embed.description
+        assert "S1:" in embed.description
+        assert "S2:" in embed.description
 
     def test_filled_line_uses_single_total_when_flat(self):
         s = _make_session(team="A", members={
@@ -2459,7 +2459,7 @@ class TestPhaseAwareEmbedRendering:
         embed = srb._render_builder_embed(s)
         assert "Filled:" in embed.description
         # Flat presets keep the X / Y total shape (no per-phase break-out).
-        assert "P1:" not in embed.description
+        assert "S1:" not in embed.description
 
 
 class TestRostersTabPhaseColumn:
@@ -2468,13 +2468,13 @@ class TestRostersTabPhaseColumn:
     "1" for traceability; sub-pool rows write empty (event-level)."""
 
     def test_header_includes_phase_column(self):
-        assert "Phase" in srb._ROSTERS_HEADER
-        # Phase sits between Team and Zone so the columns read in the
+        assert "Stage" in srb._ROSTERS_HEADER
+        # Stage sits between Team and Zone so the columns read in the
         # natural left-to-right order an officer scans.
-        assert (srb._ROSTERS_HEADER.index("Phase")
+        assert (srb._ROSTERS_HEADER.index("Stage")
                 == srb._ROSTERS_HEADER.index("Team") + 1)
         assert (srb._ROSTERS_HEADER.index("Zone")
-                == srb._ROSTERS_HEADER.index("Phase") + 1)
+                == srb._ROSTERS_HEADER.index("Stage") + 1)
 
     def test_flat_preset_writes_phase_one(self, fake_env):
         fake, gid = fake_env
@@ -2488,7 +2488,7 @@ class TestRostersTabPhaseColumn:
         srb._write_rosters_tab(session)
         ws = fake.worksheet("DS Rosters")
         rows = ws.get_all_values()
-        phase_col = srb._ROSTERS_HEADER.index("Phase")
+        phase_col = srb._ROSTERS_HEADER.index("Stage")
         member_col = srb._ROSTERS_HEADER.index("Member")
         alice_row = next(r for r in rows[1:] if r[member_col] == "Alice")
         assert alice_row[phase_col] == "1"
@@ -2521,7 +2521,7 @@ class TestRostersTabPhaseColumn:
         srb._write_rosters_tab(session)
         ws = fake.worksheet("DS Rosters")
         rows = ws.get_all_values()
-        phase_col = srb._ROSTERS_HEADER.index("Phase")
+        phase_col = srb._ROSTERS_HEADER.index("Stage")
         member_col = srb._ROSTERS_HEADER.index("Member")
         alice_row = next(r for r in rows[1:] if r[member_col] == "Alice")
         bob_row = next(r for r in rows[1:] if r[member_col] == "Bob")
@@ -2540,7 +2540,7 @@ class TestRostersTabPhaseColumn:
         srb._write_rosters_tab(session)
         ws = fake.worksheet("DS Rosters")
         rows = ws.get_all_values()
-        phase_col = srb._ROSTERS_HEADER.index("Phase")
+        phase_col = srb._ROSTERS_HEADER.index("Stage")
         member_col = srb._ROSTERS_HEADER.index("Member")
         carol_row = next(r for r in rows[1:] if r[member_col] == "Carol")
         # Sub-pool entries are event-level, not phase-scoped.

@@ -277,7 +277,10 @@ async def _lookup_user_subscription(
                   f"bot instance (user={user_id}); falling back to free "
                   f"tier. Callers in background loops must pass bot=...")
             _warned_no_bot = True
-        return False
+        # Return None (transient), not False. is_premium must NOT cache
+        # this answer: a per-guild False cached here would lock the
+        # subscriber out of every premium check for the 5-minute TTL.
+        return None
 
     try:
         async for ent in bot.entitlements(
@@ -311,15 +314,24 @@ async def is_premium(
       5. Verify the assigned user's Discord subscription is still active.
          Result cached.
 
-    `interaction` is accepted for backwards compatibility but no longer
-    used as a cheap path: with a User Subscription SKU, the interaction
-    user may not be the assigned subscriber (a different user could be
-    keeping this guild premium).
+    `interaction` is no longer consulted for entitlements (under a User
+    Subscription SKU, the interaction user may not be the assigned
+    subscriber) but its `.client` is used as a fallback when `bot=` is
+    omitted, so call sites that only have an interaction still get a
+    valid entitlement check instead of degrading to free tier.
     """
     if _force_premium_enabled():
         return True
     if guild_id in _bypass_guild_ids():
         return True
+
+    # Many slash-command call sites pass interaction= but not bot= (the
+    # bot kwarg used to be optional and is only consulted now). Without
+    # a bot instance the entitlement lookup can't run; pull bot off the
+    # interaction so those call sites resolve correctly instead of
+    # silently degrading to free tier.
+    if bot is None and interaction is not None:
+        bot = interaction.client
 
     cached = _cache_get(guild_id)
     if cached is not None:

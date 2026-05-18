@@ -9,6 +9,13 @@ Each entry is a slim summary — heavier context (root cause, what we
 tried, design rationale) lives in the corresponding commit message
 and PR description.
 
+## [1.3.3] — 2026-05-18
+
+### Fixed
+- Premium subscribers are no longer falsely locked out of `/sync_members` (and every other premium check) for 5 minutes after any setup-wizard or background call ran.
+
+Hotfix released direct to main per CLAUDE.md's hotfix exception.
+
 ## [1.3.2] — 2026-05-18
 
 ### Fixed

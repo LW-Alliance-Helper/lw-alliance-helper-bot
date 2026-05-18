@@ -323,6 +323,64 @@ class TestPremiumCaching:
         finally:
             _premium.clear_cache()
 
+    @pytest.mark.asyncio
+    async def test_bot_none_does_not_poison_per_guild_cache(self, monkeypatch):
+        """Regression: a caller that doesn't pass `bot=` must not cache
+        False at the per-guild level. If it did, every subsequent caller
+        (including the one that DOES pass bot correctly) would hit that
+        False for the full 5-minute TTL and lock the subscriber out.
+        """
+        monkeypatch.setenv("PREMIUM_SKU_ID", "12345")
+        import premium as _premium
+        importlib.reload(_premium)
+        try:
+            _premium.assign(555000111, TEST_GUILD_ID)
+
+            # First call: no bot, simulating a setup_cog or background loop.
+            # Returns False (we can't verify the subscription) but must
+            # NOT cache that False.
+            assert await _premium.is_premium(TEST_GUILD_ID) is False
+
+            # Second call: with bot, simulating /sync_members. The cache
+            # must have been left alone so this call hits the real lookup
+            # and returns True.
+            async def fake_iter(**kw):
+                yield _make_entitlement(sku_id=12345)
+
+            bot = MagicMock()
+            bot.entitlements = MagicMock(side_effect=lambda **kw: fake_iter(**kw))
+
+            assert await _premium.is_premium(TEST_GUILD_ID, bot=bot) is True
+        finally:
+            _premium.clear_cache()
+
+    @pytest.mark.asyncio
+    async def test_interaction_client_supplies_bot_when_kwarg_omitted(self, monkeypatch):
+        """is_premium pulls bot off interaction.client when bot= isn't
+        passed, so the 11 setup_cog call sites that pass only interaction=
+        still get a real entitlement check.
+        """
+        monkeypatch.setenv("PREMIUM_SKU_ID", "12345")
+        import premium as _premium
+        importlib.reload(_premium)
+        try:
+            _premium.assign(555000111, TEST_GUILD_ID)
+
+            async def fake_iter(**kw):
+                yield _make_entitlement(sku_id=12345)
+
+            bot = MagicMock()
+            bot.entitlements = MagicMock(side_effect=lambda **kw: fake_iter(**kw))
+
+            interaction = MagicMock()
+            interaction.client = bot
+
+            # Caller passes only interaction, not bot. Should still resolve
+            # to True because is_premium falls back to interaction.client.
+            assert await _premium.is_premium(TEST_GUILD_ID, interaction=interaction) is True
+        finally:
+            _premium.clear_cache()
+
 
 # ── get_limit ─────────────────────────────────────────────────────────────────
 

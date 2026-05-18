@@ -36,6 +36,7 @@ Public API:
   - `get_limit(feature, guild_id, ...)`                → int | None  (None = unlimited)
   - `is_premium_feature(name)`                         → bool        (declarative whitelist)
   - `feature_gate(name, guild_id, ...)`                → bool        (KeyError on unknown name)
+  - `silent_fallback_counts()`                         → dict[str,int] (diagnostic)
   - `limit_reached_embed(...)`, `premium_locked_embed(...)`, `upgrade_view(...)`
 """
 
@@ -57,13 +58,44 @@ PREMIUM_SKU_ID: Optional[int] = (
     else None
 )
 
-# Once-per-process flags so the silent-fallback warning doesn't spam every
-# minute (premium check fires on most slash commands and inside background
-# loops). Reset on process restart, which is the right cadence to detect a
-# regression introduced by a deploy.
-_warned_no_sku = False
-_warned_no_bot = False
-_warned_no_assignment_table = False
+# Silent-fallback observability. Each fallback path (no SKU, no bot, no
+# assignment table) logs once per process to keep stdout quiet, then
+# increments a counter on every subsequent hit. Counters are
+# process-local and reset on Railway restart, which is also when the
+# once-per-process log re-emits — keeping the two on the same cadence.
+# Read snapshots via `silent_fallback_counts()` for diagnostic queries,
+# e.g. an admin command tailing how often these paths fire.
+_silent_fallback_counts: dict[str, int] = {
+    "no_sku":              0,
+    "no_bot":              0,
+    "no_assignment_table": 0,
+}
+
+
+def _track_silent_fallback(reason: str, detail: str) -> None:
+    """Increment the counter for `reason`. Emit `detail` to stdout on
+    the FIRST hit per process; later hits stay silent so background
+    loops don't fill the log."""
+    prev = _silent_fallback_counts.get(reason, 0)
+    _silent_fallback_counts[reason] = prev + 1
+    if prev == 0:
+        print(f"[PREMIUM] silent fallback ({reason}): {detail}")
+
+
+def silent_fallback_counts() -> dict[str, int]:
+    """Snapshot of how many times each silent-fallback path fired this
+    process. Useful for diagnostic / admin commands that need to spot
+    a regression (e.g. a refactor that drops bot= on an is_premium
+    call site) before a paying subscriber files a ticket."""
+    return dict(_silent_fallback_counts)
+
+
+def _reset_silent_fallback_counts() -> None:
+    """Test-only: reset the counters between cases. Production code
+    has no reason to call this — counters live for the bot's process
+    lifetime."""
+    for k in _silent_fallback_counts:
+        _silent_fallback_counts[k] = 0
 
 # Per-feature limits. None means unlimited.
 LIMITS: dict[str, dict[str, Optional[int]]] = {
@@ -282,12 +314,12 @@ async def _lookup_user_subscription(
         return cached
 
     if PREMIUM_SKU_ID is None:
-        global _warned_no_sku
-        if not _warned_no_sku:
-            print("[PREMIUM] PREMIUM_SKU_ID env var is not set — every guild "
-                  "will resolve to free tier. Subscriptions cannot be detected "
-                  "until this is configured.")
-            _warned_no_sku = True
+        _track_silent_fallback(
+            "no_sku",
+            "PREMIUM_SKU_ID env var is not set — every guild will resolve to "
+            "free tier. Subscriptions cannot be detected until this is "
+            "configured.",
+        )
         # Return None (transient), not False, matching the bot=None branch
         # below. PREMIUM_SKU_ID is module-level so in practice it won't
         # change at runtime, but treating "we can't check" as transient
@@ -295,12 +327,12 @@ async def _lookup_user_subscription(
         # hot-reload ever flips that assumption.
         return None
     if bot is None:
-        global _warned_no_bot
-        if not _warned_no_bot:
-            print(f"[PREMIUM] user_has_active_subscription called without a "
-                  f"bot instance (user={user_id}); falling back to free "
-                  f"tier. Callers in background loops must pass bot=...")
-            _warned_no_bot = True
+        _track_silent_fallback(
+            "no_bot",
+            f"user_has_active_subscription called without a bot instance "
+            f"(user={user_id}); falling back to free tier. Callers in "
+            f"background loops must pass bot=...",
+        )
         # Return None (transient), not False. is_premium must NOT cache
         # this answer: a per-guild False cached here would lock the
         # subscriber out of every premium check for the 5-minute TTL.
@@ -367,14 +399,13 @@ async def is_premium(
     except Exception as exc:
         # Defensive: if init_db hasn't run yet (or the schema is older
         # than this code, or the file is locked), treat the lookup as
-        # "no assignment" rather than crashing the caller. Logged once
-        # per process via the warn flag below.
-        global _warned_no_assignment_table
-        if not _warned_no_assignment_table:
-            print(f"[PREMIUM] Failed to read premium_assignments "
-                  f"(guild={guild_id}): {exc}. Falling back to free tier "
-                  f"for now; this should self-heal once the table exists.")
-            _warned_no_assignment_table = True
+        # "no assignment" rather than crashing the caller.
+        _track_silent_fallback(
+            "no_assignment_table",
+            f"Failed to read premium_assignments (guild={guild_id}): {exc}. "
+            f"Falling back to free tier; this should self-heal once the "
+            f"table exists.",
+        )
         return False
     if assigned_user is None:
         _cache_set(guild_id, False)

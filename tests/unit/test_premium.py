@@ -386,6 +386,64 @@ class TestPremiumCaching:
             _premium.clear_cache()
 
 
+# ── Silent-fallback counters ──────────────────────────────────────────────────
+
+class TestSilentFallbackCounts:
+    """Each silent-fallback path (no SKU, no bot, no assignment table)
+    logs once per process and increments a counter on every subsequent
+    hit. The counters are the observability surface that catches
+    regressions where a refactor drops bot= on a premium call site.
+    """
+
+    @pytest.mark.asyncio
+    async def test_no_bot_increments_counter_silently_after_first_log(
+        self, monkeypatch, capsys,
+    ):
+        """The first hit prints a [PREMIUM] line; subsequent hits
+        increment the counter silently."""
+        # SKU set so the no_bot branch is the one we actually hit.
+        monkeypatch.setenv("PREMIUM_SKU_ID", "12345")
+        import premium as _premium
+        importlib.reload(_premium)
+        try:
+            _premium.assign(555000111, TEST_GUILD_ID)
+            # First call: warning fires, counter goes 0 -> 1.
+            await _premium.is_premium(TEST_GUILD_ID, bot=None)
+            first_out = capsys.readouterr().out
+            assert "silent fallback (no_bot)" in first_out
+            assert _premium.silent_fallback_counts()["no_bot"] == 1
+
+            # Second + third calls: no new output, counter keeps climbing.
+            await _premium.is_premium(TEST_GUILD_ID, bot=None)
+            await _premium.is_premium(TEST_GUILD_ID, bot=None)
+            later_out = capsys.readouterr().out
+            assert "silent fallback (no_bot)" not in later_out
+            assert _premium.silent_fallback_counts()["no_bot"] == 3
+        finally:
+            _premium.clear_cache()
+
+    @pytest.mark.asyncio
+    async def test_no_sku_path_tracks_separately(self, fresh_premium):
+        """Each fallback reason has its own counter so the diagnostic
+        can distinguish "we forgot to plumb bot=" from "Discord SKU
+        was never configured."
+        """
+        fresh_premium.assign(555000111, TEST_GUILD_ID)
+        await fresh_premium.is_premium(TEST_GUILD_ID, bot=MagicMock())
+        counts = fresh_premium.silent_fallback_counts()
+        # SKU was never set, so the no_sku path ran. bot was provided
+        # but the no_bot path wasn't hit.
+        assert counts["no_sku"] >= 1
+        assert counts["no_bot"] == 0
+
+    def test_snapshot_is_a_copy_not_live_view(self, fresh_premium):
+        """`silent_fallback_counts()` must hand back a copy — a caller
+        mutating the dict shouldn't poison the internal counters."""
+        snapshot = fresh_premium.silent_fallback_counts()
+        snapshot["no_bot"] = 9999
+        assert fresh_premium.silent_fallback_counts()["no_bot"] == 0
+
+
 # ── _entitlement_matches (ends_at defense-in-depth) ───────────────────────────
 
 class TestEntitlementEndsAt:

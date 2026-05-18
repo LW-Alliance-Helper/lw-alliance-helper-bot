@@ -9,6 +9,15 @@ Each entry is a slim summary — heavier context (root cause, what we
 tried, design rationale) lives in the corresponding commit message
 and PR description.
 
+## [1.4.0] — 2026-05-18
+
+### Fixed
+- Other premium-cache-poisoning paths (missing SKU, unreadable assignment table) no longer lock subscribers out.
+- Premium template-picker in `/train` blurb wizard reliably appears for subscribers.
+
+### Changed
+- `/premium_assign` refuses to silently displace a prior subscriber when two claims land on the same server at once; the loser sees an explicit message.
+
 ## [1.3.3] — 2026-05-18
 
 ### Fixed

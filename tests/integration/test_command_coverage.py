@@ -52,7 +52,9 @@ EXPECTED_COG_COMMANDS = {
         "setup_events", "setup_survey", "setup_shiny_tasks",
     },
     "SurveyCog": {
-        "survey_post", "survey", "survey_remind",
+        # Top-level: just /survey group. Subcommands (overview / post
+        # / remind) are introspected separately.
+        "survey",
     },
     "TrainCog": {
         # Top-level: /train group + the standalone /birthdays
@@ -180,6 +182,22 @@ class TestCogRegistration:
         cog = _make_cog(SurveyCog)
         try:
             assert _commands_on(cog) == EXPECTED_COG_COMMANDS["SurveyCog"]
+        finally:
+            try:
+                cog.check_scheduled_reminders.cancel()
+            except Exception:
+                pass
+
+    @pytest.mark.asyncio
+    async def test_survey_cog_survey_group_has_expected_subcommands(self, seeded_db):
+        """/survey is a top-level Group containing overview / post /
+        remind."""
+        from survey import SurveyCog
+        cog = _make_cog(SurveyCog)
+        try:
+            assert _subcommands_on(cog.survey_group) == {
+                "overview", "post", "remind",
+            }
         finally:
             try:
                 cog.check_scheduled_reminders.cancel()
@@ -512,19 +530,21 @@ class TestStormCommandsGate:
 # ── Survey commands ───────────────────────────────────────────────────────────
 
 class TestSurveyCommandsGate:
+    """Post-#199: survey commands live under the /survey group as
+    `survey_overview`, `survey_post`, and `survey_remind` on the cog."""
 
     @pytest.mark.asyncio
-    @pytest.mark.parametrize("command_name", [
-        "survey_post", "survey", "survey_remind",
+    @pytest.mark.parametrize("command_attr", [
+        "survey_post", "survey_overview", "survey_remind",
     ])
-    async def test_rejects_caller_without_leadership_role(self, seeded_db, command_name):
+    async def test_rejects_caller_without_leadership_role(self, seeded_db, command_attr):
         from survey import SurveyCog
         cog = _make_cog(SurveyCog)
         try:
             interaction = make_mock_interaction()
             interaction.user.roles = []   # no leadership role
 
-            cmd = getattr(cog, command_name)
+            cmd = getattr(cog, command_attr)
             await cmd.callback(cog, interaction)
 
             content, _ = _last_message(interaction)

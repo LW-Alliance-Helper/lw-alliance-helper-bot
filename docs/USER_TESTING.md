@@ -153,9 +153,9 @@ The squad-powers survey: members click a button and submit their stats in a priv
 
 #### As a leadership member
 
-- [ ] Run `/survey`. On the free tier this shows the question list; on Premium it shows a manage view with Add / Edit / Remove buttons.
-- [ ] Run `/survey_post` to post the answer button.
-- [ ] Run `/survey_remind`. Test both **Send now** and **Manage scheduled reminders**.
+- [ ] Run `/survey overview`. On the free tier this shows the question list; on Premium it shows a manage view with Add / Edit / Remove buttons.
+- [ ] Run `/survey post` to post the answer button.
+- [ ] Run `/survey remind`. Test both **Send now** and **Manage scheduled reminders**.
   - For Send Now, note whether the destination (channel post vs. DM) is clearly indicated.
   - For Manage Scheduled, note whether the frequency / day / time prompts are clear.
 
@@ -189,7 +189,7 @@ Once setup is confirmed, the relevant tasks are:
 - [ ] Run `/setup_members` to walk the roster-sync wizard. The final embed reports how many members were written on the initial sync.
 - [ ] Run `/sync_members` and verify the reported member count **matches the actual size of the test server** (excluding bots). If the count is `0` or wildly low, please flag it — it usually means the bot is missing a server-level permission.
 - [ ] Run `/desertstorm remind` and `/canyonstorm remind` to fire DM reminders. Review the DM body for tone and clarity. **The body is alliance-customisable** — if you re-run `/setup_desertstorm` and change the **Step 7 of 7 — Reminder DM** body, the next `/desertstorm remind` should pick up the new text. Try `{name}` as a placeholder to confirm member-name substitution works.
-- [ ] In `/survey_remind`, set up a **scheduled** reminder (DM-via-roster delivery) for a time within the next several minutes. Wait for it to fire. Review the DM body.
+- [ ] In `/survey remind`, set up a **scheduled** reminder (DM-via-roster delivery) for a time within the next several minutes. Wait for it to fire. Review the DM body.
 - [ ] **Channel/thread destinations.** When a Premium guild's wizard asks for a channel (e.g. an announcement channel), there should be a **📢 Channel** / **🧵 Thread** chooser before the actual picker. Try both paths — pick a thread, run the wizard to completion, and verify the bot posts to the chosen thread.
 
 Run `/upgrade` to see the upgrade flow as a non-premium tester would. The free → premium upsell shows up automatically when a free-tier guild attempts a Premium-only command; please flag any upsell whose wording feels confusing or misleading.

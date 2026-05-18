@@ -162,12 +162,12 @@ HELP_CATEGORIES: dict[str, dict] = {
         "commands": [
             ("/setup_survey",
              "Configure questions, channels, sheet tabs, and the intro."),
-            ("/survey",
+            ("/survey overview",
              "View configured surveys. 💎 Premium gets Add / Edit / Remove "
              "for managing multiple."),
-            ("/survey_post",
+            ("/survey post",
              "Post or repost the answer button."),
-            ("/survey_remind",
+            ("/survey remind",
              "Send now or schedule. Free: channel post. 💎 Premium: also DM "
              "via roster."),
         ],
@@ -245,11 +245,11 @@ HELP_CATEGORIES: dict[str, dict] = {
             ("/members sync",
              "Manually re-sync the roster now."),
             ("Multiple named surveys",
-             "Manage from `/survey` directly via Add / Edit / Remove."),
+             "Manage from `/survey overview` directly via Add / Edit / Remove."),
             ("DM-mode reminders",
-             "`/survey_remind`, `/desertstorm remind`, `/canyonstorm remind` "
-             "all gain DM-via-roster delivery; survey reminders can also "
-             "schedule recurring DMs."),
+             "`/survey remind`, `/desertstorm` reminder button, `/canyonstorm` "
+             "reminder button all gain DM-via-roster delivery; survey reminders "
+             "can also schedule recurring DMs."),
             ("✨ More",
              "Personal birthday DMs, train-assignment DMs, auto-mention "
              "members in train reminders, threads as destinations, "

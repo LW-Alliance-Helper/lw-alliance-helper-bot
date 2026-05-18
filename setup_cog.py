@@ -4564,7 +4564,7 @@ async def run_survey_setup(interaction: discord.Interaction, bot,
     embed.add_field(name="History Tab",         value=tab_history,                       inline=True)
     embed.add_field(name="Questions",           value=q_summary[:1024],                  inline=False)
     embed.set_footer(
-        text=f"Run {next_step_cmd} again to update. Run /survey_post to post the survey button."
+        text=f"Run {next_step_cmd} again to update. Run /survey post to post the survey button."
     )
     await channel.send(embed=embed)
     wizard_registry.unregister(user.id, cancel_event)

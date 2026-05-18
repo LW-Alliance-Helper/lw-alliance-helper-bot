@@ -783,6 +783,24 @@ def describe_sheet_error(e: Exception, *,
     return f"{type(e).__name__}: {e}{suffix}"
 
 
+def normalize_spreadsheet_id(value: str) -> str:
+    """Pull a Google Sheets spreadsheet ID out of whatever the user pasted.
+
+    Discord's `/setup` Step 5 prompts for the ID, but users routinely paste
+    the full sheet URL (`https://docs.google.com/spreadsheets/d/{ID}/edit?...`)
+    instead. The stored URL then gets fed to `gc.open_by_key(...)` which
+    requests `/v4/spreadsheets/https://docs.google.com/...` and Google 404s
+    on the resulting nonsense, with no signal back that the input was wrong.
+
+    Strips whitespace, extracts the ID segment from a `/spreadsheets/d/{ID}`
+    URL if one is present, and otherwise returns the value as-is.
+    """
+    import re
+    cleaned = (value or "").strip()
+    m = re.search(r"/spreadsheets/d/([a-zA-Z0-9_-]+)", cleaned)
+    return m.group(1) if m else cleaned
+
+
 def is_setup_complete(guild_id: int) -> bool:
     """Check if a guild has completed setup."""
     cfg = get_config(guild_id)

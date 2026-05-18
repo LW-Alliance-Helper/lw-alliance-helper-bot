@@ -9,6 +9,14 @@ Each entry is a slim summary — heavier context (root cause, what we
 tried, design rationale) lives in the corresponding commit message
 and PR description.
 
+## [1.3.2] — 2026-05-18
+
+### Fixed
+- `/sync_members` failure messages now name the actual cause instead of an opaque `<Response [404]>` ([#215](https://github.com/LW-Alliance-Helper/lw-alliance-helper-bot/issues/215)).
+- `/setup` Step 5 extracts the sheet ID from a pasted Google Sheets URL so the saved value no longer 404s every sheet operation ([#215](https://github.com/LW-Alliance-Helper/lw-alliance-helper-bot/issues/215)).
+
+Hotfix released direct to main per CLAUDE.md's hotfix exception.
+
 ## [1.3.1] — 2026-05-18
 
 ### Fixed

@@ -25,9 +25,8 @@ OVERVIEW_DESCRIPTION = (
 )
 
 ALWAYS_HANDY = (
-    "`/setup` — Roles, leadership channel, timezone, Google Sheet\n"
-    "`/view_configuration` — View all configured settings\n"
-    "`/setup_reset` — Clear configuration and start over\n"
+    "`/setup` — Setup hub: foundations + every feature wizard, plus "
+    "buttons to view full configuration or reset everything\n"
     "`/cancel` — Cancel any active wizard\n"
     "`/help` — Show this menu\n"
     "`/donate` — 💖 Tip-jar links\n"
@@ -50,7 +49,7 @@ HELP_CATEGORIES: dict[str, dict] = {
             "Drafts post to leadership for review, then to your public channel."
         ),
         "commands": [
-            ("/setup_events",
+            ("/setup → 📣 Events",
              "Configure events, leadership and public channels, daily draft "
              "time, and the 5-min warning."),
             ("/events overview",
@@ -70,7 +69,7 @@ HELP_CATEGORIES: dict[str, dict] = {
             "generate a personalised ChatGPT blurb prompt."
         ),
         "commands": [
-            ("/setup_train",
+            ("/setup → 🚂 Train",
              "Configure the train tab, blurb generation, and reminders."),
             ("/train overview",
              "View the schedule with Add / Update / Generate Prompt / Clear "
@@ -89,7 +88,7 @@ HELP_CATEGORIES: dict[str, dict] = {
             "announcements and auto-assign the train."
         ),
         "commands": [
-            ("/setup_birthdays",
+            ("/setup → 🎂 Birthdays",
              "Configure birthday tracking, train integration, and "
              "announcement template."),
             ("/birthdays",
@@ -107,7 +106,7 @@ HELP_CATEGORIES: dict[str, dict] = {
             "see every action in one place."
         ),
         "commands": [
-            ("/setup_desertstorm",
+            ("/setup → ⚔️ Desert Storm",
              "Configure Team rosters, log channel, public post channel, "
              "mail template, and (💎 Premium) the structured-flow sign-up "
              "channel, schedule, and Sheet tabs."),
@@ -135,7 +134,7 @@ HELP_CATEGORIES: dict[str, dict] = {
             "every action in one place."
         ),
         "commands": [
-            ("/setup_canyonstorm",
+            ("/setup → 🏜️ Canyon Storm",
              "Configure Team rosters, log channel, public post channel, "
              "mail template, and (💎 Premium) the structured-flow sign-up "
              "channel, schedule, and Sheet tabs."),
@@ -160,7 +159,7 @@ HELP_CATEGORIES: dict[str, dict] = {
             "land in your sheet; leadership gets a notification per submission."
         ),
         "commands": [
-            ("/setup_survey",
+            ("/setup → 📋 Survey",
              "Configure questions, channels, sheet tabs, and the intro."),
             ("/survey overview",
              "View configured surveys. 💎 Premium gets Add / Edit / Remove "
@@ -182,9 +181,9 @@ HELP_CATEGORIES: dict[str, dict] = {
             "who's stalled."
         ),
         "commands": [
-            ("/setup_growth",
+            ("/setup → 📈 Growth",
              "Configure source tab, metrics, and snapshot schedule."),
-            ("/setup_growth_breakdown",
+            ("/setup → 📊 Growth Breakdown",
              "💎 Configure the breakdown auto-post, bucket thresholds, "
              "and bucket labels."),
             ("/growth overview",
@@ -203,7 +202,7 @@ HELP_CATEGORIES: dict[str, dict] = {
             "that have shiny tasks today."
         ),
         "commands": [
-            ("/setup_shiny_tasks",
+            ("/setup → 🌟 Shiny Tasks",
              "Configure the announcement channel, server range, post "
              "time, and message body."),
         ],
@@ -240,7 +239,7 @@ HELP_CATEGORIES: dict[str, dict] = {
             "Unlock with `/upgrade`."
         ),
         "commands": [
-            ("/setup_members",
+            ("/setup → 👥 Members",
              "Configure Member Roster Sync — writes Discord IDs to your "
              "sheet so other features find members by name."),
             ("/members overview",

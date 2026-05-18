@@ -45,11 +45,11 @@ from tests.conftest import (
 
 EXPECTED_COG_COMMANDS = {
     "SetupCog": {
-        "setup", "view_configuration", "setup_reset",
-        "setup_train", "setup_growth", "setup_growth_breakdown",
-        "setup_birthdays",
-        "setup_desertstorm", "setup_canyonstorm",
-        "setup_events", "setup_survey", "setup_shiny_tasks",
+        # Post-#201: the 12 individual /setup_* commands collapsed into
+        # a single /setup button hub (setup_hub.py). All wizard handlers
+        # remain at their existing entry points and are dispatched into
+        # by the hub buttons.
+        "setup",
     },
     "SurveyCog": {
         # Top-level: just /survey group. Subcommands (overview / post
@@ -64,11 +64,10 @@ EXPECTED_COG_COMMANDS = {
         "train", "birthdays", "cancel",
     },
     "MemberRosterCog": {
-        # Top-level: /members group + the legacy /setup_members wizard.
-        # /setup_members migrates into the /setup hub in #201; for now
-        # it stays at the top level. Subcommands of /members
-        # (overview / sync) are introspected separately.
-        "members", "setup_members",
+        # Post-#195 + #201: just the /members group (overview / sync).
+        # The pre-#201 /setup_members slash command has collapsed into
+        # the /setup hub's `👥 Members` button.
+        "members",
     },
     "DonateCog": {
         # Top-level commands: /donate, /upgrade, and the /premium group.
@@ -377,48 +376,66 @@ def _last_message(interaction):
     return ("", None)
 
 
-# ── /setup_* commands: leadership-or-admin gate ──────────────────────────────
+# ── /setup hub: leadership-or-admin gates (post-#201) ────────────────────────
 
-class TestSetupStarCommandsGateNonAdmins:
-    """Each /setup_* command rejects non-admin, non-leadership users."""
+class TestSetupHubLaunchersGateNonAdmins:
+    """Post-#201: every per-feature wizard the hub dispatches into via
+    button callback retains the pre-#201 leadership-or-admin gate. The
+    helpers are tested directly here because the buttons themselves
+    can't be parametrised without driving real Discord interactions."""
 
     @pytest.mark.asyncio
-    @pytest.mark.parametrize("command_name", [
-        "setup_train", "setup_growth", "setup_birthdays",
-        "setup_desertstorm", "setup_canyonstorm",
-        "setup_events", "setup_survey", "setup_shiny_tasks",
+    @pytest.mark.parametrize("launcher_name", [
+        "_launch_train_setup", "_launch_growth_setup",
+        "_launch_birthday_setup", "_launch_event_setup",
+        "_launch_survey_setup", "_launch_shiny_tasks_setup",
     ])
-    async def test_rejects_non_privileged_caller(self, seeded_db, command_name):
-        from setup_cog import SetupCog
-        cog = _make_cog(SetupCog)
-
+    async def test_launcher_rejects_non_privileged_caller(
+        self, seeded_db, launcher_name,
+    ):
+        import setup_cog
+        launcher = getattr(setup_cog, launcher_name)
+        bot = MagicMock()
         interaction = _make_nonprivileged_interaction()
-        cmd = getattr(cog, command_name)
-        await cmd.callback(cog, interaction)
-
+        await launcher(interaction, bot)
         content, _ = _last_message(interaction)
         lowered = (content or "").lower()
-        # Either the leadership wording or the admin wording is acceptable
         assert "leadership" in lowered or "admin" in lowered, (
-            f"/{command_name} should reject non-privileged caller, got: {content!r}"
+            f"{launcher_name} should reject non-privileged caller, got: {content!r}"
         )
 
+    @pytest.mark.asyncio
+    @pytest.mark.parametrize("event_type", ["DS", "CS"])
+    async def test_storm_launcher_rejects_non_privileged_caller(
+        self, seeded_db, event_type,
+    ):
+        import setup_cog
+        bot = MagicMock()
+        interaction = _make_nonprivileged_interaction()
+        await setup_cog._launch_storm_setup(interaction, bot, event_type)
+        content, _ = _last_message(interaction)
+        lowered = (content or "").lower()
+        assert "leadership" in lowered or "admin" in lowered
 
-class TestSetupAndResetGateNonAdmins:
-    """/setup, /setup_reset, /view_configuration require admin only."""
+
+class TestSetupHubGateNonAdmins:
+    """/setup is admin-only — the hub itself + the reset flow both
+    reject non-admins."""
 
     @pytest.mark.asyncio
-    @pytest.mark.parametrize("command_name", [
-        "setup", "setup_reset", "view_configuration",
-    ])
-    async def test_rejects_non_admin(self, seeded_db, command_name):
+    async def test_setup_command_rejects_non_admin(self, seeded_db):
         from setup_cog import SetupCog
         cog = _make_cog(SetupCog)
-
         interaction = make_mock_interaction(is_admin=False)
-        cmd = getattr(cog, command_name)
-        await cmd.callback(cog, interaction)
+        await cog.setup.callback(cog, interaction)
+        content, _ = _last_message(interaction)
+        assert "admin" in (content or "").lower()
 
+    @pytest.mark.asyncio
+    async def test_reset_flow_rejects_non_admin(self, seeded_db):
+        import setup_cog
+        interaction = make_mock_interaction(is_admin=False)
+        await setup_cog._run_reset_flow(interaction)
         content, _ = _last_message(interaction)
         assert "admin" in (content or "").lower()
 
@@ -426,14 +443,13 @@ class TestSetupAndResetGateNonAdmins:
 # ── /members group + /setup_members ──────────────────────────────────────────
 
 class TestMemberRosterCommandsGate:
-    """Post-#195: `/sync_members` is now `/members sync`. The Python
-    method name on the cog is `members_sync` (vs the legacy `sync_members`
-    attribute that's gone). `/setup_members` keeps its top-level shape
-    until #201 folds it into the setup hub."""
+    """Post-#195 + #201: `/sync_members` is now `/members sync` and
+    `/setup_members` folded into the setup hub's `👥 Members` button.
+    The hub-button dispatch goes through `_launch_member_roster_setup`,
+    which retains the same gates as the pre-#201 slash command."""
 
     @pytest.mark.asyncio
-    @pytest.mark.parametrize("command_attr", ["members_sync", "setup_members"])
-    async def test_rejects_non_privileged(self, seeded_db, command_attr):
+    async def test_members_sync_rejects_non_privileged(self, seeded_db):
         import premium
         premium.clear_cache()
 
@@ -441,8 +457,20 @@ class TestMemberRosterCommandsGate:
         cog = _make_cog(MemberRosterCog)
 
         interaction = _make_nonprivileged_interaction()
-        cmd = getattr(cog, command_attr)
-        await cmd.callback(cog, interaction)
+        await cog.members_sync.callback(cog, interaction)
+
+        content, _ = _last_message(interaction)
+        lowered = (content or "").lower()
+        assert "leadership" in lowered or "admin" in lowered
+
+    @pytest.mark.asyncio
+    async def test_setup_members_launcher_rejects_non_privileged(self, seeded_db):
+        import premium, member_roster
+        premium.clear_cache()
+        bot = MagicMock()
+
+        interaction = _make_nonprivileged_interaction()
+        await member_roster._launch_member_roster_setup(interaction, bot)
 
         content, _ = _last_message(interaction)
         lowered = (content or "").lower()
@@ -450,8 +478,7 @@ class TestMemberRosterCommandsGate:
 
     @pytest.mark.asyncio
     @pytest.mark.free_tier_only
-    @pytest.mark.parametrize("command_attr", ["members_sync", "setup_members"])
-    async def test_premium_locked_for_free_admin(self, seeded_db, command_attr):
+    async def test_members_sync_premium_locked_for_free_admin(self, seeded_db):
         """An admin on a free guild gets the premium-locked embed."""
         import premium
         premium.clear_cache()
@@ -462,12 +489,11 @@ class TestMemberRosterCommandsGate:
         interaction = make_mock_interaction(is_admin=True)
         # Free guild — no entitlements
         interaction.entitlements = []
-        cmd = getattr(cog, command_attr)
-        await cmd.callback(cog, interaction)
+        await cog.members_sync.callback(cog, interaction)
 
         _, embed = _last_message(interaction)
         assert embed is not None, (
-            f"cog.{command_attr} on free tier should show the premium-locked embed"
+            "cog.members_sync on free tier should show the premium-locked embed"
         )
         assert "Premium" in (embed.title or "")
 

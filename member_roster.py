@@ -586,45 +586,49 @@ class MemberRosterCog(commands.Cog):
             ephemeral=True,
         )
 
-    @app_commands.command(
-        name="setup_members",
-        description="💎 Configure Member Roster Sync (Premium)",
-    )
-    async def setup_members(self, interaction: discord.Interaction):
-        from setup_cog import _has_leadership_or_admin, _check_wizard_can_run
-        if not _has_leadership_or_admin(interaction):
-            await interaction.response.send_message(
-                "⛔ You need the leadership role (or admin) to configure the member roster.",
-                ephemeral=True,
-            )
-            return
 
-        # Premium gate before the channel-perms pre-check: a free user
-        # trying this command should see the upsell, not a perms error.
-        if not await premium.is_premium(
-            interaction.guild_id, interaction=interaction, bot=self.bot,
-        ):
-            await interaction.response.send_message(
-                embed=premium.premium_locked_embed(
-                    feature_label="Member Roster Sync",
-                    description=(
-                        "Member Roster Sync is part of LW Alliance Helper Premium. "
-                        "Run `/upgrade` to unlock it."
-                    ),
-                ),
-                view=premium.upgrade_view(),
-                ephemeral=True,
-            )
-            return
+# ── Setup-hub button launcher ────────────────────────────────────────────────
+#
+# `/setup_members` collapsed into the `/setup` hub in #201. The button
+# `👥 Members` on the hub dispatches into this helper, which preserves
+# the leadership-or-admin + Premium + channel-perms gating that used to
+# live in the slash command.
 
-        if not await _check_wizard_can_run(interaction, "setup_members"):
-            return
-
+async def _launch_member_roster_setup(interaction: discord.Interaction, bot) -> None:
+    from setup_cog import _has_leadership_or_admin, _check_wizard_can_run
+    if not _has_leadership_or_admin(interaction):
         await interaction.response.send_message(
-            "⚙️ Starting Member Roster Sync setup — check the channel for prompts.",
+            "⛔ You need the leadership role (or admin) to configure the member roster.",
             ephemeral=True,
         )
-        await run_member_roster_setup(interaction, self.bot)
+        return
+
+    # Premium gate before the channel-perms pre-check: a free user
+    # trying this command should see the upsell, not a perms error.
+    if not await premium.is_premium(
+        interaction.guild_id, interaction=interaction, bot=bot,
+    ):
+        await interaction.response.send_message(
+            embed=premium.premium_locked_embed(
+                feature_label="Member Roster Sync",
+                description=(
+                    "Member Roster Sync is part of LW Alliance Helper Premium. "
+                    "Run `/upgrade` to unlock it."
+                ),
+            ),
+            view=premium.upgrade_view(),
+            ephemeral=True,
+        )
+        return
+
+    if not await _check_wizard_can_run(interaction, "setup"):
+        return
+
+    await interaction.response.send_message(
+        "⚙️ Starting Member Roster Sync setup — check the channel for prompts.",
+        ephemeral=True,
+    )
+    await run_member_roster_setup(interaction, bot)
 
 
 # ── Wizard ───────────────────────────────────────────────────────────────────

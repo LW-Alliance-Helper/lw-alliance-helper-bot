@@ -1395,233 +1395,197 @@ class SetupCog(commands.Cog):
     def __init__(self, bot):
         self.bot = bot
 
-    @app_commands.command(name="setup", description="Configure Alliance Helper for your server")
+    @app_commands.command(name="setup", description="Open the setup hub — foundations + every feature wizard, in one place")
     async def setup(self, interaction: discord.Interaction):
-        # Only admins can run setup
-        if not interaction.user.guild_permissions.administrator:
-            await interaction.response.send_message(
-                "⛔ Only server administrators can run `/setup`.", ephemeral=True
-            )
-            return
+        from setup_hub import handle_setup_hub
+        await handle_setup_hub(self.bot, interaction)
 
-        if not await _check_wizard_can_run(interaction, "setup"):
-            return
 
+# Standalone launcher helpers — extracted from the pre-#201 per-feature
+# `/setup_*` slash commands so the setup hub's button callbacks can
+# dispatch into the existing wizard functions without re-instantiating
+# the cog. Mirrors the `open_strategy_list` / `open_member_rule_list`
+# pattern from the storm hub (#187).
+
+async def _launch_train_setup(interaction: discord.Interaction, bot) -> None:
+    if not _has_leadership_or_admin(interaction):
         await interaction.response.send_message(
-            "⚙️ Starting setup — check the channel for prompts!", ephemeral=True
-        )
-        await run_setup(interaction, self.bot)
-
-    @app_commands.command(name="view_configuration", description="View all configured settings across every setup wizard")
-    async def view_configuration(self, interaction: discord.Interaction):
-        if not interaction.user.guild_permissions.administrator:
-            await interaction.response.send_message(
-                "⛔ Only server administrators can view configuration.", ephemeral=True
-            )
-            return
-
-        cfg = get_config(interaction.guild_id)
-        if not cfg or not cfg.setup_complete:
-            await interaction.response.send_message(
-                "⚙️ This server hasn't been set up yet. Run `/setup` to get started.",
-                ephemeral=True,
-            )
-            return
-
-        await _send_view_configuration(interaction, cfg)
-
-    @app_commands.command(name="setup_reset", description="Clear this server's configuration and start over")
-    async def setup_reset(self, interaction: discord.Interaction):
-        if not interaction.user.guild_permissions.administrator:
-            await interaction.response.send_message(
-                "⛔ Only server administrators can reset the configuration.", ephemeral=True
-            )
-            return
-
-        class ConfirmResetView(discord.ui.View):
-            def __init__(self):
-                super().__init__(timeout=60)
-                self.confirmed = False
-
-            @discord.ui.button(label="Yes, reset everything", style=discord.ButtonStyle.danger)
-            async def confirm(self, inner: discord.Interaction, button: discord.ui.Button):
-                self.confirmed = True
-                await inner.response.defer()
-                self.stop()
-
-            @discord.ui.button(label="Cancel", style=discord.ButtonStyle.secondary)
-            async def cancel(self, inner: discord.Interaction, button: discord.ui.Button):
-                await inner.response.defer()
-                self.stop()
-
-        view = ConfirmResetView()
-        await interaction.response.send_message(
-            "⚠️ Are you sure you want to reset the bot configuration for this server? "
-            "This cannot be undone.",
-            view=view,
+            "⛔ You need the leadership role (or admin) to open the train wizard.",
             ephemeral=True,
         )
-        await view.wait()
-        if view.confirmed:
-            from config import save_config, GuildConfig
-            save_config(GuildConfig(guild_id=interaction.guild_id))
-            await interaction.followup.send(
-                "✅ Configuration reset. Run `/setup` to configure the bot again.",
-                ephemeral=True,
-            )
-        else:
-            await interaction.followup.send(
-                "✅ Reset cancelled. Your configuration is still active and has not been reset.",
-                ephemeral=True,
-            )
-
-    @app_commands.command(name="setup_train", description="Configure the train schedule — tab, themes, tones, and prompt template")
-    async def setup_train(self, interaction: discord.Interaction):
-        if not _has_leadership_or_admin(interaction):
-            await interaction.response.send_message(
-                "⛔ You need the leadership role (or admin) to run `/setup_train`.",
-                ephemeral=True,
-            )
-            return
-        if not await _check_wizard_can_run(interaction, "setup_train"):
-            return
-        await interaction.response.send_message(
-            "⚙️ Starting train setup — check the channel for prompts!", ephemeral=True
-        )
-        await run_train_setup(interaction, self.bot)
-
-    @app_commands.command(name="setup_growth", description="Configure growth tracking — source tab, metrics, and snapshot frequency")
-    async def setup_growth(self, interaction: discord.Interaction):
-        if not _has_leadership_or_admin(interaction):
-            await interaction.response.send_message(
-                "⛔ You need the leadership role (or admin) to run `/setup_growth`.",
-                ephemeral=True,
-            )
-            return
-        if not await _check_wizard_can_run(interaction, "setup_growth"):
-            return
-        await interaction.response.send_message(
-            "⚙️ Starting growth tracking setup — check the channel for prompts!", ephemeral=True
-        )
-        await run_growth_setup(interaction, self.bot)
-
-    @app_commands.command(
-        name="setup_growth_breakdown",
-        description="💎 Premium — Configure the Growth Breakdown auto-post and bucket customization",
+        return
+    if not await _check_wizard_can_run(interaction, "setup"):
+        return
+    await interaction.response.send_message(
+        "⚙️ Starting train setup — check the channel for prompts!", ephemeral=True,
     )
-    async def setup_growth_breakdown(self, interaction: discord.Interaction):
-        if not _has_leadership_or_admin(interaction):
-            await interaction.response.send_message(
-                "⛔ You need the leadership role (or admin) to run `/setup_growth_breakdown`.",
-                ephemeral=True,
-            )
-            return
-        if not await premium.is_premium(interaction.guild_id, interaction=interaction):
-            await interaction.response.send_message(
-                "💎 `/setup_growth_breakdown` is a Premium feature. The "
-                "**📊 See most recent Breakdown** button on `/growth overview` (and `/growth breakdown`) works on every tier — "
-                "this command configures the auto-post and the customizable "
-                "thresholds and labels. Run `/upgrade` to subscribe.",
-                ephemeral=True,
-            )
-            return
-        if not await _check_wizard_can_run(interaction, "setup_growth_breakdown"):
-            return
+    await run_train_setup(interaction, bot)
+
+
+async def _launch_growth_setup(interaction: discord.Interaction, bot) -> None:
+    if not _has_leadership_or_admin(interaction):
         await interaction.response.send_message(
-            "⚙️ Starting Growth Breakdown setup — check the channel for prompts!",
+            "⛔ You need the leadership role (or admin) to open the growth wizard.",
             ephemeral=True,
         )
-        await run_growth_breakdown_setup(interaction, self.bot)
+        return
+    if not await _check_wizard_can_run(interaction, "setup"):
+        return
+    await interaction.response.send_message(
+        "⚙️ Starting growth tracking setup — check the channel for prompts!", ephemeral=True,
+    )
+    await run_growth_setup(interaction, bot)
 
-    @app_commands.command(name="setup_birthdays", description="Configure birthday tracking — sheet tab, columns, and lookahead days")
-    async def setup_birthdays(self, interaction: discord.Interaction):
-        if not _has_leadership_or_admin(interaction):
-            await interaction.response.send_message(
-                "⛔ You need the leadership role (or admin) to run `/setup_birthdays`.",
-                ephemeral=True,
-            )
-            return
-        if not await _check_wizard_can_run(interaction, "setup_birthdays"):
-            return
-        await interaction.response.send_message(
-            "⚙️ Starting birthday setup — check the channel for prompts!", ephemeral=True
-        )
-        await run_birthday_setup(interaction, self.bot)
 
-    @app_commands.command(name="setup_desertstorm", description="Configure Desert Storm mail template and time options")
-    async def setup_desertstorm(self, interaction: discord.Interaction):
-        if not _has_leadership_or_admin(interaction):
-            await interaction.response.send_message(
-                "⛔ You need the leadership role (or admin) to run `/setup_desertstorm`.",
-                ephemeral=True,
-            )
-            return
-        if not await _check_wizard_can_run(interaction, "setup_desertstorm"):
-            return
+async def _launch_growth_breakdown_setup(interaction: discord.Interaction, bot) -> None:
+    if not _has_leadership_or_admin(interaction):
         await interaction.response.send_message(
-            "⚙️ Starting Desert Storm setup — check the channel for prompts!", ephemeral=True
+            "⛔ You need the leadership role (or admin) to open the breakdown wizard.",
+            ephemeral=True,
         )
-        await run_storm_setup(interaction, self.bot, "DS")
+        return
+    if not await premium.is_premium(interaction.guild_id, interaction=interaction):
+        await interaction.response.send_message(
+            "💎 Growth Breakdown configuration is a Premium feature. The "
+            "**📊 See most recent Breakdown** button on `/growth overview` "
+            "(and `/growth breakdown`) works on every tier — this wizard "
+            "configures the auto-post and the customizable thresholds and "
+            "labels. Run `/upgrade` to subscribe.",
+            ephemeral=True,
+        )
+        return
+    if not await _check_wizard_can_run(interaction, "setup"):
+        return
+    await interaction.response.send_message(
+        "⚙️ Starting Growth Breakdown setup — check the channel for prompts!",
+        ephemeral=True,
+    )
+    await run_growth_breakdown_setup(interaction, bot)
 
-    @app_commands.command(name="setup_canyonstorm", description="Configure Canyon Storm mail template and time options")
-    async def setup_canyonstorm(self, interaction: discord.Interaction):
-        if not _has_leadership_or_admin(interaction):
-            await interaction.response.send_message(
-                "⛔ You need the leadership role (or admin) to run `/setup_canyonstorm`.",
-                ephemeral=True,
-            )
-            return
-        if not await _check_wizard_can_run(interaction, "setup_canyonstorm"):
-            return
-        await interaction.response.send_message(
-            "⚙️ Starting Canyon Storm setup — check the channel for prompts!", ephemeral=True
-        )
-        await run_storm_setup(interaction, self.bot, "CS")
 
-    @app_commands.command(name="setup_events", description="Add or edit an event type for announcements (Marauder, Siege, etc.)")
-    async def setup_events(self, interaction: discord.Interaction):
-        if not _has_leadership_or_admin(interaction):
-            await interaction.response.send_message(
-                "⛔ You need the leadership role (or admin) to run `/setup_events`.",
-                ephemeral=True,
-            )
-            return
-        if not await _check_wizard_can_run(interaction, "setup_events"):
-            return
+async def _launch_birthday_setup(interaction: discord.Interaction, bot) -> None:
+    if not _has_leadership_or_admin(interaction):
         await interaction.response.send_message(
-            "⚙️ Starting event setup — check the channel for prompts!", ephemeral=True
+            "⛔ You need the leadership role (or admin) to open the birthday wizard.",
+            ephemeral=True,
         )
-        await run_event_setup(interaction, self.bot)
+        return
+    if not await _check_wizard_can_run(interaction, "setup"):
+        return
+    await interaction.response.send_message(
+        "⚙️ Starting birthday setup — check the channel for prompts!", ephemeral=True,
+    )
+    await run_birthday_setup(interaction, bot)
 
-    @app_commands.command(name="setup_survey", description="Configure the default survey — channels, tabs, intro, and questions")
-    async def setup_survey(self, interaction: discord.Interaction):
-        if not _has_leadership_or_admin(interaction):
-            await interaction.response.send_message(
-                "⛔ You need the leadership role (or admin) to run `/setup_survey`.",
-                ephemeral=True,
-            )
-            return
-        if not await _check_wizard_can_run(interaction, "setup_survey"):
-            return
-        await interaction.response.send_message(
-            "⚙️ Starting survey setup — check the channel for prompts!", ephemeral=True
-        )
-        await run_survey_setup(interaction, self.bot)
 
-    @app_commands.command(name="setup_shiny_tasks", description="Daily announcement of today's shiny task servers for your Alliance")
-    async def setup_shiny_tasks(self, interaction: discord.Interaction):
-        if not _has_leadership_or_admin(interaction):
-            await interaction.response.send_message(
-                "⛔ You need the leadership role (or admin) to run `/setup_shiny_tasks`.",
-                ephemeral=True,
-            )
-            return
-        if not await _check_wizard_can_run(interaction, "setup_shiny_tasks"):
-            return
+async def _launch_storm_setup(interaction: discord.Interaction, bot, event_type: str) -> None:
+    label = "Desert Storm" if event_type == "DS" else "Canyon Storm"
+    if not _has_leadership_or_admin(interaction):
         await interaction.response.send_message(
-            "⚙️ Starting Shiny Tasks setup — check the channel for prompts!", ephemeral=True
+            f"⛔ You need the leadership role (or admin) to open the {label} wizard.",
+            ephemeral=True,
         )
-        await run_shiny_tasks_setup(interaction, self.bot)
+        return
+    if not await _check_wizard_can_run(interaction, "setup"):
+        return
+    await interaction.response.send_message(
+        f"⚙️ Starting {label} setup — check the channel for prompts!", ephemeral=True,
+    )
+    await run_storm_setup(interaction, bot, event_type)
+
+
+async def _launch_event_setup(interaction: discord.Interaction, bot) -> None:
+    if not _has_leadership_or_admin(interaction):
+        await interaction.response.send_message(
+            "⛔ You need the leadership role (or admin) to open the event wizard.",
+            ephemeral=True,
+        )
+        return
+    if not await _check_wizard_can_run(interaction, "setup"):
+        return
+    await interaction.response.send_message(
+        "⚙️ Starting event setup — check the channel for prompts!", ephemeral=True,
+    )
+    await run_event_setup(interaction, bot)
+
+
+async def _launch_survey_setup(interaction: discord.Interaction, bot) -> None:
+    if not _has_leadership_or_admin(interaction):
+        await interaction.response.send_message(
+            "⛔ You need the leadership role (or admin) to open the survey wizard.",
+            ephemeral=True,
+        )
+        return
+    if not await _check_wizard_can_run(interaction, "setup"):
+        return
+    await interaction.response.send_message(
+        "⚙️ Starting survey setup — check the channel for prompts!", ephemeral=True,
+    )
+    await run_survey_setup(interaction, bot)
+
+
+async def _launch_shiny_tasks_setup(interaction: discord.Interaction, bot) -> None:
+    if not _has_leadership_or_admin(interaction):
+        await interaction.response.send_message(
+            "⛔ You need the leadership role (or admin) to open the shiny-tasks wizard.",
+            ephemeral=True,
+        )
+        return
+    if not await _check_wizard_can_run(interaction, "setup"):
+        return
+    await interaction.response.send_message(
+        "⚙️ Starting Shiny Tasks setup — check the channel for prompts!", ephemeral=True,
+    )
+    await run_shiny_tasks_setup(interaction, bot)
+
+
+async def _run_reset_flow(interaction: discord.Interaction) -> None:
+    """Reset confirmation flow, extracted from the pre-#201
+    `/setup_reset` slash command so the setup hub's `🗑️ Reset configuration`
+    button can call it without round-tripping through a slash command."""
+    if not interaction.user.guild_permissions.administrator:
+        await interaction.response.send_message(
+            "⛔ Only server administrators can reset the configuration.",
+            ephemeral=True,
+        )
+        return
+
+    class ConfirmResetView(discord.ui.View):
+        def __init__(self):
+            super().__init__(timeout=60)
+            self.confirmed = False
+
+        @discord.ui.button(label="Yes, reset everything", style=discord.ButtonStyle.danger)
+        async def confirm(self, inner: discord.Interaction, _b: discord.ui.Button):
+            self.confirmed = True
+            await inner.response.defer()
+            self.stop()
+
+        @discord.ui.button(label="Cancel", style=discord.ButtonStyle.secondary)
+        async def cancel(self, inner: discord.Interaction, _b: discord.ui.Button):
+            await inner.response.defer()
+            self.stop()
+
+    view = ConfirmResetView()
+    await interaction.response.send_message(
+        "⚠️ Are you sure you want to reset the bot configuration for this server? "
+        "This cannot be undone.",
+        view=view,
+        ephemeral=True,
+    )
+    await view.wait()
+    if view.confirmed:
+        from config import save_config, GuildConfig
+        save_config(GuildConfig(guild_id=interaction.guild_id))
+        await interaction.followup.send(
+            "✅ Configuration reset. Run `/setup` to configure the bot again.",
+            ephemeral=True,
+        )
+    else:
+        await interaction.followup.send(
+            "✅ Reset cancelled. Your configuration is still active and has not been reset.",
+            ephemeral=True,
+        )
 
 
 # ── /Define Various Setup Commands ───────────────────────────────────────────────────────

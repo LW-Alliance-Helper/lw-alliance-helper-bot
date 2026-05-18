@@ -423,7 +423,7 @@ def _format_command_error(error: BaseException, event_id: str | None) -> str:
         return (
             "⚠️ **Discord couldn't find something I needed** — usually a channel, role, or message "
             "that's been deleted since the bot was set up.\n\n"
-            "Try running `/view_configuration` to check that all your configured channels and roles "
+            "Try running `/setup` and clicking **🗂️ View configuration** to check that all your configured channels and roles "
             "still exist.\n\n"
             f"If they look correct and this keeps happening, open an issue at <{ISSUE_TRACKER_URL}> "
             f"with the reference below.{ref_line}"
@@ -941,7 +941,7 @@ async def events_overview_slash(interaction: discord.Interaction):
 
     if not events:
         embed.description = (
-            "No event types configured yet. Run `/setup_events` to add "
+            "No event types configured yet. Run `/setup` and click **📣 Events** to add "
             "Marauder, Siege, or custom event types."
         )
         await interaction.response.send_message(embed=embed, ephemeral=True)
@@ -956,7 +956,7 @@ async def events_overview_slash(interaction: discord.Interaction):
                 anchor   = date_cls.fromisoformat(ev["anchor_date"])
                 interval = int(ev["interval_days"] or 0)
             except (ValueError, TypeError):
-                repeating_lines.append(f"• **{name}** — schedule invalid (re-run `/setup_events`)")
+                repeating_lines.append(f"• **{name}** — schedule invalid (re-open via `/setup` → 📣 Events)")
                 continue
             upcoming = next_event_dates(
                 from_date=today, count=1, anchor=anchor, cycle=interval,
@@ -1070,7 +1070,7 @@ async def events_slash(interaction: discord.Interaction, date: str = None):
 
     if not events:
         await interaction.followup.send(
-            "ℹ️ No events configured. Run `/setup_events` to add some.",
+            "ℹ️ No events configured. Run `/setup` and click **📣 Events** to add some.",
             ephemeral=True,
         )
         return
@@ -1085,7 +1085,7 @@ async def events_slash(interaction: discord.Interaction, date: str = None):
     if not groups:
         await interaction.followup.send(
             "ℹ️ No repeating events configured. The event editor only "
-            "applies to events with a recurring schedule. Run `/setup_events` "
+            "applies to events with a recurring schedule. Run `/setup` and click **📣 Events** "
             "to add one, or add events directly to your manual schedule.",
             ephemeral=True,
         )
@@ -1106,7 +1106,7 @@ async def events_slash(interaction: discord.Interaction, date: str = None):
     if not next_per_group:
         await interaction.followup.send(
             "ℹ️ Couldn't compute the next event date — your repeating events "
-            "have invalid anchor dates. Run `/setup_events` to fix.",
+            "have invalid anchor dates. Run `/setup` and click **📣 Events** to fix.",
             ephemeral=True,
         )
         return
@@ -1160,7 +1160,7 @@ async def events_slash(interaction: discord.Interaction, date: str = None):
     if not event_list:
         await interaction.followup.send(
             "⚠️ No events to show on the next event date — likely a bad timezone "
-            "or default_time on one of your configured events. Run `/setup_events` "
+            "or default_time on one of your configured events. Run `/setup` and click **📣 Events** "
             "to review.",
             ephemeral=True,
         )

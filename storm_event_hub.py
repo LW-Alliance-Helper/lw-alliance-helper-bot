@@ -112,8 +112,12 @@ def _build_event_hub_embed(
         f"<#{signup_channel_id}>" if signup_channel_id else "_not configured_"
     )
 
-    # Poll auto-schedule line.
-    poll_dow = int(structured.get("poll_day_of_week", -1) or -1)
+    # Poll auto-schedule line. Use an explicit `is None` check rather
+    # than `or -1`: `poll_day_of_week == 0` is Monday, which is falsy
+    # and would silently collapse to -1 (dropping the schedule line)
+    # if we used `or`.
+    poll_dow_raw = structured.get("poll_day_of_week")
+    poll_dow = int(poll_dow_raw) if poll_dow_raw is not None else -1
     poll_time = (structured.get("signup_time") or "").strip()
     if poll_dow >= 0 and poll_time:
         _DOW = ["Monday", "Tuesday", "Wednesday", "Thursday",

@@ -367,22 +367,15 @@ class _EventHubView(discord.ui.View):
         await handle_storm_log(self.bot, inter, self.event_type, None)
 
     async def _on_setup(self, inter: discord.Interaction) -> None:
-        # The setup wizard runs as a slash command (/setup_desertstorm)
-        # not a handler we can directly invoke with an interaction,
-        # because the wizard captures channel messages mid-flow and
-        # needs a fresh slash interaction to start. Direct officers
-        # there via an ephemeral pointer instead of trying to fake the
-        # invocation.
-        setup_cmd = (
-            "/setup_desertstorm" if self.event_type == "DS"
-            else "/setup_canyonstorm"
-        )
-        await inter.response.send_message(
-            f"⚙️ Run `{setup_cmd}` to open the setup wizard. (The wizard "
-            f"runs as its own slash command so it can capture follow-up "
-            f"messages in this channel.)",
-            ephemeral=True,
-        )
+        # Post-#201: the per-feature setup wizards moved behind the
+        # /setup hub buttons, with their bodies exposed as standalone
+        # launcher helpers. Dispatch into `_launch_storm_setup`
+        # directly so the storm hub's ⚙️ Open setup wizard button
+        # opens the wizard inline instead of telling officers to type
+        # another slash command. Same gates as the hub-button path
+        # (leadership-or-admin + channel-perms via _check_wizard_can_run).
+        from setup_cog import _launch_storm_setup
+        await _launch_storm_setup(inter, self.bot, self.event_type)
 
 
 # ── Entry point ──────────────────────────────────────────────────────────────

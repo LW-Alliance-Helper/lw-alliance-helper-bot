@@ -25,8 +25,8 @@ labelled `(ephemeral — only the clicker sees it)`. DMs are labelled
 ## Table of contents
 
 1. Auto sign-up post + member voting + power-refresh DM
-2. `/setup_desertstorm` and `/setup_canyonstorm` — structured-flow setup wizard
-3. `/sync_members` — alliance roster sync
+2. `/setup → ⚔️ Desert Storm` and `/setup → 🏜️ Canyon Storm` — structured-flow setup wizard
+3. `/members sync` — alliance roster sync
 4. `/desertstorm post_signup` + `/canyonstorm post_signup` — manual sign-up post fire
 5. `/desertstorm signups` + `/canyonstorm signups` — officer view
 6. On-behalf vote modal
@@ -254,7 +254,7 @@ Power**".
         ▼
    Screen 1.4 DM
 ```
-## 2. `/setup_desertstorm` + `/setup_canyonstorm` — structured-flow setup wizard
+## 2. `/setup → ⚔️ Desert Storm` + `/setup → 🏜️ Canyon Storm` — structured-flow setup wizard
 
 These commands share the same wizard chassis (`run_storm_setup` in
 `setup_cog.py`, branching on `event_type="DS"|"CS"`). The screens
@@ -277,7 +277,7 @@ re-entry (Keep current branch). Both paths are shown.
 
 ### Screen 2.0 — Slash-command ephemeral ack
 
-When Kevin runs `/setup_desertstorm`, Discord acks with an ephemeral
+When Kevin runs `/setup → ⚔️ Desert Storm`, Discord acks with an ephemeral
 in the slash response. Every wizard prompt that follows is a regular
 channel message in whatever channel he ran it in.
 
@@ -288,7 +288,7 @@ channel message in whatever channel he ran it in.
 (ephemeral — only Kevin sees it)
 ```
 
-*(For `/setup_canyonstorm` the ack reads `⚙️ Starting Canyon Storm
+*(For `/setup → 🏜️ Canyon Storm` the ack reads `⚙️ Starting Canyon Storm
 setup — check the channel for prompts!`)*
 
 Permission denial — non-leader, non-admin user:
@@ -296,7 +296,7 @@ Permission denial — non-leader, non-admin user:
 ```
 ┌──────────────────────────────────────────────────────────────────────┐
 │ ⛔ You need the leadership role (or admin) to run                    │
-│ `/setup_desertstorm`.                                                │
+│ `/setup → ⚔️ Desert Storm`.                                                │
 └──────────────────────────────────────────────────────────────────────┘
 (ephemeral — only the clicker sees it)
 ```
@@ -815,7 +815,7 @@ Modal title: `Attendance Tab Name`. Ack: `✅ Using DS Attendance`.
 
 ### Screen 2.12c — Judicator role (CS only, Premium)
 
-**This screen does not fire for `/setup_desertstorm`.** It only
+**This screen does not fire for `/setup → ⚔️ Desert Storm`.** It only
 appears in the CS wizard, after the Attendance tab screen.
 
 **Variant A — First-time (no saved role_id):**
@@ -1337,18 +1337,18 @@ its own timeout (120–300s); on timeout the wizard posts:
 
 ```
 ┌──────────────────────────────────────────────────────────────────────┐
-│ ⏰ Timed out. Run `/setup_desertstorm` to start again.              │
+│ ⏰ Timed out. Run `/setup → ⚔️ Desert Storm` to start again.              │
 └──────────────────────────────────────────────────────────────────────┘
 ```
 
-*(CS variant: `Run /setup_canyonstorm to start again.`)*
+*(CS variant: `Run /setup → 🏜️ Canyon Storm to start again.`)*
 
 ---
 
 ### Flow at a glance
 
 ```
-Kevin runs /setup_desertstorm
+Kevin runs /setup → ⚔️ Desert Storm
         │
         ▼
    Screen 2.0 ephemeral ack
@@ -1428,7 +1428,7 @@ Kevin runs /setup_desertstorm
 
 ---
 
-## 3. `/sync_members` — alliance roster sync
+## 3. `/members sync` — alliance roster sync
 
 Lives in `member_roster.py`. Premium-gated. Runs `write_roster()`,
 which rebuilds the configured roster tab in Apex's Google Sheet and
@@ -1476,11 +1476,11 @@ Premium upsell in the bot.)*
 
 ### Screen 3.3 — Not-yet-configured guard
 
-Fires when Apex is Premium but hasn't run `/setup_members` yet.
+Fires when Apex is Premium but hasn't run `/setup → 👥 Members` yet.
 
 ```
 ┌──────────────────────────────────────────────────────────────────────┐
-│ ⚙️ Member Roster Sync isn't configured yet. Run /setup_members      │
+│ ⚙️ Member Roster Sync isn't configured yet. Run /setup → 👥 Members      │
 │ first.                                                               │
 └──────────────────────────────────────────────────────────────────────┘
 (ephemeral — only Kevin sees it)
@@ -1573,7 +1573,7 @@ name visually emphasised.)
 ### Side-effects on the Sheet (not surfaced in Discord)
 
 For completeness — what an officer would see if they switch to the
-Google Sheet right after `/sync_members`:
+Google Sheet right after `/members sync`:
 
 **Before the first sync** (or if alliance hasn't created the tab):
 the bot creates the `Member Roster` tab automatically. There's no
@@ -1590,7 +1590,7 @@ Discord ephemeral about this — it's just a side-effect.
 ```
 
 The column **F** header (`Is this user in Discord?`) is bot-created
-the first time `/sync_members` runs after the alliance upgrades to
+the first time `/members sync` runs after the alliance upgrades to
 the version with the new column. Existing rows get extended with the
 new cell; existing custom columns (power columns, `not_on_discord`,
 notes) are preserved per Discord-ID match.
@@ -1613,7 +1613,7 @@ next sync (the column is bot-maintained, not alliance-owned).
 
 If Apex's `members` privileged intent is off (or the bot can't chunk
 the guild), the count of returned members will be wildly under the
-actual guild size. `/sync_members` will still complete with
+actual guild size. `/members sync` will still complete with
 `✅ Synced N members to the Member Roster tab` where `N` is the
 cached subset, but the bot logs:
 
@@ -1632,7 +1632,7 @@ ephemeral happily reports the partial count.)
 
 ### Auto-sync side channel
 
-In addition to manual `/sync_members`, the cog also re-syncs
+In addition to manual `/members sync`, the cog also re-syncs
 automatically on `on_member_join`, `on_member_remove`, and
 `on_member_update` (only if role membership changed). These don't
 post anything to Discord — they update the Sheet silently. Errors
@@ -1647,7 +1647,7 @@ go to Railway stdout + Sentry:
 ### Flow at a glance
 
 ```
-Kevin runs /sync_members
+Kevin runs /members sync
         │
         ▼
    Has leadership role / admin?
@@ -1662,7 +1662,7 @@ Kevin runs /sync_members
         ▼ yes
    Roster config saved (enabled flag)?
         │
-        ├── no ──→ Screen 3.3 (⚙️ run /setup_members)
+        ├── no ──→ Screen 3.3 (⚙️ run /setup → 👥 Members)
         │
         ▼ yes
    Screen 3.4 (defer + thinking spinner)
@@ -1777,12 +1777,12 @@ event type:
 ```
 ┌──────────────────────────────────────────────────────────────────────┐
 │ ⚠️ The structured roster flow isn't enabled for Desert Storm. Run   │
-│ /setup_desertstorm and turn on Structured Roster Flow first.        │
+│ /setup → ⚔️ Desert Storm and turn on Structured Roster Flow first.        │
 └──────────────────────────────────────────────────────────────────────┘
 (ephemeral — only Kevin sees it)
 ```
 
-*(CS variant: `…isn't enabled for Canyon Storm. Run /setup_canyonstorm
+*(CS variant: `…isn't enabled for Canyon Storm. Run /setup → 🏜️ Canyon Storm
 and turn on Structured Roster Flow first.`)*
 
 ---
@@ -1847,13 +1847,13 @@ sign-up post (idempotency guard via `has_registration_post`):
 
 ```
 ┌──────────────────────────────────────────────────────────────────────┐
-│ ⚠️ No sign-up channel configured. Run `/setup_desertstorm` and pick │
+│ ⚠️ No sign-up channel configured. Run `/setup → ⚔️ Desert Storm` and pick │
 │ a sign-up channel during the structured-flow setup.                  │
 └──────────────────────────────────────────────────────────────────────┘
 (ephemeral — only Kevin sees it)
 ```
 
-*(CS variant: `Run /setup_canyonstorm and pick…`)*
+*(CS variant: `Run /setup → 🏜️ Canyon Storm and pick…`)*
 
 ---
 
@@ -1865,7 +1865,7 @@ lost access):
 ```
 ┌──────────────────────────────────────────────────────────────────────┐
 │ ⚠️ The configured sign-up channel (#storm-signups) no longer exists │
-│ or the bot can't see it. Re-run /setup_desertstorm to pick a new    │
+│ or the bot can't see it. Re-run /setup → ⚔️ Desert Storm to pick a new    │
 │ channel.                                                             │
 └──────────────────────────────────────────────────────────────────────┘
 (ephemeral — only Kevin sees it)
@@ -1875,7 +1875,7 @@ lost access):
 still see it, or as `<#1234567890>` literal if not. Discord falls
 back to "deleted-channel" rendering automatically.)
 
-*(CS variant: `Re-run /setup_canyonstorm…`)*
+*(CS variant: `Re-run /setup → 🏜️ Canyon Storm…`)*
 
 ---
 
@@ -1889,7 +1889,7 @@ been parseable yet):
 ```
 ┌──────────────────────────────────────────────────────────────────────┐
 │ ⚠️ Both Desert Storm time slots need to be configured before        │
-│ posting a sign-up. Run /setup_desertstorm and pick the two times    │
+│ posting a sign-up. Run /setup → ⚔️ Desert Storm and pick the two times    │
 │ first.                                                               │
 └──────────────────────────────────────────────────────────────────────┘
 (ephemeral — only Kevin sees it)
@@ -1900,7 +1900,7 @@ For CS:
 ```
 ┌──────────────────────────────────────────────────────────────────────┐
 │ ⚠️ The Canyon Storm time slot needs to be configured before posting │
-│ a sign-up. Run /setup_canyonstorm and pick the time first.          │
+│ a sign-up. Run /setup → 🏜️ Canyon Storm and pick the time first.          │
 └──────────────────────────────────────────────────────────────────────┘
 (ephemeral — only Kevin sees it)
 ```
@@ -2121,18 +2121,18 @@ Officer typed `/desertstorm signups Storm event_date:nxt sat`.
 ### Screen 5.5 — Structured-flow opt-in gate
 
 Alliance has Premium but hasn't toggled "Structured Roster Flow" in
-`/setup_desertstorm`:
+`/setup → ⚔️ Desert Storm`:
 
 ```
 ┌──────────────────────────────────────────────────────────────────────┐
 │ ⚠️ The structured roster flow isn't enabled for Desert Storm. Run    │
-│ `/setup_desertstorm` and turn on **Structured Roster Flow** first.   │
+│ `/setup → ⚔️ Desert Storm` and turn on **Structured Roster Flow** first.   │
 └──────────────────────────────────────────────────────────────────────┘
 (ephemeral — only Kevin sees it)
 ```
 
 Mirror message for CS: `… isn't enabled for Canyon Storm. Run
-/setup_canyonstorm and turn on …`.
+/setup → 🏜️ Canyon Storm and turn on …`.
 
 ---
 
@@ -2923,7 +2923,7 @@ And the structured-flow gate:
 ```
 ┌──────────────────────────────────────────────────────────────────────┐
 │ ⚠️ The structured roster flow isn't enabled for Desert Storm. Run    │
-│ `/setup_desertstorm` and turn on **Structured Roster Flow** first.   │
+│ `/setup → ⚔️ Desert Storm` and turn on **Structured Roster Flow** first.   │
 └──────────────────────────────────────────────────────────────────────┘
 ```
 
@@ -3708,7 +3708,7 @@ No post channel configured:
 ┌──────────────────────────────────────────────────────────────────────┐
 │ ✅ Roster recorded.                                                  │
 │ ⚠️ No post channel is configured — mail was built but not sent. Run  │
-│ `/setup_desertstorm` (or `/setup_canyonstorm`) to pick one, or copy  │
+│ `/setup → ⚔️ Desert Storm` (or `/setup → 🏜️ Canyon Storm`) to pick one, or copy  │
 │ the mail manually below.                                             │
 │                                                                      │
 │ ```                                                                  │
@@ -3791,7 +3791,7 @@ Configured role no longer exists:
 ```
 ┌──────────────────────────────────────────────────────────────────────┐
 │ ⚠️ The configured Judicator role (<@&1146000011110000222>) no       │
-│ longer exists or the bot can't see it. Re-run `/setup_canyonstorm`   │
+│ longer exists or the bot can't see it. Re-run `/setup → 🏜️ Canyon Storm`   │
 │ to pick a new one.                                                   │
 └──────────────────────────────────────────────────────────────────────┘
 ```
@@ -4237,9 +4237,9 @@ current roster — rename or remove them: Alyce, Robb
 Common error strings the officer might see in this slot:
 
 - `no power metric column configured — every member will read as
-  'power unknown'. Run /setup_desertstorm or /setup_canyonstorm to
+  'power unknown'. Run /setup → ⚔️ Desert Storm or /setup → 🏜️ Canyon Storm to
   set the Power Metric Column.`
-- `member-roster sync isn't enabled — without /sync_members the
+- `member-roster sync isn't enabled — without /members sync the
   builder can't see your alliance's roster.`
 - `roster-sheet open failed: <gspread error>`
 - `roster-sheet read failed: <gspread error>`
@@ -4776,7 +4776,7 @@ gets the mail preview inline so they can copy it manually.
 ┌──────────────────────────────────────────────────────────────────────┐
 │ ✅ Roster recorded.                                                  │
 │ ⚠️ No post channel is configured — mail was built but not sent.      │
-│ Run `/setup_desertstorm` (or `/setup_canyonstorm`) to pick one, or   │
+│ Run `/setup → ⚔️ Desert Storm` (or `/setup → 🏜️ Canyon Storm`) to pick one, or   │
 │ copy the mail manually below.                                        │
 │                                                                      │
 │ ```                                                                  │
@@ -5039,7 +5039,7 @@ Only fires when:
 1. `event_type == "CS"`
 2. The post succeeded (`posted_ok`)
 3. The structured config has a `judicator_role_id` set (an
-   officer ran `/setup_canyonstorm` and picked a role)
+   officer ran `/setup → 🏜️ Canyon Storm` and picked a role)
 4. At least one member on the just-approved roster matches a
    `per_member.special_role=judicator` Member Rule
 
@@ -5092,7 +5092,7 @@ bot lost View Roles.
 ```
 ┌──────────────────────────────────────────────────────────────────────┐
 │ ⚠️ The configured Judicator role (<@&987654321>) no longer exists   │
-│ or the bot can't see it. Re-run `/setup_canyonstorm` to pick a new  │
+│ or the bot can't see it. Re-run `/setup → 🏜️ Canyon Storm` to pick a new  │
 │ one.                                                                 │
 └──────────────────────────────────────────────────────────────────────┘
 (ephemeral; allowed_mentions.none() — role mention renders as a styled
@@ -5444,18 +5444,18 @@ fires first.
 ### Screen 10.4 — Structured-flow disabled
 
 Guild IS Premium but the alliance never turned on the structured
-roster flow for this event type via `/setup_desertstorm` or
-`/setup_canyonstorm`.
+roster flow for this event type via `/setup → ⚔️ Desert Storm` or
+`/setup → 🏜️ Canyon Storm`.
 
 ```
 ┌──────────────────────────────────────────────────────────────────────┐
 │ ⚠️ The structured roster flow isn't enabled for Canyon Storm. Run   │
-│ `/setup_canyonstorm` and turn on **Structured Roster Flow** first.  │
+│ `/setup → 🏜️ Canyon Storm` and turn on **Structured Roster Flow** first.  │
 └──────────────────────────────────────────────────────────────────────┘
 (ephemeral)
 ```
 
-Variant for DS: identical with `Desert Storm` / `/setup_desertstorm`.
+Variant for DS: identical with `Desert Storm` / `/setup → ⚔️ Desert Storm`.
 
 ---
 
@@ -6520,7 +6520,7 @@ option whose `value == "0"` matches `buf.phase_count == 0`).
 
 ### Screen 12.2 — Editor embed variant: flat DS, Team A only
 
-When `/setup_desertstorm` was run with `teams=A`, the
+When `/setup → ⚔️ Desert Storm` was run with `teams=A`, the
 `_resolve_ds_teams` helper returns `"A"`. The embed surfaces it
 and the per-zone lines only show `Min A`:
 
@@ -7569,7 +7569,7 @@ A bot-process log line accompanies it:
 
 ### Screen 13.8 — `set_power_band` no Sheet configured
 
-The alliance hasn't run `/setup_desertstorm` yet, so
+The alliance hasn't run `/setup → ⚔️ Desert Storm` yet, so
 `config.get_spreadsheet(guild_id)` returns `None`:
 
 ```
@@ -8665,17 +8665,17 @@ A non-Premium alliance's officer tries `/desertstorm strategy roster_history`:
 ### Screen 15.4 — Structured-flow not enabled
 
 The alliance has Premium but the officer never enabled
-`structured_flow_enabled` for Desert Storm in `/setup_desertstorm`:
+`structured_flow_enabled` for Desert Storm in `/setup → ⚔️ Desert Storm`:
 
 ```
 ┌──────────────────────────────────────────────────────────────────────┐
 │ ⚠️ The structured roster flow isn't enabled for Desert Storm. Run    │
-│ `/setup_desertstorm` and turn on Structured Roster Flow first.       │
+│ `/setup → ⚔️ Desert Storm` and turn on Structured Roster Flow first.       │
 └──────────────────────────────────────────────────────────────────────┘
 (ephemeral)
 ```
 
-CS analogue points to `/setup_canyonstorm`.
+CS analogue points to `/setup → 🏜️ Canyon Storm`.
 
 ---
 

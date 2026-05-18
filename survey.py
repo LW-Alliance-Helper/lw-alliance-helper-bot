@@ -266,7 +266,7 @@ async def run_survey(bot, thread: discord.Thread, user: discord.Member,
     questions  = survey_cfg.get("questions") or []
 
     if not questions:
-        await thread.send("⚠️ No survey questions configured. Ask leadership to run `/setup_survey`.")
+        await thread.send("⚠️ No survey questions configured. Ask leadership to run `/setup → 📋 Survey`.")
         return
 
     def check(m):
@@ -821,7 +821,7 @@ async def _pick_survey(interaction: discord.Interaction, *, prompt: str) -> dict
 class _SurveyManageView(discord.ui.View):
     """
     The button row shown beneath `/survey`'s list view for premium guilds.
-    Replaces the old `/setup_survey_extra` and `/remove_survey` slash
+    Replaces the old `/setup → 📋 Survey_extra` and `/remove_survey` slash
     commands — Add / Edit / Remove all live here so leadership has one
     surface for survey management.
     """
@@ -1124,7 +1124,7 @@ class SurveyCog(commands.Cog):
         )
 
         if not questions:
-            embed.description = "*No survey questions configured. Run `/setup_survey` to add some.*"
+            embed.description = "*No survey questions configured. Run `/setup → 📋 Survey` to add some.*"
         else:
             lines = []
             for i, q in enumerate(questions, start=1):
@@ -1145,7 +1145,7 @@ class SurveyCog(commands.Cog):
             value="✅ Configured" if scfg.get("intro_message") else "❌ Not configured",
             inline=False,
         )
-        embed.set_footer(text="Run /setup_survey to update. Run /survey post to post the button.")
+        embed.set_footer(text="Run /setup → 📋 Survey to update. Run /survey post to post the button.")
 
         await interaction.response.send_message(embed=embed, ephemeral=True)
 
@@ -1406,7 +1406,7 @@ async def _run_send_now(interaction: discord.Interaction, bot, is_premium_flag: 
     roster_cfg = get_member_roster_config(interaction.guild_id)
     if not roster_cfg.get("enabled"):
         await interaction.followup.send(
-            "⚙️ DM reminders need Member Roster Sync. Run `/setup_members` first.",
+            "⚙️ DM reminders need Member Roster Sync. Run `/setup` → 👥 Members first.",
             ephemeral=True,
         )
         return

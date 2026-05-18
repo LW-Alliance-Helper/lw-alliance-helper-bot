@@ -1009,8 +1009,11 @@ async def ask_disable_with_clear(
     ``feature_label`` — friendly noun for the message body
     (e.g. "Shiny Tasks announcement").
 
-    ``setup_command`` — slash command leadership should re-run to
-    re-enable, sans the leading slash (e.g. "setup_shiny_tasks").
+    ``setup_command`` — slash navigation leadership should re-run to
+    re-enable, sans the leading slash (e.g. "setup → 🌟 Shiny Tasks").
+    Post-#201 every wizard lives behind a /setup hub button; pass the
+    hub navigation hint here so the rendered message reads
+    "Re-run `/setup → 🌟 Shiny Tasks` and pick Yes to restore."
 
     ``clear_fn`` — callable taking no arguments; runs synchronously
     or via ``await`` (the helper auto-detects). Should wipe the
@@ -1081,7 +1084,7 @@ async def _manage_train_templates(
     cap: int | None, cancel_event,
 ):
     """
-    Multi-template manager for /setup_train.
+    Multi-template manager for the train setup wizard.
 
     Lets the user view, add, edit, delete, and re-pick the default for the
     guild's saved ChatGPT prompt templates. `cap` is the per-tier maximum
@@ -1733,7 +1736,7 @@ class YesNoView(discord.ui.View):
         self.stop()
 
 
-# ── /view_configuration helper ───────────────────────────────────────────────
+# ── 🗂️ View configuration helper (used by the /setup hub button) ─────────────
 
 async def _send_view_configuration(interaction: discord.Interaction, cfg) -> None:
     """Build and send a single embed summarising every wizard's configuration."""
@@ -2271,7 +2274,7 @@ async def run_growth_setup(interaction: discord.Interaction, bot):
         await ask_disable_with_clear(
             channel,
             feature_label="Growth tracking",
-            setup_command="setup_growth",
+            setup_command="setup → 📈 Growth",
             had_prior_config=growth_already_configured,
             clear_fn=lambda: clear_growth_config(guild_id),
             cancel_event=cancel_event,
@@ -5132,7 +5135,7 @@ async def _run_storm_participation_step(
     is_premium_flag: bool, current: dict,
 ) -> dict | None:
     """
-    Step 6 of /setup_desertstorm and /setup_canyonstorm. Walks leadership
+    Step 6 of the storm setup wizard (DS + CS). Walks leadership
     through enabling/configuring participation log tracking. Returns a
     dict shaped like the one save_participation_config expects, or None
     if the user cancelled or timed out.
@@ -5802,7 +5805,7 @@ class _InlineCreateMemberRuleOffer(discord.ui.View):
 
 
 class _InlinePostFirstSignupOffer(discord.ui.View):
-    """Posted at the end of /setup_desertstorm / /setup_canyonstorm when
+    """Posted at the end of the storm setup wizard (DS / CS) when
     the structured flow is opted in, a sign-up channel is configured,
     and no sign-up post has been recorded yet. 'Post now' fires
     `post_registration` against the next configured event date."""
@@ -5890,7 +5893,7 @@ async def _run_structured_flow_setup_step(
     interaction_guild,
 ) -> dict | None:
     """
-    Final block of /setup_desertstorm and /setup_canyonstorm. Walks
+    Final block of the storm setup wizard (DS + CS). Walks
     leadership through enabling the structured roster flow (Premium, #38)
     and / or configuring the strategy preset + member rules tabs (free,
     #54). Returns a dict shaped like save_structured_storm_config's
@@ -7181,7 +7184,7 @@ async def run_birthday_setup(interaction: discord.Interaction, bot):
         await ask_disable_with_clear(
             channel,
             feature_label="Birthday tracking",
-            setup_command="setup_birthdays",
+            setup_command="setup → 🎂 Birthdays",
             had_prior_config=birthdays_already_configured,
             clear_fn=lambda: clear_birthday_config(guild_id),
             cancel_event=cancel_event,
@@ -7587,7 +7590,7 @@ async def run_shiny_tasks_setup(interaction: discord.Interaction, bot):
         return
     if not enabled_view.selected:
         # Disable + persist the previously-saved range/channel/etc. so the
-        # next /setup_shiny_tasks run can offer them back as "current".
+        # next Shiny Tasks setup wizard run can offer them back as "current".
         save_shiny_tasks_config(
             guild_id,
             enabled=0,
@@ -7600,7 +7603,7 @@ async def run_shiny_tasks_setup(interaction: discord.Interaction, bot):
         await ask_disable_with_clear(
             channel,
             feature_label="Shiny tasks announcement",
-            setup_command="setup_shiny_tasks",
+            setup_command="setup → 🌟 Shiny Tasks",
             had_prior_config=shiny_already_configured,
             clear_fn=lambda: clear_shiny_tasks_config(guild_id),
             cancel_event=cancel_event,

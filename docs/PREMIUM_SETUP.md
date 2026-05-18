@@ -23,10 +23,10 @@ portal hasn't granted.
 
 Why this matters:
 
-- **Member Roster Sync** (`/sync_members`) iterates `guild.members` to
+- **Member Roster Sync** (`/members sync`) iterates `guild.members` to
   write the roster sheet. Without this intent, `guild.members` is just
   the small handful of users Discord surfaces via interactions — so
-  `/sync_members` would write 0 rows even though the SKU is paid for.
+  `/members sync` would write 0 rows even though the SKU is paid for.
 - **Auto-resync on join/leave/role-change** depends on the
   `on_member_join` / `on_member_remove` / `on_member_update` gateway
   events firing. Those events do not fire without this intent.

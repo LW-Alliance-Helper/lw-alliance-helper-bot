@@ -286,8 +286,8 @@ class TestParticipationFlowGate:
         await run_log_flow(bot, channel, user, "DS")
 
         contents = _all_send_contents(channel)
-        assert any("setup_desertstorm" in c for c in contents), (
-            "Disabled-participation message should point at /setup_desertstorm"
+        assert any("Desert Storm" in c for c in contents), (
+            "Disabled-participation message should point at the Desert Storm setup wizard"
         )
 
     @pytest.mark.asyncio
@@ -315,8 +315,8 @@ class TestParticipationFlowGate:
         await run_log_flow(bot, channel, user, "CS")
 
         contents = _all_send_contents(channel)
-        assert any("setup_canyonstorm" in c for c in contents), (
-            "Empty-questions message should point at /setup_canyonstorm"
+        assert any("Canyon Storm" in c for c in contents), (
+            "Empty-questions message should point at the Canyon Storm setup wizard"
         )
 
 

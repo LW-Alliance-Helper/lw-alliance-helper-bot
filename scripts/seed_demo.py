@@ -664,9 +664,9 @@ def main() -> int:
 
     print()
     print("Done. Next steps:")
-    print(f"  1. In Discord, run /view_configuration in your demo server's leadership channel")
-    print(f"     to confirm everything looks wired up.")
-    print(f"  2. Take screenshots of /help, /train, /birthdays, /desertstorm draft, etc.")
+    print(f"  1. In Discord, run /setup in your demo server's leadership channel")
+    print(f"     and click 🗂️ View configuration to confirm everything looks wired up.")
+    print(f"  2. Take screenshots of /help, /train overview, /birthdays, /desertstorm, etc.")
     print(f"  3. Re-run this script any time the demo data drifts (it's idempotent).")
     return 0
 

@@ -716,7 +716,7 @@ class ExportImportCog(commands.Cog):
         if summary["skipped"]:
             skipped_text = "\n".join(
                 f"• **{s['category']}** — {s['reason']}\n  "
-                f"  Re-run `/import_config` with a corrected file to retry "
+                f"  Re-run `/config import` with a corrected file to retry "
                 f"just this category."
                 for s in summary["skipped"]
             )
@@ -731,7 +731,7 @@ class ExportImportCog(commands.Cog):
                 value="\n".join(f"• {w}" for w in summary["warnings"][:5])[:1024],
                 inline=False,
             )
-        result_embed.set_footer(text="Run /view_configuration to see the live state.")
+        result_embed.set_footer(text="Run /setup → 🗂️ View configuration to see the live state.")
         await channel.send(embed=result_embed)
         wizard_registry.unregister(user.id, cancel_event)
 

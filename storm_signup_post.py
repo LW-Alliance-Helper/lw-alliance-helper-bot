@@ -298,7 +298,7 @@ def _format_post_result_message(
 
     status = result.get("status")
     label = "Desert Storm" if event_type == "DS" else "Canyon Storm"
-    setup_cmd = "/setup_desertstorm" if event_type == "DS" else "/setup_canyonstorm"
+    setup_cmd = "/setup → ⚔️ Desert Storm" if event_type == "DS" else "/setup → 🏜️ Canyon Storm"
     date_pretty = format_event_date(event_date)
 
     parent = "desertstorm" if event_type == "DS" else "canyonstorm"

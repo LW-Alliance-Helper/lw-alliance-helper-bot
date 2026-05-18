@@ -568,7 +568,7 @@ class TestRunBirthdaySetup:
             await run_birthday_setup(interaction, bot)
 
         assert captured["feature_label"]   == "Birthday tracking"
-        assert captured["setup_command"]   == "setup_birthdays"
+        assert captured["setup_command"]   == "setup → 🎂 Birthdays"
         assert captured["had_prior_config"] is True
         # clear_fn should wipe the DB row when invoked.
         captured["clear_fn"]()
@@ -1033,7 +1033,7 @@ class TestRunGrowthSetup:
             await run_growth_setup(interaction, bot)
 
         assert captured["feature_label"]   == "Growth tracking"
-        assert captured["setup_command"]   == "setup_growth"
+        assert captured["setup_command"]   == "setup → 📈 Growth"
         assert captured["had_prior_config"] is True
         # clear_fn wipes the DB row when invoked.
         captured["clear_fn"]()
@@ -1189,7 +1189,7 @@ class TestRunShinyTasksSetup:
             await run_shiny_tasks_setup(interaction, bot)
 
         assert captured["feature_label"]    == "Shiny tasks announcement"
-        assert captured["setup_command"]    == "setup_shiny_tasks"
+        assert captured["setup_command"]    == "setup → 🌟 Shiny Tasks"
         assert captured["had_prior_config"] is True
         captured["clear_fn"]()
         assert config.has_shiny_tasks_config(TEST_GUILD_ID) is False

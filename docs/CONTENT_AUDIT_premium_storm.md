@@ -13,8 +13,8 @@ ellipses, line breaks (`\n`), and template placeholders (`{name}`,
 
 > **Excluded**: log lines (`[STORM …] …`), docstrings, code comments,
 > user-customisable templates (mail bodies, DM bodies — only the bot
-> scaffolding is shown). Free-tier `/setup_desertstorm` /
-> `/setup_canyonstorm` copy that pre-dates the structured flow is
+> scaffolding is shown). Free-tier `/setup → ⚔️ Desert Storm` /
+> `/setup → 🏜️ Canyon Storm` copy that pre-dates the structured flow is
 > already covered in `CONTENT_AUDIT.md`.
 
 ---
@@ -96,9 +96,9 @@ sorted by where the user normally encounters them.
 
 | Command | Description | File |
 |---|---|---|
-| `/setup_desertstorm` | Configure Desert Storm mail template and time options | `setup_cog.py:1507` |
-| `/setup_canyonstorm` | Configure Canyon Storm mail template and time options | `setup_cog.py:1522` |
-| `/sync_members` | Force a fresh `/sync_members` write to the alliance roster Sheet | `member_roster.py:430` |
+| `/setup → ⚔️ Desert Storm` | Configure Desert Storm mail template and time options | `setup_cog.py:1507` |
+| `/setup → 🏜️ Canyon Storm` | Configure Canyon Storm mail template and time options | `setup_cog.py:1522` |
+| `/members sync` | Force a fresh `/members sync` write to the alliance roster Sheet | `member_roster.py:430` |
 | `post_signup` (under `/desertstorm` or `/canyonstorm` parent group) | Manually post a sign-up post for the next storm event | `storm_signup_post.py:197` |
 | `signups` (under `/desertstorm` or `/canyonstorm` parent group) | Open the officer view (bucket map + filter + on-behalf) | `storm_officer_view.py:801` |
 | `attendance` (under `/desertstorm` or `/canyonstorm` parent group) | Post-event attendance tracker (Premium) | `storm_attendance.py:703` |
@@ -240,7 +240,7 @@ Header line + four buttons. Default body (alliance-customisable):
 > **{b_label}**, **either**, or **cannot**.\nDeadline: **{deadline}**.
 
 (Default in `defaults.STORM_DEFAULT_SIGNUP_BODY` style — alliance can
-override via `/setup_desertstorm` → mail template.)
+override via `/setup → ⚔️ Desert Storm` → mail template.)
 
 ### 3.2 SignupView buttons
 
@@ -514,8 +514,8 @@ Lives in `_finalize_structured_roster` (`storm_roster_builder.py:1989+`).
 | Trigger | Verbatim |
 |---|---|
 | Successful post | `✅ Approved & posted to <#{channel}>. Wrote **{n}** roster rows to **{tab}**.` |
-| Channel not configured | `⚠️ No post channel configured for {event_label}. Set one via `/setup_desertstorm` / `/setup_canyonstorm` and try again.` |
-| Channel deleted | `⚠️ Post channel is gone (likely deleted). Set a new one via `/setup_desertstorm` and try again.` |
+| Channel not configured | `⚠️ No post channel configured for {event_label}. Set one via `/setup → ⚔️ Desert Storm` / `/setup → 🏜️ Canyon Storm` and try again.` |
+| Channel deleted | `⚠️ Post channel is gone (likely deleted). Set a new one via `/setup → ⚔️ Desert Storm` and try again.` |
 | Send failure | `⚠️ Couldn't post the mail to <#{channel}> — likely a permissions issue (Send Messages / Embed Links). Fix and try Approve & Post again.` |
 | Lock claimed by another officer | `⛔ Another officer (<@{user}>) is currently building this team. Wait for them to finish or cancel.` |
 
@@ -808,21 +808,21 @@ officer wants to fire early).
 | Surface | Verbatim |
 |---|---|
 | Free-tier guard | `💎 **/desertstorm post_signup** (or **/canyonstorm post_signup**) is a Premium feature. See `/upgrade` for details.` |
-| Structured flow off | `⚠️ Structured flow isn't enabled for {event_label}. Run `/setup_desertstorm` and opt in.` |
-| No sign-up channel | `⚠️ No sign-up channel configured. Run `/setup_desertstorm` to set one.` |
+| Structured flow off | `⚠️ Structured flow isn't enabled for {event_label}. Run `/setup → ⚔️ Desert Storm` and opt in.` |
+| No sign-up channel | `⚠️ No sign-up channel configured. Run `/setup → ⚔️ Desert Storm` to set one.` |
 | Success | `✅ Sign-up post fired in <#{channel}> for **{event_date}**.` |
 | Recent duplicate guard | `⚠️ A sign-up post for **{event_date}** already exists in <#{channel}>. Use that one, or wait for the next event date.` |
 
 ---
 
-## 13. `/sync_members` flow (with `Is this user in Discord?` column)
+## 13. `/members sync` flow (with `Is this user in Discord?` column)
 
 Lives in `member_roster.py`. Premium-gated.
 
 | Surface | Verbatim |
 |---|---|
-| Free-tier guard | `💎 **/sync_members** is a Premium feature. See `/upgrade` for details.` |
-| Not configured | `⚠️ Member-roster sync isn't configured yet. Run `/setup_members` first.` |
+| Free-tier guard | `💎 **/members sync** is a Premium feature. See `/upgrade` for details.` |
+| Not configured | `⚠️ Member-roster sync isn't configured yet. Run `/setup → 👥 Members` first.` |
 | Success | `✅ Synced **{n}** members to `{tab}`.` |
 | Missing privileged intent (warn log only) | `[ROSTER] Guild {id}: only {cached}/{total} members in cache. Enable the SERVER MEMBERS INTENT in the Discord Developer Portal…` |
 
@@ -835,7 +835,7 @@ See §15.
 ## 14. Walkthrough tour
 
 Lives in `storm_walkthrough.py`. Optional Premium onboarding view
-posted after a fresh `/setup_desertstorm` or `/setup_canyonstorm`
+posted after a fresh `/setup → ⚔️ Desert Storm` or `/setup → 🏜️ Canyon Storm`
 completes with structured flow enabled.
 
 | Page | Headline |
@@ -849,7 +849,7 @@ completes with structured flow enabled.
 | Attendance | `📋 Post-event attendance per slot` |
 | History | `📜 Browse past rosters + attendance by date` |
 | Member rules | `📋 Per-member + power-band overrides` |
-| Wrap | `🎉 You're set — run `/setup_desertstorm` again to tweak.` |
+| Wrap | `🎉 You're set — run `/setup → ⚔️ Desert Storm` again to tweak.` |
 
 Buttons: `◀️ Previous` / `▶️ Next` / `❌ Close tour`. Persistent
 state is per-message; closing dismisses the ephemeral.
@@ -859,7 +859,7 @@ state is per-message; closing dismisses the ephemeral.
 ## 15. The "Is this user in Discord?" column (NEW in ο)
 
 Bot-maintained column on the alliance's roster Sheet. Created
-automatically by `/sync_members` (no manual setup required).
+automatically by `/members sync` (no manual setup required).
 
 **Values**: `Yes` (member is in the live Discord guild, non-bot)
 or `No` (blank ID, non-numeric ID, ID not in guild, ID is a bot).
@@ -876,7 +876,7 @@ outside Yes/No are rejected by Sheets).
      or blank.
 
 **Override semantics**: the bot overwrites this column on every
-`/sync_members`. If the alliance needs a manual override for an
+`/members sync`. If the alliance needs a manual override for an
 alt-account edge case, they should use the legacy `not_on_discord`
 column or the `Is this user in Discord?` column will be auto-flipped
 back on next sync. Future enhancement: alliance-override row that
@@ -896,7 +896,7 @@ roster builder under Premium).
 | `/desertstorm strategy create|edit|list|delete` | None — full free-tier surface for preset library mgmt. |
 | `/desertstorm strategy apply` | Premium-only when invoked with `event_date` (structured mode). |
 | `/desertstorm member_rule *` | Premium-only when read by the roster builder's auto-fill (but rules can be CREATED in free-tier). |
-| `/setup_members` + `/sync_members` | Premium-only; populates the roster Sheet the storm flow reads. |
+| `/setup → 👥 Members` + `/members sync` | Premium-only; populates the roster Sheet the storm flow reads. |
 
 ---
 
@@ -1041,7 +1041,7 @@ lookup so pre-#152 data stays correctly aligned (commit `aafb576`).
 These are user-facing strings that surfaced in the audit but aren't
 priority enough to ship in this batch:
 
-- **Mail body customisation flow**: `/setup_desertstorm` mail
+- **Mail body customisation flow**: `/setup → ⚔️ Desert Storm` mail
   template wizard inherits free-tier copy that doesn't reference
   the new structured fields (signups_tab, rosters_tab,
   attendance_tab). The default body works, but the wizard prompts

@@ -166,7 +166,7 @@ class TrainCog(commands.Cog):
         guild_id     = interaction.guild_id if hasattr(interaction, "guild_id") else None
         bcfg         = get_birthday_config(guild_id) if guild_id else {}
         tab_name     = bcfg.get("tab_name") or get_member_tab_name(guild_id)
-        # Use the configured lookahead window from /setup_birthdays. Defaults
+        # Use the configured lookahead window from /setup → 🎂 Birthdays. Defaults
         # to 14 days when not set so a fresh install still shows something
         # useful out of the box.
         window_days  = int(bcfg.get("lookahead_days") or 14)
@@ -183,7 +183,7 @@ class TrainCog(commands.Cog):
 
         if not members:
             await interaction.followup.send(
-                f"⚠️ No birthdays found in **{tab_name}**. Run `/setup_birthdays` to verify the tab and column settings.",
+                f"⚠️ No birthdays found in **{tab_name}**. Run `/setup → 🎂 Birthdays` to verify the tab and column settings.",
                 ephemeral=True,
             )
             return
@@ -225,7 +225,7 @@ class TrainCog(commands.Cog):
                 lines.append(f"• **{when:%A, %B} {when.day}** — {name} *({label})*")
             embed.description = "\n".join(lines)
 
-        embed.set_footer(text=f"Source: {tab_name} · Run /setup_birthdays to change settings")
+        embed.set_footer(text=f"Source: {tab_name} · Run /setup → 🎂 Birthdays to change settings")
         await interaction.followup.send(embed=embed, ephemeral=True)
 
     # ── /train log ─────────────────────────────────────────────────────────────
@@ -490,7 +490,7 @@ class TrainCog(commands.Cog):
 
                 # Resolve the alliance's configured DM template once per
                 # guild — falling back to the bot's hardcoded default if
-                # /setup_birthdays hasn't been run since dm_message landed.
+                # /setup → 🎂 Birthdays hasn't been run since dm_message landed.
                 bday_dm_tmpl = (bcfg.get("dm_message") or "").strip() \
                                or DEFAULT_BIRTHDAY_DM
 
@@ -514,7 +514,7 @@ class TrainCog(commands.Cog):
                               f"{bday_channel_id} (#{chan_name}) for guild "
                               f"{guild.id} ({guild.name}) — leadership must "
                               f"grant View Channel + Send Messages or "
-                              f"reconfigure via /setup_birthdays")
+                              f"reconfigure via /setup → 🎂 Birthdays")
                         break
 
                     # 💎 Premium: also DM the member directly with a personal note.
@@ -603,7 +603,7 @@ class TrainCog(commands.Cog):
             print(f"[TRAIN] Reminder sent for guild {guild.id} — {name} on {today_str}")
 
             # 💎 Premium: also DM the member assigned to today's train.
-            # Body is alliance-configurable via /setup_train; falls back
+            # Body is alliance-configurable via the train setup wizard; falls back
             # to the bot's hardcoded default if not customised.
             train_dm_tmpl = (train_cfg.get("dm_message") or "").strip() \
                             or DEFAULT_TRAIN_DM

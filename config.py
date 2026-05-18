@@ -854,7 +854,7 @@ def init_db():
         # hard for sheet-side sums to interpret. Numeric is now a free-tier
         # type and ships with a magnitude scaler. Backfill any saved guild
         # config whose questions still carry the original LW default keys so
-        # leadership doesn't have to re-run /setup_survey by hand. Idempotent:
+        # leadership doesn't have to re-run the survey setup wizard by hand. Idempotent:
         # only upgrades type=text questions that haven't been migrated.
         _LW_DEFAULT_MAGNITUDES = {
             "squad1_power":  "M",
@@ -1350,7 +1350,7 @@ def format_storm_slot(hour: int, minute: int, guild_id: int) -> str:
     """Compose the canonical storm-slot label.
 
     Returns `<local> (HH:MM server time)` — the format used on every
-    user-facing surface (TimeSelectView buttons, /view_configuration,
+    user-facing surface (TimeSelectView buttons, the /setup hub's 🗂️ View configuration button,
     storm overview embeds, mail `{time}` placeholder).
     """
     return f"{server_time_to_local(hour, minute, guild_id)} ({hour:02d}:{minute:02d} server time)"
@@ -1417,8 +1417,8 @@ def _normalize_storm_templates(d: dict, event_type: str) -> dict:
 
 def has_storm_config(guild_id: int, event_type: str) -> bool:
     """True iff the guild has a row in `guild_storm_config` for this
-    event_type — i.e. they have run `/setup_desertstorm` or
-    `/setup_canyonstorm` at least once. The fallback dict from
+    event_type — i.e. they have run `the Desert Storm setup wizard` or
+    `the Canyon Storm setup wizard` at least once. The fallback dict from
     `get_storm_config` doesn't distinguish "saved with all defaults"
     from "never configured"; this helper exists for the setup-wizard
     summary embed gate (#103)."""
@@ -2242,8 +2242,8 @@ def save_participation_config(
 ):
     """
     Persist the participation-log config to the (guild_id, event_type) row.
-    The row must already exist (created by /setup_desertstorm or
-    /setup_canyonstorm via save_storm_config); this UPDATE does not insert.
+    The row must already exist (created by the Desert Storm setup wizard or
+    the Canyon Storm setup wizard via save_storm_config); this UPDATE does not insert.
     The log-summary channel lives on `log_channel_id` and is set by the
     main storm-setup save call, so it isn't a parameter here.
     """
@@ -2279,7 +2279,7 @@ def save_participation_config(
 
 def has_growth_config(guild_id: int) -> bool:
     """True iff the guild has a row in `guild_growth_config` — i.e. they
-    have run `/setup_growth` at least once. `get_growth_config` returns
+    have run `the growth setup wizard` at least once. `get_growth_config` returns
     a fallback dict on miss, so it can't distinguish "saved with all
     defaults" from "never configured"; this helper exists for the
     setup-wizard summary embed and the disable-with-clear gate (#99)."""
@@ -2296,7 +2296,7 @@ def clear_growth_config(guild_id: int) -> None:
     `ask_disable_with_clear` Clear button after the user disables growth
     tracking. Wipes both the snapshot config and the breakdown config
     (which lives on the same row) — breakdown isn't functional without
-    growth metrics anyway, and `/setup_growth_breakdown` blocks when
+    growth metrics anyway, and `the growth-breakdown setup wizard` blocks when
     growth is disabled or has no metrics."""
     with _get_conn() as conn:
         conn.execute(
@@ -2381,7 +2381,7 @@ def save_growth_config(guild_id: int, enabled: int, tab_source: str,
 
 def has_growth_breakdown_config(guild_id: int) -> bool:
     """True iff the guild has saved any non-default breakdown field —
-    i.e. they have walked `/setup_growth_breakdown` at least once and
+    i.e. they have walked `the growth-breakdown setup wizard` at least once and
     changed something. Breakdown shares a row with growth, so the row
     existing isn't a useful signal on its own; instead this checks the
     breakdown-specific fields (post channel, thresholds, labels, bucket
@@ -2412,7 +2412,7 @@ def save_growth_breakdown_config(
     """Update the breakdown-specific fields on guild_growth_config without
     touching the core growth-snapshot fields. Returns True if a row was
     updated; False if the guild has no growth config yet (caller should
-    run `/setup_growth` first).
+    run `the growth setup wizard` first).
 
     `breakdown_thresholds` is a dict like ``{"increased": 20, "steady": 10,
     "low": 5, "none": 0}`` (Decline is implicit at < 0%). Empty dict means
@@ -2452,7 +2452,7 @@ def save_growth_breakdown_config(
 
 def has_survey_config(guild_id: int) -> bool:
     """True iff the guild has a row in `guild_survey_config` — i.e. they
-    have run `/setup_survey` for the main survey at least once. The
+    have run `the survey setup wizard` for the main survey at least once. The
     fallback dict from `get_survey_config` doesn't distinguish that
     case from "never configured"; this helper exists for the
     setup-wizard summary embed gate (#102). Extra named surveys live
@@ -2728,7 +2728,7 @@ def delete_extra_survey(guild_id: int, survey_id: str) -> bool:
 
 def has_birthday_config(guild_id: int) -> bool:
     """True iff the guild has a row in `guild_birthday_config` — i.e. they
-    have run `/setup_birthdays` at least once. `get_birthday_config`
+    have run `the birthday setup wizard` at least once. `get_birthday_config`
     returns a fallback dict on miss, so it can't distinguish "saved
     with all defaults" from "never configured"; this helper exists for
     the setup-wizard summary embed and the disable-with-clear gate
@@ -2837,7 +2837,7 @@ def mark_birthday_population_fired(guild_id: int, date_iso: str) -> None:
     """Stamp `last_train_population_date` so subsequent ticks (including
     fresh-process ticks after a Railway redeploy) skip the auto-pop for
     the rest of the day. UPDATE-only — the guild has to have run
-    `/setup_birthdays` first for the row to exist, in which case the
+    `the birthday setup wizard` first for the row to exist, in which case the
     caller's `bcfg.get("train_integration")` check has already passed
     so we know the row is present."""
     with _get_conn() as conn:
@@ -2851,7 +2851,7 @@ def mark_birthday_population_fired(guild_id: int, date_iso: str) -> None:
 
 def has_member_roster_config(guild_id: int) -> bool:
     """True iff the guild has a row in `guild_member_roster_config` —
-    i.e. they have run `/setup_members` at least once.
+    i.e. they have run `the Member Roster setup wizard` at least once.
     `get_member_roster_config` returns a fallback dict on miss, so it
     can't distinguish "saved with all defaults" from "never
     configured"; this helper exists for the setup-wizard summary embed
@@ -3023,7 +3023,7 @@ def _normalize_train_templates(d: dict) -> dict:
 
 def has_train_config(guild_id: int) -> bool:
     """True iff the guild has a row in `guild_train_config` — i.e. they
-    have run `/setup_train` at least once. `get_train_config` returns
+    have run `the train setup wizard` at least once. `get_train_config` returns
     a fallback dict on miss, so it can't distinguish "saved with all
     defaults" from "never configured"; this helper exists for the
     setup-wizard summary embed (#97) which only renders when there is
@@ -3128,7 +3128,7 @@ def save_train_config(guild_id: int, tab_name: str, themes: list,
 
 def has_shiny_tasks_config(guild_id: int) -> bool:
     """True iff the guild has a row in `guild_shiny_tasks_config` — i.e.
-    they have run `/setup_shiny_tasks` at least once.
+    they have run `the Shiny Tasks setup wizard` at least once.
     `get_shiny_tasks_config` returns a fallback dict on miss, so it
     can't distinguish "saved with all defaults" from "never configured";
     this helper exists for the setup-wizard summary embed and the

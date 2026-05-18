@@ -115,7 +115,7 @@ class TestSurveyFlow:
         thread.send.assert_called()
         sent_msgs = [c.args[0] if c.args else str(c.kwargs)
                      for c in thread.send.call_args_list]
-        assert any("setup_survey" in m or "No survey" in m or "not configured" in m.lower()
+        assert any("Survey" in m or "No survey" in m or "not configured" in m.lower()
                    for m in sent_msgs)
 
     @pytest.mark.asyncio

@@ -66,7 +66,7 @@ Most setup commands open a multi-step wizard in the channel. If you get stuck mi
 
 ### A note on the setup commands
 
-The bot has a family of `/setup_*` wizards (`/setup`, `/setup_train`, `/setup_events`, `/setup_growth`, `/setup_birthdays`, `/setup_desertstorm`, `/setup_canyonstorm`, `/setup_survey`, `/setup_members`). On the testing server these are typically already configured for you. **Do not run `/setup_reset`** on a configured test server — it wipes the whole configuration. Re-running an individual `/setup_*` command to *update* a section is fine and is a useful thing to test.
+Every setup wizard lives behind a button on the `/setup` hub — one slash command opens an embed with foundation state and a button grid for Train, Events, Growth, Birthdays, Desert Storm, Canyon Storm, Survey, Members, Shiny Tasks, Growth Breakdown, plus utility buttons for 🗂️ View configuration and 🗑️ Reset configuration. On the testing server most of these are typically already configured for you. **Do not click the 🗑️ Reset configuration button** on a configured test server — it wipes the whole configuration. Re-running an individual feature wizard via its button to *update* a section is fine and is a useful thing to test.
 
 If you are testing a fresh install (your own private test guild), feel free to walk through `/setup` end-to-end — feedback on first-time setup is especially valuable.
 
@@ -79,7 +79,7 @@ These are grouped by feature. Tasks are not required to be done in order or in f
 ### Basics
 
 - [ ] Run `/help`. Review the layout. Is anything missing or unclear?
-- [ ] Run `/view_configuration`. Does the displayed configuration make sense?
+- [ ] Run `/setup` and click **🗂️ View configuration**. Does the displayed configuration make sense?
 - [ ] Try a command in a non-leadership channel. The bot should refuse — note whether the rejection message is clear.
 
 ---
@@ -93,7 +93,7 @@ The bot can post in-game event reminders (Plague Marauder, Zombie Siege, etc.) o
 - [ ] **Try each editor button** — Add Event, Edit Time, Remove Event, Add Announcement Text, Build Announcement. Note whether each button's purpose is clear before clicking.
 - [ ] Run `/events log`. Note whether the message format and information level feel useful.
 - [ ] Add custom announcement text to today's events, then build the announcement. Note whether confirm vs. cancel is clearly distinguished.
-- [ ] **Custom-blurb round-trip.** Run `/setup_events` and either add a new event or edit one to give it a custom announcement blurb. The only placeholders are `{time}` (event time in the alliance timezone) and `{server_time}` (UTC). Example: *"We will be doing Glacieradon at {time} ({server_time} Server Time)! Remember to start with only 10 hits."* Then run `/events show`, add that event to today's schedule, and click **Build Announcement**. The draft should contain your custom wording — *not* a generic "&lt;event_key&gt; at {time} ({server_time} Server Time)." fallback (which would also render the key in lowercase). If the wording is wrong, please flag it.
+- [ ] **Custom-blurb round-trip.** Run `/setup → 📣 Events` and either add a new event or edit one to give it a custom announcement blurb. The only placeholders are `{time}` (event time in the alliance timezone) and `{server_time}` (UTC). Example: *"We will be doing Glacieradon at {time} ({server_time} Server Time)! Remember to start with only 10 hits."* Then run `/events show`, add that event to today's schedule, and click **Build Announcement**. The draft should contain your custom wording — *not* a generic "&lt;event_key&gt; at {time} ({server_time} Server Time)." fallback (which would also render the key in lowercase). If the wording is wrong, please flag it.
 
 ---
 
@@ -106,7 +106,7 @@ The bot tracks the daily alliance train assignment and (when configured) generat
 - [ ] If a blurb template is configured, test the **Generate Prompt** button. Note whether the resulting prompt is usable as-is.
 - [ ] Try the **Clear** button and cancel out of the confirmation. Note whether the cancel-result message is clear.
 - [ ] Run `/train log` to see past entries. Note whether the rendered output is easy to scan.
-- [ ] Run `/setup_train`. The final step is **Step 8 of 8 — Train DM Body (💎 Premium)** with `{name}` as a placeholder. Note whether the prompt makes clear that this fires alongside the channel reminder when the assigned member is on Premium + Member Roster Sync.
+- [ ] Run `/setup → 🚂 Train`. The final step is **Step 8 of 8 — Train DM Body (💎 Premium)** with `{name}` as a placeholder. Note whether the prompt makes clear that this fires alongside the channel reminder when the assigned member is on Premium + Member Roster Sync.
 
 ---
 
@@ -116,7 +116,7 @@ If birthdays are configured, the bot can announce them and (optionally) add them
 
 - [ ] Run `/birthdays`. Review the lookahead window and list format.
 - [ ] If birthday → train integration is enabled, run `/train birthdays` and verify the train schedule shows the resulting additions.
-- [ ] Run `/setup_birthdays` (only if reminders are enabled). The final step is **Step 9 of 9 — Birthday DM Body (💎 Premium)** with `{name}` as a placeholder. Try **Use default** and **Define my own** to see how each lands.
+- [ ] Run `/setup → 🎂 Birthdays` (only if reminders are enabled). The final step is **Step 9 of 9 — Birthday DM Body (💎 Premium)** with `{name}` as a placeholder. Try **Use default** and **Define my own** to see how each lands.
 
 ---
 
@@ -175,7 +175,7 @@ Periodic stat snapshots so the alliance can track progress over time.
 - [ ] Run `/growth overview`. Review the status display and available actions. The status should include a **Next Snapshot** date — note whether it's clear when the next automatic snapshot will fire.
 - [ ] Run `/growth breakdown`. Note whether the bucket counts (Increased / Steady / Low / None / Decline) render correctly, or whether the "no breakdown data yet" message points you at the right next step.
 - [ ] Take a manual snapshot via the **📸 Run Snapshot Now** button. Note whether the success message communicates what was captured.
-- [ ] Run `/setup_growth` and pick a custom interval (e.g. every 14 days). The confirmation embed should tell you exactly when the next snapshot will fire and offer a one-click way to start tracking from today instead.
+- [ ] Run `/setup → 📈 Growth` and pick a custom interval (e.g. every 14 days). The confirmation embed should tell you exactly when the next snapshot will fire and offer a one-click way to start tracking from today instead.
 
 ---
 
@@ -187,9 +187,9 @@ Premium adds member-aware automation: DMs to roster members, multi-survey, sched
 
 Once setup is confirmed, the relevant tasks are:
 
-- [ ] Run `/setup_members` to walk the roster-sync wizard. The final embed reports how many members were written on the initial sync.
-- [ ] Run `/sync_members` and verify the reported member count **matches the actual size of the test server** (excluding bots). If the count is `0` or wildly low, please flag it — it usually means the bot is missing a server-level permission.
-- [ ] Run `/desertstorm remind` and `/canyonstorm remind` to fire DM reminders. Review the DM body for tone and clarity. **The body is alliance-customisable** — if you re-run `/setup_desertstorm` and change the **Step 7 of 7 — Reminder DM** body, the next `/desertstorm remind` should pick up the new text. Try `{name}` as a placeholder to confirm member-name substitution works.
+- [ ] Run `/setup → 👥 Members` to walk the roster-sync wizard. The final embed reports how many members were written on the initial sync.
+- [ ] Run `/members sync` and verify the reported member count **matches the actual size of the test server** (excluding bots). If the count is `0` or wildly low, please flag it — it usually means the bot is missing a server-level permission.
+- [ ] Run `/desertstorm remind` and `/canyonstorm remind` to fire DM reminders. Review the DM body for tone and clarity. **The body is alliance-customisable** — if you re-run `/setup → ⚔️ Desert Storm` and change the **Step 7 of 7 — Reminder DM** body, the next `/desertstorm remind` should pick up the new text. Try `{name}` as a placeholder to confirm member-name substitution works.
 - [ ] In `/survey remind`, set up a **scheduled** reminder (DM-via-roster delivery) for a time within the next several minutes. Wait for it to fire. Review the DM body.
 - [ ] **Channel/thread destinations.** When a Premium guild's wizard asks for a channel (e.g. an announcement channel), there should be a **📢 Channel** / **🧵 Thread** chooser before the actual picker. Try both paths — pick a thread, run the wizard to completion, and verify the bot posts to the chosen thread.
 

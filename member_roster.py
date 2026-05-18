@@ -18,7 +18,8 @@ accurate.
 
 Commands:
   /setup_members  — admin wizard to configure tab/columns/role filter
-  /sync_members   — manually run a full sync now
+  /members overview — roster source + sync state at a glance
+  /members sync     — manually run a full sync now
 """
 
 import asyncio
@@ -341,7 +342,7 @@ def _apply_discord_flag_validation(
 def _warn_if_cache_looks_thin(guild: discord.Guild) -> None:
     """If the cached member list is wildly smaller than Discord's reported
     guild size, the Server Members Intent probably isn't enabled (or the
-    caller forgot to chunk). Log loudly so the symptom — "/sync_members
+    caller forgot to chunk). Log loudly so the symptom — "/members sync
     wrote 0 rows" — has a breadcrumb pointing at the cause."""
     try:
         cached_count = len(guild.members)
@@ -385,6 +386,15 @@ async def _ensure_member_cache(guild: discord.Guild) -> None:
 # ── Cog ──────────────────────────────────────────────────────────────────────
 
 class MemberRosterCog(commands.Cog):
+    # /members is a top-level slash-command group containing overview /
+    # sync. Leaves room for future roster-side leaves (audit, drift
+    # detection, manual add/remove without re-running a full sync) to
+    # land under the same namespace.
+    members_group = app_commands.Group(
+        name="members",
+        description="💎 Member roster sync (Premium)",
+    )
+
     def __init__(self, bot: commands.Bot):
         self.bot = bot
 
@@ -426,11 +436,102 @@ class MemberRosterCog(commands.Cog):
             except Exception:
                 pass
 
-    @app_commands.command(
-        name="sync_members",
+    @members_group.command(
+        name="overview",
+        description="Roster source, sync state, and pointers into /members sync",
+    )
+    async def members_overview(self, interaction: discord.Interaction):
+        from setup_cog import _has_leadership_or_admin
+        if not _has_leadership_or_admin(interaction):
+            await interaction.response.send_message(
+                "⛔ You need the leadership role (or admin) to view the member roster.",
+                ephemeral=True,
+            )
+            return
+
+        is_premium = await premium.is_premium(
+            interaction.guild_id, interaction=interaction, bot=self.bot,
+        )
+        cfg = get_member_roster_config(interaction.guild_id)
+
+        embed = discord.Embed(
+            title="👥 Member Roster Sync",
+            description=(
+                "Writes every Discord member to your alliance's Google Sheet "
+                "so other Premium features (birthday DMs, train DMs, "
+                "auto-mention, etc.) can find members by name. The sheet stays "
+                "yours; this command only adds + updates rows."
+            ),
+            color=discord.Color.blurple() if is_premium else discord.Color.greyple(),
+        )
+
+        if not is_premium:
+            embed.add_field(
+                name="💎 Premium feature",
+                value=(
+                    "Member Roster Sync is part of Premium. "
+                    "Run `/upgrade` to unlock it."
+                ),
+                inline=False,
+            )
+            await interaction.response.send_message(
+                embed=embed, view=premium.upgrade_view(), ephemeral=True,
+            )
+            return
+
+        enabled = bool(cfg.get("enabled"))
+        tab_name = cfg.get("tab_name") or "Member Roster"
+        auto_sync = bool(cfg.get("auto_sync"))
+        last_synced = (cfg.get("last_synced_at") or "").strip()
+        role_filter_id = int(cfg.get("role_filter_id") or 0)
+
+        if enabled:
+            lines = [
+                f"**Sheet tab:** `{tab_name}`",
+                f"**Auto-sync on join/leave/role-change:** "
+                f"{'on' if auto_sync else 'off'}",
+            ]
+            if role_filter_id:
+                role = interaction.guild.get_role(role_filter_id) if interaction.guild else None
+                lines.append(
+                    f"**Filtered to role:** "
+                    f"{role.mention if role else f'`role #{role_filter_id}` (deleted?)'}"
+                )
+            else:
+                lines.append("**Filtered to role:** *(all members)*")
+            lines.append(
+                f"**Last sync:** {last_synced or '*(never synced)*'}"
+            )
+            embed.add_field(
+                name="Current state",
+                value="\n".join(lines),
+                inline=False,
+            )
+        else:
+            embed.add_field(
+                name="Not yet configured",
+                value=(
+                    "Run `/setup_members` to pick the destination tab and "
+                    "(optionally) filter to a specific role."
+                ),
+                inline=False,
+            )
+
+        embed.add_field(
+            name="Sub-commands",
+            value=(
+                "• `/members sync` — Rebuild the roster sheet now\n"
+                "• `/setup_members` — Configure or change the roster destination"
+            ),
+            inline=False,
+        )
+        await interaction.response.send_message(embed=embed, ephemeral=True)
+
+    @members_group.command(
+        name="sync",
         description="💎 Manually rebuild the member roster sheet now",
     )
-    async def sync_members(self, interaction: discord.Interaction):
+    async def members_sync(self, interaction: discord.Interaction):
         from setup_cog import _has_leadership_or_admin
         if not _has_leadership_or_admin(interaction):
             await interaction.response.send_message(
@@ -618,7 +719,7 @@ async def run_member_roster_setup(interaction: discord.Interaction, bot):
     await channel.send(
         "**Step 3 of 3 — Auto-Sync?**\n"
         "Should the bot automatically re-sync when members join, leave, or "
-        "change roles?\nPick **No** to only sync on `/sync_members`.",
+        "change roles?\nPick **No** to only sync on `/members sync`.",
         view=auto_view,
     )
     await wait_view_or_cancel(auto_view, cancel_event)
@@ -646,7 +747,7 @@ async def run_member_roster_setup(interaction: discord.Interaction, bot):
     except Exception as e:
         await channel.send(
             f"✅ Saved configuration but the initial sync failed: {e}\n"
-            f"Try running `/sync_members` once you've fixed the issue."
+            f"Try running `/members sync` once you've fixed the issue."
         )
         wizard_registry.unregister(user.id, cancel_event)
         return
@@ -663,7 +764,7 @@ async def run_member_roster_setup(interaction: discord.Interaction, bot):
     )
     embed.add_field(name="Auto-Sync",    value="Enabled" if auto_sync else "Disabled", inline=True)
     embed.add_field(name="Initial sync", value=f"**{count}** members written", inline=False)
-    embed.set_footer(text="Run /sync_members to re-sync manually any time.")
+    embed.set_footer(text="Run /members sync to re-sync manually any time.")
     await channel.send(embed=embed)
     wizard_registry.unregister(user.id, cancel_event)
     print(f"[ROSTER] Sync configured for guild {guild_id} ({count} members)")

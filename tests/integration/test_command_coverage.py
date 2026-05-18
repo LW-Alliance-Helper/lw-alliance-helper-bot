@@ -59,7 +59,11 @@ EXPECTED_COG_COMMANDS = {
         "cancel", "train",
     },
     "MemberRosterCog": {
-        "sync_members", "setup_members",
+        # Top-level: /members group + the legacy /setup_members wizard.
+        # /setup_members migrates into the /setup hub in #201; for now
+        # it stays at the top level. Subcommands of /members
+        # (overview / sync) are introspected separately.
+        "members", "setup_members",
     },
     "DonateCog": {
         # Top-level commands: /donate, /upgrade, and the /premium group.
@@ -189,6 +193,15 @@ class TestCogRegistration:
         from member_roster import MemberRosterCog
         cog = _make_cog(MemberRosterCog)
         assert _commands_on(cog) == EXPECTED_COG_COMMANDS["MemberRosterCog"]
+
+    def test_member_roster_cog_members_group_has_expected_subcommands(self, seeded_db):
+        """/members is a top-level Group containing overview / sync.
+        Subcommands are introspected here rather than via `_commands_on`."""
+        from member_roster import MemberRosterCog
+        cog = _make_cog(MemberRosterCog)
+        assert _subcommands_on(cog.members_group) == {
+            "overview", "sync",
+        }
 
     def test_donate_cog_registers_expected_commands(self, seeded_db):
         from donate import DonateCog
@@ -347,13 +360,17 @@ class TestSetupAndResetGateNonAdmins:
         assert "admin" in (content or "").lower()
 
 
-# ── /sync_members + /setup_members ───────────────────────────────────────────
+# ── /members group + /setup_members ──────────────────────────────────────────
 
 class TestMemberRosterCommandsGate:
+    """Post-#195: `/sync_members` is now `/members sync`. The Python
+    method name on the cog is `members_sync` (vs the legacy `sync_members`
+    attribute that's gone). `/setup_members` keeps its top-level shape
+    until #201 folds it into the setup hub."""
 
     @pytest.mark.asyncio
-    @pytest.mark.parametrize("command_name", ["sync_members", "setup_members"])
-    async def test_rejects_non_privileged(self, seeded_db, command_name):
+    @pytest.mark.parametrize("command_attr", ["members_sync", "setup_members"])
+    async def test_rejects_non_privileged(self, seeded_db, command_attr):
         import premium
         premium.clear_cache()
 
@@ -361,7 +378,7 @@ class TestMemberRosterCommandsGate:
         cog = _make_cog(MemberRosterCog)
 
         interaction = _make_nonprivileged_interaction()
-        cmd = getattr(cog, command_name)
+        cmd = getattr(cog, command_attr)
         await cmd.callback(cog, interaction)
 
         content, _ = _last_message(interaction)
@@ -370,8 +387,8 @@ class TestMemberRosterCommandsGate:
 
     @pytest.mark.asyncio
     @pytest.mark.free_tier_only
-    @pytest.mark.parametrize("command_name", ["sync_members", "setup_members"])
-    async def test_premium_locked_for_free_admin(self, seeded_db, command_name):
+    @pytest.mark.parametrize("command_attr", ["members_sync", "setup_members"])
+    async def test_premium_locked_for_free_admin(self, seeded_db, command_attr):
         """An admin on a free guild gets the premium-locked embed."""
         import premium
         premium.clear_cache()
@@ -382,12 +399,12 @@ class TestMemberRosterCommandsGate:
         interaction = make_mock_interaction(is_admin=True)
         # Free guild — no entitlements
         interaction.entitlements = []
-        cmd = getattr(cog, command_name)
+        cmd = getattr(cog, command_attr)
         await cmd.callback(cog, interaction)
 
         _, embed = _last_message(interaction)
         assert embed is not None, (
-            f"/{command_name} on free tier should show the premium-locked embed"
+            f"cog.{command_attr} on free tier should show the premium-locked embed"
         )
         assert "Premium" in (embed.title or "")
 

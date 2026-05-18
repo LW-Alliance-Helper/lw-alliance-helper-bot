@@ -238,7 +238,9 @@ HELP_CATEGORIES: dict[str, dict] = {
             ("/setup_members",
              "Configure Member Roster Sync — writes Discord IDs to your "
              "sheet so other features find members by name."),
-            ("/sync_members",
+            ("/members overview",
+             "Roster source, last-sync time, and current state at a glance."),
+            ("/members sync",
              "Manually re-sync the roster now."),
             ("Multiple named surveys",
              "Manage from `/survey` directly via Add / Edit / Remove."),

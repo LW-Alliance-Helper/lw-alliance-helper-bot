@@ -173,7 +173,7 @@ class MemberRosterCog(commands.Cog):
             await self._auto_sync_if_enabled(after.guild)
 
     async def _auto_sync_if_enabled(self, guild: discord.Guild):
-        if not await premium.is_premium(guild.id, bot=self.bot):
+        if not await premium.feature_gate("member_sync", guild.id, bot=self.bot):
             return
         cfg = get_member_roster_config(guild.id)
         if not cfg.get("enabled") or not cfg.get("auto_sync"):
@@ -213,8 +213,9 @@ class MemberRosterCog(commands.Cog):
             )
             return
 
-        if not await premium.is_premium(
-            interaction.guild_id, interaction=interaction, bot=self.bot,
+        if not await premium.feature_gate(
+            "member_sync", interaction.guild_id,
+            interaction=interaction, bot=self.bot,
         ):
             await interaction.response.send_message(
                 embed=premium.premium_locked_embed(
@@ -280,8 +281,9 @@ class MemberRosterCog(commands.Cog):
 
         # Premium gate before the channel-perms pre-check: a free user
         # trying this command should see the upsell, not a perms error.
-        if not await premium.is_premium(
-            interaction.guild_id, interaction=interaction, bot=self.bot,
+        if not await premium.feature_gate(
+            "member_sync", interaction.guild_id,
+            interaction=interaction, bot=self.bot,
         ):
             await interaction.response.send_message(
                 embed=premium.premium_locked_embed(

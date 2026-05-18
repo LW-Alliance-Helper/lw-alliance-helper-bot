@@ -1472,7 +1472,7 @@ class SetupCog(commands.Cog):
                 ephemeral=True,
             )
             return
-        if not await premium.is_premium(interaction.guild_id, interaction=interaction):
+        if not await premium.is_premium(interaction.guild_id, interaction=interaction, bot=interaction.client):
             await interaction.response.send_message(
                 "💎 `/setup_growth_breakdown` is a Premium feature. The "
                 "**📊 See most recent Breakdown** button on `/growth` works on every tier — "
@@ -1743,7 +1743,7 @@ async def _send_view_configuration(interaction: discord.Interaction, cfg) -> Non
     growth   = get_growth_config(guild_id)
     shiny    = get_shiny_tasks_config(guild_id)
     events   = get_guild_events(guild_id, active_only=True)
-    is_premium_flag = await premium.is_premium(guild_id, interaction=interaction)
+    is_premium_flag = await premium.is_premium(guild_id, interaction=interaction, bot=interaction.client)
 
     def _yn(v) -> str:
         return "✅ Configured" if v else "❌ Not configured"
@@ -1991,7 +1991,7 @@ async def run_setup(interaction: discord.Interaction, bot):
     cfg.leadership_role_id   = v.selected_role.id
 
     # ── Step 3: Leadership channel ─────────────────────────────────────────────
-    is_premium_flag = await premium.is_premium(guild_id, interaction=interaction)
+    is_premium_flag = await premium.is_premium(guild_id, interaction=interaction, bot=interaction.client)
     await channel.send(
         "**Step 3 of 6 — Leadership Channel**\n"
         "Pick the channel where I should post drafts, reminders, and approvals "
@@ -2372,7 +2372,7 @@ async def run_growth_setup(interaction: discord.Interaction, bot):
 
     while True:
         # Free-tier cap on number of growth metrics
-        metrics_cap = await premium.get_limit("growth_metrics", guild_id, interaction=interaction)
+        metrics_cap = await premium.get_limit("growth_metrics", guild_id, interaction=interaction, bot=interaction.client)
         at_metrics_cap = metrics_cap is not None and len(metrics) >= metrics_cap
 
         class MetricsActionView(discord.ui.View):
@@ -2527,7 +2527,7 @@ async def run_growth_setup(interaction: discord.Interaction, bot):
 
     # ── Step 7: Snapshot frequency ────────────────────────────────────────────
     # Custom-interval frequency is a premium-only feature.
-    custom_interval_unlocked = await premium.is_premium(guild_id, interaction=interaction)
+    custom_interval_unlocked = await premium.is_premium(guild_id, interaction=interaction, bot=interaction.client)
 
     class FrequencyView(discord.ui.View):
         def __init__(self):
@@ -3304,9 +3304,9 @@ async def run_train_setup(interaction: discord.Interaction, bot):
 
     # Free-tier slot caps for themes / tones (None = unlimited).
     # Also used by the reminder-channel step to expose threads on premium.
-    is_premium_flag = await premium.is_premium(guild_id, interaction=interaction)
-    themes_cap = await premium.get_limit("themes", guild_id, interaction=interaction)
-    tones_cap  = await premium.get_limit("tones",  guild_id, interaction=interaction)
+    is_premium_flag = await premium.is_premium(guild_id, interaction=interaction, bot=interaction.client)
+    themes_cap = await premium.get_limit("themes", guild_id, interaction=interaction, bot=interaction.client)
+    tones_cap  = await premium.get_limit("tones",  guild_id, interaction=interaction, bot=interaction.client)
 
     def _trim(values: list[str], cap: int | None) -> tuple[list[str], bool]:
         """Trim list to cap. Returns (trimmed_list, was_truncated)."""
@@ -3445,7 +3445,7 @@ async def run_train_setup(interaction: discord.Interaction, bot):
         # ── Step 6: Prompt templates ───────────────────────────────────────────
         # Free tier keeps a single "Default" template; premium can save up to
         # `template_cap` named templates and pick which is the default.
-        template_cap     = await premium.get_limit("train_templates", guild_id, interaction=interaction)
+        template_cap     = await premium.get_limit("train_templates", guild_id, interaction=interaction, bot=interaction.client)
         existing_templates = list(current.get("templates") or [])
         if not existing_templates:
             existing_templates = [{"name": "Default", "template": prompt_template or ""}]
@@ -3897,7 +3897,7 @@ async def run_survey_setup(interaction: discord.Interaction, bot,
         "Configure the survey for your alliance."
     )
 
-    is_premium_flag = await premium.is_premium(guild_id, interaction=interaction)
+    is_premium_flag = await premium.is_premium(guild_id, interaction=interaction, bot=interaction.client)
 
     # ── Step 1: Survey channel ─────────────────────────────────────────────────
     survey_ch_view = ChannelSelectStep(
@@ -4221,7 +4221,7 @@ async def run_survey_setup(interaction: discord.Interaction, bot,
                         q_num    = f"Question {idx + 1}"
                     else:
                         # Free-tier cap on number of survey questions
-                        q_cap = await premium.get_limit("survey_questions", guild_id, interaction=interaction)
+                        q_cap = await premium.get_limit("survey_questions", guild_id, interaction=interaction, bot=interaction.client)
                         if q_cap is not None and len(questions) >= q_cap:
                             await channel.send(embed=premium.limit_reached_embed(
                                 feature_label="Survey Questions",
@@ -4248,7 +4248,7 @@ async def run_survey_setup(interaction: discord.Interaction, bot,
                     q_key = q_label.lower().replace(" ", "_").replace("(", "").replace(")", "").replace("/", "_")
 
                     # Type — Numeric is free; Multi-select / Date are Premium.
-                    is_premium_for_q = await premium.is_premium(guild_id, interaction=interaction)
+                    is_premium_for_q = await premium.is_premium(guild_id, interaction=interaction, bot=interaction.client)
                     type_options = [
                         discord.SelectOption(label="Text — member types their answer", value="text"),
                         discord.SelectOption(label="Dropdown — member selects from a list", value="dropdown"),
@@ -4616,7 +4616,7 @@ async def run_storm_setup(interaction: discord.Interaction, bot, event_type: str
 
     await channel.send(f"⚙️ **{label} Setup**")
 
-    is_premium_flag = await premium.is_premium(guild_id, interaction=interaction)
+    is_premium_flag = await premium.is_premium(guild_id, interaction=interaction, bot=interaction.client)
 
     # ── Step 1: Sheet tab ──────────────────────────────────────────────────────
     hardcoded_tab = "DS Assignments" if event_type == "DS" else "CS Assignments"
@@ -5551,7 +5551,7 @@ async def run_event_setup(interaction: discord.Interaction, bot):
 
     # ── Steps 1-4: Channel/time settings (skipped if coming from action menu) ──
     if not skip_settings:
-        is_premium_flag  = await premium.is_premium(guild_id, interaction=interaction)
+        is_premium_flag  = await premium.is_premium(guild_id, interaction=interaction, bot=interaction.client)
         current_draft_id = guild_cfg.event_draft_channel_id or 0
         draft_ch_view    = ChannelSelectStep(
             "Select the draft channel...",
@@ -5770,7 +5770,7 @@ async def run_event_setup(interaction: discord.Interaction, bot):
                     existing = get_guild_event(guild_id, list_view.edit_key)
                 elif list_view.action == "add":
                     # Free-tier cap on number of events
-                    cap = await premium.get_limit("events", guild_id, interaction=interaction)
+                    cap = await premium.get_limit("events", guild_id, interaction=interaction, bot=interaction.client)
                     if cap is not None and len(events) >= cap:
                         await channel.send(embed=premium.limit_reached_embed(
                             feature_label="Event Announcements",
@@ -6300,7 +6300,7 @@ async def run_birthday_setup(interaction: discord.Interaction, bot):
 
     if reminders_enabled:
         # ── Step 8a: Reminder channel ──────────────────────────────────────────
-        is_premium_flag = await premium.is_premium(guild_id, interaction=interaction)
+        is_premium_flag = await premium.is_premium(guild_id, interaction=interaction, bot=interaction.client)
         saved_remind_ch = current.get("reminder_channel_id", 0) or 0
         remind_ch_view = ChannelSelectStep(
             "Select the birthday announcement channel...",
@@ -6535,7 +6535,7 @@ async def run_shiny_tasks_setup(interaction: discord.Interaction, bot):
         return
 
     # ── Step 2: Channel ───────────────────────────────────────────────────────
-    is_premium_flag = await premium.is_premium(guild_id, interaction=interaction)
+    is_premium_flag = await premium.is_premium(guild_id, interaction=interaction, bot=interaction.client)
     await channel.send(
         "**Step 2 of 6 — Announcement Channel**\n"
         "Pick the channel where the daily shiny tasks post should be posted."

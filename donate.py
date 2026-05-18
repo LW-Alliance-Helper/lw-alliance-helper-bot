@@ -226,7 +226,21 @@ class DonateCog(commands.Cog):
                     await interaction.response.send_message(embed=embed, ephemeral=True)
                     return
 
-                premium.assign(user_id, guild_id)
+                if not premium.assign(user_id, guild_id):
+                    # Race: another subscriber claimed this guild between
+                    # the holder pre-check above and the assign call.
+                    embed = discord.Embed(
+                        title="⚠️ Couldn't claim this server",
+                        description=(
+                            "Another subscriber's claim on this server "
+                            "landed first. Run `/premium_assign` from a "
+                            "different server, or `/premium_status` to "
+                            "see your options."
+                        ),
+                        color=discord.Color.orange(),
+                    )
+                    await interaction.response.send_message(embed=embed, ephemeral=True)
+                    return
                 embed = discord.Embed(
                     title="💎 Premium is active in this server!",
                     description=(
@@ -411,7 +425,21 @@ class DonateCog(commands.Cog):
                 )
                 return
 
-            premium.assign(user_id, guild_id)
+            if not premium.assign(user_id, guild_id):
+                await interaction.followup.send(
+                    embed=discord.Embed(
+                        title="⚠️ Couldn't claim this server",
+                        description=(
+                            "Another subscriber claimed this server between "
+                            "the time you confirmed and now. Run "
+                            "`/premium_assign` from a different server, or "
+                            "`/premium_status` to manage your subscription."
+                        ),
+                        color=discord.Color.orange(),
+                    ),
+                    ephemeral=True,
+                )
+                return
             confirm_embed = discord.Embed(
                 title="💎 Premium is now active in this server",
                 description=(
@@ -450,7 +478,22 @@ class DonateCog(commands.Cog):
             )
             return
 
-        premium.assign(user_id, guild_id)
+        if not premium.assign(user_id, guild_id):
+            await interaction.followup.send(
+                embed=discord.Embed(
+                    title="⚠️ Couldn't switch to this server",
+                    description=(
+                        "Another subscriber claimed this server between "
+                        "the time you confirmed and now. Run "
+                        f"`/premium_status` to confirm **{prior_name}** is "
+                        "still your active server, or try `/premium_assign` "
+                        "from a different one."
+                    ),
+                    color=discord.Color.orange(),
+                ),
+                ephemeral=True,
+            )
+            return
         confirm_embed = discord.Embed(
             title="💎 Premium switched to this server",
             description=(
@@ -641,7 +684,15 @@ class DonateCog(commands.Cog):
             await self._dm_blocked_assignment(user_id, guild_id, holder)
             return
 
-        premium.assign(user_id, guild_id)
+        if not premium.assign(user_id, guild_id):
+            # Race between the pre-check above and this assign call.
+            # Re-resolve the new holder so the user gets a helpful DM.
+            new_holder = premium.get_assigned_user(guild_id)
+            if new_holder is not None:
+                await self._dm_blocked_assignment(user_id, guild_id, new_holder)
+            else:
+                await self._dm_assignment_prompt(user_id)
+            return
         await self._dm_auto_assigned(user_id, guild_id)
 
     @commands.Cog.listener()

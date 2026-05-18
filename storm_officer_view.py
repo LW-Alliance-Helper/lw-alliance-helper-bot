@@ -1,7 +1,10 @@
 """
-`/desertstorm signups` and `/canyonstorm signups` officer view (#125).
+Officer view for storm sign-ups — reached via the
+`👁️ View sign-ups + set up teams` button on `/desertstorm` and
+`/canyonstorm` (hub-restructure #187; legacy `/desertstorm signups`
+subcommand pre-#125).
 
-Leadership-only command that surfaces who's voted for an event,
+Leadership-only surface that displays who's voted for an event,
 grouped by vote bucket, with a path to cast on-behalf votes for
 members who don't use Discord.
 
@@ -38,6 +41,8 @@ import logging
 from typing import Optional
 
 import discord
+
+from storm_event_hub import HUB_COMMAND, HUB_BTN_VIEW_SIGNUPS, HUB_BTN_PRESETS
 
 logger = logging.getLogger(__name__)
 
@@ -433,7 +438,7 @@ def _render_embed(
     date_pretty = format_event_date(event_date)
 
     total = sum(len(v) for v in buckets.values())
-    title = f"{emoji} {label} Sign-Ups — {date_pretty}  ({total} members)"
+    title = f"{emoji} {label} Sign-Ups: {date_pretty}  ({total} members)"
 
     # If any bucket holds a not-on-Discord entry, render a footnote so the
     # ¹ marker we add to each such entry isn't unexplained.
@@ -476,13 +481,13 @@ def _render_embed(
         used += len(block)
 
     if has_off_discord:
-        footnote = "\n¹ Not on Discord — cast their vote with **🙋 Record on-behalf vote**."
+        footnote = "\n¹ Not on Discord. Cast their vote with **🙋 Record on-behalf vote**."
         if used + len(footnote) <= _DESCRIPTION_BUDGET:
             desc_lines.append(footnote)
 
     description = "\n".join(desc_lines) if desc_lines else "_No data yet._"
     if truncated_buckets:
-        description += "\n\n_Some buckets clipped — use the filter dropdown to drill in._"
+        description += "\n\n_Some buckets clipped. Use the filter dropdown to drill in._"
 
     embed = discord.Embed(
         title=title,
@@ -587,11 +592,22 @@ class _OnBehalfVoteView(discord.ui.View):
         # authoritative signal: if the picked name matches a live
         # member's display name, use their Discord ID regardless of
         # what the roster row says.
+        #
+        # Display-name collisions: alliances sometimes have two Discord
+        # members with the same server nickname (e.g. two "Phoenix"
+        # alts). A single-key lookup would let one ID silently overwrite
+        # the other and the officer would cast a vote for the wrong
+        # member with no signal. Multi-value lookup so colliding names
+        # surface ALL matching Discord IDs; the picker then disambiguates
+        # by appending `(@username)` for each colliding entry.
         guild = parent_view.guild if parent_view is not None else None
-        discord_by_name = {}
+        discord_members_by_name: dict[str, list[tuple[str, str]]] = {}
         if guild is not None:
             for gm in _discord_member_pool(guild):
-                discord_by_name[gm.display_name.lower()] = str(gm.id)
+                key = gm.display_name.lower()
+                discord_members_by_name.setdefault(key, []).append(
+                    (str(gm.id), gm.name)
+                )
         seen: set[str] = set()
         cleaned: list[dict] = []
         for m in members:
@@ -609,23 +625,38 @@ class _OnBehalfVoteView(discord.ui.View):
             seen.add(key)
             discord_id = (m.get("discord_id") or "").strip()
             not_on_discord = bool(m.get("not_on_discord"))
+            live_matches = discord_members_by_name.get(key, [])
             # Resolution priority for `target_member_id`:
-            #   1. Live Discord member with matching display_name. Most
-            #      authoritative; survives roster-row misclassification.
-            #   2. Roster row's discord_id when the row isn't flagged
-            #      not_on_discord.
-            #   3. The picked name verbatim (non-Discord roster member).
-            live_id = discord_by_name.get(key)
-            if live_id:
-                target_id = live_id
-            elif discord_id and not not_on_discord:
-                target_id = discord_id
-            else:
-                target_id = name
-            cleaned.append({
-                "name": name,
-                "target_id": target_id,
-            })
+            #   1. Roster row's discord_id when filled in and not flagged
+            #      not_on_discord. The roster is explicit about which
+            #      user this row represents, so no Discord-side
+            #      disambiguation is needed even if multiple Discord
+            #      members share the display name.
+            #   2. Single live Discord member with matching display_name
+            #      — use their ID directly.
+            #   3. Multiple live Discord members share the display name
+            #      AND the roster row didn't pre-commit to an ID — emit
+            #      ONE picker entry per colliding member, suffixed
+            #      `(@username)`, so the officer can tell them apart.
+            #   4. The picked name verbatim (genuine non-Discord roster
+            #      member, or no live match at all).
+            if discord_id and not not_on_discord:
+                cleaned.append({"name": name, "target_id": discord_id})
+                continue
+            if not_on_discord or not live_matches:
+                cleaned.append({"name": name, "target_id": name})
+                continue
+            if len(live_matches) == 1:
+                cleaned.append({"name": name, "target_id": live_matches[0][0]})
+                continue
+            # Collision: expand into one disambiguated entry per
+            # Discord match. Sort by username for a stable order across
+            # picker rebuilds.
+            for member_id, username in sorted(live_matches, key=lambda p: p[1].lower()):
+                cleaned.append({
+                    "name": f"{name} (@{username})",
+                    "target_id": member_id,
+                })
         cleaned.sort(key=lambda r: r["name"].lower())
         self.members = cleaned
         # Cache a name→target_id map so the submit handler can resolve
@@ -876,7 +907,7 @@ class _OnBehalfVoteView(discord.ui.View):
         self.stop()
         try:
             await inter.response.edit_message(
-                content="↩️ Cancelled — no vote recorded.", view=self,
+                content="↩️ Cancelled. No vote recorded.", view=self,
             )
         except discord.HTTPException:
             pass
@@ -927,8 +958,8 @@ class OfficerView(discord.ui.View):
         officers know the buttons are dead. Matches the auto-post-view
         cleanup contract in CLAUDE.md."""
         from wizard_registry import expire_view_message
-        parent = "desertstorm" if self.event_type == "DS" else "canyonstorm"
-        await expire_view_message(self.message, command_hint=f"/{parent} signups")
+        hint = f"{HUB_COMMAND[self.event_type]} → **{HUB_BTN_VIEW_SIGNUPS}**"
+        await expire_view_message(self.message, command_hint=hint)
 
     async def refresh_buckets(self) -> None:
         """Re-read the alliance roster Sheet + storm_signups SQLite
@@ -1019,7 +1050,7 @@ class OfficerView(discord.ui.View):
                 msg = await inter.followup.send(
                     content=(
                         "🙋 Pick a member and a vote, then **Submit**. "
-                        "Only roster members are listed — `/members sync` "
+                        "Only roster members are listed. `/members sync` "
                         "refreshes the list."
                     ),
                     view=picker, ephemeral=True,
@@ -1111,11 +1142,11 @@ async def _open_team_setup(
     import storm_strategy as ss
     preset_names = ss.list_presets(officer_view.guild_id, officer_view.event_type)
     if not preset_names:
-        parent = "desertstorm" if officer_view.event_type == "DS" else "canyonstorm"
+        hub_cmd = HUB_COMMAND[officer_view.event_type]
         await inter.response.send_message(
             f"⚠️ No strategy presets defined yet for "
             f"{'Desert Storm' if officer_view.event_type == 'DS' else 'Canyon Storm'}. "
-            f"Run `/{parent} strategy create` first.",
+            f"Run `{hub_cmd}` and click **{HUB_BTN_PRESETS}** first.",
             ephemeral=True,
         )
         return
@@ -1178,7 +1209,7 @@ class _PresetPickerView(discord.ui.View):
             self.selected_preset = select.values[0]
             for item in self.children: item.disabled = True
             await inter.response.edit_message(
-                content=f"✅ Preset **{self.selected_preset}** selected — "
+                content=f"✅ Preset **{self.selected_preset}** selected. "
                         f"opening the roster builder…",
                 view=self,
             )
@@ -1201,9 +1232,10 @@ class _PresetPickerView(discord.ui.View):
 
 # ── Slash command handler ────────────────────────────────────────────────────
 #
-# Registered by `storm_commands_root` under `/desertstorm signups` and
-# `/canyon_storm signups`. This module exposes the handler body so the
-# root cog stays a thin dispatcher.
+# Wired from the `👁️ View sign-ups + set up teams` button on the
+# `/desertstorm` and `/canyonstorm` event hubs (storm_event_hub.py).
+# This module exposes the handler body so the hub stays a thin
+# dispatcher.
 
 
 async def handle_storm_signups(
@@ -1288,7 +1320,7 @@ async def handle_storm_signups(
         # hid the detail the audit explicitly asked to expose.
         preview = " · ".join(view.roster_errors[:2])
         followup_args["content"] = (
-            "⚠️ Roster Sheet read had issues — non-Discord member "
+            "⚠️ Roster Sheet read had issues. Non-Discord member "
             f"enumeration may be incomplete: {preview}"
         )
         logger.warning(
@@ -1297,26 +1329,7 @@ async def handle_storm_signups(
         )
     view.message = await interaction.followup.send(**followup_args)
 
-    # First-run walkthrough offer (#130 + #170). Fires after the main
-    # view lands so the officer sees the actual command output even
-    # if they decline the tour. No-op if already dismissed. Failures
-    # here must not crash the main flow — the officer view is the
-    # critical path; the tour is a nice-to-have.
-    # Tour copy branches on event_type + cfg.teams so a CS officer
-    # sees CS-flavored steps and a single-team officer sees only
-    # their team's Set-Up button mentioned.
-    try:
-        from storm_walkthrough import maybe_offer_storm_signups_tour
-        import config as _config
-        cfg = _config.get_storm_config(interaction.guild_id, et) or {}
-        teams_setting = (cfg.get("teams") or "both").strip()
-        if teams_setting not in ("both", "A", "B"):
-            teams_setting = "both"
-        await maybe_offer_storm_signups_tour(
-            interaction, event_type=et, teams=teams_setting,
-        )
-    except Exception as e:
-        logger.warning(
-            "[STORM OFFICER VIEW] walkthrough offer failed for guild=%s: %s",
-            interaction.guild_id, e,
-        )
+    # First-run tour offer moved to `storm_event_hub.handle_event_hub`
+    # post-#190 (the hub is the front door for the storm flow now).
+    # The officer view is reached via the hub's "View sign-ups + set
+    # up teams" button; the tour fires upstream at hub entry instead.

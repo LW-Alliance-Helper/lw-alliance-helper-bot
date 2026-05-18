@@ -16,13 +16,11 @@ Storage shape (Sheet, alliance-owned, source of truth):
 Preset names are unique per (guild, event_type). Rows for one preset
 share the Preset Name value.
 
-In-Discord editor flow (DS form shown — CS variants live under
-`/canyonstorm strategy …`):
-  /desertstorm strategy create name:"…"  → opens editor seeded with
-                                           canonical DS zones
-  /desertstorm strategy edit name:"…"    → loads from Sheet → editor
-  /desertstorm strategy list             → embed of saved presets
-  /desertstorm strategy delete name:"…"  → confirm → remove
+Reached via the `🧮 Manage strategy presets` button on `/desertstorm`
+and `/canyonstorm` (hub-restructure #187; legacy
+`/desertstorm strategy create / edit / list / delete` subcommands
+pre-#126). The button opens the preset list, which carries inline
+buttons for create / edit / delete and exposes a per-preset editor.
 
 Editor state is buffered in memory on the View. Discord's interaction
 token expires after 15 minutes; that's a natural session bound, so no
@@ -270,7 +268,7 @@ class ZoneRow:
             # team minimums (which are per-team, not per-phase, so they
             # belong on the header), then one row per phase showing
             # capacity and any non-zero per-phase priority.
-            header = f"• {icon}**{self.zone}** — {mins}"
+            header = f"• {icon}**{self.zone}**: {mins}"
             phase_lines: list[str] = []
             phase_prios = [
                 self.priority_phase1, self.priority_phase2, self.priority_phase3,
@@ -281,7 +279,7 @@ class ZoneRow:
             for idx, (cap, prio) in enumerate(zip(phase_caps, phase_prios), start=1):
                 prio_suffix = f" (priority {prio})" if prio else ""
                 phase_lines.append(
-                    f"   └ Phase {idx}: cap {cap}{prio_suffix}"
+                    f"   └ Stage {idx}: cap {cap}{prio_suffix}"
                 )
             return "\n".join([header] + phase_lines)
 
@@ -479,17 +477,17 @@ def seed_default_preset(name: str, event_type: str) -> PresetBuffer:
 
 
 _DS_HEADER = ["Preset Name", "Zone", "Max Players",
-              "Max Phase 1", "Max Phase 2", "Max Phase 3",
+              "Max Stage 1", "Max Stage 2", "Max Stage 3",
               "Min Power A", "Min Power B",
               "Priority",
-              "Priority Phase 1", "Priority Phase 2", "Priority Phase 3",
-              "Phase Count"]
+              "Priority Stage 1", "Priority Stage 2", "Priority Stage 3",
+              "Stage Count"]
 _CS_HEADER = ["Preset Name", "Zone", "Max Players",
-              "Max Phase 1", "Max Phase 2", "Max Phase 3",
+              "Max Stage 1", "Max Stage 2", "Max Stage 3",
               "Min Power",
               "Priority",
-              "Priority Phase 1", "Priority Phase 2", "Priority Phase 3",
-              "Faction", "Phase Count"]
+              "Priority Stage 1", "Priority Stage 2", "Priority Stage 3",
+              "Faction", "Stage Count"]
 
 # Truthy strings the legacy `Use Phases` column might carry. Used only
 # to read pre-3-phase preset data — new writes always use the
@@ -498,10 +496,10 @@ _TRUE_STRINGS = {"true", "yes", "1", "y", "on", "phases"}
 
 
 def _parse_phase_count(row: dict) -> int:
-    """Resolve a row's phase_count from the new Phase Count column,
-    falling back to the legacy Use Phases boolean if Phase Count is
+    """Resolve a row's phase_count from the new Stage Count column,
+    falling back to the legacy Use Phases boolean if Stage Count is
     missing. Unknown / unparseable values clamp to 0 (flat)."""
-    raw = row.get("Phase Count", "")
+    raw = row.get("Stage Count", "")
     if raw not in ("", None):
         try:
             val = int(str(raw).strip())
@@ -544,8 +542,9 @@ def _get_or_create_strategies_worksheet(guild_id: int, event_type: str):
     raised opening it — unconfigured / bad creds / deleted spreadsheet)."""
     import config
     # `config.get_spreadsheet` raises rather than returning None for
-    # unconfigured guilds. Catch broadly so /desertstorm strategy commands
-    # don't die with an unhandled traceback on a guild that hasn't run setup.
+    # unconfigured guilds. Catch broadly so the strategy preset surface
+    # doesn't die with an unhandled traceback on a guild that hasn't
+    # run setup.
     try:
         sh = config.get_spreadsheet(guild_id)
     except Exception as e:
@@ -609,15 +608,15 @@ def load_preset(guild_id: int, event_type: str, name: str) -> PresetBuffer | Non
             zr = ZoneRow(
                 zone=zone_name,
                 max_players=_safe_int(r.get("Max Players", 0)),
-                max_phase1=_safe_int(r.get("Max Phase 1", 0)),
-                max_phase2=_safe_int(r.get("Max Phase 2", 0)),
-                max_phase3=_safe_int(r.get("Max Phase 3", 0)),
+                max_phase1=_safe_int(r.get("Max Stage 1", 0)),
+                max_phase2=_safe_int(r.get("Max Stage 2", 0)),
+                max_phase3=_safe_int(r.get("Max Stage 3", 0)),
                 min_power_a=min_a,
                 min_power_b=min_b,
                 priority=_safe_int(r.get("Priority", 0)),
-                priority_phase1=_safe_int(r.get("Priority Phase 1", 0)),
-                priority_phase2=_safe_int(r.get("Priority Phase 2", 0)),
-                priority_phase3=_safe_int(r.get("Priority Phase 3", 0)),
+                priority_phase1=_safe_int(r.get("Priority Stage 1", 0)),
+                priority_phase2=_safe_int(r.get("Priority Stage 2", 0)),
+                priority_phase3=_safe_int(r.get("Priority Stage 3", 0)),
             )
             zones.append(zr)
         else:
@@ -625,15 +624,15 @@ def load_preset(guild_id: int, event_type: str, name: str) -> PresetBuffer | Non
             zr = ZoneRow(
                 zone=zone_name,
                 max_players=_safe_int(r.get("Max Players", 0)),
-                max_phase1=_safe_int(r.get("Max Phase 1", 0)),
-                max_phase2=_safe_int(r.get("Max Phase 2", 0)),
-                max_phase3=_safe_int(r.get("Max Phase 3", 0)),
+                max_phase1=_safe_int(r.get("Max Stage 1", 0)),
+                max_phase2=_safe_int(r.get("Max Stage 2", 0)),
+                max_phase3=_safe_int(r.get("Max Stage 3", 0)),
                 min_power_a=min_p,
                 min_power_b=0,
                 priority=_safe_int(r.get("Priority", 0)),
-                priority_phase1=_safe_int(r.get("Priority Phase 1", 0)),
-                priority_phase2=_safe_int(r.get("Priority Phase 2", 0)),
-                priority_phase3=_safe_int(r.get("Priority Phase 3", 0)),
+                priority_phase1=_safe_int(r.get("Priority Stage 1", 0)),
+                priority_phase2=_safe_int(r.get("Priority Stage 2", 0)),
+                priority_phase3=_safe_int(r.get("Priority Stage 3", 0)),
             )
             # Merge-on-load: when two legacy rows translate to the
             # same display name, fold the second into the first by
@@ -720,7 +719,7 @@ def save_preset(guild_id: int, event_type: str, buf: PresetBuffer) -> bool:
         `_safe_int` / `_parse_phase_count` fall through to their
         defaults (0 / 0). Legacy `Use Phases` (truthy → phase_count
         = 2) is honoured here too so an interim 2-phase preset
-        round-trips into the new `Phase Count` column on the next
+        round-trips into the new `Stage Count` column on the next
         save."""
         out: list[str] = []
         legacy_uses_phases = (
@@ -730,7 +729,7 @@ def save_preset(guild_id: int, event_type: str, buf: PresetBuffer) -> bool:
             else False
         )
         for col_name in header:
-            if col_name == "Phase Count" and "Phase Count" not in old_header_idx:
+            if col_name == "Stage Count" and "Stage Count" not in old_header_idx:
                 out.append("2" if legacy_uses_phases else "0")
                 continue
             idx = old_header_idx.get(col_name, -1)
@@ -858,11 +857,11 @@ def _build_editor_embed(buf: PresetBuffer, team_size_hint: int = _TEAM_SIZE_HINT
     if buf.phase_count == 0:
         mode_label = "Flat"
     elif buf.phase_count == 2:
-        mode_label = "2 Phases (P1 + P2)"
+        mode_label = "2 Stages (S1 + S2)"
     elif buf.phase_count == 3:
-        mode_label = "3 Phases (P1 + P2 + P3)"
+        mode_label = "3 Stages (S1 + S2 + S3)"
     else:
-        mode_label = f"{buf.phase_count} Phases"
+        mode_label = f"{buf.phase_count} Stages"
     desc_lines.append(f"🔀 Mode: **{mode_label}**")
     desc_lines.append("")
     if buf.zones:
@@ -891,7 +890,7 @@ def _build_editor_embed(buf: PresetBuffer, team_size_hint: int = _TEAM_SIZE_HINT
         f"📊 Capacity: **{cap}** (team size {team_size_hint}; flex room is fine) {glyph}"
     )
     if buf.dirty:
-        desc_lines.append("⚠️ *Unsaved changes — Save preset to save your changes.*")
+        desc_lines.append("⚠️ *Unsaved changes. Save preset to save your changes.*")
     return discord.Embed(
         title=title,
         description="\n".join(desc_lines),
@@ -1003,7 +1002,7 @@ class _ZoneEditModal(discord.ui.Modal):
             max_players = int((self.max_input.value or "0").strip() or 0)
         except ValueError:
             await interaction.response.send_message(
-                f"⚠️ Max Players must be a number — got `{self.max_input.value}`. "
+                f"⚠️ Max Players must be a number. Got `{self.max_input.value}`. "
                 f"Try again.",
                 ephemeral=True,
             )
@@ -1038,7 +1037,7 @@ class _ZoneEditModal(discord.ui.Modal):
             priority = int((self.priority_input.value or "0").strip() or 0)
         except ValueError:
             await interaction.response.send_message(
-                f"⚠️ Priority must be a number — got `{self.priority_input.value}`. "
+                f"⚠️ Priority must be a number. Got `{self.priority_input.value}`. "
                 f"Try again.",
                 ephemeral=True,
             )
@@ -1153,7 +1152,7 @@ class _ZonePhaseCapacityAndFloorsModal(discord.ui.Modal):
 
     def __init__(self, view: "_PresetEditorView", zone_name: str):
         phase_count = int(getattr(view.buf, "phase_count", 2) or 2)
-        super().__init__(title=f"{zone_name} — Caps + Min ({phase_count}P)"[:45])
+        super().__init__(title=f"{zone_name}: Caps + Min ({phase_count}S)"[:45])
         self._view = view
         self._zone_name = zone_name
         self._phase_count = phase_count
@@ -1163,23 +1162,23 @@ class _ZonePhaseCapacityAndFloorsModal(discord.ui.Modal):
         )
 
         self.max_phase1_input = discord.ui.TextInput(
-            label="Max Phase 1",
-            placeholder="e.g. 4 (leave 0 to skip Phase 1 at this zone)",
+            label="Max Stage 1",
+            placeholder="e.g. 4 (leave 0 to skip Stage 1 at this zone)",
             default=str(pending["max_phase1"] or ""),
             required=False, max_length=4,
         )
         self.add_item(self.max_phase1_input)
         self.max_phase2_input = discord.ui.TextInput(
-            label="Max Phase 2",
-            placeholder="e.g. 2 (leave 0 to skip Phase 2 at this zone)",
+            label="Max Stage 2",
+            placeholder="e.g. 2 (leave 0 to skip Stage 2 at this zone)",
             default=str(pending["max_phase2"] or ""),
             required=False, max_length=4,
         )
         self.add_item(self.max_phase2_input)
         if phase_count >= 3:
             self.max_phase3_input = discord.ui.TextInput(
-                label="Max Phase 3",
-                placeholder="e.g. 3 (leave 0 to skip Phase 3 at this zone)",
+                label="Max Stage 3",
+                placeholder="e.g. 3 (leave 0 to skip Stage 3 at this zone)",
                 default=str(pending["max_phase3"] or ""),
                 required=False, max_length=4,
             )
@@ -1235,7 +1234,7 @@ class _ZonePhaseCapacityAndFloorsModal(discord.ui.Modal):
                 pending[key] = int((field.value or "0").strip() or 0)
             except ValueError:
                 await interaction.response.send_message(
-                    f"⚠️ {field.label} must be a number — got `{field.value}`. "
+                    f"⚠️ {field.label} must be a number. Got `{field.value}`. "
                     f"Reopen the zone to retry.",
                     ephemeral=True,
                 )
@@ -1247,7 +1246,7 @@ class _ZonePhaseCapacityAndFloorsModal(discord.ui.Modal):
                 val, bad = _parse_power_cell(self.power_a_input.value or "")
                 if bad:
                     await interaction.response.send_message(
-                        f"⚠️ Min Power Team A didn't parse — got "
+                        f"⚠️ Min Power Team A didn't parse. Got "
                         f"`{self.power_a_input.value}`. Use `80M` or `80,000,000`.",
                         ephemeral=True,
                     )
@@ -1257,7 +1256,7 @@ class _ZonePhaseCapacityAndFloorsModal(discord.ui.Modal):
                 val, bad = _parse_power_cell(self.power_b_input.value or "")
                 if bad:
                     await interaction.response.send_message(
-                        f"⚠️ Min Power Team B didn't parse — got "
+                        f"⚠️ Min Power Team B didn't parse. Got "
                         f"`{self.power_b_input.value}`. Use `60M` or `60,000,000`.",
                         ephemeral=True,
                     )
@@ -1267,7 +1266,7 @@ class _ZonePhaseCapacityAndFloorsModal(discord.ui.Modal):
             val, bad = _parse_power_cell(self.power_input.value or "")
             if bad:
                 await interaction.response.send_message(
-                    f"⚠️ Min Power didn't parse — got "
+                    f"⚠️ Min Power didn't parse. Got "
                     f"`{self.power_input.value}`. Use `70M` or `70,000,000`.",
                     ephemeral=True,
                 )
@@ -1277,12 +1276,12 @@ class _ZonePhaseCapacityAndFloorsModal(discord.ui.Modal):
         view = _ZoneWizardNextView(
             self._view, self._zone_name,
             next_page="priority",
-            label="Next → Priority Per Phase",
+            label="Next → Priority Per Stage",
         )
         await interaction.response.send_message(
             content=(
                 f"✅ Capacities + minimums recorded for **{self._zone_name}**. "
-                f"Click **Next** to set the per-phase auto-fill priorities."
+                f"Click **Next** to set the per-stage auto-fill priorities."
             ),
             view=view, ephemeral=True,
         )
@@ -1297,21 +1296,21 @@ class _ZonePhasePriorityModal(discord.ui.Modal):
 
     def __init__(self, view: "_PresetEditorView", zone_name: str):
         phase_count = int(getattr(view.buf, "phase_count", 2) or 2)
-        super().__init__(title=f"{zone_name} — Priority ({phase_count}P)"[:45])
+        super().__init__(title=f"{zone_name}: Priority ({phase_count}S)"[:45])
         self._view = view
         self._zone_name = zone_name
         self._phase_count = phase_count
         pending = _stash_pending_edit(view, zone_name)
 
         self.prio_p1_input = discord.ui.TextInput(
-            label="Priority Phase 1 (1 = highest)",
+            label="Priority Stage 1 (1 = highest)",
             placeholder="leave blank for no priority",
             default=str(pending["priority_phase1"] or ""),
             required=False, max_length=3,
         )
         self.add_item(self.prio_p1_input)
         self.prio_p2_input = discord.ui.TextInput(
-            label="Priority Phase 2",
+            label="Priority Stage 2",
             placeholder="leave blank for no priority",
             default=str(pending["priority_phase2"] or ""),
             required=False, max_length=3,
@@ -1319,7 +1318,7 @@ class _ZonePhasePriorityModal(discord.ui.Modal):
         self.add_item(self.prio_p2_input)
         if phase_count >= 3:
             self.prio_p3_input = discord.ui.TextInput(
-                label="Priority Phase 3",
+                label="Priority Stage 3",
                 placeholder="leave blank for no priority",
                 default=str(pending["priority_phase3"] or ""),
                 required=False, max_length=3,
@@ -1341,7 +1340,7 @@ class _ZonePhasePriorityModal(discord.ui.Modal):
                 pending[key] = int((field.value or "0").strip() or 0)
             except ValueError:
                 await interaction.response.send_message(
-                    f"⚠️ {field.label} must be a number — got `{field.value}`. "
+                    f"⚠️ {field.label} must be a number. Got `{field.value}`. "
                     f"Reopen the zone to retry.",
                     ephemeral=True,
                 )
@@ -1368,7 +1367,7 @@ class _ZonePhasePriorityModal(discord.ui.Modal):
         siblings = _sibling_zone_names(self._view.buf.zones, self._zone_name)
         await self._view.refresh(
             interaction,
-            message=f"✏️ Updated **{self._zone_name}** ({self._phase_count}-phase).",
+            message=f"✏️ Updated **{self._zone_name}** ({self._phase_count}-stage).",
         )
         # Apply-to-similar follow-up — same offer as the flat flow.
         if siblings:
@@ -1579,7 +1578,7 @@ class _ApplyToSimilarView(discord.ui.View):
                 item.disabled = True
             try:
                 await inter.response.edit_message(
-                    content="OK — only the edited zone was changed.",
+                    content="OK. Only the edited zone was changed.",
                     view=self,
                 )
             except discord.HTTPException:
@@ -1703,25 +1702,25 @@ class _PresetEditorView(discord.ui.View):
         # phase capacities + assignments aren't touched on a mode flip
         # so an officer can move between modes without losing data.
         phase_mode_select = discord.ui.Select(
-            placeholder="🔀 Phase mode",
+            placeholder="🔀 Stage mode",
             min_values=1, max_values=1,
             options=[
                 discord.SelectOption(
-                    label="Flat (no phases)",
+                    label="Flat (no stages)",
                     value="0",
                     description="Single per-zone slot — Max Players only.",
                     default=self.buf.phase_count == 0,
                 ),
                 discord.SelectOption(
-                    label="2 Phases",
+                    label="2 Stages",
                     value="2",
-                    description="DS-style migration: Phase 1 → Phase 2.",
+                    description="DS-style migration: Stage 1 → Stage 2.",
                     default=self.buf.phase_count == 2,
                 ),
                 discord.SelectOption(
-                    label="3 Phases",
+                    label="3 Stages",
                     value="3",
-                    description="CS-style stages: Phase 1 → 2 → 3.",
+                    description="CS-style: Stage 1 → 2 → 3.",
                     default=self.buf.phase_count == 3,
                 ),
             ],
@@ -1779,7 +1778,7 @@ class _PresetEditorView(discord.ui.View):
                     seeded += 1
             self.buf.phase_count = new_count
             self.buf.dirty = True
-            label = "Flat" if new_count == 0 else f"{new_count}-phase"
+            label = "Flat" if new_count == 0 else f"{new_count}-stage"
             seeded_note = (
                 f" Seeded {seeded} per-zone capacity/priority value(s) "
                 f"from prior values; edit any zone to override."
@@ -1789,7 +1788,7 @@ class _PresetEditorView(discord.ui.View):
             # "flip back any time" (vague) to "re-select the same mode"
             # (concrete) per #174 / Decision #13's polish notes.
             restore_label = (
-                "Flat" if old_count == 0 else f"{old_count}-phase"
+                "Flat" if old_count == 0 else f"{old_count}-stage"
             )
             await self.refresh(
                 inter,
@@ -1856,7 +1855,7 @@ class _PresetEditorView(discord.ui.View):
                 self.stop()
             else:
                 await inter.followup.send(
-                    "⚠️ Could not save preset — check that your Google Sheet is configured "
+                    "⚠️ Could not save preset. Check that your Google Sheet is configured "
                     "and that the bot has edit access. See logs for details.",
                     ephemeral=True,
                 )
@@ -1904,8 +1903,9 @@ class _PresetEditorView(discord.ui.View):
         window; without this hook, buttons silently 404 with
         'Interaction failed' after timeout."""
         from wizard_registry import expire_view_message
-        parent = "desertstorm" if self.buf.event_type == "DS" else "canyonstorm"
-        await expire_view_message(self.message, command_hint=f"/{parent} strategy edit")
+        from storm_event_hub import HUB_COMMAND, HUB_BTN_PRESETS
+        hint = f"`{HUB_COMMAND[self.buf.event_type]}` → **{HUB_BTN_PRESETS}**"
+        await expire_view_message(self.message, command_hint=hint)
 
 
 # ── Cog + slash command groups ───────────────────────────────────────────────
@@ -1985,8 +1985,7 @@ class _CreatePresetNameModal(discord.ui.Modal, title="Create strategy preset"):
         if name.lower() in existing:
             await interaction.response.send_message(
                 f"⚠️ A preset named **{name}** already exists. Use the "
-                f"Edit button on the list (or "
-                f"`/{parent} strategy edit name:\"{name}\"`) to modify it.",
+                f"Edit button on the list to modify it.",
                 ephemeral=True,
             )
             return
@@ -2112,7 +2111,7 @@ async def open_strategy_list(
     else:
         description = "\n".join(f"• **{n}**" for n in names)
     embed = discord.Embed(
-        title=f"📋 {label} — Strategy Presets",
+        title=f"📋 {label}: Strategy Presets",
         description=description,
         color=discord.Color.blurple(),
     )
@@ -2385,10 +2384,9 @@ class _StrategyGroup(app_commands.Group):
             )
         ]
         if name.lower() in existing:
-            parent = "desertstorm" if self.event_type == "DS" else "canyonstorm"
             await interaction.response.send_message(
                 f"⚠️ A preset named **{name}** already exists. "
-                f"Use `/{parent} strategy edit name:\"{name}\"` to modify it.",
+                f"Use the Edit button on the preset list to modify it.",
                 ephemeral=True,
             )
             return
@@ -2460,7 +2458,7 @@ def build_ds_strategy_group() -> _StrategyGroup:
     @grp.command(name="roster_history",
                  description="Browse past DS rosters with attendance overlaid")
     @app_commands.describe(
-        date="Optional — show a specific date (May 18, 5/18, 2026-05-18, yesterday). Omit to list recent events.",
+        date="Optional: show a specific date (May 18, 5/18, 2026-05-18, yesterday). Omit to list recent events.",
     )
     async def ds_history(interaction: discord.Interaction, date: str | None = None):
         from storm_history import open_history
@@ -2505,7 +2503,7 @@ def build_cs_strategy_group() -> _StrategyGroup:
     @grp.command(name="roster_history",
                  description="Browse past CS rosters with attendance overlaid")
     @app_commands.describe(
-        date="Optional — show a specific date (May 18, 5/18, 2026-05-18, yesterday). Omit to list recent events.",
+        date="Optional: show a specific date (May 18, 5/18, 2026-05-18, yesterday). Omit to list recent events.",
     )
     async def cs_history(interaction: discord.Interaction, date: str | None = None):
         from storm_history import open_history

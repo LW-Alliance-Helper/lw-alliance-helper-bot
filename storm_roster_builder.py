@@ -1,10 +1,12 @@
 """
 Manual roster builder for Desert Storm and Canyon Storm (#128).
 
-`/desertstorm strategy apply name:<preset>` (and the CS equivalent) opens an
-interactive roster builder. Leadership picks the team, the bot loads
-the named preset + member rules + roster powers, and the builder
-enforces per-zone power floors as members are assigned.
+Opened from the `👁️ View sign-ups + set up teams` officer view via
+its "Apply preset" picker (hub-restructure #187; legacy
+`/desertstorm strategy apply` slash subcommand pre-#125). Leadership
+picks the team, the bot loads the named preset + member rules + roster
+powers, and the builder enforces per-zone power floors as members are
+assigned.
 
 v1 scope:
   * Manual assignment via zone + member dropdowns (no auto-fill)
@@ -32,6 +34,12 @@ import logging
 from typing import Optional
 
 import discord
+
+from storm_event_hub import (
+    HUB_COMMAND,
+    HUB_BTN_VIEW_SIGNUPS,
+    HUB_BTN_PAST_ROSTERS,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -973,7 +981,7 @@ def _render_zone_line(session: RosterBuilderSession, zone_name: str) -> str:
             # Box-drawing prefix ("   └ ") visually nests the phase
             # row under the zone header without relying on Discord's
             # inconsistent leading-space rendering in embed bodies.
-            phase_lines.append(f"   └ Phase {p}: {count}/{cap} — {names}")
+            phase_lines.append(f"   └ Stage {p}: {count}/{cap} · {names}")
         return "\n".join([header] + phase_lines)
 
     # Flat preset — single-line shape unchanged from pre-#172.
@@ -988,9 +996,9 @@ def _render_zone_line(session: RosterBuilderSession, zone_name: str) -> str:
 def _render_builder_embed(session: RosterBuilderSession) -> discord.Embed:
     event_label = "Desert Storm" if session.event_type == "DS" else "Canyon Storm"
     if session.event_type == "DS":
-        team_label = f" — Team {session.team}"
+        team_label = f": Team {session.team}"
     elif session.preset.faction and session.preset.faction != "Either":
-        team_label = f" — {session.preset.faction}"
+        team_label = f": {session.preset.faction}"
     else:
         team_label = ""
     title = f"🛡️ Roster Builder: {session.preset.name}{team_label}"
@@ -1005,12 +1013,12 @@ def _render_builder_embed(session: RosterBuilderSession) -> discord.Embed:
     # buttons will mutate.
     if session.is_phase_aware:
         lines.append(
-            f"🔀 Editing **Phase {session.selected_phase}** "
-            f"_(use the Phase buttons below to switch)_"
+            f"🔀 Editing **Stage {session.selected_phase}** "
+            f"_(use the Stage buttons below to switch)_"
         )
     lines.append("")
     if session.is_paired:
-        lines.append("**📋 Zones** _(paired mode — each primary has a dedicated sub)_")
+        lines.append("**📋 Zones** _(paired mode: each primary has a dedicated sub)_")
     else:
         lines.append("**📋 Zones**")
     for z in session.preset.zones:
@@ -1024,9 +1032,9 @@ def _render_builder_embed(session: RosterBuilderSession) -> discord.Embed:
                 if k in session.members
             )
             lines.append(
-                f"⚠️ **Unpaired primaries ({len(unpaired)})**: {unpaired_names} — "
-                f"click **🔁 Pair subs** to attach a sub to any of them. "
-                f"Subs may not cover every primary — that's expected."
+                f"⚠️ **Unpaired primaries ({len(unpaired)})**: {unpaired_names}. "
+                f"Click **🔁 Pair subs** to attach a sub to any of them. "
+                f"Subs may not cover every primary; that's expected."
             )
         # Surface the available subs pool — paired subs live inline
         # against each primary, but auto-fill or manual add can leave
@@ -1039,7 +1047,7 @@ def _render_builder_embed(session: RosterBuilderSession) -> discord.Embed:
         if sub_names:
             lines.append(
                 f"🪑 **Available subs ({len(sub_names)})**: "
-                f"{', '.join(sub_names)} — pair via **🔁 Pair subs** "
+                f"{', '.join(sub_names)}. Pair via **🔁 Pair subs** "
                 f"or leave as bench."
             )
     else:
@@ -1070,7 +1078,7 @@ def _render_builder_embed(session: RosterBuilderSession) -> discord.Embed:
             cap = sum(
                 int(z.max_for_phase(p)) for z in session.preset.zones
             )
-            per_phase.append(f"P{p}: {assigned}/{cap}")
+            per_phase.append(f"S{p}: {assigned}/{cap}")
         lines.append(f"📊 **Filled:** {', '.join(per_phase)}")
     else:
         total_assigned = sum(
@@ -1092,13 +1100,13 @@ def _render_builder_embed(session: RosterBuilderSession) -> discord.Embed:
             # this zone — surface both so leadership can tell at a
             # glance which rule is in play.
             lines.append(
-                f"🎯 **Active zone:** {active_icon}**{selected}** — minimum "
+                f"🎯 **Active zone:** {active_icon}**{selected}** · minimum "
                 f"**{format_power(effective_floor) if effective_floor else '(none)'}** "
                 f"_(preset minimum {format_power(preset_floor)} relaxed by power_band rule)_"
             )
         else:
             lines.append(
-                f"🎯 **Active zone:** {active_icon}**{selected}** — minimum "
+                f"🎯 **Active zone:** {active_icon}**{selected}** · minimum "
                 f"**{format_power(effective_floor) if effective_floor else '(none)'}**"
             )
         if session.show_below_floor:
@@ -1141,12 +1149,12 @@ def _render_builder_embed(session: RosterBuilderSession) -> discord.Embed:
         # manually — `(+N more)` hid exactly the entries they needed.
         if af["gaps"]:
             lines.append(
-                f"• Gaps (power unknown, not slotted): **{len(af['gaps'])}** — "
+                f"• Gaps (power unknown, not slotted): **{len(af['gaps'])}**: "
                 f"{', '.join(af['gaps'])}"
             )
         if af["conflicts"]:
             lines.append(
-                f"• Conflicts: **{len(af['conflicts'])}** — "
+                f"• Conflicts: **{len(af['conflicts'])}**: "
                 f"{'; '.join(af['conflicts'])}"
             )
         else:
@@ -1280,7 +1288,7 @@ class RosterBuilderView(discord.ui.View):
         if s.is_phase_aware:
             for phase in s.iter_phases():
                 btn = discord.ui.Button(
-                    label=f"Phase {phase}"
+                    label=f"Stage {phase}"
                           + (" •" if phase == s.selected_phase else ""),
                     style=(discord.ButtonStyle.primary
                            if phase == s.selected_phase
@@ -1308,7 +1316,7 @@ class RosterBuilderView(discord.ui.View):
                 count = s.zone_member_count(z.zone)
                 cap = s.zone_capacity(z.zone)
                 if s.is_phase_aware:
-                    return f"P{s.selected_phase}: {z.zone} ({count}/{cap})"[:100]
+                    return f"S{s.selected_phase}: {z.zone} ({count}/{cap})"[:100]
                 return f"{z.zone} ({count}/{cap})"[:100]
             zone_options = [
                 discord.SelectOption(
@@ -1358,7 +1366,7 @@ class RosterBuilderView(discord.ui.View):
             placeholder = (
                 f"Pick a member for {s.selected_zone or 'a zone'}…"
                 if eligible or s.show_below_floor else
-                "No eligible members — toggle below-minimum override"
+                "No eligible members. Toggle below-minimum override"
             )
             # Surface overflow so the officer knows the dropdown is
             # truncated — Discord caps Select options at 25 and a
@@ -1491,7 +1499,7 @@ class RosterBuilderView(discord.ui.View):
             ]
             if not to_move:
                 await inter.response.send_message(
-                    "⚠️ No unassigned members to move — everyone in this "
+                    "⚠️ No unassigned members to move. Everyone in this "
                     "team's pool is already assigned as a primary or sub.",
                     ephemeral=True,
                 )
@@ -1681,7 +1689,7 @@ class RosterBuilderView(discord.ui.View):
             for item in self.children:
                 item.disabled = True
             await inter.response.edit_message(
-                content=("Roster builder cancelled — nothing posted."
+                content=("Roster builder cancelled. Nothing posted."
                          if s.is_structured else "Roster builder closed."),
                 embed=_render_builder_embed(s),
                 view=self,
@@ -1832,7 +1840,7 @@ class _AutoFillConfirmView(discord.ui.View):
         )
         try:
             await inter.response.edit_message(
-                content="🎯 Auto-fill re-run complete — main view refreshed.",
+                content="🎯 Auto-fill re-run complete. Main view refreshed.",
                 view=self,
             )
         except discord.HTTPException:
@@ -1863,7 +1871,7 @@ class _AutoFillConfirmView(discord.ui.View):
             item.disabled = True
         try:
             await inter.response.edit_message(
-                content="↩️ Auto-fill cancelled — your edits are intact.",
+                content="↩️ Auto-fill cancelled. Your edits are intact.",
                 view=self,
             )
         except discord.HTTPException:
@@ -1995,9 +2003,9 @@ class _PairSubsView(discord.ui.View):
         primary_count = len(self._phase_assignments_flat())
         sub_pool = len(s.subs)
         header = (
-            f"🔁 **Pair subs** — Phase {s.selected_phase}\n"
+            f"🔁 **Pair subs**: Stage {s.selected_phase}\n"
             f"You have **{sub_pool} sub{'s' if sub_pool != 1 else ''}** "
-            f"and **{primary_count} primar{'ies' if primary_count != 1 else 'y'}** — "
+            f"and **{primary_count} primar{'ies' if primary_count != 1 else 'y'}**. "
             f"not every primary will get a sub."
         )
         pair_rows = self._pair_rows()
@@ -2379,7 +2387,7 @@ class _SaveAsPresetModal(discord.ui.Modal, title="Save as preset"):
             )
         else:
             await inter.response.send_message(
-                "⚠️ Couldn't save preset — check that your Sheet is configured "
+                "⚠️ Couldn't save preset. Check that your Sheet is configured "
                 "and the bot has edit access.",
                 ephemeral=True,
             )
@@ -2436,7 +2444,7 @@ async def _render_and_attach(
             session.guild_id, session.event_type, e,
         )
         await inter.followup.send(
-            "⚠️ Image render isn't available — the host is missing Pillow. "
+            "⚠️ Image render isn't available. The host is missing Pillow. "
             "Use the text-template mail in the meantime.",
             ephemeral=True,
         )
@@ -2447,7 +2455,7 @@ async def _render_and_attach(
             session.guild_id, session.event_type, e,
         )
         await inter.followup.send(
-            "⚠️ Couldn't render the roster image — see bot logs.",
+            "⚠️ Couldn't render the roster image. See bot logs.",
             ephemeral=True,
         )
         return
@@ -2499,7 +2507,7 @@ async def _render_and_attach(
         # (the action bar's value is acting on a public message).
         await inter.followup.send(
             content=(
-                "🖼️ Roster image attached (couldn't post publicly — check "
+                "🖼️ Roster image attached (couldn't post publicly; check "
                 "the bot's permissions in this channel):"
             ),
             file=discord.File(io.BytesIO(png_bytes), filename=filename),
@@ -2521,7 +2529,7 @@ async def _render_and_attach(
     )
     await inter.followup.send(
         content=(
-            f"🖼️ Roster image posted above. Pick an action below — only "
+            f"🖼️ Roster image posted above. Pick an action below; only "
             f"you'll see this prompt."
         ),
         view=view,
@@ -2581,7 +2589,7 @@ class _RenderActionView(discord.ui.View):
             )
         except discord.Forbidden:
             await inter.response.send_message(
-                "⚠️ I can't DM you — your privacy settings block bot DMs. "
+                "⚠️ I can't DM you. Your privacy settings block bot DMs. "
                 "Right-click the image in the channel and use Save image instead.",
                 ephemeral=True,
             )
@@ -2597,7 +2605,7 @@ class _RenderActionView(discord.ui.View):
             )
             return
         await inter.response.send_message(
-            "📥 Sent to your DMs — check your direct messages with the bot.",
+            "📥 Sent to your DMs. Check your direct messages with the bot.",
             ephemeral=True,
         )
 
@@ -2610,13 +2618,10 @@ class _RenderActionView(discord.ui.View):
         live in Discord; we just remember where."""
         import config
         if not self.event_date:
-            signups_cmd = (
-                "/desertstorm signups" if self.event_type == "DS"
-                else "/canyonstorm signups"
-            )
             await inter.response.send_message(
-                "⚠️ Can't save to history without an event date — open the "
-                f"roster from `{signups_cmd}` so the event date is set.",
+                "⚠️ Can't save to history without an event date. Open the "
+                f"roster via `{HUB_COMMAND[self.event_type]}` → "
+                f"**{HUB_BTN_VIEW_SIGNUPS}** so the event date is set.",
                 ephemeral=True,
             )
             return
@@ -2632,14 +2637,14 @@ class _RenderActionView(discord.ui.View):
                 self.guild_id, e,
             )
             await inter.response.send_message(
-                "⚠️ Couldn't save to history — see bot logs.",
+                "⚠️ Couldn't save to history. See bot logs.",
                 ephemeral=True,
             )
             return
-        parent = "desertstorm" if self.event_type == "DS" else "canyonstorm"
         await inter.response.send_message(
             f"💾 Saved. The image is now linked from "
-            f"`/{parent} strategy roster_history` for this event date "
+            f"`{HUB_COMMAND[self.event_type]}` → **{HUB_BTN_PAST_ROSTERS}** "
+            f"for this event date "
             f"(stays available until the original message is deleted).",
             ephemeral=True,
         )
@@ -2735,7 +2740,7 @@ class _PostCaptionModal(discord.ui.Modal):
         self.filename = filename
         self.caption = discord.ui.TextInput(
             label="Caption (optional)",
-            placeholder="e.g. Saturday's Desert Storm — final assignments",
+            placeholder="e.g. Saturday's Desert Storm: final assignments",
             required=False,
             max_length=1500,
             style=discord.TextStyle.paragraph,
@@ -2746,7 +2751,7 @@ class _PostCaptionModal(discord.ui.Modal):
         channel = inter.guild.get_channel_or_thread(self.channel_id) if inter.guild else None
         if channel is None:
             await inter.response.send_message(
-                "⚠️ Couldn't resolve that channel — it may have been "
+                "⚠️ Couldn't resolve that channel. It may have been "
                 "deleted between picker and submit. Try again.",
                 ephemeral=True,
             )
@@ -2889,7 +2894,7 @@ def _build_mail_body(session: RosterBuilderSession) -> str:
     blocks: list[str] = []
     for phase in session.iter_phases():
         body = _build_mail_for_phase(session, phase=phase)
-        blocks.append(f"**Phase {phase}**\n\n{body}")
+        blocks.append(f"**Stage {phase}**\n\n{body}")
     return "\n\n".join(blocks)
 
 
@@ -2905,7 +2910,7 @@ async def _send_mail_preview(
     # code-fence framing stays under 2000.
     preview = mail if len(mail) <= 1900 else mail[:1880] + "\n…(truncated)"
     await inter.response.send_message(
-        "📄 **Mail preview** — copy and paste into your alliance's mail system:\n"
+        "📄 **Mail preview**. Copy and paste into your alliance's mail system:\n"
         f"```\n{preview}\n```",
         ephemeral=True,
     )
@@ -3043,7 +3048,7 @@ async def _finalize_structured_roster(
         setup_cmd = "/setup → ⚔️ Desert Storm" if s.event_type == "DS" else "/setup → 🏜️ Canyon Storm"
         summary_lines = [
             "✅ Roster recorded.",
-            "⚠️ No post channel is configured — mail was built but not "
+            "⚠️ No post channel is configured. Mail was built but not "
             f"sent. Run `{setup_cmd}` to pick one, or copy the mail "
             "manually below.",
         ]
@@ -3052,14 +3057,14 @@ async def _finalize_structured_roster(
             "✅ Roster recorded.",
             f"⚠️ The configured post channel (<#{post_channel_id}>) is "
             f"deleted or the bot can't see it. Re-run setup to pick a new "
-            f"channel — mail preview below.",
+            f"channel. Mail preview below.",
         ]
     else:  # send_failed
         summary_lines = [
             "✅ Roster recorded.",
             f"⚠️ The configured post channel <#{post_channel_id}> rejected "
             f"the send: `{(post_error or 'unknown error')[:120]}`. Check "
-            f"the bot's permissions in that channel — mail preview below.",
+            f"the bot's permissions in that channel. Mail preview below.",
         ]
     if write_errors:
         summary_lines.append("⚠️ " + write_errors[0])
@@ -3088,7 +3093,7 @@ async def _finalize_structured_roster(
 
 
 _ROSTERS_HEADER = [
-    "Event Date", "Team", "Phase", "Zone", "Member", "Role",
+    "Event Date", "Team", "Stage", "Zone", "Member", "Role",
     "Power at Assignment", "Discord ID", "Override Below Minimum",
     "Paired With", "Posted At (UTC)",
 ]
@@ -3124,14 +3129,14 @@ def _write_rosters_tab(session: RosterBuilderSession) -> list[str]:
         session.event_type, "rosters_tab"
     )
     if not tab:
-        return ["No rosters tab configured — Sheet write skipped."]
+        return ["No rosters tab configured. Sheet write skipped."]
 
     try:
         sh = config.get_spreadsheet(session.guild_id)
     except Exception as e:
         return [f"spreadsheet open failed: {e}"]
     if sh is None:
-        return ["spreadsheet not configured — Sheet write skipped."]
+        return ["spreadsheet not configured. Sheet write skipped."]
 
     try:
         ws = config.get_or_create_worksheet(
@@ -3171,7 +3176,7 @@ def _write_rosters_tab(session: RosterBuilderSession) -> list[str]:
         # corrupting every downstream read.
         needs_header_migration = existing and (
             "Paired With" not in existing
-            or "Phase" not in existing
+            or "Stage" not in existing
             or "Override Below Minimum" not in existing
         )
         if needs_header_migration:
@@ -3184,7 +3189,7 @@ def _write_rosters_tab(session: RosterBuilderSession) -> list[str]:
                 for row in (all_values[1:] if all_values else []):
                     new_row: list[str] = []
                     for col_name in _ROSTERS_HEADER:
-                        if col_name == "Phase" and "Phase" not in old_idx:
+                        if col_name == "Stage" and "Stage" not in old_idx:
                             # Old rows pre-date phase support — they
                             # represent a flat (single-phase) roster.
                             # Write "1" so loaders can join on phase
@@ -3472,12 +3477,13 @@ async def open_roster_builder(
             )
         if not members:
             from storm_date_helpers import format_event_date
-            parent = "desertstorm" if event_type == "DS" else "canyonstorm"
             await interaction.followup.send(
                 f"⚠️ No signed-up members match team **{team or 'A'}** for "
-                f"event **{format_event_date(event_date)}**. Check `/{parent} signups` to see who's "
-                f"voted, or run the apply flow without an event date to use "
-                f"the full roster.",
+                f"event **{format_event_date(event_date)}**. Run "
+                f"`{HUB_COMMAND[event_type]}` and click "
+                f"**{HUB_BTN_VIEW_SIGNUPS}** to see who's voted, or run "
+                f"the apply flow without an event date to use the full "
+                f"roster.",
                 ephemeral=True,
             )
             return

@@ -711,9 +711,9 @@ class TestPhaseAwarePresets:
         line = row.render_line("DS", phase_count=2)
         assert "Max:" not in line
         # Per-phase rows under the zone header.
-        assert "Phase 1: cap 3" in line
-        assert "Phase 2: cap 1" in line
-        assert "Phase 3" not in line
+        assert "Stage 1: cap 3" in line
+        assert "Stage 2: cap 1" in line
+        assert "Stage 3" not in line
 
     def test_render_line_three_phase_includes_p3(self):
         row = ss.ZoneRow(zone="Power Tower", max_players=0,
@@ -721,9 +721,9 @@ class TestPhaseAwarePresets:
                          min_power_a=200_000_000)
         line = row.render_line("CS", phase_count=3)
         assert "Max:" not in line
-        assert "Phase 1: cap 4" in line
-        assert "Phase 2: cap 2" in line
-        assert "Phase 3: cap 3" in line
+        assert "Stage 1: cap 4" in line
+        assert "Stage 2: cap 2" in line
+        assert "Stage 3: cap 3" in line
 
     def test_total_capacity_flat_sums_max_players(self):
         buf = ss.PresetBuffer(name="Flat", event_type="DS", zones=[
@@ -942,13 +942,13 @@ class TestPresetEditorPolish:
         phase_selects = [
             c for c in view.children
             if isinstance(c, __import__("discord").ui.Select)
-            and "Phase mode" in (c.placeholder or "")
+            and "Stage mode" in (c.placeholder or "")
         ]
         assert len(phase_selects) == 1
         labels = [opt.label for opt in phase_selects[0].options]
-        assert "Flat (no phases)" in labels
-        assert "2 Phases" in labels
-        assert "3 Phases" in labels
+        assert "Flat (no stages)" in labels
+        assert "2 Stages" in labels
+        assert "3 Stages" in labels
         assert not any("Yes —" in lab for lab in labels)
 
     def test_action_button_labels_self_describe(self):

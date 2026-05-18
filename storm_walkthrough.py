@@ -1,22 +1,22 @@
 """
-Guided first-run walkthrough on storm entry points (#130).
+Guided first-run walkthrough on the storm event hub (#130, rewritten
+for #187 + #190).
 
 Surfaces a `[👋 Walk me through this]` offer the first time an officer
-opens the storm sign-ups view in a guild. Clicking it runs a narrated micro-tour
-that explains each component of the officer view; clicking dismiss
-records the choice so the offer never re-appears for that officer.
+opens `/desertstorm` or `/canyonstorm`. Clicking it runs a narrated
+5-step tour that walks through the hub layout, the weekly event cycle,
+the strategy presets + member rules surfaces, free vs Premium gating,
+and a wrap-up pointer at `/help`. Clicking dismiss records the choice
+so the offer doesn't re-appear for that officer.
 
-The walkthrough key encodes a version (`storm_signups_v1`) so a major
-UI rewrite can re-offer the tour without losing per-officer dismissal
-records — just bump the key.
+The walkthrough key encodes a version (`storm_hub_v1`). The earlier
+`storm_signups_v1` tour was tied to the pre-#187 `/<event> signups`
+officer view; bumping the key to `storm_hub_v1` re-offers the tour
+to officers who already dismissed v1 so they see the new hub-flow
+explanation once.
 
-Per Decision #12 / Rule N (#170), the tour fires for both
-`/desertstorm signups` and `/canyonstorm signups`. Per-officer
-dismissals share the same `storm_signups_v1` key — dismissing on DS
-silences CS for that officer too. Step copy branches on `event_type`
-+ the alliance's `teams` config so the on-behalf vote section
-(Step 4) and Set-Up section (Step 5) describe the actual UI the
-officer will see, not a DS-default that misleads CS officers.
+Per-officer dismissals share the key across DS + CS: dismissing on
+one event type silences the other for that officer.
 """
 
 from __future__ import annotations
@@ -28,107 +28,129 @@ import discord
 logger = logging.getLogger(__name__)
 
 
-# Tour content — each step is one short ephemeral message with [Next →]
-# and [Skip the rest] buttons. Six steps tracks the design spec.
-STORM_SIGNUPS_TOUR_KEY = "storm_signups_v1"
+# Tour content version. Bump when the hub's UX changes enough that
+# existing officers should see the updated tour. The old
+# `storm_signups_v1` key (officer-view tour) is dead post-#187, but
+# leaving it in `config.is_walkthrough_dismissed` won't hurt; new
+# dismissals key against this new value.
+STORM_HUB_TOUR_KEY = "storm_hub_v1"
 
 
-def _build_storm_signups_tour_steps(
-    event_type: str = "DS", teams: str = "both",
+def _build_storm_hub_tour_steps(
+    event_type: str = "DS",
 ) -> list[str]:
-    """Build the per-event-type, per-team-config tour copy.
+    """Build the 5-step hub-centric tour copy. Branches on event_type
+    so DS officers see DS-flavoured copy (and CS officers see CS).
 
-    DS and CS share the bucket / strikethrough / not-on-Discord
-    structure (steps 1-3) so those are identical. Steps 4-6 branch:
-      * Step 4 wording references the post-#168 ephemeral view with
-        Member + Vote selects (no more free-text modal).
-      * Step 5 lists only the Set-Up button(s) the officer will
-        actually see — both A + B when `teams=both`, just the single
-        team's button when `teams=A` or `teams=B`. Event-type label
-        + game-defined times naturally flow from the click target.
-      * Step 6 points at the right /help category for the officer's
-        event type (Desert Storm vs Canyon Storm) instead of a
-        both-category mention.
+    The five steps walk the weekly cycle:
+        1. The hub itself (config summary + button grid).
+        2. The weekly event cycle (post poll, view sign-ups, set up
+           teams, record attendance).
+        3. Strategy presets + member rules (the storage surfaces that
+           feed the roster builder).
+        4. Free vs Premium gating (what each `💎` button unlocks).
+        5. Wrap-up (`/<event>` re-opens the hub, `/help` has the
+           command list).
     """
-    teams_norm = (teams or "both").strip()
-    if teams_norm not in ("both", "A", "B"):
-        teams_norm = "both"
-
     label = "Desert Storm" if event_type == "DS" else "Canyon Storm"
-    help_category = label  # `/help` category names match this exactly.
-
-    # Step 5 — branch on teams config so the copy matches the buttons.
-    if teams_norm == "both":
-        setup_phrase = (
-            "click **🅰️ Set up Team A** or **🅱️ Set up Team B**"
-        )
-    elif teams_norm == "A":
-        setup_phrase = "click **🅰️ Set up Team A**"
-    else:
-        setup_phrase = "click **🅱️ Set up Team B**"
+    event_day = "Friday" if event_type == "DS" else "Thursday"
+    parent = "desertstorm" if event_type == "DS" else "canyonstorm"
 
     return [
-        "**Step 1 / 6 — The buckets**\n"
-        "The embed groups everyone by their current vote: 🅰️ Team A, "
-        "🅱️ Team B, 🔄 Either, ❌ Cannot, and ❓ Not voted yet. The "
-        "counter in the title tells you the total members you're tracking.",
+        # ── Step 1 / 5: The hub ──────────────────────────────────────────
+        f"**Step 1 / 5: The {label} hub**\n"
+        f"This embed is your home base for {label}. The top of the embed "
+        f"shows your alliance's current setup: the next event date, the "
+        f"sign-up post channel (and auto-schedule if you set one up), "
+        f"team configuration (A & B / single team), how many strategy "
+        f"presets you've saved, and whether the structured roster flow "
+        f"is enabled.\n"
+        f"\n"
+        f"The buttons below cover every action in three groups: "
+        f"event-day actions (top row), communications + configuration "
+        f"(middle row), and reference + setup (bottom row).",
 
-        "**Step 2 / 6 — Who's already assigned**\n"
-        "Members already slotted into a roster for this event render with "
-        "strikethrough. That way you can scan at a glance for who's left "
-        "to place when you're building out a team.",
+        # ── Step 2 / 5: The weekly cycle ─────────────────────────────────
+        f"**Step 2 / 5: The weekly cycle**\n"
+        f"{label} runs every **{event_day}** in-game. Here's the flow:\n"
+        f"\n"
+        f"1. **📣 Post sign-up poll** drops a vote message in your sign-up "
+        f"channel. Members click a button to register their availability.\n"
+        f"2. After votes come in, click **👁️ View sign-ups + set up "
+        f"teams**. You'll see who voted in each bucket and can click "
+        f"🅰️ Set up Team A or 🅱️ Set up Team B to open the roster "
+        f"builder, pre-filtered to members who signed up for that team.\n"
+        f"3. After the event, **📋 Record attendance** lets you mark who "
+        f"actually showed at each assigned slot.\n"
+        f"\n"
+        f"Auto-scheduling can fire step 1 for you on a configured day; "
+        f"otherwise the button works on-demand.",
 
-        "**Step 3 / 6 — Members who aren't on Discord**\n"
-        "If your roster Sheet flags a row with `not_on_discord`, that "
-        "member surfaces in the buckets just like everyone else (marked "
-        "with ¹). They won't vote themselves — you cast their vote with "
-        "**🙋 Record on-behalf vote**, and the bot logs that you recorded it.",
+        # ── Step 3 / 5: Strategy presets + member rules ──────────────────
+        f"**Step 3 / 5: Strategy presets + member rules**\n"
+        f"Two storage surfaces feed the roster builder:\n"
+        f"\n"
+        f"**🧮 Manage strategy presets** opens your saved zone layouts. "
+        f"A preset lists which zones the team uses, max players per "
+        f"zone, optional minimum power per zone, and priority. When you "
+        f"set up a team, you pick which preset to apply.\n"
+        f"\n"
+        f"**👤 Manage member rules** opens the eligibility rule list. "
+        f"Two types: power-band rules ('members ≥ 80M are eligible for "
+        f"Power Tower') and per-member overrides ('Alice always plays "
+        f"Team A'). Both feed into the auto-fill when you build a "
+        f"roster.",
 
-        "**Step 4 / 6 — Recording on-behalf votes**\n"
-        "Click **🙋 Record on-behalf vote** to open the picker. Pick the "
-        "member from the dropdown (sourced from your roster Sheet — no "
-        "free typing, so typos can't slip through), pick a vote (the "
-        "options match the team buttons members see on the sign-up post), "
-        "then hit **Submit**. Each on-behalf vote captures your Discord "
-        "ID for audit.",
+        # ── Step 4 / 5: Free vs Premium ──────────────────────────────────
+        f"**Step 4 / 5: Free vs Premium**\n"
+        f"The hub buttons with `💎` render disabled on the free tier. "
+        f"Here's what unlocks with `/upgrade`:\n"
+        f"\n"
+        f"**Premium:** Post sign-up poll, View sign-ups + set up teams, "
+        f"Record attendance, Send DM reminder to roster, View past "
+        f"rosters. These power the structured roster flow.\n"
+        f"\n"
+        f"**Free tier:** Manage strategy presets, Manage member rules, "
+        f"Generate mail (the legacy text template), Fill out "
+        f"participation questions, View past participation logs. "
+        f"Strategy presets + member rules still let free-tier alliances "
+        f"use the roster builder against their full roster.",
 
-        "**Step 5 / 6 — Setting up a team**\n"
-        f"When you're ready to build a {label} roster, {setup_phrase}. "
-        "The bot will ask which preset to use, then open the roster builder "
-        "pre-filtered to members who signed up, with eligibility minimums "
-        "enforced.",
-
-        "**Step 6 / 6 — That's the tour**\n"
-        f"You can run `/help` any time and pick **{help_category}** "
-        "from the dropdown to revisit the command list. Closing this "
-        "message drops you back to the live officer view.",
+        # ── Step 5 / 5: Wrap-up ──────────────────────────────────────────
+        f"**Step 5 / 5: That's the tour**\n"
+        f"Run `/{parent}` any time to come back to this hub. The hub "
+        f"re-reads your config on every open, so any setup changes "
+        f"show up the next time you open it.\n"
+        f"\n"
+        f"For the full command list, run `/help` and pick **{label}** "
+        f"from the category dropdown. Closing this message drops you "
+        f"back to the live hub.",
     ]
 
 
-# Backwards-compat alias: tests and any external callers that imported
-# the constant continue to work against the DS+both default. New
-# in-process callers go through `_build_storm_signups_tour_steps` via
-# `maybe_offer_storm_signups_tour`.
-_STORM_SIGNUPS_TOUR_STEPS: list[str] = _build_storm_signups_tour_steps("DS", "both")
+# Backwards-compat alias kept for any external/test callers that
+# imported the constant before the hub rewrite.
+_STORM_HUB_TOUR_STEPS: list[str] = _build_storm_hub_tour_steps("DS")
 
 
-async def maybe_offer_storm_signups_tour(
+async def maybe_offer_storm_hub_tour(
     interaction: discord.Interaction,
     *,
-    walkthrough_key: str = STORM_SIGNUPS_TOUR_KEY,
+    walkthrough_key: str = STORM_HUB_TOUR_KEY,
     event_type: str = "DS",
-    teams: str = "both",
 ) -> None:
-    """If the officer hasn't seen the walkthrough yet, send an ephemeral
-    offer message. Records the dismissal on either choice — accept (the
-    tour fires) or decline (next time the officer runs the command, the
-    offer doesn't reappear).
+    """Fire the first-run hub tour offer if the officer hasn't already
+    dismissed it. Called from `storm_event_hub.handle_event_hub` after
+    the hub embed lands so the offer arrives as a followup ephemeral
+    immediately below the hub.
 
-    No-op if the walkthrough was already dismissed. Safe to call once
-    per storm sign-ups view invocation. `event_type` + `teams` shape
-    the tour copy (Step 4 on-behalf flow, Step 5 Set-Up button list,
-    Step 6 `/help` category pointer) so a CS officer sees CS-flavored
-    steps and a single-team officer sees their single button.
+    No-op if the walkthrough was already dismissed (either via
+    `[Walk me through this]` or `[No thanks]`). Safe to call once per
+    hub invocation; defends against double-click races inside the
+    `_OfferView` itself.
+
+    `event_type` shapes the tour copy (event-type label in Step 1,
+    game-defined event day in Step 2, `/<parent>` reference in Step 5).
     """
     import config
     guild_id = interaction.guild_id
@@ -141,13 +163,13 @@ async def maybe_offer_storm_signups_tour(
     view = _OfferView(
         guild_id=guild_id, user_id=user_id,
         walkthrough_key=walkthrough_key,
-        event_type=event_type, teams=teams,
+        event_type=event_type,
     )
     label = "Desert Storm" if event_type == "DS" else "Canyon Storm"
     try:
         msg = await interaction.followup.send(
-            f"👋 First time opening the {label} sign-ups view? Want a "
-            "quick walkthrough of what each piece does?",
+            f"👋 First time opening {label}? Want a quick walkthrough "
+            f"of how this hub works?",
             view=view,
             ephemeral=True,
             wait=True,
@@ -157,25 +179,26 @@ async def maybe_offer_storm_signups_tour(
         view.message = msg
     except discord.HTTPException as e:
         logger.warning(
-            "[STORM WALKTHROUGH] failed to send offer (guild=%s user=%s): %s",
+            "[STORM WALKTHROUGH] failed to send hub-tour offer "
+            "(guild=%s user=%s): %s",
             guild_id, user_id, e,
         )
 
 
 class _OfferView(discord.ui.View):
     """First-run offer: [Walk me through this] / [No thanks]. Both
-    record the dismissal — the bot only ever offers once."""
+    record the dismissal. The bot only ever offers once per officer +
+    walkthrough_key tuple."""
 
     def __init__(
         self, *, guild_id: int, user_id: int, walkthrough_key: str,
-        event_type: str = "DS", teams: str = "both",
+        event_type: str = "DS",
     ):
         super().__init__(timeout=300)
         self.guild_id = guild_id
         self.user_id  = user_id
         self.walkthrough_key = walkthrough_key
         self.event_type = event_type
-        self.teams = teams
         self.message: discord.Message | discord.WebhookMessage | None = None
 
     @discord.ui.button(label="👋 Walk me through this", style=discord.ButtonStyle.success)
@@ -202,7 +225,7 @@ class _OfferView(discord.ui.View):
             )
         except discord.HTTPException:
             pass
-        steps = _build_storm_signups_tour_steps(self.event_type, self.teams)
+        steps = _build_storm_hub_tour_steps(self.event_type)
         await _send_tour_step(inter, steps, index=0)
 
     @discord.ui.button(label="No thanks", style=discord.ButtonStyle.secondary)
@@ -223,18 +246,18 @@ class _OfferView(discord.ui.View):
             item.disabled = True
         try:
             await inter.response.edit_message(
-                content="👍 Got it — won't ask again. Run `/help` any "
+                content="👍 Got it, won't ask again. Run `/help` any "
                         "time and pick Desert Storm or Canyon Storm "
-                        "if you want a refresher.",
+                        "for a refresher.",
                 view=self,
             )
         except discord.HTTPException:
             pass
 
     async def on_timeout(self):
-        # Timing out without clicking is treated as "deferred" — don't
-        # record dismissal so the offer fires again next time. Strip the
-        # view from the message so the buttons don't 404 on a stale click.
+        # Timing out without clicking is treated as "deferred" so the
+        # offer fires again next time. Strip the view from the message
+        # so the buttons don't 404 on a stale click.
         for item in self.children:
             item.disabled = True
         if self.message is None:
@@ -243,13 +266,6 @@ class _OfferView(discord.ui.View):
             await self.message.edit(view=self)
         except discord.HTTPException:
             pass
-
-
-async def _start_tour(interaction: discord.Interaction, steps: list[str]) -> None:
-    """Public entry — sends step 0. Kept for backwards compatibility
-    with any external caller; the new internal path uses
-    `_send_tour_step` directly."""
-    await _send_tour_step(interaction, steps, index=0)
 
 
 async def _send_tour_step(
@@ -283,7 +299,7 @@ async def _send_tour_step(
 
 class _TourStepView(discord.ui.View):
     """One step of the tour. Owns the index so Next/Skip can advance
-    correctly — the prior implementation re-entered `_start_tour` on
+    correctly. Earlier implementation re-entered a start function on
     every Next click, which threw away the increment and looped on
     step 1 forever."""
 

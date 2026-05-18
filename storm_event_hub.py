@@ -30,6 +30,40 @@ _EVENT_EMOJI = {"DS": "⚔️", "CS": "🏜️"}
 _PARENT_CMD = {"DS": "desertstorm", "CS": "canyonstorm"}
 _FIXED_EVENT_DAY = {"DS": "Friday", "CS": "Thursday"}
 
+# Canonical slash-command surface, with leading slash. Use this in
+# user-facing copy that tells officers which hub to open.
+HUB_COMMAND = {"DS": "/desertstorm", "CS": "/canyonstorm"}
+
+# ── Button labels (exported) ─────────────────────────────────────────────────
+#
+# Single source of truth for the hub's button labels. Imported by every
+# module that quotes a button name in error / timeout / followup copy,
+# so a rename here updates every caller automatically.
+#
+# These are the "active" (premium-unlocked) forms. The free-tier locked
+# form is derived via `_locked()` so we don't carry both spellings.
+HUB_BTN_POST_SIGNUP = "📣 Post sign-up poll"
+HUB_BTN_VIEW_SIGNUPS = "👁️ View sign-ups + set up teams"
+HUB_BTN_ATTENDANCE = "📋 Record attendance"
+HUB_BTN_PARTICIPATION = "📊 Fill out participation questions"
+HUB_BTN_REMIND = "🔔 Send DM reminder to roster"
+HUB_BTN_PRESETS = "🧮 Manage strategy presets"
+HUB_BTN_RULES = "👤 Manage member rules"
+HUB_BTN_DRAFT = "📄 Generate mail"
+HUB_BTN_LOGS = "📜 View past participation logs"
+HUB_BTN_PAST_ROSTERS = "📜 View past rosters"
+HUB_BTN_SETUP = "⚙️ Open setup"
+
+
+def _locked(label: str) -> str:
+    """Free-tier-locked variant of a hub button label: replace the
+    leading emoji with 💎. Keeps the active label as the single source
+    of truth — the locked form is computed, not stored separately."""
+    if " " not in label:
+        return f"💎 {label}"
+    _, rest = label.split(" ", 1)
+    return f"💎 {rest}"
+
 
 # ── Embed builder ────────────────────────────────────────────────────────────
 
@@ -124,12 +158,12 @@ def _build_event_hub_embed(
     ]
     if not is_premium:
         description_lines.append(
-            "\n_Free tier — Premium-only buttons below are disabled. "
+            "\n_Free tier: Premium-only buttons below are disabled. "
             "Run `/upgrade` to unlock the structured roster flow._"
         )
 
     embed = discord.Embed(
-        title=f"{emoji} {label} — {guild.name}",
+        title=f"{emoji} {label}: {guild.name}",
         description="\n".join(description_lines),
         color=color,
     )
@@ -213,7 +247,7 @@ class _EventHubView(discord.ui.View):
         # Post sign-up poll (Premium): blue, the "start the cycle"
         # action. Most events begin with this button click.
         self._add_button(
-            label="💎 Post sign-up poll" if premium_off else "📣 Post sign-up poll",
+            label=_locked(HUB_BTN_POST_SIGNUP) if premium_off else HUB_BTN_POST_SIGNUP,
             style=discord.ButtonStyle.primary,
             disabled=premium_off,
             row=0,
@@ -223,7 +257,7 @@ class _EventHubView(discord.ui.View):
         # the roster" action. Highest-traffic button once the poll is
         # up — gets the most visual weight after Post.
         self._add_button(
-            label="💎 View sign-ups + set up teams" if premium_off else "👁️ View sign-ups + set up teams",
+            label=_locked(HUB_BTN_VIEW_SIGNUPS) if premium_off else HUB_BTN_VIEW_SIGNUPS,
             style=discord.ButtonStyle.success,
             disabled=premium_off,
             row=0,
@@ -233,7 +267,7 @@ class _EventHubView(discord.ui.View):
         # it's part of the event-day flow, but visually deprioritised
         # so officers don't click it mid-build by accident.
         self._add_button(
-            label="💎 Record attendance" if premium_off else "📋 Record attendance",
+            label=_locked(HUB_BTN_ATTENDANCE) if premium_off else HUB_BTN_ATTENDANCE,
             style=discord.ButtonStyle.secondary,
             disabled=premium_off,
             row=0,
@@ -242,7 +276,7 @@ class _EventHubView(discord.ui.View):
         # Fill out participation questions (free tier): same row
         # because participation logs are an event-day chore.
         self._add_button(
-            label="📊 Fill out participation questions",
+            label=HUB_BTN_PARTICIPATION,
             style=discord.ButtonStyle.secondary,
             disabled=False,
             row=0,
@@ -252,26 +286,26 @@ class _EventHubView(discord.ui.View):
         # ── Row 1: Communications + configuration ────────────────────────
         # DM roster reminder (Premium): leads the comms/config row.
         self._add_button(
-            label="💎 Send DM reminder to roster" if premium_off else "🔔 Send DM reminder to roster",
+            label=_locked(HUB_BTN_REMIND) if premium_off else HUB_BTN_REMIND,
             style=discord.ButtonStyle.secondary,
             disabled=premium_off,
             row=1,
             callback=self._on_remind,
         )
         self._add_button(
-            label="🧮 Manage strategy presets",
+            label=HUB_BTN_PRESETS,
             style=discord.ButtonStyle.secondary,
             disabled=False, row=1,
             callback=self._on_manage_presets,
         )
         self._add_button(
-            label="👤 Manage member rules",
+            label=HUB_BTN_RULES,
             style=discord.ButtonStyle.secondary,
             disabled=False, row=1,
             callback=self._on_manage_rules,
         )
         self._add_button(
-            label="📄 Generate mail",
+            label=HUB_BTN_DRAFT,
             style=discord.ButtonStyle.secondary,
             disabled=False, row=1,
             callback=self._on_draft,
@@ -279,20 +313,20 @@ class _EventHubView(discord.ui.View):
 
         # ── Row 2: Reference + setup ─────────────────────────────────────
         self._add_button(
-            label="📜 View past participation logs",
+            label=HUB_BTN_LOGS,
             style=discord.ButtonStyle.secondary,
             disabled=False, row=2,
             callback=self._on_log,
         )
         self._add_button(
-            label="💎 View past rosters" if premium_off else "📜 View past rosters",
+            label=_locked(HUB_BTN_PAST_ROSTERS) if premium_off else HUB_BTN_PAST_ROSTERS,
             style=discord.ButtonStyle.secondary,
             disabled=premium_off,
             row=2,
             callback=self._on_past_rosters,
         )
         self._add_button(
-            label="⚙️ Open setup",
+            label=HUB_BTN_SETUP,
             style=discord.ButtonStyle.secondary,
             disabled=False, row=2,
             callback=self._on_setup,
@@ -370,11 +404,20 @@ class _EventHubView(discord.ui.View):
         # Post-#201: the per-feature setup wizards moved behind the
         # /setup hub buttons, with their bodies exposed as standalone
         # launcher helpers. Dispatch into `_launch_storm_setup`
-        # directly so the storm hub's ⚙️ Open setup wizard button
-        # opens the wizard inline instead of telling officers to type
-        # another slash command. Same gates as the hub-button path
-        # (leadership-or-admin + channel-perms via _check_wizard_can_run).
+        # directly so the storm hub's ⚙️ Open setup button opens
+        # the wizard inline instead of telling officers to type
+        # another slash command. Disable the hub buttons first so
+        # officers can't double-fire the wizard by clicking again
+        # mid-flow (matches the /growth Edit Config pattern).
+        import wizard_registry
         from setup_cog import _launch_storm_setup
+        for item in self.children:
+            item.disabled = True
+        try:
+            await wizard_registry.safe_edit_response(inter, view=self)
+        except Exception:
+            pass
+        self.stop()
         await _launch_storm_setup(inter, self.bot, self.event_type)
 
 
@@ -428,13 +471,34 @@ async def handle_event_hub(
         is_premium=is_premium,
     )
 
-    # Send as a regular (non-ephemeral) message so other leadership
-    # can see the same hub if Kevin shares the channel. The
-    # interaction-check guard restricts clicks to the opener so
-    # accidental cross-officer clicks fail loudly.
+    # Ephemeral — only the officer who ran the command sees the hub.
+    # Avoids two problems with the previous non-ephemeral approach:
+    # (1) when multiple officers run /desertstorm in the same channel,
+    # the channel collects duplicate visible-but-unclickable embeds;
+    # (2) the owner-only interaction_check meant other leadership
+    # could see the hub but couldn't act on it, which read as a bug.
+    # Each officer gets their own ephemeral hub instance.
     if interaction.response.is_done():
-        sent = await interaction.followup.send(embed=embed, view=view)
+        sent = await interaction.followup.send(embed=embed, view=view, ephemeral=True)
     else:
-        await interaction.response.send_message(embed=embed, view=view)
+        await interaction.response.send_message(embed=embed, view=view, ephemeral=True)
         sent = await interaction.original_response()
     view.message = sent
+
+    # First-run tour offer (#190): the hub is now the front door for
+    # the storm flow, so the tour fires here instead of the legacy
+    # `/<event> signups` officer-view trigger. Sent as an ephemeral
+    # followup so only the officer who opened the hub sees it. The
+    # offer no-ops if the officer has already dismissed it.
+    try:
+        from storm_walkthrough import maybe_offer_storm_hub_tour
+        await maybe_offer_storm_hub_tour(
+            interaction, event_type=event_type,
+        )
+    except Exception as e:
+        # Walkthrough offer is non-essential; don't let a tour-side
+        # failure (DB error, ephemeral send fail) take down the hub.
+        logger.warning(
+            "[STORM HUB] tour offer failed for guild=%s event=%s: %s",
+            guild.id, event_type, e,
+        )

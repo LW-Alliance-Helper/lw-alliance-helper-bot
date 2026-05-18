@@ -1,10 +1,13 @@
 """
-Storm sign-up post command (#124).
+Storm sign-up post (#124).
 
-Leadership runs `/desertstorm post_signup event_date:YYYY-MM-DD` (or the CS equivalent)
-to publish a registration message in the alliance's configured sign-up
-channel. The message embeds a `SignupView` (#123) so members click to
-vote; the persistent-View infra handles vote capture + Sheet mirroring.
+Reached via the `📣 Post sign-up poll` button on `/desertstorm` and
+`/canyonstorm` (hub-restructure #187; legacy
+`/desertstorm post_signup event_date:YYYY-MM-DD` subcommand pre-#187).
+The button publishes a registration message in the alliance's
+configured sign-up channel. The message embeds a `SignupView` (#123)
+so members click to vote; the persistent-View infra handles vote
+capture + Sheet mirroring.
 
 v1 scope: leadership-triggered only. Auto-scheduling (a recurring task
 that fires N days before the next event day) is intentionally deferred
@@ -82,7 +85,7 @@ def _build_registration_embed(event_type: str, event_date_iso: str,
         f"replace the first vote you cast."
     )
     embed = discord.Embed(
-        title=f"{emoji} {label} — Sign Up for {date_pretty}",
+        title=f"{emoji} {label}: Sign Up for {date_pretty}",
         description=desc,
         color=discord.Color.gold() if event_type == "DS" else discord.Color.orange(),
     )
@@ -104,9 +107,9 @@ async def post_registration(
 
     Idempotent on `(guild_id, event_type, event_date)` — if a post
     already exists, returns status `already_posted` without sending
-    again. Used by both the leadership-triggered `/desertstorm post_signup`
-    slash command (and the CS equivalent, which shape the response into
-    user-facing copy) and the auto-scheduler loop (#131) (which logs status).
+    again. Used by both the leadership-triggered `📣 Post sign-up poll`
+    hub button (which shapes the response into user-facing copy) and
+    the auto-scheduler loop (#131) (which logs status).
 
     Returns a dict carrying at minimum a `status` key. Possible values:
       * `ok`               — message sent + recorded; `message_id` and
@@ -200,12 +203,11 @@ async def post_registration(
     }
 
 
-# ── Slash command handler ────────────────────────────────────────────────────
+# ── Hub button handler ───────────────────────────────────────────────────────
 #
-# The slash command itself is registered by `storm_commands_root` under the
-# `/desertstorm post_signup` and `/canyonstorm post_signup` parents. This
-# module just exposes the handler body so the root cog stays a thin
-# dispatcher.
+# Wired from the `📣 Post sign-up poll` button on the `/desertstorm`
+# and `/canyonstorm` event hubs (storm_event_hub.py). This module
+# exposes the handler body so the hub stays a thin dispatcher.
 
 
 async def handle_post_signup(
@@ -301,13 +303,15 @@ def _format_post_result_message(
     setup_cmd = "/setup → ⚔️ Desert Storm" if event_type == "DS" else "/setup → 🏜️ Canyon Storm"
     date_pretty = format_event_date(event_date)
 
-    parent = "desertstorm" if event_type == "DS" else "canyonstorm"
+    from storm_event_hub import HUB_COMMAND, HUB_BTN_VIEW_SIGNUPS
+    hub_cmd = HUB_COMMAND[event_type]
     if status == "ok":
         cid = result.get("channel_id")
         return (
             f"✅ Sign-up post for {label} on **{date_pretty}** is live in "
             f"<#{cid}>. Members can vote any time before the event. "
-            f"Open `/{parent} signups` to review who's voted."
+            f"Run `{hub_cmd}` and click **{HUB_BTN_VIEW_SIGNUPS}** to "
+            f"review who's voted."
         )
     if status == "already_posted":
         cid = result.get("channel_id")

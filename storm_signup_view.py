@@ -222,7 +222,7 @@ async def _handle_signup_click(interaction: discord.Interaction, vote_code: str)
         try:
             await interaction.response.send_message(
                 "ℹ️ Your alliance is configured as Team A only. "
-                "Team B / Either aren't valid choices — pick Team A "
+                "Team B / Either aren't valid choices. Pick Team A "
                 "or Cannot participate.",
                 ephemeral=True,
             )
@@ -233,7 +233,7 @@ async def _handle_signup_click(interaction: discord.Interaction, vote_code: str)
         try:
             await interaction.response.send_message(
                 "ℹ️ Your alliance is configured as Team B only. "
-                "Team A / Either aren't valid choices — pick Team B "
+                "Team A / Either aren't valid choices. Pick Team B "
                 "or Cannot participate.",
                 ephemeral=True,
             )
@@ -462,7 +462,7 @@ async def _maybe_send_power_refresh_dm(
         )
     else:
         body = (
-            "Heads up — your power value on the alliance roster Sheet "
+            "Heads up: your power value on the alliance roster Sheet "
             "isn't readable. Could you update it before the next storm "
             "so leadership has accurate numbers for zone assignments?"
         )

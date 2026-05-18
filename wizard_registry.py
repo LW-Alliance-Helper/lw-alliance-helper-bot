@@ -122,9 +122,11 @@ async def expire_view_message(message, command_hint: str = "") -> None:
     clicking one fails with "Interaction failed" because the view
     stopped listening on the bot side. The user just sees a dead UI.
 
-    `command_hint` is the slash command leadership should run to
-    re-initiate the flow (e.g. "/events", "/train"). Leave empty to
-    drop the suffix.
+    `command_hint` is the pre-formatted re-initiate hint shown to
+    leadership. Callers own the formatting — wrap the slash command in
+    backticks yourself (e.g. "`/events`") or include button-label
+    markdown (e.g. "`/desertstorm` → **👁️ View sign-ups + set up teams**").
+    Leave empty to drop the suffix.
 
     Idempotent — re-running on the same message is a no-op. Swallows
     discord errors (deleted message, lost perms) so the timeout
@@ -132,7 +134,7 @@ async def expire_view_message(message, command_hint: str = "") -> None:
     """
     if message is None:
         return
-    suffix = f" Use `{command_hint}` to re-initiate." if command_hint else ""
+    suffix = f" Use {command_hint} to re-initiate." if command_hint else ""
     notice = f"\n\n⏰ *The actions for this have timed out.{suffix}*"
     try:
         existing = (getattr(message, "content", None) or "")

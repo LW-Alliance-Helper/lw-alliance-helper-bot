@@ -24,7 +24,7 @@ Coordinates were extracted from the SVG mocks (`ds_layout.svg`,
 `CS_layout.svg`) the alliance lead authored — every box position
 matches the design 1:1, scaled by `SCALE` for crisper output.
 
-Phase-aware zones render with `Stage/Phase N:` headers inside their
+Phase-aware zones render with `Stage N:` headers inside their
 member-list pill. A member migrating across phases (e.g. Alice plays
 Info Center in Phase 1, Nuclear Silo in Phase 2) shows up in two
 different zone blocks, one per phase. Member-list font auto-shrinks
@@ -55,7 +55,7 @@ class RosterZone:
     place each zone's icon + text pill at its layout slot, then
     stacks the per-phase member lists inside the text pill.
     """
-    name: str                   # display name; may include "Phase N — " prefix
+    name: str                   # display name; may include "Stage N — " prefix
     max_players: int
     members: list[str] = field(default_factory=list)
     phase: int = 0              # 0 = flat preset, 1/2/3 = phase-aware
@@ -615,7 +615,7 @@ def _pick_member_fonts(phase_blocks: list[RosterZone], max_h: int):
 def _draw_member_block(draw, b: Box, phase_blocks: list[RosterZone],
                        paired_subs: dict[str, str], is_paired: bool) -> None:
     """Render the member list inside a zone's text pill. Phase-aware
-    blocks get a bold `Stage/Phase N:` header; flat blocks render the
+    blocks get a bold `Stage N:` header; flat blocks render the
     member list directly. Paired-mode formatting appends `+ sub Bob`
     inline so the pill stays compact."""
     x0, y0, x1, y1 = _s_box(b)
@@ -636,7 +636,7 @@ def _draw_member_block(draw, b: Box, phase_blocks: list[RosterZone],
         first = False
         if block.phase >= 1:
             draw.text((x0 + pad, cy),
-                      f"Stage/Phase {block.phase}:",
+                      f"Stage {block.phase}:",
                       fill=_TEXT_DARK, font=fh)
             cy += fh.size + line_gap
         for name in block.members:
@@ -830,7 +830,7 @@ def roster_from_session(session) -> RosterData:
                 if cap == 0 and not names:
                     continue
                 zones.append(RosterZone(
-                    name=f"Phase {phase} — {z.zone}",
+                    name=f"Stage {phase} — {z.zone}",
                     max_players=cap,
                     members=names,
                     phase=phase,

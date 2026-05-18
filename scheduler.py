@@ -348,7 +348,7 @@ class EventEditorView(discord.ui.View):
     async def on_timeout(self):
         """Strip the editor buttons and tell leadership how to re-open it."""
         from wizard_registry import expire_view_message
-        await expire_view_message(self.message, command_hint="/events")
+        await expire_view_message(self.message, command_hint="`/events`")
 
     @discord.ui.button(label="➕ Add Event", style=discord.ButtonStyle.primary, row=0)
     async def add_event(self, interaction: discord.Interaction, button: discord.ui.Button):
@@ -761,7 +761,7 @@ class ApprovalView(discord.ui.View):
         the draft. Without the message edit, the buttons stayed on screen
         but clicks failed silently with 'Interaction failed'."""
         from wizard_registry import expire_view_message
-        await expire_view_message(self.message, command_hint="/events")
+        await expire_view_message(self.message, command_hint="`/events`")
 
 
 # ── Main scheduler loop ────────────────────────────────────────────────────────

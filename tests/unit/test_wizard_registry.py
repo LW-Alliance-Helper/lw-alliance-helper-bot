@@ -184,7 +184,7 @@ class TestExpireViewMessage:
         msg = MagicMock()
         msg.edit = AsyncMock()
         # Simulate first run already happened.
-        msg.content = "draft\n\n⏰ *The actions for this have timed out. Use `/events` to re-initiate.*"
+        msg.content = "draft\n\n⏰ *The actions for this have timed out. Use /events to re-initiate.*"
 
         await expire_view_message(msg, command_hint="/events")
 

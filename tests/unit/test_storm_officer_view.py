@@ -16,9 +16,15 @@ from tests.unit.test_config import TEST_GUILD_ID
 
 class _FakeMember:
     def __init__(self, member_id: int, display_name: str, bot: bool = False,
-                 role_ids: list[int] | None = None):
+                 role_ids: list[int] | None = None,
+                 name: str | None = None):
         self.id = member_id
         self.display_name = display_name
+        # Underlying Discord username (the @ handle). Used by the
+        # on-behalf collision-disambiguation path. Defaults to the
+        # display_name lowercased + member_id suffix to keep test
+        # fixtures terse — collision tests pass `name` explicitly.
+        self.name = name if name is not None else f"{display_name.lower()}_{member_id}"
         self.bot = bot
         self.roles = [MagicMock(id=rid) for rid in (role_ids or [])]
 
@@ -695,6 +701,108 @@ class TestOnBehalfVoteView:
         view.page = 1
         assert len(view._members_for_page()) == 15
 
+    def test_collision_on_display_name_expands_to_disambiguated_picker_entries(
+        self, seeded_db,
+    ):
+        """When two Discord members share the same server nickname AND
+        the roster row doesn't carry an explicit discord_id, the picker
+        must surface ALL matching Discord IDs — not silently overwrite
+        one with the other. Officers see `Phoenix (@phoenix99)` vs
+        `Phoenix (@phoenix01)` and pick the right user. The previous
+        `dict[name] = id` lookup let last-write-win, so the officer
+        could cast a vote for the wrong member with no signal."""
+        parent = self._fake_parent_view()
+        parent.guild = _FakeGuild(
+            TEST_GUILD_ID,
+            [
+                _FakeMember(101, "Phoenix", name="phoenix99"),
+                _FakeMember(102, "Phoenix", name="phoenix01"),
+                _FakeMember(103, "SoloName", name="solo"),
+            ],
+        )
+        roster = [
+            {"name": "Phoenix", "discord_id": "", "not_on_discord": False},
+            {"name": "SoloName", "discord_id": "", "not_on_discord": False},
+        ]
+        view = sov._OnBehalfVoteView(
+            parent, roster, teams_setting="both",
+        )
+        names = [m["name"] for m in view.members]
+        target_ids = [m["target_id"] for m in view.members]
+
+        # SoloName has no collision -> renders once with the live ID.
+        assert "SoloName" in names
+        solo_idx = names.index("SoloName")
+        assert target_ids[solo_idx] == "103"
+
+        # Phoenix collision expands into two disambiguated entries. Each
+        # maps to a distinct Discord ID so the officer's pick lands on
+        # the right user.
+        assert "Phoenix (@phoenix01)" in names
+        assert "Phoenix (@phoenix99)" in names
+        # The bare "Phoenix" label must NOT exist — that's the
+        # last-write-wins entry the disambiguation is replacing.
+        assert "Phoenix" not in names
+        # IDs are distinct and cover both alts.
+        disambiguated_ids = {
+            target_ids[names.index("Phoenix (@phoenix01)")],
+            target_ids[names.index("Phoenix (@phoenix99)")],
+        }
+        assert disambiguated_ids == {"101", "102"}
+
+    def test_collision_does_not_expand_when_roster_pins_a_discord_id(
+        self, seeded_db,
+    ):
+        """If the roster row already carries an explicit `discord_id`,
+        the roster has chosen which user this row represents — no
+        disambiguation needed even when Discord has multiple members
+        with the same display_name."""
+        parent = self._fake_parent_view()
+        parent.guild = _FakeGuild(
+            TEST_GUILD_ID,
+            [
+                _FakeMember(101, "Phoenix", name="phoenix99"),
+                _FakeMember(102, "Phoenix", name="phoenix01"),
+            ],
+        )
+        roster = [
+            {"name": "Phoenix", "discord_id": "101", "not_on_discord": False},
+        ]
+        view = sov._OnBehalfVoteView(
+            parent, roster, teams_setting="both",
+        )
+        names = [m["name"] for m in view.members]
+        target_ids = [m["target_id"] for m in view.members]
+        # Single entry, no `(@…)` suffix, ID matches the roster's pin.
+        assert names == ["Phoenix"]
+        assert target_ids == ["101"]
+
+    def test_not_on_discord_roster_row_skips_collision_expansion(
+        self, seeded_db,
+    ):
+        """A roster row flagged `not_on_discord` represents a real
+        non-Discord member by name — no Discord-side expansion even if
+        the name happens to match live Discord members."""
+        parent = self._fake_parent_view()
+        parent.guild = _FakeGuild(
+            TEST_GUILD_ID,
+            [
+                _FakeMember(101, "Phoenix", name="phoenix99"),
+                _FakeMember(102, "Phoenix", name="phoenix01"),
+            ],
+        )
+        roster = [
+            {"name": "Phoenix", "discord_id": "", "not_on_discord": True},
+        ]
+        view = sov._OnBehalfVoteView(
+            parent, roster, teams_setting="both",
+        )
+        names = [m["name"] for m in view.members]
+        target_ids = [m["target_id"] for m in view.members]
+        # The vote is keyed by the raw name — non-Discord member.
+        assert names == ["Phoenix"]
+        assert target_ids == ["Phoenix"]
+
     def test_submit_disabled_until_both_selects_chosen(self, seeded_db):
         view = sov._OnBehalfVoteView(
             self._fake_parent_view(), [{"name": "Alice"}], teams_setting="both",
@@ -852,7 +960,9 @@ class TestOfficerViewTimeout:
         with patch("wizard_registry.expire_view_message", new=AsyncMock()) as ex:
             await view.on_timeout()
         ex.assert_awaited_once()
-        # Command hint points at the parent-group `signups` subcommand —
-        # event-type aware so DS officers see the DS path and vice versa.
+        # Command hint points at the hub button — event-type aware so DS
+        # officers see the DS hub and vice versa.
         kwargs = ex.await_args.kwargs
-        assert kwargs.get("command_hint") == "/desertstorm signups"
+        hint = kwargs.get("command_hint", "")
+        assert "/desertstorm" in hint
+        assert "View sign-ups" in hint

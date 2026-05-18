@@ -1,11 +1,9 @@
 """
 storm_log.py — DS and CS event logging
 
-Slash commands:
-  /desertstorm participation — Log Desert Storm participation data
-  /canyonstorm participation — Log Canyon Storm participation data
-  /desertstorm log [date]    — View a Desert Storm log entry
-  /canyonstorm log [date]    — View a Canyon Storm log entry
+Reached via the `📊 Fill out participation questions` button (log
+write) and the `📜 View past participation logs` button (read) on
+`/desertstorm` and `/canyonstorm` (hub-restructure #187).
 
 Writes to the "DS-CS Sit-outs" tab in Google Sheets and posts a
 summary to the dedicated log thread configured for this guild.
@@ -23,6 +21,7 @@ import os
 from datetime import date
 
 import discord
+from storm_event_hub import HUB_COMMAND, HUB_BTN_PARTICIPATION
 from config import get_config
 import wizard_registry
 
@@ -93,7 +92,7 @@ class NameEntryModal(discord.ui.Modal):
         self.text_input = discord.ui.TextInput(
             label="Names (comma-separated or one per line)",
             style=discord.TextStyle.paragraph,
-            placeholder="e.g. Alice, Bob, Chris — or leave blank and submit for none",
+            placeholder="e.g. Alice, Bob, Chris, or leave blank and submit for none",
             required=False,
             max_length=1000,
         )
@@ -242,7 +241,7 @@ class NameEntryView(discord.ui.View):
                 # Restore the Enter Names button so they can try again
                 try:
                     await interaction.message.edit(
-                        content="*Re-enter names — press Enter Names again:*",
+                        content="*Re-enter names: press Enter Names again:*",
                         view=self,
                     )
                 except discord.HTTPException:
@@ -260,7 +259,7 @@ class NameEntryView(discord.ui.View):
         for item in self.children:
             item.disabled = True
         await wizard_registry.safe_edit_response(
-            interaction, content="*Skipped — none.*", view=self
+            interaction, content="*Skipped: none.*", view=self
         )
         self.stop()
 
@@ -398,8 +397,9 @@ async def run_log_flow(bot, channel, user, event_type):
     """
     is_ds        = event_type.upper() == "DS"
     event_label  = "Desert Storm" if is_ds else "Canyon Storm"
-    log_cmd      = "/desertstorm participation" if is_ds else "/canyonstorm participation"
-    setup_cmd    = "/setup_desertstorm"          if is_ds else "/setup_canyonstorm"
+    hub_cmd      = HUB_COMMAND["DS"] if is_ds else HUB_COMMAND["CS"]
+    log_hint     = f"`{hub_cmd}` → **{HUB_BTN_PARTICIPATION}**"
+    setup_cmd    = "/setup_desertstorm" if is_ds else "/setup_canyonstorm"
     guild_id     = channel.guild.id if hasattr(channel, "guild") and channel.guild else None
     cancel_event = asyncio.Event()
     active_logs[user.id] = cancel_event
@@ -449,7 +449,7 @@ async def run_log_flow(bot, channel, user, event_type):
                 pass
             return reply.content.strip()
         except asyncio.TimeoutError:
-            await channel.send(f"⏰ Timed out. Run `{log_cmd}` to start again.")
+            await channel.send(f"⏰ Timed out. Run {log_hint} to start again.")
             return None
 
     async def wait_for_view(view, prompt_msg):
@@ -472,20 +472,20 @@ async def run_log_flow(bot, channel, user, event_type):
                 await prompt_msg.delete()
             except discord.HTTPException:
                 pass
-            await channel.send(f"⏰ Timed out. Run `{log_cmd}` to start again.")
+            await channel.send(f"⏰ Timed out. Run {log_hint} to start again.")
             return False
         return True
 
     try:
         total_steps = len(questions) + 1  # +1 for the always-required date
         await channel.send(
-            f"📋 **{event_label} Log** — started by {user.mention}\n"
+            f"📋 **{event_label} Log** started by {user.mention}\n"
             f"*{total_steps} step(s) total. Use `/cancel` at any time to stop.*"
         )
 
         # ── Step 1: Date (always asked, never configurable) ──────────────────
         raw_date = await wait_for_msg(
-            "**Step 1 — Event date**\n"
+            "**Step 1: Event date**\n"
             "Type the date (e.g. `April 14`, `4/14`) or type `today`:"
         )
         if raw_date is None:
@@ -501,7 +501,7 @@ async def run_log_flow(bot, channel, user, event_type):
             if not parsed_d:
                 await channel.send(
                     f"⚠️ Could not parse `{raw_date}` as a date. "
-                    f"Run `{log_cmd}` to start again."
+                    f"Run {log_hint} to start again."
                 )
                 return
             log_date = parsed_d
@@ -532,7 +532,7 @@ async def run_log_flow(bot, channel, user, event_type):
             qlabel = q.get("label", qkey)
             qtype  = q.get("type", "text")
 
-            header = f"**Step {idx} of {total_steps} — {qlabel}**"
+            header = f"**Step {idx} of {total_steps}: {qlabel}**"
 
             if qtype == "yes_no":
                 yn = _YesNoLogView()
@@ -580,8 +580,8 @@ async def run_log_flow(bot, channel, user, event_type):
                     break
                 if value is None:
                     await channel.send(
-                        "⚠️ Too many invalid attempts. Cancelling the log — "
-                        f"run `{log_cmd}` when you're ready to try again."
+                        "⚠️ Too many invalid attempts. Cancelling the log. "
+                        f"run {log_hint} when you're ready to try again."
                     )
                     return
                 answers[qkey] = value
@@ -591,7 +591,7 @@ async def run_log_flow(bot, channel, user, event_type):
                 if not names:
                     await channel.send(
                         "⚠️ The configured roster tab is empty or unreachable. "
-                        f"Run `{log_cmd.replace('_participation', '').replace('/', '/setup')}` "
+                        f"Run `{setup_cmd}` "
                         f"to update the roster source, then try again."
                     )
                     return
@@ -687,7 +687,7 @@ async def run_log_flow(bot, channel, user, event_type):
 
         # ── Summary ──────────────────────────────────────────────────────────
         date_str = f"{log_date:%A, %B} {log_date.day}, {log_date.year}"
-        lines = [f"📋 **{event_label} Log — {date_str}**"]
+        lines = [f"📋 **{event_label} Log: {date_str}**"]
         for q in questions:
             qkey   = q.get("key", "")
             qlabel = q.get("label", qkey)
@@ -966,7 +966,7 @@ async def _send_storm_reminder(bot, interaction: discord.Interaction, event_type
 # call time from the event_type so DS and CS share one default. The only
 # user-supplied placeholder is `{name}` (member's roster name).
 DEFAULT_STORM_REMINDER_DM = (
-    "⚔️ **{label} reminder** — your alliance is preparing for this week's "
+    "⚔️ **{label} reminder**: your alliance is preparing for this week's "
     "{label}. Please confirm your participation in Discord and check the "
     "team channel for your zone assignment. Good luck out there!"
 )
@@ -1021,7 +1021,7 @@ async def _show_storm_log(interaction: discord.Interaction, event: str, date: st
         )
         if recent_dates and parsed_d not in recent_dates:
             embed = discord.Embed(
-                title=f"📊 {event_label} log lookback — Free tier limit",
+                title=f"📊 {event_label} log lookback: Free tier limit",
                 description=(
                     f"You can only see the **{recent_cap} most recent** log "
                     f"entries with the free tier. Upgrade to "
@@ -1046,7 +1046,7 @@ async def _show_storm_log(interaction: discord.Interaction, event: str, date: st
         return
 
     date_str = f"{parsed_d:%A, %B} {parsed_d.day}, {parsed_d.year}"
-    lines    = [f"📋 **{event_label} Log — {date_str}**"]
+    lines    = [f"📋 **{event_label} Log: {date_str}**"]
     # Prefer the generic `fields` list (set by the new participation flow);
     # fall back to the legacy DS/CS column shape so pre-rework data still
     # renders nicely.

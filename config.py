@@ -266,9 +266,10 @@ def init_db():
         # guild_storm_config — per-guild DS/CS mail templates and time options.
         # `templates_json` and `default_template` support multiple named
         # templates per (guild, event_type) for premium subscribers.
-        # `dm_reminder_message` is the body of the Premium DM that fires when
-        # leadership runs `/desertstorm remind` or `/canyonstorm remind`;
-        # empty string means "use the hardcoded default in storm_log.py".
+        # `dm_reminder_message` is the body of the Premium DM that fires
+        # when leadership clicks `🔔 Send DM reminder to roster` on
+        # `/desertstorm` or `/canyonstorm`; empty string means "use the
+        # hardcoded default in storm_log.py".
         # Supports `{name}` placeholder.
         conn.execute("""
             CREATE TABLE IF NOT EXISTS guild_storm_config (
@@ -582,7 +583,8 @@ def init_db():
             ("participation_roster_name_col", "INTEGER DEFAULT 0"),
             ("participation_roster_alias_col","INTEGER DEFAULT -1"),
             ("participation_roster_start_row","INTEGER DEFAULT 2"),
-            # Premium /desertstorm remind / /canyonstorm remind DM body
+            # Premium DM-reminder body — sent when leadership clicks
+            # `🔔 Send DM reminder to roster` on the storm hub
             # (empty → hardcoded default in storm_log.py).
             ("dm_reminder_message",           "TEXT    DEFAULT ''"),
             # Which DS teams the alliance runs (#148) — 'both' | 'A' | 'B'.
@@ -1492,9 +1494,10 @@ def save_storm_config(guild_id: int, event_type: str, tab_name: str,
     CS_SERVER_TIMES below) and aren't stored per-guild — only the
     `timezone` is used at display time to render local clock equivalents.
 
-    `dm_reminder_message` is the body of the Premium DM that fires when
-    leadership runs `/desertstorm remind` or `/canyonstorm remind`. Empty
-    string means "use the hardcoded default in storm_log.py". Supports the
+    `dm_reminder_message` is the body of the Premium DM that fires
+    when leadership clicks `🔔 Send DM reminder to roster` on the
+    `/desertstorm` or `/canyonstorm` event hub. Empty string means
+    "use the hardcoded default in storm_log.py". Supports the
     `{name}` placeholder.
 
     `teams` is the wizard's "Which teams do you run?" answer for DS

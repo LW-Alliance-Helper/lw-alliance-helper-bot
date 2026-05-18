@@ -21,20 +21,20 @@ PRIVACY_URL = (
 OVERVIEW_DESCRIPTION = (
     "Commands require the leadership role and the leadership channel. "
     "Run `/setup` first if you haven't configured the bot.\n"
-    f"🗂️ Your alliance data lives in your own Google Sheet — see [Privacy]({PRIVACY_URL})."
+    f"🗂️ Your alliance data lives in your own Google Sheet. See [Privacy]({PRIVACY_URL})."
 )
 
 ALWAYS_HANDY = (
-    "`/setup` — Roles, leadership channel, timezone, Google Sheet\n"
-    "`/view_configuration` — View all configured settings\n"
-    "`/setup_reset` — Clear configuration and start over\n"
-    "`/cancel` — Cancel any active wizard\n"
-    "`/help` — Show this menu\n"
-    "`/donate` — 💖 Tip-jar links\n"
-    "`/upgrade` — 💎 Subscribe and pin Premium here\n"
-    "`/premium_assign` — 💎 Move Premium to this server\n"
-    "`/premium_status` — 💎 Subscription state and assigned server\n"
-    "`/premium_unassign` — 💎 Release the pin (subscription stays)"
+    "`/setup`: Roles, leadership channel, timezone, Google Sheet\n"
+    "`/view_configuration`: View all configured settings\n"
+    "`/setup_reset`: Clear configuration and start over\n"
+    "`/cancel`: Cancel any active wizard\n"
+    "`/help`: Show this menu\n"
+    "`/donate`: 💖 Tip-jar links\n"
+    "`/upgrade`: 💎 Subscribe and pin Premium here\n"
+    "`/premium_assign`: 💎 Move Premium to this server\n"
+    "`/premium_status`: 💎 Subscription state and assigned server\n"
+    "`/premium_unassign`: 💎 Release the pin (subscription stays)"
 )
 
 
@@ -175,7 +175,7 @@ HELP_CATEGORIES: dict[str, dict] = {
         "label": "Growth Tracking",
         "description": (
             "Periodic snapshots of member stats, written to your sheet. "
-            "Each snapshot also classifies members into growth buckets — "
+            "Each snapshot also classifies members into growth buckets. "
             "click **📊 See most recent Breakdown** on `/growth` to see who's climbing and "
             "who's stalled."
         ),
@@ -209,7 +209,7 @@ HELP_CATEGORIES: dict[str, dict] = {
         "description": (
             "Move your alliance's bot config to a new Discord server, or "
             "snapshot it as a backup you can restore later. Your alliance "
-            "data lives in your Google Sheet either way — these commands "
+            "data lives in your Google Sheet either way; these commands "
             "carry the bot's wizard answers (templates, channels, schedules) "
             "alongside it."
         ),
@@ -233,16 +233,17 @@ HELP_CATEGORIES: dict[str, dict] = {
         ),
         "commands": [
             ("/setup_members",
-             "Configure Member Roster Sync — writes Discord IDs to your "
+             "Configure Member Roster Sync. Writes Discord IDs to your "
              "sheet so other features find members by name."),
             ("/sync_members",
              "Manually re-sync the roster now."),
             ("Multiple named surveys",
              "Manage from `/survey` directly via Add / Edit / Remove."),
             ("DM-mode reminders",
-             "`/survey_remind`, `/desertstorm remind`, `/canyonstorm remind` "
-             "all gain DM-via-roster delivery; survey reminders can also "
-             "schedule recurring DMs."),
+             "`/survey_remind` plus the **🔔 Send DM reminder to roster** "
+             "button on `/desertstorm` and `/canyonstorm` all gain "
+             "DM-via-roster delivery; survey reminders can also schedule "
+             "recurring DMs."),
             ("✨ More",
              "Personal birthday DMs, train-assignment DMs, auto-mention "
              "members in train reminders, threads as destinations, "
@@ -262,7 +263,7 @@ def _tier_meta(is_premium: bool) -> tuple[str, discord.Color]:
 def build_overview_embed(is_premium: bool) -> discord.Embed:
     badge, color = _tier_meta(is_premium)
     embed = discord.Embed(
-        title=f"🤖 Alliance Helper — Commands  ·  {badge}",
+        title=f"🤖 Alliance Helper Commands  ·  {badge}",
         color=color,
         description=OVERVIEW_DESCRIPTION,
     )
@@ -273,7 +274,7 @@ def build_overview_embed(is_premium: bool) -> discord.Embed:
         )
     else:
         embed.set_footer(
-            text="Pick a category below — or run /upgrade to unlock Premium.",
+            text="Pick a category below, or run /upgrade to unlock Premium.",
         )
     return embed
 
@@ -288,7 +289,7 @@ def build_category_embed(category_id: str, is_premium: bool) -> discord.Embed:
     )
     for name, value in cat["commands"]:
         embed.add_field(name=name, value=value, inline=False)
-    embed.set_footer(text="Pick another category from the dropdown — or 🏠 Overview to go back.")
+    embed.set_footer(text="Pick another category from the dropdown, or 🏠 Overview to go back.")
     return embed
 
 

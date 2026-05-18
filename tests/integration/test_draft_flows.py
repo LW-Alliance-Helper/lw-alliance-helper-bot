@@ -96,11 +96,12 @@ class TestDsDraftFlowTimeouts:
             await run_ds_draft_flow(bot, channel, user, "A",
                                      current_zones={"Z1": "names"}, current_subs=[])
 
-        # Should have surfaced the timeout message pointing at the new
-        # consolidated command path (`/desertstorm draft` since #143).
+        # Should have surfaced the timeout message pointing at the hub
+        # button (`📄 Generate mail` on `/desertstorm` since #187).
         contents = _all_send_contents(channel)
         assert any("Timed out" in c for c in contents)
-        assert any("/desertstorm draft" in c for c in contents)
+        assert any("/desertstorm" in c for c in contents)
+        assert any("Generate mail" in c for c in contents)
 
     @pytest.mark.asyncio
     async def test_template_choice_timeout_exits_cleanly(self, seeded_db):

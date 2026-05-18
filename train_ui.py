@@ -141,7 +141,7 @@ async def run_blurb_wizard_for_entry(bot, channel, user, date_str: str, name: st
         import premium
         from train import get_train_template_names
         template_name = None
-        if await premium.is_premium(guild_id):
+        if await premium.is_premium(guild_id, bot=bot):
             names = get_train_template_names(guild_id)
             if len(names) > 1:
                 class TemplatePickView(discord.ui.View):

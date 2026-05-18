@@ -158,12 +158,12 @@ def _build_event_hub_embed(
     ]
     if not is_premium:
         description_lines.append(
-            "\n_Free tier — Premium-only buttons below are disabled. "
+            "\n_Free tier: Premium-only buttons below are disabled. "
             "Run `/upgrade` to unlock the structured roster flow._"
         )
 
     embed = discord.Embed(
-        title=f"{emoji} {label} — {guild.name}",
+        title=f"{emoji} {label}: {guild.name}",
         description="\n".join(description_lines),
         color=color,
     )
@@ -432,7 +432,7 @@ class _EventHubView(discord.ui.View):
             self.stop()
             return
         await inter.followup.send(
-            f"⚙️ Starting storm setup — check the channel for prompts!",
+            f"⚙️ Starting storm setup. Check the channel for prompts!",
             ephemeral=True,
         )
         self.stop()

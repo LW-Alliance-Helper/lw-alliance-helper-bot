@@ -58,7 +58,7 @@ def _build_storm_hub_tour_steps(
 
     return [
         # ── Step 1 / 5: The hub ──────────────────────────────────────────
-        f"**Step 1 / 5 — The {label} hub**\n"
+        f"**Step 1 / 5: The {label} hub**\n"
         f"This embed is your home base for {label}. The top of the embed "
         f"shows your alliance's current setup: the next event date, the "
         f"sign-up post channel (and auto-schedule if you set one up), "
@@ -71,7 +71,7 @@ def _build_storm_hub_tour_steps(
         f"(middle row), and reference + setup (bottom row).",
 
         # ── Step 2 / 5: The weekly cycle ─────────────────────────────────
-        f"**Step 2 / 5 — The weekly cycle**\n"
+        f"**Step 2 / 5: The weekly cycle**\n"
         f"{label} runs every **{event_day}** in-game. Here's the flow:\n"
         f"\n"
         f"1. **📣 Post sign-up poll** drops a vote message in your sign-up "
@@ -87,7 +87,7 @@ def _build_storm_hub_tour_steps(
         f"otherwise the button works on-demand.",
 
         # ── Step 3 / 5: Strategy presets + member rules ──────────────────
-        f"**Step 3 / 5 — Strategy presets + member rules**\n"
+        f"**Step 3 / 5: Strategy presets + member rules**\n"
         f"Two storage surfaces feed the roster builder:\n"
         f"\n"
         f"**🧮 Manage strategy presets** opens your saved zone layouts. "
@@ -102,7 +102,7 @@ def _build_storm_hub_tour_steps(
         f"roster.",
 
         # ── Step 4 / 5: Free vs Premium ──────────────────────────────────
-        f"**Step 4 / 5 — Free vs Premium**\n"
+        f"**Step 4 / 5: Free vs Premium**\n"
         f"The hub buttons with `💎` render disabled on the free tier. "
         f"Here's what unlocks with `/upgrade`:\n"
         f"\n"
@@ -117,7 +117,7 @@ def _build_storm_hub_tour_steps(
         f"use the roster builder against their full roster.",
 
         # ── Step 5 / 5: Wrap-up ──────────────────────────────────────────
-        f"**Step 5 / 5 — That's the tour**\n"
+        f"**Step 5 / 5: That's the tour**\n"
         f"Run `/{parent}` any time to come back to this hub. The hub "
         f"re-reads your config on every open, so any setup changes "
         f"show up the next time you open it.\n"

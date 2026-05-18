@@ -79,7 +79,7 @@ _TEAMS                = ("A", "B")
 
 _SUBJECT_REQUIRED_MSG = (
     "⚠️ Provide a member. Pick from the typeahead (server member) OR "
-    "type a roster name (non-Discord member) — exactly one, not both."
+    "type a roster name (non-Discord member): exactly one, not both."
 )
 
 
@@ -475,7 +475,7 @@ class _RulesListView(discord.ui.View):
                 if r.notes:
                     lines.append(f"     ↳ _{r.notes}_")
         embed = discord.Embed(
-            title=f"📋 {label} — Member Rules",
+            title=f"📋 {label}: Member Rules",
             description="\n".join(lines) or "*empty*",
             color=discord.Color.blurple(),
         )
@@ -631,7 +631,7 @@ class _AddRuleTypePickerView(discord.ui.View):
             "👤 Per-member rules need a server-member picker, which Discord "
             "doesn't expose inside a modal. Close this view and re-open "
             f"the rules surface via `{HUB_COMMAND[self.event_type]}` → "
-            f"**{HUB_BTN_RULES}** — the per-member options (pin to a "
+            f"**{HUB_BTN_RULES}**: the per-member options (pin to a "
             "specific zone, or pin to Team A / Team B) live there "
             "alongside the member picker."
         )
@@ -648,7 +648,7 @@ class _AddRuleTypePickerView(discord.ui.View):
         self.stop()
         try:
             await inter.response.edit_message(
-                content="↩️ Cancelled — no rule added.", view=self,
+                content="↩️ Cancelled. No rule added.", view=self,
             )
         except discord.HTTPException:
             pass
@@ -746,8 +746,8 @@ class _MemberRuleGroup(app_commands.Group):
             return
         canonical = {z.lower() for z in canonical_zones_for(self.event_type)}
         zone_warning = "" if zone.lower() in canonical else (
-            f"\n⚠️ `{zone}` isn't in the canonical zone list — "
-            "the rule was saved, but double-check the spelling."
+            f"\n⚠️ `{zone}` isn't in the canonical zone list. "
+            "The rule was saved, but double-check the spelling."
         )
         ok, msg = await asyncio.to_thread(save_rule,
             interaction.guild_id, self.event_type,
@@ -842,8 +842,8 @@ class _MemberRuleGroup(app_commands.Group):
         _parse, _format, canonical_zones_for = _strategy_helpers()
         canonical = {z.lower() for z in canonical_zones_for(self.event_type)}
         zone_warning = "" if zone_clean.lower() in canonical else (
-            f"\n⚠️ `{zone_clean}` isn't in the canonical zone list — "
-            "saved anyway; double-check the spelling."
+            f"\n⚠️ `{zone_clean}` isn't in the canonical zone list. "
+            "Saved anyway; double-check the spelling."
         )
         ok, msg = await asyncio.to_thread(save_rule,
             interaction.guild_id, self.event_type,
@@ -1001,7 +1001,7 @@ def build_ds_member_rule_group() -> _MemberRuleGroup:
 
     @grp.command(name="list",
                  description="Show all saved DS member rules (with Clear buttons)")
-    @app_commands.describe(member="Optional — filter to one member's rules")
+    @app_commands.describe(member="Optional: filter to one member's rules")
     async def listing(interaction: discord.Interaction, member: str | None = None):
         await grp._list(interaction, member)
 
@@ -1073,7 +1073,7 @@ def build_cs_member_rule_group() -> _MemberRuleGroup:
 
     @grp.command(name="list",
                  description="Show all saved CS member rules (with Clear buttons)")
-    @app_commands.describe(member="Optional — filter to one member's rules")
+    @app_commands.describe(member="Optional: filter to one member's rules")
     async def listing(interaction: discord.Interaction, member: str | None = None):
         await grp._list(interaction, member)
 
@@ -1109,7 +1109,7 @@ class _InlinePowerBandPowerModal(discord.ui.Modal):
 
     def __init__(self, event_type: str, zone: str):
         label = "Desert Storm" if event_type == "DS" else "Canyon Storm"
-        super().__init__(title=f"{label} Power-Band Rule — {zone}"[:45])
+        super().__init__(title=f"{label} Power-Band Rule: {zone}"[:45])
         self.event_type = event_type
         self.zone = zone
         self.threshold = discord.ui.TextInput(
@@ -1252,7 +1252,7 @@ class InlinePowerBandView(discord.ui.View):
                 child.disabled = True
             try:
                 await inter.response.edit_message(
-                    content="↩️ Cancelled — no rule saved.", view=self,
+                    content="↩️ Cancelled. No rule saved.", view=self,
                 )
             except discord.HTTPException:
                 pass

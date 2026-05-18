@@ -456,7 +456,7 @@ def _render_embed(session: _AttendanceSession) -> discord.Embed:
 
     label = "Desert Storm" if session.event_type == "DS" else "Canyon Storm"
     embed = discord.Embed(
-        title=f"📋 {label} Attendance — {format_event_date(session.event_date)}",
+        title=f"📋 {label} Attendance: {format_event_date(session.event_date)}",
         color=discord.Color.gold() if session.event_type == "DS"
               else discord.Color.orange(),
     )
@@ -569,7 +569,7 @@ class _AttendanceView(discord.ui.View):
         for slot in slots:
             key = s.slot_key(slot)
             cur = s.statuses.get(key, STATUS_UNRECORDED)
-            label = f"{slot['member']} — {slot['zone'] or 'sub'}"
+            label = f"{slot['member']}: {slot['zone'] or 'sub'}"
             desc = f"current: {_STATUS_LABELS.get(cur, '—')}"
             # Stable value: encoded as team|zone|member; max 100 chars.
             value = f"{slot['team']}|{slot['zone']}|{slot['member']}"[:100]
@@ -722,7 +722,7 @@ class _AttendanceView(discord.ui.View):
         counts = s.counts()
         if errors:
             await inter.followup.send(
-                "⚠️ Attendance partially saved — " + errors[0],
+                "⚠️ Attendance partially saved: " + errors[0],
                 ephemeral=True,
             )
             return
@@ -732,7 +732,7 @@ class _AttendanceView(discord.ui.View):
         )
         from storm_date_helpers import format_event_date
         await inter.followup.send(
-            f"✅ Saved attendance for **{format_event_date(s.event_date)}** — "
+            f"✅ Saved attendance for **{format_event_date(s.event_date)}**: "
             f"{recorded} slot(s) recorded "
             f"(✅ {counts.get(STATUS_ATTENDED, 0)}, "
             f"❌ {counts.get(STATUS_NO_SHOW, 0)}).",
@@ -879,7 +879,7 @@ async def handle_storm_attendance(
             interaction.guild_id, "; ".join(attendance_errors),
         )
         content = (
-            "⚠️ Read existing attendance had issues — see bot logs. "
+            "⚠️ Read existing attendance had issues. See bot logs. "
             "You can still record fresh entries below."
         )
     msg = await interaction.followup.send(content=content, embed=embed, view=view)

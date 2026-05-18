@@ -310,7 +310,7 @@ def parse_ds_template(text: str) -> tuple[dict, list, list]:
                 canonical = canonical_by_lower.get(zone_stripped.lower())
                 if canonical is None:
                     errors.append(
-                        f"Unknown zone `{zone_stripped}` — must be one of: "
+                        f"Unknown zone `{zone_stripped}`. Must be one of: "
                         f"{canonical_list}"
                     )
                 else:
@@ -488,7 +488,7 @@ async def _post_and_copy(channel, post_channel_id: int, event_label: str,
 
     suffix = f" (also posted to {posted_to})" if posted_to else ""
     await channel.send(
-        f"✅ **{event_label} Team {team} mail — ready to copy{suffix}:**\n"
+        f"✅ **{event_label} Team {team} mail, ready to copy{suffix}:**\n"
         f"```\n{mail}\n```"
     )
 
@@ -538,7 +538,7 @@ class StormApprovalView(discord.ui.View):
             item.disabled = True
         await interaction.message.edit(view=self)
 
-    @discord.ui.button(label="✅ Looks Good — Post & Copy", style=discord.ButtonStyle.success)
+    @discord.ui.button(label="✅ Looks Good: Post & Copy", style=discord.ButtonStyle.success)
     async def approve(self, interaction: discord.Interaction, button: discord.ui.Button):
         await interaction.response.defer()
         await self._disable(interaction)
@@ -630,7 +630,7 @@ async def run_ds_draft_flow(bot, channel, user, team: str,
     guild_id = getattr(getattr(channel, "guild", None), "id", None)
 
     # ── Step 2: Pick Time ─────────────────────────────────────────────────────
-    time_msg  = await channel.send("**Step 2 of 4 — Pick Time**\n⏰ What time is Desert Storm this week?")
+    time_msg  = await channel.send("**Step 2 of 4: Pick Time**\n⏰ What time is Desert Storm this week?")
     time_view = TimeSelectView(event_type="DS", guild_id=guild_id)
     await time_msg.edit(view=time_view)
     await time_view.wait()
@@ -649,10 +649,10 @@ async def run_ds_draft_flow(bot, channel, user, team: str,
     # ── Step 3: Mail Template — Use as-is or Edit ─────────────────────────────
     stale = _non_canonical_ds_zones(current_zones)
     if stale:
-        stale_lines = "\n".join(f"• `{k}` — {v}" for k, v in stale.items())
+        stale_lines = "\n".join(f"• `{k}`: {v}" for k, v in stale.items())
         await channel.send(
             "ℹ️ Your saved data has zones that aren't on the canonical "
-            "Desert Storm list — they'll be dropped on the next save:\n"
+            "Desert Storm list. They'll be dropped on the next save:\n"
             f"{stale_lines}\n"
             "Re-enter assignments under the correct zone name in the "
             "template below."
@@ -661,7 +661,7 @@ async def run_ds_draft_flow(bot, channel, user, team: str,
     template = build_ds_template(current_zones, current_subs)
     use_view = TemplateUseEditView()
     await channel.send(
-        f"**Step 3 of 4 — Mail Template (Team {team})**\n"
+        f"**Step 3 of 4: Mail Template (Team {team})**\n"
         f"Here is the saved template for **Team {team}**:\n"
         f"```\n{template}\n```\n"
         f"Use it as-is, or edit it before posting?",
@@ -682,8 +682,8 @@ async def run_ds_draft_flow(bot, channel, user, team: str,
             return m.author == user and m.channel == channel
 
         prompt = await channel.send(
-            f"✏️ {user.mention} — copy the block above, make your edits, and paste it back below.\n"
-            f"*(10 minutes to respond — type `cancel` to stop)*"
+            f"✏️ {user.mention}, copy the block above, make your edits, and paste it back below.\n"
+            f"*(10 minutes to respond; type `cancel` to stop)*"
         )
         try:
             reply = await bot.wait_for("message", check=check, timeout=WIZARD_TIMEOUT)
@@ -752,7 +752,7 @@ async def run_ds_draft_flow(bot, channel, user, team: str,
         post_channel_id=post_channel_id,
     )
     await channel.send(
-        f"**Step 4 of 4 — Preview**\n"
+        f"**Step 4 of 4: Preview**\n"
         f"📬 **Desert Storm Team {team} mail preview:**\n\n{mail}\n\nDoes this look right?",
         view=approval_view,
     )
@@ -799,8 +799,8 @@ async def handle_storm_draft(bot, interaction: discord.Interaction, event_type: 
 
     # Step 1: Pick team
     team_msg = await channel.send(
-        f"{icon} **{label} Draft** — started by {interaction.user.mention}\n\n"
-        f"**Step 1 of 4 — Pick Team**\nWhich team are you drafting for?"
+        f"{icon} **{label} Draft** started by {interaction.user.mention}\n\n"
+        f"**Step 1 of 4: Pick Team**\nWhich team are you drafting for?"
     )
     team_view = TeamSelectView()
     await team_msg.edit(view=team_view)
@@ -1279,7 +1279,7 @@ class CSApprovalView(discord.ui.View):
             item.disabled = True
         await interaction.message.edit(view=self)
 
-    @discord.ui.button(label="✅ Looks Good — Post & Copy", style=discord.ButtonStyle.success)
+    @discord.ui.button(label="✅ Looks Good: Post & Copy", style=discord.ButtonStyle.success)
     async def approve(self, interaction: discord.Interaction, button: discord.ui.Button):
         await interaction.response.defer()
         await self._disable(interaction)
@@ -1307,7 +1307,7 @@ async def run_cs_draft_flow(bot, channel, user, team: str, current_zones: dict):
     guild_id = getattr(getattr(channel, "guild", None), "id", None)
 
     # ── Step 2: Pick Time ─────────────────────────────────────────────────────
-    time_msg  = await channel.send("**Step 2 of 4 — Pick Time**\n⏰ What time is Canyon Storm this week?")
+    time_msg  = await channel.send("**Step 2 of 4: Pick Time**\n⏰ What time is Canyon Storm this week?")
     time_view = TimeSelectView(event_type="CS", guild_id=guild_id)
     await time_msg.edit(view=time_view)
     await time_view.wait()
@@ -1326,10 +1326,10 @@ async def run_cs_draft_flow(bot, channel, user, team: str, current_zones: dict):
     # ── Step 3: Mail Template — Use as-is or Edit ─────────────────────────────
     stale = _non_canonical_cs_zones(current_zones)
     if stale:
-        stale_lines = "\n".join(f"• `{k}` — {v}" for k, v in stale.items())
+        stale_lines = "\n".join(f"• `{k}`: {v}" for k, v in stale.items())
         await channel.send(
             "ℹ️ Your saved data has zones that aren't on the canonical "
-            "Canyon Storm list — they'll be dropped on the next save:\n"
+            "Canyon Storm list. They'll be dropped on the next save:\n"
             f"{stale_lines}\n"
             "Re-enter assignments under the correct zone name in the "
             "template below."
@@ -1338,7 +1338,7 @@ async def run_cs_draft_flow(bot, channel, user, team: str, current_zones: dict):
     template = build_cs_template(current_zones)
     use_view = TemplateUseEditView()
     await channel.send(
-        f"**Step 3 of 4 — Mail Template (Team {team})**\n"
+        f"**Step 3 of 4: Mail Template (Team {team})**\n"
         f"Here is the saved template for **Team {team}**:\n"
         f"```\n{template}\n```\n"
         f"Use it as-is, or edit it before posting?",
@@ -1359,8 +1359,8 @@ async def run_cs_draft_flow(bot, channel, user, team: str, current_zones: dict):
             return m.author == user and m.channel == channel
 
         prompt = await channel.send(
-            f"✏️ {user.mention} — copy the block above, make your edits, and paste it back below.\n"
-            f"*(10 minutes to respond — type `cancel` to stop)*"
+            f"✏️ {user.mention}, copy the block above, make your edits, and paste it back below.\n"
+            f"*(10 minutes to respond; type `cancel` to stop)*"
         )
         try:
             reply = await bot.wait_for("message", check=check, timeout=WIZARD_TIMEOUT)
@@ -1426,7 +1426,7 @@ async def run_cs_draft_flow(bot, channel, user, team: str, current_zones: dict):
         time_key=time_key, post_channel_id=post_channel_id,
     )
     await channel.send(
-        f"**Step 4 of 4 — Preview**\n"
+        f"**Step 4 of 4: Preview**\n"
         f"📬 **Canyon Storm Team {team} mail preview:**\n\n{mail}\n\nDoes this look right?",
         view=approval_view,
     )

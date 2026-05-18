@@ -85,7 +85,7 @@ def _build_registration_embed(event_type: str, event_date_iso: str,
         f"replace the first vote you cast."
     )
     embed = discord.Embed(
-        title=f"{emoji} {label} — Sign Up for {date_pretty}",
+        title=f"{emoji} {label}: Sign Up for {date_pretty}",
         description=desc,
         color=discord.Color.gold() if event_type == "DS" else discord.Color.orange(),
     )

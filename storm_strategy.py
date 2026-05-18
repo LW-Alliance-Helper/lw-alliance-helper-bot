@@ -268,7 +268,7 @@ class ZoneRow:
             # team minimums (which are per-team, not per-phase, so they
             # belong on the header), then one row per phase showing
             # capacity and any non-zero per-phase priority.
-            header = f"• {icon}**{self.zone}** — {mins}"
+            header = f"• {icon}**{self.zone}**: {mins}"
             phase_lines: list[str] = []
             phase_prios = [
                 self.priority_phase1, self.priority_phase2, self.priority_phase3,
@@ -890,7 +890,7 @@ def _build_editor_embed(buf: PresetBuffer, team_size_hint: int = _TEAM_SIZE_HINT
         f"📊 Capacity: **{cap}** (team size {team_size_hint}; flex room is fine) {glyph}"
     )
     if buf.dirty:
-        desc_lines.append("⚠️ *Unsaved changes — Save preset to save your changes.*")
+        desc_lines.append("⚠️ *Unsaved changes. Save preset to save your changes.*")
     return discord.Embed(
         title=title,
         description="\n".join(desc_lines),
@@ -1002,7 +1002,7 @@ class _ZoneEditModal(discord.ui.Modal):
             max_players = int((self.max_input.value or "0").strip() or 0)
         except ValueError:
             await interaction.response.send_message(
-                f"⚠️ Max Players must be a number — got `{self.max_input.value}`. "
+                f"⚠️ Max Players must be a number. Got `{self.max_input.value}`. "
                 f"Try again.",
                 ephemeral=True,
             )
@@ -1037,7 +1037,7 @@ class _ZoneEditModal(discord.ui.Modal):
             priority = int((self.priority_input.value or "0").strip() or 0)
         except ValueError:
             await interaction.response.send_message(
-                f"⚠️ Priority must be a number — got `{self.priority_input.value}`. "
+                f"⚠️ Priority must be a number. Got `{self.priority_input.value}`. "
                 f"Try again.",
                 ephemeral=True,
             )
@@ -1152,7 +1152,7 @@ class _ZonePhaseCapacityAndFloorsModal(discord.ui.Modal):
 
     def __init__(self, view: "_PresetEditorView", zone_name: str):
         phase_count = int(getattr(view.buf, "phase_count", 2) or 2)
-        super().__init__(title=f"{zone_name} — Caps + Min ({phase_count}S)"[:45])
+        super().__init__(title=f"{zone_name}: Caps + Min ({phase_count}S)"[:45])
         self._view = view
         self._zone_name = zone_name
         self._phase_count = phase_count
@@ -1234,7 +1234,7 @@ class _ZonePhaseCapacityAndFloorsModal(discord.ui.Modal):
                 pending[key] = int((field.value or "0").strip() or 0)
             except ValueError:
                 await interaction.response.send_message(
-                    f"⚠️ {field.label} must be a number — got `{field.value}`. "
+                    f"⚠️ {field.label} must be a number. Got `{field.value}`. "
                     f"Reopen the zone to retry.",
                     ephemeral=True,
                 )
@@ -1246,7 +1246,7 @@ class _ZonePhaseCapacityAndFloorsModal(discord.ui.Modal):
                 val, bad = _parse_power_cell(self.power_a_input.value or "")
                 if bad:
                     await interaction.response.send_message(
-                        f"⚠️ Min Power Team A didn't parse — got "
+                        f"⚠️ Min Power Team A didn't parse. Got "
                         f"`{self.power_a_input.value}`. Use `80M` or `80,000,000`.",
                         ephemeral=True,
                     )
@@ -1256,7 +1256,7 @@ class _ZonePhaseCapacityAndFloorsModal(discord.ui.Modal):
                 val, bad = _parse_power_cell(self.power_b_input.value or "")
                 if bad:
                     await interaction.response.send_message(
-                        f"⚠️ Min Power Team B didn't parse — got "
+                        f"⚠️ Min Power Team B didn't parse. Got "
                         f"`{self.power_b_input.value}`. Use `60M` or `60,000,000`.",
                         ephemeral=True,
                     )
@@ -1266,7 +1266,7 @@ class _ZonePhaseCapacityAndFloorsModal(discord.ui.Modal):
             val, bad = _parse_power_cell(self.power_input.value or "")
             if bad:
                 await interaction.response.send_message(
-                    f"⚠️ Min Power didn't parse — got "
+                    f"⚠️ Min Power didn't parse. Got "
                     f"`{self.power_input.value}`. Use `70M` or `70,000,000`.",
                     ephemeral=True,
                 )
@@ -1296,7 +1296,7 @@ class _ZonePhasePriorityModal(discord.ui.Modal):
 
     def __init__(self, view: "_PresetEditorView", zone_name: str):
         phase_count = int(getattr(view.buf, "phase_count", 2) or 2)
-        super().__init__(title=f"{zone_name} — Priority ({phase_count}S)"[:45])
+        super().__init__(title=f"{zone_name}: Priority ({phase_count}S)"[:45])
         self._view = view
         self._zone_name = zone_name
         self._phase_count = phase_count
@@ -1340,7 +1340,7 @@ class _ZonePhasePriorityModal(discord.ui.Modal):
                 pending[key] = int((field.value or "0").strip() or 0)
             except ValueError:
                 await interaction.response.send_message(
-                    f"⚠️ {field.label} must be a number — got `{field.value}`. "
+                    f"⚠️ {field.label} must be a number. Got `{field.value}`. "
                     f"Reopen the zone to retry.",
                     ephemeral=True,
                 )
@@ -1578,7 +1578,7 @@ class _ApplyToSimilarView(discord.ui.View):
                 item.disabled = True
             try:
                 await inter.response.edit_message(
-                    content="OK — only the edited zone was changed.",
+                    content="OK. Only the edited zone was changed.",
                     view=self,
                 )
             except discord.HTTPException:
@@ -1855,7 +1855,7 @@ class _PresetEditorView(discord.ui.View):
                 self.stop()
             else:
                 await inter.followup.send(
-                    "⚠️ Could not save preset — check that your Google Sheet is configured "
+                    "⚠️ Could not save preset. Check that your Google Sheet is configured "
                     "and that the bot has edit access. See logs for details.",
                     ephemeral=True,
                 )
@@ -2111,7 +2111,7 @@ async def open_strategy_list(
     else:
         description = "\n".join(f"• **{n}**" for n in names)
     embed = discord.Embed(
-        title=f"📋 {label} — Strategy Presets",
+        title=f"📋 {label}: Strategy Presets",
         description=description,
         color=discord.Color.blurple(),
     )
@@ -2458,7 +2458,7 @@ def build_ds_strategy_group() -> _StrategyGroup:
     @grp.command(name="roster_history",
                  description="Browse past DS rosters with attendance overlaid")
     @app_commands.describe(
-        date="Optional — show a specific date (May 18, 5/18, 2026-05-18, yesterday). Omit to list recent events.",
+        date="Optional: show a specific date (May 18, 5/18, 2026-05-18, yesterday). Omit to list recent events.",
     )
     async def ds_history(interaction: discord.Interaction, date: str | None = None):
         from storm_history import open_history
@@ -2503,7 +2503,7 @@ def build_cs_strategy_group() -> _StrategyGroup:
     @grp.command(name="roster_history",
                  description="Browse past CS rosters with attendance overlaid")
     @app_commands.describe(
-        date="Optional — show a specific date (May 18, 5/18, 2026-05-18, yesterday). Omit to list recent events.",
+        date="Optional: show a specific date (May 18, 5/18, 2026-05-18, yesterday). Omit to list recent events.",
     )
     async def cs_history(interaction: discord.Interaction, date: str | None = None):
         from storm_history import open_history

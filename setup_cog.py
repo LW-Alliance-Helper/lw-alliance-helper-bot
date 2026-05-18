@@ -1565,7 +1565,7 @@ class SetupCog(commands.Cog):
         if not await _check_wizard_can_run(interaction, "setup_desertstorm"):
             return
         await interaction.response.send_message(
-            "⚙️ Starting Desert Storm setup — check the channel for prompts!", ephemeral=True
+            "⚙️ Starting Desert Storm setup. Check the channel for prompts!", ephemeral=True
         )
         await run_storm_setup(interaction, self.bot, "DS")
 
@@ -1580,7 +1580,7 @@ class SetupCog(commands.Cog):
         if not await _check_wizard_can_run(interaction, "setup_canyonstorm"):
             return
         await interaction.response.send_message(
-            "⚙️ Starting Canyon Storm setup — check the channel for prompts!", ephemeral=True
+            "⚙️ Starting Canyon Storm setup. Check the channel for prompts!", ephemeral=True
         )
         await run_storm_setup(interaction, self.bot, "CS")
 
@@ -4626,18 +4626,18 @@ async def run_storm_setup(interaction: discord.Interaction, bot, event_type: str
     if event_type == "DS":
         default_template  = DEFAULT_DS_TEMPLATE
         placeholder_info  = (
-            "• `{alliance_name}` — your alliance name\n"
-            "• `{zones}` — zone assignments block\n"
-            "• `{subs}` — substitute members\n"
-            "• `{time}` — event time (auto-filled when drafting)"
+            "• `{alliance_name}`: your alliance name\n"
+            "• `{zones}`: zone assignments block\n"
+            "• `{subs}`: substitute members\n"
+            "• `{time}`: event time (auto-filled when drafting)"
         )
     else:
         default_template  = DEFAULT_CS_TEMPLATE
         placeholder_info  = (
-            "• `{alliance_name}` — your alliance name\n"
-            "• `{zones}` — zone assignments block\n"
-            "• `{subs}` — substitute members\n"
-            "• `{time}` — event time (auto-filled when drafting)"
+            "• `{alliance_name}`: your alliance name\n"
+            "• `{zones}`: zone assignments block\n"
+            "• `{subs}`: substitute members\n"
+            "• `{time}`: event time (auto-filled when drafting)"
         )
 
     # ── If already configured, show summary and offer edit or cancel ─────────
@@ -4689,10 +4689,10 @@ async def run_storm_setup(interaction: discord.Interaction, bot, event_type: str
     hardcoded_tab = "DS Assignments" if event_type == "DS" else "CS Assignments"
     tab_name = await ask_keep_or_change(
         channel,
-        f"**Step 1 of 7 — Sheet Tab**\n"
+        f"**Step 1 of 7: Sheet Tab**\n"
         f"Which tab in your Google Sheet stores the {label} zone assignments?\n"
         f"⚠️ *Make sure this tab exists in your sheet before continuing.*\n"
-        f"ℹ️ *The bot will manage the data structure of this tab automatically — "
+        f"ℹ️ *The bot will manage the data structure of this tab automatically. "
         f"you don't need to set up any specific columns or formatting beforehand.*",
         default=hardcoded_tab,
         current=current.get("tab_name", ""),
@@ -4756,7 +4756,7 @@ async def run_storm_setup(interaction: discord.Interaction, bot, event_type: str
         team_view.remove_item(team_view.keep_current)
     await channel.send(
         (
-            f"**Step 2 of 7 — Which teams do you run for {label}?**"
+            f"**Step 2 of 7: Which teams do you run for {label}?**"
             + (f"\nCurrent: **{_team_blurb[saved_teams]}**" if storm_already_configured else "")
         ),
         view=team_view,
@@ -4785,7 +4785,7 @@ async def run_storm_setup(interaction: discord.Interaction, bot, event_type: str
             "Pick a new one below."
         )
     await channel.send(
-        f"**Step 3 of 7 — Storm Log Channel**\n"
+        f"**Step 3 of 7: Storm Log Channel**\n"
         f"Select the channel where {label} participation/log summaries will be posted:",
         view=log_ch_view,
     )
@@ -4811,7 +4811,7 @@ async def run_storm_setup(interaction: discord.Interaction, bot, event_type: str
             "Pick a new one below."
         )
     await channel.send(
-        f"**Step 4 of 7 — Mail Post Channel**\n"
+        f"**Step 4 of 7: Mail Post Channel**\n"
         f"When leadership clicks **Post & Copy** at the end of `/"
         f"{'desertstorm' if event_type == 'DS' else 'canyonstorm'}_draft`, "
         f"the finished mail will be posted to this channel:",
@@ -4853,7 +4853,7 @@ async def run_storm_setup(interaction: discord.Interaction, bot, event_type: str
 
         choice_view = TemplateChoiceView()
         await channel.send(
-            f"**{label} Mail Template — {team_label}**\n"
+            f"**{label} Mail Template: {team_label}**\n"
             f"When you draft the mail each week, you will be able to select the time slot "
             f"when you are running that team's {label}.\n\n"
             f"Here is the default template:\n"
@@ -4914,7 +4914,7 @@ async def run_storm_setup(interaction: discord.Interaction, bot, event_type: str
 
         shared_view = SharedTemplateView()
         await channel.send(
-            "**Step 5 of 7 — Mail Template**\n"
+            "**Step 5 of 7: Mail Template**\n"
             "Do you want one template that applies to both teams, or separate templates per team?",
             view=shared_view,
         )
@@ -4937,7 +4937,7 @@ async def run_storm_setup(interaction: discord.Interaction, bot, event_type: str
 
     else:
         team_label = "Team A" if teams == "A" else "Team B"
-        await channel.send("**Step 5 of 7 — Mail Template**")
+        await channel.send("**Step 5 of 7: Mail Template**")
         template = await get_template(team_label)
         if template is None:
             return
@@ -4974,9 +4974,9 @@ async def run_storm_setup(interaction: discord.Interaction, bot, event_type: str
     saved_remind_dm   = (current.get("dm_reminder_message") or "").strip()
     remind_dm = await ask_keep_or_change(
         channel,
-        f"**Step 7 of 7 — {label} Reminder DM (💎 Premium)**\n"
+        f"**Step 7 of 7: {label} Reminder DM (💎 Premium)**\n"
         f"When leadership runs `/{cmd_name.replace('setup_', '')}_remind`, the bot DMs every "
-        f"roster member this message. Free guilds can configure it now — it just won't "
+        f"roster member this message. Free guilds can configure it now; it just won't "
         f"fire until you have Premium + Member Roster Sync.\n\n"
         f"Use `{{name}}` as a placeholder for the member's roster name (optional).",
         default=default_remind_dm,
@@ -5154,10 +5154,10 @@ async def run_storm_setup(interaction: discord.Interaction, bot, event_type: str
 _PARTICIPATION_FREE_TYPES = ["text", "yes_no", "numeric", "roster_names"]
 _PARTICIPATION_PREMIUM_TYPES = ["single_select", "multi_select", "date"]
 _PARTICIPATION_TYPE_LABELS = {
-    "text":          "Text — short typed answer",
+    "text":          "Text: short typed answer",
     "yes_no":        "Yes / No",
-    "numeric":       "Numeric — number with optional min/max",
-    "roster_names":  "Roster names — pick or type member names",
+    "numeric":       "Numeric: number with optional min/max",
+    "roster_names":  "Roster names: pick or type member names",
     "single_select": "💎 Single-select dropdown",
     "multi_select":  "💎 Multi-select dropdown",
     "date":          "💎 Date (formatted entry)",
@@ -5186,7 +5186,7 @@ async def _run_storm_participation_step(
     # ── 6.1 Enable? ────────────────────────────────────────────────────────────
     enable_view = YesNoView()
     await channel.send(
-        f"**Step 6 of 7 — Participation Tracking**\n"
+        f"**Step 6 of 7: Participation Tracking**\n"
         f"Do you want to track {label} participation? Leadership runs "
         f"`/{cmd_name.replace('setup_', '')}_participation` after each event "
         f"to log who showed up, who sat out, etc.\n"
@@ -5217,7 +5217,7 @@ async def _run_storm_participation_step(
     hardcoded_tab = "DS Participation Log" if event_type == "DS" else "CS Participation Log"
     tab_name = await ask_keep_or_change(
         channel,
-        f"**Step 6.1 — Participation Sheet Tab**\n"
+        f"**Step 6.1: Participation Sheet Tab**\n"
         f"Which tab should the bot write {label} participation rows to?\n"
         f"ℹ️ *The bot will create this tab automatically if it doesn't exist "
         f"and will manage the column structure based on the questions you define.*",
@@ -5246,7 +5246,7 @@ async def _run_storm_participation_step(
     )
     roster_tab = await ask_keep_or_change(
         channel,
-        f"**Step 6.2 — Roster Source: Sheet Tab**\n"
+        f"**Step 6.2: Roster Source: Sheet Tab**\n"
         f"Which tab in your sheet has the list of members? The bot reads "
         f"member names from here when you use a `Roster names` question.\n"
         f"*Tip: this is often the same tab you use for `/setup_survey` or "
@@ -5264,7 +5264,7 @@ async def _run_storm_participation_step(
     saved_name_col_idx = cur_part.get("roster_name_col")
     raw_name_col = await ask_keep_or_change(
         channel,
-        f"**Step 6.3 — Roster Source: Name Column**\n"
+        f"**Step 6.3: Roster Source: Name Column**\n"
         f"Which column letter has the member name? (e.g. `A`, `B`, `E`)",
         default="A",
         current=(
@@ -5286,7 +5286,7 @@ async def _run_storm_participation_step(
 
     alias_view = YesNoView()
     await channel.send(
-        "**Step 6.4 — Roster Source: Alias Column?**\n"
+        "**Step 6.4: Roster Source: Alias Column?**\n"
         "If you have other names or nicknames that you call your members in these "
         "mails, this helps resolve to their full name in your sheet automatically. "
         "Do you have an alias column?",
@@ -5327,7 +5327,7 @@ async def _run_storm_participation_step(
 
     raw_start = await ask_keep_or_change(
         channel,
-        "**Step 6.5 — Roster Source: First Data Row**\n"
+        "**Step 6.5: Roster Source: First Data Row**\n"
         "In your existing roster tab above, which row does the member data start on? "
         "Usually `2` if your sheet has a header row in row 1.",
         default="2",
@@ -5351,11 +5351,11 @@ async def _run_storm_participation_step(
 
     def _summarize() -> str:
         if not questions:
-            return "*(no questions yet — every participation log will only ask for the date)*"
+            return "*(no questions yet; every participation log will only ask for the date)*"
         lines = []
         for i, q in enumerate(questions, start=1):
             t = _PARTICIPATION_TYPE_LABELS.get(q.get("type"), q.get("type", "?"))
-            lines.append(f"**{i}. {q.get('label', '?')}** — _{t}_")
+            lines.append(f"**{i}. {q.get('label', '?')}**: _{t}_")
         return "\n".join(lines)
 
     while True:
@@ -5418,7 +5418,7 @@ async def _run_storm_participation_step(
         )
         view = _BuilderView(len(questions))
         await channel.send(
-            f"**Step 6.6 — Participation Questions**\n"
+            f"**Step 6.6: Participation Questions**\n"
             f"Each question becomes a column on your sheet and a step in the "
             f"`/{cmd_name.replace('setup_', '')}_participation` flow.\n"
             f"Examples: *Vote count*, *Sitting out*, *Did anyone show up late?*\n"
@@ -5551,7 +5551,7 @@ async def _ask_signup_schedule(
                     await wizard_registry.safe_edit_response(
                         inter,
                         content=(
-                            f"✅ Auto-scheduling skipped — post manually "
+                            f"✅ Auto-scheduling skipped. Post manually "
                             f"via `{HUB_COMMAND[event_type]}` → "
                             f"**{HUB_BTN_POST_SIGNUP}** when you're ready."
                         ),
@@ -5570,7 +5570,7 @@ async def _ask_signup_schedule(
 
     dow_view = _DowView(int(current_dow if current_dow is not None else -1))
     await channel.send(
-        f"**Auto-Schedule — Poll Day (💎 Premium)**\n"
+        f"**Auto-Schedule: Poll Day (💎 Premium)**\n"
         f"**{label}** runs every **{event_label}** in-game. Which day "
         f"do you want the bot to post the sign-up poll? (The dropdown "
         f"shows only days that sit between the previous event and the "
@@ -5602,7 +5602,7 @@ async def _ask_signup_schedule(
     for attempt in range(3):
         time_picked = await ask_keep_or_change(
             channel,
-            f"**Auto-Schedule — Sign-Up Post Time**\n"
+            f"**Auto-Schedule: Sign-Up Post Time**\n"
             f"What time should the bot fire the sign-up post?{tz_hint}\n"
             f"*(e.g. `2:00pm`, `9:00am`, or 24-hour `14:00`)*",
             default="12:00pm",
@@ -5911,7 +5911,7 @@ class _InlinePostFirstSignupOffer(discord.ui.View):
             )
         self.stop()
 
-    @discord.ui.button(label="Skip — I'll post later", style=discord.ButtonStyle.secondary)
+    @discord.ui.button(label="Skip: I'll post later", style=discord.ButtonStyle.secondary)
     async def skip_btn(self, inter: discord.Interaction, _btn):
         self.choice = "skip"
         for child in self.children:
@@ -6054,10 +6054,10 @@ async def _run_structured_flow_setup_step(
                         "Use Current: Pool" if has_saved else "Use Default: Pool"
                     )
                     pool_style = discord.ButtonStyle.success
-                    paired_label = "Paired — primary↔sub pairs"
+                    paired_label = "Paired: primary↔sub pairs"
                     paired_style = discord.ButtonStyle.primary
                 else:
-                    pool_label = "Pool — flat sub list"
+                    pool_label = "Pool: flat sub list"
                     pool_style = discord.ButtonStyle.primary
                     paired_label = "Use Current: Paired"
                     paired_style = discord.ButtonStyle.success
@@ -6090,8 +6090,8 @@ async def _run_structured_flow_setup_step(
         await channel.send(
             "**Sub Mode**\n"
             "How should subs be tracked when leadership builds a roster?\n"
-            "• **Pool** — flat list of subs; any sub can cover any primary no-show.\n"
-            "• **Paired** — each primary has a specific sub assigned in advance.",
+            "• **Pool**: flat list of subs; any sub can cover any primary no-show.\n"
+            "• **Paired**: each primary has a specific sub assigned in advance.",
             view=sub_view,
         )
         await wait_view_or_cancel(sub_view, cancel_event)
@@ -6212,7 +6212,7 @@ async def _run_structured_flow_setup_step(
                 f"**{result.get('power_metric_column', 'B')}** on the roster "
                 f"Sheet) is blank or unparseable, the bot can DM them a "
                 f"one-line nudge to update it. Currently "
-                f"**{'on' if current_yn else 'off'}** — keep it or flip.",
+                f"**{'on' if current_yn else 'off'}**. Keep it or flip.",
                 view=gate,
             )
             await wait_view_or_cancel(gate, cancel_event)
@@ -6425,7 +6425,7 @@ async def _build_participation_question(
     # Label
     label_extra = f"\n*Existing label:* `{existing.get('label', '')}`" if existing else ""
     await channel.send(
-        f"**Question — Label**\n"
+        f"**Question: Label**\n"
         f"What's the label for this question? (e.g. `Sitting Out`, `Vote Count`)" + label_extra
     )
     try:
@@ -6470,7 +6470,7 @@ async def _build_participation_question(
 
     type_view = _TypeView()
     type_extra = f"\n*Existing type:* `{existing.get('type')}`" if existing else ""
-    await channel.send(f"**Question — Answer Type**{type_extra}", view=type_view)
+    await channel.send(f"**Question: Answer Type**{type_extra}", view=type_view)
     await wait_view_or_cancel(type_view, cancel_event)
     if type_view.cancelled:
         return
@@ -6484,7 +6484,7 @@ async def _build_participation_question(
     # Type-specific extras
     if q_type == "numeric":
         await channel.send(
-            "**Optional — bounds**\nReply with `min,max` (e.g. `0,500`) or "
+            "**Optional bounds**\nReply with `min,max` (e.g. `0,500`) or "
             "type `none` for no bounds."
         )
         try:
@@ -6501,7 +6501,7 @@ async def _build_participation_question(
                 if hi:
                     q["max"] = float(hi) if "." in hi else int(hi)
             except Exception:
-                await channel.send("⚠️ Couldn't parse those bounds — saving without min/max.")
+                await channel.send("⚠️ Couldn't parse those bounds. Saving without min/max.")
 
     elif q_type in ("single_select", "multi_select"):
         await channel.send(

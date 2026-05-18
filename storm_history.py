@@ -249,9 +249,9 @@ def _format_power_display(raw: str) -> str:
     try:
         n = int(raw)
     except (TypeError, ValueError):
-        return f" — {raw}"
+        return f" · {raw}"
     from storm_strategy import format_power
-    return f" — {format_power(n)}"
+    return f" · {format_power(n)}"
 
 
 def render_event_embed(
@@ -267,7 +267,7 @@ def render_event_embed(
     date_pretty = format_event_date(event_date)
 
     embed = discord.Embed(
-        title=f"📜 {label} Roster — {date_pretty}",
+        title=f"📜 {label} Roster: {date_pretty}",
         color=discord.Color.dark_gold() if event_type == "DS"
               else discord.Color.dark_orange(),
     )
@@ -420,7 +420,7 @@ def render_history_list_embed(
 ) -> discord.Embed:
     label = "Desert Storm" if event_type == "DS" else "Canyon Storm"
     embed = discord.Embed(
-        title=f"📜 {label} — Recent Rosters",
+        title=f"📜 {label}: Recent Rosters",
         color=discord.Color.dark_gold() if event_type == "DS"
               else discord.Color.dark_orange(),
     )
@@ -551,7 +551,7 @@ class _RosterImageLinksView(discord.ui.View):
         what = "channel" if reason == "channel" else "image"
         await inter.response.send_message(
             f"⚠️ The saved roster {what}{team_label} can no longer be "
-            f"found — it was deleted from the original channel. The link "
+            f"found. It was deleted from the original channel. The link "
             f"has been cleared. To save a new image: open the roster "
             f"builder, click 🖼️ Render image, then 💾 Save to history.",
             ephemeral=True,
@@ -715,7 +715,7 @@ async def open_history(
         )
         content = None
         if slot_errors:
-            content = "⚠️ Read had soft errors — see bot logs."
+            content = "⚠️ Read had soft errors. See bot logs."
             logger.warning(
                 "[STORM HISTORY] roster read errors guild=%s date=%s: %s",
                 interaction.guild_id, date_clean, "; ".join(slot_errors),

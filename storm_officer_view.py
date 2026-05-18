@@ -438,7 +438,7 @@ def _render_embed(
     date_pretty = format_event_date(event_date)
 
     total = sum(len(v) for v in buckets.values())
-    title = f"{emoji} {label} Sign-Ups — {date_pretty}  ({total} members)"
+    title = f"{emoji} {label} Sign-Ups: {date_pretty}  ({total} members)"
 
     # If any bucket holds a not-on-Discord entry, render a footnote so the
     # ¹ marker we add to each such entry isn't unexplained.
@@ -481,13 +481,13 @@ def _render_embed(
         used += len(block)
 
     if has_off_discord:
-        footnote = "\n¹ Not on Discord — cast their vote with **🙋 Record on-behalf vote**."
+        footnote = "\n¹ Not on Discord. Cast their vote with **🙋 Record on-behalf vote**."
         if used + len(footnote) <= _DESCRIPTION_BUDGET:
             desc_lines.append(footnote)
 
     description = "\n".join(desc_lines) if desc_lines else "_No data yet._"
     if truncated_buckets:
-        description += "\n\n_Some buckets clipped — use the filter dropdown to drill in._"
+        description += "\n\n_Some buckets clipped. Use the filter dropdown to drill in._"
 
     embed = discord.Embed(
         title=title,
@@ -881,7 +881,7 @@ class _OnBehalfVoteView(discord.ui.View):
         self.stop()
         try:
             await inter.response.edit_message(
-                content="↩️ Cancelled — no vote recorded.", view=self,
+                content="↩️ Cancelled. No vote recorded.", view=self,
             )
         except discord.HTTPException:
             pass
@@ -1024,7 +1024,7 @@ class OfficerView(discord.ui.View):
                 msg = await inter.followup.send(
                     content=(
                         "🙋 Pick a member and a vote, then **Submit**. "
-                        "Only roster members are listed — `/sync_members` "
+                        "Only roster members are listed. `/sync_members` "
                         "refreshes the list."
                     ),
                     view=picker, ephemeral=True,
@@ -1183,7 +1183,7 @@ class _PresetPickerView(discord.ui.View):
             self.selected_preset = select.values[0]
             for item in self.children: item.disabled = True
             await inter.response.edit_message(
-                content=f"✅ Preset **{self.selected_preset}** selected — "
+                content=f"✅ Preset **{self.selected_preset}** selected. "
                         f"opening the roster builder…",
                 view=self,
             )
@@ -1294,7 +1294,7 @@ async def handle_storm_signups(
         # hid the detail the audit explicitly asked to expose.
         preview = " · ".join(view.roster_errors[:2])
         followup_args["content"] = (
-            "⚠️ Roster Sheet read had issues — non-Discord member "
+            "⚠️ Roster Sheet read had issues. Non-Discord member "
             f"enumeration may be incomplete: {preview}"
         )
         logger.warning(

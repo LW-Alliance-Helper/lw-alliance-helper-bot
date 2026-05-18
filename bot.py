@@ -850,10 +850,103 @@ async def growth_slash(interaction: discord.Interaction):
     await interaction.response.send_message(embed=embed, view=GrowthActionView(), ephemeral=True)
 
 
-# ── /events command ────────────────────────────────────────────────────────────
+# ── /events command group ─────────────────────────────────────────────────────
+#
+# Discord groups can't be invoked as bare `/events`, so the date-arg
+# behavior that used to live on bare `/events` is now `/events show
+# [date]`, and a new `/events overview` leaf renders a read-only
+# config snapshot (configured event types + next firing dates) for
+# leadership pre-flight. `/events log` is the renamed `/events_log`.
 
-@bot.tree.command(
+events_group = app_commands.Group(
     name="events",
+    description="View, draft, and audit alliance event announcements",
+)
+
+
+@events_group.command(
+    name="overview",
+    description="Configured event types, next firing dates, and pointers into /events show / log",
+)
+async def events_overview_slash(interaction: discord.Interaction):
+    if not await guard(interaction):
+        return
+
+    from config import get_guild_events, get_config
+    cfg    = get_config(interaction.guild_id)
+    events = get_guild_events(interaction.guild_id, active_only=True)
+    today  = date_cls.today()
+
+    embed = discord.Embed(
+        title="📣 Event Announcements",
+        color=discord.Color.blurple(),
+    )
+
+    if not events:
+        embed.description = (
+            "No event types configured yet. Run `/setup_events` to add "
+            "Marauder, Siege, or custom event types."
+        )
+        await interaction.response.send_message(embed=embed, ephemeral=True)
+        return
+
+    repeating_lines: list[str] = []
+    manual_lines:    list[str] = []
+    for ev in events:
+        name = ev.get("name") or "(unnamed)"
+        if ev["schedule_type"] == "repeating" and ev.get("anchor_date"):
+            try:
+                anchor   = date_cls.fromisoformat(ev["anchor_date"])
+                interval = int(ev["interval_days"] or 0)
+            except (ValueError, TypeError):
+                repeating_lines.append(f"• **{name}** — schedule invalid (re-run `/setup_events`)")
+                continue
+            upcoming = next_event_dates(
+                from_date=today, count=1, anchor=anchor, cycle=interval,
+            ) if interval > 0 else []
+            if upcoming:
+                next_date = upcoming[0]
+                days = (next_date - today).days
+                when = (
+                    "today" if days == 0
+                    else "tomorrow" if days == 1
+                    else f"in {days} days"
+                )
+                repeating_lines.append(
+                    f"• **{name}** — every {interval}d, next on "
+                    f"{next_date:%a %b} {next_date.day} ({when})"
+                )
+            else:
+                repeating_lines.append(f"• **{name}** — every {interval}d")
+        else:
+            manual_lines.append(f"• **{name}** — manual entries only")
+
+    if repeating_lines:
+        embed.add_field(
+            name=f"Repeating ({len(repeating_lines)})",
+            value="\n".join(repeating_lines)[:1024],
+            inline=False,
+        )
+    if manual_lines:
+        embed.add_field(
+            name=f"Manual ({len(manual_lines)})",
+            value="\n".join(manual_lines)[:1024],
+            inline=False,
+        )
+
+    embed.add_field(
+        name="Sub-commands",
+        value=(
+            "• `/events show [date]` — Open the editor for today or a specific date\n"
+            "• `/events log` — Recent approved event posts"
+        ),
+        inline=False,
+    )
+    await interaction.response.send_message(embed=embed, ephemeral=True)
+
+
+@events_group.command(
+    name="show",
     description="Open the event editor for today or a specific date",
 )
 @app_commands.describe(date="Optional date, e.g. 'April 5' or '4/5' (defaults to today)")
@@ -1029,10 +1122,10 @@ async def events_slash(interaction: discord.Interaction, date: str = None):
     print(f"[EVENTS] Manual event editor opened for guild {interaction.guild_id} date {event_date} by {interaction.user}")
 
 
-# ── /events_log command ───────────────────────────────────────────────────────
+# ── /events log command ───────────────────────────────────────────────────────
 
-@bot.tree.command(
-    name="events_log",
+@events_group.command(
+    name="log",
     description="Show recent approved event posts (window depends on your tier)",
 )
 async def events_log_slash(interaction: discord.Interaction):
@@ -1437,6 +1530,11 @@ async def admin_forget_guild_slash(interaction: discord.Interaction, guild_id: s
 
 # Alias so date_cls doesn't conflict with the `date` parameter name in events_slash
 date_cls = date
+
+
+# Register the /events Group on the tree once every subcommand has
+# been attached above. Global registration — every alliance gets it.
+bot.tree.add_command(events_group)
 
 
 # Register the /admin Group on the tree once every subcommand has been

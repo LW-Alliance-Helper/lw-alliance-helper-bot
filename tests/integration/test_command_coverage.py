@@ -88,7 +88,13 @@ EXPECTED_COG_COMMANDS = {
 EXPECTED_STORM_TOP_LEVEL_COMMANDS = {"desertstorm", "canyonstorm"}
 
 # Module-level slash commands defined directly in bot.py (not on a cog).
-EXPECTED_MODULE_COMMANDS = {"growth", "events", "events_log", "help"}
+# `/events` is now an `app_commands.Group` with overview / show / log
+# subcommands (#197). `/admin` is also a Group but scoped via
+# `BOT_ADMIN_GUILD_IDS`, so it doesn't appear in the global tree under
+# the production registration — exercised separately in
+# `tests/unit/test_guild_install_metadata.py`.
+EXPECTED_MODULE_COMMANDS = {"growth", "events", "help"}
+EXPECTED_EVENTS_SUBCOMMANDS = {"overview", "show", "log"}
 
 
 # ── Cog instantiation helpers ─────────────────────────────────────────────────
@@ -242,12 +248,21 @@ class TestCogRegistration:
 
         # CommandTree.get_commands() returns a list[Command] for the
         # global scope. Map by name and assert membership.
-        registered = {c.name for c in bot_module.bot.tree.get_commands()}
+        registered = {c.name: c for c in bot_module.bot.tree.get_commands()}
         for name in EXPECTED_MODULE_COMMANDS:
             assert name in registered, (
                 f"bot.py's command tree is missing /{name}. "
                 f"Registered commands: {sorted(registered)}"
             )
+
+        # /events is a Group — verify its subcommands too.
+        events_grp = registered.get("events")
+        assert events_grp is not None
+        sub_names = _subcommands_on(events_grp)
+        assert sub_names == EXPECTED_EVENTS_SUBCOMMANDS, (
+            f"/events subcommands mismatch: got {sub_names}, "
+            f"expected {EXPECTED_EVENTS_SUBCOMMANDS}"
+        )
 
     @pytest.mark.asyncio
     async def test_no_unexpected_extra_commands(self, seeded_db):

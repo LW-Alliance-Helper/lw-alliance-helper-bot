@@ -53,10 +53,12 @@ HELP_CATEGORIES: dict[str, dict] = {
             ("/setup_events",
              "Configure events, leadership and public channels, daily draft "
              "time, and the 5-min warning."),
-            ("/events [date]",
+            ("/events overview",
+             "Configured event types + next firing dates at a glance."),
+            ("/events show [date]",
              "Open the event editor for today or a chosen date. Edit, "
              "approve, and post."),
-            ("/events_log",
+            ("/events log",
              "Show approved event posts (free: 7 days / 💎 Premium: 30 days)."),
         ],
     },

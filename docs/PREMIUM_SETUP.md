@@ -196,7 +196,7 @@ A few specific things that *might* surprise existing users:
   entries. The data isn't deleted from the sheet — it's just not
   surfaced via `/desertstorm log` for older dates. Premium users see
   everything.
-- **`/events_log` and `/train_log` windows**: free tier shows 7 days of
+- **`/events log` and `/train log` windows**: free tier shows 7 days of
   history; premium shows 30. Same principle — the data isn't deleted,
   just filtered on read.
 

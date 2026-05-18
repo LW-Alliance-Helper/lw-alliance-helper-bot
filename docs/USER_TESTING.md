@@ -88,11 +88,12 @@ These are grouped by feature. Tasks are not required to be done in order or in f
 
 The bot can post in-game event reminders (Plague Marauder, Zombie Siege, etc.) on a schedule. Drafts are posted to leadership for approval before going public.
 
-- [ ] Run `/events`. Review today's event list and the editor buttons.
+- [ ] Run `/events overview`. Confirm the configured event types and next firing dates look right.
+- [ ] Run `/events show`. Review today's event list and the editor buttons.
 - [ ] **Try each editor button** — Add Event, Edit Time, Remove Event, Add Announcement Text, Build Announcement. Note whether each button's purpose is clear before clicking.
-- [ ] Run `/events_log`. Note whether the message format and information level feel useful.
+- [ ] Run `/events log`. Note whether the message format and information level feel useful.
 - [ ] Add custom announcement text to today's events, then build the announcement. Note whether confirm vs. cancel is clearly distinguished.
-- [ ] **Custom-blurb round-trip.** Run `/setup_events` and either add a new event or edit one to give it a custom announcement blurb. The only placeholders are `{time}` (event time in the alliance timezone) and `{server_time}` (UTC). Example: *"We will be doing Glacieradon at {time} ({server_time} Server Time)! Remember to start with only 10 hits."* Then run `/events`, add that event to today's schedule, and click **Build Announcement**. The draft should contain your custom wording — *not* a generic "&lt;event_key&gt; at {time} ({server_time} Server Time)." fallback (which would also render the key in lowercase). If the wording is wrong, please flag it.
+- [ ] **Custom-blurb round-trip.** Run `/setup_events` and either add a new event or edit one to give it a custom announcement blurb. The only placeholders are `{time}` (event time in the alliance timezone) and `{server_time}` (UTC). Example: *"We will be doing Glacieradon at {time} ({server_time} Server Time)! Remember to start with only 10 hits."* Then run `/events show`, add that event to today's schedule, and click **Build Announcement**. The draft should contain your custom wording — *not* a generic "&lt;event_key&gt; at {time} ({server_time} Server Time)." fallback (which would also render the key in lowercase). If the wording is wrong, please flag it.
 
 ---
 

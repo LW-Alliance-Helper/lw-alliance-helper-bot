@@ -1451,6 +1451,142 @@ class TestAutoFillButtonGate:
         assert not any("Auto-fill" in lab for lab in labels)
 
 
+class TestAutoFillPriorityGreedy:
+    """#226: priority-greedy fills the top-priority zone to capacity
+    with the strongest members before moving on. Top-power lands in
+    top-priority zones, low-priority zones get the weakest starters
+    (or stay empty if the team is short). 0-cap zones are skipped."""
+
+    def _make_thirty_signups(self):
+        # Same 30-member, 11-zone preset shape as the balanced tests
+        # so the algorithms are testing against identical fixtures.
+        zones = [
+            ss.ZoneRow(zone="Oil Refinery I", max_players=3,
+                       min_power_a=100_000_000, priority=1),
+            ss.ZoneRow(zone="Oil Refinery II", max_players=3,
+                       min_power_a=100_000_000, priority=2),
+            ss.ZoneRow(zone="Science Hub", max_players=3,
+                       min_power_a=100_000_000, priority=3),
+            ss.ZoneRow(zone="Info Center", max_players=3,
+                       min_power_a=100_000_000, priority=4),
+            ss.ZoneRow(zone="Field Hospital I", max_players=2,
+                       min_power_a=100_000_000, priority=5),
+            ss.ZoneRow(zone="Field Hospital II", max_players=2,
+                       min_power_a=100_000_000, priority=6),
+            ss.ZoneRow(zone="Field Hospital III", max_players=2,
+                       min_power_a=100_000_000, priority=7),
+            ss.ZoneRow(zone="Field Hospital IV", max_players=2,
+                       min_power_a=100_000_000, priority=8),
+            ss.ZoneRow(zone="Nuclear Silo", max_players=4,
+                       min_power_a=100_000_000, priority=9),
+            ss.ZoneRow(zone="Arsenal", max_players=3,
+                       min_power_a=100_000_000, priority=10),
+            ss.ZoneRow(zone="Mercenary Factory", max_players=3,
+                       min_power_a=100_000_000, priority=11),
+        ]
+        members = {
+            str(i): {"key": str(i), "name": f"M{i:02d}",
+                     "discord_id": str(i),
+                     "power": 510_000_000 - i * 10_000_000,
+                     "not_on_discord": False}
+            for i in range(1, 31)
+        }
+        return _make_session(team="A", members=members, preset_zones=zones)
+
+    def test_top_priority_zone_fills_to_capacity_first(self):
+        sess = self._make_thirty_signups()
+        srb._auto_fill_session(sess, strategy="priority_greedy")
+        # Top-priority zone (Oil Refinery I, priority=1, cap=3) gets
+        # the top 3 power-ranked starters (M01, M02, M03).
+        assert sess.assignments["Oil Refinery I"] == ["1", "2", "3"]
+
+    def test_next_priority_zone_gets_next_block(self):
+        sess = self._make_thirty_signups()
+        srb._auto_fill_session(sess, strategy="priority_greedy")
+        # Second-priority zone (Oil Refinery II, cap=3) gets M04, M05, M06.
+        assert sess.assignments["Oil Refinery II"] == ["4", "5", "6"]
+
+    def test_low_priority_zones_get_weakest_starters(self):
+        sess = self._make_thirty_signups()
+        srb._auto_fill_session(sess, strategy="priority_greedy")
+        # Mercenary Factory is the lowest-priority zone (priority=11,
+        # cap=3). With priority-greedy and 20 starters across zones
+        # whose capacities sum top-to-bottom as
+        # 3,3,3,3,2,2,2,2 = 20 by the time we reach Nuclear Silo, the
+        # starter pool runs out exactly at Nuclear Silo, so Arsenal +
+        # Mercenary Factory stay empty.
+        assert sess.assignments["Mercenary Factory"] == []
+        assert sess.assignments["Arsenal"] == []
+
+    def test_total_placed_still_twenty(self):
+        sess = self._make_thirty_signups()
+        srb._auto_fill_session(sess, strategy="priority_greedy")
+        placed = sum(len(v) for v in sess.assignments.values())
+        assert placed == 20
+
+    def test_subs_are_still_next_ten_by_power(self):
+        sess = self._make_thirty_signups()
+        srb._auto_fill_session(sess, strategy="priority_greedy")
+        # Sub pool selection is independent of strategy; M21..M30 are
+        # still the 10 subs.
+        assert set(sess.subs) == {str(i) for i in range(21, 31)}
+
+    def test_skips_zero_capacity_zones(self):
+        # Field Hospital III/IV set to 0 cap for this team. The
+        # priority-greedy walker should skip them entirely and place
+        # starters in the remaining zones only.
+        sess = self._make_thirty_signups()
+        for z in sess.preset.zones:
+            if z.zone in ("Field Hospital III", "Field Hospital IV"):
+                z.max_players = 0
+        srb._auto_fill_session(sess, strategy="priority_greedy")
+        assert sess.assignments["Field Hospital III"] == []
+        assert sess.assignments["Field Hospital IV"] == []
+
+    def test_unknown_strategy_falls_back_to_balanced(self):
+        # Defensive: an unknown strategy string normalises to balanced
+        # rather than crashing or silently failing.
+        sess = self._make_thirty_signups()
+        srb._auto_fill_session(sess, strategy="not_a_real_strategy")
+        # Balanced result: top-priority zones get top-power on pass 1
+        # (M01 at Oil Refinery I, M02 at Oil Refinery II, etc.).
+        assert "1" in sess.assignments["Oil Refinery I"]
+        assert "2" in sess.assignments["Oil Refinery II"]
+        # Round-robin places M12 in Oil Refinery I on pass 2.
+        assert "12" in sess.assignments["Oil Refinery I"]
+
+
+class TestAutoFillStrategyPicker:
+    """#226: clicking Auto-fill always opens the strategy picker.
+    The picker carries the two strategy buttons + Cancel and the
+    body copy describes each strategy. When the session already has
+    assignments, the body prepends a destructive-rerun warning."""
+
+    def test_picker_carries_both_strategies_and_cancel(self):
+        parent = MagicMock()
+        parent.session.user_id = 42
+        view = srb._AutoFillStrategyPickerView(parent_view=parent)
+        labels = [getattr(c, "label", "") for c in view.children]
+        assert any("Balanced spread" in lab for lab in labels)
+        assert any("Strength to priority" in lab for lab in labels)
+        assert any("Cancel" in lab for lab in labels)
+
+    def test_balanced_button_runs_balanced_strategy(self):
+        # The picker's balanced callback dispatches to
+        # `_auto_fill_session(strategy="balanced")` via `_run_with_strategy`.
+        # Smoke-test that the view class can be constructed and the
+        # callback is wired (deep integration via mocks would replicate
+        # discord.py's view runtime, which isn't worth the test churn).
+        parent = MagicMock()
+        parent.session.user_id = 42
+        view = srb._AutoFillStrategyPickerView(parent_view=parent)
+        # The discord.ui.Button decorator wraps balanced/priority_greedy
+        # as attributes of the View instance.
+        assert hasattr(view, "balanced")
+        assert hasattr(view, "priority_greedy")
+        assert hasattr(view, "cancel")
+
+
 class TestApprovePostButtonSplit:
     """#225: Approve & Post offers a per-send choice between attaching
     the rendered image and posting text only. Flat-structured shows
@@ -2569,12 +2705,16 @@ class TestAutoFillConfirmDestructive:
         s.assignments_p2["Arsenal"].append("1")
         assert s.has_existing_assignments() is True
 
-    def test_confirm_view_renders_confirm_and_cancel_buttons(self):
+    def test_strategy_picker_renders_both_strategies_and_cancel(self):
+        # Post-#226: the destructive-rerun confirm fold into the new
+        # `_AutoFillStrategyPickerView`, which carries both strategy
+        # options plus the cancel affordance.
         parent_view = MagicMock()
         parent_view.session.user_id = 42
-        view = srb._AutoFillConfirmView(parent_view=parent_view)
+        view = srb._AutoFillStrategyPickerView(parent_view=parent_view)
         labels = [getattr(c, "label", "") for c in view.children]
-        assert any("Re-run auto-fill" in lab for lab in labels)
+        assert any("Balanced spread" in lab for lab in labels)
+        assert any("Strength to priority" in lab for lab in labels)
         assert any("Cancel" in lab for lab in labels)
 
 

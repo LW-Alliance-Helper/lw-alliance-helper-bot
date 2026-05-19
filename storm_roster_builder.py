@@ -692,7 +692,80 @@ def _apply_rules_to_session(session: RosterBuilderSession) -> None:
 # ── Auto-fill (#134) ─────────────────────────────────────────────────────────
 
 
-def _auto_fill_session(session: RosterBuilderSession) -> dict:
+AUTO_FILL_STRATEGIES = ("balanced", "priority_greedy")
+
+
+def _place_starter_in_zone(
+    session: RosterBuilderSession, starter_key: str, zone_name: str,
+    phase: int, summary: dict,
+) -> None:
+    """Append a starter to a phase's zone and update the auto-fill
+    bookkeeping (below-floor override flag, power-band counter,
+    `auto_filled_by_power` count). Shared by every fill strategy so
+    floor handling and the summary counts stay in sync (#226)."""
+    session.assignments_for_phase(phase)[zone_name].append(starter_key)
+    summary["auto_filled_by_power"] += 1
+    preset_floor = session.floor_for_zone(zone_name)
+    effective_floor = _effective_floor_for_zone(session, zone_name)
+    member_power = session.members[starter_key].get("power")
+    if member_power is None:
+        session.below_floor_overrides_for_phase(phase).add(starter_key)
+    elif member_power < effective_floor:
+        session.below_floor_overrides_for_phase(phase).add(starter_key)
+    elif effective_floor < preset_floor and member_power < preset_floor:
+        summary["power_band_rules_applied"] += 1
+
+
+def _fill_balanced(
+    session: RosterBuilderSession, remaining: list[str], phase: int,
+    zones_sorted: list, phase_assignments: dict, summary: dict,
+) -> None:
+    """Round-robin fill: pass over zones in priority order placing one
+    starter per zone per pass, looping until every starter is placed
+    or no zone has remaining capacity. Spreads power evenly across
+    every zone the team uses this phase. 0-cap zones are skipped by
+    the capacity guard."""
+    while remaining:
+        progress = False
+        for z in zones_sorted:
+            if not remaining:
+                break
+            if session.zone_member_count(z.zone) >= session.zone_capacity(z.zone):
+                continue
+            starter_key = remaining.pop(0)
+            _place_starter_in_zone(session, starter_key, z.zone, phase, summary)
+            progress = True
+        if not progress:
+            # Every zone is full this phase. Remaining starters stay
+            # unassigned for this phase; the officer can place them
+            # manually via the picker.
+            break
+
+
+def _fill_priority_greedy(
+    session: RosterBuilderSession, remaining: list[str], phase: int,
+    zones_sorted: list, phase_assignments: dict, summary: dict,
+) -> None:
+    """Priority-greedy fill: walk zones in priority asc, fill each
+    zone to capacity from the front of the power-desc starter list
+    before moving on. Concentrates the strongest members in
+    top-priority zones; low-priority zones get the weakest starters
+    (or stay empty if the team runs out). 0-cap zones are skipped by
+    the capacity guard."""
+    for z in zones_sorted:
+        if not remaining:
+            break
+        while remaining:
+            if session.zone_member_count(z.zone) >= session.zone_capacity(z.zone):
+                break
+            starter_key = remaining.pop(0)
+            _place_starter_in_zone(session, starter_key, z.zone, phase, summary)
+
+
+def _auto_fill_session(
+    session: RosterBuilderSession,
+    *, strategy: str = "balanced",
+) -> dict:
     """Auto-fill the roster from member rules and the LW 20-starters-plus-10-subs
     team rule (#219).
 
@@ -713,13 +786,14 @@ def _auto_fill_session(session: RosterBuilderSession) -> dict:
          `team_seats(event_type)` is reached. The next slice (subs_target
          members) becomes the sub pool. Members with no parseable power go
          to `gaps` and are not auto-placed.
-      3. Round-robin zone fill per phase. Same starter pool across every
-         phase the preset declares. For each phase, walk that phase's zones
-         in priority asc (priority=0 sorts last), placing one starter per
-         zone per pass from the power-desc starter list. Loop passes until
-         every starter is placed or no zone has remaining capacity. Top-
-         priority zones receive both the highest-power starters and the
-         extras when the starter count does not divide evenly across zones.
+      3. Per-phase zone fill (#226). Same starter pool across every
+         phase the preset declares. The `strategy` parameter picks:
+           "balanced" — round-robin (default; current behavior).
+           "priority_greedy" — fill top-priority zones to capacity
+             with the strongest members before moving on.
+         Both strategies share `_place_starter_in_zone` so floor
+         handling and summary bookkeeping stay aligned, and both
+         skip 0-cap zones via the capacity guard.
       4. Paired-mode pairings. Each phase walks its primaries
          weakest-first (power asc) and picks the unpaired candidate
          whose power is closest to the primary's. Zone-floor
@@ -736,6 +810,8 @@ def _auto_fill_session(session: RosterBuilderSession) -> dict:
     The fill is officer-correctable. Every assignment can be tweaked via
     the picker before Approve & Post.
     """
+    if strategy not in AUTO_FILL_STRATEGIES:
+        strategy = "balanced"
     # ── Reset state ── auto-fill is "redo from scratch".
     # Phase-aware: clear every phase's dicts. Flat: only phase 1 is
     # touched.
@@ -854,7 +930,7 @@ def _auto_fill_session(session: RosterBuilderSession) -> dict:
             continue
         sub_pool.append(key)
 
-    # ── 3. Round-robin zone fill per phase ──
+    # ── 3. Per-phase fill via the selected strategy (#226) ──
     # priority=0 means "no priority set" so it sorts to the end via 9999.
     # Phase-aware presets read per-phase priority; flat presets use the
     # single `priority` field.
@@ -871,7 +947,7 @@ def _auto_fill_session(session: RosterBuilderSession) -> dict:
 
         # Members already placed in this phase (from per-member rules in
         # phase 1 only): they occupy a starter seat but were already put
-        # in a zone, so the round-robin skips them.
+        # in a zone, so the fill skips them.
         already_placed: set[str] = set()
         for zone_members in phase_assignments.values():
             already_placed.update(zone_members)
@@ -882,35 +958,16 @@ def _auto_fill_session(session: RosterBuilderSession) -> dict:
         # via step 1. Stable on member key.
         remaining.sort(key=_power_rank_key)
 
-        # Round-robin passes: each pass walks zones in priority order and
-        # adds one starter to each zone with remaining capacity. Loop
-        # until every starter is placed or no progress was made (every
-        # zone is full).
-        while remaining:
-            progress = False
-            for z in zones_sorted:
-                if not remaining:
-                    break
-                if session.zone_member_count(z.zone) >= session.zone_capacity(z.zone):
-                    continue
-                starter_key = remaining.pop(0)
-                phase_assignments[z.zone].append(starter_key)
-                summary["auto_filled_by_power"] += 1
-                preset_floor = session.floor_for_zone(z.zone)
-                effective_floor = _effective_floor_for_zone(session, z.zone)
-                member_power = session.members[starter_key].get("power")
-                if member_power is None:
-                    session.below_floor_overrides_for_phase(phase).add(starter_key)
-                elif member_power < effective_floor:
-                    session.below_floor_overrides_for_phase(phase).add(starter_key)
-                elif effective_floor < preset_floor and member_power < preset_floor:
-                    summary["power_band_rules_applied"] += 1
-                progress = True
-            if not progress:
-                # Every zone is full this phase. Remaining starters stay
-                # unassigned for this phase; the officer can place them
-                # manually via the picker.
-                break
+        if strategy == "priority_greedy":
+            _fill_priority_greedy(
+                session, remaining, phase, zones_sorted,
+                phase_assignments, summary,
+            )
+        else:
+            _fill_balanced(
+                session, remaining, phase, zones_sorted,
+                phase_assignments, summary,
+            )
 
     # ── 4. Sub pairings (paired mode only) ──
     # Pair candidates are sub_pool plus any starters that couldn't fit
@@ -1689,18 +1746,22 @@ class RosterBuilderView(discord.ui.View):
                 style=discord.ButtonStyle.primary, row=auto_fill_row,
             )
 
-            async def _run_auto_fill(inter: discord.Interaction):
-                """Actually execute the auto-fill + refresh. Pulled out
-                so both the direct first-click path AND the
-                post-confirm path can call it through the same code."""
+            async def _run_auto_fill(
+                inter: discord.Interaction, *,
+                strategy: str = "balanced",
+            ):
+                """Actually execute the auto-fill + refresh. Called by
+                the strategy picker after the officer chooses a
+                strategy and (when relevant) accepts the destructive-
+                rerun warning."""
                 # Wrap the algorithm in explicit logging so when team-
                 # test reports "auto-fill skipped after the first
                 # power-unknown" we have a trail in Railway logs.
                 logger.info(
                     "[STORM AUTO-FILL] start: guild=%s event=%s team=%s "
-                    "preset=%s pool_size=%d (members=%s)",
+                    "preset=%s strategy=%s pool_size=%d (members=%s)",
                     s.guild_id, s.event_type, s.team,
-                    s.preset.name, len(s.members),
+                    s.preset.name, strategy, len(s.members),
                     [
                         {"key": k, "name": m.get("name"),
                          "discord_id": m.get("discord_id"),
@@ -1710,7 +1771,7 @@ class RosterBuilderView(discord.ui.View):
                     ],
                 )
                 try:
-                    summary = _auto_fill_session(s)
+                    summary = _auto_fill_session(s, strategy=strategy)
                 except Exception as e:
                     logger.exception(
                         "[STORM AUTO-FILL] crashed for guild=%s event=%s: %s",
@@ -1723,35 +1784,48 @@ class RosterBuilderView(discord.ui.View):
                     )
                     return
                 logger.info(
-                    "[STORM AUTO-FILL] done: guild=%s event=%s summary=%s "
+                    "[STORM AUTO-FILL] done: guild=%s event=%s strategy=%s summary=%s "
                     "assignments=%s subs=%d paired=%d",
-                    s.guild_id, s.event_type, summary,
+                    s.guild_id, s.event_type, strategy, summary,
                     {z: names for z, names in s.assignments.items() if names},
                     len(s.subs), len(s.paired_subs),
                 )
                 await self._refresh(inter)
 
+            self._run_auto_fill = _run_auto_fill  # noqa — captured by the picker view
+
             async def _auto_fill(inter: discord.Interaction):
                 if not await self._guard_owner(inter):
                     return
-                # Decision #9 (#171): destructive re-runs prompt for
-                # confirmation. A fresh session (no assignments, subs,
-                # or pairings) skips the prompt and runs straight away.
-                if not s.has_existing_assignments():
-                    await _run_auto_fill(inter)
-                    return
-                confirm_view = _AutoFillConfirmView(parent_view=self)
+                # #226: every Auto-fill click opens the strategy picker.
+                # The picker carries (a) the two strategy buttons and
+                # (b) the destructive-rerun warning copy when the
+                # session already has assignments, so officers see one
+                # ephemeral regardless of fresh vs rerun.
+                picker_view = _AutoFillStrategyPickerView(parent_view=self)
+                body = (
+                    "🎯 **Auto-fill strategy.** Pick how to distribute "
+                    "the 20 starters across this team's zones:\n"
+                    "• **🎯 Balanced spread**: one starter per zone per "
+                    "pass, power distributed across every zone.\n"
+                    "• **🔝 Strength to priority**: fill the "
+                    "top-priority zone fully with the strongest members "
+                    "before moving on."
+                )
+                if s.has_existing_assignments():
+                    body = (
+                        "⚠️ **Re-running auto-fill will reset every "
+                        "assignment, sub pairing, and override on this "
+                        "team.** Manual edits since the last auto-fill "
+                        "will be lost.\n\n"
+                    ) + body
                 await inter.response.send_message(
-                    "⚠️ **Re-run auto-fill?** This will reset every "
-                    "assignment, sub pairing, and override on this team. "
-                    "Manual edits you've made since the last auto-fill "
-                    "will be lost.",
-                    view=confirm_view, ephemeral=True,
+                    body, view=picker_view, ephemeral=True,
                 )
                 try:
-                    confirm_view.message = await inter.original_response()
+                    picker_view.message = await inter.original_response()
                 except discord.HTTPException:
-                    confirm_view.message = None
+                    picker_view.message = None
 
             auto_fill_btn.callback = _auto_fill
             self.add_item(auto_fill_btn)
@@ -1978,15 +2052,24 @@ def _zone_of_primary(session: RosterBuilderSession, primary_key: str) -> str:
     return session.selected_zone or ""
 
 
-class _AutoFillConfirmView(discord.ui.View):
-    """Confirm/cancel prompt for re-running auto-fill on a session that
-    already has manual edits (#171 / Decision #9).
+class _AutoFillStrategyPickerView(discord.ui.View):
+    """Strategy picker for the Auto-fill button (#226).
 
-    First-click auto-fill on a fresh session skips this view entirely.
-    Confirming runs auto-fill on the parent session and refreshes the
-    parent builder view via its captured message handle (the ephemeral
-    confirm interaction has already consumed its own response slot, so
-    the main view can't be edited through this interaction).
+    The Auto-fill button always opens this picker. Officers pick one
+    of two strategies, each described in the picker's body copy:
+
+      🎯 Balanced spread      — one starter per zone per pass.
+      🔝 Strength to priority — fill top-priority zones first.
+
+    A third button cancels without running. When the parent session
+    already has assignments, the parent builder prepends a
+    destructive-rerun warning to the body so officers see one
+    ephemeral regardless of fresh vs rerun (the picker absorbs the
+    role of the previous `_AutoFillConfirmView`).
+
+    Each strategy button runs the parent's `_run_auto_fill` with the
+    matching `strategy` kwarg and then refreshes the main builder
+    view via its captured message handle.
     """
 
     def __init__(self, *, parent_view: "RosterBuilderView"):
@@ -2002,10 +2085,9 @@ class _AutoFillConfirmView(discord.ui.View):
             return False
         return True
 
-    @discord.ui.button(label="🎯 Re-run auto-fill",
-                       style=discord.ButtonStyle.danger)
-    async def confirm(self, inter: discord.Interaction,
-                      _btn: discord.ui.Button):
+    async def _run_with_strategy(
+        self, inter: discord.Interaction, strategy: str, label: str,
+    ) -> None:
         if not await self._guard_owner(inter):
             return
         if self.is_finished():
@@ -2015,10 +2097,10 @@ class _AutoFillConfirmView(discord.ui.View):
             item.disabled = True
         s = self.parent_view.session
         try:
-            summary = _auto_fill_session(s)
+            summary = _auto_fill_session(s, strategy=strategy)
         except Exception as e:
             logger.exception(
-                "[STORM AUTO-FILL] confirm-path crashed for guild=%s event=%s: %s",
+                "[STORM AUTO-FILL] picker-path crashed for guild=%s event=%s: %s",
                 s.guild_id, s.event_type, e,
             )
             try:
@@ -2034,18 +2116,19 @@ class _AutoFillConfirmView(discord.ui.View):
                 pass
             return
         logger.info(
-            "[STORM AUTO-FILL] confirm-path done: guild=%s event=%s summary=%s",
-            s.guild_id, s.event_type, summary,
+            "[STORM AUTO-FILL] picker-path done: guild=%s event=%s "
+            "strategy=%s summary=%s",
+            s.guild_id, s.event_type, strategy, summary,
         )
         try:
             await inter.response.edit_message(
-                content="🎯 Auto-fill re-run complete. Main view refreshed.",
+                content=f"{label} run complete. Main view refreshed.",
                 view=self,
             )
         except discord.HTTPException:
             pass
         # Refresh the main builder view via its captured message handle,
-        # not through this interaction — the ephemeral confirm and the
+        # not through this interaction. The ephemeral picker and the
         # main builder live on separate messages.
         try:
             if self.parent_view.message is not None:
@@ -2056,6 +2139,22 @@ class _AutoFillConfirmView(discord.ui.View):
                 )
         except discord.HTTPException:
             pass
+
+    @discord.ui.button(label="🎯 Balanced spread",
+                       style=discord.ButtonStyle.primary)
+    async def balanced(self, inter: discord.Interaction,
+                       _btn: discord.ui.Button):
+        await self._run_with_strategy(
+            inter, "balanced", "🎯 Balanced spread auto-fill",
+        )
+
+    @discord.ui.button(label="🔝 Strength to priority",
+                       style=discord.ButtonStyle.primary)
+    async def priority_greedy(self, inter: discord.Interaction,
+                              _btn: discord.ui.Button):
+        await self._run_with_strategy(
+            inter, "priority_greedy", "🔝 Strength-to-priority auto-fill",
+        )
 
     @discord.ui.button(label="↩️ Cancel",
                        style=discord.ButtonStyle.secondary)

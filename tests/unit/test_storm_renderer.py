@@ -75,6 +75,44 @@ def test_render_includes_paired_subs():
     assert png[:8] == b"\x89PNG\r\n\x1a\n"
 
 
+def test_render_closed_zero_cap_zone_survives():
+    """#226: zones with `max_for_phase=0` still appear in `roster.zones`
+    so the canonical layout slot draws as an empty pill. Officers use
+    cap=0 to communicate 'do not assign here, we're letting points
+    build,' so the visual handed to members needs every zone slot
+    intact even when the zone is closed."""
+    # Phase-aware preset where Field Hospital III is closed across
+    # both stages (max_phase1 / max_phase2 default to 0).
+    closed_zone = sr.RosterZone(
+        name="Stage 1 — Field Hospital III",
+        canonical_zone="Field Hospital III",
+        max_players=0,
+        members=[],
+        phase=1,
+    )
+    closed_zone_p2 = sr.RosterZone(
+        name="Stage 2 — Field Hospital III",
+        canonical_zone="Field Hospital III",
+        max_players=0,
+        members=[],
+        phase=2,
+    )
+    open_zone = sr.RosterZone(
+        name="Stage 1 — Nuclear Silo",
+        canonical_zone="Nuclear Silo",
+        max_players=4,
+        members=["Alice", "Bob"],
+        phase=1,
+    )
+    roster = sr.RosterData(
+        title="Closed zone demo",
+        event_type="DS",
+        zones=[closed_zone, closed_zone_p2, open_zone],
+    )
+    png = sr.render(roster)
+    assert png[:8] == b"\x89PNG\r\n\x1a\n"
+
+
 # ── roster_from_session conversion ───────────────────────────────────────────
 
 
@@ -147,6 +185,47 @@ class TestRosterFromSession:
         # Paired map keyed by display name (renderer-friendly), value
         # is the partner's display name.
         assert data.paired_subs.get("Alice") == "Bob"
+
+    def test_closed_phase_blocks_still_appear_in_zones(self):
+        """#226: a zone with `max_for_phase = 0` for every phase still
+        appears in `roster.zones` as a `RosterZone` with empty members.
+        Without this, the canonical PNG layout slot for the closed
+        zone goes unused and the visual handed to members has an
+        empty hole where the zone should be."""
+        import storm_strategy as ss
+        import storm_roster_builder as srb
+        members = {
+            "1001": _FakeMember("Alice", "1001").as_dict,
+        }
+        # Phase-aware preset where Field Hospital III is closed for
+        # every phase (max_phase1 + max_phase2 both default to 0).
+        zones = [
+            ss.ZoneRow(zone="Info Center", max_players=0,
+                       max_phase1=2, max_phase2=1,
+                       min_power_a=200_000_000, min_power_b=100_000_000),
+            ss.ZoneRow(zone="Field Hospital III", max_players=0,
+                       max_phase1=0, max_phase2=0,
+                       min_power_a=0, min_power_b=0),
+        ]
+        preset = ss.PresetBuffer(name="Closed", event_type="DS",
+                                 zones=zones, phase_count=2)
+        sess = srb.RosterBuilderSession(
+            guild_id=1, user_id=42, event_type="DS",
+            team="A", preset=preset, members=members,
+            per_member_rules=[], power_band_rules=[], sub_mode="pool",
+        )
+        sess.event_date = "2026-05-18"
+        data = sr.roster_from_session(sess)
+        # Field Hospital III appears as a `canonical_zone` key in the
+        # roster.zones list, with cap=0 and no members, for every
+        # phase the preset declares.
+        fh3_blocks = [
+            z for z in data.zones if z.canonical_zone == "Field Hospital III"
+        ]
+        assert len(fh3_blocks) == 2
+        for b in fh3_blocks:
+            assert b.max_players == 0
+            assert b.members == []
 
     def test_pool_subs_carried_through(self):
         members = {

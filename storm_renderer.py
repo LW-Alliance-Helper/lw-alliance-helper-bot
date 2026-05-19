@@ -599,11 +599,15 @@ def _measure_member_block(phase_blocks: list[RosterZone],
                           fh, fm, line_gap: int, block_gap: int) -> int:
     """Vertical space the member list will consume at the given font
     sizes. Used by `_pick_member_fonts` to auto-shrink content that
-    overflows the text pill."""
+    overflows the text pill. Skips the same blocks `_draw_member_block`
+    skips at render time (closed-empty stages) so the font picker
+    doesn't reserve space for headers that won't actually draw."""
     h = 0
     first = True
     for block in phase_blocks:
         if not block.members and block.phase == 0:
+            continue
+        if block.phase >= 1 and block.max_players == 0 and not block.members:
             continue
         if not first:
             h += block_gap
@@ -638,6 +642,12 @@ def _draw_member_block(draw, b: Box, phase_blocks: list[RosterZone],
     ` + sub Bob` was redundant and was the only thing pushing labels
     past the pill width. `paired_subs` / `is_paired` are kept in the
     signature so callers don't need to change, but they're unused.
+
+    Post-#226: when every phase block for the zone is fully closed
+    (cap=0 + empty members across every stage), the pill renders as
+    a clean empty box. Without this carve-out, an "all stages closed"
+    zone would draw stacked empty `Stage 1:` / `Stage 2:` headers
+    over an otherwise-empty pill (visual noise).
     """
     del paired_subs, is_paired  # rendered in the Subs panel instead.
     x0, y0, x1, y1 = _s_box(b)
@@ -646,12 +656,25 @@ def _draw_member_block(draw, b: Box, phase_blocks: list[RosterZone],
     avail_h = (y1 - y0) - 2 * py
     line_gap = max(2, _s(2))
     block_gap = max(4, _s(4))
+    # All phase blocks closed + empty → leave the pill genuinely empty
+    # rather than stacking empty stage headers.
+    if phase_blocks and all(
+        b.phase >= 1 and not b.members and b.max_players == 0
+        for b in phase_blocks
+    ):
+        return
     fh, fm = _pick_member_fonts(phase_blocks, avail_h)
     cy = y0 + py
     indent = max(8, _s(6))
     first = True
     for block in sorted(phase_blocks, key=lambda z: z.phase):
         if not block.members and block.phase == 0:
+            continue
+        # Skip per-phase Stage headers for closed-empty stages within
+        # an otherwise-populated zone (e.g. FH I has Stage 1 members
+        # but Stage 2 is closed): the empty header reads as a dangling
+        # label otherwise.
+        if block.phase >= 1 and block.max_players == 0 and not block.members:
             continue
         if not first:
             cy += block_gap
@@ -853,11 +876,12 @@ def roster_from_session(session) -> RosterData:
             for phase in session.iter_phases():
                 cap = int(z.max_for_phase(phase))
                 names = _build_member_block(z.zone, phase)
-                # Skip empty phase blocks for zones that don't
-                # participate in this phase (Phase-1 center zones in
-                # DS, Phase-1/Phase-2 Virus Lab in CS).
-                if cap == 0 and not names:
-                    continue
+                # Closed phase blocks (cap=0) still appear in
+                # roster.zones so the canonical layout slot draws as
+                # an empty pill (#226). Officers use cap=0 to
+                # communicate "this zone is intentionally unassigned";
+                # the visual handed to members needs to show every
+                # zone slot, even the closed ones.
                 zones.append(RosterZone(
                     name=f"Stage {phase} — {z.zone}",
                     max_players=cap,

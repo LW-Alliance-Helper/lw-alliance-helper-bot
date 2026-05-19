@@ -488,9 +488,13 @@ class TestPowerBandRuleConsumption:
 
 class TestEmbedRendering:
     def test_renders_team_label_for_ds(self):
+        # Post-#222: team moved from the title into the body's first
+        # bulleted line as `🗺️ Desert Storm: Team A`.
         session = _make_session(team="A")
         embed = srb._render_builder_embed(session)
-        assert "Team A" in embed.title
+        assert "Roster Builder Template" in embed.title
+        assert "Team A" not in embed.title
+        assert "Desert Storm: Team A" in embed.description
 
     def test_renders_floor_for_active_zone(self):
         session = _make_session(team="A")
@@ -1612,10 +1616,10 @@ class TestPairedSubMode:
         sess.assignments["Power Tower"].append("1001")
         sess.paired_subs["1001"] = "1002"
         embed = srb._render_builder_embed(sess)
-        # Rendered as "Alice + sub Bob"
-        assert "Alice" in embed.description
-        assert "Bob" in embed.description
-        assert "sub" in embed.description.lower()
+        # Post-#222: pairings render in the `### Auto-paired Subs:`
+        # section with `Primary ↔ Sub` per line (not inline in zones).
+        assert "Auto-paired Subs" in embed.description
+        assert "Alice ↔ Bob" in embed.description
 
     def test_render_embed_flags_unpaired_primary(self):
         members = self._three_members()
@@ -1623,9 +1627,10 @@ class TestPairedSubMode:
         sess.assignments["Power Tower"].append("1001")
         # No pairing yet.
         embed = srb._render_builder_embed(sess)
-        # The ⚠️ flag surfaces in the embed for unpaired primaries.
-        assert "⚠️" in embed.description
-        assert "Unpaired primaries" in embed.description
+        # Post-#222: the ⚠️ inline marker is gone (cluttered the zone
+        # line). Unpaired primaries surface via the dedicated message.
+        assert "Primaries without a designated Sub" in embed.description
+        assert "Alice" in embed.description
 
     def test_render_embed_paired_mode_surfaces_available_subs(self):
         """Paired mode's flat sub list used to be invisible from the
@@ -2355,9 +2360,12 @@ class TestAutoFillSummaryRenderingNoTruncation:
         srb._auto_fill_session(session)
         embed = srb._render_builder_embed(session)
         body = embed.description or ""
-        # Pair line uses the ↔ marker between each pair.
-        assert "Auto-paired subs (" in body
+        # Post-#222: explicit `Primary ↔ Sub` lines live in the
+        # `### Auto-paired Subs:` section above the auto-fill summary;
+        # the summary itself only carries the count.
+        assert "### **Auto-paired Subs:**" in body
         assert "↔" in body
+        assert "- Auto-paired subs: 2" in body
 
     def _three_members(self):
         return {
@@ -2746,6 +2754,213 @@ class TestAutoFillPhaseAware:
         # Phase 2 dict stays empty for flat presets even with members
         # available.
         assert all(len(v) == 0 for v in s.assignments_p2.values())
+
+
+class TestEmbedLayoutOverhaul:
+    """#222: embed layout overhaul. Drops the per-zone status glyph,
+    drops the `←` selected-zone marker, drops the ⚠️ unpaired marker
+    and inline ` + sub <name>` from zone lines, lifts pairings into a
+    dedicated `### **Auto-paired Subs:**` section, and reworks the
+    auto-fill summary heading + bullet style + `Not on Discord` line."""
+
+    def _ten_members(self):
+        return {
+            str(i): {"key": str(i), "name": f"M{i:02d}",
+                     "discord_id": str(i),
+                     "power": 410_000_000 - i * 10_000_000,
+                     "not_on_discord": False}
+            for i in range(1, 11)
+        }
+
+    def test_title_drops_team_label(self):
+        sess = _make_session(team="A")
+        embed = srb._render_builder_embed(sess)
+        assert embed.title == "🛡️ Roster Builder Template: Standard"
+
+    def test_body_opens_with_bulleted_event_and_team(self):
+        sess = _make_session(team="B")
+        embed = srb._render_builder_embed(sess)
+        body = embed.description or ""
+        # First two lines: bullet for event/team, bullet for minimum.
+        head = body.splitlines()[:2]
+        assert head[0] == "- 🗺️ Desert Storm: Team B"
+        assert head[1] == "- ⚖️ Enforcing Min B for this team"
+
+    def test_zones_heading_uses_markdown_h2(self):
+        sess = _make_session(team="A")
+        embed = srb._render_builder_embed(sess)
+        assert "## 📋 Zones" in embed.description
+
+    def test_zone_lines_drop_status_glyph(self):
+        sess = _make_session(team="A", members=self._ten_members())
+        sess.assignments["Power Tower"].extend(["1", "2"])
+        embed = srb._render_builder_embed(sess)
+        body = embed.description or ""
+        # None of the status glyphs appear in the embed body. The n/cap
+        # count is the only state indicator now.
+        for glyph in ("🟡", "✅", "⬜"):
+            assert glyph not in body, (
+                f"status glyph {glyph!r} should be gone from the embed"
+            )
+        # n/cap is still there.
+        assert "(2/4)" in body
+
+    def test_zone_lines_drop_active_zone_marker(self):
+        sess = _make_session(team="A")
+        sess.selected_zone = "Power Tower"
+        embed = srb._render_builder_embed(sess)
+        body = embed.description or ""
+        # `←` no longer appears on the Power Tower zone line. The
+        # `🎯 Active zone:` line below already calls it out.
+        # (`🎯 Active zone:` is its own line; the marker we're checking
+        # is the inline one next to the zone name.)
+        zone_line = next(
+            line for line in body.splitlines() if "Power Tower" in line and "/" in line
+        )
+        assert "←" not in zone_line
+
+    def test_zone_lines_drop_inline_sub_in_paired_mode(self):
+        members = {
+            "1001": {"key": "1001", "name": "Alice", "discord_id": "1001",
+                     "power": 412_000_000, "not_on_discord": False},
+            "1002": {"key": "1002", "name": "Bob", "discord_id": "1002",
+                     "power": 380_000_000, "not_on_discord": False},
+        }
+        sess = _make_session(team="A", members=members, sub_mode="paired")
+        sess.assignments["Power Tower"].append("1001")
+        sess.paired_subs["1001"] = "1002"
+        embed = srb._render_builder_embed(sess)
+        body = embed.description or ""
+        zone_line = next(
+            line for line in body.splitlines() if "Power Tower" in line and "/" in line
+        )
+        # The zone line shows only the primary; ` + sub <name>` is gone.
+        assert "Alice" in zone_line
+        assert "+ sub" not in zone_line
+        assert "Bob" not in zone_line  # Bob renders below in the pair section.
+
+    def test_auto_paired_subs_section_renders_one_pair_per_line(self):
+        members = self._ten_members()
+        sess = _make_session(team="A", members=members, sub_mode="paired")
+        sess.assignments["Power Tower"].extend(["1", "2"])
+        sess.paired_subs["1"] = "3"
+        sess.paired_subs["2"] = "4"
+        embed = srb._render_builder_embed(sess)
+        body = embed.description or ""
+        assert "### **Auto-paired Subs:**" in body
+        # Two pairs, each on its own line, primary first.
+        assert "M01 ↔ M03" in body
+        assert "M02 ↔ M04" in body
+
+    def test_auto_paired_subs_section_omitted_when_no_pairings(self):
+        sess = _make_session(team="A", sub_mode="paired")
+        embed = srb._render_builder_embed(sess)
+        body = embed.description or ""
+        assert "Auto-paired Subs" not in body
+
+    def test_unpaired_message_drops_warning_emoji(self):
+        members = {
+            "1001": {"key": "1001", "name": "Alice", "discord_id": "1001",
+                     "power": 412_000_000, "not_on_discord": False},
+        }
+        sess = _make_session(team="A", members=members, sub_mode="paired")
+        sess.assignments["Power Tower"].append("1001")
+        embed = srb._render_builder_embed(sess)
+        body = embed.description or ""
+        # Post-#222 message: `Primaries without a designated Sub (N): ...`
+        # with the `Click 🔁 Pair subs ...` sentence on its own line.
+        assert "Primaries without a designated Sub (1): Alice" in body
+        click_line = next(
+            line for line in body.splitlines() if line.startswith("Click 🔁 Pair subs")
+        )
+        assert "attach a sub" in click_line
+
+    def test_auto_fill_summary_uses_h2_heading_and_dash_bullets(self):
+        sess = _make_session(team="A", members=self._ten_members())
+        srb._auto_fill_session(sess)
+        embed = srb._render_builder_embed(sess)
+        body = embed.description or ""
+        assert "## 🎯 Auto-fill summary" in body
+        # The summary section uses `- ` bullets instead of `• `.
+        summary_idx = body.index("## 🎯 Auto-fill summary")
+        summary_block = body[summary_idx:]
+        assert "- Per-member rules applied" in summary_block
+        assert "- Auto-filled by power" in summary_block
+        assert "• " not in summary_block
+
+    def test_auto_fill_summary_shows_auto_paired_count_only(self):
+        members = self._ten_members()
+        sess = _make_session(team="A", members=members, sub_mode="paired")
+        # Single-zone preset so the round-robin places several primaries
+        # in one zone and triggers pairing.
+        sess.preset.zones = [
+            ss.ZoneRow(zone="Power Tower", max_players=4,
+                       min_power_a=100_000_000, priority=1),
+        ]
+        # Re-init assignment dicts to match new zone set.
+        for ph_dict in (sess.assignments, sess.assignments_p2, sess.assignments_p3):
+            ph_dict.clear()
+            ph_dict["Power Tower"] = []
+        srb._auto_fill_session(sess)
+        embed = srb._render_builder_embed(sess)
+        body = embed.description or ""
+        # Summary line is count-only; the explicit `↔` list is in the
+        # `Auto-paired Subs` section above the summary.
+        assert "- Auto-paired subs: " in body
+        # The explicit `Primary ↔ Sub` strings should NOT appear inside
+        # the summary block (they're in the section above).
+        summary_idx = body.index("## 🎯 Auto-fill summary")
+        summary_block = body[summary_idx:]
+        assert "↔" not in summary_block
+
+    def test_auto_fill_summary_includes_not_on_discord_count(self):
+        members = {
+            "1001": {"key": "1001", "name": "Alice", "discord_id": "1001",
+                     "power": 412_000_000, "not_on_discord": False},
+            "1002": {"key": "1002", "name": "Bob", "discord_id": "1002",
+                     "power": 380_000_000, "not_on_discord": True},
+        }
+        sess = _make_session(team="A", members=members)
+        srb._auto_fill_session(sess)
+        embed = srb._render_builder_embed(sess)
+        body = embed.description or ""
+        assert "- Not on Discord: 1" in body
+
+    def test_auto_fill_summary_not_on_discord_zero_when_all_on_discord(self):
+        sess = _make_session(team="A", members=self._ten_members())
+        srb._auto_fill_session(sess)
+        embed = srb._render_builder_embed(sess)
+        body = embed.description or ""
+        assert "- Not on Discord: 0" in body
+
+    def test_footer_dropped(self):
+        members = {
+            "1001": {"key": "1001", "name": "Alice", "discord_id": "1001",
+                     "power": 412_000_000, "not_on_discord": True},
+        }
+        sess = _make_session(team="A", members=members)
+        embed = srb._render_builder_embed(sess)
+        # Footer used to carry `¹ Not on Discord`; that data is in the
+        # summary's `Not on Discord: N` line now, no footer needed.
+        assert embed.footer.text is None
+
+    def test_filled_and_active_zone_have_no_bold(self):
+        sess = _make_session(team="A", members=self._ten_members())
+        sess.selected_zone = "Power Tower"
+        embed = srb._render_builder_embed(sess)
+        body = embed.description or ""
+        filled_line = next(
+            line for line in body.splitlines() if line.startswith("📊 Filled:")
+        )
+        active_line = next(
+            line for line in body.splitlines() if line.startswith("🎯 Active zone:")
+        )
+        # No `**` markdown bold around the labels or counts.
+        assert "**" not in filled_line
+        # The `_(preset minimum ... relaxed)_` italic note can use
+        # underscores when a band rule applies, but in this case it
+        # doesn't, so no markdown markers should appear on the line.
+        assert "**" not in active_line
 
 
 class TestPhaseAwareEmbedRendering:

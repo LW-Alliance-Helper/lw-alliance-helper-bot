@@ -1030,78 +1030,45 @@ def _format_member_label(member: dict) -> str:
     return f"{name}{suffix}"
 
 
-def _zone_status_glyph(count: int, cap: int) -> str:
-    """Color-coded fill marker for a zone slot.
-      —  zone has no capacity in this phase (e.g. center zones in Phase 1)
-      ⬜ empty
-      🟡 partially filled
-      ✅ at or above capacity
-    """
-    if cap <= 0 and count == 0:
-        return "—"
-    if count == 0:
-        return "⬜"
-    if count < cap:
-        return "🟡"
-    return "✅"
-
-
 def _format_zone_member_list(
     session: "RosterBuilderSession", member_keys: list[str], phase: int,
 ) -> str:
     """Render the comma-separated member list for one zone in one phase.
 
-    In paired mode, paired primaries render with `+ sub <name>` and
-    unpaired primaries with the `⚠️` glyph so the officer can spot
-    missing pairings at a glance. The pairing lookup is phase-scoped —
-    a primary in Phase 1 with no sub paired for Phase 1 still flags
-    even if Phase 2 has a pairing.
+    Post-#222: just bare primary names. Pairings live in their own
+    `### Auto-paired Subs:` section below the zone block, so inline
+    ` + sub <name>` is gone; unpaired ⚠️ markers are gone too (the
+    "Primaries without a designated Sub" message lists them).
     """
     names: list[str] = []
-    pairings = session.paired_subs_for_phase(phase)
     for k in member_keys:
         m = session.members.get(k)
-        primary_label = m["name"] if m else f"<unknown:{k}>"
-        if session.is_paired:
-            sub_key = pairings.get(k)
-            if sub_key:
-                sub_m = session.members.get(sub_key)
-                sub_label = sub_m["name"] if sub_m else f"<unknown:{sub_key}>"
-                names.append(f"{primary_label} + sub {sub_label}")
-            else:
-                names.append(f"{primary_label} ⚠️")
-        else:
-            names.append(primary_label)
+        names.append(m["name"] if m else f"<unknown:{k}>")
     return ", ".join(names) if names else "(empty)"
 
 
 def _render_zone_line(session: RosterBuilderSession, zone_name: str) -> str:
     """Render one zone's row in the builder embed.
 
-    Flat presets render as a single line: `{status} **Zone** (n/cap): names`.
+    Flat presets: `[icon] Zone (n/cap): names`.
 
-    Phase-aware presets (#172 / Rule L) render per-zone-per-phase: a
-    bolded zone header followed by one indented line per phase, each
-    showing that phase's count, capacity, and member list. The header's
-    status glyph reflects the currently-selected phase so the picker /
-    assign actions match what's coloured red/yellow/green.
+    Phase-aware presets (#172 / Rule L): zone-name header followed by
+    one indented line per phase showing that phase's count, capacity,
+    and member list.
+
+    Post-#222: no status glyph (n/cap conveys state), no `←`
+    selected-zone marker (the `Active zone:` line below shows it), no
+    inline ` + sub <name>` or ⚠️ markers in the member list.
     """
     z = session.preset.find_zone(zone_name)
     if z is None:
-        return f"• {zone_name} (?/?)"
+        return f"{zone_name} (?/?)"
 
     from storm_icons import zone_emoji_prefix
     icon = zone_emoji_prefix(zone_name)  # "" until #158 emojis upload.
-    marker = " ←" if zone_name == session.selected_zone else ""
 
     if session.is_phase_aware:
-        # Header status reflects the selected phase. Toggling phases
-        # via the Phase nav recolors the header so the officer can see
-        # "what's full in the phase I'm editing right now."
-        sel_count = session.zone_member_count(zone_name)
-        sel_cap = session.zone_capacity(zone_name)
-        header_status = _zone_status_glyph(sel_count, sel_cap)
-        header = f"{header_status} {icon}**{zone_name}**{marker}"
+        header = f"{icon}**{zone_name}**"
 
         phase_lines: list[str] = []
         for p in session.iter_phases():
@@ -1115,47 +1082,68 @@ def _render_zone_line(session: RosterBuilderSession, zone_name: str) -> str:
             phase_lines.append(f"   └ Stage {p}: {count}/{cap} · {names}")
         return "\n".join([header] + phase_lines)
 
-    # Flat preset — single-line shape unchanged from pre-#172.
     sel_count = session.zone_member_count(zone_name)
     sel_cap = int(z.max_players)
-    status = _zone_status_glyph(sel_count, sel_cap)
     member_keys = session.assignments_for_phase(session.selected_phase).get(zone_name, [])
     names_part = _format_zone_member_list(session, member_keys, phase=session.selected_phase)
-    return f"{status} {icon}**{zone_name}** ({sel_count}/{sel_cap}){marker}: {names_part}"
+    return f"{icon}**{zone_name}** ({sel_count}/{sel_cap}): {names_part}"
 
 
 def _render_builder_embed(session: RosterBuilderSession) -> discord.Embed:
     event_label = "Desert Storm" if session.event_type == "DS" else "Canyon Storm"
+    title = f"🛡️ Roster Builder Template: {session.preset.name}"
+
+    # Event + team line: `🗺️ Desert Storm: Team A` for DS, `🗺️ Canyon Storm:
+    # <faction>` for CS with a faction, bare `🗺️ Canyon Storm` otherwise.
     if session.event_type == "DS":
-        team_label = f": Team {session.team}"
+        event_team_line = f"🗺️ {event_label}: Team {session.team}"
     elif session.preset.faction and session.preset.faction != "Either":
-        team_label = f": {session.preset.faction}"
+        event_team_line = f"🗺️ {event_label}: {session.preset.faction}"
     else:
-        team_label = ""
-    title = f"🛡️ Roster Builder: {session.preset.name}{team_label}"
+        event_team_line = f"🗺️ {event_label}"
 
     lines: list[str] = []
-    lines.append(f"🗺️ {event_label}")
+    lines.append(f"- {event_team_line}")
     if session.event_type == "DS":
         floor_label = "Min A" if session.team == "A" else "Min B"
-        lines.append(f"⚖️ Enforcing **{floor_label}** minimum for this team")
+        lines.append(f"- ⚖️ Enforcing {floor_label} for this team")
     # Phase-aware (#152): surface the active phase prominently so an
     # officer can see at a glance which phase the picker + assign
     # buttons will mutate.
     if session.is_phase_aware:
         lines.append(
-            f"🔀 Editing **Stage {session.selected_phase}** "
+            f"- 🔀 Editing Stage {session.selected_phase} "
             f"_(use the Stage buttons below to switch)_"
         )
     lines.append("")
+
     if session.is_paired:
-        lines.append("**📋 Zones** _(paired mode: each primary has a dedicated sub)_")
+        lines.append(
+            "## 📋 Zones _(paired mode: each primary has a dedicated sub)_"
+        )
     else:
-        lines.append("**📋 Zones**")
+        lines.append("## 📋 Zones")
     for z in session.preset.zones:
         lines.append(_render_zone_line(session, z.zone))
     lines.append("")
+
+    # ── Auto-paired Subs (#222) ──
+    # Lifted out of the zone lines so pairings have a dedicated section.
+    # Reads current state (not the auto-fill summary) so manual pairing
+    # edits update the section live. Phase-aware: shows the selected
+    # phase's pairings; officers switching phases see the swap.
     if session.is_paired:
+        phase_pairings = session.paired_subs_for_phase(session.selected_phase)
+        if phase_pairings:
+            lines.append("### **Auto-paired Subs:**")
+            for primary_key, sub_key in phase_pairings.items():
+                primary_m = session.members.get(primary_key)
+                sub_m = session.members.get(sub_key)
+                primary_name = primary_m["name"] if primary_m else primary_key
+                sub_name = sub_m["name"] if sub_m else sub_key
+                lines.append(f"{primary_name} ↔ {sub_name}")
+            lines.append("")
+
         unpaired = session.unpaired_primaries()
         if unpaired:
             unpaired_names = ", ".join(
@@ -1163,22 +1151,22 @@ def _render_builder_embed(session: RosterBuilderSession) -> discord.Embed:
                 if k in session.members
             )
             lines.append(
-                f"⚠️ **Unpaired primaries ({len(unpaired)})**: {unpaired_names}. "
-                f"Click **🔁 Pair subs** to attach a sub to any of them. "
-                f"Subs may not cover every primary; that's expected."
+                f"Primaries without a designated Sub ({len(unpaired)}): "
+                f"{unpaired_names}."
             )
-        # Surface the available subs pool — paired subs live inline
-        # against each primary, but auto-fill or manual add can leave
-        # extra subs in `session.subs` that don't belong to any
-        # primary yet. Without this line the officer can't tell those
-        # exist from the embed.
+            lines.append(
+                "Click 🔁 Pair subs to attach a sub to any of them. "
+                "Subs may not cover every primary; that's expected."
+            )
+        # session.subs in paired mode = overflow only (members who
+        # couldn't pair). Typically empty in the 30-signup case.
         sub_names = [
             session.members[k]["name"] for k in session.subs if k in session.members
         ]
         if sub_names:
             lines.append(
-                f"🪑 **Available subs ({len(sub_names)})**: "
-                f"{', '.join(sub_names)}. Pair via **🔁 Pair subs** "
+                f"🪑 Available subs ({len(sub_names)}): "
+                f"{', '.join(sub_names)}. Pair via 🔁 Pair subs "
                 f"or leave as bench."
             )
     else:
@@ -1186,19 +1174,13 @@ def _render_builder_embed(session: RosterBuilderSession) -> discord.Embed:
             session.members[k]["name"] for k in session.subs if k in session.members
         ]
         if sub_names:
-            lines.append(f"🪑 **Subs ({len(sub_names)})**: {', '.join(sub_names)}")
+            lines.append(f"🪑 Subs ({len(sub_names)}): {', '.join(sub_names)}")
         else:
-            lines.append("🪑 **Subs**: _(none)_")
+            lines.append("🪑 Subs: _(none)_")
     lines.append("")
 
-    # Sum across every phase the preset declares. On flat presets this
-    # collapses to the original Phase 1 / max_players counts; on phase-
-    # aware presets the gauge sums P1+P2(+P3) assignments and the
-    # per-phase capacities so the readout matches reality (the prior
-    # code summed only Phase 1 and divided by `max_players` which is
-    # unset for phase-aware zones — produced "Filled: 2 / 0").
-    # Per Rule L (#172), phase-aware presets surface per-phase counts
-    # so each phase's fill state is visible at a glance.
+    # Phase-aware (Rule L / #172): per-phase counts in `Filled:`. Flat
+    # presets keep the single total.
     if session.is_phase_aware:
         per_phase = []
         for p in session.iter_phases():
@@ -1210,14 +1192,14 @@ def _render_builder_embed(session: RosterBuilderSession) -> discord.Embed:
                 int(z.max_for_phase(p)) for z in session.preset.zones
             )
             per_phase.append(f"S{p}: {assigned}/{cap}")
-        lines.append(f"📊 **Filled:** {', '.join(per_phase)}")
+        lines.append(f"📊 Filled: {', '.join(per_phase)}")
     else:
         total_assigned = sum(
             len(zone_members)
             for zone_members in session.assignments_for_phase(1).values()
         )
         total_capacity = session.preset.total_capacity()
-        lines.append(f"📊 **Filled:** {total_assigned} / {total_capacity}")
+        lines.append(f"📊 Filled: {total_assigned} / {total_capacity}")
 
     selected = session.selected_zone
     if selected:
@@ -1228,17 +1210,17 @@ def _render_builder_embed(session: RosterBuilderSession) -> discord.Embed:
         from storm_strategy import format_power
         if effective_floor != preset_floor:
             # A power_band Member Rule lowered the effective minimum for
-            # this zone — surface both so leadership can tell at a
-            # glance which rule is in play.
+            # this zone. Surface both so leadership can tell at a glance
+            # which rule is in play.
             lines.append(
-                f"🎯 **Active zone:** {active_icon}**{selected}** · minimum "
-                f"**{format_power(effective_floor) if effective_floor else '(none)'}** "
+                f"🎯 Active zone: {active_icon}{selected} · minimum "
+                f"{format_power(effective_floor) if effective_floor else '(none)'} "
                 f"_(preset minimum {format_power(preset_floor)} relaxed by power_band rule)_"
             )
         else:
             lines.append(
-                f"🎯 **Active zone:** {active_icon}**{selected}** · minimum "
-                f"**{format_power(effective_floor) if effective_floor else '(none)'}**"
+                f"🎯 Active zone: {active_icon}{selected} · minimum "
+                f"{format_power(effective_floor) if effective_floor else '(none)'}"
             )
         if session.show_below_floor:
             lines.append("👁️ Members below minimum visible in the picker.")
@@ -1256,55 +1238,53 @@ def _render_builder_embed(session: RosterBuilderSession) -> discord.Embed:
     af = session.auto_fill_summary
     if af is not None:
         lines.append("")
-        lines.append("🎯 **Auto-fill summary**")
+        lines.append("## 🎯 Auto-fill summary")
         if af.get("starters_short", 0) > 0:
             # #219: surface short-signup counts up front so officers
             # see the gap before scanning the per-zone fill state.
             lines.append(
-                f"• ⚠️ {af['starters_short']} of 20 starter seats unfilled "
+                f"- ⚠️ {af['starters_short']} of 20 starter seats unfilled "
                 f"(short on signups)."
             )
         lines.append(
-            f"• Per-member rules applied: **{af['per_member_rules_applied']}**"
+            f"- Per-member rules applied: {af['per_member_rules_applied']}"
         )
         lines.append(
-            f"• Members slotted via a band-relaxed minimum: **{af['power_band_rules_applied']}**"
+            f"- Members slotted via a band-relaxed minimum: {af['power_band_rules_applied']}"
         )
         lines.append(
-            f"• Auto-filled by power: **{af['auto_filled_by_power']}**"
+            f"- Auto-filled by power: {af['auto_filled_by_power']}"
         )
-        # Decision #14 (#171): auto-paired subs render explicitly so
-        # officers can see who got paired with whom — pairing is the
-        # highest-edit candidate, so visibility matters more than
-        # brevity. The bare count surfaces nothing actionable.
+        # Count only; the explicit `Primary ↔ Sub` list now lives in
+        # the `### Auto-paired Subs:` section above, sourced from
+        # current session state.
         paired = af.get("auto_paired_subs") or []
-        if paired:
-            lines.append(
-                f"• Auto-paired subs ({len(paired)}): {', '.join(paired)}"
-            )
+        lines.append(f"- Auto-paired subs: {len(paired)}")
         # Decision #8 (#171): no truncation. Officers need every gap +
         # every conflict listed so they can make slotting decisions
-        # manually — `(+N more)` hid exactly the entries they needed.
+        # manually. `(+N more)` hid exactly the entries they needed.
         if af["gaps"]:
             lines.append(
-                f"• Gaps (power unknown, not slotted): **{len(af['gaps'])}**: "
+                f"- Gaps (power unknown, not slotted) ({len(af['gaps'])}): "
                 f"{', '.join(af['gaps'])}"
             )
         if af["conflicts"]:
             lines.append(
-                f"• Conflicts: **{len(af['conflicts'])}**: "
+                f"- Conflicts ({len(af['conflicts'])}): "
                 f"{'; '.join(af['conflicts'])}"
             )
         else:
-            lines.append("• Conflicts: **0**")
+            lines.append("- Conflicts: 0")
+        not_on_discord_count = sum(
+            1 for m in session.members.values() if m.get("not_on_discord")
+        )
+        lines.append(f"- Not on Discord: {not_on_discord_count}")
 
     embed = discord.Embed(
         title=title,
         description="\n".join(lines),
         color=discord.Color.gold() if session.event_type == "DS" else discord.Color.orange(),
     )
-    if any(m.get("not_on_discord") for m in session.members.values()):
-        embed.set_footer(text="¹ Not on Discord")
     return embed
 
 

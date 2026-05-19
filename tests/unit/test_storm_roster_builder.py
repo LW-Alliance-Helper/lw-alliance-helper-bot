@@ -2106,10 +2106,9 @@ class TestPowerSnapshotAtFinalize:
 
 
 class TestPairedSubMailRendering:
-    """Audit Critical C2: paired subs were invisible in the mail. The
-    mail builders only saw `session.subs` (the overflow pool); paired
-    subs lived in `session.paired_subs` and never reached the template.
-    Fix: `_mail_zone_and_sub_lists` renders "Alice + sub Bob" inline."""
+    """#224: paired mode renders pairings as a `Primary ↔ Sub` list in
+    the Subs block, matching the embed shape from #222. Zones carry
+    bare primaries only (no inline ` + sub <name>`)."""
 
     def test_pool_mode_unchanged(self):
         members = {
@@ -2126,7 +2125,7 @@ class TestPairedSubMailRendering:
         assert zones == {"Power Tower": ["Alice"]}
         assert subs == ["Bob"]
 
-    def test_paired_mode_renders_sub_inline(self):
+    def test_paired_mode_pairings_render_as_separate_list(self):
         members = {
             "1001": {"key": "1001", "name": "Alice", "discord_id": "1001",
                      "power": 412_000_000, "not_on_discord": False},
@@ -2137,11 +2136,10 @@ class TestPairedSubMailRendering:
         session.assignments["Power Tower"].append("1001")
         session.paired_subs["1001"] = "1002"
         zones, subs = srb._mail_zone_and_sub_lists(session)
-        # The paired sub renders INLINE on the primary's line. Mail
-        # builders previously never saw "Bob" at all in this state.
-        assert zones == {"Power Tower": ["Alice + sub Bob"]}
-        # Flat sub list is empty (Bob is paired inline, not in overflow).
-        assert subs == []
+        # Zone carries the bare primary name. No inline ` + sub <name>`.
+        assert zones == {"Power Tower": ["Alice"]}
+        # Subs list carries the pairing as `Primary ↔ Sub`.
+        assert subs == ["Alice ↔ Bob"]
 
     def test_paired_mode_unpaired_primary_renders_plain(self):
         members = {
@@ -2150,14 +2148,14 @@ class TestPairedSubMailRendering:
         }
         session = _make_session(team="A", members=members, sub_mode="paired")
         session.assignments["Power Tower"].append("1001")
-        # No pairing recorded — primary still renders, no "+ sub" suffix.
+        # No pairing recorded — primary renders bare, no pair line.
         zones, subs = srb._mail_zone_and_sub_lists(session)
         assert zones == {"Power Tower": ["Alice"]}
         assert subs == []
 
-    def test_paired_mode_overflow_in_flat_sub_list(self):
+    def test_paired_mode_overflow_appended_after_pairings(self):
         """When `session.subs` is non-empty in paired mode (auto-fill's
-        overflow pool), those names still appear in the mail's sub block."""
+        overflow pool), those names append after the pairing lines."""
         members = {
             "1001": {"key": "1001", "name": "Alice", "discord_id": "1001",
                      "power": 412_000_000, "not_on_discord": False},
@@ -2171,9 +2169,9 @@ class TestPairedSubMailRendering:
         session.paired_subs["1001"] = "1002"
         session.subs.append("1003")
         zones, subs = srb._mail_zone_and_sub_lists(session)
-        assert zones == {"Power Tower": ["Alice + sub Bob"]}
-        # Carol is overflow → still surfaces in the flat sub block.
-        assert subs == ["Carol"]
+        assert zones == {"Power Tower": ["Alice"]}
+        # Pairing line first, overflow name after.
+        assert subs == ["Alice ↔ Bob", "Carol"]
 
 
 class TestRostersTabHeaderMigration:

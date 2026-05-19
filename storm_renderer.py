@@ -404,6 +404,16 @@ _PAIRS_DIVIDER_WIDTH_SVG = 2
 _LABEL_PT = 10
 _HEADER_PT = 14
 
+# Subs panel table font (paired mode). The right-side `Subs` pill
+# renders two side-by-side columns (`Primary` | `Sub`), and each
+# column is ~half the panel width. At 10 pt bold a 20-char in-game
+# username fills the column with no gap, so adjacent rows like
+# `Bobby1269` `KayyyShawty` end up touching. 8 pt keeps two 20-char
+# names cleanly separated in the table while preserving the panel
+# header at the larger size for hierarchy. Only applies inside
+# `_draw_subs_section` — zone-pill labels stay at `_LABEL_PT`.
+_SUBS_TABLE_PT = 8
+
 
 def _pt_to_px(pt: float) -> int:
     return int(round(pt * 96 / 72 * SCALE))
@@ -721,8 +731,18 @@ def _draw_subs_section(canvas, layout: EventLayout,
     pad_x = max(8, _s(6))
     pad_y = max(6, _s(6))
     line_gap = max(2, _s(3))
-    fm = _try_font(_pt_to_px(_LABEL_PT), bold=False)
-    fm_bold = _try_font(_pt_to_px(_LABEL_PT), bold=True)
+    # Paired mode uses _SUBS_TABLE_PT so two 20-char usernames fit
+    # side-by-side in the Primary / Sub columns. Flat mode uses the
+    # default label size since the single column is the full panel
+    # width.
+    pairs_font_px = _pt_to_px(_SUBS_TABLE_PT)
+    flat_font_px = _pt_to_px(_LABEL_PT)
+    if use_pairs:
+        fm = _try_font(pairs_font_px, bold=False)
+        fm_bold = _try_font(pairs_font_px, bold=True)
+    else:
+        fm = _try_font(flat_font_px, bold=False)
+        fm_bold = _try_font(flat_font_px, bold=True)
     x0, y0, x1, y1 = _s_box(content_box)
     cy = y0 + pad_y
 

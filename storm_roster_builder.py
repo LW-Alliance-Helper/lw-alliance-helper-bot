@@ -2907,22 +2907,21 @@ def _mail_zone_and_sub_lists(
     """Return `(zones_for_mail, sub_names)` honoring the session's
     sub_mode.
 
-    Pool mode: primaries go under each zone; `session.subs` is the flat
-    sub list. Unchanged behaviour.
+    Pool mode: zones carry bare primary names; `sub_names` is the flat
+    overflow pool from `session.subs`.
 
-    Paired mode: primaries go under each zone with "Alice + sub Bob"
-    formatting (so the mail reads the way the embed does), and the
-    flat sub list is the overflow pool (`session.subs`) only — paired
-    subs are inline, not in the global sub block. The Critical audit
-    finding was that paired subs were silently invisible in the mail
-    because `session.subs` was the only sub source the mail builder
-    saw, and `session.subs` is empty for paired-only rosters.
+    Paired mode (#224): zones still carry bare primary names (the
+    inline ` + sub <name>` is gone). `sub_names` carries the pairings
+    formatted as `Primary ↔ Sub` lines first, followed by any
+    overflow sub names. Matches the embed shape rolled out in #222 so
+    the mail and the embed read the same way.
 
-    `phase` (#152): 1 or 2. Selects which phase's assignments and
+    `phase` (#152): 1 or 2 or 3. Selects which phase's assignments and
     paired-sub map to render. Flat presets ignore this and always
     return phase-1 data. The global sub pool is event-level (not
-    per-phase) and is only attached to phase 1's return — phase 2
-    returns an empty sub list to avoid duplicating subs across blocks.
+    per-phase) so the overflow names only attach to the phase-1
+    return; later phases append only their own per-phase pairing
+    list so subs aren't duplicated across blocks.
     """
     zones_for_mail: dict[str, list[str]] = {}
     is_paired = (session.sub_mode == "paired")
@@ -2936,30 +2935,27 @@ def _mail_zone_and_sub_lists(
             m = session.members.get(k)
             if m is None:
                 continue
-            label = m["name"]
-            if is_paired:
-                sub_key = pairings.get(k)
-                if sub_key is not None:
-                    sub_m = session.members.get(sub_key)
-                    if sub_m is not None:
-                        label = f"{label} + sub {sub_m['name']}"
-            names.append(label)
+            names.append(m["name"])
         if names:
             zones_for_mail[zone_name] = names
 
-    # Overflow / pool subs render in the global sub block. In paired
-    # mode these are the unmatched leftovers (`session.subs`), distinct
-    # from the inline paired subs above. Subs are event-level so they
-    # only attach to the phase-1 return; phase 2 callers get an empty
-    # list and don't double-render them.
+    # Paired-mode pairings render as `Primary ↔ Sub` lines. Each
+    # phase carries its own pairing dict, so phase-aware mail emits
+    # the right pairings per block. Overflow flat-list names append
+    # after, but only on phase 1's return (sub pool is event-level).
+    sub_names: list[str] = []
+    if is_paired:
+        for primary_key, sub_key in pairings.items():
+            primary_m = session.members.get(primary_key)
+            sub_m = session.members.get(sub_key)
+            if primary_m is None or sub_m is None:
+                continue
+            sub_names.append(f"{primary_m['name']} ↔ {sub_m['name']}")
     if phase == 1:
-        sub_names = [
-            session.members[k]["name"]
-            for k in session.subs
-            if k in session.members
-        ]
-    else:
-        sub_names = []
+        for k in session.subs:
+            m = session.members.get(k)
+            if m is not None:
+                sub_names.append(m["name"])
     return zones_for_mail, sub_names
 
 
@@ -3110,9 +3106,10 @@ async def _finalize_structured_roster(
             s.guild_id, s.event_date, e,
         )
 
-    # Build mail — `_build_mail_body` honors paired sub_mode (paired
-    # subs render inline as "Alice + sub Bob") and phase-aware presets
-    # (two phase blocks under "**Phase 1**" / "**Phase 2**" headers).
+    # Build mail. `_build_mail_body` honors paired sub_mode (pairings
+    # render as a `Primary ↔ Sub` list under the Subs section per
+    # #224, matching the embed) and phase-aware presets (one block
+    # per stage under `**Stage N**` headers).
     mail = _build_mail_body(s)
 
     cfg = config.get_storm_config(s.guild_id, s.event_type)

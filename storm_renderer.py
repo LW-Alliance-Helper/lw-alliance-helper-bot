@@ -393,10 +393,15 @@ _PAIRS_DIVIDER_WIDTH_SVG = 2
 # ── Font sizing ──────────────────────────────────────────────────────
 
 
-# Locked sizes per the alliance lead's design spec (8 pt labels +
+# Locked sizes per the alliance lead's design spec (10 pt labels +
 # members, 14 pt header). Converted from typographic points to SCALEd
-# pixels via the 96-DPI web convention.
-_LABEL_PT = 8
+# pixels via the 96-DPI web convention. Label size bumped from 8 to 10
+# post-#222 once inline ` + sub <name>` dropped from per-zone labels —
+# bare primary names stay under the in-game 20-char username max, so
+# the pill has the horizontal room for the larger font. The shrink
+# fallback in `_pick_member_fonts` still handles long sheet-alias
+# names that exceed the in-game limit.
+_LABEL_PT = 10
 _HEADER_PT = 14
 
 
@@ -616,8 +621,15 @@ def _draw_member_block(draw, b: Box, phase_blocks: list[RosterZone],
                        paired_subs: dict[str, str], is_paired: bool) -> None:
     """Render the member list inside a zone's text pill. Phase-aware
     blocks get a bold `Stage N:` header; flat blocks render the
-    member list directly. Paired-mode formatting appends `+ sub Bob`
-    inline so the pill stays compact."""
+    member list directly.
+
+    Post-#222: zone pills render bare primary names. Pairings live in
+    the right-side `Subs` panel (Primary / Sub table) so inline
+    ` + sub Bob` was redundant and was the only thing pushing labels
+    past the pill width. `paired_subs` / `is_paired` are kept in the
+    signature so callers don't need to change, but they're unused.
+    """
+    del paired_subs, is_paired  # rendered in the Subs panel instead.
     x0, y0, x1, y1 = _s_box(b)
     pad = max(8, _s(6))
     py = max(6, _s(5))
@@ -640,11 +652,8 @@ def _draw_member_block(draw, b: Box, phase_blocks: list[RosterZone],
                       fill=_TEXT_DARK, font=fh)
             cy += fh.size + line_gap
         for name in block.members:
-            label = name
-            if is_paired and name in paired_subs:
-                label = f"{name} + sub {paired_subs[name]}"
             draw.text((x0 + pad + indent, cy),
-                      label, fill=_TEXT_MUTED, font=fm)
+                      name, fill=_TEXT_MUTED, font=fm)
             cy += fm.size + line_gap
 
 

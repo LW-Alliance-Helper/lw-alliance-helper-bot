@@ -827,16 +827,25 @@ class TestAutoFill:
     def test_power_band_relaxation_counted(self):
         # Preset floor for Power Tower = 300M; band lowers it to 200M.
         # Bob (280M) and Carol (220M) are below preset but above band,
-        # so they slot in via the band relaxation — the count reflects
-        # *members slotted via the band*, not *rules whose threshold
-        # < preset floor*. Alice (412M) is above preset, so she doesn't
+        # so they slot in via the band relaxation. The count reflects
+        # members slotted via the band, not rules whose threshold
+        # < preset floor. Alice (412M) is above preset, so she doesn't
         # count even though the band applies to her zone.
+        # Single-zone preset forces round-robin (post-#219) to land all
+        # three members in PT; with the multi-zone default they'd spread
+        # across zones where the band isn't relevant.
         members = self._three_members()
+        zones = [
+            ss.ZoneRow(zone="Power Tower", max_players=4,
+                       min_power_a=300_000_000, priority=1),
+        ]
         power_band = [smr.Rule(
             rule_type="power_band", subject="200000000",
             value="Power Tower",
         )]
-        session = _make_session(team="A", members=members, power_band_rules=power_band)
+        session = _make_session(team="A", members=members,
+                                preset_zones=zones,
+                                power_band_rules=power_band)
         summary = srb._auto_fill_session(session)
         assert summary["power_band_rules_applied"] == 2
 
@@ -1088,6 +1097,334 @@ class TestAutoFill:
         assert eligible1 == eligible2
         # Alice sorts before Zora.
         assert eligible1.index("A") < eligible1.index("Z")
+
+
+class TestAutoFillTwentyTenSplit:
+    """#219: Last War defines every DS and CS team as 20 starters plus
+    10 subs. Auto-fill enforces that split independent of preset zone
+    capacity (which is allowed to exceed the team size so officers can
+    place the same person in multiple stages without enforcement)."""
+
+    def _make_thirty_signups(self, sub_mode: str = "pool"):
+        """A 30-member roster mirroring the canonical DS team size.
+        Powers descend from M01 (500M) to M30 (210M) so the top-20-vs-
+        next-10 boundary is unambiguous."""
+        # 11 canonical DS zones with capacities summing to 30 so the
+        # preset itself is over-cap relative to the 20-starter team
+        # rule. This is the configuration testers were reporting:
+        # auto-fill used to land all 30 as primaries.
+        zones = [
+            ss.ZoneRow(zone="Oil Refinery I", max_players=3,
+                       min_power_a=100_000_000, priority=1),
+            ss.ZoneRow(zone="Oil Refinery II", max_players=3,
+                       min_power_a=100_000_000, priority=2),
+            ss.ZoneRow(zone="Science Hub", max_players=3,
+                       min_power_a=100_000_000, priority=3),
+            ss.ZoneRow(zone="Info Center", max_players=3,
+                       min_power_a=100_000_000, priority=4),
+            ss.ZoneRow(zone="Field Hospital I", max_players=2,
+                       min_power_a=100_000_000, priority=5),
+            ss.ZoneRow(zone="Field Hospital II", max_players=2,
+                       min_power_a=100_000_000, priority=6),
+            ss.ZoneRow(zone="Field Hospital III", max_players=2,
+                       min_power_a=100_000_000, priority=7),
+            ss.ZoneRow(zone="Field Hospital IV", max_players=2,
+                       min_power_a=100_000_000, priority=8),
+            ss.ZoneRow(zone="Nuclear Silo", max_players=4,
+                       min_power_a=100_000_000, priority=9),
+            ss.ZoneRow(zone="Arsenal", max_players=3,
+                       min_power_a=100_000_000, priority=10),
+            ss.ZoneRow(zone="Mercenary Factory", max_players=3,
+                       min_power_a=100_000_000, priority=11),
+        ]
+        members = {
+            str(i): {"key": str(i), "name": f"M{i:02d}",
+                     "discord_id": str(i),
+                     "power": 510_000_000 - i * 10_000_000,
+                     "not_on_discord": False}
+            for i in range(1, 31)
+        }
+        return _make_session(team="A", members=members,
+                             preset_zones=zones, sub_mode=sub_mode)
+
+    def test_exactly_twenty_starters_placed_in_zones(self):
+        sess = self._make_thirty_signups()
+        srb._auto_fill_session(sess)
+        placed = 0
+        for zone_members in sess.assignments.values():
+            placed += len(zone_members)
+        assert placed == 20
+
+    def test_exactly_ten_subs_in_sub_pool(self):
+        sess = self._make_thirty_signups()
+        srb._auto_fill_session(sess)
+        assert len(sess.subs) == 10
+
+    def test_starters_are_top_twenty_by_power(self):
+        sess = self._make_thirty_signups()
+        srb._auto_fill_session(sess)
+        placed: set[str] = set()
+        for zone_members in sess.assignments.values():
+            placed.update(zone_members)
+        # M01..M20 are the top 20 by power.
+        expected_starters = {str(i) for i in range(1, 21)}
+        assert placed == expected_starters
+
+    def test_subs_are_next_ten_by_power(self):
+        sess = self._make_thirty_signups()
+        srb._auto_fill_session(sess)
+        # M21..M30 are the bottom 10.
+        assert set(sess.subs) == {str(i) for i in range(21, 31)}
+
+    def test_top_priority_zones_get_top_power_starters(self):
+        """Round-robin walks zones in priority order on each pass, so
+        pass 1 puts M01..M11 one per zone (Oil Refinery I gets M01,
+        Oil Refinery II gets M02, etc.). Pass 2 puts the next batch."""
+        sess = self._make_thirty_signups()
+        srb._auto_fill_session(sess)
+        # M01 lands in the top-priority zone (Oil Refinery I).
+        assert "1" in sess.assignments["Oil Refinery I"]
+        assert "2" in sess.assignments["Oil Refinery II"]
+        assert "3" in sess.assignments["Science Hub"]
+        assert "4" in sess.assignments["Info Center"]
+        # M12 lands in Oil Refinery I again on pass 2 (round-robin loop).
+        assert "12" in sess.assignments["Oil Refinery I"]
+
+    def test_top_priority_zones_win_uneven_extras(self):
+        """20 starters across 11 zones leaves a remainder: top 9 zones
+        get 2 members, last 2 zones get 1 member each. Top-priority
+        zones win the extras."""
+        sess = self._make_thirty_signups()
+        srb._auto_fill_session(sess)
+        # Top-priority zones each have 2 members.
+        assert len(sess.assignments["Oil Refinery I"]) >= 2
+        assert len(sess.assignments["Oil Refinery II"]) >= 2
+        # Arsenal (priority 10) and Mercenary Factory (priority 11) get
+        # 1 each, because the round-robin runs out of starters before
+        # adding a second pass.
+        assert len(sess.assignments["Arsenal"]) == 1
+        assert len(sess.assignments["Mercenary Factory"]) == 1
+
+    def test_starters_short_zero_when_thirty_signed_up(self):
+        sess = self._make_thirty_signups()
+        summary = srb._auto_fill_session(sess)
+        assert summary["starters_short"] == 0
+
+    def test_starters_short_reports_gap_when_under_twenty(self):
+        # 17 members → 3 starter seats unfilled.
+        members = {
+            str(i): {"key": str(i), "name": f"M{i:02d}",
+                     "discord_id": str(i),
+                     "power": 500_000_000 - i * 10_000_000,
+                     "not_on_discord": False}
+            for i in range(1, 18)
+        }
+        sess = _make_session(team="A", members=members)
+        summary = srb._auto_fill_session(sess)
+        assert summary["starters_short"] == 3
+
+    def test_starters_short_renders_in_embed(self):
+        members = {
+            str(i): {"key": str(i), "name": f"M{i:02d}",
+                     "discord_id": str(i),
+                     "power": 500_000_000 - i * 10_000_000,
+                     "not_on_discord": False}
+            for i in range(1, 18)
+        }
+        sess = _make_session(team="A", members=members)
+        srb._auto_fill_session(sess)
+        embed = srb._render_builder_embed(sess)
+        assert "3 of 20 starter seats unfilled" in (embed.description or "")
+
+    def test_paired_mode_pairs_weakest_primary_with_closest_power_sub(self):
+        sess = self._make_thirty_signups(sub_mode="paired")
+        srb._auto_fill_session(sess)
+        # The weakest placed primary is M20 (310M). Closest-power sub in
+        # the bottom-10 pool is M21 (300M, distance 10M); M22 is 290M
+        # (distance 20M). M20 should pair with M21.
+        assert sess.paired_subs.get("20") == "21"
+
+    def test_paired_mode_walks_primaries_weakest_first(self):
+        sess = self._make_thirty_signups(sub_mode="paired")
+        srb._auto_fill_session(sess)
+        # Weakest 10 primaries (M11..M20) all get a paired sub from the
+        # bottom-10 sub pool (M21..M30, closest-power each).
+        weakest_ten = [str(i) for i in range(11, 21)]
+        for primary in weakest_ten:
+            assert primary in sess.paired_subs, (
+                f"weakest primary {primary} should have an auto-paired sub"
+            )
+        # Strongest 10 primaries (M01..M10) stay unpaired because only
+        # 10 subs exist and they go to the weaker primaries first.
+        strongest_ten = [str(i) for i in range(1, 11)]
+        for primary in strongest_ten:
+            assert primary not in sess.paired_subs
+
+    def test_paired_mode_summary_lists_pairings(self):
+        sess = self._make_thirty_signups(sub_mode="paired")
+        summary = srb._auto_fill_session(sess)
+        assert len(summary["auto_paired_subs"]) == 10
+
+    def test_paired_mode_with_thirty_signups_drains_sub_pool(self):
+        """In the 30-signup case all 10 subs get paired in P1, so the
+        flat `session.subs` overflow list ends up empty (every sub has
+        a primary attached)."""
+        sess = self._make_thirty_signups(sub_mode="paired")
+        srb._auto_fill_session(sess)
+        # All 10 subs paired in some phase → no overflow.
+        assert sess.subs == []
+
+    def test_pinned_members_count_toward_starter_pool(self):
+        """A per_member rule pinning a low-power member should still
+        count them as a starter, and the top-power list fills 19 more
+        seats (not 20) around them."""
+        members = {
+            str(i): {"key": str(i), "name": f"M{i:02d}",
+                     "discord_id": str(i),
+                     "power": 510_000_000 - i * 10_000_000,
+                     "not_on_discord": False}
+            for i in range(1, 31)
+        }
+        zones = [
+            ss.ZoneRow(zone="Oil Refinery I", max_players=3,
+                       min_power_a=0, priority=1),
+        ] + [
+            ss.ZoneRow(zone=f"Zone {i}", max_players=3,
+                       min_power_a=0, priority=i)
+            for i in range(2, 12)
+        ]
+        # Pin M25 (a low-power member who'd normally be a sub) to
+        # Oil Refinery I. They become a starter.
+        per_member = [smr.Rule(
+            rule_type="per_member", subject="M25",
+            sub_type="zone", value="Oil Refinery I",
+        )]
+        sess = _make_session(team="A", members=members,
+                             preset_zones=zones,
+                             per_member_rules=per_member)
+        srb._auto_fill_session(sess)
+        # M25 is in a zone → starter.
+        all_placed: set[str] = set()
+        for zone_members in sess.assignments.values():
+            all_placed.update(zone_members)
+        assert "25" in all_placed
+        # M25 is NOT in the sub pool.
+        assert "25" not in sess.subs
+        # Sub pool is 10 members. Pinning M25 reserves one starter seat,
+        # so the auto-fill draws 19 from the top of the power-desc list.
+        # Rank 21 (M21) gets the displaced top-20 seat, leaving M22..M30
+        # as 9 subs plus... actually the precise sub identity depends on
+        # which rank is displaced; the invariant is: 10 subs total.
+        assert len(sess.subs) == 10
+
+    def test_under_twenty_signups_all_become_starters(self):
+        members = {
+            str(i): {"key": str(i), "name": f"M{i:02d}",
+                     "discord_id": str(i),
+                     "power": 500_000_000 - i * 10_000_000,
+                     "not_on_discord": False}
+            for i in range(1, 11)  # 10 members
+        }
+        sess = _make_session(team="A", members=members)
+        srb._auto_fill_session(sess)
+        # All 10 are starters; sub pool is empty.
+        all_placed: set[str] = set()
+        for zone_members in sess.assignments.values():
+            all_placed.update(zone_members)
+        assert len(all_placed) == 10
+        assert sess.subs == []
+
+    def test_between_twenty_and_thirty_signups_fills_subs_partially(self):
+        # 25 signups → 20 starters, 5 subs.
+        members = {
+            str(i): {"key": str(i), "name": f"M{i:02d}",
+                     "discord_id": str(i),
+                     "power": 510_000_000 - i * 10_000_000,
+                     "not_on_discord": False}
+            for i in range(1, 26)
+        }
+        sess = self._make_thirty_signups()
+        sess.members = members
+        srb._auto_fill_session(sess)
+        placed: set[str] = set()
+        for zone_members in sess.assignments.values():
+            placed.update(zone_members)
+        assert len(placed) == 20
+        assert len(sess.subs) == 5
+
+    def test_phase_aware_uses_same_twenty_starters_across_phases(self):
+        """The #219 rule keeps the same 20 starters event-wide. Each
+        phase round-robins those 20 into its own zones; nobody else
+        gets pulled in for phase 2."""
+        zones = [
+            ss.ZoneRow(zone="Info Center", max_players=0,
+                       max_phase1=10, max_phase2=10,
+                       min_power_a=0, min_power_b=0,
+                       priority_phase1=1, priority_phase2=1),
+            ss.ZoneRow(zone="Arsenal", max_players=0,
+                       max_phase1=10, max_phase2=10,
+                       min_power_a=0, min_power_b=0,
+                       priority_phase1=2, priority_phase2=2),
+        ]
+        preset = ss.PresetBuffer(name="TwoPhase", event_type="DS",
+                                 zones=zones, phase_count=2)
+        members = {
+            str(i): {"key": str(i), "name": f"M{i:02d}",
+                     "discord_id": str(i),
+                     "power": 510_000_000 - i * 10_000_000,
+                     "not_on_discord": False}
+            for i in range(1, 31)
+        }
+        sess = srb.RosterBuilderSession(
+            guild_id=1, user_id=42, event_type="DS",
+            team="A", preset=preset, members=members,
+            per_member_rules=[], power_band_rules=[],
+            sub_mode="pool",
+        )
+        srb._auto_fill_session(sess)
+        # Same 20 starters in each phase (intersection equals union).
+        p1: set[str] = set()
+        for zone_members in sess.assignments_for_phase(1).values():
+            p1.update(zone_members)
+        p2: set[str] = set()
+        for zone_members in sess.assignments_for_phase(2).values():
+            p2.update(zone_members)
+        assert p1 == p2
+        # And those 20 are M01..M20.
+        assert p1 == {str(i) for i in range(1, 21)}
+        # The 10 subs (M21..M30) never appear in any phase's zones.
+        sub_set = {str(i) for i in range(21, 31)}
+        assert sub_set.isdisjoint(p1)
+        assert sub_set.isdisjoint(p2)
+
+    def test_ties_at_rank_twenty_boundary_break_on_member_key(self):
+        """Two members tied on power at the 20/21 boundary: the one
+        with the smaller member key sorts to starter, the other to
+        sub. Deterministic so re-runs of auto-fill don't shuffle the
+        roster on the officer."""
+        # 21 members, all with the same power except #21 also at the
+        # same power. Top 20 by tiebreak (key asc) become starters.
+        members = {
+            str(i): {"key": str(i), "name": f"M{i:02d}",
+                     "discord_id": str(i),
+                     "power": 300_000_000,
+                     "not_on_discord": False}
+            for i in range(1, 22)
+        }
+        sess = _make_session(team="A", members=members)
+        srb._auto_fill_session(sess)
+        placed: set[str] = set()
+        for zone_members in sess.assignments.values():
+            placed.update(zone_members)
+        # Member keys "1".."21". Sort by key string is lexicographic:
+        # "1" < "10" < "11" < ... < "19" < "2" < "20" < "21" < "3" ...
+        # So the top 20 (lex-sorted) include "1", "10"..."19", "2",
+        # "20", "21" (that's 13), plus "3"..."9" (7 more) = 20.
+        # The leftover is the lex-largest key not in the top 20, which
+        # is "9". So "9" is in subs, all others in zones.
+        assert "9" in sess.subs
+        for k in placed:
+            assert k != "9"
 
 
 class TestAutoFillButtonGate:

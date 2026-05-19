@@ -693,34 +693,48 @@ def _apply_rules_to_session(session: RosterBuilderSession) -> None:
 
 
 def _auto_fill_session(session: RosterBuilderSession) -> dict:
-    """Auto-fill the roster from member rules + power-based greedy fill.
+    """Auto-fill the roster from member rules and the LW 20-starters-plus-10-subs
+    team rule (#219).
 
-    Resets the current roster (assignments + subs + override flags)
-    before filling, so a re-click of the button is "redo from scratch"
+    Resets the current roster (assignments, subs, override flags, pairings)
+    before filling so a re-click of the button is "redo from scratch"
     rather than "stack onto current state."
 
     Algorithm, in order:
-      1. per_member zone rules — pin members to their named zone if
-         capacity, the member is in the signed-up pool, and the zone
-         exists in the preset. **Applied to Phase 1 only** on phase-
-         aware presets; the rule model doesn't yet carry a phase
-         dimension (#152 v1 simplification). Phase 2 greedy fill picks
-         up the same members later if they're eligible there too.
-      2. Greedy fill — runs once per phase. For each zone in priority
-         order (lowest int first; priority=0 sorts last), fills the
-         phase's remaining slots from the eligibility-gated pool. The
-         per-phase eligibility filter (#152) lets a Phase 1-assigned
-         member still appear in the Phase 2 picker for the migration
-         case.
-      3. Spillover — unassigned members with known power go into the
-         event-level sub pool. Power-unknown members are reported as
-         gaps so the officer can decide who to override below the
-         floor.
+      1. per_member zone rules. Pin members to their named zone if capacity,
+         the member is in the signed-up pool, and the zone exists in the
+         preset. Applied to Phase 1 only on phase-aware presets; the rule
+         model does not yet carry a phase dimension. Pinned members always
+         count as starters regardless of where they rank by power.
+      2. Starter / sub split by squad power. Sort signed-up members with
+         known power desc (tiebreak by stable member key). Pinned members
+         from step 1 occupy starter seats first; the rest of the starter
+         pool fills from the top of the power-desc list until
+         `team_seats(event_type)` is reached. The next slice (subs_target
+         members) becomes the sub pool. Members with no parseable power go
+         to `gaps` and are not auto-placed.
+      3. Round-robin zone fill per phase. Same starter pool across every
+         phase the preset declares. For each phase, walk that phase's zones
+         in priority asc (priority=0 sorts last), placing one starter per
+         zone per pass from the power-desc starter list. Loop passes until
+         every starter is placed or no zone has remaining capacity. Top-
+         priority zones receive both the highest-power starters and the
+         extras when the starter count does not divide evenly across zones.
+      4. Paired-mode pairings. Each phase walks its primaries
+         weakest-first (power asc) and picks the unpaired candidate
+         whose power is closest to the primary's. Zone-floor
+         eligibility stays a hard filter. Candidates come from sub_pool
+         plus any starter that couldn't fit in a zone in step 3
+         (small-alliance fallback).
+      5. Spillover. Any power-known member that didn't land in a zone
+         and didn't get paired in any phase ends up in `session.subs`.
+         In pool mode that's where the sub roster lives. In paired
+         mode it's overflow, typically empty in the 30-signup case.
 
     Returns the summary dict (also stored on `session.auto_fill_summary`).
 
-    The fill is officer-correctable — every assignment can be tweaked
-    via the picker before Approve & Post.
+    The fill is officer-correctable. Every assignment can be tweaked via
+    the picker before Approve & Post.
     """
     # ── Reset state ── auto-fill is "redo from scratch".
     # Phase-aware: clear every phase's dicts. Flat: only phase 1 is
@@ -747,6 +761,10 @@ def _auto_fill_session(session: RosterBuilderSession) -> dict:
         "auto_paired_subs":         [],  # list[str] each "PrimaryName ↔ SubName"
         "gaps":                     [],  # member names with no parseable power
         "conflicts":                [],  # short strings: rule application failures
+        # #219: how many starter seats went unfilled because too few
+        # members signed up. 0 in the normal 30-signup case; positive
+        # when the alliance is short.
+        "starters_short":           0,
     }
 
     # Remember the officer's UI cursor; we mutate it while filling each
@@ -756,7 +774,7 @@ def _auto_fill_session(session: RosterBuilderSession) -> dict:
 
     # ── 1. per_member zone rules ── (Phase 1 only on phase-aware)
     # Per Decision #7 (#173): if the rule's subject isn't in tonight's
-    # roster the rule is a silent no-op — nothing to apply, nothing to
+    # roster the rule is a silent no-op. Nothing to apply, nothing to
     # report. Only the other conflict shapes (unknown zone, full zone,
     # already-pinned-elsewhere) still surface in the summary.
     session.selected_phase = 1
@@ -791,11 +809,55 @@ def _auto_fill_session(session: RosterBuilderSession) -> dict:
         if member is not None and member.get("power") is None:
             session.below_floor_overrides_for_phase(1).add(match_key)
 
-    # ── 2. Greedy fill by zone priority, per phase ──
-    # On flat presets we order once by the single `priority` field.
-    # On phase-aware presets the order is per-phase, so a preset can
-    # prioritise Power Tower in Phase 1 and Virus Lab in Phase 3.
-    # priority=0 means "no priority set" → sorts to the end via 9999.
+    # ── 2. Starter / sub split by squad power desc (#219) ──
+    # Power-known members rank by power desc; ties break on member key
+    # (deterministic, stable across re-runs of auto-fill on the same
+    # signups). Power-unknown members flow to `gaps`. Pinned members
+    # always occupy starter seats regardless of rank.
+    from storm import team_seats
+    starters_target, subs_target = team_seats(session.event_type)
+
+    pinned_keys: set[str] = set()
+    for zone_members in session.assignments_for_phase(1).values():
+        pinned_keys.update(zone_members)
+
+    def _power_rank_key(key: str) -> tuple[int, str]:
+        m = session.members[key]
+        return (-(m.get("power") or 0), key)
+
+    power_known: list[str] = [
+        k for k, m in session.members.items() if m.get("power") is not None
+    ]
+    power_known.sort(key=_power_rank_key)
+
+    for key, m in session.members.items():
+        if m.get("power") is None and key not in pinned_keys:
+            summary["gaps"].append(m["name"])
+
+    starters: list[str] = list(pinned_keys)
+    starters_set: set[str] = set(starters)
+    for key in power_known:
+        if len(starters) >= starters_target:
+            break
+        if key in starters_set:
+            continue
+        starters.append(key)
+        starters_set.add(key)
+
+    summary["starters_short"] = max(0, starters_target - len(starters))
+
+    sub_pool: list[str] = []
+    for key in power_known:
+        if len(sub_pool) >= subs_target:
+            break
+        if key in starters_set:
+            continue
+        sub_pool.append(key)
+
+    # ── 3. Round-robin zone fill per phase ──
+    # priority=0 means "no priority set" so it sorts to the end via 9999.
+    # Phase-aware presets read per-phase priority; flat presets use the
+    # single `priority` field.
     def _phase_priority_key(p):
         def key(z):
             prio = z.priority_for_phase(p) if session.is_phase_aware else z.priority
@@ -806,77 +868,146 @@ def _auto_fill_session(session: RosterBuilderSession) -> dict:
         session.selected_phase = phase
         phase_assignments = session.assignments_for_phase(phase)
         zones_sorted = sorted(session.preset.zones, key=_phase_priority_key(phase))
-        for z in zones_sorted:
-            remaining = session.zone_capacity(z.zone) - session.zone_member_count(z.zone)
-            if remaining <= 0:
-                continue
-            eligible_keys, _below = _eligible_member_keys_for_zone(session, z.zone)
-            if not eligible_keys:
-                continue
-            for key in eligible_keys[:remaining]:
-                phase_assignments[z.zone].append(key)
+
+        # Members already placed in this phase (from per-member rules in
+        # phase 1 only): they occupy a starter seat but were already put
+        # in a zone, so the round-robin skips them.
+        already_placed: set[str] = set()
+        for zone_members in phase_assignments.values():
+            already_placed.update(zone_members)
+
+        remaining = [k for k in starters if k not in already_placed]
+        # Re-sort by power desc so power-known starters are placed before
+        # any pinned-with-unknown-power starters that landed in `starters`
+        # via step 1. Stable on member key.
+        remaining.sort(key=_power_rank_key)
+
+        # Round-robin passes: each pass walks zones in priority order and
+        # adds one starter to each zone with remaining capacity. Loop
+        # until every starter is placed or no progress was made (every
+        # zone is full).
+        while remaining:
+            progress = False
+            for z in zones_sorted:
+                if not remaining:
+                    break
+                if session.zone_member_count(z.zone) >= session.zone_capacity(z.zone):
+                    continue
+                starter_key = remaining.pop(0)
+                phase_assignments[z.zone].append(starter_key)
                 summary["auto_filled_by_power"] += 1
                 preset_floor = session.floor_for_zone(z.zone)
                 effective_floor = _effective_floor_for_zone(session, z.zone)
-                member_power = session.members[key].get("power")
-                if (
-                    member_power is not None
-                    and effective_floor < preset_floor
-                    and member_power < preset_floor
-                ):
+                member_power = session.members[starter_key].get("power")
+                if member_power is None:
+                    session.below_floor_overrides_for_phase(phase).add(starter_key)
+                elif member_power < effective_floor:
+                    session.below_floor_overrides_for_phase(phase).add(starter_key)
+                elif effective_floor < preset_floor and member_power < preset_floor:
                     summary["power_band_rules_applied"] += 1
+                progress = True
+            if not progress:
+                # Every zone is full this phase. Remaining starters stay
+                # unassigned for this phase; the officer can place them
+                # manually via the picker.
+                break
 
-    # ── 3. Spillover (or pair) ──
-    # Paired-sub pairing runs per phase: each phase's unpaired primaries
-    # get the strongest remaining sub for that phase. Subs are
-    # event-level so a member paired in phase 1 isn't pickable for
-    # phase 2 pairing (avoids double-booking the same sub seat).
+    # ── 4. Sub pairings (paired mode only) ──
+    # Pair candidates are sub_pool plus any starters that couldn't fit
+    # in zones during step 3 (small-alliance fallback so the team's
+    # weakest placed starter still gets a backup when fewer than 30 are
+    # signed up). Per phase, walk primaries weakest-first (power asc,
+    # unknown power last) and pick the closest-power sub that clears
+    # the primary's zone floor. The same candidate identity can be
+    # paired in multiple phases — the per-phase pairing dicts are
+    # independent.
+    placed_anywhere: set[str] = set()
+    for phase in session.iter_phases():
+        for zone_members in session.assignments_for_phase(phase).values():
+            placed_anywhere.update(zone_members)
+    unplaced_starters = [k for k in starters if k not in placed_anywhere]
+    pairing_candidates = list(sub_pool) + unplaced_starters
+
     if session.is_paired:
         for phase in session.iter_phases():
             session.selected_phase = phase
             phase_assignments = session.assignments_for_phase(phase)
             phase_pairings = session.paired_subs_for_phase(phase)
-            unpaired = session.unpaired_primaries()
-            for primary_key in unpaired:
-                primary_zone = None
-                for zone, zmembers in phase_assignments.items():
-                    if primary_key in zmembers:
-                        primary_zone = zone
-                        break
-                if not primary_zone:
+
+            primaries_with_zone: list[tuple[str, str]] = []
+            for zone_name, zmembers in phase_assignments.items():
+                for primary_key in zmembers:
+                    if primary_key in phase_pairings:
+                        continue
+                    primaries_with_zone.append((primary_key, zone_name))
+
+            def _primary_rank_key(item: tuple[str, str]) -> tuple[int, str]:
+                key, _ = item
+                m = session.members.get(key, {})
+                power = m.get("power")
+                # Power-unknown primaries pair last (any eligible sub
+                # is acceptable since there's no closest-power anchor).
+                # 10**18 outranks any realistic squad power.
+                return (power if power is not None else 10 ** 18, key)
+
+            primaries_with_zone.sort(key=_primary_rank_key)
+
+            available_subs = list(pairing_candidates)
+            for primary_key, primary_zone in primaries_with_zone:
+                if not available_subs:
+                    break
+                primary_m = session.members.get(primary_key, {})
+                primary_power = primary_m.get("power")
+                effective_floor = _effective_floor_for_zone(session, primary_zone)
+                eligible: list[str] = []
+                for sub_key in available_subs:
+                    if sub_key == primary_key:
+                        continue
+                    sub_power = session.members.get(sub_key, {}).get("power")
+                    if sub_power is None:
+                        continue
+                    if sub_power >= effective_floor:
+                        eligible.append(sub_key)
+                if not eligible:
                     continue
-                eligible_sub_keys, _below = _eligible_member_keys_for_zone(
-                    session, primary_zone,
-                )
-                if not eligible_sub_keys:
-                    continue
-                sub_key = eligible_sub_keys[0]
-                phase_pairings[primary_key] = sub_key
-                primary_m = session.members.get(primary_key)
-                sub_m = session.members.get(sub_key)
-                primary_name = primary_m["name"] if primary_m else primary_key
-                sub_name = sub_m["name"] if sub_m else sub_key
+                if primary_power is None:
+                    # No anchor for closest-power. Use the strongest
+                    # eligible sub so the unknown-power primary at least
+                    # gets a backup.
+                    eligible.sort(
+                        key=lambda sk: -(session.members[sk].get("power") or 0)
+                    )
+                    chosen_sub = eligible[0]
+                else:
+                    def _distance(sk: str) -> tuple[int, str]:
+                        sp = session.members[sk].get("power") or 0
+                        return (abs(sp - primary_power), sk)
+                    eligible.sort(key=_distance)
+                    chosen_sub = eligible[0]
+                phase_pairings[primary_key] = chosen_sub
+                available_subs.remove(chosen_sub)
+                sub_m = session.members.get(chosen_sub, {})
                 summary["auto_paired_subs"].append(
-                    f"{primary_name} ↔ {sub_name}"
+                    f"{primary_m.get('name', primary_key)} ↔ "
+                    f"{sub_m.get('name', chosen_sub)}"
                 )
 
-        assigned = session.assigned_member_keys()
-        for key, m in session.members.items():
-            if key in assigned:
-                continue
-            if m.get("power") is None:
-                summary["gaps"].append(m["name"])
-                continue
-            session.subs.append(key)
-    else:
-        assigned = session.assigned_member_keys()
-        for key, m in session.members.items():
-            if key in assigned:
-                continue
-            if m.get("power") is None:
-                summary["gaps"].append(m["name"])
-                continue
-            session.subs.append(key)
+    # ── 5. Spillover into session.subs ──
+    # Everything power-known that didn't land in a zone or a paired-sub
+    # seat ends up in the flat sub pool. In pool mode this is the only
+    # surface for the 10 designated subs; in paired mode it's overflow
+    # (typically empty when 30 signed up, non-empty for under-30
+    # alliances where some unplaced starters couldn't find a primary
+    # to pair with).
+    assigned = session.assigned_member_keys()
+    for key, m in session.members.items():
+        if key in assigned:
+            continue
+        if m.get("power") is None:
+            # Already added to summary["gaps"] in step 2; skip so we
+            # don't double-report.
+            continue
+        session.subs.append(key)
 
     session.selected_phase = original_phase
     session.auto_fill_summary = summary
@@ -1126,6 +1257,13 @@ def _render_builder_embed(session: RosterBuilderSession) -> discord.Embed:
     if af is not None:
         lines.append("")
         lines.append("🎯 **Auto-fill summary**")
+        if af.get("starters_short", 0) > 0:
+            # #219: surface short-signup counts up front so officers
+            # see the gap before scanning the per-zone fill state.
+            lines.append(
+                f"• ⚠️ {af['starters_short']} of 20 starter seats unfilled "
+                f"(short on signups)."
+            )
         lines.append(
             f"• Per-member rules applied: **{af['per_member_rules_applied']}**"
         )

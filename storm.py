@@ -65,6 +65,30 @@ DS_ZONE_STRUCTURE: list[str] = [
 ]
 
 
+# ── Canonical team-seat counts (#219) ──────────────────────────────────────────
+# Last War defines every DS and CS team as 20 starters + 10 subs. Alliances
+# do not customise these numbers. The Premium auto-fill in
+# storm_roster_builder relies on this split to decide who lands in zones vs
+# the sub pool, independent of preset zone capacity (which is allowed to
+# exceed the team size so officers can place the same person in multiple
+# stages without enforcement).
+DS_TEAM_STARTERS = 20
+DS_TEAM_SUBS     = 10
+CS_TEAM_STARTERS = 20
+CS_TEAM_SUBS     = 10
+
+
+def team_seats(event_type: str) -> tuple[int, int]:
+    """Return (starters, subs) for the given storm event type.
+
+    `event_type` is "DS" or "CS". Anything else falls back to the DS
+    numbers since both event types share the same split today.
+    """
+    if event_type == "CS":
+        return CS_TEAM_STARTERS, CS_TEAM_SUBS
+    return DS_TEAM_STARTERS, DS_TEAM_SUBS
+
+
 def _non_canonical_ds_zones(zones: dict) -> dict:
     """Return {zone_name: members} entries from `zones` that aren't in
     DS_ZONE_STRUCTURE and have a non-empty value. Used by the draft flow to

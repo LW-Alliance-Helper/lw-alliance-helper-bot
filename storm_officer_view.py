@@ -552,14 +552,68 @@ def _vote_select_options(
     return options
 
 
+_ACK_NAME_PREVIEW = 5
+
+
+def _vote_ack_label(vote: str) -> str:
+    """Friendly label for an ack line. Doesn't need slot strings — the
+    parent view embed already shows the slot timing, and the ack is
+    explicitly an officer-side confirmation."""
+    return {
+        "a":      "Team A",
+        "b":      "Team B",
+        "either": "Either",
+        "cannot": "Cannot",
+    }.get(vote, vote)
+
+
+def _format_on_behalf_ack(
+    recorded: list[str], failed: list[str], vote: str,
+) -> str:
+    """Build the on-behalf submit ack. Single-pick keeps the original
+    phrasing; multi-pick gets a count + first-N-names preview + overflow
+    hint. Partial-failure path tells the officer how many fell out."""
+    label = _vote_ack_label(vote)
+    if not recorded and failed:
+        return (
+            f"⚠️ Couldn't record any of the {len(failed)} on-behalf votes. "
+            "Check the bot logs."
+        )
+    if len(recorded) == 1 and not failed:
+        return f"✅ Recorded on-behalf vote for **{recorded[0]}**."
+
+    preview = ", ".join(recorded[:_ACK_NAME_PREVIEW])
+    overflow = ""
+    if len(recorded) > _ACK_NAME_PREVIEW:
+        overflow = f", … +{len(recorded) - _ACK_NAME_PREVIEW} more"
+    msg = (
+        f"✅ Recorded **{len(recorded)} on-behalf vote(s)** ({label}): "
+        f"{preview}{overflow}."
+    )
+    if failed:
+        msg += (
+            f"\n⚠️ {len(failed)} failed to record — check the bot logs."
+        )
+    return msg
+
+
 class _OnBehalfVoteView(discord.ui.View):
-    """Ephemeral on-behalf vote picker (#168).
+    """Ephemeral on-behalf vote picker (#168, multi-select in #218).
 
     Replaces the old `_OnBehalfModal` free-text flow with structured
     selects: Member Select sourced from the roster Sheet + Vote Select
     that mirrors the sign-up post's button labels. Both selects must be
     populated before Submit fires — there's no free-text path, so typo
     members and unparseable votes are unreachable.
+
+    Multi-select (#218): the Member Select accepts up to 25 picks per
+    page; Submit casts the chosen vote against every picked member.
+    Picks are persisted across pages so officers can paginate, tick more
+    names, and submit once. By default the picker hides members who
+    already have a vote on this event so officers can't accidentally
+    clobber sign-up-post votes; the 👁️ button toggles them back in for
+    correction flows. The 📥 button stages every not-yet-voted member
+    in one click — Submit still required.
 
     Roster lists longer than 25 paginate via Prev/Next buttons + a
     `Page X / Y` label-only indicator. The Member Select's options are
@@ -571,10 +625,18 @@ class _OnBehalfVoteView(discord.ui.View):
         parent_view: "OfficerView",
         members: list[dict],
         teams_setting: str,
+        voted_target_ids: set[str] | None = None,
     ):
-        super().__init__(timeout=300)
+        # Bumped 300 → 600 because multi-select flows take longer than
+        # the original single-pick flow (paginate, tick, paginate, tick).
+        super().__init__(timeout=600)
         self.parent_view = parent_view
         self.teams_setting = teams_setting
+        # Set of target_ids whose vote is already recorded on this event.
+        # Drives the "hide already-voted" default + the 📥 shortcut's
+        # not-voted scope. Empty set = "no prior votes" → toggle/shortcut
+        # are still rendered but no-op.
+        self.voted_target_ids: set[str] = set(voted_target_ids or ())
         # Sort + de-dupe roster (case-insensitive on name). Each entry
         # carries both the display `name` and the row's `discord_id`
         # (when present) so submit can choose the right
@@ -658,7 +720,11 @@ class _OnBehalfVoteView(discord.ui.View):
                     "target_id": member_id,
                 })
         cleaned.sort(key=lambda r: r["name"].lower())
-        self.members = cleaned
+        # `_all_members` is the full roster post-dedup-sort. `members`
+        # is a property that returns the filter-applied subset (hides
+        # already-voted by default; full list when `show_voted` is True).
+        # Page math reads `members`, so toggling rebuilds page_count.
+        self._all_members: list[dict] = cleaned
         # Cache a name→target_id map so the submit handler can resolve
         # without re-walking the list. Keys are lowercased to match the
         # case-insensitive picker dedup.
@@ -666,10 +732,42 @@ class _OnBehalfVoteView(discord.ui.View):
             r["name"].lower(): r["target_id"] for r in cleaned
         }
         self.page = 0
-        self.selected_member: str | None = None
+        # Multi-select state: picks accumulate across pages until Submit
+        # fires. Insertion order is preserved for stable ack rendering.
+        self.selected_members: list[str] = []
         self.selected_vote: str | None = None
+        # Toggle: when False (default), the Member Select hides any
+        # roster row whose target_id is in `voted_target_ids` so an
+        # officer can't accidentally overwrite a vote already cast via
+        # the sign-up post. Flip True via the 👁️ button when the
+        # officer's intentionally correcting a prior vote.
+        self.show_voted: bool = False
         self.message: discord.Message | None = None
         self._build_components()
+
+    @property
+    def members(self) -> list[dict]:
+        """Filter-applied member list. `show_voted=False` (default) hides
+        members already in a vote bucket; `True` returns the full roster.
+        Read by `_members_for_page` and `page_count`."""
+        if self.show_voted or not self.voted_target_ids:
+            return self._all_members
+        return [
+            m for m in self._all_members
+            if m["target_id"] not in self.voted_target_ids
+        ]
+
+    @property
+    def not_voted_count(self) -> int:
+        """Members in `_all_members` whose target_id isn't already voted.
+        Drives the 📥 shortcut button label + disable state. Independent
+        of `show_voted` — the shortcut always means "not-voted only"."""
+        if not self.voted_target_ids:
+            return len(self._all_members)
+        return sum(
+            1 for m in self._all_members
+            if m["target_id"] not in self.voted_target_ids
+        )
 
     @property
     def page_count(self) -> int:
@@ -684,22 +782,46 @@ class _OnBehalfVoteView(discord.ui.View):
     def _build_components(self):
         self.clear_items()
 
+        # Clamp the page index after a filter toggle / shortcut shrinks
+        # the list — otherwise paging beyond the new last page produces
+        # an empty Select that breaks the disabled-Submit invariant.
+        page_count = self.page_count
+        if self.page >= page_count:
+            self.page = max(0, page_count - 1)
+
         page_members = self._members_for_page()
         if page_members:
+            # Picks for THIS page are the intersection of currently-shown
+            # names with `selected_members`. The Select's interaction
+            # only carries the new values for the visible page, so the
+            # callback must remember which page-1 picks survived a page-2
+            # update vs. which were unticked on this page.
+            selected_set = set(self.selected_members)
+            page_names = {m["name"] for m in page_members}
+            picks_on_this_page = [
+                m["name"] for m in page_members if m["name"] in selected_set
+            ]
             member_options = [
                 discord.SelectOption(
                     label=m["name"][:100],
                     value=m["name"][:100],
-                    default=(m["name"] == self.selected_member),
+                    default=(m["name"] in selected_set),
                 )
                 for m in page_members
             ]
+            placeholder = "Pick one or more members…"
+            if self.selected_members:
+                placeholder = (
+                    f"Picked: {len(self.selected_members)} "
+                    f"(this page: {len(picks_on_this_page)})"
+                )
+            # `max_values` is capped at the page size — Discord rejects
+            # `max_values > len(options)`. The 25-cap is enforced by
+            # `_ON_BEHALF_PAGE_SIZE` so we never exceed Discord's limit.
             member_select = discord.ui.Select(
-                placeholder=(
-                    f"Picked: {self.selected_member}"
-                    if self.selected_member else "Pick a member…"
-                ),
-                min_values=1, max_values=1,
+                placeholder=placeholder,
+                min_values=0,
+                max_values=len(member_options),
                 options=member_options,
                 row=0,
             )
@@ -707,7 +829,15 @@ class _OnBehalfVoteView(discord.ui.View):
             async def _on_member(inter: discord.Interaction):
                 if not await self._guard_owner(inter):
                     return
-                self.selected_member = member_select.values[0]
+                # Replace the picks for the current page only. Anything
+                # picked on other pages survives. Without this, paging
+                # to page 2 + ticking new names would silently erase
+                # everything chosen on page 1.
+                kept = [
+                    name for name in self.selected_members
+                    if name not in page_names
+                ]
+                self.selected_members = kept + list(member_select.values)
                 self._build_components()
                 try:
                     await inter.response.edit_message(view=self)
@@ -799,9 +929,12 @@ class _OnBehalfVoteView(discord.ui.View):
             next_btn.callback = _on_next
             self.add_item(next_btn)
 
+        submit_label = "✅ Submit"
+        if self.selected_members and self.selected_vote:
+            submit_label = f"✅ Submit ({len(self.selected_members)})"
         submit_btn = discord.ui.Button(
-            label="✅ Submit", style=discord.ButtonStyle.primary,
-            disabled=not (self.selected_member and self.selected_vote),
+            label=submit_label, style=discord.ButtonStyle.primary,
+            disabled=not (self.selected_members and self.selected_vote),
             row=3,
         )
         submit_btn.callback = self._on_submit
@@ -812,6 +945,67 @@ class _OnBehalfVoteView(discord.ui.View):
         )
         cancel_btn.callback = self._on_cancel
         self.add_item(cancel_btn)
+
+        # 📥 Stage every not-yet-voted member in one click. Officer still
+        # has to hit Submit — no auto-submit, because a misclick at 100
+        # members is brutal. Disabled when nothing to stage.
+        not_voted_n = self.not_voted_count
+        select_all_btn = discord.ui.Button(
+            label=f"📥 Select all not-voted ({not_voted_n})",
+            style=discord.ButtonStyle.secondary,
+            disabled=(not_voted_n == 0),
+            row=4,
+        )
+
+        async def _on_select_all(inter: discord.Interaction):
+            if not await self._guard_owner(inter):
+                return
+            not_voted_names = [
+                m["name"] for m in self._all_members
+                if m["target_id"] not in self.voted_target_ids
+            ]
+            # Replace, don't append — repeat clicks should stay
+            # idempotent rather than dupe the list.
+            self.selected_members = not_voted_names
+            self._build_components()
+            try:
+                await inter.response.edit_message(view=self)
+            except discord.HTTPException:
+                pass
+
+        select_all_btn.callback = _on_select_all
+        self.add_item(select_all_btn)
+
+        # 👁️ Toggle whether already-voted members appear in the picker.
+        # Hidden by default to keep officers out of accidental-overwrite
+        # range; flip on for correction flows.
+        if self.voted_target_ids:
+            toggle_label = (
+                "🙈 Hide already-voted"
+                if self.show_voted
+                else f"👁️ Show already-voted ({len(self.voted_target_ids)})"
+            )
+            toggle_btn = discord.ui.Button(
+                label=toggle_label,
+                style=discord.ButtonStyle.secondary,
+                row=4,
+            )
+
+            async def _on_toggle(inter: discord.Interaction):
+                if not await self._guard_owner(inter):
+                    return
+                self.show_voted = not self.show_voted
+                # Reset to first page so a toggle never strands the
+                # officer on a now-empty page.
+                self.page = 0
+                self._build_components()
+                try:
+                    await inter.response.edit_message(view=self)
+                except discord.HTTPException:
+                    pass
+
+            toggle_btn.callback = _on_toggle
+            self.add_item(toggle_btn)
 
     async def _guard_owner(self, inter: discord.Interaction) -> bool:
         if inter.user.id != self.parent_view.owner_user_id:
@@ -825,9 +1019,9 @@ class _OnBehalfVoteView(discord.ui.View):
     async def _on_submit(self, inter: discord.Interaction):
         if not await self._guard_owner(inter):
             return
-        if not (self.selected_member and self.selected_vote):
+        if not (self.selected_members and self.selected_vote):
             await inter.response.send_message(
-                "⚠️ Pick a member and a vote before submitting.",
+                "⚠️ Pick at least one member and a vote before submitting.",
                 ephemeral=True,
             )
             return
@@ -836,66 +1030,66 @@ class _OnBehalfVoteView(discord.ui.View):
         except discord.HTTPException:
             pass
 
-        # Resolve picked display name → bucket-builder target_id. For
-        # Discord-member targets this is the Discord ID (matches the
-        # self-vote shape from SignupView); for non-Discord roster
-        # rows this is the name verbatim. Without this resolution,
-        # on-behalf votes for Discord members landed in a phantom
-        # name-keyed bucket and the original Discord-ID-keyed
+        # Resolve picked display names → bucket-builder target_ids in one
+        # pass before writing, so a single resolution miss doesn't strand
+        # half the batch. For Discord-member targets the resolved id is
+        # the Discord ID (matches the self-vote shape from SignupView);
+        # for non-Discord roster rows it's the name verbatim. Without
+        # this resolution, on-behalf votes for Discord members landed in
+        # a phantom name-keyed bucket and the original Discord-ID-keyed
         # "Not voted yet" entry never moved.
-        target_member_id = (
-            self._target_by_name.get(self.selected_member.lower())
-            or self.selected_member
-        )
-
         import config
-        ok = config.record_storm_vote(
-            self.parent_view.guild_id,
-            self.parent_view.event_type,
-            self.parent_view.event_date,
-            voter_user_id=inter.user.id,
-            target_member_id=target_member_id,
-            vote=self.selected_vote,
-            is_on_behalf=True,
-        )
-        if not ok:
-            await inter.followup.send(
-                "⚠️ Couldn't record that vote. Check the bot logs.",
-                ephemeral=True,
+        recorded: list[str] = []
+        failed: list[str] = []
+        for name in self.selected_members:
+            target_member_id = (
+                self._target_by_name.get(name.lower()) or name
             )
-            return
+            ok = config.record_storm_vote(
+                self.parent_view.guild_id,
+                self.parent_view.event_type,
+                self.parent_view.event_date,
+                voter_user_id=inter.user.id,
+                target_member_id=target_member_id,
+                vote=self.selected_vote,
+                is_on_behalf=True,
+            )
+            if ok:
+                recorded.append(name)
+            else:
+                failed.append(name)
 
-        # Refresh the parent view in place so the new vote shows up.
-        await self.parent_view.refresh_buckets()
-        try:
-            if self.parent_view.message is not None:
-                await self.parent_view.message.edit(
-                    embed=_render_embed(
-                        self.parent_view.guild, self.parent_view.event_type,
-                        self.parent_view.event_date,
-                        self.parent_view.buckets, self.parent_view.bucket_filter,
-                    ),
-                    view=self.parent_view,
-                )
-        except discord.HTTPException:
-            pass
+        # Refresh the parent view in place ONCE after the batch — a
+        # per-member refresh would do N sheet reads on a 100-member
+        # apply-all submit and the embed would flicker through every
+        # intermediate state.
+        if recorded:
+            await self.parent_view.refresh_buckets()
+            try:
+                if self.parent_view.message is not None:
+                    await self.parent_view.message.edit(
+                        embed=_render_embed(
+                            self.parent_view.guild, self.parent_view.event_type,
+                            self.parent_view.event_date,
+                            self.parent_view.buckets, self.parent_view.bucket_filter,
+                        ),
+                        view=self.parent_view,
+                    )
+            except discord.HTTPException:
+                pass
+
+        ack = _format_on_behalf_ack(recorded, failed, self.selected_vote)
 
         for item in self.children:
             item.disabled = True
         self.stop()
         try:
             if self.message is not None:
-                await self.message.edit(
-                    content=f"✅ Recorded on-behalf vote for **{self.selected_member}**.",
-                    view=self,
-                )
+                await self.message.edit(content=ack, view=self)
         except discord.HTTPException:
             pass
         try:
-            await inter.followup.send(
-                f"✅ Recorded on-behalf vote for **{self.selected_member}**.",
-                ephemeral=True,
-            )
+            await inter.followup.send(ack, ephemeral=True)
         except discord.HTTPException:
             pass
 
@@ -1045,13 +1239,26 @@ class OfficerView(discord.ui.View):
             import config
             cfg = config.get_storm_config(self.guild_id, self.event_type) or {}
             teams_setting = (cfg.get("teams") or "both").strip()
-            picker = _OnBehalfVoteView(self, roster_rows, teams_setting)
+            # Collect target_ids already in a vote bucket so the picker
+            # can hide them by default — officers can flip them back in
+            # via 👁️ when intentionally correcting a prior vote.
+            voted_target_ids: set[str] = set()
+            for k in ("a", "b", "either", "cannot"):
+                for e in self.buckets.get(k, []):
+                    voted_target_ids.add(e["target_id"])
+            picker = _OnBehalfVoteView(
+                self, roster_rows, teams_setting,
+                voted_target_ids=voted_target_ids,
+            )
             try:
                 msg = await inter.followup.send(
                     content=(
-                        "🙋 Pick a member and a vote, then **Submit**. "
-                        "Only roster members are listed. `/members sync` "
-                        "refreshes the list."
+                        "🙋 Pick one or more members and a vote, then "
+                        "**Submit**. Already-voted members are hidden — "
+                        "use **👁️ Show already-voted** to correct a "
+                        "prior vote. **📥 Select all not-voted** stages "
+                        "the remaining roster in one click. `/members "
+                        "sync` refreshes the list."
                     ),
                     view=picker, ephemeral=True,
                 )

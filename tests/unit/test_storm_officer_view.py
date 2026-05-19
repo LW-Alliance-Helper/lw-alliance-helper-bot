@@ -803,7 +803,7 @@ class TestOnBehalfVoteView:
         assert names == ["Phoenix"]
         assert target_ids == ["Phoenix"]
 
-    def test_submit_disabled_until_both_selects_chosen(self, seeded_db):
+    def test_submit_disabled_until_member_and_vote_picked(self, seeded_db):
         view = sov._OnBehalfVoteView(
             self._fake_parent_view(), [{"name": "Alice"}], teams_setting="both",
         )
@@ -818,7 +818,7 @@ class TestOnBehalfVoteView:
         view = sov._OnBehalfVoteView(
             parent, [{"name": "Alice"}], teams_setting="both",
         )
-        view.selected_member = "Alice"
+        view.selected_members = ["Alice"]
         view.selected_vote = "a"
         interaction = self._fake_interaction(user_id=parent.owner_user_id)
         with patch(
@@ -851,7 +851,7 @@ class TestOnBehalfVoteView:
             {"name": "Kevin", "discord_id": "1501975127200501840", "not_on_discord": False},
         ]
         view = sov._OnBehalfVoteView(parent, roster, teams_setting="both")
-        view.selected_member = "Kevin"
+        view.selected_members = ["Kevin"]
         view.selected_vote = "a"
         interaction = self._fake_interaction(user_id=parent.owner_user_id)
         with patch("config.record_storm_vote", return_value=True) as record:
@@ -868,13 +868,259 @@ class TestOnBehalfVoteView:
             {"name": "Frank", "discord_id": "", "not_on_discord": True},
         ]
         view = sov._OnBehalfVoteView(parent, roster, teams_setting="both")
-        view.selected_member = "Frank"
+        view.selected_members = ["Frank"]
         view.selected_vote = "b"
         interaction = self._fake_interaction(user_id=parent.owner_user_id)
         with patch("config.record_storm_vote", return_value=True) as record:
             await view._on_submit(interaction)
         kwargs = record.call_args.kwargs
         assert kwargs["target_member_id"] == "Frank"
+
+
+class TestOnBehalfMultiSelect:
+    """#218 — multi-select + "select all not-voted" shortcut + show/hide
+    already-voted toggle. Tester feedback: manually entering 30 members
+    is tedious; a 100-member alliance would be unworkable. The picker
+    now accepts multi-pick per page (up to Discord's 25-per-Select cap),
+    persists picks across pagination, and exposes two shortcuts: stage
+    every not-yet-voted member with one click, and toggle whether the
+    voted bucket appears in the picker."""
+
+    def _fake_parent_view(self):
+        view = MagicMock()
+        view.guild_id = TEST_GUILD_ID
+        view.guild = _FakeGuild(TEST_GUILD_ID, [])
+        view.event_type = "DS"
+        view.event_date = "2026-05-18"
+        view.owner_user_id = 1
+        view.message = None
+        view.bucket_filter = None
+        view.buckets = {}
+        view.refresh_buckets = AsyncMock()
+        return view
+
+    def _fake_interaction(self, user_id: int = 1):
+        interaction = MagicMock()
+        interaction.user.id = user_id
+        interaction.response.send_message = AsyncMock()
+        interaction.response.edit_message = AsyncMock()
+        interaction.response.defer        = AsyncMock()
+        interaction.followup.send         = AsyncMock()
+        return interaction
+
+    def test_member_select_max_values_matches_page_size(self, seeded_db):
+        """Multi-pick: max_values=len(options) so officers can tick up
+        to 25 names per page in one Select interaction."""
+        roster = [{"name": f"Member{i:03d}"} for i in range(10)]
+        view = sov._OnBehalfVoteView(
+            self._fake_parent_view(), roster, teams_setting="both",
+        )
+        member_sels = [
+            c for c in view.children
+            if isinstance(c, __import__("discord").ui.Select) and c.row == 0
+        ]
+        assert member_sels
+        assert member_sels[0].max_values == 10
+        assert member_sels[0].min_values == 0
+
+    def test_voted_members_hidden_by_default(self, seeded_db):
+        """`voted_target_ids` set → Member Select shows only not-voted
+        members. Officers can't accidentally clobber an existing vote."""
+        roster = [
+            {"name": "Alice", "discord_id": "10", "not_on_discord": False},
+            {"name": "Bob",   "discord_id": "20", "not_on_discord": False},
+            {"name": "Carol", "discord_id": "30", "not_on_discord": False},
+        ]
+        view = sov._OnBehalfVoteView(
+            self._fake_parent_view(), roster, teams_setting="both",
+            voted_target_ids={"10", "20"},
+        )
+        visible = [m["name"] for m in view.members]
+        assert visible == ["Carol"]
+
+    def test_show_voted_toggle_surfaces_voted_members(self, seeded_db):
+        """Flipping show_voted=True restores the full roster so the
+        officer can correct a prior vote."""
+        roster = [
+            {"name": "Alice", "discord_id": "10", "not_on_discord": False},
+            {"name": "Bob",   "discord_id": "20", "not_on_discord": False},
+        ]
+        view = sov._OnBehalfVoteView(
+            self._fake_parent_view(), roster, teams_setting="both",
+            voted_target_ids={"10"},
+        )
+        assert [m["name"] for m in view.members] == ["Bob"]
+        view.show_voted = True
+        view._build_components()
+        assert sorted(m["name"] for m in view.members) == ["Alice", "Bob"]
+
+    def test_show_voted_button_only_rendered_when_voted_set_nonempty(self, seeded_db):
+        """No prior votes → the 👁️ toggle button doesn't render; the
+        affordance would have nothing to toggle."""
+        roster = [{"name": "Alice"}]
+        view_no_votes = sov._OnBehalfVoteView(
+            self._fake_parent_view(), roster, teams_setting="both",
+        )
+        labels = [getattr(c, "label", "") for c in view_no_votes.children]
+        assert not any("Show already-voted" in lab for lab in labels)
+        assert not any("Hide already-voted" in lab for lab in labels)
+
+        view_with_votes = sov._OnBehalfVoteView(
+            self._fake_parent_view(), roster, teams_setting="both",
+            voted_target_ids={"99"},
+        )
+        labels = [getattr(c, "label", "") for c in view_with_votes.children]
+        assert any("Show already-voted" in lab for lab in labels)
+
+    async def test_select_all_not_voted_stages_picks(self, seeded_db):
+        """📥 button drops every not-yet-voted member into
+        selected_members without auto-submitting. Submit gate stays in
+        place so a misclick doesn't cast 100 votes."""
+        roster = [
+            {"name": "Alice", "discord_id": "10", "not_on_discord": False},
+            {"name": "Bob",   "discord_id": "20", "not_on_discord": False},
+            {"name": "Carol", "discord_id": "30", "not_on_discord": False},
+        ]
+        view = sov._OnBehalfVoteView(
+            self._fake_parent_view(), roster, teams_setting="both",
+            voted_target_ids={"10"},
+        )
+        select_all_btns = [
+            c for c in view.children
+            if getattr(c, "label", "").startswith("📥 Select all not-voted")
+        ]
+        assert select_all_btns
+        interaction = self._fake_interaction(user_id=view.parent_view.owner_user_id)
+        with patch("config.record_storm_vote") as record:
+            await select_all_btns[0].callback(interaction)
+        # The button only stages — no write happened.
+        record.assert_not_called()
+        assert sorted(view.selected_members) == ["Bob", "Carol"]
+
+    def test_select_all_button_disabled_when_no_not_voted_left(self, seeded_db):
+        roster = [
+            {"name": "Alice", "discord_id": "10", "not_on_discord": False},
+        ]
+        view = sov._OnBehalfVoteView(
+            self._fake_parent_view(), roster, teams_setting="both",
+            voted_target_ids={"10"},
+        )
+        select_all_btns = [
+            c for c in view.children
+            if getattr(c, "label", "").startswith("📥 Select all not-voted")
+        ]
+        assert select_all_btns and select_all_btns[0].disabled is True
+
+    async def test_submit_records_every_picked_member(self, seeded_db):
+        """N picks → N record_storm_vote calls + one parent refresh."""
+        parent = self._fake_parent_view()
+        roster = [
+            {"name": "Alice", "discord_id": "10", "not_on_discord": False},
+            {"name": "Bob",   "discord_id": "20", "not_on_discord": False},
+            {"name": "Carol", "discord_id": "30", "not_on_discord": False},
+        ]
+        view = sov._OnBehalfVoteView(parent, roster, teams_setting="both")
+        view.selected_members = ["Alice", "Bob", "Carol"]
+        view.selected_vote = "either"
+        interaction = self._fake_interaction(user_id=parent.owner_user_id)
+        with patch("config.record_storm_vote", return_value=True) as record:
+            await view._on_submit(interaction)
+        assert record.call_count == 3
+        target_ids = [c.kwargs["target_member_id"] for c in record.call_args_list]
+        assert sorted(target_ids) == ["10", "20", "30"]
+        # One refresh, not three — flicker / sheet-read amplification
+        # would be the bug here.
+        parent.refresh_buckets.assert_awaited_once()
+
+    async def test_submit_partial_failure_does_not_abort_remaining(self, seeded_db):
+        """If one record_storm_vote returns False, the rest still write
+        and the ack tells the officer how many fell out."""
+        parent = self._fake_parent_view()
+        roster = [
+            {"name": "Alice", "discord_id": "10", "not_on_discord": False},
+            {"name": "Bob",   "discord_id": "20", "not_on_discord": False},
+            {"name": "Carol", "discord_id": "30", "not_on_discord": False},
+        ]
+        view = sov._OnBehalfVoteView(parent, roster, teams_setting="both")
+        view.selected_members = ["Alice", "Bob", "Carol"]
+        view.selected_vote = "a"
+        interaction = self._fake_interaction(user_id=parent.owner_user_id)
+        # Bob's write fails; Alice + Carol succeed.
+        with patch(
+            "config.record_storm_vote",
+            side_effect=[True, False, True],
+        ) as record:
+            await view._on_submit(interaction)
+        assert record.call_count == 3
+        # The followup ack carries the partial-failure copy.
+        ack_call = interaction.followup.send.call_args
+        ack_text = ack_call.args[0] if ack_call.args else ack_call.kwargs.get("content", "")
+        assert "2 on-behalf vote" in ack_text
+        assert "1 failed" in ack_text
+
+    def test_page_picks_survive_pagination(self, seeded_db):
+        """Picks made on page 1 persist when the officer paginates to
+        page 2 and ticks more names. Replacement is page-scoped — only
+        unticking on the current page removes a pick."""
+        roster = [{"name": f"Member{i:03d}"} for i in range(40)]
+        view = sov._OnBehalfVoteView(
+            self._fake_parent_view(), roster, teams_setting="both",
+        )
+        # Manually seed page-1 picks (simulating an earlier Select
+        # interaction).
+        view.selected_members = ["Member000", "Member001"]
+        view.page = 1
+        view._build_components()
+        # Add a page-2 pick via direct list mutation (the Select callback
+        # would do the same kept+new merge).
+        view.selected_members = ["Member000", "Member001", "Member025"]
+        view.page = 0
+        view._build_components()
+        # All three survive across the page flip.
+        assert sorted(view.selected_members) == [
+            "Member000", "Member001", "Member025",
+        ]
+
+
+class TestOnBehalfAckFormatting:
+    """#218 — `_format_on_behalf_ack` covers single, multi, partial-fail
+    and all-fail paths. Single-pick keeps the original bold-name copy
+    so existing tester muscle memory still matches."""
+
+    def test_single_recorded_keeps_original_phrasing(self):
+        assert sov._format_on_behalf_ack(["Alice"], [], "a") == (
+            "✅ Recorded on-behalf vote for **Alice**."
+        )
+
+    def test_multi_recorded_uses_count_and_preview(self):
+        ack = sov._format_on_behalf_ack(
+            ["Alice", "Bob", "Carol"], [], "either",
+        )
+        assert "3 on-behalf vote" in ack
+        assert "Either" in ack
+        assert "Alice" in ack and "Bob" in ack and "Carol" in ack
+
+    def test_long_preview_caps_at_preview_count_with_overflow(self):
+        names = [f"M{i}" for i in range(10)]
+        ack = sov._format_on_behalf_ack(names, [], "a")
+        assert "+5 more" in ack
+        # First five names show, rest don't.
+        for name in names[:sov._ACK_NAME_PREVIEW]:
+            assert name in ack
+        for name in names[sov._ACK_NAME_PREVIEW:]:
+            assert name not in ack
+
+    def test_all_failed_returns_warning(self):
+        ack = sov._format_on_behalf_ack([], ["Alice", "Bob"], "a")
+        assert ack.startswith("⚠️")
+        assert "any of the 2" in ack
+
+    def test_partial_failure_appends_failed_count(self):
+        ack = sov._format_on_behalf_ack(
+            ["Alice", "Bob"], ["Carol"], "a",
+        )
+        assert "2 on-behalf vote" in ack
+        assert "1 failed" in ack
 
 
 class TestOfficerViewTeamsGate:

@@ -9,6 +9,7 @@ view + modal are integration territory and not unit-tested here.
 import pytest
 from unittest.mock import MagicMock, patch
 
+import discord
 import storm_roster_builder as srb
 import storm_strategy as ss
 import storm_member_rules as smr
@@ -1450,6 +1451,107 @@ class TestAutoFillButtonGate:
         assert not any("Auto-fill" in lab for lab in labels)
 
 
+class TestApprovePostButtonSplit:
+    """#225: Approve & Post offers a per-send choice between attaching
+    the rendered image and posting text only. Flat-structured shows
+    two main-view buttons; phase-aware structured (no spare row) keeps
+    one Approve button that opens an ephemeral picker."""
+
+    def test_flat_structured_shows_two_approve_buttons(self):
+        session = _make_session(team="A")
+        session.event_date = "2026-05-18"
+        view = srb.RosterBuilderView(session)
+        labels = [getattr(c, "label", "") for c in view.children]
+        assert any("Approve & Post (with image)" in lab for lab in labels)
+        assert any("Approve & Post (text only)" in lab for lab in labels)
+
+    def test_flat_structured_drops_the_legacy_single_approve_label(self):
+        # The legacy unified "✅ Approve & Post" button is gone — its
+        # role is split across the two new buttons.
+        session = _make_session(team="A")
+        session.event_date = "2026-05-18"
+        view = srb.RosterBuilderView(session)
+        labels = [getattr(c, "label", "") for c in view.children]
+        assert "✅ Approve & Post" not in labels
+
+    def test_flat_structured_layout_has_post_row_above_final_row(self):
+        """Auto-fill, Generate image, and Preview mail sit on the post
+        row (row 3 in flat-structured); the destructive Approve / Cancel
+        actions occupy the final row (row 4)."""
+        session = _make_session(team="A")
+        session.event_date = "2026-05-18"
+        view = srb.RosterBuilderView(session)
+        rows_by_label: dict[str, int] = {}
+        for c in view.children:
+            label = getattr(c, "label", None)
+            row = getattr(c, "row", None)
+            if label:
+                rows_by_label[label] = row
+        # Auto-fill, Preview mail, Generate <event> assignments image
+        # all share post_row.
+        auto_row = next(r for l, r in rows_by_label.items() if "Auto-fill" in l)
+        preview_row = next(r for l, r in rows_by_label.items() if "Preview mail" in l)
+        gen_image_row = next(
+            r for l, r in rows_by_label.items() if "Generate" in l and "image" in l
+        )
+        assert auto_row == preview_row == gen_image_row
+        # Approve & Cancel share final_row, exactly one row below.
+        approve_image_row = next(
+            r for l, r in rows_by_label.items() if "with image" in l
+        )
+        approve_text_row = next(
+            r for l, r in rows_by_label.items() if "text only" in l
+        )
+        cancel_row = next(r for l, r in rows_by_label.items() if "Cancel" in l)
+        assert approve_image_row == approve_text_row == cancel_row
+        assert approve_image_row == auto_row + 1
+
+    def test_phase_aware_structured_keeps_single_approve_button(self):
+        # Phase-aware can't add a post_row (rows 0-4 are full), so the
+        # split happens behind an ephemeral picker. Only one Approve
+        # button shows on the main view.
+        from unittest.mock import patch
+        sess = _make_phase_aware_session()
+        sess.event_date = "2026-05-18"
+        view = srb.RosterBuilderView(sess)
+        labels = [getattr(c, "label", "") for c in view.children]
+        # The unified "Approve & Post" label is back for phase-aware.
+        assert any(lab.endswith("Approve & Post") for lab in labels)
+        # The split-variant labels are NOT on the main view.
+        assert not any("with image" in lab for lab in labels)
+        assert not any("text only" in lab for lab in labels)
+
+    def test_phase_aware_picker_view_has_both_variants(self):
+        # The ephemeral picker carries both variants plus a cancel
+        # affordance.
+        sess = _make_phase_aware_session()
+        sess.event_date = "2026-05-18"
+        parent = srb.RosterBuilderView(sess)
+        picker = srb._ApprovePostPickerView(parent_view=parent)
+        labels = [getattr(c, "label", "") for c in picker.children]
+        assert any("With image" in lab for lab in labels)
+        assert any("Text only" in lab for lab in labels)
+        assert any("Cancel" in lab for lab in labels)
+
+    def test_free_tier_keeps_standalone_generate_image_on_final_row(self):
+        # Free-tier has no Approve & Post and no post_row — Generate
+        # image stays on final_row alongside Generate mail / Save preset
+        # / Done so the officer can still grab the PNG manually.
+        session = _make_session(team="A")  # event_date None → free-tier
+        view = srb.RosterBuilderView(session)
+        rows_by_label: dict[str, int] = {}
+        for c in view.children:
+            label = getattr(c, "label", None)
+            row = getattr(c, "row", None)
+            if label:
+                rows_by_label[label] = row
+        gen_image_row = next(
+            r for l, r in rows_by_label.items() if "Generate" in l and "image" in l
+        )
+        done_row = next(r for l, r in rows_by_label.items() if "Done" in l)
+        assert gen_image_row == done_row
+
+
 class TestNonDiscordAutoDetect:
     """#139 — auto-detect non-Discord roster rows via two paths:
       * Blank Discord ID cell.
@@ -2052,6 +2154,61 @@ class TestFinalizePostOutcomes:
         sent = inter.followup.send.await_args.args[0]
         assert "Roster posted." in sent
         assert "<#12345>" in sent
+
+    @pytest.mark.asyncio
+    async def test_include_image_attaches_png_to_send(self, fake_env):
+        """#225: `include_image=True` renders the roster and passes the
+        PNG to `channel.send` as the `file=` argument so the post lands
+        with both text and image."""
+        from unittest.mock import patch
+        ch = self._make_fake_channel(12345, mention="<#12345>")
+        inter, view, _ = self._make_structured_view(
+            fake_env, channel=ch, channel_id=12345,
+        )
+        fake_png = b"\x89PNG\r\n\x1a\nfake-png-bytes"
+        with patch("storm_renderer.render", return_value=fake_png):
+            await srb._finalize_structured_roster(inter, view, include_image=True)
+        ch.send.assert_awaited_once()
+        # Mail in args[0], image in `file` kwarg.
+        kwargs = ch.send.await_args.kwargs
+        assert "file" in kwargs
+        attached = kwargs["file"]
+        assert isinstance(attached, discord.File)
+        assert attached.filename.endswith(".png")
+
+    @pytest.mark.asyncio
+    async def test_text_only_skips_file_argument(self, fake_env):
+        ch = self._make_fake_channel(12345, mention="<#12345>")
+        inter, view, _ = self._make_structured_view(
+            fake_env, channel=ch, channel_id=12345,
+        )
+        await srb._finalize_structured_roster(inter, view, include_image=False)
+        ch.send.assert_awaited_once()
+        # No `file=` kwarg in text-only mode.
+        assert "file" not in ch.send.await_args.kwargs
+
+    @pytest.mark.asyncio
+    async def test_render_failure_falls_back_to_text_with_warning(self, fake_env):
+        """Pillow missing / encode failure on the with-image path drops
+        the attachment, posts text-only, and tacks the failure reason
+        onto the officer ephemeral so the missing image isn't silent."""
+        from unittest.mock import patch
+        ch = self._make_fake_channel(12345, mention="<#12345>")
+        inter, view, _ = self._make_structured_view(
+            fake_env, channel=ch, channel_id=12345,
+        )
+        with patch(
+            "storm_renderer.render",
+            side_effect=RuntimeError("Pillow not installed"),
+        ):
+            await srb._finalize_structured_roster(inter, view, include_image=True)
+        ch.send.assert_awaited_once()
+        # No file attached — render failed but post still went through.
+        assert "file" not in ch.send.await_args.kwargs
+        # Officer ephemeral carries both the success line AND a warning.
+        sent = inter.followup.send.await_args.args[0]
+        assert "Roster posted" in sent
+        assert "Couldn't attach the image" in sent
 
 
 class TestPowerSnapshotAtFinalize:

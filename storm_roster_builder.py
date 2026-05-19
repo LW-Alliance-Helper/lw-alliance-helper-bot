@@ -1390,14 +1390,39 @@ class RosterBuilderView(discord.ui.View):
         self.clear_items()
         s = self.session
 
-        # Row layout adapts to phase-aware (#152). Phase-aware presets
-        # reserve row 0 for the Phase 1 / Phase 2 nav buttons, pushing
-        # every other component down by one row. Flat presets keep the
-        # original 4-row layout (zone, member, actions, finalisation).
-        zone_row = 1 if s.is_phase_aware else 0
-        member_row = 2 if s.is_phase_aware else 1
-        action_row = 3 if s.is_phase_aware else 2
-        final_row = 4 if s.is_phase_aware else 3
+        # Row layout adapts to phase-aware (#152) and structured-mode
+        # post controls (#225). Discord caps a View at 5 ActionRows.
+        #
+        # Phase-aware flat layout — both modes:
+        #   row 0: Stage nav buttons (phase-aware) OR zone select (flat)
+        #
+        # Structured-mode flat reshuffles so the "post tools" sit on a
+        # dedicated row above the destructive Approve / Cancel actions
+        # (per #225's drawn layout). Phase-aware structured can't add a
+        # post_row (rows 0-4 are already used) so it keeps the
+        # historical 4-row layout and the Approve button opens an
+        # ephemeral picker for the with-image / text-only choice.
+        if s.is_structured and not s.is_phase_aware:
+            # Flat structured: 5 rows.
+            zone_row = 0
+            member_row = 1
+            action_row = 2
+            post_row = 3
+            final_row = 4
+        elif s.is_phase_aware:
+            # Phase-aware (structured or free-tier): no post_row.
+            zone_row = 1
+            member_row = 2
+            action_row = 3
+            post_row = None
+            final_row = 4
+        else:
+            # Flat free-tier: no post_row.
+            zone_row = 0
+            member_row = 1
+            action_row = 2
+            post_row = None
+            final_row = 3
 
         # Row 0 — Phase navigation (phase-aware presets only). Walks
         # `iter_phases()` so 3-phase presets get a Phase 3 button.
@@ -1653,10 +1678,15 @@ class RosterBuilderView(discord.ui.View):
         # Row 3 — finalisation. Structured-mode adds an Approve & Post
         # button that fires the rosters_tab write + auto-post; free
         # tier gets Generate-mail-only (officer copies manually).
+        # Auto-fill sits on post_row in flat-structured (#225) so the
+        # destructive Approve / Cancel row stays clean; phase-aware
+        # structured keeps it on action_row since post_row doesn't
+        # exist there.
+        auto_fill_row = post_row if (s.is_structured and post_row is not None) else action_row
         if s.is_structured:
             auto_fill_btn = discord.ui.Button(
                 label="🎯 Auto-fill",
-                style=discord.ButtonStyle.primary, row=action_row,
+                style=discord.ButtonStyle.primary, row=auto_fill_row,
             )
 
             async def _run_auto_fill(inter: discord.Interaction):
@@ -1726,21 +1756,69 @@ class RosterBuilderView(discord.ui.View):
             auto_fill_btn.callback = _auto_fill
             self.add_item(auto_fill_btn)
 
-            approve_btn = discord.ui.Button(
-                label="✅ Approve & Post",
-                style=discord.ButtonStyle.success, row=final_row,
-            )
+            # Approve & Post (#225). Flat-structured presents two
+            # buttons on final_row so the officer can pick image vs
+            # text-only in one click. Phase-aware structured can't fit
+            # two buttons (rows 0-4 are full and the row-of-five limit
+            # would force dropping another action), so it keeps one
+            # Approve button that opens an ephemeral picker.
+            if post_row is not None:
+                approve_image_btn = discord.ui.Button(
+                    label="🖼️ Approve & Post (with image)",
+                    style=discord.ButtonStyle.success, row=final_row,
+                )
 
-            async def _approve(inter: discord.Interaction):
-                if not await self._guard_owner(inter):
-                    return
-                await _finalize_structured_roster(inter, self)
+                async def _approve_with_image(inter: discord.Interaction):
+                    if not await self._guard_owner(inter):
+                        return
+                    await _finalize_structured_roster(
+                        inter, self, include_image=True,
+                    )
 
-            approve_btn.callback = _approve
-            self.add_item(approve_btn)
+                approve_image_btn.callback = _approve_with_image
+                self.add_item(approve_image_btn)
 
+                approve_text_btn = discord.ui.Button(
+                    label="📄 Approve & Post (text only)",
+                    style=discord.ButtonStyle.success, row=final_row,
+                )
+
+                async def _approve_text_only(inter: discord.Interaction):
+                    if not await self._guard_owner(inter):
+                        return
+                    await _finalize_structured_roster(
+                        inter, self, include_image=False,
+                    )
+
+                approve_text_btn.callback = _approve_text_only
+                self.add_item(approve_text_btn)
+            else:
+                approve_btn = discord.ui.Button(
+                    label="✅ Approve & Post",
+                    style=discord.ButtonStyle.success, row=final_row,
+                )
+
+                async def _approve(inter: discord.Interaction):
+                    if not await self._guard_owner(inter):
+                        return
+                    # Phase-aware: open the ephemeral picker.
+                    picker = _ApprovePostPickerView(parent_view=self)
+                    await inter.response.send_message(
+                        "📬 **Approve & Post.** Pick how to post the roster:",
+                        view=picker, ephemeral=True,
+                    )
+                    try:
+                        picker.message = await inter.original_response()
+                    except discord.HTTPException:
+                        picker.message = None
+
+                approve_btn.callback = _approve
+                self.add_item(approve_btn)
+
+            preview_row = post_row if post_row is not None else final_row
             preview_btn = discord.ui.Button(
-                label="📄 Preview mail", style=discord.ButtonStyle.secondary, row=final_row,
+                label="📄 Preview mail",
+                style=discord.ButtonStyle.secondary, row=preview_row,
             )
 
             async def _preview(inter: discord.Interaction):
@@ -1778,14 +1856,17 @@ class RosterBuilderView(discord.ui.View):
         # Image render — available in both modes. Posts a PNG attachment
         # alongside the main message. Pillow import happens lazily inside
         # the handler so the builder doesn't pay the import cost unless
-        # the button's clicked.
+        # the button's clicked. In flat-structured mode the button sits
+        # on post_row alongside Auto-fill / Preview mail (#225); other
+        # modes keep it on final_row.
         render_label = (
             "🖼️ Generate DS assignments image"
             if s.event_type == "DS"
             else "🖼️ Generate CS assignments image"
         )
+        render_row = post_row if post_row is not None else final_row
         render_btn = discord.ui.Button(
-            label=render_label, style=discord.ButtonStyle.secondary, row=final_row,
+            label=render_label, style=discord.ButtonStyle.secondary, row=render_row,
         )
 
         async def _render(inter: discord.Interaction):
@@ -1990,6 +2071,88 @@ class _AutoFillConfirmView(discord.ui.View):
         try:
             await inter.response.edit_message(
                 content="↩️ Auto-fill cancelled. Your edits are intact.",
+                view=self,
+            )
+        except discord.HTTPException:
+            pass
+
+    async def on_timeout(self) -> None:
+        for item in self.children:
+            item.disabled = True
+        if self.message is not None:
+            try:
+                await self.message.edit(view=self)
+            except discord.HTTPException:
+                pass
+
+
+class _ApprovePostPickerView(discord.ui.View):
+    """Phase-aware-only fallback for the Approve & Post choice (#225).
+
+    Flat-structured presets show two main-view buttons (Approve with
+    image / Approve text only) so the officer picks in one click. Phase-
+    aware structured can't fit two main-view buttons (Discord caps a
+    View at 5 ActionRows and phase-aware already uses all 5), so the
+    single Approve button opens this ephemeral picker instead.
+    """
+
+    def __init__(self, *, parent_view: "RosterBuilderView"):
+        super().__init__(timeout=120)
+        self.parent_view = parent_view
+        self.message: Optional[discord.Message] = None
+
+    async def _guard_owner(self, inter: discord.Interaction) -> bool:
+        if inter.user.id != self.parent_view.session.user_id:
+            await inter.response.send_message(
+                "⛔ Only the builder's owner can confirm.", ephemeral=True,
+            )
+            return False
+        return True
+
+    @discord.ui.button(label="🖼️ With image",
+                       style=discord.ButtonStyle.success)
+    async def with_image(self, inter: discord.Interaction,
+                         _btn: discord.ui.Button):
+        if not await self._guard_owner(inter):
+            return
+        if self.is_finished():
+            return
+        self.stop()
+        for item in self.children:
+            item.disabled = True
+        await _finalize_structured_roster(
+            inter, self.parent_view, include_image=True,
+        )
+
+    @discord.ui.button(label="📄 Text only",
+                       style=discord.ButtonStyle.success)
+    async def text_only(self, inter: discord.Interaction,
+                        _btn: discord.ui.Button):
+        if not await self._guard_owner(inter):
+            return
+        if self.is_finished():
+            return
+        self.stop()
+        for item in self.children:
+            item.disabled = True
+        await _finalize_structured_roster(
+            inter, self.parent_view, include_image=False,
+        )
+
+    @discord.ui.button(label="↩️ Cancel",
+                       style=discord.ButtonStyle.secondary)
+    async def cancel(self, inter: discord.Interaction,
+                     _btn: discord.ui.Button):
+        if not await self._guard_owner(inter):
+            return
+        if self.is_finished():
+            return
+        self.stop()
+        for item in self.children:
+            item.disabled = True
+        try:
+            await inter.response.edit_message(
+                content="↩️ Approve cancelled. Roster not posted.",
                 view=self,
             )
         except discord.HTTPException:
@@ -3063,9 +3226,18 @@ def _signup_filter_keys(
 
 async def _finalize_structured_roster(
     interaction: discord.Interaction, view: RosterBuilderView,
+    *, include_image: bool = False,
 ) -> None:
     """Approve & Post: posts the structured mail to the configured
-    post channel and writes one row per slot to rosters_tab."""
+    post channel and writes one row per slot to rosters_tab.
+
+    `include_image=True` (#225) renders the roster as a PNG and
+    attaches it to the same `channel.send` that carries the mail body,
+    so the post lands as one message with both. Render failure (Pillow
+    missing, encode error, >25 MB) falls back to text-only — the post
+    still goes through, and the officer ephemeral confirmation tacks on
+    a warning so the missing attachment isn't silent.
+    """
     import config
     import storm
 
@@ -3118,6 +3290,62 @@ async def _finalize_structured_roster(
     if post_channel_id and interaction.guild:
         post_channel = interaction.guild.get_channel(post_channel_id)
 
+    # Render the PNG up front (when requested) so we can attach it to
+    # the channel.send call. Render failure falls back to text-only and
+    # gets reported in the officer ephemeral so the missing attachment
+    # isn't silent (#225).
+    image_warning: Optional[str] = None
+    image_file: Optional[discord.File] = None
+    if include_image and post_channel_id and post_channel is not None:
+        try:
+            import storm_renderer
+            roster_data = storm_renderer.roster_from_session(s)
+            png_bytes = await asyncio.to_thread(
+                storm_renderer.render, roster_data,
+            )
+        except RuntimeError as e:
+            # Pillow missing — host doesn't have the dependency installed.
+            image_warning = (
+                "Couldn't attach the image (host is missing Pillow). "
+                "Posted text only."
+            )
+            logger.warning(
+                "[STORM STRUCTURED] image render skipped (Pillow missing) "
+                "guild=%s event=%s: %s",
+                s.guild_id, s.event_type, e,
+            )
+            png_bytes = None
+        except Exception as e:
+            image_warning = (
+                f"Couldn't attach the image: `{type(e).__name__}: "
+                f"{str(e)[:120]}`. Posted text only."
+            )
+            logger.exception(
+                "[STORM STRUCTURED] image render failed guild=%s event=%s",
+                s.guild_id, s.event_type,
+            )
+            png_bytes = None
+        if png_bytes is not None:
+            if len(png_bytes) > _MAX_ATTACHMENT_BYTES:
+                image_warning = (
+                    f"Rendered image too large to attach "
+                    f"({len(png_bytes) // (1024 * 1024)} MB > 25 MB Discord "
+                    f"limit). Posted text only."
+                )
+                logger.warning(
+                    "[STORM STRUCTURED] image too large to attach (size=%d "
+                    "guild=%s event=%s)",
+                    len(png_bytes), s.guild_id, s.event_type,
+                )
+            else:
+                filename = (
+                    f"{s.event_type.lower()}-roster"
+                    + (f"-{s.event_date}" if s.event_date else "")
+                    + (f"-team-{s.team}" if s.team else "")
+                    + ".png"
+                )
+                image_file = discord.File(io.BytesIO(png_bytes), filename=filename)
+
     # Distinguish three outcomes for the officer-facing summary:
     #   no_channel    — alliance never configured a post channel
     #   channel_gone  — channel_id is set but the channel was deleted /
@@ -3134,7 +3362,10 @@ async def _finalize_structured_roster(
         post_status = "channel_gone"
     else:
         try:
-            await post_channel.send(mail)
+            if image_file is not None:
+                await post_channel.send(mail, file=image_file)
+            else:
+                await post_channel.send(mail)
             posted_to_mention = post_channel.mention
             post_status = "posted_ok"
         except Exception as e:
@@ -3183,6 +3414,8 @@ async def _finalize_structured_roster(
         ]
     if write_errors:
         summary_lines.append("⚠️ " + write_errors[0])
+    if image_warning is not None:
+        summary_lines.append("⚠️ " + image_warning)
 
     # Slim public ack on the original builder message.
     try:

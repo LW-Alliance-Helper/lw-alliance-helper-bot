@@ -3406,9 +3406,13 @@ async def _finalize_structured_roster(
     # Render the PNG up front (when requested) so we can attach it to
     # the channel.send call. Render failure falls back to text-only and
     # gets reported in the officer ephemeral so the missing attachment
-    # isn't silent (#225).
+    # isn't silent (#225). The renderer also populates
+    # `roster_data.overflow` with members who couldn't fit the slot
+    # grid (#228 follow-up); we stash the list for the second-ephemeral
+    # warning posted after the channel.send.
     image_warning: Optional[str] = None
     image_file: Optional[discord.File] = None
+    image_overflow: list = []
     if include_image and post_channel_id and post_channel is not None:
         try:
             import storm_renderer
@@ -3416,6 +3420,7 @@ async def _finalize_structured_roster(
             png_bytes = await asyncio.to_thread(
                 storm_renderer.render, roster_data,
             )
+            image_overflow = list(roster_data.overflow or [])
         except RuntimeError as e:
             # Pillow missing — host doesn't have the dependency installed.
             image_warning = (
@@ -3548,6 +3553,43 @@ async def _finalize_structured_roster(
         preview = mail if len(mail) <= 1800 else mail[:1780] + "\n…(truncated)"
         detail += f"\n\n```\n{preview}\n```"
     await interaction.followup.send(detail, ephemeral=True)
+
+    # #228 follow-up: if the rendered image couldn't fit every member
+    # (slot grid capped at `max_rows` per zone), surface the names
+    # that fell out as a SECOND ephemeral so the officer catches it.
+    # The members are still in the rosters_tab and the mail body — the
+    # warning only covers the image render. Officer-actionable hint:
+    # shorter Discord display names take up less of the slot grid.
+    if image_overflow and post_status == "posted_ok":
+        # Group by (zone, stage) so the warning reads cleanly.
+        from collections import OrderedDict
+        grouped: "OrderedDict[tuple[str, int], list[str]]" = OrderedDict()
+        for entry in image_overflow:
+            key = (entry.canonical_zone, entry.phase)
+            grouped.setdefault(key, []).append(entry.name)
+        bullet_lines = []
+        for (zone, phase), names in grouped.items():
+            label = f"**{zone}**"
+            if phase >= 1:
+                label += f" Stage {phase}"
+            bullet_lines.append(f"• {label}: {', '.join(names)}")
+        warning = (
+            f"⚠️ **{len(image_overflow)} member(s) didn't fit in the "
+            f"posted image.** They're still in the mail body and the "
+            f"rosters_tab — only the image render dropped them.\n\n"
+            + "\n".join(bullet_lines)
+            + "\n\nShorter Discord display names (≤ 20 chars) help — "
+            "the image render truncates anything longer and a long "
+            "name eats one slot in its zone's row grid."
+        )
+        try:
+            await interaction.followup.send(warning, ephemeral=True)
+        except discord.HTTPException as e:
+            logger.warning(
+                "[STORM STRUCTURED] overflow warning followup failed "
+                "(guild=%s event=%s): %s",
+                s.guild_id, s.event_type, e,
+            )
 
     view._release_session_lock()
     view.stop()

@@ -2346,6 +2346,73 @@ class TestFinalizePostOutcomes:
         assert "Roster posted" in sent
         assert "Couldn't attach the image" in sent
 
+    @pytest.mark.asyncio
+    async def test_overflow_ephemeral_warns_about_clipped_members(self, fake_env):
+        """#228 follow-up: when the rendered image can't fit every
+        member (slot grid `max_rows` cap), a second ephemeral lists
+        the names that dropped so the officer can react. Members are
+        still in the mail body + rosters_tab — only the image clips
+        them."""
+        from unittest.mock import patch
+        import storm_renderer as sr
+        ch = self._make_fake_channel(12345, mention="<#12345>")
+        inter, view, _ = self._make_structured_view(
+            fake_env, channel=ch, channel_id=12345,
+        )
+        fake_png = b"\x89PNG\r\n\x1a\nfake-png-bytes"
+
+        # Simulate a render that produces a PNG AND surfaces overflow.
+        # `storm_renderer.render` populates `roster.overflow` on the
+        # RosterData it was given, so we patch the function to do the
+        # same in-place mutation.
+        def _fake_render(roster_data):
+            roster_data.overflow = [
+                sr._OverflowEntry(
+                    canonical_zone="Nuclear Silo", phase=2, name="Member 7",
+                ),
+                sr._OverflowEntry(
+                    canonical_zone="Nuclear Silo", phase=2, name="Member 14",
+                ),
+            ]
+            return fake_png
+
+        with patch("storm_renderer.render", side_effect=_fake_render):
+            await srb._finalize_structured_roster(inter, view, include_image=True)
+
+        # The first followup carries the standard confirmation. The
+        # second followup is the overflow warning.
+        assert inter.followup.send.await_count == 2
+        first_msg = inter.followup.send.await_args_list[0].args[0]
+        second_msg = inter.followup.send.await_args_list[1].args[0]
+        assert "Roster posted" in first_msg
+        assert "didn't fit" in second_msg
+        assert "Nuclear Silo" in second_msg
+        assert "Member 7" in second_msg
+        assert "Member 14" in second_msg
+
+    @pytest.mark.asyncio
+    async def test_no_overflow_ephemeral_when_everyone_fits(self, fake_env):
+        """If `roster.overflow` is empty (the typical case), the
+        second-ephemeral path is skipped — just the standard
+        confirmation goes out."""
+        from unittest.mock import patch
+        ch = self._make_fake_channel(12345, mention="<#12345>")
+        inter, view, _ = self._make_structured_view(
+            fake_env, channel=ch, channel_id=12345,
+        )
+        fake_png = b"\x89PNG\r\n\x1a\nfake-png-bytes"
+
+        def _fake_render(roster_data):
+            roster_data.overflow = []
+            return fake_png
+
+        with patch("storm_renderer.render", side_effect=_fake_render):
+            await srb._finalize_structured_roster(inter, view, include_image=True)
+
+        # Only the standard confirmation ephemeral fires; no overflow
+        # warning because there's nothing to warn about.
+        assert inter.followup.send.await_count == 1
+
 
 class TestPowerSnapshotAtFinalize:
     @pytest.mark.asyncio

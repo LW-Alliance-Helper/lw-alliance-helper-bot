@@ -84,6 +84,10 @@ class RosterData:
     team_label: str = ""                            # "Team A" / "Rulebringers" / ""
     event_date_label: str = ""                      # human-readable date string
     phase_count: int = 0                            # 0 = flat, 2 or 3 = phase-aware
+    # Populated by `render()` after the slot-flow layout runs (#227):
+    # any names that couldn't fit inside their zone's pill go here so
+    # the caller can warn the officer in a post-Approve ephemeral.
+    overflow: list = field(default_factory=list)
 
 
 # ── Asset paths ──────────────────────────────────────────────────────
@@ -136,6 +140,44 @@ _CS_ICON_FILES: dict[str, Optional[str]] = {
 SCALE = 2
 
 
+# Locked sizes per the alliance lead's design spec. Converted from
+# typographic points to SCALEd pixels via the 96-DPI web convention.
+#
+# Post-#227 redesign: every label inside a zone pill (title pill text
+# + member text) is 8 pt. The new pill-rendering engine packs names
+# into slot grids sized to fit 20-char in-game names at 8 pt; no font
+# auto-shrink anywhere. The canvas header (event / team / date)
+# stays at 14 pt bold.
+_LABEL_PT = 8
+_HEADER_PT = 14
+
+# Subs panel table font (paired mode). Same 8 pt as label text now
+# that label and table both target the 20-char username max at the
+# same point size. Kept as a separate constant so the table can shrink
+# independently if the subs panel layout ever changes.
+_SUBS_TABLE_PT = 8
+
+# Long-name threshold. Names with `> _LONG_NAME_CHARS` rendered glyph
+# count are treated as "wide" and take a full row inside their pill,
+# absorbing the other column slots in that row. Slot widths are sized
+# to fit this many characters at `_LABEL_PT`.
+_LONG_NAME_CHARS = 20
+
+# Max rows allowed inside a central-column zone pill (DS Arsenal /
+# Nuclear Silo / Mercenary Factory). Outer pills grow vertically until
+# they collide with the next zone; central pills cap here so the icon
+# above stays visible.
+_CENTRAL_MAX_ROWS = 7
+
+# Max rows for outer zones (DS left / right columns, all CS zones).
+# Derived from the typical vertical headroom between adjacent zones
+# in the layout grid (~148 SVG of available vertical at SCALE=2,
+# divided by row pitch of ~12.5 SVG). Going beyond this overflows
+# into the next zone's space, so the algorithm falls back to 2-col
+# packing instead.
+_OUTER_MAX_ROWS = 11
+
+
 @dataclass(frozen=True)
 class Box:
     """Pixel-coordinate box in SVG units. The renderer multiplies by
@@ -148,10 +190,31 @@ class Box:
 
 @dataclass(frozen=True)
 class ZoneLayout:
-    """One zone's three layout pills + icon position."""
+    """One zone's three layout pills + icon position.
+
+    Post-#227: the `text` Box is treated as the *anchor* for the
+    member-list pill (top-left corner + maximum width). Actual pill
+    height is computed at render time from the content via the
+    `max_cols` slot grid plus the optional `max_rows` cap. Pills grow
+    downward beyond `text.h` when content requires it; `text.h` is
+    used only as the *minimum* pill height so empty zones still render
+    a visible pill.
+
+    `max_cols` is the number of name slots packed horizontally inside
+    the pill. Outer DS zones (left/right map columns) use 2 cols;
+    central DS zones (Arsenal / Nuclear Silo / Mercenary Factory)
+    use 3. CS uses 2 across the board.
+
+    `max_rows` caps the vertical row count for central zones (7 per
+    the alliance lead's spec) so the pill can't outgrow the space
+    below the icon. Outer zones leave this as `None` and accept
+    however many rows the content needs.
+    """
     title: Box
     text: Box
     icon: Box
+    max_cols: int = 2
+    max_rows: Optional[int] = None
 
 
 @dataclass(frozen=True)
@@ -191,63 +254,73 @@ _DS_LAYOUT = EventLayout(
     spawn_rects=[
         # DS spawn squares — narrow vertical strips at left/right edges.
         # Game-defined colours: Team A blue, Team B red.
-        (Box(0, 289.84, 38.33, 213.57),       (92, 124, 199, 255)),    # blue
-        (Box(883.01, 287.32, 38.33, 213.57),  (208, 102, 99, 255)),    # red
+        (Box(0, 289.84, 38.33, 213.57),       (92, 124, 199, 204)),    # blue
+        (Box(883.01, 287.32, 38.33, 213.57),  (208, 102, 99, 204)),    # red
     ],
     zones={
         "Info Center": ZoneLayout(
-            title=Box(48.39, 85.63, 213.64, 16.79),
-            text=Box(48.38, 106.20, 127.34, 136.60),
+            title=Box(48.39, 85.63, 223.34, 16.79),
+            text=Box(48.38, 106.20, 127.34, 60.00),
             icon=Box(175.08, 102.42, 96, 96),
         ),
         "Oil Refinery I": ZoneLayout(
             title=Box(58.31, 252.84, 223.34, 16.79),
-            text=Box(154.31, 273.41, 127.34, 136.60),
+            text=Box(154.31, 273.41, 127.34, 60.00),
             icon=Box(57.47, 269.52, 96, 96),
         ),
         "Field Hospital I": ZoneLayout(
             title=Box(58.31, 420.84, 223.34, 16.79),
-            text=Box(154.31, 441.41, 127.34, 136.60),
+            text=Box(154.31, 441.41, 127.34, 60.00),
             icon=Box(58.31, 437.63, 96, 96),
         ),
         "Field Hospital II": ZoneLayout(
-            title=Box(51.19, 589.63, 219.91, 16.79),
-            text=Box(52.01, 610.20, 127.34, 136.60),
+            title=Box(51.19, 589.63, 223.34, 16.79),
+            text=Box(52.01, 610.20, 127.34, 60.00),
             icon=Box(178.70, 606.42, 96, 96),
         ),
+        # Central DS zones use 3 column slots (vs 2 for outer) and cap
+        # at 7 vertical rows so the pill can't outgrow the space below
+        # the icon. Pill width widened to 200 SVG units so 3 slots fit
+        # at 8 pt + the long-name absorption case.
         "Arsenal": ZoneLayout(
-            title=Box(399.22, 77.35, 127.34, 16.79),
-            text=Box(399.22, 189.94, 127.34, 74.05),
+            title=Box(362.89, 77.35, 200.00, 16.79),
+            text=Box(362.89, 189.94, 200.00, 60.00),
             icon=Box(413.21, 94.13, 96, 96),
+            max_cols=3,
+            max_rows=_CENTRAL_MAX_ROWS,
         ),
         "Nuclear Silo": ZoneLayout(
-            title=Box(400.19, 329.72, 127.34, 16.79),
-            text=Box(399.22, 434.32, 127.34, 74.05),
+            title=Box(362.89, 329.72, 200.00, 16.79),
+            text=Box(362.89, 434.32, 200.00, 60.00),
             icon=Box(415.57, 341.69, 96, 96),
+            max_cols=3,
+            max_rows=_CENTRAL_MAX_ROWS,
         ),
         "Mercenary Factory": ZoneLayout(
-            title=Box(399.22, 563.90, 128.31, 16.79),
-            text=Box(399.22, 676.49, 127.34, 74.05),
+            title=Box(362.89, 563.90, 200.00, 16.79),
+            text=Box(362.89, 676.49, 200.00, 60.00),
             icon=Box(413.21, 580.68, 96, 96),
+            max_cols=3,
+            max_rows=_CENTRAL_MAX_ROWS,
         ),
         "Field Hospital IV": ZoneLayout(
             title=Box(658.94, 86.16, 223.34, 16.79),
-            text=Box(754.94, 106.73, 127.34, 136.60),
+            text=Box(754.94, 106.73, 127.34, 60.00),
             icon=Box(658.95, 102.95, 96, 96),
         ),
         "Field Hospital III": ZoneLayout(
             title=Box(640.77, 252.09, 223.34, 16.79),
-            text=Box(641.59, 272.65, 127.34, 136.60),
+            text=Box(641.59, 272.65, 127.34, 60.00),
             icon=Box(768.29, 268.87, 96, 96),
         ),
         "Oil Refinery II": ZoneLayout(
             title=Box(644.13, 420.91, 223.34, 16.79),
-            text=Box(644.12, 441.48, 127.34, 136.60),
+            text=Box(644.12, 441.48, 127.34, 60.00),
             icon=Box(771.46, 437.63, 96, 96),
         ),
         "Science Hub": ZoneLayout(
             title=Box(658.94, 589.74, 223.34, 16.79),
-            text=Box(754.94, 610.31, 127.34, 136.60),
+            text=Box(754.94, 610.31, 127.34, 60.00),
             icon=Box(658.94, 606.42, 96, 96),
         ),
     },
@@ -269,17 +342,22 @@ _DS_LAYOUT = EventLayout(
 
 
 _CS_LAYOUT = EventLayout(
-    svg_w=1235.67, svg_h=1045.44,
+    # Post-#227: canvas height shrunk from 1045 to 938 SVG (~107 SVG)
+    # so the bottom spawn rectangles sit close to the Sample Warehouse
+    # icon row rather than carrying a huge empty band below. The
+    # subs sidebar contracts to match; logo slot below the pair table
+    # stays generous enough at the new bottom.
+    svg_w=1235.67, svg_h=938.44,
     header=Box(0, 0, 1235.67, 48.00),
-    bg_main=Box(1.30, 46.77, 1049.07, 996.44),
-    bg_subs=Box(1050.26, 47.62, 184.79, 996.44),
+    bg_main=Box(1.30, 46.77, 1049.07, 889.44),
+    bg_subs=Box(1050.26, 47.62, 184.79, 889.44),
     spawn_rects=[
         # CS spawn bands — game-defined factions.
         # Rulebringers (blue) — single horizontal band at top.
-        (Box(343.01, 47.48, 349.54, 38.33),    (92, 124, 199, 255)),
+        (Box(343.01, 47.48, 349.54, 38.33),    (92, 124, 199, 204)),
         # Dawnbreakers (red) — split into two horizontal bands at bottom.
-        (Box(117.97, 1004.88, 392.00, 38.33),  (208, 102, 99, 255)),
-        (Box(550.35, 1004.88, 374.27, 38.33),  (208, 102, 99, 255)),
+        (Box(117.97, 897.88, 392.00, 38.33),   (208, 102, 99, 204)),
+        (Box(550.35, 897.88, 374.27, 38.33),   (208, 102, 99, 204)),
     ],
     zones={
         # Top row
@@ -375,15 +453,31 @@ _LAYOUTS: dict[str, EventLayout] = {
 
 
 _SAND = (218, 178, 130, 255)
+# CS background base. Deeper sage per the alliance lead's #227 dev
+# review feedback ("more of a sage / slightly deeper green than the
+# grass green you have now"). The PIL noise overlay adds subtle
+# variation on top so the canvas reads as terrain rather than flat
+# colour.
+_JUNGLE = (102, 122, 88, 255)
 _HEADER_FILL = (67, 67, 67, 255)
 _HEADER_TEXT = (245, 245, 245, 255)
-_PILL_FILL = (255, 255, 255, 126)
+# Pill fill opacity: 80% (alpha 204/255) post-#227 dev review. The
+# original ~49% read fine over the flat sand / sage fills but became
+# muddy over the painted background images. 80% keeps the slight
+# glassy / paper-over-terrain look while leaving the 8 pt text
+# readable.
+_PILL_FILL = (255, 255, 255, 204)
 _PILL_OUTLINE = (0, 0, 0, 255)
 _SPAWN_OUTLINE = (40, 40, 40, 255)
 _PLACEHOLDER_FILL = (217, 217, 217, 255)
 _PLACEHOLDER_OUTLINE = (0, 0, 0, 255)
 _TEXT_DARK = (20, 20, 20, 255)
 _TEXT_MUTED = (60, 60, 60, 255)
+
+# Background noise grain amplitude (per-channel ±). Larger = more
+# texture, smaller = closer to a solid fill. 16 reads as gentle
+# graininess at SCALE=2 without making the labels harder to read.
+_NOISE_AMPLITUDE = 16
 _PAIRS_UNDERLINE_COLOR = (158, 158, 158, 255)
 _PAIRS_DIVIDER_COLOR = (153, 153, 153, 255)
 _PAIRS_UNDERLINE_WIDTH_SVG = 3
@@ -391,28 +485,6 @@ _PAIRS_DIVIDER_WIDTH_SVG = 2
 
 
 # ── Font sizing ──────────────────────────────────────────────────────
-
-
-# Locked sizes per the alliance lead's design spec (10 pt labels +
-# members, 14 pt header). Converted from typographic points to SCALEd
-# pixels via the 96-DPI web convention. Label size bumped from 8 to 10
-# post-#222 once inline ` + sub <name>` dropped from per-zone labels —
-# bare primary names stay under the in-game 20-char username max, so
-# the pill has the horizontal room for the larger font. The shrink
-# fallback in `_pick_member_fonts` still handles long sheet-alias
-# names that exceed the in-game limit.
-_LABEL_PT = 10
-_HEADER_PT = 14
-
-# Subs panel table font (paired mode). The right-side `Subs` pill
-# renders two side-by-side columns (`Primary` | `Sub`), and each
-# column is ~half the panel width. At 10 pt bold a 20-char in-game
-# username fills the column with no gap, so adjacent rows like
-# `Bobby1269` `KayyyShawty` end up touching. 8 pt keeps two 20-char
-# names cleanly separated in the table while preserving the panel
-# header at the larger size for hierarchy. Only applies inside
-# `_draw_subs_section` — zone-pill labels stay at `_LABEL_PT`.
-_SUBS_TABLE_PT = 8
 
 
 def _pt_to_px(pt: float) -> int:
@@ -443,13 +515,29 @@ def render(roster: RosterData) -> bytes:
 
     # 1. Backgrounds: main play area + subs column. Subs column
     #    carries a 1 px black stroke whose left edge is the vertical
-    #    separator between the map and the subs section.
+    #    separator between the map and the subs section. DS uses a
+    #    sand palette; CS uses a sage / khaki green for the jungle
+    #    look the alliance lead asked for (#227). Both get a PIL noise
+    #    overlay so the canvas reads as terrain rather than flat
+    #    colour.
+    is_cs = roster.event_type.upper() == "CS"
+    bg_color = _JUNGLE if is_cs else _SAND
     bg_layer = Image.new("RGBA", canvas.size, (0, 0, 0, 0))
     bg_draw = ImageDraw.Draw(bg_layer)
-    bg_draw.rectangle(_s_box(layout.bg_main), fill=_SAND)
-    bg_draw.rectangle(_s_box(layout.bg_subs), fill=_SAND,
-                      outline=(0, 0, 0, 255), width=max(1, SCALE // 2))
+    bg_draw.rectangle(_s_box(layout.bg_main), fill=bg_color)
+    bg_draw.rectangle(_s_box(layout.bg_subs), fill=bg_color)
     canvas.alpha_composite(bg_layer)
+    # Layer the painted background image over the flat fill (#227).
+    # Procedural noise is the fallback if the asset is missing.
+    if not _apply_background_image(canvas, layout, is_cs):
+        _apply_background_noise(canvas, layout, bg_color)
+    # Re-stroke the sidebar outline AFTER the background so the
+    # divider between the map and the sidebar reads clearly.
+    border_layer = Image.new("RGBA", canvas.size, (0, 0, 0, 0))
+    border_draw = ImageDraw.Draw(border_layer)
+    border_draw.rectangle(_s_box(layout.bg_subs),
+                          outline=(0, 0, 0, 255), width=max(2, SCALE))
+    canvas.alpha_composite(border_layer)
 
     # 2. Header bar with event / team / date.
     layer = Image.new("RGBA", canvas.size, (0, 0, 0, 0))
@@ -476,6 +564,7 @@ def render(roster: RosterData) -> bytes:
     icons_dir = (_ICONS_DS_DIR if roster.event_type.upper() == "DS"
                  else _ICONS_CS_DIR)
 
+    overflow: list[_OverflowEntry] = []
     for canonical, phase_blocks in grouped.items():
         zlayout = layout.zones.get(canonical)
         if zlayout is None:
@@ -485,10 +574,20 @@ def render(roster: RosterData) -> bytes:
                          canonical, roster.event_type)
             continue
         _draw_zone(canvas, zlayout, canonical, phase_blocks,
-                   icon_files, icons_dir, roster)
+                   icon_files, icons_dir, roster, overflow)
 
     # 5. Subs section — picks flat or pairs variant on data shape.
     _draw_subs_section(canvas, layout, roster)
+
+    # 6. Attribution logo at the bottom of the subs sidebar (#227).
+    _draw_attribution_logo(canvas, layout)
+
+    # Stash the overflow list on the roster so callers
+    # (`_finalize_structured_roster`) can surface a warning ephemeral
+    # naming members who didn't fit the slot grid. Render itself never
+    # blocks on overflow; the PNG is still produced with as many names
+    # as fit.
+    roster.overflow = overflow
 
     buf = io.BytesIO()
     canvas.convert("RGB").save(buf, format="PNG")
@@ -595,120 +694,430 @@ def _draw_icon(canvas, draw, zlayout: ZoneLayout, canonical: str,
                  width=max(1, SCALE // 2))
 
 
-def _measure_member_block(phase_blocks: list[RosterZone],
-                          fh, fm, line_gap: int, block_gap: int) -> int:
-    """Vertical space the member list will consume at the given font
-    sizes. Used by `_pick_member_fonts` to auto-shrink content that
-    overflows the text pill. Skips the same blocks `_draw_member_block`
-    skips at render time (closed-empty stages) so the font picker
-    doesn't reserve space for headers that won't actually draw."""
-    h = 0
-    first = True
-    for block in phase_blocks:
+# ── Slot-flow member layout (#227) ──────────────────────────────────
+#
+# Names default to a 1-column vertical stack. The pill grows downward
+# until it hits the zone's `max_rows` content cap (central pills are
+# fixed at 7; outer pills get a computed cap from the layout's
+# available vertical space). When 1-col can't fit, the algorithm
+# falls back to 2-col packing (outer) or 3-col packing (central). At
+# 2 cols and above, slot widths shrink and 20-char in-game names
+# become "long," taking a full row alone. Stage headers don't count
+# toward the row budget; only content rows (member rows / empty
+# rows) do.
+
+
+@dataclass
+class _OverflowEntry:
+    """One member that couldn't fit inside a zone's slot grid (capped
+    at `max_rows` for central zones). The renderer collects these so
+    the caller (`_finalize_structured_roster`) can warn the officer
+    after Approve-with-image lands the post."""
+    canonical_zone: str
+    phase: int
+    name: str
+
+
+# Padding inside the text pill. Top/bottom is slightly larger than
+# left/right so the pill has visual breathing room without the
+# horizontal slot grid feeling cramped.
+_PILL_PAD_X_SVG = 6.0
+_PILL_PAD_Y_SVG = 7.0
+_PILL_LINE_GAP_SVG = 2.0
+_PILL_HEADER_GAP_SVG = 3.0      # gap between a Stage header and its first row
+_PILL_STAGE_GAP_SVG = 6.0       # gap between end of Stage 1's rows and Stage 2's header
+_PILL_NAME_INDENT_SVG = 4.0     # left indent for member rows (under the Stage header)
+# Horizontal gap between adjacent column slots in multi-col layouts.
+# Without this, packed names like "Member 2 Member 9" run together at
+# 8 pt (#227 dev review).
+_PILL_COL_GAP_SVG = 12.0
+
+
+def _pill_extend_direction(zlayout) -> str:
+    """Pick the direction the text pill should grow when it needs to
+    widen to fit a long-name row. Centrals (pill below icon) grow
+    both directions; outer zones grow away from the icon (so the icon
+    stays visible).
+
+      icon center > pill center  → icon is to the right → grow LEFT
+      icon center < pill center  → icon is to the left  → grow RIGHT
+      centers aligned (central)  → grow BOTH directions
+    """
+    icon_cx = zlayout.icon.x + zlayout.icon.w / 2
+    pill_cx = zlayout.text.x + zlayout.text.w / 2
+    if abs(icon_cx - pill_cx) < 5.0:
+        return "both"
+    return "left" if icon_cx > pill_cx else "right"
+
+
+def _max_line_width_px(lines: list[dict], font_regular, font_bold,
+                       slot_width_px: int, col_gap_px: int) -> int:
+    """Maximum rendered pixel width across all lines in a flow layout.
+    Used to size the pill horizontally so long-row names + multi-col
+    rows fit without clipping (#227 dev review)."""
+    pad_x = _s(_PILL_PAD_X_SVG)
+    indent = _s(_PILL_NAME_INDENT_SVG)
+    overhead = 2 * pad_x + indent  # padding on both sides + name indent
+    max_inner = 0
+    for line in lines:
+        if line["type"] == "header":
+            inner = font_bold.getbbox(line["text"])[2]
+        elif line["type"] == "row":
+            items = line["items"]
+            if not items:
+                continue
+            cols = len(items)
+            # Each name's actual rendered width inside its slot, plus
+            # inter-column gaps.
+            max_name = max(font_regular.getbbox(n)[2] for n in items)
+            # A row uses slot_width per item, but the actual name
+            # could be narrower or wider than the slot. The pill needs
+            # room for the widest case.
+            slot_or_name = max(slot_width_px, max_name)
+            inner = cols * slot_or_name + (cols - 1) * col_gap_px
+        elif line["type"] == "long":
+            inner = font_regular.getbbox(line["name"])[2]
+        else:  # empty
+            inner = font_regular.getbbox("(empty)")[2]
+        if inner > max_inner:
+            max_inner = inner
+    return max_inner + overhead
+
+
+def _attempt_flow_at(phase_blocks: list[RosterZone], font_regular,
+                     pill_content_width_px: int, cols: int,
+                     max_rows: int,
+                     canonical_zone: str) -> tuple[list[dict], list[_OverflowEntry]]:
+    """Attempt the slot layout at `cols` columns. Returns the lines +
+    any members that didn't fit within `max_rows` content rows.
+
+    Stage headers don't count toward `max_rows`. A "content row" is a
+    `row` (one or more short names), a `long` row (one 20-char-plus
+    name absorbing the row), or an `empty` placeholder.
+
+    The "long" threshold is character-count based (`_LONG_NAME_CHARS`,
+    typically 20 to match the in-game username max) rather than pixel
+    width. Pixel-width detection at 8 pt occasionally mis-classifies
+    9-char names whose rendered glyphs exceed the per-slot pixel
+    budget — even though the user's design treats them as short and
+    accepts a few pixels of overlap into the inter-column gap.
+    """
+    lines: list[dict] = []
+    overflow: list[_OverflowEntry] = []
+    content_rows = 0
+    blocks_sorted = sorted(phase_blocks, key=lambda b: b.phase)
+
+    def _budget_ok() -> bool:
+        return content_rows < max_rows
+
+    for block in blocks_sorted:
         if not block.members and block.phase == 0:
             continue
+        # Closed-empty stages inside an otherwise-populated zone don't
+        # contribute a Stage header. Dangling empty stage rows would
+        # read as noise.
         if block.phase >= 1 and block.max_players == 0 and not block.members:
             continue
-        if not first:
-            h += block_gap
-        first = False
+
+        # Stage header always renders (when present), but doesn't tick
+        # the content-row budget.
         if block.phase >= 1:
-            h += fh.size + line_gap
-        h += len(block.members) * (fm.size + line_gap)
+            lines.append({"type": "header", "text": f"Stage {block.phase}:"})
+
+        if not block.members:
+            if _budget_ok():
+                lines.append({"type": "empty"})
+                content_rows += 1
+            continue
+
+        current_row: list[str] = []
+        for raw_name in block.members:
+            # In-game LW usernames are hard-capped at 20 chars. Sheet
+            # aliases can exceed that; we truncate so the pill never
+            # needs to grow beyond the 20-char box width
+            # (#227 dev review feedback).
+            name = raw_name[:_LONG_NAME_CHARS]
+            # At 1 col every name takes the full row anyway (the col
+            # IS the row), so the threshold only matters at 2+ cols.
+            is_long = cols > 1 and len(name) >= _LONG_NAME_CHARS
+            if is_long:
+                if current_row:
+                    if not _budget_ok():
+                        for n in current_row:
+                            overflow.append(_OverflowEntry(
+                                canonical_zone, block.phase, n,
+                            ))
+                        current_row = []
+                    else:
+                        lines.append({"type": "row", "items": current_row})
+                        content_rows += 1
+                        current_row = []
+                if not _budget_ok():
+                    overflow.append(_OverflowEntry(
+                        canonical_zone, block.phase, name,
+                    ))
+                    continue
+                lines.append({"type": "long", "name": name})
+                content_rows += 1
+            else:
+                current_row.append(name)
+                if len(current_row) >= cols:
+                    if not _budget_ok():
+                        for n in current_row:
+                            overflow.append(_OverflowEntry(
+                                canonical_zone, block.phase, n,
+                            ))
+                        current_row = []
+                    else:
+                        lines.append({"type": "row", "items": current_row})
+                        content_rows += 1
+                        current_row = []
+        if current_row:
+            if not _budget_ok():
+                for n in current_row:
+                    overflow.append(_OverflowEntry(
+                        canonical_zone, block.phase, n,
+                    ))
+            else:
+                lines.append({"type": "row", "items": current_row})
+                content_rows += 1
+    return lines, overflow
+
+
+def _build_flow_lines(phase_blocks: list[RosterZone], font_regular,
+                      pill_content_width_px: int, max_cols: int,
+                      max_rows: int, canonical_zone: str,
+                      overflow: list[_OverflowEntry]) -> list[dict]:
+    """Try the slot layout at 1 col first. If it overflows `max_rows`,
+    re-try at 2 cols, then `max_cols` cols. Take the first column
+    count where no overflow occurs; if even `max_cols` cols can't fit
+    everyone, take the max-cols attempt and accumulate its overflow.
+    This implements the alliance lead's "columns are the fallback"
+    rule from #227's design review."""
+    best_lines: list[dict] = []
+    best_overflow: list[_OverflowEntry] = []
+    for cols in range(1, max_cols + 1):
+        lines, attempt_overflow = _attempt_flow_at(
+            phase_blocks, font_regular,
+            pill_content_width_px=pill_content_width_px,
+            cols=cols, max_rows=max_rows,
+            canonical_zone=canonical_zone,
+        )
+        if not attempt_overflow:
+            return lines
+        best_lines, best_overflow = lines, attempt_overflow
+    overflow.extend(best_overflow)
+    return best_lines
+
+
+def _pill_height_px(lines: list[dict], font_regular, font_bold) -> int:
+    """Compute the pixel height the pill needs to draw `lines` without
+    clipping. Mirrors `_draw_flow_lines` exactly so the pill background
+    and the drawn content stay in sync."""
+    if not lines:
+        return _s(_PILL_PAD_Y_SVG) * 2
+    line_gap = _s(_PILL_LINE_GAP_SVG)
+    header_gap = _s(_PILL_HEADER_GAP_SVG)
+    stage_gap = _s(_PILL_STAGE_GAP_SVG)
+    pad_y = _s(_PILL_PAD_Y_SVG)
+    h = pad_y
+    prev_type = None
+    for line in lines:
+        if line["type"] == "header":
+            if prev_type is not None:
+                h += stage_gap
+            h += font_bold.size
+        else:  # row | long | empty
+            if prev_type == "header":
+                h += header_gap
+            elif prev_type is not None:
+                h += line_gap
+            h += font_regular.size
+        prev_type = line["type"]
+    h += pad_y
     return h
 
 
-def _pick_member_fonts(phase_blocks: list[RosterZone], max_h: int):
-    """Pick bold-header + regular-name fonts that fit `max_h`. Starts
-    at the locked 8-pt size and shrinks until content fits."""
-    base = _pt_to_px(_LABEL_PT)
-    for shrink in (0, 2, 4, 6, 8, 10):
-        sz = max(10, base - shrink)
-        fh = _try_font(sz, bold=True)
-        fm = _try_font(sz, bold=False)
-        if _measure_member_block(phase_blocks, fh, fm, 4, 8) <= max_h:
-            return fh, fm
-    return _try_font(10, bold=True), _try_font(10)
-
-
-def _draw_member_block(draw, b: Box, phase_blocks: list[RosterZone],
-                       paired_subs: dict[str, str], is_paired: bool) -> None:
-    """Render the member list inside a zone's text pill. Phase-aware
-    blocks get a bold `Stage N:` header; flat blocks render the
-    member list directly.
-
-    Post-#222: zone pills render bare primary names. Pairings live in
-    the right-side `Subs` panel (Primary / Sub table) so inline
-    ` + sub Bob` was redundant and was the only thing pushing labels
-    past the pill width. `paired_subs` / `is_paired` are kept in the
-    signature so callers don't need to change, but they're unused.
-
-    Post-#226: when every phase block for the zone is fully closed
-    (cap=0 + empty members across every stage), the pill renders as
-    a clean empty box. Without this carve-out, an "all stages closed"
-    zone would draw stacked empty `Stage 1:` / `Stage 2:` headers
-    over an otherwise-empty pill (visual noise).
-    """
-    del paired_subs, is_paired  # rendered in the Subs panel instead.
-    x0, y0, x1, y1 = _s_box(b)
-    pad = max(8, _s(6))
-    py = max(6, _s(5))
-    avail_h = (y1 - y0) - 2 * py
-    line_gap = max(2, _s(2))
-    block_gap = max(4, _s(4))
-    # All phase blocks closed + empty → leave the pill genuinely empty
-    # rather than stacking empty stage headers.
-    if phase_blocks and all(
-        b.phase >= 1 and not b.members and b.max_players == 0
-        for b in phase_blocks
-    ):
-        return
-    fh, fm = _pick_member_fonts(phase_blocks, avail_h)
-    cy = y0 + py
-    indent = max(8, _s(6))
-    first = True
-    for block in sorted(phase_blocks, key=lambda z: z.phase):
-        if not block.members and block.phase == 0:
-            continue
-        # Skip per-phase Stage headers for closed-empty stages within
-        # an otherwise-populated zone (e.g. FH I has Stage 1 members
-        # but Stage 2 is closed): the empty header reads as a dangling
-        # label otherwise.
-        if block.phase >= 1 and block.max_players == 0 and not block.members:
-            continue
-        if not first:
-            cy += block_gap
-        first = False
-        if block.phase >= 1:
-            draw.text((x0 + pad, cy),
-                      f"Stage {block.phase}:",
-                      fill=_TEXT_DARK, font=fh)
-            cy += fh.size + line_gap
-        for name in block.members:
-            draw.text((x0 + pad + indent, cy),
-                      name, fill=_TEXT_MUTED, font=fm)
-            cy += fm.size + line_gap
+def _draw_flow_lines(draw, anchor: Box, lines: list[dict],
+                     font_regular, font_bold, slot_width_px: int) -> None:
+    """Render the slot-flow `lines` into the pill anchored at
+    `anchor`. Assumes the pill background was already drawn at the
+    height returned by `_pill_height_px`. `slot_width_px` is the per-
+    name horizontal slot used to place columns in multi-col rows."""
+    x0, y0, _x1, _y1 = _s_box(anchor)
+    pad_x = _s(_PILL_PAD_X_SVG)
+    pad_y = _s(_PILL_PAD_Y_SVG)
+    line_gap = _s(_PILL_LINE_GAP_SVG)
+    header_gap = _s(_PILL_HEADER_GAP_SVG)
+    stage_gap = _s(_PILL_STAGE_GAP_SVG)
+    indent = _s(_PILL_NAME_INDENT_SVG)
+    col_gap = _s(_PILL_COL_GAP_SVG)
+    cy = y0 + pad_y
+    prev_type = None
+    for line in lines:
+        if line["type"] == "header":
+            if prev_type is not None:
+                cy += stage_gap
+            draw.text((x0 + pad_x, cy), line["text"],
+                      fill=_TEXT_DARK, font=font_bold)
+            cy += font_bold.size
+        elif line["type"] == "row":
+            if prev_type == "header":
+                cy += header_gap
+            elif prev_type is not None:
+                cy += line_gap
+            items = line["items"]
+            for idx, name in enumerate(items):
+                # Each column slot starts at `slot_width_px + col_gap`
+                # after the previous, so packed names have breathing
+                # room rather than running together at 8 pt.
+                x = x0 + pad_x + indent + idx * (slot_width_px + col_gap)
+                draw.text((x, cy), name, fill=_TEXT_MUTED, font=font_regular)
+            cy += font_regular.size
+        elif line["type"] == "long":
+            if prev_type == "header":
+                cy += header_gap
+            elif prev_type is not None:
+                cy += line_gap
+            draw.text((x0 + pad_x + indent, cy), line["name"],
+                      fill=_TEXT_MUTED, font=font_regular)
+            cy += font_regular.size
+        elif line["type"] == "empty":
+            if prev_type == "header":
+                cy += header_gap
+            elif prev_type is not None:
+                cy += line_gap
+            draw.text((x0 + pad_x + indent, cy), "(empty)",
+                      fill=_TEXT_MUTED, font=font_regular)
+            cy += font_regular.size
+        prev_type = line["type"]
 
 
 def _draw_zone(canvas, zlayout: ZoneLayout, canonical: str,
                phase_blocks: list[RosterZone],
                icon_files: dict, icons_dir: str,
-               roster: RosterData) -> None:
+               roster: RosterData,
+               overflow: list[_OverflowEntry]) -> None:
     """Render the three pills + icon for one canonical zone slot.
+
     `phase_blocks` is the list of `RosterZone` entries for this zone
-    (one per phase for phase-aware presets, one total for flat)."""
+    (one per phase for phase-aware presets, one total for flat). The
+    text pill grows downward from `zlayout.text.y` to fit the slot-flow
+    layout's actual line count (#227). Names that don't fit within
+    the zone's `max_rows` cap go into `overflow` so the caller can
+    warn the officer.
+    """
     from PIL import Image, ImageDraw
+    font_regular = _try_font(_pt_to_px(_LABEL_PT), bold=False)
+    font_bold = _try_font(_pt_to_px(_LABEL_PT), bold=True)
+
+    # Slot grid math: the pill content area is `text.w` minus
+    # left/right padding minus the per-name indent. `_build_flow_lines`
+    # tries 1-col first (where the slot fills the full content area)
+    # and falls back to multi-col only when a 1-col layout overflows
+    # the row budget. The chosen column count drives the per-name slot
+    # width passed to `_draw_flow_lines`.
+    pad_x = _s(_PILL_PAD_X_SVG)
+    indent = _s(_PILL_NAME_INDENT_SVG)
+    pill_content_width_px = _s(zlayout.text.w) - 2 * pad_x - indent
+
+    # Outer zones use `_OUTER_MAX_ROWS` (derived from the typical
+    # vertical headroom between adjacent zones in the layout grid).
+    # Central zones cap at `max_rows` per the spec (7). Headers don't
+    # count toward the cap; only content rows do.
+    max_rows = zlayout.max_rows if zlayout.max_rows is not None else _OUTER_MAX_ROWS
+
+    lines = _build_flow_lines(
+        phase_blocks, font_regular,
+        pill_content_width_px=pill_content_width_px,
+        max_cols=zlayout.max_cols,
+        max_rows=max_rows,
+        canonical_zone=canonical,
+        overflow=overflow,
+    )
+
+    # Determine the column count actually used so `_draw_flow_lines`
+    # can position name slots correctly. Inspect the lines: if any
+    # `row` has more than 1 item, we're in multi-col; otherwise we
+    # rendered everything as 1-col.
+    cols_used = 1
+    for line in lines:
+        if line["type"] == "row" and len(line["items"]) > cols_used:
+            cols_used = len(line["items"])
+    col_gap_px = _s(_PILL_COL_GAP_SVG) if cols_used > 1 else 0
+    total_gap_px = col_gap_px * (cols_used - 1)
+    slot_width_px = max(1, (pill_content_width_px - total_gap_px) // cols_used)
+
+    # #227 dev review: when a long-row name (or wide multi-col row) is
+    # present, scale the pill out to the side so the name fits without
+    # clipping. Centrals scale symmetrically; outer zones scale away
+    # from their icon (so the icon stays visible).
+    required_pill_w_px = _max_line_width_px(
+        lines, font_regular, font_bold, slot_width_px, col_gap_px,
+    )
+    default_pill_w_px = _s(zlayout.text.w)
+    if required_pill_w_px > default_pill_w_px:
+        extend_px = required_pill_w_px - default_pill_w_px
+        direction = _pill_extend_direction(zlayout)
+        if direction == "right":
+            pill_x_px = _s(zlayout.text.x)
+            pill_w_px = required_pill_w_px
+        elif direction == "left":
+            pill_x_px = _s(zlayout.text.x) - extend_px
+            pill_w_px = required_pill_w_px
+        else:  # both
+            pill_x_px = _s(zlayout.text.x) - extend_px // 2
+            pill_w_px = required_pill_w_px
+        # Re-derive slot_width with the wider pill so the row layout
+        # gets the extra horizontal room.
+        pill_content_width_px = pill_w_px - 2 * pad_x - indent
+        slot_width_px = max(
+            1, (pill_content_width_px - total_gap_px) // cols_used,
+        )
+    else:
+        pill_x_px = _s(zlayout.text.x)
+        pill_w_px = default_pill_w_px
+
+    # The text-pill Box we hand to the renderer is dynamic post-#227:
+    # `text.x` and `text.w` reflect the resized pill so the drawing
+    # code below paints at the right coordinates.
+    text_box_dynamic = Box(
+        x=pill_x_px / SCALE, y=zlayout.text.y,
+        w=pill_w_px / SCALE, h=zlayout.text.h,
+    )
+    pill_h_px = _pill_height_px(lines, font_regular, font_bold)
+    # Minimum pill height: just enough room for one line of text +
+    # vertical padding. Lets the pill collapse tight to its content for
+    # 1-2 name zones (matching the alliance lead's design) while
+    # keeping zero-content pills visually present.
+    min_pill_h_px = 2 * _s(_PILL_PAD_Y_SVG) + font_regular.size
+    pill_h_px = max(pill_h_px, min_pill_h_px)
+
+    # Pill background sized to the computed content height +
+    # post-#227 dynamic content width. We can't reuse `_draw_pill`
+    # directly because that takes a Box in SVG units; build the
+    # rendered box from the dynamic anchor + pixel height.
     layer = Image.new("RGBA", canvas.size, (0, 0, 0, 0))
     d = ImageDraw.Draw(layer)
     _draw_pill(d, zlayout.title, radius_svg=zlayout.title.h / 2)
-    _draw_pill(d, zlayout.text,
-               radius_svg=min(zlayout.text.w, zlayout.text.h) / 9)
+    text_x0 = pill_x_px
+    text_y0 = _s(zlayout.text.y)
+    text_x1 = text_x0 + pill_w_px
+    text_y1 = text_y0 + pill_h_px
+    r = _s(min(text_box_dynamic.w, zlayout.text.h) / 9)
+    d.rounded_rectangle(
+        (text_x0, text_y0, text_x1, text_y1),
+        radius=r, fill=_PILL_FILL,
+    )
+    d.rounded_rectangle(
+        (text_x0, text_y0, text_x1, text_y1),
+        radius=r, outline=_PILL_OUTLINE, width=max(1, SCALE // 2),
+    )
     canvas.alpha_composite(layer)
 
     layer = Image.new("RGBA", canvas.size, (0, 0, 0, 0))
     d = ImageDraw.Draw(layer)
-    _draw_centered_text(d, zlayout.title, canonical,
-                        _try_font(_pt_to_px(_LABEL_PT), bold=True), _TEXT_DARK)
+    _draw_centered_text(d, zlayout.title, canonical, font_bold, _TEXT_DARK)
     canvas.alpha_composite(layer)
 
     layer = Image.new("RGBA", canvas.size, (0, 0, 0, 0))
@@ -718,9 +1127,10 @@ def _draw_zone(canvas, zlayout: ZoneLayout, canonical: str,
 
     layer = Image.new("RGBA", canvas.size, (0, 0, 0, 0))
     d = ImageDraw.Draw(layer)
-    is_paired = bool(roster.paired_subs)
-    _draw_member_block(d, zlayout.text, phase_blocks,
-                       roster.paired_subs, is_paired)
+    _draw_flow_lines(
+        d, text_box_dynamic, lines, font_regular, font_bold,
+        slot_width_px=slot_width_px,
+    )
     canvas.alpha_composite(layer)
 
 
@@ -817,6 +1227,162 @@ def _draw_subs_section(canvas, layout: EventLayout,
             cy += fm.size + line_gap
 
     canvas.alpha_composite(layer)
+
+
+# ── Background noise + attribution logo (#227) ──────────────────────
+
+
+# Noise generation parameters. Post-#227 dev review: switched from
+# tiled noise (visibly repeating) to canvas-sized noise generated
+# once at low resolution then upscaled with bilinear blur for an
+# organic, non-repeating terrain feel. Two octaves stacked produce
+# broader light/dark patches alongside the finer grain so the canvas
+# reads as ground rather than uniform noise.
+_NOISE_COARSE_BLOCK_PX = 32      # ~32 px per coarse block at SCALE 2
+_NOISE_FINE_BLOCK_PX = 8         # ~8 px per fine grain block
+_NOISE_COARSE_WEIGHT = 0.65      # tone-shift contribution
+_NOISE_FINE_WEIGHT = 0.35        # grain contribution
+
+
+def _apply_background_noise(canvas, layout: EventLayout,
+                            base_rgba: tuple[int, int, int, int]) -> None:
+    """Layer a deterministic two-octave noise pattern over the main +
+    subs background fills so the canvas reads as terrain rather than
+    a flat colour wash. Noise is generated *once at canvas size* (no
+    tiling) so there's no visible repetition. Two octaves stack: a
+    coarse octave for broad tonal variation, plus a fine octave for
+    grain texture. Both are generated at low resolution and upscaled
+    bilinearly to produce soft organic blobs instead of sharp blocks.
+    Seeded RNG keeps the output stable across runs."""
+    import random
+    from PIL import Image, ImageDraw as _ImageDraw
+
+    canvas_w, canvas_h = canvas.size
+    rng = random.Random(0x57_4f_52_4d)  # "STOR" — stable per render
+    amp = _NOISE_AMPLITUDE
+    br, bg, bb, _ba = base_rgba
+
+    def _make_octave(block_px: int, weight: float) -> Image.Image:
+        """Generate one noise octave at canvas size by sampling a low-
+        resolution grid and bilinear-upscaling it."""
+        lo_w = max(2, canvas_w // block_px + 1)
+        lo_h = max(2, canvas_h // block_px + 1)
+        lo = Image.new("RGBA", (lo_w, lo_h), (0, 0, 0, 0))
+        lo_px = lo.load()
+        for y in range(lo_h):
+            for x in range(lo_w):
+                dr = rng.triangular(-amp, amp, 0) * weight
+                dg = rng.triangular(-amp, amp, 0) * weight
+                db = rng.triangular(-amp, amp, 0) * weight
+                r = max(0, min(255, int(br + dr)))
+                g = max(0, min(255, int(bg + dg)))
+                b = max(0, min(255, int(bb + db)))
+                lo_px[x, y] = (r, g, b, 255)
+        return lo.resize((canvas_w, canvas_h), Image.BILINEAR)
+
+    coarse = _make_octave(_NOISE_COARSE_BLOCK_PX, _NOISE_COARSE_WEIGHT)
+    fine = _make_octave(_NOISE_FINE_BLOCK_PX, _NOISE_FINE_WEIGHT)
+    # Blend the two octaves additively. Each octave alone reads as
+    # gentle haze; together they look like uneven dirt / dappled
+    # vegetation.
+    noise = Image.blend(coarse, fine, 0.5)
+
+    # Mask the noise to only cover the two background rectangles so
+    # it doesn't bleed onto the header bar / spawn rectangles.
+    mask = Image.new("L", canvas.size, 0)
+    md = _ImageDraw.Draw(mask)
+    md.rectangle(_s_box(layout.bg_main), fill=255)
+    md.rectangle(_s_box(layout.bg_subs), fill=255)
+    canvas.paste(noise, (0, 0), mask)
+
+
+_LOGO_PATH = os.path.join(_HERE, "assets", "branding",
+                          "lw-alliance-helper-logo.png")
+_DS_BACKGROUND_PATH = os.path.join(_HERE, "assets", "backgrounds",
+                                   "ds_background.png")
+_CS_BACKGROUND_PATH = os.path.join(_HERE, "assets", "backgrounds",
+                                   "cs_background.png")
+
+
+def _apply_background_image(canvas, layout: EventLayout,
+                            is_cs: bool) -> bool:
+    """Composite the painted DS / CS background image over the main +
+    subs background rectangles. Returns True on success; False if the
+    asset is missing (caller falls back to procedural noise).
+
+    The painted image is upscaled with LANCZOS to the canvas dimensions
+    so the noise texture, rocks, and other terrain detail stay crisp.
+    A mask restricts the composite to just the background rectangles
+    so the painted scene doesn't bleed onto the header bar or spawn
+    bands."""
+    from PIL import Image, ImageDraw as _ImageDraw
+    path = _CS_BACKGROUND_PATH if is_cs else _DS_BACKGROUND_PATH
+    if not os.path.isfile(path):
+        logger.debug("render: background asset missing at %s", path)
+        return False
+    try:
+        bg = Image.open(path).convert("RGBA")
+    except (OSError, IOError) as e:
+        logger.debug("render: background load failed (%s)", e)
+        return False
+    bg = bg.resize(canvas.size, Image.LANCZOS)
+    # Restrict the paste to the actual background rectangles via a
+    # mask so the painted scene doesn't paint over the header bar or
+    # spawn rectangles.
+    mask = Image.new("L", canvas.size, 0)
+    md = _ImageDraw.Draw(mask)
+    md.rectangle(_s_box(layout.bg_main), fill=255)
+    md.rectangle(_s_box(layout.bg_subs), fill=255)
+    canvas.paste(bg, (0, 0), mask)
+    return True
+
+
+def _draw_attribution_logo(canvas, layout: EventLayout) -> None:
+    """Drop the bot's logo into the bottom of the subs sidebar (#227).
+
+    Logo scales to fit the rectangle between the bottom of the
+    `subs_text_pairs` Box and the bottom of `bg_subs`, butting up
+    against the side / bottom edges of the sidebar. If the logo file
+    is missing (partial deployments, asset not copied) the slot is
+    left empty rather than crashing the render."""
+    from PIL import Image
+    if not os.path.isfile(_LOGO_PATH):
+        logger.debug("render: logo asset missing at %s; skipping", _LOGO_PATH)
+        return
+    try:
+        logo = Image.open(_LOGO_PATH).convert("RGBA")
+    except (OSError, IOError) as e:
+        logger.debug("render: logo load failed (%s); skipping", e)
+        return
+
+    # Slot: bottom of `subs_text_pairs` to bottom of `bg_subs`,
+    # full width of the sidebar.
+    pairs_bottom = layout.subs_text_pairs.y + layout.subs_text_pairs.h
+    bg_bottom = layout.bg_subs.y + layout.bg_subs.h
+    slot_top_y = pairs_bottom + 8.0    # small gap below the pair table
+    slot_left_x = layout.bg_subs.x
+    slot_right_x = layout.bg_subs.x + layout.bg_subs.w
+    slot_w_svg = slot_right_x - slot_left_x
+    slot_h_svg = bg_bottom - slot_top_y
+    if slot_h_svg <= 0 or slot_w_svg <= 0:
+        return
+
+    # Cap the logo to the sidebar width so it fits the column without
+    # bleeding into the map area. The sidebar is the binding dimension.
+    target_w_px = _s(slot_w_svg)
+    target_h_px = _s(slot_h_svg)
+    # Scale to fit while preserving aspect ratio.
+    logo_w, logo_h = logo.size
+    scale = min(target_w_px / logo_w, target_h_px / logo_h)
+    new_w = max(1, int(round(logo_w * scale)))
+    new_h = max(1, int(round(logo_h * scale)))
+    logo = logo.resize((new_w, new_h), Image.LANCZOS)
+    # Anchor at the bottom of the slot, horizontally centred. Bottom
+    # alignment keeps the logo flush with the sidebar edge per the
+    # alliance lead's design review ("butt up against the edges").
+    paste_x = _s(slot_left_x) + (target_w_px - new_w) // 2
+    paste_y = _s(slot_top_y) + (target_h_px - new_h)
+    canvas.alpha_composite(logo, (paste_x, paste_y))
 
 
 # ── Conversion helper from a RosterBuilderSession ────────────────────

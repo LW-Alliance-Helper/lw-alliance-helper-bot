@@ -325,10 +325,10 @@ class TestMapBasedRender:
         # layout needs the extra vertical room.
         from PIL import Image
         img = Image.open(io.BytesIO(png))
-        # CS svg is 1235.67 wide x 1045.44 tall — aspect ratio ≈ 1.18.
-        # DS is 1107.6 x 764.3 — aspect ≈ 1.45. CS render must be the
-        # taller-aspect one.
-        assert img.size[1] / img.size[0] > 0.8
+        # CS svg post-#227 is 1235.67 wide x 938.44 tall — aspect
+        # ratio ≈ 1.32. DS is 1107.6 x 764.3 — aspect ≈ 1.45. CS
+        # render must still be the taller-aspect one.
+        assert img.size[1] / img.size[0] > 0.7
 
     def test_render_missing_zone_doesnt_crash(self):
         # Unknown / typo canonical zones get skipped silently — render

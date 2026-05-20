@@ -2122,10 +2122,18 @@ class _AutoFillStrategyPickerView(discord.ui.View):
             "strategy=%s summary=%s",
             s.guild_id, s.event_type, strategy, summary,
         )
+        # Collapse the picker to a brief "done — look up" line and
+        # remove the buttons so the officer's eye is pulled to the
+        # main builder view (which we're about to refresh). Editing
+        # with view=None is the safe ephemeral-dismissal path across
+        # discord.py versions; full delete-on-ephemeral has
+        # inconsistent semantics for component-attached messages.
         try:
             await inter.response.edit_message(
-                content=f"{label} run complete. Main view refreshed.",
-                view=self,
+                content=(
+                    f"✅ {label} complete. Builder above is updated."
+                ),
+                view=None,
             )
         except discord.HTTPException:
             pass
@@ -2142,12 +2150,12 @@ class _AutoFillStrategyPickerView(discord.ui.View):
         except discord.HTTPException:
             pass
 
-    # Secondary style on both strategy buttons so the emoji + label
-    # stay readable (the blue primary background washed out the
-    # glyphs). Cancel sits on its own row to preserve the visual
-    # separation between strategy choice and the cancel affordance.
+    # Primary style on both strategy buttons. The new ⚖️ / 💪 glyphs
+    # read fine against the blue background (the earlier 🎯 / 🔝
+    # rendered washed-out at small sizes). All three buttons fit on a
+    # single row.
     @discord.ui.button(label="⚖️ Balanced spread",
-                       style=discord.ButtonStyle.secondary, row=0)
+                       style=discord.ButtonStyle.primary, row=0)
     async def balanced(self, inter: discord.Interaction,
                        _btn: discord.ui.Button):
         await self._run_with_strategy(
@@ -2155,7 +2163,7 @@ class _AutoFillStrategyPickerView(discord.ui.View):
         )
 
     @discord.ui.button(label="💪 Strength to priority",
-                       style=discord.ButtonStyle.secondary, row=0)
+                       style=discord.ButtonStyle.primary, row=0)
     async def priority_greedy(self, inter: discord.Interaction,
                               _btn: discord.ui.Button):
         await self._run_with_strategy(
@@ -2163,7 +2171,7 @@ class _AutoFillStrategyPickerView(discord.ui.View):
         )
 
     @discord.ui.button(label="↩️ Cancel Auto-fill",
-                       style=discord.ButtonStyle.secondary, row=1)
+                       style=discord.ButtonStyle.secondary, row=0)
     async def cancel(self, inter: discord.Interaction,
                      _btn: discord.ui.Button):
         if not await self._guard_owner(inter):

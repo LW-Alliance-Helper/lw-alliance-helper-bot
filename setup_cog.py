@@ -5130,26 +5130,47 @@ async def _run_storm_participation_step(
     import premium
 
     cur_part = get_participation_config(guild_id, event_type)
+    # Treat any prior saved row (enabled true OR disabled with config
+    # bits set) as "re-entry" so the Yes/No prompt offers Keep current
+    # instead of forcing the officer to re-pick. A pristine row has
+    # everything zero / empty.
+    part_previously_saved = (
+        bool(cur_part.get("enabled"))
+        or bool(cur_part.get("tab_name"))
+        or bool(cur_part.get("questions"))
+    )
 
     # ── 6.1 Enable? ────────────────────────────────────────────────────────────
-    enable_view = YesNoView()
-    await channel.send(
+    enable_prompt = (
         f"**Step 6 of 7: Participation Tracking**\n"
         f"Do you want to track {label} participation? Leadership runs "
         f"`/{cmd_name.replace('setup_', '')}_participation` after each event "
         f"to log who showed up, who sat out, etc.\n"
         f"You'll define the questions yourself, so the tracker matches how "
-        f"your alliance runs the event.",
-        view=enable_view,
+        f"your alliance runs the event."
     )
-    await wait_view_or_cancel(enable_view, cancel_event)
-    if enable_view.cancelled:
-        return None
-    if enable_view.selected is None:
-        await channel.send(f"⏰ Timed out. Run `/{cmd_name}` to start again.")
-        return None
+    if part_previously_saved:
+        gate = _KeepOrFlipYesNoGate(current_value=bool(cur_part.get("enabled")))
+        await channel.send(enable_prompt, view=gate)
+        await wait_view_or_cancel(gate, cancel_event)
+        if getattr(gate, "cancelled", False):
+            return None
+        if gate.value is None:
+            await channel.send(f"⏰ Timed out. Run `/{cmd_name}` to start again.")
+            return None
+        enable_selected = bool(gate.value)
+    else:
+        enable_view = YesNoView()
+        await channel.send(enable_prompt, view=enable_view)
+        await wait_view_or_cancel(enable_view, cancel_event)
+        if enable_view.cancelled:
+            return None
+        if enable_view.selected is None:
+            await channel.send(f"⏰ Timed out. Run `/{cmd_name}` to start again.")
+            return None
+        enable_selected = bool(enable_view.selected)
 
-    if not enable_view.selected:
+    if not enable_selected:
         # Disabled — keep the existing values around but mark off.
         return {
             "enabled":          0,
@@ -5232,23 +5253,45 @@ async def _run_storm_participation_step(
         await channel.send(f"⚠️ `{raw_name_col}` isn't a valid column letter. Run `/{cmd_name}` to start again.")
         return None
 
-    alias_view = YesNoView()
-    await channel.send(
+    # Re-entry: if the alliance previously configured a roster alias
+    # column (saved as >= 0) OR explicitly opted out (-1) on a prior
+    # save, surface the keep-or-flip gate instead of plain Yes/No.
+    saved_alias_idx = cur_part.get("roster_alias_col")
+    alias_was_previously_answered = (
+        part_previously_saved
+        and isinstance(saved_alias_idx, int)
+    )
+    alias_prompt = (
         "**Step 6.4: Roster Source: Alias Column?**\n"
         "If you have other names or nicknames that you call your members in these "
         "mails, this helps resolve to their full name in your sheet automatically. "
-        "Do you have an alias column?",
-        view=alias_view,
+        "Do you have an alias column?"
     )
-    await wait_view_or_cancel(alias_view, cancel_event)
-    if alias_view.cancelled:
-        return None
-    if alias_view.selected is None:
-        await channel.send(f"⏰ Timed out. Run `/{cmd_name}` to start again.")
-        return None
+    if alias_was_previously_answered:
+        alias_gate = _KeepOrFlipYesNoGate(
+            current_value=(saved_alias_idx >= 0),
+        )
+        await channel.send(alias_prompt, view=alias_gate)
+        await wait_view_or_cancel(alias_gate, cancel_event)
+        if getattr(alias_gate, "cancelled", False):
+            return None
+        if alias_gate.value is None:
+            await channel.send(f"⏰ Timed out. Run `/{cmd_name}` to start again.")
+            return None
+        alias_selected = bool(alias_gate.value)
+    else:
+        alias_view = YesNoView()
+        await channel.send(alias_prompt, view=alias_view)
+        await wait_view_or_cancel(alias_view, cancel_event)
+        if alias_view.cancelled:
+            return None
+        if alias_view.selected is None:
+            await channel.send(f"⏰ Timed out. Run `/{cmd_name}` to start again.")
+            return None
+        alias_selected = bool(alias_view.selected)
 
     roster_alias_col = -1
-    if alias_view.selected:
+    if alias_selected:
         saved_alias = cur_part.get("roster_alias_col")
         # Hardcoded default = column right after the name column (a sensible
         # convention). Saved value (if any) is shown as "current".
@@ -5471,6 +5514,48 @@ async def _ask_signup_schedule(
             super().__init__(timeout=300)
             self.selected: int | None = None
             self.cancelled = False
+
+            # Keep-current button (#80 pattern). Re-selecting an already
+            # default-marked dropdown option doesn't read as "save" to
+            # leadership, so the picker also exposes an explicit
+            # Keep-current affordance like every other /setup_* re-entry
+            # surface. Label reflects whatever the saved value is: the
+            # day name when a poll day was configured, "Skip
+            # auto-scheduling" when the alliance opted out previously.
+            if 0 <= current <= 6 and current in poll_options:
+                keep_label = f"✅ Keep current: {_DOW_NAMES[current]}"
+            else:
+                keep_label = "✅ Keep current: Skip auto-scheduling"
+            keep_btn = discord.ui.Button(
+                label=keep_label[:80],
+                style=discord.ButtonStyle.success,
+                row=0,
+            )
+
+            async def _on_keep(inter: discord.Interaction):
+                self.selected = current if (0 <= current <= 6 and current in poll_options) else -1
+                for item in self.children: item.disabled = True
+                if self.selected < 0:
+                    await wizard_registry.safe_edit_response(
+                        inter,
+                        content=(
+                            f"✅ Auto-scheduling stays skipped. Post "
+                            f"manually via `{HUB_COMMAND[event_type]}` → "
+                            f"**{HUB_BTN_POST_SIGNUP}** when you're ready."
+                        ),
+                        view=self,
+                    )
+                else:
+                    await wizard_registry.safe_edit_response(
+                        inter,
+                        content=f"✅ Keeping poll day: **{_DOW_NAMES[self.selected]}**.",
+                        view=self,
+                    )
+                self.stop()
+
+            keep_btn.callback = _on_keep
+            self.add_item(keep_btn)
+
             options = [
                 discord.SelectOption(
                     label=_DOW_NAMES[i], value=str(i),
@@ -5487,6 +5572,7 @@ async def _ask_signup_schedule(
                 placeholder="When should the bot post the sign-up poll?",
                 min_values=1, max_values=1,
                 options=options,
+                row=1,
             )
 
             async def _on_pick(inter: discord.Interaction):
@@ -5934,18 +6020,44 @@ async def _run_structured_flow_setup_step(
             f"draft for {label} when enabled. You can leave this off and still "
             f"use the strategy preset library on the free tier."
         )
-        enable_view = YesNoView()
-        await channel.send(
-            f"Turn on the structured flow for {label}?",
-            view=enable_view,
-        )
-        await wait_view_or_cancel(enable_view, cancel_event)
-        if getattr(enable_view, "cancelled", False):
-            return None
-        if enable_view.selected is None:
-            await channel.send(f"⏰ Timed out. Run `/{cmd_name}` to start again.")
-            return None
-        structured_opted_in = bool(enable_view.selected)
+        # Re-entry: the alliance has a previously saved decision (either
+        # explicit on or explicit off after running the wizard before),
+        # so offer Keep-current / Flip rather than forcing a re-pick of
+        # plain Yes/No. `get_structured_storm_config` always returns a
+        # dict with `structured_flow_enabled`, so detect prior setup by
+        # asking has_storm_config directly.
+        from config import has_storm_config
+        already_decided = has_storm_config(guild_id, event_type)
+        if already_decided:
+            structured_gate = _KeepOrFlipYesNoGate(
+                current_value=bool(
+                    current_structured.get("structured_flow_enabled")
+                ),
+            )
+            await channel.send(
+                f"Turn on the structured flow for {label}?",
+                view=structured_gate,
+            )
+            await wait_view_or_cancel(structured_gate, cancel_event)
+            if getattr(structured_gate, "cancelled", False):
+                return None
+            if structured_gate.value is None:
+                await channel.send(f"⏰ Timed out. Run `/{cmd_name}` to start again.")
+                return None
+            structured_opted_in = bool(structured_gate.value)
+        else:
+            enable_view = YesNoView()
+            await channel.send(
+                f"Turn on the structured flow for {label}?",
+                view=enable_view,
+            )
+            await wait_view_or_cancel(enable_view, cancel_event)
+            if getattr(enable_view, "cancelled", False):
+                return None
+            if enable_view.selected is None:
+                await channel.send(f"⏰ Timed out. Run `/{cmd_name}` to start again.")
+                return None
+            structured_opted_in = bool(enable_view.selected)
     result["structured_flow_enabled"] = structured_opted_in
 
     # ── Premium + opted-in: full config ────────────────────────────────────

@@ -1157,17 +1157,6 @@ def _draw_subs_section(canvas, layout: EventLayout,
     canvas.alpha_composite(layer)
 
     content_box = layout.subs_text_pairs if use_pairs else layout.subs_text_flat
-    layer = Image.new("RGBA", canvas.size, (0, 0, 0, 0))
-    d = ImageDraw.Draw(layer)
-    _draw_pill(d, content_box,
-               radius_svg=min(content_box.w, content_box.h) / 9)
-    canvas.alpha_composite(layer)
-
-    layer = Image.new("RGBA", canvas.size, (0, 0, 0, 0))
-    d = ImageDraw.Draw(layer)
-    pad_x = max(8, _s(6))
-    pad_y = max(6, _s(6))
-    line_gap = max(2, _s(3))
     # Paired mode uses _SUBS_TABLE_PT so two 20-char usernames fit
     # side-by-side in the Primary / Sub columns. Flat mode uses the
     # default label size since the single column is the full panel
@@ -1180,7 +1169,59 @@ def _draw_subs_section(canvas, layout: EventLayout,
     else:
         fm = _try_font(flat_font_px, bold=False)
         fm_bold = _try_font(flat_font_px, bold=True)
-    x0, y0, x1, y1 = _s_box(content_box)
+    pad_x = max(8, _s(6))
+    pad_y = max(6, _s(6))
+    line_gap = max(2, _s(3))
+    x0, y0, x1, _y1_full = _s_box(content_box)
+
+    # #228 follow-up: shrink the subs pill vertically when it isn't
+    # completely full, matching the dynamic-height behaviour of every
+    # other pill on the canvas. Pairs mode height comes from the
+    # last-row offset + a half-row tail; flat mode height comes from
+    # N rows of font + line gap + top/bottom padding.
+    if use_pairs:
+        pairs_count = len(roster.paired_subs)
+        if pairs_count == 0:
+            # Just header + underline; small tail.
+            content_h_px = _s(layout.pairs_underline_offset_y) + _s(10)
+        else:
+            last_row_top_svg = (
+                layout.pairs_row1_offset_y
+                + (pairs_count - 1) * layout.pairs_row_step
+            )
+            tail_svg = layout.pairs_row_step * 0.55
+            content_h_px = _s(last_row_top_svg + tail_svg)
+    else:
+        flat_count = len([s for s in roster.subs])
+        if flat_count == 0:
+            content_h_px = 2 * pad_y + fm.size
+        else:
+            content_h_px = (
+                pad_y
+                + flat_count * (fm.size + line_gap)
+                - line_gap
+                + pad_y
+            )
+    # Never grow beyond the layout's default; only shrink.
+    content_h_px = min(content_h_px, _y1_full - y0)
+    y1 = y0 + content_h_px
+
+    # Draw the pill background at the computed height (manual rounded
+    # rectangle instead of `_draw_pill` so we can pin the height).
+    radius_px = _s(min(content_box.w, content_box.h) / 9)
+    layer = Image.new("RGBA", canvas.size, (0, 0, 0, 0))
+    d = ImageDraw.Draw(layer)
+    d.rounded_rectangle(
+        (x0, y0, x1, y1), radius=radius_px, fill=_PILL_FILL,
+    )
+    d.rounded_rectangle(
+        (x0, y0, x1, y1), radius=radius_px,
+        outline=_PILL_OUTLINE, width=max(1, SCALE // 2),
+    )
+    canvas.alpha_composite(layer)
+
+    layer = Image.new("RGBA", canvas.size, (0, 0, 0, 0))
+    d = ImageDraw.Draw(layer)
     cy = y0 + pad_y
 
     if use_pairs:

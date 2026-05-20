@@ -209,11 +209,19 @@ class _SetupHubView(discord.ui.View):
                 button.label = f"💎 {button.label}"
 
     async def interaction_check(self, interaction: discord.Interaction) -> bool:
-        # Hub buttons inherit the same admin-only gate as the slash
-        # command that opened the hub.
-        if not interaction.user.guild_permissions.administrator:
+        # Hub buttons inherit the same admin-or-leadership gate as the
+        # slash command that opened the hub. Some alliances let
+        # leadership configure the bot without granting full server
+        # admin, mirroring the per-feature `/setup_*` wizard gate
+        # (`setup_cog._has_leadership_or_admin`).
+        from setup_cog import _has_leadership_or_admin
+        if not _has_leadership_or_admin(interaction):
+            from config import get_config
+            cfg = get_config(interaction.guild_id)
+            role_name = (cfg.leadership_role_name if cfg else None) or "Leadership"
             await interaction.response.send_message(
-                "⛔ Only server administrators can use the setup hub.",
+                f"⛔ You need server administrator permission or the "
+                f"**{role_name}** role to use the setup hub.",
                 ephemeral=True,
             )
             return False
@@ -310,12 +318,24 @@ class _SetupHubView(discord.ui.View):
 
 
 async def handle_setup_hub(bot, interaction: discord.Interaction) -> None:
-    """Admin-gated entry point invoked by /setup. Reads premium status
-    via `premium.is_premium` and caches it on the view so per-button
-    callbacks don't re-check."""
-    if not interaction.user.guild_permissions.administrator:
+    """Admin-or-leadership entry point invoked by /setup. Reads premium
+    status via `premium.is_premium` and caches it on the view so
+    per-button callbacks don't re-check.
+
+    Server administrators or members with the configured leadership
+    role can run `/setup`. On a fresh install (no saved config yet)
+    only admins pass the gate — they configure the leadership role
+    during the wizard, after which their officers can re-open setup
+    without needing admin permissions.
+    """
+    from setup_cog import _has_leadership_or_admin
+    if not _has_leadership_or_admin(interaction):
+        from config import get_config
+        cfg = get_config(interaction.guild_id)
+        role_name = (cfg.leadership_role_name if cfg else None) or "Leadership"
         await interaction.response.send_message(
-            "⛔ Only server administrators can run `/setup`.",
+            f"⛔ You need server administrator permission or the "
+            f"**{role_name}** role to run `/setup`.",
             ephemeral=True,
         )
         return

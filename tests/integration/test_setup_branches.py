@@ -263,3 +263,87 @@ class TestViewConfiguration:
         assert "/setup" in msg or "set up" in msg.lower()
 
 
+# ── /setup admin-or-leadership gate (#236) ───────────────────────────────────
+
+class TestSetupHubLeadershipGate:
+    """The /setup hub used to be admin-only, which blocked alliances
+    where day-to-day officers don't carry full server-admin
+    permissions. The hub now accepts admins OR members with the
+    configured leadership role — matching the gate every per-feature
+    `/setup_*` wizard already uses."""
+
+    @pytest.mark.asyncio
+    async def test_handle_setup_hub_lets_leadership_role_through(self, seeded_db):
+        """A non-admin member with the configured Leadership role can
+        run `/setup`; the hub embed + view are sent."""
+        import setup_hub
+        from tests.conftest import make_mock_role
+
+        interaction = make_mock_interaction(is_admin=False)
+        interaction.user.roles = [make_mock_role(name="Leadership")]
+        bot = MagicMock()
+
+        with patch("premium.is_premium", AsyncMock(return_value=False)):
+            await setup_hub.handle_setup_hub(bot, interaction)
+
+        sent = interaction.response.send_message.call_args
+        assert sent is not None
+        # The hub call sends an embed + view, not the reject message.
+        kwargs = sent.kwargs
+        assert "embed" in kwargs and "view" in kwargs
+
+    @pytest.mark.asyncio
+    async def test_handle_setup_hub_rejects_unprivileged_user(self, seeded_db):
+        """A user with neither admin nor the Leadership role still hits
+        the reject path, with a message naming the configured role."""
+        import setup_hub
+        from tests.conftest import make_mock_role
+
+        interaction = make_mock_interaction(is_admin=False)
+        interaction.user.roles = [make_mock_role(name="Member")]
+        bot = MagicMock()
+
+        await setup_hub.handle_setup_hub(bot, interaction)
+
+        sent = interaction.response.send_message.call_args
+        msg = sent.args[0] if sent.args else sent.kwargs.get("content", "")
+        assert "Leadership" in msg
+        assert "administrator" in msg.lower()
+
+    @pytest.mark.asyncio
+    async def test_hub_view_interaction_check_lets_leadership_through(self, seeded_db):
+        """The setup hub's button-gate (interaction_check) follows the
+        same admin-or-leadership rule as the slash command."""
+        import setup_hub
+        from tests.conftest import make_mock_role
+
+        interaction = make_mock_interaction(is_admin=False)
+        interaction.user.roles = [make_mock_role(name="Leadership")]
+        view = setup_hub._SetupHubView(
+            MagicMock(), TEST_GUILD_ID, interaction.user.id, is_premium=False,
+        )
+
+        result = await view.interaction_check(interaction)
+        assert result is True
+        interaction.response.send_message.assert_not_called()
+
+    @pytest.mark.asyncio
+    async def test_hub_view_interaction_check_rejects_member_role(self, seeded_db):
+        """A user without the Leadership role still bounces off the
+        hub button gate."""
+        import setup_hub
+        from tests.conftest import make_mock_role
+
+        interaction = make_mock_interaction(is_admin=False)
+        interaction.user.roles = [make_mock_role(name="Member")]
+        view = setup_hub._SetupHubView(
+            MagicMock(), TEST_GUILD_ID, interaction.user.id, is_premium=False,
+        )
+
+        result = await view.interaction_check(interaction)
+        assert result is False
+        sent = interaction.response.send_message.call_args
+        msg = sent.args[0] if sent.args else sent.kwargs.get("content", "")
+        assert "Leadership" in msg
+
+

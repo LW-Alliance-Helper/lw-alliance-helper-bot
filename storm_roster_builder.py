@@ -1804,13 +1804,15 @@ class RosterBuilderView(discord.ui.View):
                 # ephemeral regardless of fresh vs rerun.
                 picker_view = _AutoFillStrategyPickerView(parent_view=self)
                 body = (
-                    "🎯 **Auto-fill strategy.** Pick how to distribute "
-                    "the 20 starters across this team's zones:\n"
-                    "• **🎯 Balanced spread**: one starter per zone per "
+                    "## Auto-fill strategy\n"
+                    "Pick how to distribute the 20 starters across "
+                    "this team's zones:\n"
+                    "\n"
+                    "- ⚖️ **Balanced spread:** one starter per zone per "
                     "pass, power distributed across every zone.\n"
-                    "• **🔝 Strength to priority**: fill the "
-                    "top-priority zone fully with the strongest members "
-                    "before moving on."
+                    "- 💪 **Strength to priority:** fill the top-priority "
+                    "zone fully with the strongest members before moving "
+                    "on."
                 )
                 if s.has_existing_assignments():
                     body = (
@@ -2140,24 +2142,28 @@ class _AutoFillStrategyPickerView(discord.ui.View):
         except discord.HTTPException:
             pass
 
-    @discord.ui.button(label="🎯 Balanced spread",
-                       style=discord.ButtonStyle.primary)
+    # Secondary style on both strategy buttons so the emoji + label
+    # stay readable (the blue primary background washed out the
+    # glyphs). Cancel sits on its own row to preserve the visual
+    # separation between strategy choice and the cancel affordance.
+    @discord.ui.button(label="⚖️ Balanced spread",
+                       style=discord.ButtonStyle.secondary, row=0)
     async def balanced(self, inter: discord.Interaction,
                        _btn: discord.ui.Button):
         await self._run_with_strategy(
-            inter, "balanced", "🎯 Balanced spread auto-fill",
+            inter, "balanced", "⚖️ Balanced spread auto-fill",
         )
 
-    @discord.ui.button(label="🔝 Strength to priority",
-                       style=discord.ButtonStyle.primary)
+    @discord.ui.button(label="💪 Strength to priority",
+                       style=discord.ButtonStyle.secondary, row=0)
     async def priority_greedy(self, inter: discord.Interaction,
                               _btn: discord.ui.Button):
         await self._run_with_strategy(
-            inter, "priority_greedy", "🔝 Strength-to-priority auto-fill",
+            inter, "priority_greedy", "💪 Strength-to-priority auto-fill",
         )
 
-    @discord.ui.button(label="↩️ Cancel",
-                       style=discord.ButtonStyle.secondary)
+    @discord.ui.button(label="↩️ Cancel Auto-fill",
+                       style=discord.ButtonStyle.secondary, row=1)
     async def cancel(self, inter: discord.Interaction,
                      _btn: discord.ui.Button):
         if not await self._guard_owner(inter):

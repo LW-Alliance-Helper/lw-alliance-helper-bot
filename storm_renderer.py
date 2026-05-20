@@ -169,13 +169,17 @@ _LONG_NAME_CHARS = 20
 # above stays visible.
 _CENTRAL_MAX_ROWS = 7
 
-# Max rows for outer zones (DS left / right columns, all CS zones).
-# Derived from the typical vertical headroom between adjacent zones
-# in the layout grid (~148 SVG of available vertical at SCALE=2,
-# divided by row pitch of ~12.5 SVG). Going beyond this overflows
-# into the next zone's space, so the algorithm falls back to 2-col
-# packing instead.
-_OUTER_MAX_ROWS = 11
+# Max content rows for outer zones (DS left / right columns, all CS
+# zones). The actual rendered pill height for a 2-stage outer pill
+# with C content rows is ~78 + 25*C px (padding + 2 stage headers +
+# row spacing). At SCALE=2 the available vertical between adjacent
+# outer zones is ~296 px (148 SVG), which leaves room for ~8 content
+# rows before the pill overlaps the next zone's title. We pick 7 so
+# there's a one-row buffer against unexpected line growth (long
+# names, future spacing tweaks) and the algorithm spills to 2-col
+# packing before the pill gets too tall. Was 11 pre-#228 dev review;
+# the higher cap let busy zones grow past their lane.
+_OUTER_MAX_ROWS = 7
 
 
 @dataclass(frozen=True)

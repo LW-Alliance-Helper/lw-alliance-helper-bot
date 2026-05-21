@@ -2391,6 +2391,93 @@ class TestFinalizePostOutcomes:
         assert "Member 14" in second_msg
 
     @pytest.mark.asyncio
+    async def test_long_mail_body_posts_as_txt_attachment(self, fake_env):
+        """Tester report 2026-05-21: a roster whose mail body exceeded
+        Discord's 2000-char message ceiling raised HTTPException 50035
+        on `post_channel.send(mail)`, then the recovery ephemeral also
+        blew the same ceiling, leaving Approve & Post stuck in
+        "thinking…" forever. Fix: when the mail is too long, attach it
+        as a .txt file so the post still goes through."""
+        from unittest.mock import patch
+        ch = self._make_fake_channel(12345, mention="<#12345>")
+        inter, view, _ = self._make_structured_view(
+            fake_env, channel=ch, channel_id=12345,
+        )
+        long_mail = "X" * 2500  # 500 chars over the limit
+        with patch("storm_roster_builder._build_mail_body", return_value=long_mail):
+            await srb._finalize_structured_roster(inter, view)
+
+        ch.send.assert_awaited_once()
+        kwargs = ch.send.await_args.kwargs
+        # Should land as a single-file attachment (the .txt mail body),
+        # not as inline content.
+        assert "file" in kwargs, (
+            "long mail should attach as .txt, not blow Discord's "
+            "2000-char inline limit"
+        )
+        attached = kwargs["file"]
+        assert isinstance(attached, discord.File)
+        assert attached.filename.endswith(".txt")
+        # Inline content is the short placeholder, well under 2000.
+        content = ch.send.await_args.args[0]
+        assert len(content) < 2000
+        assert "full mail attached" in content
+
+    @pytest.mark.asyncio
+    async def test_long_mail_with_image_attaches_both_files(self, fake_env):
+        """Long mail + with-image path attaches both the .txt and the
+        .png so the single Discord message carries everything."""
+        from unittest.mock import patch
+        ch = self._make_fake_channel(12345, mention="<#12345>")
+        inter, view, _ = self._make_structured_view(
+            fake_env, channel=ch, channel_id=12345,
+        )
+        long_mail = "X" * 2500
+        fake_png = b"\x89PNG\r\n\x1a\nfake-png-bytes"
+        with patch("storm_renderer.render", return_value=fake_png), \
+             patch("storm_roster_builder._build_mail_body", return_value=long_mail):
+            await srb._finalize_structured_roster(inter, view, include_image=True)
+
+        ch.send.assert_awaited_once()
+        kwargs = ch.send.await_args.kwargs
+        # Two attachments — .txt mail and .png image — should land via
+        # the `files=` kwarg (the multi-attachment form).
+        assert "files" in kwargs
+        files = kwargs["files"]
+        assert len(files) == 2
+        names = [f.filename for f in files]
+        assert any(n.endswith(".txt") for n in names)
+        assert any(n.endswith(".png") for n in names)
+
+    @pytest.mark.asyncio
+    async def test_recovery_ephemeral_never_exceeds_message_limit(self, fake_env):
+        """Defensive: when the post fails (any cause), the officer
+        ephemeral must always fit in 2000 chars so the interaction
+        doesn't stay stuck in "thinking…". Tester report 2026-05-21."""
+        from unittest.mock import patch
+        # Force a send_failed branch by raising from channel.send.
+        ch = self._make_fake_channel(
+            12345, send_raises=Exception("Some failure"),
+        )
+        inter, view, _ = self._make_structured_view(
+            fake_env, channel=ch, channel_id=12345,
+        )
+        # A mail body big enough that the unbudgeted preview would have
+        # blown the ceiling.
+        long_mail = "Y" * 2500
+        with patch("storm_roster_builder._build_mail_body", return_value=long_mail):
+            await srb._finalize_structured_roster(inter, view)
+
+        inter.followup.send.assert_awaited()
+        # Every followup.send must fit in 2000 chars.
+        for call in inter.followup.send.await_args_list:
+            content = call.args[0] if call.args else call.kwargs.get("content", "")
+            assert len(content) <= 2000, (
+                f"officer ephemeral exceeded 2000 chars ({len(content)})"
+                " — this is the stuck-thinking failure mode"
+            )
+
+    @pytest.mark.asyncio
     async def test_no_overflow_ephemeral_when_everyone_fits(self, fake_env):
         """If `roster.overflow` is empty (the typical case), the
         second-ephemeral path is skipped — just the standard

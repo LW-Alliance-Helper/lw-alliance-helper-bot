@@ -2791,6 +2791,10 @@ class _SaveAsPresetModal(discord.ui.Modal, title="Save as preset"):
 
 
 _MAX_ATTACHMENT_BYTES = 25 * 1024 * 1024
+# Discord caps regular message content (the `content` field, not
+# attachments) at 2000 characters. Anything longer must be split or
+# attached as a file.
+_MAX_MESSAGE_CONTENT = 2000
 
 
 async def _render_and_attach(
@@ -3479,11 +3483,45 @@ async def _finalize_structured_roster(
     elif post_channel is None:
         post_status = "channel_gone"
     else:
+        # Discord caps message content at 2000 chars. A full roster
+        # (20 starters + 10 subs + every zone + phase headers) easily
+        # exceeds that for large alliances, so when the mail is too
+        # long we attach it as a .txt file instead of sending inline.
+        # The image render (if any) still rides as a second attachment
+        # on the same message so the post stays one Discord message.
+        # (Tester report 2026-05-21: long-mail HTTPException left the
+        # Approve & Post interaction stuck in "thinking…" because the
+        # recovery ephemeral also blew the 2000-char ceiling.)
+        files: list[discord.File] = []
+        if len(mail) > _MAX_MESSAGE_CONTENT:
+            txt_name = (
+                f"{s.event_type.lower()}-roster"
+                + (f"-{s.event_date}" if s.event_date else "")
+                + (f"-team-{s.team}" if s.team else "")
+                + ".txt"
+            )
+            files.append(discord.File(
+                io.BytesIO(mail.encode("utf-8")), filename=txt_name,
+            ))
+            content = (
+                f"📋 **{s.event_type} Roster** — full mail attached "
+                f"(longer than Discord's 2000-char message limit). "
+                f"Copy from the attachment to send in-game."
+            )
+        else:
+            content = mail
+        if image_file is not None:
+            files.append(image_file)
         try:
-            if image_file is not None:
-                await post_channel.send(mail, file=image_file)
+            # `file=` for one attachment, `files=` for two+, so the
+            # single-image happy path (still the common case) preserves
+            # its kwarg shape and existing tests.
+            if len(files) == 1:
+                await post_channel.send(content, file=files[0])
+            elif len(files) > 1:
+                await post_channel.send(content, files=files)
             else:
-                await post_channel.send(mail)
+                await post_channel.send(content)
             posted_to_mention = post_channel.mention
             post_status = "posted_ok"
         except Exception as e:
@@ -3548,11 +3586,47 @@ async def _finalize_structured_roster(
 
     # Officer-facing details (ephemeral). Include the mail preview when
     # we didn't auto-post (so the officer can copy it manually).
+    # Discord caps message content at 2000 chars; budget the preview to
+    # what's left after the summary lines + code-fence wrappers fit.
+    # Without this cap the recovery ephemeral itself blew the limit and
+    # left the interaction stuck in "thinking…" (tester report
+    # 2026-05-21).
     detail = "\n".join(summary_lines)
     if post_status != "posted_ok":
-        preview = mail if len(mail) <= 1800 else mail[:1780] + "\n…(truncated)"
+        # 8 chars for the ```\n…\n``` wrappers + 12 chars margin.
+        fence_overhead = 20
+        budget = _MAX_MESSAGE_CONTENT - len(detail) - fence_overhead
+        if budget < 200:
+            budget = 200  # always show at least a short snippet
+        if len(mail) <= budget:
+            preview = mail
+        else:
+            preview = mail[: budget - 20] + "\n…(truncated)"
         detail += f"\n\n```\n{preview}\n```"
-    await interaction.followup.send(detail, ephemeral=True)
+    # Hard-cap defense: even with the budget above, truncate the final
+    # string so a future bug in this builder can't re-introduce the
+    # stuck-"thinking…" failure mode.
+    if len(detail) > _MAX_MESSAGE_CONTENT:
+        detail = detail[: _MAX_MESSAGE_CONTENT - 20] + "\n…(truncated)"
+    try:
+        await interaction.followup.send(detail, ephemeral=True)
+    except discord.HTTPException as e:
+        # Last-resort fallback: keep the interaction from staying stuck
+        # in "thinking…" if the detail ephemeral still fails for any
+        # reason (unexpected encoding issue, rate limit, etc.).
+        logger.warning(
+            "[STORM STRUCTURED] detail ephemeral failed (guild=%s "
+            "event=%s, len=%d): %s",
+            s.guild_id, s.event_type, len(detail), e,
+        )
+        try:
+            await interaction.followup.send(
+                "⚠️ Roster recorded but the confirmation message "
+                "couldn't be sent. Check the configured post channel.",
+                ephemeral=True,
+            )
+        except discord.HTTPException:
+            pass  # nothing else to do; at least it's not stuck thinking
 
     # #228 follow-up: if the rendered image couldn't fit every member
     # (slot grid capped at `max_rows` per zone), surface the names

@@ -1000,10 +1000,54 @@ def _build_flow_lines(phase_blocks: list[RosterZone], font_regular,
     return best_lines
 
 
+def _font_row_height(font) -> int:
+    """Actual rendered row height in pixels for `font`. PIL's
+    `font.size` returns the em-square size but doesn't include the
+    descender, so rows in fallback fonts (Noto CJK SC has a ~7 px
+    descender at 16 px em) overflow a pill sized by em alone (#236
+    follow-up). `getmetrics()` returns (ascent, descent) measured
+    from the baseline; their sum is the actual top-to-bottom extent
+    a single line of text occupies."""
+    try:
+        ascent, descent = font.getmetrics()
+        return ascent + descent
+    except (AttributeError, OSError):
+        # Some PIL fallback fonts (e.g. `load_default`) don't expose
+        # getmetrics. Use the em size as a safe approximation.
+        return getattr(font, "size", 0) or 12
+
+
+def _row_height_for_line(line: dict, font_regular, font_bold) -> int:
+    """Row height for a single `_build_flow_lines` entry, accounting
+    for any fallback font that a name in the row would use. Picks the
+    max font height across every name in the row so CJK / Arabic
+    fallback rows don't clip into the next line or the pill bottom."""
+    if line["type"] == "header":
+        return _font_row_height(font_bold)
+    if line["type"] == "row":
+        # Multi-name row. Walk each name through `_font_for_text` so
+        # mixed-script rows (e.g. `Alice 김민준 Bob`) take the tallest
+        # font's row height.
+        max_h = _font_row_height(font_regular)
+        for name in line.get("items", []):
+            f = _font_for_text(name, font_regular.size)
+            max_h = max(max_h, _font_row_height(f))
+        return max_h
+    if line["type"] == "long":
+        name = line.get("name", "")
+        f = _font_for_text(name, font_regular.size)
+        return max(_font_row_height(font_regular), _font_row_height(f))
+    # empty
+    return _font_row_height(font_regular)
+
+
 def _pill_height_px(lines: list[dict], font_regular, font_bold) -> int:
     """Compute the pixel height the pill needs to draw `lines` without
     clipping. Mirrors `_draw_flow_lines` exactly so the pill background
-    and the drawn content stay in sync."""
+    and the drawn content stay in sync. Per-line row heights account
+    for the actual font that will be used (#236 follow-up: CJK and
+    Arabic fallback fonts have larger ascent + descent than Inter at
+    the same em size)."""
     if not lines:
         return _s(_PILL_PAD_Y_SVG) * 2
     line_gap = _s(_PILL_LINE_GAP_SVG)
@@ -1016,13 +1060,12 @@ def _pill_height_px(lines: list[dict], font_regular, font_bold) -> int:
         if line["type"] == "header":
             if prev_type is not None:
                 h += stage_gap
-            h += font_bold.size
         else:  # row | long | empty
             if prev_type == "header":
                 h += header_gap
             elif prev_type is not None:
                 h += line_gap
-            h += font_regular.size
+        h += _row_height_for_line(line, font_regular, font_bold)
         prev_type = line["type"]
     h += pad_y
     return h
@@ -1045,17 +1088,21 @@ def _draw_flow_lines(draw, anchor: Box, lines: list[dict],
     cy = y0 + pad_y
     prev_type = None
     for line in lines:
+        # Pre-advance the inter-line gap before this line.
         if line["type"] == "header":
             if prev_type is not None:
                 cy += stage_gap
-            draw.text((x0 + pad_x, cy), line["text"],
-                      fill=_TEXT_DARK, font=font_bold)
-            cy += font_bold.size
-        elif line["type"] == "row":
+        else:
             if prev_type == "header":
                 cy += header_gap
             elif prev_type is not None:
                 cy += line_gap
+
+        # Draw this line's content at `cy` (top of the row).
+        if line["type"] == "header":
+            draw.text((x0 + pad_x, cy), line["text"],
+                      fill=_TEXT_DARK, font=font_bold)
+        elif line["type"] == "row":
             items = line["items"]
             for idx, name in enumerate(items):
                 # Each column slot starts at `slot_width_px + col_gap`
@@ -1067,24 +1114,18 @@ def _draw_flow_lines(draw, anchor: Box, lines: list[dict],
                 # the Inter `.notdef` tofu box.
                 name_font = _font_for_text(name, font_regular.size)
                 draw.text((x, cy), name, fill=_TEXT_MUTED, font=name_font)
-            cy += font_regular.size
         elif line["type"] == "long":
-            if prev_type == "header":
-                cy += header_gap
-            elif prev_type is not None:
-                cy += line_gap
             name_font = _font_for_text(line["name"], font_regular.size)
             draw.text((x0 + pad_x + indent, cy), line["name"],
                       fill=_TEXT_MUTED, font=name_font)
-            cy += font_regular.size
         elif line["type"] == "empty":
-            if prev_type == "header":
-                cy += header_gap
-            elif prev_type is not None:
-                cy += line_gap
             draw.text((x0 + pad_x + indent, cy), "(empty)",
                       fill=_TEXT_MUTED, font=font_regular)
-            cy += font_regular.size
+
+        # Advance by the actual row height (accounts for fallback-font
+        # ascent + descent) so the next line lands below the descenders
+        # of this one instead of overlapping (#236 follow-up).
+        cy += _row_height_for_line(line, font_regular, font_bold)
         prev_type = line["type"]
 
 
@@ -1274,28 +1315,62 @@ def _draw_subs_section(canvas, layout: EventLayout,
     # last-row offset + a fixed 12 px tail (design source's bottom
     # padding); flat mode comes from N rows of font + line gap + top
     # and bottom padding.
+    # Pre-compute the per-row top positions for paired mode so the
+    # pill height calculation and the draw loop agree on placement,
+    # even when CJK / Arabic names step rows further apart than the
+    # layout's nominal `pairs_row_step` (#236 follow-up).
+    pairs_row_tops: list[int] = []
     if use_pairs:
         pairs_count = len(roster.paired_subs)
         if pairs_count == 0:
             # Just header + underline; small tail.
             content_h_px = _s(layout.pairs_underline_offset_y) + _s(10)
         else:
-            last_row_top_svg = (
-                layout.pairs_row1_offset_y
-                + (pairs_count - 1) * layout.pairs_row_step
+            box_top_svg = content_box.y
+            row1_y_px = _s(box_top_svg + layout.pairs_row1_offset_y)
+            nominal_step_px = _s(layout.pairs_row_step)
+            cy = row1_y_px
+            last_row_h = _font_row_height(fm)
+            for primary, sub in roster.paired_subs.items():
+                pairs_row_tops.append(cy)
+                primary_font = _font_for_text(primary, fm.size)
+                sub_font = _font_for_text(sub, fm.size)
+                last_row_h = max(
+                    _font_row_height(primary_font),
+                    _font_row_height(sub_font),
+                    _font_row_height(fm),
+                )
+                # Step = max(nominal layout step, actual row height +
+                # a small breathing margin). Latin-only rosters keep
+                # the existing nominal spacing; CJK / Arabic rows
+                # expand as needed without clipping into the next
+                # row's ascender.
+                cy += max(nominal_step_px, last_row_h + _s(2))
+            last_row_top = pairs_row_tops[-1]
+            # Pill bottom = last row top + last row's actual height +
+            # design source's 12 px bottom padding (`_s(6)` at SCALE=2).
+            content_h_px = (
+                (last_row_top - _s(box_top_svg))
+                + last_row_h + _s(6)
             )
-            # Tail = design source's 12 px bottom padding. Replaces the
-            # row-step multiplier (#235) which produced ~11 px and read
-            # as cramped to the tester.
-            content_h_px = _s(last_row_top_svg) + _s(6)
     else:
         flat_count = len([s for s in roster.subs])
         if flat_count == 0:
-            content_h_px = 2 * pad_y + fm.size
+            content_h_px = 2 * pad_y + _font_row_height(fm)
         else:
+            # Take the max row height across every sub name so a CJK
+            # row anywhere in the list grows the pill instead of
+            # clipping into the bottom (#236 follow-up).
+            max_row_h = max(
+                _font_row_height(fm),
+                *(
+                    _font_row_height(_font_for_text(name, fm.size))
+                    for name in roster.subs
+                ),
+            )
             content_h_px = (
                 pad_y
-                + flat_count * (fm.size + line_gap)
+                + flat_count * (max_row_h + line_gap)
                 - line_gap
                 + pad_y
             )
@@ -1323,14 +1398,15 @@ def _draw_subs_section(canvas, layout: EventLayout,
 
     if use_pairs:
         # Table: "Primary" / "Sub" headers, thick underline, one row per
-        # pair with a thin divider between rows.
+        # pair with a thin divider between rows. Row positions come
+        # from `pairs_row_tops` computed above so the rows step by the
+        # max font height when CJK / Arabic names appear (#236
+        # follow-up).
         box_top = content_box.y
         primary_x = _s(layout.subs_pair_left_x)
         sub_x = _s(layout.subs_pair_right_x)
         header_y = _s(box_top + layout.pairs_header_offset_y)
         underline_y = _s(box_top + layout.pairs_underline_offset_y)
-        row1_y = _s(box_top + layout.pairs_row1_offset_y)
-        row_step_px = _s(layout.pairs_row_step)
 
         d.text((primary_x, header_y), "Primary",
                fill=_TEXT_DARK, font=fm_bold)
@@ -1344,19 +1420,28 @@ def _draw_subs_section(canvas, layout: EventLayout,
         )
         pairs_list = list(roster.paired_subs.items())
         for i, (primary, sub) in enumerate(pairs_list):
-            row_y = row1_y + i * row_step_px
-            if row_y + fm.size > y1 - pad_y:
-                break
+            row_y = pairs_row_tops[i]
             # Per-name font picker so CJK / Arabic player names render
             # with their fallback fonts (#236) instead of tofu boxes.
             primary_font = _font_for_text(primary, fm.size)
             sub_font = _font_for_text(sub, fm.size)
+            row_h = max(
+                _font_row_height(primary_font),
+                _font_row_height(sub_font),
+                _font_row_height(fm),
+            )
+            if row_y + row_h > y1 - pad_y:
+                break
             d.text((primary_x, row_y), primary,
                    fill=_TEXT_DARK, font=primary_font)
             d.text((sub_x, row_y), sub,
                    fill=_TEXT_DARK, font=sub_font)
             if i < len(pairs_list) - 1:
-                div_y = row_y + _s(layout.pairs_row_step * 0.625)
+                # Place the divider midway between this row and the
+                # next one (`pairs_row_tops[i+1]`) so it stays
+                # centered regardless of variable row stepping.
+                next_top = pairs_row_tops[i + 1]
+                div_y = (row_y + row_h + next_top) // 2
                 if div_y < y1 - 4:
                     d.line(
                         (_s(layout.pairs_divider_x0), div_y,
@@ -1367,12 +1452,13 @@ def _draw_subs_section(canvas, layout: EventLayout,
     else:
         # Flat list — one sub per row.
         for name in roster.subs:
-            if cy + fm.size > y1 - pad_y:
-                break
             # Per-name font picker for CJK / Arabic fallback (#236).
             name_font = _font_for_text(name, fm.size)
+            row_h = _font_row_height(name_font)
+            if cy + row_h > y1 - pad_y:
+                break
             d.text((x0 + pad_x + 4, cy), name, fill=_TEXT_DARK, font=name_font)
-            cy += fm.size + line_gap
+            cy += row_h + line_gap
 
     canvas.alpha_composite(layer)
 

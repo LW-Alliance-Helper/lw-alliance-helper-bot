@@ -534,6 +534,34 @@ def init_db():
         )
         conn.commit()
 
+        # storm_roster_drafts — per-(guild, event_type, team) snapshot of
+        # the structured roster builder's in-progress state (#240).
+        # Auto-saved on every state change; loaded when the officer
+        # clicks `♻️ Resume Team X roster` on the OfficerView. Survives
+        # View timeouts AND Railway redeploys so a builder session can
+        # take longer than 1 hour without losing work.
+        #
+        # NOTE: `event_date` is stored for the load-time staleness
+        # warning ("This draft was last saved for Sat May 18, signups
+        # may have shifted") but is *not* part of the PRIMARY KEY. One
+        # row per team — drafts are reusable across weeks. The team
+        # plan (storm_team_plans) carries the per-event-date member
+        # composition; the draft just carries zone assignments and sub
+        # pairings on top, applied to whoever is in the current week's
+        # plan / signups at load time.
+        conn.execute("""
+            CREATE TABLE IF NOT EXISTS storm_roster_drafts (
+                guild_id      INTEGER NOT NULL,
+                event_type    TEXT    NOT NULL,
+                team          TEXT    NOT NULL,
+                session_json  TEXT    NOT NULL,
+                event_date    TEXT    NOT NULL,
+                updated_at    TEXT    NOT NULL,
+                PRIMARY KEY (guild_id, event_type, team)
+            )
+        """)
+        conn.commit()
+
         # storm_roster_images — pointer to a public roster-image message
         # in Discord, written by the `💾 Save to history` action on the
         # builder's render flow. The history browser surfaces this as
@@ -2144,6 +2172,83 @@ def clear_storm_team_plan(
             "WHERE guild_id = ? AND event_type = ? AND event_date = ? "
             "  AND team = ?",
             (int(guild_id), event_type, event_date, team),
+        )
+        conn.commit()
+        return cur.rowcount
+
+
+# ── Storm roster drafts (#240) ────────────────────────────────────────────────
+#
+# Per-(guild, event_type, team) snapshot of the structured roster
+# builder's in-progress state. One row per team; reusable across
+# event weeks. Saves the officer's intent (zone assignments, sub
+# pairings, overrides, selected preset) — NOT the member dict
+# (re-read from team plan / signups at load time). See #240's
+# design comment for the full contract.
+
+
+def save_roster_draft(
+    guild_id: int,
+    event_type: str,
+    team: str,
+    *,
+    session_json: str,
+    event_date: str,
+) -> None:
+    """Persist (or overwrite) the roster draft for one team. Called
+    by the builder's auto-save hook on every state change. Idempotent
+    upsert keyed by (guild_id, event_type, team) so one team only
+    ever has one draft row."""
+    from datetime import datetime, timezone as _tz
+    updated_at = datetime.now(_tz.utc).isoformat()
+    with _get_conn() as conn:
+        conn.execute(
+            "INSERT INTO storm_roster_drafts "
+            "(guild_id, event_type, team, session_json, event_date, updated_at) "
+            "VALUES (?, ?, ?, ?, ?, ?) "
+            "ON CONFLICT(guild_id, event_type, team) DO UPDATE SET "
+            "  session_json = excluded.session_json, "
+            "  event_date   = excluded.event_date, "
+            "  updated_at   = excluded.updated_at",
+            (int(guild_id), event_type, team, session_json,
+             event_date, updated_at),
+        )
+        conn.commit()
+
+
+def get_roster_draft(
+    guild_id: int, event_type: str, team: str,
+) -> Optional[dict]:
+    """Return the saved roster draft for one team, or None if no row
+    exists. Caller deserializes `session_json` and reconciles against
+    the current team plan / signups at builder open."""
+    with _get_conn() as conn:
+        row = conn.execute(
+            "SELECT session_json, event_date, updated_at "
+            "FROM storm_roster_drafts "
+            "WHERE guild_id = ? AND event_type = ? AND team = ?",
+            (int(guild_id), event_type, team),
+        ).fetchone()
+    if row is None:
+        return None
+    return {
+        "session_json": row["session_json"],
+        "event_date":   row["event_date"],
+        "updated_at":   row["updated_at"],
+    }
+
+
+def delete_roster_draft(
+    guild_id: int, event_type: str, team: str,
+) -> int:
+    """Delete the saved draft for one team. Returns the rowcount (0
+    if nothing was saved). Called when the officer confirms
+    🆕 Set up new — the draft is cleared and a fresh builder opens."""
+    with _get_conn() as conn:
+        cur = conn.execute(
+            "DELETE FROM storm_roster_drafts "
+            "WHERE guild_id = ? AND event_type = ? AND team = ?",
+            (int(guild_id), event_type, team),
         )
         conn.commit()
         return cur.rowcount

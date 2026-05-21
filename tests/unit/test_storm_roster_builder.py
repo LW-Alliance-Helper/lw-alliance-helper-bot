@@ -4096,3 +4096,169 @@ class TestRostersTabPhaseColumn:
         carol_row = next(r for r in rows[1:] if r[member_col] == "Carol")
         # Sub-pool entries are event-level, not phase-scoped.
         assert carol_row[phase_col] == ""
+
+
+# ── #240: draft persistence (serialize / reconcile) ──────────────────────────
+
+
+class TestDraftSerialization:
+    """#240: officer intent (zone assignments, pairings, overrides,
+    preset name, UI cursor) round-trips through JSON without losing
+    fidelity. Member identity and rules are NOT serialized — they
+    re-resolve from team plan / signups at load time."""
+
+    def test_serialize_captures_intent_fields(self):
+        members = {
+            "1001": {"key": "1001", "name": "Alice", "discord_id": "1001",
+                     "power": 412_000_000, "not_on_discord": False},
+            "1002": {"key": "1002", "name": "Bob",   "discord_id": "1002",
+                     "power": 380_000_000, "not_on_discord": False},
+        }
+        session = _make_session(team="A", members=members)
+        session.assignments["Power Tower"] = ["1001"]
+        session.subs = ["1002"]
+        session.selected_phase = 1
+        session.selected_zone = "Power Tower"
+        session.show_below_floor = True
+        session.team_plan_applied = True
+
+        import json
+        payload = json.loads(srb._serialize_session(session))
+        assert payload["version"] == 1
+        assert payload["assignments_p1"]["Power Tower"] == ["1001"]
+        assert payload["subs"] == ["1002"]
+        assert payload["selected_phase"] == 1
+        assert payload["selected_zone"] == "Power Tower"
+        assert payload["show_below_floor"] is True
+        assert payload["team_plan_applied"] is True
+        # members / rules are NOT in the payload (re-resolved at load).
+        assert "members" not in payload
+        assert "per_member_rules" not in payload
+        assert "power_band_rules" not in payload
+
+    def test_round_trip_preserves_assignments_and_pairings(self):
+        members = {
+            f"100{i}": {"key": f"100{i}", "name": f"M{i}", "discord_id": f"100{i}",
+                        "power": 400_000_000 - i * 10_000_000,
+                        "not_on_discord": False}
+            for i in range(4)
+        }
+        session1 = _make_session(team="A", members=members, sub_mode="paired")
+        session1.assignments["Power Tower"] = ["1000", "1001"]
+        session1.paired_subs["1000"] = "1002"
+        session1.paired_subs["1001"] = "1003"
+        session1.below_floor_overrides.add("1003")
+
+        import json
+        payload = json.loads(srb._serialize_session(session1))
+
+        session2 = _make_session(team="A", members=members, sub_mode="paired")
+        report = srb._apply_saved_state(session2, payload)
+
+        assert session2.assignments["Power Tower"] == ["1000", "1001"]
+        assert session2.paired_subs["1000"] == "1002"
+        assert session2.paired_subs["1001"] == "1003"
+        assert "1003" in session2.below_floor_overrides
+        assert report["dropped_members"] == []
+        assert report["kept_assignments"] == 2
+        assert report["kept_pairings"] == 2
+
+    def test_reconciliation_drops_keys_not_in_current_members(self):
+        current_members = {
+            "1001": {"key": "1001", "name": "Alice", "discord_id": "1001",
+                     "power": 412_000_000, "not_on_discord": False},
+            "1002": {"key": "1002", "name": "Bob", "discord_id": "1002",
+                     "power": 380_000_000, "not_on_discord": False},
+        }
+        payload = {
+            "version": 1,
+            "assignments_p1": {"Power Tower": ["1001", "1003"]},
+            "paired_subs_p1": {},
+            "subs": ["1002"],
+            "below_floor_overrides_p1": [],
+            "selected_preset_name": "Standard",
+            "selected_phase": 1, "selected_zone": "Power Tower",
+            "show_below_floor": False,
+            "saved_for_event_date": "2026-05-22",
+        }
+        session = _make_session(team="A", members=current_members)
+        report = srb._apply_saved_state(session, payload)
+        assert session.assignments["Power Tower"] == ["1001"]
+        assert "1003" in report["dropped_members"]
+        assert report["kept_assignments"] == 1
+
+    def test_reconciliation_drops_pairs_with_missing_keys(self):
+        current_members = {
+            "1001": {"key": "1001", "name": "Alice", "discord_id": "1001",
+                     "power": 412_000_000, "not_on_discord": False},
+        }
+        payload = {
+            "version": 1, "assignments_p1": {},
+            "paired_subs_p1": {"1001": "1003"},
+            "subs": [], "below_floor_overrides_p1": [],
+            "selected_phase": 1, "selected_zone": "",
+            "show_below_floor": False,
+            "saved_for_event_date": "2026-05-22",
+            "selected_preset_name": "Standard",
+        }
+        session = _make_session(team="A", members=current_members,
+                                sub_mode="paired")
+        report = srb._apply_saved_state(session, payload)
+        assert session.paired_subs == {}
+        assert "1003" in report["dropped_members"]
+
+    def test_reconciliation_drops_zones_not_in_current_preset(self):
+        members = {
+            "1001": {"key": "1001", "name": "Alice", "discord_id": "1001",
+                     "power": 412_000_000, "not_on_discord": False},
+        }
+        payload = {
+            "version": 1,
+            "assignments_p1": {"Phantom Zone": ["1001"]},
+            "paired_subs_p1": {}, "subs": [],
+            "below_floor_overrides_p1": [],
+            "selected_phase": 1, "selected_zone": "",
+            "show_below_floor": False,
+            "saved_for_event_date": "2026-05-22",
+            "selected_preset_name": "Standard",
+        }
+        session = _make_session(team="A", members=members)
+        report = srb._apply_saved_state(session, payload)
+        assert "Phantom Zone" not in session.assignments
+        assert report["kept_assignments"] == 0
+
+    def test_reconciliation_surfaces_stale_event_date(self):
+        members = {
+            "1001": {"key": "1001", "name": "Alice", "discord_id": "1001",
+                     "power": 412_000_000, "not_on_discord": False},
+        }
+        payload = {
+            "version": 1, "assignments_p1": {}, "paired_subs_p1": {},
+            "subs": [], "below_floor_overrides_p1": [],
+            "selected_phase": 1, "selected_zone": "",
+            "show_below_floor": False,
+            "saved_for_event_date": "2026-05-15",
+            "selected_preset_name": "Standard",
+        }
+        session = _make_session(team="A", members=members)
+        session.event_date = "2026-05-22"
+        report = srb._apply_saved_state(session, payload)
+        assert report["stale_event_date"] == "2026-05-15"
+
+    def test_reconciliation_no_stale_flag_when_dates_match(self):
+        members = {
+            "1001": {"key": "1001", "name": "Alice", "discord_id": "1001",
+                     "power": 412_000_000, "not_on_discord": False},
+        }
+        payload = {
+            "version": 1, "assignments_p1": {}, "paired_subs_p1": {},
+            "subs": [], "below_floor_overrides_p1": [],
+            "selected_phase": 1, "selected_zone": "",
+            "show_below_floor": False,
+            "saved_for_event_date": "2026-05-22",
+            "selected_preset_name": "Standard",
+        }
+        session = _make_session(team="A", members=members)
+        session.event_date = "2026-05-22"
+        report = srb._apply_saved_state(session, payload)
+        assert report["stale_event_date"] is None

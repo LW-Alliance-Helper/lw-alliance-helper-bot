@@ -2087,7 +2087,13 @@ class OfficerView(discord.ui.View):
         # this team. Gated by `teams` config — applies identically to
         # DS and CS. teams=both shows A+B; teams=A or teams=B shows
         # just that team's button.
-        from config import get_storm_config
+        #
+        # #240: when a saved draft exists for a team, that team's row
+        # becomes `[♻️ Resume <ts>]  [🆕 Set up new]`. Resume is success/
+        # green (the most likely intended path), Set up new is
+        # secondary. When no draft exists, the row shows a single
+        # `[🅰️ Set up Team A]` success button (pre-#240 behaviour).
+        from config import get_storm_config, get_roster_draft
         cfg = get_storm_config(self.guild_id, self.event_type) or {}
         teams_setting = (cfg.get("teams") or "both").strip()
         if teams_setting not in ("both", "A", "B"):
@@ -2096,27 +2102,93 @@ class OfficerView(discord.ui.View):
         show_a = teams_setting in ("both", "A")
         show_b = teams_setting in ("both", "B")
 
+        def _format_draft_timestamp(updated_at_iso: str) -> str:
+            """Render the saved-at timestamp for a Resume button label.
+            Discord button labels don't render `<t:...>` format codes,
+            so the timestamp is static absolute text computed at view
+            render time. Format mirrors what the design source used:
+            `May 21 8:42pm`."""
+            from datetime import datetime, timezone
+            try:
+                dt = datetime.fromisoformat(updated_at_iso)
+                if dt.tzinfo is None:
+                    dt = dt.replace(tzinfo=timezone.utc)
+                # Localize to the guild's timezone for human-readable
+                # labels (officers think in their alliance's local
+                # time, not UTC).
+                tz_name = (cfg.get("timezone") or "America/New_York")
+                try:
+                    from zoneinfo import ZoneInfo
+                    dt = dt.astimezone(ZoneInfo(tz_name))
+                except Exception:
+                    pass
+                hour = dt.hour % 12 or 12
+                ampm = "am" if dt.hour < 12 else "pm"
+                month_label = dt.strftime("%b")  # Jan / Feb / Mar / ...
+                return (
+                    f"{month_label} {dt.day} {hour}:{dt.minute:02d}{ampm}"
+                )
+            except (TypeError, ValueError):
+                return "earlier"
+
+        def _add_team_row(team_letter: str, row: int) -> None:
+            """Render one team's row: paired `[Resume] [Set up new]`
+            when a draft exists, single `[Set up Team X]` otherwise.
+            Row index passed in so caller controls layout placement."""
+            draft = get_roster_draft(
+                self.guild_id, self.event_type, team_letter,
+            )
+            has_draft = draft is not None
+            if has_draft:
+                ts_label = _format_draft_timestamp(draft["updated_at"])
+                resume_btn = discord.ui.Button(
+                    label=f"♻️ Resume Team {team_letter} ({ts_label})",
+                    style=discord.ButtonStyle.success, row=row,
+                )
+
+                async def _resume(inter: discord.Interaction):
+                    await _open_team_setup(
+                        inter, self, team=team_letter, resume=True,
+                    )
+
+                resume_btn.callback = _resume
+                self.add_item(resume_btn)
+
+                fresh_btn = discord.ui.Button(
+                    label=f"🆕 Set up new Team {team_letter} roster",
+                    style=discord.ButtonStyle.secondary, row=row,
+                )
+
+                async def _fresh(inter: discord.Interaction):
+                    await _confirm_discard_and_setup(
+                        inter, self, team=team_letter,
+                    )
+
+                fresh_btn.callback = _fresh
+                self.add_item(fresh_btn)
+            else:
+                solo_btn = discord.ui.Button(
+                    label=f"🅰️ Set up Team {team_letter}"
+                    if team_letter == "A"
+                    else f"🅱️ Set up Team {team_letter}",
+                    style=discord.ButtonStyle.success, row=row,
+                )
+
+                async def _setup(inter: discord.Interaction):
+                    await _open_team_setup(inter, self, team=team_letter)
+
+                solo_btn.callback = _setup
+                self.add_item(solo_btn)
+
+        # Layout: Team A on row 2, Team B on row 4. Plan buttons sit
+        # between them on row 3 so each team's actions cluster
+        # vertically (Set up / Plan together for Team A, then Set up /
+        # Plan together for Team B — easier to scan than mixing
+        # teams across rows).
         if show_a:
-            a_btn = discord.ui.Button(
-                label="🅰️ Set up Team A", style=discord.ButtonStyle.success, row=2,
-            )
-
-            async def _setup_a(inter: discord.Interaction):
-                await _open_team_setup(inter, self, team="A")
-
-            a_btn.callback = _setup_a
-            self.add_item(a_btn)
-
+            _add_team_row("A", row=2)
         if show_b:
-            b_btn = discord.ui.Button(
-                label="🅱️ Set up Team B", style=discord.ButtonStyle.success, row=2,
-            )
-
-            async def _setup_b(inter: discord.Interaction):
-                await _open_team_setup(inter, self, team="B")
-
-            b_btn.callback = _setup_b
-            self.add_item(b_btn)
+            _add_team_row("B", row=4)
 
         # 📋 Team plan buttons (#239) — capture the 20+10 split the
         # officer committed to in-game so the roster builder's auto-fill
@@ -2159,15 +2231,50 @@ class OfficerView(discord.ui.View):
 
 async def _open_team_setup(
     inter: discord.Interaction, officer_view: "OfficerView", *, team: str,
+    resume: bool = False,
 ) -> None:
     """Pick a preset, then hand off to the structured roster builder.
-    Called from the Set-up-Team buttons on the officer view."""
+    Called from the Set-up-Team buttons on the officer view.
+
+    `resume=True` (#240) skips the preset picker when a saved draft
+    exists for this team (the draft already carries the preset name),
+    and threads `resume_from_draft=True` into `open_roster_builder` so
+    the saved zone assignments + pairings load on top of the freshly-
+    built session.
+    """
     if inter.user.id != officer_view.owner_user_id:
         await inter.response.send_message(
             "⛔ Only the officer who opened this view can start team setup.",
             ephemeral=True,
         )
         return
+
+    # #240 Resume path: the saved draft already names the preset. Skip
+    # the preset picker and go straight to the builder. If the draft
+    # vanished between officer-view render and click (extreme race),
+    # fall through to the fresh-setup picker.
+    if resume:
+        import config
+        draft = config.get_roster_draft(
+            officer_view.guild_id, officer_view.event_type, team,
+        )
+        if draft is not None:
+            try:
+                import json
+                payload = json.loads(draft["session_json"])
+                preset_name = payload.get("selected_preset_name", "")
+            except (ValueError, KeyError):
+                preset_name = ""
+            if preset_name:
+                await inter.response.defer(ephemeral=False, thinking=True)
+                from storm_roster_builder import open_roster_builder
+                await open_roster_builder(
+                    inter, officer_view.event_type, preset_name,
+                    event_date=officer_view.event_date,
+                    team_override=team or None,
+                    resume_from_draft=True,
+                )
+                return
 
     import storm_strategy as ss
     preset_names = ss.list_presets(officer_view.guild_id, officer_view.event_type)
@@ -2187,14 +2294,23 @@ async def _open_team_setup(
     team_label = (
         "Team A" if team == "A" else "Team B" if team == "B" else "this roster"
     )
-    await inter.response.send_message(
-        f"Pick a strategy preset to apply for **{team_label}**:",
-        view=picker, ephemeral=True,
-    )
-    try:
-        picker.message = await inter.original_response()
-    except discord.HTTPException:
-        picker.message = None
+    # #240 chain-from-confirm path: the discard-confirm view already
+    # responded to `inter` via `edit_message`, so a follow-up has to
+    # ride `interaction.followup.send`. Fresh path: `response` is
+    # unused, send via `response.send_message`.
+    prompt = f"Pick a strategy preset to apply for **{team_label}**:"
+    if inter.response.is_done():
+        picker.message = await inter.followup.send(
+            prompt, view=picker, ephemeral=True,
+        )
+    else:
+        await inter.response.send_message(
+            prompt, view=picker, ephemeral=True,
+        )
+        try:
+            picker.message = await inter.original_response()
+        except discord.HTTPException:
+            picker.message = None
     await picker.wait()
     if not picker.selected_preset:
         return  # user dismissed or timed out
@@ -2209,6 +2325,124 @@ async def _open_team_setup(
         event_date=officer_view.event_date,
         team_override=team or None,
     )
+
+
+async def _confirm_discard_and_setup(
+    inter: discord.Interaction, officer_view: "OfficerView", *, team: str,
+) -> None:
+    """#240: when the officer clicks `🆕 Set up new Team X` and a saved
+    draft exists, confirm before discarding the draft. Yes → delete
+    the draft + open the preset picker; Cancel → back to officer
+    view, draft untouched."""
+    if inter.user.id != officer_view.owner_user_id:
+        await inter.response.send_message(
+            "⛔ Only the officer who opened this view can start team setup.",
+            ephemeral=True,
+        )
+        return
+
+    import config
+    draft = config.get_roster_draft(
+        officer_view.guild_id, officer_view.event_type, team,
+    )
+    if draft is None:
+        # Edge case — draft vanished between render and click. Go
+        # straight to the fresh setup path without a redundant confirm.
+        await _open_team_setup(inter, officer_view, team=team)
+        return
+
+    confirm = _DiscardDraftConfirmView(
+        owner_id=inter.user.id, officer_view=officer_view, team=team,
+        draft_event_date=draft.get("event_date", ""),
+    )
+    await inter.response.send_message(
+        f"⚠️ You have a saved roster draft for **Team {team}** from "
+        f"**{draft.get('event_date', 'an earlier event')}**. Starting "
+        f"fresh will discard it.",
+        view=confirm, ephemeral=True,
+    )
+    try:
+        confirm.message = await inter.original_response()
+    except discord.HTTPException:
+        confirm.message = None
+
+
+class _DiscardDraftConfirmView(discord.ui.View):
+    """Two-button confirm shown before `🆕 Set up new` overwrites a
+    saved draft (#240). Yes → delete draft + open preset picker;
+    Cancel → close ephemeral, draft untouched."""
+
+    def __init__(
+        self, *, owner_id: int, officer_view: "OfficerView", team: str,
+        draft_event_date: str,
+    ):
+        super().__init__(timeout=120)
+        self.owner_id = owner_id
+        self.officer_view = officer_view
+        self.team = team
+        self.draft_event_date = draft_event_date
+        self.message: Optional[discord.Message] = None
+
+    async def interaction_check(self, inter: discord.Interaction) -> bool:
+        if inter.user.id != self.owner_id:
+            await inter.response.send_message(
+                "⛔ Only the officer who opened this can confirm.",
+                ephemeral=True,
+            )
+            return False
+        return True
+
+    @discord.ui.button(label="Yes, start over",
+                       style=discord.ButtonStyle.danger)
+    async def confirm(self, inter: discord.Interaction,
+                      _btn: discord.ui.Button):
+        if self.is_finished():
+            return
+        import config
+        try:
+            config.delete_roster_draft(
+                self.officer_view.guild_id,
+                self.officer_view.event_type,
+                self.team,
+            )
+        except Exception:
+            pass
+        for item in self.children:
+            item.disabled = True
+        try:
+            await inter.response.edit_message(
+                content=(
+                    f"🆕 Starting fresh for **Team {self.team}**. Pick a "
+                    f"strategy preset to apply..."
+                ),
+                view=self,
+            )
+        except discord.HTTPException:
+            pass
+        self.stop()
+        # Open the preset picker via the existing fresh-setup path.
+        # We've already responded to `inter`, so `_open_team_setup`
+        # will fall through to its `send_message` call which Discord
+        # rejects on a responded interaction — call via followup
+        # instead by passing a fresh-state path.
+        await _open_team_setup(inter, self.officer_view, team=self.team)
+
+    @discord.ui.button(label="↩️ Cancel",
+                       style=discord.ButtonStyle.secondary)
+    async def cancel(self, inter: discord.Interaction,
+                     _btn: discord.ui.Button):
+        if self.is_finished():
+            return
+        for item in self.children:
+            item.disabled = True
+        try:
+            await inter.response.edit_message(
+                content="↩️ Cancelled. Your saved draft is still there.",
+                view=self,
+            )
+        except discord.HTTPException:
+            pass
+        self.stop()
 
 
 class _PresetPickerView(discord.ui.View):

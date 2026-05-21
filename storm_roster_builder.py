@@ -2135,6 +2135,13 @@ class RosterBuilderView(discord.ui.View):
         done_btn.callback = _done
         self.add_item(done_btn)
 
+        # Auto-save the draft (#240). `_rebuild` is the chokepoint
+        # every state change flows through, so a write here covers
+        # every move, auto-fill, pairing edit, phase switch, etc. The
+        # save is best-effort — a SQLite hiccup logs but doesn't break
+        # the UI.
+        _autosave_draft(self.session)
+
     async def _guard_owner(self, inter: discord.Interaction) -> bool:
         if inter.user.id != self.session.user_id:
             await inter.response.send_message(
@@ -3517,6 +3524,207 @@ def _signup_filter_keys(
     return out
 
 
+# ── Draft persistence (#240) ────────────────────────────────────────────────
+#
+# Snapshot the officer's intent (zone assignments, sub pool / pairings,
+# below-floor overrides, preset choice, UI cursor) to SQLite on every
+# state change so View timeouts AND Railway redeploys don't lose the
+# build. Member identity comes from the current team plan / signups at
+# load time and is NOT part of the saved JSON — drafts are reusable
+# across event weeks. See #240's design comment for the full contract.
+
+_DRAFT_FORMAT_VERSION = 1
+
+
+def _serialize_session(session: RosterBuilderSession) -> str:
+    """Serialize a `RosterBuilderSession` to a JSON string for the
+    `storm_roster_drafts` store. Captures the officer's intent only;
+    members, rules, and the preset object are re-resolved at load
+    time so drafts stay valid across event weeks."""
+    import json
+    payload = {
+        "version": _DRAFT_FORMAT_VERSION,
+        "selected_preset_name": session.preset.name if session.preset else "",
+        "selected_phase": session.selected_phase,
+        "selected_zone": session.selected_zone,
+        "show_below_floor": session.show_below_floor,
+        "subs": list(session.subs),
+        "assignments_p1": {z: list(ks) for z, ks in session.assignments.items()},
+        "assignments_p2": {z: list(ks) for z, ks in session.assignments_p2.items()},
+        "assignments_p3": {z: list(ks) for z, ks in session.assignments_p3.items()},
+        "paired_subs_p1": dict(session.paired_subs),
+        "paired_subs_p2": dict(session.paired_subs_p2),
+        "paired_subs_p3": dict(session.paired_subs_p3),
+        "below_floor_overrides_p1": sorted(session.below_floor_overrides),
+        "below_floor_overrides_p2": sorted(session.below_floor_overrides_p2),
+        "below_floor_overrides_p3": sorted(session.below_floor_overrides_p3),
+        "team_plan_applied": bool(session.team_plan_applied),
+        "saved_for_event_date": session.event_date or "",
+    }
+    return json.dumps(payload)
+
+
+def _apply_saved_state(
+    session: RosterBuilderSession,
+    saved_payload: dict,
+) -> dict:
+    """Apply a deserialized draft payload to a freshly-built session,
+    dropping any member keys that aren't in the current `session.members`
+    (reconciled from this week's team plan / signups at load time).
+    Saved entries for zones not in the current preset are silently
+    dropped (preset choice may have changed).
+
+    Returns a reconciliation report:
+        {
+            "dropped_members": list[str],   # member names dropped
+            "kept_assignments": int,        # member-zone pairs kept
+            "kept_pairings":   int,         # primary-sub pairs kept
+            "stale_event_date": Optional[str],  # saved event_date when it differs
+        }
+    """
+    member_keys = set(session.members.keys())
+    dropped_keys: set[str] = set()
+
+    def _filter_keys(keys: list[str]) -> list[str]:
+        out: list[str] = []
+        for k in keys:
+            if k in member_keys:
+                out.append(k)
+            else:
+                dropped_keys.add(k)
+        return out
+
+    def _apply_assignments(
+        saved_by_zone: dict[str, list[str]],
+        target: dict[str, list[str]],
+    ) -> int:
+        kept = 0
+        for zone, saved_keys in (saved_by_zone or {}).items():
+            if zone not in target:
+                # Zone not in current preset — silently drop.
+                continue
+            filtered = _filter_keys(saved_keys)
+            target[zone] = filtered
+            kept += len(filtered)
+        return kept
+
+    def _apply_pairings(
+        saved_pairs: dict[str, str],
+        target: dict[str, str],
+    ) -> int:
+        kept = 0
+        for primary, sub in (saved_pairs or {}).items():
+            if primary in member_keys and sub in member_keys:
+                target[primary] = sub
+                kept += 1
+            else:
+                if primary not in member_keys:
+                    dropped_keys.add(primary)
+                if sub not in member_keys:
+                    dropped_keys.add(sub)
+        return kept
+
+    # Per-phase apply
+    kept_assignments = 0
+    kept_assignments += _apply_assignments(
+        saved_payload.get("assignments_p1", {}), session.assignments,
+    )
+    kept_assignments += _apply_assignments(
+        saved_payload.get("assignments_p2", {}), session.assignments_p2,
+    )
+    kept_assignments += _apply_assignments(
+        saved_payload.get("assignments_p3", {}), session.assignments_p3,
+    )
+
+    kept_pairings = 0
+    kept_pairings += _apply_pairings(
+        saved_payload.get("paired_subs_p1", {}), session.paired_subs,
+    )
+    kept_pairings += _apply_pairings(
+        saved_payload.get("paired_subs_p2", {}), session.paired_subs_p2,
+    )
+    kept_pairings += _apply_pairings(
+        saved_payload.get("paired_subs_p3", {}), session.paired_subs_p3,
+    )
+
+    # Flat sub pool (pool mode)
+    session.subs = _filter_keys(list(saved_payload.get("subs", [])))
+
+    # Below-floor overrides per phase (member-key sets)
+    session.below_floor_overrides = set(
+        _filter_keys(list(saved_payload.get("below_floor_overrides_p1", [])))
+    )
+    session.below_floor_overrides_p2 = set(
+        _filter_keys(list(saved_payload.get("below_floor_overrides_p2", [])))
+    )
+    session.below_floor_overrides_p3 = set(
+        _filter_keys(list(saved_payload.get("below_floor_overrides_p3", [])))
+    )
+
+    # UI cursor — restore the phase + zone the officer was on. Validate
+    # against current preset; fall back to defaults if stale.
+    sel_phase = int(saved_payload.get("selected_phase", 1) or 1)
+    if sel_phase not in (1, 2, 3):
+        sel_phase = 1
+    session.selected_phase = sel_phase
+    sel_zone = saved_payload.get("selected_zone", "") or ""
+    current_zones = {z.zone for z in session.preset.zones}
+    if sel_zone and sel_zone in current_zones:
+        session.selected_zone = sel_zone
+    session.show_below_floor = bool(saved_payload.get("show_below_floor", False))
+
+    # Translate dropped keys to display names for the warning. Members
+    # that aren't in this week's pool can't be display-named cleanly —
+    # use the raw key as a fallback so officers see *something*.
+    dropped_names: list[str] = []
+    for k in sorted(dropped_keys):
+        dropped_names.append(k)
+
+    # Staleness: if the saved draft was last saved for a different
+    # event_date, surface it so the officer reviews before posting.
+    saved_event_date = saved_payload.get("saved_for_event_date", "") or ""
+    stale_event_date: Optional[str] = None
+    if saved_event_date and session.event_date and \
+            saved_event_date != session.event_date:
+        stale_event_date = saved_event_date
+
+    return {
+        "dropped_members":    dropped_names,
+        "kept_assignments":   kept_assignments,
+        "kept_pairings":      kept_pairings,
+        "stale_event_date":   stale_event_date,
+    }
+
+
+def _autosave_draft(session: RosterBuilderSession) -> None:
+    """Best-effort serialize + write of the current session to
+    `storm_roster_drafts`. Called from `RosterBuilderView._rebuild`
+    after every state change. SQLite failures log + drop on the floor;
+    the in-memory session stays authoritative."""
+    if not session.is_structured:
+        # Free-tier manual-apply mode — no draft persistence
+        # (officer copies the mail themselves; nothing to resume).
+        return
+    if not session.event_date:
+        # Defensive — structured mode always has event_date, but a
+        # crafted fixture or hand-edited DB row could land here.
+        return
+    try:
+        import config
+        config.save_roster_draft(
+            session.guild_id,
+            session.event_type,
+            session.team or "",
+            session_json=_serialize_session(session),
+            event_date=session.event_date,
+        )
+    except Exception as e:
+        logger.warning(
+            "[STORM DRAFT] autosave failed (guild=%s event=%s team=%s): %s",
+            session.guild_id, session.event_type, session.team, e,
+        )
+
+
 def _team_plan_keys_or_signup_keys(
     guild_id: int, event_type: str, event_date: str, team: str,
 ) -> tuple[set[str], bool]:
@@ -4268,6 +4476,7 @@ async def open_roster_builder(
     *,
     event_date: Optional[str] = None,
     team_override: Optional[str] = None,
+    resume_from_draft: bool = False,
 ) -> None:
     """Open the roster builder for a named preset.
 
@@ -4283,6 +4492,12 @@ async def open_roster_builder(
 
     `team_override` skips the team picker (used by structured mode
     when the officer already picked a team in the officer view).
+
+    `resume_from_draft` (#240): when True, after the session is built
+    fresh from the current team plan / signups, the saved draft for
+    this team is loaded and applied. Saved zone assignments + sub
+    pairings + overrides land on top of the current member pool. Set
+    by the officer view's `♻️ Resume Team X` button.
     """
     from storm_permissions import (
         is_leader_or_admin,
@@ -4507,6 +4722,66 @@ async def open_roster_builder(
     # being clobbered.
     session.roster_errors = list(roster_errors)
     _apply_rules_to_session(session)
+
+    # #240: resume from saved draft when requested. Loads the saved
+    # session JSON, applies it on top of the freshly-built session,
+    # drops any member keys that aren't in this week's pool, and
+    # surfaces a reconciliation warning. If no draft exists (officer
+    # clicked Resume but the row vanished between officer-view render
+    # and click) silently fall through to a fresh build.
+    if resume_from_draft and is_structured:
+        try:
+            saved = config.get_roster_draft(
+                interaction.guild_id, event_type, team or "",
+            )
+        except Exception as e:
+            saved = None
+            logger.warning(
+                "[STORM DRAFT] load failed (guild=%s event=%s team=%s): %s",
+                interaction.guild_id, event_type, team, e,
+            )
+        if saved is not None:
+            try:
+                import json
+                payload = json.loads(saved["session_json"])
+            except (ValueError, KeyError) as e:
+                payload = None
+                logger.warning(
+                    "[STORM DRAFT] payload parse failed "
+                    "(guild=%s event=%s team=%s): %s",
+                    interaction.guild_id, event_type, team, e,
+                )
+            if payload is not None:
+                report = _apply_saved_state(session, payload)
+                # Surface reconciliation results so the officer can
+                # spot losses before posting. Banner sits at the top
+                # of the `roster_errors` list (rendered first in the
+                # embed).
+                lines: list[str] = []
+                if report["stale_event_date"]:
+                    from storm_date_helpers import format_event_date
+                    lines.append(
+                        f"📅 Resumed a draft last saved for "
+                        f"**{format_event_date(report['stale_event_date'])}**. "
+                        f"Re-applied to this week's signups — review "
+                        f"before posting."
+                    )
+                if report["dropped_members"]:
+                    dropped = report["dropped_members"]
+                    sample = ", ".join(dropped[:5])
+                    more = (
+                        f" (+{len(dropped) - 5} more)"
+                        if len(dropped) > 5 else ""
+                    )
+                    lines.append(
+                        f"⚠️ {len(dropped)} saved member(s) aren't in "
+                        f"this week's pool and were removed: "
+                        f"{sample}{more}."
+                    )
+                if lines:
+                    # Prepend so the resume banner is the FIRST error
+                    # the officer reads in the embed.
+                    session.roster_errors = lines + session.roster_errors
 
     view = RosterBuilderView(session)
     embed = _render_builder_embed(session)

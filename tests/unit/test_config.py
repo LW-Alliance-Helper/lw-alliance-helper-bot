@@ -944,3 +944,89 @@ class TestNormalizeSpreadsheetId:
     def test_none_returns_empty(self):
         import config
         assert config.normalize_spreadsheet_id(None) == ""
+
+
+# ── Storm roster drafts (#240) ────────────────────────────────────────────────
+
+
+class TestRosterDraftCrud:
+    """#240: persist the structured roster builder's in-progress state
+    so View timeouts and Railway redeploys don't lose work. One row per
+    (guild, event_type, team); reusable across event weeks."""
+
+    def test_get_returns_none_when_no_row(self, seeded_db):
+        import config
+        assert config.get_roster_draft(TEST_GUILD_ID, "DS", "A") is None
+
+    def test_save_then_get_round_trips(self, seeded_db):
+        import config
+        config.save_roster_draft(
+            TEST_GUILD_ID, "DS", "A",
+            session_json='{"version": 1, "test": "payload"}',
+            event_date="2026-05-22",
+        )
+        loaded = config.get_roster_draft(TEST_GUILD_ID, "DS", "A")
+        assert loaded is not None
+        assert loaded["session_json"] == '{"version": 1, "test": "payload"}'
+        assert loaded["event_date"] == "2026-05-22"
+        assert loaded["updated_at"]  # ISO timestamp string, non-empty
+
+    def test_save_upserts_one_row_per_team(self, seeded_db):
+        """Saving for the same (guild, event_type, team) overwrites the
+        previous row — never appends. One draft per team."""
+        import config
+        config.save_roster_draft(
+            TEST_GUILD_ID, "DS", "A",
+            session_json='{"v": 1}', event_date="2026-05-22",
+        )
+        config.save_roster_draft(
+            TEST_GUILD_ID, "DS", "A",
+            session_json='{"v": 2}', event_date="2026-05-29",
+        )
+        loaded = config.get_roster_draft(TEST_GUILD_ID, "DS", "A")
+        # Second save wins; event_date advanced too.
+        assert loaded["session_json"] == '{"v": 2}'
+        assert loaded["event_date"] == "2026-05-29"
+
+    def test_drafts_isolated_per_team(self, seeded_db):
+        import config
+        config.save_roster_draft(
+            TEST_GUILD_ID, "DS", "A",
+            session_json='{"team": "A"}', event_date="2026-05-22",
+        )
+        config.save_roster_draft(
+            TEST_GUILD_ID, "DS", "B",
+            session_json='{"team": "B"}', event_date="2026-05-22",
+        )
+        loaded_a = config.get_roster_draft(TEST_GUILD_ID, "DS", "A")
+        loaded_b = config.get_roster_draft(TEST_GUILD_ID, "DS", "B")
+        assert loaded_a["session_json"] == '{"team": "A"}'
+        assert loaded_b["session_json"] == '{"team": "B"}'
+
+    def test_drafts_isolated_per_event_type(self, seeded_db):
+        import config
+        config.save_roster_draft(
+            TEST_GUILD_ID, "DS", "A",
+            session_json='{"ev": "DS"}', event_date="2026-05-22",
+        )
+        config.save_roster_draft(
+            TEST_GUILD_ID, "CS", "A",
+            session_json='{"ev": "CS"}', event_date="2026-05-22",
+        )
+        loaded_ds = config.get_roster_draft(TEST_GUILD_ID, "DS", "A")
+        loaded_cs = config.get_roster_draft(TEST_GUILD_ID, "CS", "A")
+        assert loaded_ds["session_json"] == '{"ev": "DS"}'
+        assert loaded_cs["session_json"] == '{"ev": "CS"}'
+
+    def test_delete_removes_row(self, seeded_db):
+        import config
+        config.save_roster_draft(
+            TEST_GUILD_ID, "DS", "A",
+            session_json='{"x": 1}', event_date="2026-05-22",
+        )
+        assert config.delete_roster_draft(TEST_GUILD_ID, "DS", "A") == 1
+        assert config.get_roster_draft(TEST_GUILD_ID, "DS", "A") is None
+
+    def test_delete_returns_zero_when_no_row(self, seeded_db):
+        import config
+        assert config.delete_roster_draft(TEST_GUILD_ID, "DS", "A") == 0

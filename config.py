@@ -498,6 +498,42 @@ def init_db():
         """)
         conn.commit()
 
+        # storm_team_plans — per-(guild, event_type, event_date, team) record
+        # of the 30 players the officer committed to in-game for this event,
+        # split into 20 primaries + 10 subs. Captured before the structured
+        # roster builder opens; consumed by `open_roster_builder` to
+        # constrain the candidate pool and seed the sub list so auto-fill
+        # mirrors the in-game commitment instead of fighting it. See #239.
+        #
+        # Players are restricted to one team per event (matches the in-game
+        # rule: once you submit a team, you can't move that player). The
+        # extra UNIQUE INDEX enforces this across the (guild, event, team)
+        # composite key — Team A and Team B cannot share a target_member_id
+        # for the same event. CS uses the same A/B model as DS (#166).
+        conn.execute("""
+            CREATE TABLE IF NOT EXISTS storm_team_plans (
+                guild_id          INTEGER NOT NULL,
+                event_type        TEXT    NOT NULL,
+                event_date        TEXT    NOT NULL,
+                team              TEXT    NOT NULL,
+                target_member_id  TEXT    NOT NULL,
+                role              TEXT    NOT NULL,
+                saved_by_user_id  INTEGER NOT NULL,
+                saved_at          TEXT    NOT NULL,
+                PRIMARY KEY (guild_id, event_type, event_date, team, target_member_id)
+            )
+        """)
+        conn.execute(
+            "CREATE INDEX IF NOT EXISTS idx_storm_team_plans_event "
+            "ON storm_team_plans (guild_id, event_type, event_date, team)"
+        )
+        conn.execute(
+            "CREATE UNIQUE INDEX IF NOT EXISTS "
+            "idx_storm_team_plans_one_team_per_member "
+            "ON storm_team_plans (guild_id, event_type, event_date, target_member_id)"
+        )
+        conn.commit()
+
         # storm_roster_images — pointer to a public roster-image message
         # in Discord, written by the `💾 Save to history` action on the
         # builder's render flow. The history browser surfaces this as
@@ -1899,6 +1935,218 @@ def get_member_vote(
     d = dict(row)
     d["is_on_behalf"] = bool(d.get("is_on_behalf"))
     return d
+
+
+# ── Storm team plans (#239) ──────────────────────────────────────────────────
+#
+# Per-team, per-event record of the 30 players the officer committed to in
+# Last War (20 primaries + 10 subs). Read by the roster builder at open and
+# auto-fill time so the bot mirrors the in-game submission instead of
+# re-deriving a starter/sub split that may contradict it.
+#
+# Validation lives in `save_storm_team_plan` (returns `(ok, errors)`) so the
+# UI can surface conflicts inline. The `UNIQUE INDEX (guild, event_type,
+# event_date, target_member_id)` defined in `init_db` is the belt-and-braces
+# backstop for the one-team-per-member rule if the validator is bypassed.
+
+STORM_PLAN_MAX_PRIMARIES = 20
+STORM_PLAN_MAX_SUBS = 10
+STORM_PLAN_MAX_TOTAL = STORM_PLAN_MAX_PRIMARIES + STORM_PLAN_MAX_SUBS
+_VALID_STORM_PLAN_ROLES = {"primary", "sub"}
+
+
+def save_storm_team_plan(
+    guild_id: int,
+    event_type: str,
+    event_date: str,
+    team: str,
+    primaries: list[str],
+    subs: list[str],
+    saved_by_user_id: int,
+) -> tuple[bool, list[str]]:
+    """Atomic replace of the team plan for one (guild, event, team).
+
+    DELETE-then-bulk-INSERT inside a single transaction. Validates:
+    * No member appears in both `primaries` and `subs`.
+    * `primaries` ≤ 20, `subs` ≤ 10, total ≤ 30.
+    * No member listed is already on the *other* team's plan for the
+      same event (one-team-per-member, matching the in-game rule that
+      a submitted team can't be moved).
+    * `role` values are restricted to `{"primary", "sub"}` by construction.
+
+    Returns `(True, [])` on success, `(False, errors)` otherwise. Errors
+    are short human-readable strings the UI can surface verbatim.
+    """
+    errors: list[str] = []
+    primaries = [str(m) for m in primaries]
+    subs = [str(m) for m in subs]
+
+    primary_set = set(primaries)
+    sub_set = set(subs)
+    overlap = primary_set & sub_set
+    if overlap:
+        errors.append(
+            "Members listed as both primary and sub: " + ", ".join(sorted(overlap))
+        )
+    if len(primaries) > STORM_PLAN_MAX_PRIMARIES:
+        errors.append(
+            f"Too many primaries ({len(primaries)}); max is "
+            f"{STORM_PLAN_MAX_PRIMARIES}."
+        )
+    if len(subs) > STORM_PLAN_MAX_SUBS:
+        errors.append(
+            f"Too many subs ({len(subs)}); max is {STORM_PLAN_MAX_SUBS}."
+        )
+    total = len(primary_set | sub_set)
+    if total > STORM_PLAN_MAX_TOTAL:
+        errors.append(
+            f"Total ({total}) exceeds {STORM_PLAN_MAX_TOTAL} per team."
+        )
+    if errors:
+        return False, errors
+
+    incoming = primary_set | sub_set
+    with _get_conn() as conn:
+        # Cross-team conflict check: anyone on the OTHER team's plan for
+        # this same event blocks the save.
+        if incoming:
+            placeholders = ",".join("?" for _ in incoming)
+            rows = conn.execute(
+                f"SELECT target_member_id FROM storm_team_plans "
+                f"WHERE guild_id = ? AND event_type = ? AND event_date = ? "
+                f"  AND team != ? "
+                f"  AND target_member_id IN ({placeholders})",
+                (
+                    int(guild_id), event_type, event_date, team,
+                    *sorted(incoming),
+                ),
+            ).fetchall()
+            conflicts = sorted({r["target_member_id"] for r in rows})
+            if conflicts:
+                errors.append(
+                    "Already on the other team for this event: "
+                    + ", ".join(conflicts)
+                )
+                return False, errors
+
+        saved_at = _utcnow_iso()
+        try:
+            conn.execute(
+                "DELETE FROM storm_team_plans "
+                "WHERE guild_id = ? AND event_type = ? AND event_date = ? "
+                "  AND team = ?",
+                (int(guild_id), event_type, event_date, team),
+            )
+            rows_to_insert = [
+                (int(guild_id), event_type, event_date, team, m,
+                 "primary", int(saved_by_user_id), saved_at)
+                for m in primaries
+            ] + [
+                (int(guild_id), event_type, event_date, team, m,
+                 "sub", int(saved_by_user_id), saved_at)
+                for m in subs
+            ]
+            if rows_to_insert:
+                conn.executemany(
+                    "INSERT INTO storm_team_plans "
+                    "(guild_id, event_type, event_date, team, target_member_id, "
+                    " role, saved_by_user_id, saved_at) "
+                    "VALUES (?, ?, ?, ?, ?, ?, ?, ?)",
+                    rows_to_insert,
+                )
+            conn.commit()
+        except sqlite3.IntegrityError as exc:
+            conn.rollback()
+            return False, [f"Database rejected the plan: {exc}"]
+    return True, []
+
+
+def get_storm_team_plan(
+    guild_id: int, event_type: str, event_date: str, team: str,
+) -> dict | None:
+    """Return the saved team plan or None if no rows exist for this
+    (guild, event_type, event_date, team). Shape:
+        {"primaries": list[str], "subs": list[str],
+         "saved_by_user_id": int, "saved_at": str}
+    """
+    with _get_conn() as conn:
+        rows = conn.execute(
+            "SELECT target_member_id, role, saved_by_user_id, saved_at "
+            "FROM storm_team_plans "
+            "WHERE guild_id = ? AND event_type = ? AND event_date = ? "
+            "  AND team = ?",
+            (int(guild_id), event_type, event_date, team),
+        ).fetchall()
+    if not rows:
+        return None
+    primaries: list[str] = []
+    subs: list[str] = []
+    saved_by_user_id = 0
+    saved_at = ""
+    for r in rows:
+        if r["role"] == "primary":
+            primaries.append(r["target_member_id"])
+        elif r["role"] == "sub":
+            subs.append(r["target_member_id"])
+        saved_by_user_id = int(r["saved_by_user_id"])
+        if r["saved_at"] > saved_at:
+            saved_at = r["saved_at"]
+    return {
+        "primaries": sorted(primaries),
+        "subs": sorted(subs),
+        "saved_by_user_id": saved_by_user_id,
+        "saved_at": saved_at,
+    }
+
+
+def get_storm_team_plans_for_event(
+    guild_id: int, event_type: str, event_date: str,
+) -> dict[str, dict]:
+    """Return a `{team: plan_dict}` map covering every team that has a
+    plan for this event. Cheaper than two `get_storm_team_plan` calls
+    when the picker needs to know what the other team has claimed."""
+    with _get_conn() as conn:
+        rows = conn.execute(
+            "SELECT team, target_member_id, role, saved_by_user_id, saved_at "
+            "FROM storm_team_plans "
+            "WHERE guild_id = ? AND event_type = ? AND event_date = ?",
+            (int(guild_id), event_type, event_date),
+        ).fetchall()
+    plans: dict[str, dict] = {}
+    for r in rows:
+        team = r["team"]
+        p = plans.setdefault(
+            team,
+            {"primaries": [], "subs": [],
+             "saved_by_user_id": 0, "saved_at": ""},
+        )
+        if r["role"] == "primary":
+            p["primaries"].append(r["target_member_id"])
+        elif r["role"] == "sub":
+            p["subs"].append(r["target_member_id"])
+        p["saved_by_user_id"] = int(r["saved_by_user_id"])
+        if r["saved_at"] > p["saved_at"]:
+            p["saved_at"] = r["saved_at"]
+    for p in plans.values():
+        p["primaries"] = sorted(p["primaries"])
+        p["subs"] = sorted(p["subs"])
+    return plans
+
+
+def clear_storm_team_plan(
+    guild_id: int, event_type: str, event_date: str, team: str,
+) -> int:
+    """Delete the saved plan for one team. Returns the number of rows
+    removed (0 if nothing was saved)."""
+    with _get_conn() as conn:
+        cur = conn.execute(
+            "DELETE FROM storm_team_plans "
+            "WHERE guild_id = ? AND event_type = ? AND event_date = ? "
+            "  AND team = ?",
+            (int(guild_id), event_type, event_date, team),
+        )
+        conn.commit()
+        return cur.rowcount
 
 
 # ── Storm registration posts (#123, written by #124) ─────────────────────────

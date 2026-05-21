@@ -42,6 +42,11 @@ from typing import Optional
 
 import discord
 
+from config import (
+    STORM_PLAN_MAX_PRIMARIES,
+    STORM_PLAN_MAX_SUBS,
+    STORM_PLAN_MAX_TOTAL,
+)
 from storm_event_hub import HUB_COMMAND, HUB_BTN_VIEW_SIGNUPS, HUB_BTN_PRESETS
 
 logger = logging.getLogger(__name__)
@@ -430,6 +435,7 @@ def _render_embed(
     event_date: str,
     buckets: dict[str, list[dict]],
     bucket_filter: str | None = None,
+    team_plans: dict[str, dict] | None = None,
 ) -> discord.Embed:
     from storm_date_helpers import format_event_date
 
@@ -494,6 +500,35 @@ def _render_embed(
         description=description,
         color=discord.Color.gold() if event_type == "DS" else discord.Color.orange(),
     )
+
+    # 📋 Team plan summary (#239) — surface the saved in-game commitment
+    # so officers can see at a glance whether the plan is current and
+    # whether the auto-fill will be constrained. Renders one inline
+    # field per saved team; absent teams aren't displayed (no plan = no
+    # row). Callers can pass an already-fetched `team_plans` dict to
+    # skip the SQL round-trip; otherwise we fetch on demand so legacy
+    # callsites get the summary for free.
+    if team_plans is None:
+        try:
+            from config import get_storm_team_plans_for_event
+            team_plans = get_storm_team_plans_for_event(
+                guild.id, event_type, event_date,
+            )
+        except Exception:
+            team_plans = {}
+    if team_plans:
+        for plan_team in ("A", "B"):
+            plan = team_plans.get(plan_team)
+            if not plan:
+                continue
+            n_primary = len(plan.get("primaries") or [])
+            n_sub = len(plan.get("subs") or [])
+            embed.add_field(
+                name=f"📋 Team {plan_team} plan",
+                value=f"{n_primary} primary / {n_sub} sub",
+                inline=True,
+            )
+
     counts_line = " · ".join(
         f"{_BUCKET_EMOJIS[k]} {len(buckets[k])}" for k in _BUCKET_ORDER
     )
@@ -1116,6 +1151,756 @@ class _OnBehalfVoteView(discord.ui.View):
                 pass
 
 
+class _TeamPlanRosterPickerView(discord.ui.View):
+    """Step 1 of the team-plan picker (#239) — pick up to 30 players
+    for one team for one event.
+
+    Candidate pool = members who voted Team A (or Either) for Team A's
+    plan; Team B (or Either) for Team B's plan. Members already on the
+    OTHER team's saved plan for the same event are filtered out and
+    surfaced as a one-line "N hidden — already on Team X" note, so the
+    one-team-per-member rule (matching the in-game "can't move once
+    submitted" constraint) is enforced at pick time rather than only at
+    save time.
+
+    Re-entry pre-seeds picks from the saved plan (primaries ∪ subs) so
+    the officer is editing the existing 30, not starting over.
+    """
+
+    def __init__(
+        self,
+        parent_view: "OfficerView",
+        team: str,
+        candidates: list[dict],
+        other_team_claimed: list[str],
+        prior_picks: list[str],
+        prior_subs: list[str],
+        prior_saved_at: str,
+    ):
+        super().__init__(timeout=600)
+        self.parent_view = parent_view
+        self.team = team
+        self.candidates = candidates  # [{"name": str, "target_id": str}]
+        self.other_team_claimed = list(other_team_claimed)
+        self.selected_target_ids: list[str] = list(prior_picks)
+        self.prior_subs: list[str] = list(prior_subs)
+        self.has_prior_plan: bool = bool(prior_picks or prior_subs)
+        self.prior_saved_at = prior_saved_at
+        self.advance_to_step2: bool = False
+        self.cleared: bool = False
+        self.page = 0
+        self.message: discord.Message | None = None
+        # Build a quick name lookup so step 2 can render display names
+        # for the picked target_ids without re-querying the bucket map.
+        self.name_by_target_id: dict[str, str] = {
+            c["target_id"]: c["name"] for c in candidates
+        }
+        self._build_components()
+
+    @property
+    def page_count(self) -> int:
+        if not self.candidates:
+            return 1
+        return (
+            (len(self.candidates) + _ON_BEHALF_PAGE_SIZE - 1)
+            // _ON_BEHALF_PAGE_SIZE
+        )
+
+    def _candidates_for_page(self) -> list[dict]:
+        start = self.page * _ON_BEHALF_PAGE_SIZE
+        return self.candidates[start:start + _ON_BEHALF_PAGE_SIZE]
+
+    def _build_components(self):
+        self.clear_items()
+
+        page_count = self.page_count
+        if self.page >= page_count:
+            self.page = max(0, page_count - 1)
+
+        page_candidates = self._candidates_for_page()
+        if page_candidates:
+            selected_set = set(self.selected_target_ids)
+            page_ids = {c["target_id"] for c in page_candidates}
+            picks_on_this_page = [
+                c for c in page_candidates if c["target_id"] in selected_set
+            ]
+            options = [
+                discord.SelectOption(
+                    label=c["name"][:100],
+                    value=c["target_id"][:100],
+                    default=(c["target_id"] in selected_set),
+                )
+                for c in page_candidates
+            ]
+            placeholder = "Pick up to 30 players for this event…"
+            if self.selected_target_ids:
+                placeholder = (
+                    f"Picked: {len(self.selected_target_ids)} of 30 "
+                    f"(this page: {len(picks_on_this_page)})"
+                )
+            select = discord.ui.Select(
+                placeholder=placeholder,
+                min_values=0,
+                max_values=len(options),
+                options=options,
+                row=0,
+            )
+
+            async def _on_pick(inter: discord.Interaction):
+                if not await self._guard_owner(inter):
+                    return
+                kept = [
+                    tid for tid in self.selected_target_ids
+                    if tid not in page_ids
+                ]
+                self.selected_target_ids = kept + list(select.values)
+                self._build_components()
+                try:
+                    await inter.response.edit_message(view=self)
+                except discord.HTTPException:
+                    pass
+
+            select.callback = _on_pick
+            self.add_item(select)
+
+        if self.page_count > 1:
+            prev_btn = discord.ui.Button(
+                label="◀ Prev", style=discord.ButtonStyle.secondary,
+                disabled=(self.page == 0), row=1,
+            )
+
+            async def _on_prev(inter: discord.Interaction):
+                if not await self._guard_owner(inter):
+                    return
+                if self.page > 0:
+                    self.page -= 1
+                    self._build_components()
+                    try:
+                        await inter.response.edit_message(view=self)
+                    except discord.HTTPException:
+                        pass
+                else:
+                    await inter.response.defer()
+
+            prev_btn.callback = _on_prev
+            self.add_item(prev_btn)
+
+            page_label = discord.ui.Button(
+                label=f"Page {self.page + 1} / {self.page_count}",
+                style=discord.ButtonStyle.secondary,
+                disabled=True, row=1,
+            )
+            self.add_item(page_label)
+
+            next_pg_btn = discord.ui.Button(
+                label="Page ▶", style=discord.ButtonStyle.secondary,
+                disabled=(self.page >= self.page_count - 1), row=1,
+            )
+
+            async def _on_next_page(inter: discord.Interaction):
+                if not await self._guard_owner(inter):
+                    return
+                if self.page < self.page_count - 1:
+                    self.page += 1
+                    self._build_components()
+                    try:
+                        await inter.response.edit_message(view=self)
+                    except discord.HTTPException:
+                        pass
+                else:
+                    await inter.response.defer()
+
+            next_pg_btn.callback = _on_next_page
+            self.add_item(next_pg_btn)
+
+        # Advance to step 2 — enabled only when 1..30 picks are made.
+        pick_count = len(self.selected_target_ids)
+        next_btn = discord.ui.Button(
+            label=f"Next ▶ Mark subs ({pick_count}/30)",
+            style=discord.ButtonStyle.primary,
+            disabled=not (1 <= pick_count <= STORM_PLAN_MAX_TOTAL),
+            row=2,
+        )
+
+        async def _on_next(inter: discord.Interaction):
+            if not await self._guard_owner(inter):
+                return
+            self.advance_to_step2 = True
+            for item in self.children:
+                item.disabled = True
+            self.stop()
+            try:
+                await inter.response.edit_message(
+                    content="↪️ Pick the subs (up to 10)…", view=self,
+                )
+            except discord.HTTPException:
+                pass
+
+        next_btn.callback = _on_next
+        self.add_item(next_btn)
+
+        cancel_btn = discord.ui.Button(
+            label="↩️ Cancel", style=discord.ButtonStyle.secondary, row=2,
+        )
+
+        async def _on_cancel(inter: discord.Interaction):
+            if not await self._guard_owner(inter):
+                return
+            for item in self.children:
+                item.disabled = True
+            self.stop()
+            try:
+                await inter.response.edit_message(
+                    content="↩️ Cancelled. Plan unchanged.", view=self,
+                )
+            except discord.HTTPException:
+                pass
+
+        cancel_btn.callback = _on_cancel
+        self.add_item(cancel_btn)
+
+        if self.has_prior_plan:
+            clear_btn = discord.ui.Button(
+                label="🗑️ Clear plan", style=discord.ButtonStyle.danger,
+                row=2,
+            )
+
+            async def _on_clear(inter: discord.Interaction):
+                if not await self._guard_owner(inter):
+                    return
+                import config
+                config.clear_storm_team_plan(
+                    self.parent_view.guild_id,
+                    self.parent_view.event_type,
+                    self.parent_view.event_date,
+                    self.team,
+                )
+                self.cleared = True
+                for item in self.children:
+                    item.disabled = True
+                self.stop()
+                try:
+                    await inter.response.edit_message(
+                        content="🗑️ Plan cleared.", view=self,
+                    )
+                except discord.HTTPException:
+                    pass
+
+            clear_btn.callback = _on_clear
+            self.add_item(clear_btn)
+
+    async def _guard_owner(self, inter: discord.Interaction) -> bool:
+        if inter.user.id != self.parent_view.owner_user_id:
+            await inter.response.send_message(
+                "⛔ Only the officer who opened this view can edit the team plan.",
+                ephemeral=True,
+            )
+            return False
+        return True
+
+    async def on_timeout(self) -> None:
+        for item in self.children:
+            item.disabled = True
+        if self.message is not None:
+            try:
+                await self.message.edit(view=self)
+            except discord.HTTPException:
+                pass
+
+
+class _TeamPlanSubPickerView(discord.ui.View):
+    """Step 2 of the team-plan picker (#239) — of the 30 picked in
+    step 1, mark up to 10 as subs. The remaining are primaries.
+
+    Save → atomic replace of the saved plan via
+    `config.save_storm_team_plan`. Back → returns to step 1 with
+    state preserved so the officer can swap picks before saving.
+    """
+
+    def __init__(
+        self,
+        parent_view: "OfficerView",
+        team: str,
+        chosen: list[dict],
+        prior_subs: list[str],
+    ):
+        super().__init__(timeout=600)
+        self.parent_view = parent_view
+        self.team = team
+        self.chosen = chosen  # [{"name": str, "target_id": str}]
+        # Drop any prior-sub IDs that aren't in the step-1 picks anymore
+        # (officer might have deselected them).
+        chosen_ids = {c["target_id"] for c in chosen}
+        self.selected_sub_ids: list[str] = [
+            tid for tid in prior_subs if tid in chosen_ids
+        ]
+        self.saved: bool = False
+        self.go_back: bool = False
+        self.page = 0
+        self.save_errors: list[str] = []
+        self.message: discord.Message | None = None
+        self._build_components()
+
+    @property
+    def page_count(self) -> int:
+        if not self.chosen:
+            return 1
+        return (
+            (len(self.chosen) + _ON_BEHALF_PAGE_SIZE - 1)
+            // _ON_BEHALF_PAGE_SIZE
+        )
+
+    def _chosen_for_page(self) -> list[dict]:
+        start = self.page * _ON_BEHALF_PAGE_SIZE
+        return self.chosen[start:start + _ON_BEHALF_PAGE_SIZE]
+
+    def _build_components(self):
+        self.clear_items()
+
+        page_count = self.page_count
+        if self.page >= page_count:
+            self.page = max(0, page_count - 1)
+
+        page_chosen = self._chosen_for_page()
+        if page_chosen:
+            selected_set = set(self.selected_sub_ids)
+            page_ids = {c["target_id"] for c in page_chosen}
+            picks_on_this_page = [
+                c for c in page_chosen if c["target_id"] in selected_set
+            ]
+            options = [
+                discord.SelectOption(
+                    label=c["name"][:100],
+                    value=c["target_id"][:100],
+                    default=(c["target_id"] in selected_set),
+                )
+                for c in page_chosen
+            ]
+            placeholder = "Pick up to 10 subs (the rest are primaries)…"
+            if self.selected_sub_ids:
+                placeholder = (
+                    f"Subs picked: {len(self.selected_sub_ids)} of 10 "
+                    f"(this page: {len(picks_on_this_page)})"
+                )
+            select = discord.ui.Select(
+                placeholder=placeholder,
+                min_values=0,
+                max_values=len(options),
+                options=options,
+                row=0,
+            )
+
+            async def _on_pick(inter: discord.Interaction):
+                if not await self._guard_owner(inter):
+                    return
+                kept = [
+                    tid for tid in self.selected_sub_ids
+                    if tid not in page_ids
+                ]
+                self.selected_sub_ids = kept + list(select.values)
+                self._build_components()
+                try:
+                    await inter.response.edit_message(view=self)
+                except discord.HTTPException:
+                    pass
+
+            select.callback = _on_pick
+            self.add_item(select)
+
+        if self.page_count > 1:
+            prev_btn = discord.ui.Button(
+                label="◀ Prev", style=discord.ButtonStyle.secondary,
+                disabled=(self.page == 0), row=1,
+            )
+
+            async def _on_prev(inter: discord.Interaction):
+                if not await self._guard_owner(inter):
+                    return
+                if self.page > 0:
+                    self.page -= 1
+                    self._build_components()
+                    try:
+                        await inter.response.edit_message(view=self)
+                    except discord.HTTPException:
+                        pass
+                else:
+                    await inter.response.defer()
+
+            prev_btn.callback = _on_prev
+            self.add_item(prev_btn)
+
+            page_label = discord.ui.Button(
+                label=f"Page {self.page + 1} / {self.page_count}",
+                style=discord.ButtonStyle.secondary,
+                disabled=True, row=1,
+            )
+            self.add_item(page_label)
+
+            next_pg_btn = discord.ui.Button(
+                label="Page ▶", style=discord.ButtonStyle.secondary,
+                disabled=(self.page >= self.page_count - 1), row=1,
+            )
+
+            async def _on_next_page(inter: discord.Interaction):
+                if not await self._guard_owner(inter):
+                    return
+                if self.page < self.page_count - 1:
+                    self.page += 1
+                    self._build_components()
+                    try:
+                        await inter.response.edit_message(view=self)
+                    except discord.HTTPException:
+                        pass
+                else:
+                    await inter.response.defer()
+
+            next_pg_btn.callback = _on_next_page
+            self.add_item(next_pg_btn)
+
+        sub_count = len(self.selected_sub_ids)
+        primary_count = len(self.chosen) - sub_count
+        save_disabled = (
+            sub_count > STORM_PLAN_MAX_SUBS
+            or primary_count > STORM_PLAN_MAX_PRIMARIES
+        )
+        save_btn = discord.ui.Button(
+            label=f"💾 Save plan ({primary_count} primary / {sub_count} sub)",
+            style=discord.ButtonStyle.success,
+            disabled=save_disabled,
+            row=2,
+        )
+        save_btn.callback = self._on_save
+        self.add_item(save_btn)
+
+        back_btn = discord.ui.Button(
+            label="◀ Back", style=discord.ButtonStyle.secondary, row=2,
+        )
+
+        async def _on_back(inter: discord.Interaction):
+            if not await self._guard_owner(inter):
+                return
+            self.go_back = True
+            for item in self.children:
+                item.disabled = True
+            self.stop()
+            try:
+                await inter.response.edit_message(
+                    content="◀ Back to player picker…", view=self,
+                )
+            except discord.HTTPException:
+                pass
+
+        back_btn.callback = _on_back
+        self.add_item(back_btn)
+
+        cancel_btn = discord.ui.Button(
+            label="↩️ Cancel", style=discord.ButtonStyle.secondary, row=2,
+        )
+
+        async def _on_cancel(inter: discord.Interaction):
+            if not await self._guard_owner(inter):
+                return
+            for item in self.children:
+                item.disabled = True
+            self.stop()
+            try:
+                await inter.response.edit_message(
+                    content="↩️ Cancelled. Plan unchanged.", view=self,
+                )
+            except discord.HTTPException:
+                pass
+
+        cancel_btn.callback = _on_cancel
+        self.add_item(cancel_btn)
+
+    async def _guard_owner(self, inter: discord.Interaction) -> bool:
+        if inter.user.id != self.parent_view.owner_user_id:
+            await inter.response.send_message(
+                "⛔ Only the officer who opened this view can edit the team plan.",
+                ephemeral=True,
+            )
+            return False
+        return True
+
+    async def _on_save(self, inter: discord.Interaction):
+        if not await self._guard_owner(inter):
+            return
+        sub_set = set(self.selected_sub_ids)
+        primaries = [
+            c["target_id"] for c in self.chosen
+            if c["target_id"] not in sub_set
+        ]
+        subs = [
+            c["target_id"] for c in self.chosen
+            if c["target_id"] in sub_set
+        ]
+        import config
+        ok, errors = config.save_storm_team_plan(
+            self.parent_view.guild_id,
+            self.parent_view.event_type,
+            self.parent_view.event_date,
+            self.team,
+            primaries=primaries,
+            subs=subs,
+            saved_by_user_id=inter.user.id,
+        )
+        if not ok:
+            self.save_errors = errors
+            try:
+                await inter.response.send_message(
+                    "⚠️ Couldn't save plan:\n• " + "\n• ".join(errors),
+                    ephemeral=True,
+                )
+            except discord.HTTPException:
+                pass
+            return
+        self.saved = True
+        for item in self.children:
+            item.disabled = True
+        self.stop()
+        try:
+            await inter.response.edit_message(
+                content=(
+                    f"✅ Plan saved for Team {self.team}: "
+                    f"{len(primaries)} primary, {len(subs)} sub. "
+                    "Open **Set up Team " + self.team + "** to apply it."
+                ),
+                view=self,
+            )
+        except discord.HTTPException:
+            pass
+
+    async def on_timeout(self) -> None:
+        for item in self.children:
+            item.disabled = True
+        if self.message is not None:
+            try:
+                await self.message.edit(view=self)
+            except discord.HTTPException:
+                pass
+
+
+async def _open_team_plan(
+    inter: discord.Interaction, officer_view: "OfficerView", *, team: str,
+) -> None:
+    """Drive the two-step team-plan picker for one team (#239). Called
+    from the 📋 Team A/B plan buttons on the officer view.
+
+    Step 1 picks up to 30 players from the team's yes-pool (filtered
+    against the other team's saved plan). Step 2 marks up to 10 of
+    those as subs. Save persists via `config.save_storm_team_plan`;
+    cancel or timeout leaves any prior plan untouched.
+    """
+    if inter.user.id != officer_view.owner_user_id:
+        await inter.response.send_message(
+            "⛔ Only the officer who opened this view can edit the team plan.",
+            ephemeral=True,
+        )
+        return
+
+    import config
+
+    # Candidate pool: voted-yes for this team. "either" voters appear
+    # in BOTH teams' pools, but the other-team filter below makes sure
+    # we don't surface anyone the OTHER team's saved plan has already
+    # claimed.
+    if team == "A":
+        eligible_buckets = ("a", "either")
+    elif team == "B":
+        eligible_buckets = ("b", "either")
+    else:
+        await inter.response.send_message(
+            f"⚠️ Unknown team `{team}`.", ephemeral=True,
+        )
+        return
+
+    raw_pool: list[dict] = []
+    seen_target_ids: set[str] = set()
+    for k in eligible_buckets:
+        for e in officer_view.buckets.get(k, []):
+            tid = e.get("target_id")
+            if not tid or tid in seen_target_ids:
+                continue
+            seen_target_ids.add(tid)
+            raw_pool.append({"name": e.get("name", ""), "target_id": tid})
+
+    # Cross-team filter: anyone already on the OTHER team's plan for
+    # this event is hidden from this picker. The save-time validator
+    # is the backstop if two officers race; this is the friendly path.
+    other_team = "B" if team == "A" else "A"
+    other_plan = config.get_storm_team_plan(
+        officer_view.guild_id, officer_view.event_type,
+        officer_view.event_date, other_team,
+    ) or {"primaries": [], "subs": []}
+    other_claimed = set(other_plan["primaries"]) | set(other_plan["subs"])
+    if other_claimed:
+        hidden_names = sorted({
+            c["name"] for c in raw_pool if c["target_id"] in other_claimed
+        })
+        candidates = [
+            c for c in raw_pool if c["target_id"] not in other_claimed
+        ]
+    else:
+        hidden_names = []
+        candidates = list(raw_pool)
+    candidates.sort(key=lambda c: c["name"].lower())
+
+    prior_plan = config.get_storm_team_plan(
+        officer_view.guild_id, officer_view.event_type,
+        officer_view.event_date, team,
+    )
+    prior_picks: list[str] = []
+    prior_subs: list[str] = []
+    prior_saved_at = ""
+    if prior_plan:
+        prior_picks = list(prior_plan["primaries"]) + list(prior_plan["subs"])
+        prior_subs = list(prior_plan["subs"])
+        prior_saved_at = prior_plan.get("saved_at", "")
+        # If the saved plan references members no longer in the pool
+        # (vote changed to "cannot", roster row removed, etc.), keep
+        # them in the picker so the officer can deselect them — adding
+        # phantom rows preserves the "edit, don't restart" experience.
+        existing_ids = {c["target_id"] for c in candidates}
+        for tid in prior_picks:
+            if tid in existing_ids:
+                continue
+            # Best-effort name resolution from any bucket — fall back
+            # to the id itself if we can't find a friendlier label.
+            name = tid
+            for k in ("a", "b", "either", "cannot"):
+                for e in officer_view.buckets.get(k, []):
+                    if e.get("target_id") == tid:
+                        name = e.get("name") or name
+                        break
+            candidates.append({"name": f"{name} (vote changed)", "target_id": tid})
+        candidates.sort(key=lambda c: c["name"].lower())
+
+    if not candidates:
+        await inter.response.send_message(
+            f"⚠️ No eligible players for Team {team} yet. Members need to "
+            f"vote {'A' if team == 'A' else 'B'} or Either before they "
+            f"can appear in the picker.",
+            ephemeral=True,
+        )
+        return
+
+    intro_lines = [
+        f"📋 **Team {team} plan** — "
+        f"pick up to **30** players for this event, then mark up to "
+        f"**10** as subs.",
+        f"_Candidate pool: {len(candidates)} member(s) who voted "
+        f"{'A' if team == 'A' else 'B'} or Either._",
+    ]
+    if hidden_names:
+        n = len(hidden_names)
+        sample = ", ".join(hidden_names[:3])
+        more = f" +{n - 3} more" if n > 3 else ""
+        intro_lines.append(
+            f"_{n} member(s) hidden — already on Team {other_team}: "
+            f"{sample}{more}._"
+        )
+
+    first_response = True
+    while True:
+        step1 = _TeamPlanRosterPickerView(
+            officer_view, team, candidates, sorted(other_claimed),
+            prior_picks, prior_subs, prior_saved_at,
+        )
+        if first_response:
+            try:
+                await inter.response.send_message(
+                    "\n".join(intro_lines), view=step1, ephemeral=True,
+                )
+                step1.message = await inter.original_response()
+            except discord.HTTPException:
+                step1.message = None
+            first_response = False
+        else:
+            # Re-entry after step 2 "back" — use followup, the original
+            # interaction response was already consumed.
+            try:
+                step1.message = await inter.followup.send(
+                    "\n".join(intro_lines), view=step1, ephemeral=True,
+                )
+            except discord.HTTPException:
+                step1.message = None
+
+        await step1.wait()
+        if step1.cleared:
+            await _refresh_officer_view_message(officer_view)
+            return
+        if not step1.advance_to_step2:
+            return  # cancelled / timed out
+
+        chosen_ids = list(step1.selected_target_ids)
+        # Preserve display name from step 1's candidate list so step 2
+        # shows the same names; sort case-insensitively for stability.
+        name_lookup = {c["target_id"]: c["name"] for c in candidates}
+        chosen = [
+            {"name": name_lookup.get(tid, tid), "target_id": tid}
+            for tid in chosen_ids
+        ]
+        chosen.sort(key=lambda c: c["name"].lower())
+
+        step2 = _TeamPlanSubPickerView(
+            officer_view, team, chosen, prior_subs=prior_subs,
+        )
+        try:
+            step2.message = await inter.followup.send(
+                f"📋 **Team {team} plan** — Step 2 of 2. Mark up to "
+                f"**10** subs from the {len(chosen)} picked. The "
+                f"remaining will be primaries.",
+                view=step2, ephemeral=True,
+            )
+        except discord.HTTPException:
+            step2.message = None
+
+        await step2.wait()
+        if step2.saved:
+            await _refresh_officer_view_message(officer_view)
+            return
+        if step2.go_back:
+            # Update prior_picks/prior_subs so re-entry shows the
+            # tweaked state, then loop back to step 1.
+            prior_picks = chosen_ids
+            prior_subs = list(step2.selected_sub_ids)
+            continue
+        # Cancel / timeout from step 2 — nothing to do.
+        return
+
+
+async def _refresh_officer_view_message(officer_view: "OfficerView") -> None:
+    """Re-render the officer view's public embed + rebuild its component
+    row so the 📋 Team plan button label can flip between "📋 Team A plan"
+    and "📋 Team A plan ✅", and the team-plan summary lines pick up the
+    fresh `saved_at` timestamp. Best-effort — if the message was already
+    deleted or the bot lost perms, the followup ack from the picker is
+    the officer's confirmation."""
+    if officer_view.message is None:
+        return
+    officer_view._build_components()  # rebuild button labels
+    try:
+        import config
+        team_plans = config.get_storm_team_plans_for_event(
+            officer_view.guild_id,
+            officer_view.event_type,
+            officer_view.event_date,
+        )
+        await officer_view.message.edit(
+            embed=_render_embed(
+                officer_view.guild,
+                officer_view.event_type,
+                officer_view.event_date,
+                officer_view.buckets,
+                officer_view.bucket_filter,
+                team_plans=team_plans,
+            ),
+            view=officer_view,
+        )
+    except discord.HTTPException:
+        pass
+
+
 class OfficerView(discord.ui.View):
     """Officer view for one event. Owns the bucket map + filter state."""
 
@@ -1332,6 +2117,44 @@ class OfficerView(discord.ui.View):
 
             b_btn.callback = _setup_b
             self.add_item(b_btn)
+
+        # 📋 Team plan buttons (#239) — capture the 20+10 split the
+        # officer committed to in-game so the roster builder's auto-fill
+        # mirrors the in-game submission instead of re-deriving its own
+        # split. Saved label flips to ✅ so officers can see at a glance
+        # whether the plan is current. Same `teams` gate as the setup
+        # buttons above so single-team alliances don't see the other
+        # team's button.
+        from config import get_storm_team_plan as _get_team_plan
+        if show_a:
+            plan_a_saved = _get_team_plan(
+                self.guild_id, self.event_type, self.event_date, "A",
+            ) is not None
+            a_plan_btn = discord.ui.Button(
+                label="📋 Team A plan" + (" ✅" if plan_a_saved else ""),
+                style=discord.ButtonStyle.secondary, row=3,
+            )
+
+            async def _plan_a(inter: discord.Interaction):
+                await _open_team_plan(inter, self, team="A")
+
+            a_plan_btn.callback = _plan_a
+            self.add_item(a_plan_btn)
+
+        if show_b:
+            plan_b_saved = _get_team_plan(
+                self.guild_id, self.event_type, self.event_date, "B",
+            ) is not None
+            b_plan_btn = discord.ui.Button(
+                label="📋 Team B plan" + (" ✅" if plan_b_saved else ""),
+                style=discord.ButtonStyle.secondary, row=3,
+            )
+
+            async def _plan_b(inter: discord.Interaction):
+                await _open_team_plan(inter, self, team="B")
+
+            b_plan_btn.callback = _plan_b
+            self.add_item(b_plan_btn)
 
 
 async def _open_team_setup(

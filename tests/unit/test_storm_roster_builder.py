@@ -577,6 +577,240 @@ class TestSignupFilterKeys:
             assert "1" not in keys
 
 
+class TestTeamPlanKeysOrSignupKeys:
+    """#239: when a saved team plan exists for an event+team, the
+    builder's candidate pool tightens to the plan's 30 members. With
+    no plan saved, the helper falls back to the vote-bucket filter
+    (today's behaviour) — guarded by a regression test."""
+
+    def test_no_plan_falls_back_to_signup_filter(self, seeded_db):
+        import config
+        gid = TEST_GUILD_ID
+        config.record_storm_vote(gid, "DS", "2026-05-21",
+                                 voter_user_id=1, target_member_id="1", vote="a")
+        config.record_storm_vote(gid, "DS", "2026-05-21",
+                                 voter_user_id=2, target_member_id="2", vote="either")
+        keys, applied = srb._team_plan_keys_or_signup_keys(
+            gid, "DS", "2026-05-21", "A",
+        )
+        assert keys == {"1", "2"}
+        assert applied is False
+
+    def test_saved_plan_overrides_signup_filter(self, seeded_db):
+        import config
+        gid = TEST_GUILD_ID
+        # Signups would include 1, 2, 3 — but plan says only 1, 2.
+        for tid in ("1", "2", "3"):
+            config.record_storm_vote(
+                gid, "DS", "2026-05-21",
+                voter_user_id=int(tid), target_member_id=tid, vote="a",
+            )
+        config.save_storm_team_plan(
+            gid, "DS", "2026-05-21", "A",
+            primaries=["1"], subs=["2"], saved_by_user_id=999,
+        )
+        keys, applied = srb._team_plan_keys_or_signup_keys(
+            gid, "DS", "2026-05-21", "A",
+        )
+        assert keys == {"1", "2"}
+        assert applied is True
+
+    def test_empty_plan_falls_through(self, seeded_db):
+        """A `clear`-ed plan returns None; the helper falls back to
+        signups. Also covers the no-rows-but-table-exists edge."""
+        import config
+        gid = TEST_GUILD_ID
+        config.record_storm_vote(gid, "DS", "2026-05-21",
+                                 voter_user_id=1, target_member_id="1", vote="a")
+        config.save_storm_team_plan(
+            gid, "DS", "2026-05-21", "A",
+            primaries=["1"], subs=[], saved_by_user_id=999,
+        )
+        config.clear_storm_team_plan(gid, "DS", "2026-05-21", "A")
+        keys, applied = srb._team_plan_keys_or_signup_keys(
+            gid, "DS", "2026-05-21", "A",
+        )
+        assert keys == {"1"}
+        assert applied is False
+
+
+class TestAutoFillPlanAware:
+    """#239: when a plan is provided (either directly or auto-loaded
+    from the saved plan), auto-fill seeds starters from
+    `plan["primaries"]` and the sub pool from `plan["subs"]` instead
+    of running the by-power top-20 split."""
+
+    def _make_thirty_members(self):
+        """30 members with descending power so the by-power split is
+        unambiguous (M01 strongest, M30 weakest)."""
+        members = {
+            str(i): {"key": str(i), "name": f"M{i:02d}",
+                     "discord_id": str(i),
+                     "power": 510_000_000 - i * 10_000_000,
+                     "not_on_discord": False}
+            for i in range(1, 31)
+        }
+        return members
+
+    def _make_eleven_zone_preset(self):
+        return [
+            ss.ZoneRow(zone="Oil Refinery I", max_players=3,
+                       min_power_a=100_000_000, priority=1),
+            ss.ZoneRow(zone="Oil Refinery II", max_players=3,
+                       min_power_a=100_000_000, priority=2),
+            ss.ZoneRow(zone="Science Hub", max_players=3,
+                       min_power_a=100_000_000, priority=3),
+            ss.ZoneRow(zone="Info Center", max_players=3,
+                       min_power_a=100_000_000, priority=4),
+            ss.ZoneRow(zone="Field Hospital I", max_players=2,
+                       min_power_a=100_000_000, priority=5),
+            ss.ZoneRow(zone="Field Hospital II", max_players=2,
+                       min_power_a=100_000_000, priority=6),
+            ss.ZoneRow(zone="Field Hospital III", max_players=2,
+                       min_power_a=100_000_000, priority=7),
+            ss.ZoneRow(zone="Field Hospital IV", max_players=2,
+                       min_power_a=100_000_000, priority=8),
+            ss.ZoneRow(zone="Nuclear Silo", max_players=4,
+                       min_power_a=100_000_000, priority=9),
+            ss.ZoneRow(zone="Arsenal", max_players=3,
+                       min_power_a=100_000_000, priority=10),
+            ss.ZoneRow(zone="Mercenary Factory", max_players=3,
+                       min_power_a=100_000_000, priority=11),
+        ]
+
+    def test_plan_overrides_by_power_split(self):
+        """The crux of #239: plan picks the BOTTOM-power members as
+        primaries to demonstrate auto-fill respects the plan's choice
+        rather than the by-power default."""
+        members = self._make_thirty_members()
+        session = _make_session(
+            team="A", members=members,
+            preset_zones=self._make_eleven_zone_preset(),
+        )
+        # Make M21..M40 (the bottom 20) primaries and M01..M10 subs.
+        # The by-power default would put M01..M20 as primaries — this
+        # is the inverse, so any zone-placement of M01..M10 proves
+        # the plan was ignored.
+        primaries = [str(i) for i in range(21, 41) if str(i) in members]
+        subs = [str(i) for i in range(1, 11)]
+        plan = {"primaries": primaries, "subs": subs}
+        srb._auto_fill_session(session, plan=plan)
+        placed: set[str] = set()
+        for zone_members in session.assignments.values():
+            placed.update(zone_members)
+        # Primaries from the plan are placed; M01..M10 (in subs) are not.
+        for top_id in ("1", "2", "3", "4", "5", "6", "7", "8", "9", "10"):
+            assert top_id not in placed, (
+                f"top-power M{top_id} should be a sub per plan, not placed in a zone"
+            )
+        # Sub pool matches the plan's subs (intersected with members).
+        assert set(session.subs) == set(subs)
+
+    def test_plan_primary_below_top_twenty_still_placed(self):
+        """Single-member version of the by-power-vs-plan test: a
+        bottom-power member marked primary in the plan still lands
+        in a zone."""
+        members = self._make_thirty_members()
+        session = _make_session(
+            team="A", members=members,
+            preset_zones=self._make_eleven_zone_preset(),
+        )
+        plan = {"primaries": ["30"], "subs": []}
+        srb._auto_fill_session(session, plan=plan)
+        placed: set[str] = set()
+        for zone_members in session.assignments.values():
+            placed.update(zone_members)
+        assert "30" in placed
+
+    def test_missing_plan_keys_surface_as_conflicts(self):
+        """Plan keys that aren't in `session.members` (vote changed to
+        cannot, roster row removed, etc.) appear in the summary's
+        conflicts list — non-fatal."""
+        members = self._make_thirty_members()
+        session = _make_session(team="A", members=members)
+        plan = {"primaries": ["1", "999"], "subs": ["888"]}
+        summary = srb._auto_fill_session(session, plan=plan)
+        conflict_blob = " ".join(summary["conflicts"])
+        assert "999" in conflict_blob
+        assert "888" in conflict_blob
+        assert "missing" in conflict_blob.lower()
+        # "1" is in members so no conflict for it.
+        assert "plan key 1 missing" not in conflict_blob
+
+    def test_pinned_vs_sub_conflict_pin_wins(self):
+        """Per-member rule pins a member to a zone; plan marks them as
+        sub. Pin wins, conflict surfaces in summary."""
+        import storm_member_rules as smr
+        members = self._make_thirty_members()
+        per_member = [smr.Rule(
+            rule_type="per_member", sub_type="zone",
+            subject="M01", value="Oil Refinery I",
+        )]
+        session = _make_session(
+            team="A", members=members,
+            preset_zones=self._make_eleven_zone_preset(),
+            per_member_rules=per_member,
+        )
+        # _apply_rules_to_session is what populates assignments from
+        # the per_member rule. It runs in open_roster_builder normally;
+        # call it directly here.
+        srb._apply_rules_to_session(session)
+        plan = {"primaries": [], "subs": ["1"]}
+        summary = srb._auto_fill_session(session, plan=plan)
+        # Pin wins: M01 is in the Oil Refinery I zone.
+        assert "1" in session.assignments["Oil Refinery I"]
+        # And NOT in the sub pool.
+        assert "1" not in session.subs
+        # Conflict surfaced.
+        conflict_blob = " ".join(summary["conflicts"])
+        assert "M01" in conflict_blob
+        assert "pin" in conflict_blob.lower()
+
+    def test_no_plan_byte_identical_to_legacy(self):
+        """Regression guard: when `plan=None` (and no saved plan auto-
+        loads because event_date/team are unset), the by-power split
+        matches the legacy behaviour exactly."""
+        members = self._make_thirty_members()
+        # No event_date, no team — auto-load path skipped.
+        session = _make_session(team="A", members=members,
+                                preset_zones=self._make_eleven_zone_preset())
+        # Sanity: no event_date so the session can't trigger plan
+        # auto-load even if a plan existed in the DB.
+        assert session.event_date is None
+        srb._auto_fill_session(session, plan=None)
+        placed: set[str] = set()
+        for zone_members in session.assignments.values():
+            placed.update(zone_members)
+        # Legacy behaviour: top 20 by power are starters.
+        expected_starters = {str(i) for i in range(1, 21)}
+        assert placed == expected_starters
+        assert set(session.subs) == {str(i) for i in range(21, 31)}
+
+    def test_partial_plan_only_seeds_what_was_saved(self):
+        """A partial plan (18 primaries, 5 subs) seeds only those
+        members; remaining starter seats stay unfilled (mirrors the
+        validator's permissive partial-plan behaviour)."""
+        members = self._make_thirty_members()
+        session = _make_session(
+            team="A", members=members,
+            preset_zones=self._make_eleven_zone_preset(),
+        )
+        plan = {
+            "primaries": [str(i) for i in range(1, 19)],   # 18 primaries
+            "subs":      [str(i) for i in range(21, 26)],  # 5 subs
+        }
+        summary = srb._auto_fill_session(session, plan=plan)
+        placed: set[str] = set()
+        for zone_members in session.assignments.values():
+            placed.update(zone_members)
+        # Only the 18 plan primaries get placed.
+        assert placed == {str(i) for i in range(1, 19)}
+        # Only the 5 plan subs are in the sub pool.
+        assert set(session.subs) == {str(i) for i in range(21, 26)}
+        # Starters_short tracks the 2-seat shortfall.
+        assert summary["starters_short"] == 2
+
+
 class TestSessionStructuredMode:
     def test_event_date_marks_structured(self):
         session = _make_session()

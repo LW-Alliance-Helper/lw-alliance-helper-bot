@@ -1191,6 +1191,265 @@ class TestOfficerViewTeamsGate:
         assert not any("Set up Team B" in lab for lab in labels)
 
 
+class TestTeamPlanButtons:
+    """#239 — the 📋 Team A/B plan buttons sit alongside the existing
+    🅰️/🅱️ Set up Team buttons, gated by the same `teams` setting.
+    Label flips to '✅' when a plan is saved so officers can see at a
+    glance whether the in-game commitment is captured."""
+
+    def test_teams_both_shows_both_plan_buttons(self, seeded_db):
+        import config
+        config.save_storm_config(
+            TEST_GUILD_ID, "DS",
+            tab_name="DS Tab", mail_template="",
+            timezone="America/New_York", log_channel_id=0,
+            teams="both",
+        )
+        guild = _FakeGuild(TEST_GUILD_ID, [])
+        view = sov.OfficerView(guild, owner_user_id=1, event_type="DS",
+                               event_date="2026-05-21")
+        labels = [getattr(c, "label", "") for c in view.children if hasattr(c, "label")]
+        assert any("Team A plan" in lab for lab in labels)
+        assert any("Team B plan" in lab for lab in labels)
+
+    def test_teams_a_hides_team_b_plan_button(self, seeded_db):
+        import config
+        config.save_storm_config(
+            TEST_GUILD_ID, "DS",
+            tab_name="DS Tab", mail_template="",
+            timezone="America/New_York", log_channel_id=0,
+            teams="A",
+        )
+        guild = _FakeGuild(TEST_GUILD_ID, [])
+        view = sov.OfficerView(guild, owner_user_id=1, event_type="DS",
+                               event_date="2026-05-21")
+        labels = [getattr(c, "label", "") for c in view.children if hasattr(c, "label")]
+        assert any("Team A plan" in lab for lab in labels)
+        assert not any("Team B plan" in lab for lab in labels)
+
+    def test_saved_plan_flips_label_to_checkmark(self, seeded_db):
+        import config
+        config.save_storm_config(
+            TEST_GUILD_ID, "DS",
+            tab_name="DS Tab", mail_template="",
+            timezone="America/New_York", log_channel_id=0,
+            teams="both",
+        )
+        config.save_storm_team_plan(
+            TEST_GUILD_ID, "DS", "2026-05-21", "A",
+            primaries=["11"], subs=[], saved_by_user_id=999,
+        )
+        guild = _FakeGuild(TEST_GUILD_ID, [])
+        view = sov.OfficerView(guild, owner_user_id=1, event_type="DS",
+                               event_date="2026-05-21")
+        labels = [getattr(c, "label", "") for c in view.children if hasattr(c, "label")]
+        # Team A has a saved plan → ✅ suffix.
+        assert any(lab == "📋 Team A plan ✅" for lab in labels), labels
+        # Team B has no plan → plain label.
+        assert any(lab == "📋 Team B plan" for lab in labels), labels
+
+    def test_cs_uses_same_ab_model_for_plan_buttons(self, seeded_db):
+        """Regression guard against the 'CS is single-team' misread
+        (#166): the team plan buttons branch on `teams` exactly like
+        DS does, so a teams=both CS alliance gets both plan buttons."""
+        import config
+        config.save_storm_config(
+            TEST_GUILD_ID, "CS",
+            tab_name="CS Tab", mail_template="",
+            timezone="America/New_York", log_channel_id=0,
+            teams="both",
+        )
+        guild = _FakeGuild(TEST_GUILD_ID, [])
+        view = sov.OfficerView(guild, owner_user_id=1, event_type="CS",
+                               event_date="2026-05-21")
+        labels = [getattr(c, "label", "") for c in view.children if hasattr(c, "label")]
+        assert any("Team A plan" in lab for lab in labels)
+        assert any("Team B plan" in lab for lab in labels)
+
+
+class TestTeamPlanRosterPickerView:
+    """Step 1 of the team-plan picker — pick up to 30 from the yes-pool."""
+
+    def _make_parent(self):
+        parent = MagicMock()
+        parent.owner_user_id = 999
+        parent.guild_id = TEST_GUILD_ID
+        parent.event_type = "DS"
+        parent.event_date = "2026-05-21"
+        return parent
+
+    def _make_candidates(self, n: int) -> list[dict]:
+        return [
+            {"name": f"M{i:02d}", "target_id": str(i)}
+            for i in range(1, n + 1)
+        ]
+
+    def test_next_disabled_with_zero_picks(self):
+        parent = self._make_parent()
+        view = sov._TeamPlanRosterPickerView(
+            parent, "A", self._make_candidates(5),
+            other_team_claimed=[], prior_picks=[], prior_subs=[],
+            prior_saved_at="",
+        )
+        next_btn = next(
+            c for c in view.children
+            if getattr(c, "label", "").startswith("Next ▶")
+        )
+        assert next_btn.disabled is True
+
+    def test_next_enabled_with_one_pick(self):
+        parent = self._make_parent()
+        view = sov._TeamPlanRosterPickerView(
+            parent, "A", self._make_candidates(5),
+            other_team_claimed=[], prior_picks=["1"], prior_subs=[],
+            prior_saved_at="",
+        )
+        next_btn = next(
+            c for c in view.children
+            if getattr(c, "label", "").startswith("Next ▶")
+        )
+        assert next_btn.disabled is False
+
+    def test_next_disabled_when_over_thirty(self):
+        parent = self._make_parent()
+        # Pre-seed 31 prior picks — over the 30 cap.
+        view = sov._TeamPlanRosterPickerView(
+            parent, "A", self._make_candidates(40),
+            other_team_claimed=[],
+            prior_picks=[str(i) for i in range(1, 32)],
+            prior_subs=[], prior_saved_at="",
+        )
+        next_btn = next(
+            c for c in view.children
+            if getattr(c, "label", "").startswith("Next ▶")
+        )
+        assert next_btn.disabled is True
+
+    def test_pagination_appears_when_over_25(self):
+        parent = self._make_parent()
+        view = sov._TeamPlanRosterPickerView(
+            parent, "A", self._make_candidates(30),
+            other_team_claimed=[], prior_picks=[], prior_subs=[],
+            prior_saved_at="",
+        )
+        labels = [getattr(c, "label", "") for c in view.children]
+        assert any(lab and lab.startswith("Page ") for lab in labels)
+
+    def test_clear_button_only_when_prior_plan(self):
+        parent = self._make_parent()
+        view_with = sov._TeamPlanRosterPickerView(
+            parent, "A", self._make_candidates(5),
+            other_team_claimed=[], prior_picks=["1"],
+            prior_subs=[], prior_saved_at="2026-05-21T10:00:00+00:00",
+        )
+        view_without = sov._TeamPlanRosterPickerView(
+            parent, "A", self._make_candidates(5),
+            other_team_claimed=[], prior_picks=[],
+            prior_subs=[], prior_saved_at="",
+        )
+        labels_with = [getattr(c, "label", "") for c in view_with.children]
+        labels_without = [getattr(c, "label", "") for c in view_without.children]
+        assert any("Clear plan" in lab for lab in labels_with)
+        assert not any("Clear plan" in lab for lab in labels_without)
+
+    async def test_owner_guard_blocks_non_owner(self):
+        parent = self._make_parent()
+        view = sov._TeamPlanRosterPickerView(
+            parent, "A", self._make_candidates(5),
+            other_team_claimed=[], prior_picks=[], prior_subs=[],
+            prior_saved_at="",
+        )
+        inter = MagicMock()
+        inter.user.id = 12345  # not the owner (999)
+        inter.response.send_message = AsyncMock()
+        ok = await view._guard_owner(inter)
+        assert ok is False
+        inter.response.send_message.assert_awaited_once()
+        msg = inter.response.send_message.await_args.args[0]
+        assert "Only the officer" in msg
+
+
+class TestTeamPlanSubPickerView:
+    """Step 2 of the team-plan picker — mark up to 10 subs from the 30."""
+
+    def _make_parent(self):
+        parent = MagicMock()
+        parent.owner_user_id = 999
+        parent.guild_id = TEST_GUILD_ID
+        parent.event_type = "DS"
+        parent.event_date = "2026-05-21"
+        return parent
+
+    def _make_chosen(self, n: int) -> list[dict]:
+        return [
+            {"name": f"M{i:02d}", "target_id": str(i)}
+            for i in range(1, n + 1)
+        ]
+
+    def test_save_button_disabled_when_too_many_subs(self):
+        parent = self._make_parent()
+        # 15 chosen, 11 marked as sub (over the 10 cap).
+        view = sov._TeamPlanSubPickerView(
+            parent, "A", self._make_chosen(15),
+            prior_subs=[str(i) for i in range(1, 12)],
+        )
+        save_btn = next(
+            c for c in view.children
+            if getattr(c, "label", "").startswith("💾 Save plan")
+        )
+        assert save_btn.disabled is True
+
+    def test_save_button_enabled_with_ten_subs(self):
+        parent = self._make_parent()
+        view = sov._TeamPlanSubPickerView(
+            parent, "A", self._make_chosen(30),
+            prior_subs=[str(i) for i in range(21, 31)],  # exactly 10
+        )
+        save_btn = next(
+            c for c in view.children
+            if getattr(c, "label", "").startswith("💾 Save plan")
+        )
+        assert save_btn.disabled is False
+
+    def test_label_reports_primary_sub_split(self):
+        parent = self._make_parent()
+        view = sov._TeamPlanSubPickerView(
+            parent, "A", self._make_chosen(28),
+            prior_subs=[str(i) for i in range(19, 29)],  # 10 subs
+        )
+        save_btn = next(
+            c for c in view.children
+            if getattr(c, "label", "").startswith("💾 Save plan")
+        )
+        # 28 chosen, 10 marked sub → 18 primary.
+        assert "18 primary" in save_btn.label
+        assert "10 sub" in save_btn.label
+
+    def test_drops_prior_subs_not_in_chosen(self):
+        """If the officer deselects a member in step 1 who was a prior
+        sub, that member shouldn't carry over to step 2."""
+        parent = self._make_parent()
+        chosen = self._make_chosen(5)  # M01..M05 only
+        view = sov._TeamPlanSubPickerView(
+            parent, "A", chosen,
+            prior_subs=["1", "2", "99"],  # 99 not in chosen
+        )
+        assert "99" not in view.selected_sub_ids
+        assert set(view.selected_sub_ids) == {"1", "2"}
+
+    async def test_owner_guard_blocks_non_owner(self):
+        parent = self._make_parent()
+        view = sov._TeamPlanSubPickerView(
+            parent, "A", self._make_chosen(5), prior_subs=[],
+        )
+        inter = MagicMock()
+        inter.user.id = 12345
+        inter.response.send_message = AsyncMock()
+        ok = await view._guard_owner(inter)
+        assert ok is False
+        inter.response.send_message.assert_awaited_once()
+
+
 class TestOfficerViewTimeout:
     """The OfficerView is posted publicly so multiple leadership members
     can use it as an audit trail. Without `on_timeout`, the buttons

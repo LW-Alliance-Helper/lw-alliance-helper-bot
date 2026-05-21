@@ -434,6 +434,11 @@ class RosterBuilderSession:
         # `storm_team_plans` row (#239). Auto-fill respects the plan's
         # primary/sub split instead of re-deriving by power.
         self.team_plan_applied: bool = False
+        # #240 follow-up: latched flag set when an autosave write to
+        # `storm_roster_drafts` raises. The next embed render surfaces
+        # a clear warning so the officer knows their work isn't being
+        # persisted (and can screenshot the embed as a manual backup).
+        self.autosave_failed: bool = False
 
     @property
     def is_structured(self) -> bool:
@@ -1195,6 +1200,12 @@ def _auto_fill_session(
 # ── Embed rendering ──────────────────────────────────────────────────────────
 
 
+# Discord caps embed description at 4096 chars (the total embed cap
+# is 6000). `_render_builder_embed` truncates with a notice when the
+# composed description would exceed this — see #240 follow-up.
+_MAX_EMBED_DESCRIPTION = 4096
+
+
 def _format_member_label(member: dict) -> str:
     name = member["name"]
     power = member.get("power")
@@ -1301,6 +1312,19 @@ def _render_builder_embed(session: RosterBuilderSession) -> discord.Embed:
         event_team_line = f"🗺️ {event_label}"
 
     lines: list[str] = []
+    # #240 follow-up: when autosave to `storm_roster_drafts` fails,
+    # surface a prominent warning at the top of the embed so the
+    # officer doesn't unknowingly lose hours of work to a future View
+    # timeout. Latched flag — clears on the next successful save.
+    if getattr(session, "autosave_failed", False) and session.is_structured:
+        lines.append(
+            "⚠️ **Couldn't save your draft.** This build won't persist "
+            "if the builder times out, you close it, or the bot "
+            "restarts. Screenshot the embed below as a backup, or try "
+            "any action (move a member, switch a stage) — the save "
+            "will retry on every change."
+        )
+        lines.append("")
     lines.append(f"- {event_team_line}")
     if session.event_type == "DS":
         floor_label = "Min A" if session.team == "A" else "Min B"
@@ -1490,12 +1514,49 @@ def _render_builder_embed(session: RosterBuilderSession) -> discord.Embed:
         )
         lines.append(f"- Not on Discord: {not_on_discord_count}")
 
+    # #8 (#240 follow-up): Discord caps embed description at 4096
+    # chars. Roster errors + reconciliation banners + auto-fill
+    # summary + zone lines can compound past that ceiling, and the
+    # embed.set_message edit would fail (the builder would stop
+    # updating). Defensively truncate the joined description so the
+    # render always completes, and tell the officer what was clipped.
+    description = "\n".join(lines)
+    if len(description) > _MAX_EMBED_DESCRIPTION:
+        # Leave room for a short truncation notice.
+        budget = _MAX_EMBED_DESCRIPTION - 200
+        description = (
+            description[:budget].rsplit("\n", 1)[0]
+            + "\n\n…\n⚠️ Builder details were too long to display in one "
+              "embed — some lines were clipped. The underlying roster "
+              "state is still intact; only the display was trimmed. "
+              "Check your sheet's `Rosters` tab for the full record "
+              "after Approve & Post."
+        )
+
     embed = discord.Embed(
         title=title,
-        description="\n".join(lines),
+        description=description,
         color=discord.Color.gold() if session.event_type == "DS" else discord.Color.orange(),
     )
+    # #4 (#240 follow-up): subtle persistent reminder that the builder
+    # auto-saves. Sits in the embed footer (small grey text below the
+    # description) so officers don't worry their work is volatile.
+    # Only shown for structured-mode builds — free-tier "manual apply"
+    # has no draft to save.
+    if session.is_structured:
+        embed.set_footer(
+            text=(
+                "💾 Auto-saving as you go. Close anytime; resume from "
+                "/desertstorm signups → ♻️ Resume Team X."
+                if session.event_type == "DS"
+                else
+                "💾 Auto-saving as you go. Close anytime; resume from "
+                "/canyonstorm signups → ♻️ Resume Team X."
+            )
+        )
     return embed
+
+
 
 
 # ── Eligibility helpers ──────────────────────────────────────────────────────
@@ -1601,6 +1662,16 @@ class RosterBuilderView(discord.ui.View):
         super().__init__(timeout=3600)
         self.session = session
         self.message: Optional[discord.Message] = None
+        # `_user_action_since_open` (#240 follow-up): the initial
+        # `_rebuild` during construction saves the freshly-built state
+        # back to disk, which is wasted I/O AND creates a "draft" from
+        # mere builder opens (officer opens, never edits, closes —
+        # they get a Resume button next time labeled with a
+        # 5-seconds-ago timestamp that doesn't represent real work).
+        # The flag is False during __init__ so the initial `_rebuild`
+        # skips the autosave; subsequent rebuilds (every one of which
+        # flows through a user-clicked button) save normally.
+        self._user_action_since_open: bool = False
         self._rebuild()
 
     def _rebuild(self) -> None:
@@ -2113,9 +2184,19 @@ class RosterBuilderView(discord.ui.View):
         render_btn.callback = _render
         self.add_item(render_btn)
 
-        cancel_label = "❌ Cancel" if s.is_structured else "✅ Done"
+        # #240 follow-up: structured mode now persists the draft on
+        # every action, so closing the builder doesn't lose work.
+        # Button label switches from "❌ Cancel" (which implied
+        # destruction) to "👋 Close (draft saved)" so officers know
+        # they can come back via ♻️ Resume.
+        cancel_label = (
+            "👋 Close (draft saved)" if s.is_structured else "✅ Done"
+        )
         done_btn = discord.ui.Button(
-            label=cancel_label, style=discord.ButtonStyle.danger, row=final_row,
+            label=cancel_label,
+            style=discord.ButtonStyle.secondary
+            if s.is_structured else discord.ButtonStyle.danger,
+            row=final_row,
         )
 
         async def _done(inter: discord.Interaction):
@@ -2123,9 +2204,21 @@ class RosterBuilderView(discord.ui.View):
                 return
             for item in self.children:
                 item.disabled = True
+            if s.is_structured:
+                hub_cmd = (
+                    "/desertstorm signups" if s.event_type == "DS"
+                    else "/canyonstorm signups"
+                )
+                close_msg = (
+                    f"👋 Builder closed. **Your draft is saved** — "
+                    f"come back via `{hub_cmd}` and click "
+                    f"**♻️ Resume Team {s.team}** to pick up where "
+                    f"you left off."
+                )
+            else:
+                close_msg = "Roster builder closed."
             await inter.response.edit_message(
-                content=("Roster builder cancelled. Nothing posted."
-                         if s.is_structured else "Roster builder closed."),
+                content=close_msg,
                 embed=_render_builder_embed(s),
                 view=self,
             )
@@ -2140,7 +2233,16 @@ class RosterBuilderView(discord.ui.View):
         # every move, auto-fill, pairing edit, phase switch, etc. The
         # save is best-effort — a SQLite hiccup logs but doesn't break
         # the UI.
-        _autosave_draft(self.session)
+        #
+        # `_user_action_since_open` is False during the initial
+        # __init__-driven rebuild, so the very first call skips the
+        # save (the on-disk state already reflects this start point —
+        # either freshly loaded from draft, or default-fresh). Every
+        # subsequent rebuild is flowing through a user-clicked button
+        # callback that flips the flag to True before calling
+        # `_rebuild`, so real edits get saved.
+        if self._user_action_since_open:
+            _autosave_draft(self.session)
 
     async def _guard_owner(self, inter: discord.Interaction) -> bool:
         if inter.user.id != self.session.user_id:
@@ -2152,6 +2254,11 @@ class RosterBuilderView(discord.ui.View):
         return True
 
     async def _refresh(self, inter: discord.Interaction) -> None:
+        # `_refresh` is the chokepoint user-action button callbacks
+        # call after mutating session state. Flip the user-action flag
+        # so the autosave inside `_rebuild` fires (#240 follow-up:
+        # skip the initial __init__-driven rebuild, save real edits).
+        self._user_action_since_open = True
         self._rebuild()
         await inter.response.edit_message(
             embed=_render_builder_embed(self.session), view=self,
@@ -2322,9 +2429,11 @@ class _AutoFillStrategyPickerView(discord.ui.View):
             pass
         # Refresh the main builder view via its captured message handle,
         # not through this interaction. The ephemeral picker and the
-        # main builder live on separate messages.
+        # main builder live on separate messages. Flip the user-action
+        # flag so the autosave fires (#240 follow-up).
         try:
             if self.parent_view.message is not None:
+                self.parent_view._user_action_since_open = True
                 self.parent_view._rebuild()
                 await self.parent_view.message.edit(
                     embed=_render_builder_embed(s),
@@ -3540,7 +3649,14 @@ def _serialize_session(session: RosterBuilderSession) -> str:
     """Serialize a `RosterBuilderSession` to a JSON string for the
     `storm_roster_drafts` store. Captures the officer's intent only;
     members, rules, and the preset object are re-resolved at load
-    time so drafts stay valid across event weeks."""
+    time so drafts stay valid across event weeks.
+
+    `member_names_at_save` ships a tiny `{key: name}` lookup for the
+    members referenced by saved assignments / pairings / subs /
+    overrides — used by the reconciliation banner so dropped-member
+    warnings show "Alice" instead of "1001" when the member isn't
+    in the current pool to look up by key anymore (#240 follow-up).
+    """
     import json
     payload = {
         "version": _DRAFT_FORMAT_VERSION,
@@ -3560,6 +3676,31 @@ def _serialize_session(session: RosterBuilderSession) -> str:
         "below_floor_overrides_p3": sorted(session.below_floor_overrides_p3),
         "team_plan_applied": bool(session.team_plan_applied),
         "saved_for_event_date": session.event_date or "",
+    }
+    referenced_keys: set[str] = set()
+    for zone_dict in (
+        payload["assignments_p1"],
+        payload["assignments_p2"],
+        payload["assignments_p3"],
+    ):
+        for keys in zone_dict.values():
+            referenced_keys.update(keys)
+    for pair_dict in (
+        payload["paired_subs_p1"],
+        payload["paired_subs_p2"],
+        payload["paired_subs_p3"],
+    ):
+        for primary, sub in pair_dict.items():
+            referenced_keys.add(primary)
+            referenced_keys.add(sub)
+    referenced_keys.update(payload["subs"])
+    referenced_keys.update(payload["below_floor_overrides_p1"])
+    referenced_keys.update(payload["below_floor_overrides_p2"])
+    referenced_keys.update(payload["below_floor_overrides_p3"])
+    payload["member_names_at_save"] = {
+        k: session.members.get(k, {}).get("name") or k
+        for k in referenced_keys
+        if k
     }
     return json.dumps(payload)
 
@@ -3673,12 +3814,20 @@ def _apply_saved_state(
         session.selected_zone = sel_zone
     session.show_below_floor = bool(saved_payload.get("show_below_floor", False))
 
-    # Translate dropped keys to display names for the warning. Members
-    # that aren't in this week's pool can't be display-named cleanly —
-    # use the raw key as a fallback so officers see *something*.
+    # Translate dropped keys to display names for the warning. Prefer
+    # the names-at-save lookup the serializer shipped so officers see
+    # "Alice" instead of the raw Discord ID. Falls back to current
+    # `session.members` (when somehow a dropped key is still there)
+    # and the raw key as a last resort (#240 follow-up).
+    names_at_save = saved_payload.get("member_names_at_save") or {}
     dropped_names: list[str] = []
     for k in sorted(dropped_keys):
-        dropped_names.append(k)
+        name = names_at_save.get(k)
+        if not name:
+            current = session.members.get(k)
+            if current:
+                name = current.get("name")
+        dropped_names.append(name or k)
 
     # Staleness: if the saved draft was last saved for a different
     # event_date, surface it so the officer reviews before posting.
@@ -3718,7 +3867,13 @@ def _autosave_draft(session: RosterBuilderSession) -> None:
             session_json=_serialize_session(session),
             event_date=session.event_date,
         )
+        # Latched flag — once an autosave fails, the warning stays
+        # surfaced until the officer reopens the builder. A later
+        # successful save clears the flag so officers know their
+        # work is persisting again.
+        session.autosave_failed = False
     except Exception as e:
+        session.autosave_failed = True
         logger.warning(
             "[STORM DRAFT] autosave failed (guild=%s event=%s team=%s): %s",
             session.guild_id, session.event_type, session.team, e,

@@ -2266,6 +2266,38 @@ async def _open_team_setup(
             except (ValueError, KeyError):
                 preset_name = ""
             if preset_name:
+                # #240 follow-up: graceful handling when the saved
+                # preset was renamed or deleted. Without this check
+                # `open_roster_builder` bails on `load_preset` →
+                # None with a generic "no preset named X" error and
+                # the orphan draft sits there forever. Surface a
+                # clearer error + a discard button so the officer
+                # can clean up the stale row.
+                import storm_strategy as ss
+                preset = await asyncio.to_thread(
+                    ss.load_preset,
+                    officer_view.guild_id, officer_view.event_type,
+                    preset_name,
+                )
+                if preset is None:
+                    orphan_view = _OrphanDraftDiscardView(
+                        owner_id=inter.user.id,
+                        officer_view=officer_view, team=team,
+                    )
+                    await inter.response.send_message(
+                        f"📋 The saved draft for **Team {team}** "
+                        f"references a strategy preset named "
+                        f"**{preset_name}** which no longer exists "
+                        f"(it may have been renamed or deleted). "
+                        f"Discard the orphan draft and start fresh "
+                        f"with a current preset?",
+                        view=orphan_view, ephemeral=True,
+                    )
+                    try:
+                        orphan_view.message = await inter.original_response()
+                    except discord.HTTPException:
+                        orphan_view.message = None
+                    return
                 await inter.response.defer(ephemeral=False, thinking=True)
                 from storm_roster_builder import open_roster_builder
                 await open_roster_builder(
@@ -2438,6 +2470,81 @@ class _DiscardDraftConfirmView(discord.ui.View):
         try:
             await inter.response.edit_message(
                 content="↩️ Cancelled. Your saved draft is still there.",
+                view=self,
+            )
+        except discord.HTTPException:
+            pass
+        self.stop()
+
+
+class _OrphanDraftDiscardView(discord.ui.View):
+    """Shown when a Resume click hits a draft whose `selected_preset_name`
+    no longer exists (preset was renamed or deleted between save and
+    resume). #240 follow-up — without this the officer just sees a
+    generic "no preset named X" error and the orphan row sits there
+    forever, blocking future Resume clicks too."""
+
+    def __init__(
+        self, *, owner_id: int, officer_view: "OfficerView", team: str,
+    ):
+        super().__init__(timeout=120)
+        self.owner_id = owner_id
+        self.officer_view = officer_view
+        self.team = team
+        self.message: Optional[discord.Message] = None
+
+    async def interaction_check(self, inter: discord.Interaction) -> bool:
+        if inter.user.id != self.owner_id:
+            await inter.response.send_message(
+                "⛔ Only the officer who opened this can confirm.",
+                ephemeral=True,
+            )
+            return False
+        return True
+
+    @discord.ui.button(label="🗑️ Discard orphan draft",
+                       style=discord.ButtonStyle.danger)
+    async def discard(self, inter: discord.Interaction,
+                      _btn: discord.ui.Button):
+        if self.is_finished():
+            return
+        import config
+        try:
+            config.delete_roster_draft(
+                self.officer_view.guild_id,
+                self.officer_view.event_type,
+                self.team,
+            )
+        except Exception:
+            pass
+        for item in self.children:
+            item.disabled = True
+        try:
+            await inter.response.edit_message(
+                content=(
+                    f"🗑️ Orphan draft cleared. Click **Set up Team "
+                    f"{self.team}** on the signups view to start fresh."
+                ),
+                view=self,
+            )
+        except discord.HTTPException:
+            pass
+        self.stop()
+
+    @discord.ui.button(label="↩️ Keep draft (do nothing)",
+                       style=discord.ButtonStyle.secondary)
+    async def keep(self, inter: discord.Interaction,
+                   _btn: discord.ui.Button):
+        if self.is_finished():
+            return
+        for item in self.children:
+            item.disabled = True
+        try:
+            await inter.response.edit_message(
+                content=(
+                    "↩️ Draft kept. Resume won't work until the missing "
+                    "preset is restored or you discard the draft."
+                ),
                 view=self,
             )
         except discord.HTTPException:

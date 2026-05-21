@@ -1872,8 +1872,11 @@ class TestApprovePostButtonSplit:
         approve_text_row = next(
             r for l, r in rows_by_label.items() if "text only" in l
         )
-        cancel_row = next(r for l, r in rows_by_label.items() if "Cancel" in l)
-        assert approve_image_row == approve_text_row == cancel_row
+        # #240 follow-up renamed the structured-mode close button from
+        # "❌ Cancel" to "👋 Close (draft saved)" since the draft now
+        # persists and there's nothing to "cancel" anymore.
+        close_row = next(r for l, r in rows_by_label.items() if "Close" in l)
+        assert approve_image_row == approve_text_row == close_row
         assert approve_image_row == auto_row + 1
 
     def test_phase_aware_structured_keeps_single_approve_button(self):
@@ -4262,3 +4265,230 @@ class TestDraftSerialization:
         session.event_date = "2026-05-22"
         report = srb._apply_saved_state(session, payload)
         assert report["stale_event_date"] is None
+
+
+class TestDraftFollowupPolish:
+    """#240 follow-up: address the gaps caught during the design audit
+    — names instead of keys in the warning, skip initial-rebuild
+    autosave, autosave-failure flag surfacing in the embed."""
+
+    def test_serialize_emits_member_names_at_save(self):
+        members = {
+            "1001": {"key": "1001", "name": "Alice", "discord_id": "1001",
+                     "power": 412_000_000, "not_on_discord": False},
+            "1002": {"key": "1002", "name": "Bob", "discord_id": "1002",
+                     "power": 380_000_000, "not_on_discord": False},
+        }
+        session = _make_session(team="A", members=members)
+        session.assignments["Power Tower"] = ["1001"]
+        session.subs = ["1002"]
+        import json
+        payload = json.loads(srb._serialize_session(session))
+        assert payload["member_names_at_save"]["1001"] == "Alice"
+        assert payload["member_names_at_save"]["1002"] == "Bob"
+
+    def test_dropped_members_warning_uses_names_not_keys(self):
+        """The reconciliation banner shows display names instead of
+        the raw Discord IDs when names_at_save is shipped."""
+        # Saved draft references Carol (1003), who isn't in this
+        # week's pool.
+        payload = {
+            "version": 1,
+            "assignments_p1": {"Power Tower": ["1003"]},
+            "paired_subs_p1": {}, "subs": [],
+            "below_floor_overrides_p1": [],
+            "selected_phase": 1, "selected_zone": "",
+            "show_below_floor": False,
+            "saved_for_event_date": "2026-05-22",
+            "selected_preset_name": "Standard",
+            "member_names_at_save": {"1003": "Carol"},
+        }
+        current_members = {
+            "1001": {"key": "1001", "name": "Alice", "discord_id": "1001",
+                     "power": 412_000_000, "not_on_discord": False},
+        }
+        session = _make_session(team="A", members=current_members)
+        report = srb._apply_saved_state(session, payload)
+        # The warning shows the name, not the bare key.
+        assert "Carol" in report["dropped_members"]
+        assert "1003" not in report["dropped_members"]
+
+    def test_dropped_members_falls_back_to_key_when_no_names_dict(self):
+        """Older payloads (or hand-edited rows) without member_names_at_save
+        still surface — they just show keys as the fallback. No crash."""
+        payload = {
+            "version": 1,
+            "assignments_p1": {"Power Tower": ["1003"]},
+            "paired_subs_p1": {}, "subs": [],
+            "below_floor_overrides_p1": [],
+            "selected_phase": 1, "selected_zone": "",
+            "show_below_floor": False,
+            "saved_for_event_date": "2026-05-22",
+            "selected_preset_name": "Standard",
+            # No member_names_at_save.
+        }
+        current_members = {
+            "1001": {"key": "1001", "name": "Alice", "discord_id": "1001",
+                     "power": 412_000_000, "not_on_discord": False},
+        }
+        session = _make_session(team="A", members=current_members)
+        report = srb._apply_saved_state(session, payload)
+        # Falls back to the raw key.
+        assert "1003" in report["dropped_members"]
+
+    def test_initial_rebuild_skips_autosave(self):
+        """`RosterBuilderView.__init__` calls `_rebuild` once before
+        any user action; that initial save would write back the
+        freshly-loaded state with a current timestamp and create a
+        "draft" from a mere open. The flag-gated autosave skips it."""
+        from unittest.mock import patch
+        members = {
+            "1001": {"key": "1001", "name": "Alice", "discord_id": "1001",
+                     "power": 412_000_000, "not_on_discord": False},
+        }
+        session = _make_session(team="A", members=members)
+        session.event_date = "2026-05-22"  # force is_structured=True
+        with patch.object(srb, "_autosave_draft") as autosave_mock:
+            view = srb.RosterBuilderView(session)
+            # The constructor's _rebuild ran with the flag False,
+            # so autosave should NOT have fired yet.
+            assert autosave_mock.call_count == 0
+            # Simulate a user-action _refresh by setting the flag
+            # and triggering _rebuild directly.
+            view._user_action_since_open = True
+            view._rebuild()
+            assert autosave_mock.call_count == 1
+
+    def test_autosave_failure_latches_flag(self):
+        """When the autosave write raises, `session.autosave_failed`
+        becomes True so the next embed render can warn the officer."""
+        from unittest.mock import patch
+        members = {
+            "1001": {"key": "1001", "name": "Alice", "discord_id": "1001",
+                     "power": 412_000_000, "not_on_discord": False},
+        }
+        session = _make_session(team="A", members=members)
+        session.event_date = "2026-05-22"
+        assert session.autosave_failed is False
+        with patch("config.save_roster_draft", side_effect=Exception("disk full")):
+            srb._autosave_draft(session)
+        assert session.autosave_failed is True
+
+    def test_autosave_success_clears_flag(self):
+        """A subsequent successful autosave clears the latched failure
+        flag — officers see the warning until persistence recovers."""
+        from unittest.mock import patch
+        members = {
+            "1001": {"key": "1001", "name": "Alice", "discord_id": "1001",
+                     "power": 412_000_000, "not_on_discord": False},
+        }
+        session = _make_session(team="A", members=members)
+        session.event_date = "2026-05-22"
+        session.autosave_failed = True  # pre-existing failed state
+        with patch("config.save_roster_draft"):
+            srb._autosave_draft(session)
+        assert session.autosave_failed is False
+
+    def test_embed_surfaces_autosave_failed_warning(self):
+        """When `session.autosave_failed=True`, the embed description
+        leads with a prominent warning so officers know to screenshot
+        / be careful."""
+        members = {
+            "1001": {"key": "1001", "name": "Alice", "discord_id": "1001",
+                     "power": 412_000_000, "not_on_discord": False},
+        }
+        session = _make_session(team="A", members=members)
+        session.event_date = "2026-05-22"  # structured mode
+        session.autosave_failed = True
+        embed = srb._render_builder_embed(session)
+        assert "Couldn't save your draft" in embed.description
+
+    def test_embed_no_warning_when_autosave_healthy(self):
+        members = {
+            "1001": {"key": "1001", "name": "Alice", "discord_id": "1001",
+                     "power": 412_000_000, "not_on_discord": False},
+        }
+        session = _make_session(team="A", members=members)
+        session.event_date = "2026-05-22"
+        # autosave_failed defaults to False
+        embed = srb._render_builder_embed(session)
+        assert "Couldn't save your draft" not in (embed.description or "")
+
+    def test_embed_footer_shows_auto_save_hint_in_structured_mode(self):
+        members = {
+            "1001": {"key": "1001", "name": "Alice", "discord_id": "1001",
+                     "power": 412_000_000, "not_on_discord": False},
+        }
+        session = _make_session(team="A", members=members)
+        session.event_date = "2026-05-22"
+        embed = srb._render_builder_embed(session)
+        assert embed.footer.text is not None
+        assert "Auto-saving" in embed.footer.text
+        assert "Resume Team" in embed.footer.text
+
+    def test_embed_footer_skipped_in_free_tier(self):
+        """Free-tier (no event_date) doesn't persist drafts, so the
+        Auto-saving hint would be misleading. Footer left empty."""
+        members = {
+            "1001": {"key": "1001", "name": "Alice", "discord_id": "1001",
+                     "power": 412_000_000, "not_on_discord": False},
+        }
+        session = _make_session(team="A", members=members)
+        # event_date is None → free-tier
+        embed = srb._render_builder_embed(session)
+        # No footer text was set (or empty).
+        assert (embed.footer is None
+                or embed.footer.text is None
+                or "Auto-saving" not in embed.footer.text)
+
+    def test_embed_truncates_oversized_description(self):
+        """When the composed description exceeds Discord's 4096-char
+        ceiling, the embed truncates with a clear notice instead of
+        letting the Discord API reject the edit. Use a huge single
+        roster_error string since the embed only renders error[0]."""
+        members = {
+            "1001": {"key": "1001", "name": "Alice", "discord_id": "1001",
+                     "power": 412_000_000, "not_on_discord": False},
+        }
+        session = _make_session(team="A", members=members)
+        session.event_date = "2026-05-22"
+        # One enormous error string — pushes the joined description
+        # past 4096 single-handedly.
+        session.roster_errors = ["⚠️ " + "X" * 5000]
+        embed = srb._render_builder_embed(session)
+        assert len(embed.description) <= 4096
+        assert "too long to display" in embed.description
+
+    def test_structured_done_button_says_close_draft_saved(self):
+        """#240 follow-up: the structured-mode close button no longer
+        labels itself as 'Cancel' since the draft persists. New label
+        signals that closing doesn't lose work."""
+        from unittest.mock import patch
+        members = {
+            "1001": {"key": "1001", "name": "Alice", "discord_id": "1001",
+                     "power": 412_000_000, "not_on_discord": False},
+        }
+        session = _make_session(team="A", members=members)
+        session.event_date = "2026-05-22"  # structured mode
+        with patch.object(srb, "_autosave_draft"):
+            view = srb.RosterBuilderView(session)
+        labels = [getattr(c, "label", "") for c in view.children]
+        assert any("Close" in lab and "draft saved" in lab.lower()
+                   for lab in labels)
+        # Old "Cancel" label gone.
+        assert not any(lab == "❌ Cancel" for lab in labels)
+
+    def test_free_tier_done_button_unchanged(self):
+        """Free-tier (no draft persistence) keeps the original
+        `✅ Done` label — no draft to communicate about."""
+        from unittest.mock import patch
+        members = {
+            "1001": {"key": "1001", "name": "Alice", "discord_id": "1001",
+                     "power": 412_000_000, "not_on_discord": False},
+        }
+        session = _make_session(team="A", members=members)
+        # event_date None → free-tier
+        with patch.object(srb, "_autosave_draft"):
+            view = srb.RosterBuilderView(session)
+        labels = [getattr(c, "label", "") for c in view.children]
+        assert any("Done" in lab for lab in labels)

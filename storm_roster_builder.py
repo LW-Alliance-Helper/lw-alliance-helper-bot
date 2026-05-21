@@ -842,6 +842,13 @@ def _auto_fill_session(
         # members signed up. 0 in the normal 30-signup case; positive
         # when the alliance is short.
         "starters_short":           0,
+        # #238: subs that ended up in the available pool because their
+        # power was below the floor for every remaining unpaired
+        # primary's zone. Each entry is `{"name": ..., "power": int,
+        # "min_floor": int}` so the embed can surface a clear reason
+        # ("Couldn't pair Alice (60M) — power below 80M minimum for
+        # any remaining open positions").
+        "unpaired_subs_below_floor": [],
     }
 
     # Remember the officer's UI cursor; we mutate it while filling each
@@ -1050,6 +1057,48 @@ def _auto_fill_session(
                     f"{sub_m.get('name', chosen_sub)}"
                 )
 
+        # ── 4b. Unpaired-sub reasons (#238) ──
+        # After the pairing loop, identify subs whose power was below
+        # the floor for every still-unpaired primary's zone. Those
+        # subs end up in `session.subs` (the Available pool) with no
+        # explanation pre-#238; populate `unpaired_subs_below_floor`
+        # so the embed can surface "Couldn't pair Alice (60M) — power
+        # below the 80M minimum for any remaining open positions."
+        all_paired_sub_keys: set[str] = set()
+        for ph in session.iter_phases():
+            all_paired_sub_keys.update(
+                session.paired_subs_for_phase(ph).values()
+            )
+        unpaired_primary_floors: list[tuple[str, int]] = []
+        for ph in session.iter_phases():
+            ph_assigns = session.assignments_for_phase(ph)
+            ph_pairings = session.paired_subs_for_phase(ph)
+            for zone, primary_keys in ph_assigns.items():
+                for pk in primary_keys:
+                    if pk not in ph_pairings:
+                        floor = _effective_floor_for_zone(session, zone)
+                        if floor > 0:
+                            unpaired_primary_floors.append((zone, floor))
+        seen_unpaired: set[str] = set()
+        for sub_key in pairing_candidates:
+            if sub_key in all_paired_sub_keys:
+                continue
+            if sub_key in seen_unpaired:
+                continue
+            seen_unpaired.add(sub_key)
+            sub_m = session.members.get(sub_key, {})
+            sub_power = sub_m.get("power")
+            if sub_power is None:
+                continue  # Already in summary["gaps"].
+            if not unpaired_primary_floors:
+                continue  # No unpaired primaries — sub was just surplus.
+            if all(sub_power < floor for _, floor in unpaired_primary_floors):
+                summary["unpaired_subs_below_floor"].append({
+                    "name": sub_m.get("name", sub_key),
+                    "power": sub_power,
+                    "min_floor": min(f for _, f in unpaired_primary_floors),
+                })
+
     # ── 5. Spillover into session.subs ──
     # Everything power-known that didn't land in a zone or a paired-sub
     # seat ends up in the flat sub pool. In pool mode this is the only
@@ -1105,6 +1154,17 @@ def _format_zone_member_list(
     return ", ".join(names) if names else "(empty)"
 
 
+def _zone_minimum_suffix(session: RosterBuilderSession, zone_name: str) -> str:
+    """Build a `_(minimum XM)_` suffix when the zone has a power-band
+    floor > 0 (#238). Returns the empty string for zones without a
+    rule so unrestricted zones stay visually clean."""
+    from storm_strategy import format_power
+    floor = _effective_floor_for_zone(session, zone_name)
+    if floor and floor > 0:
+        return f" _(minimum {format_power(floor)})_"
+    return ""
+
+
 def _render_zone_line(session: RosterBuilderSession, zone_name: str) -> str:
     """Render one zone's row in the builder embed.
 
@@ -1117,6 +1177,11 @@ def _render_zone_line(session: RosterBuilderSession, zone_name: str) -> str:
     Post-#222: no status glyph (n/cap conveys state), no `←`
     selected-zone marker (the `Active zone:` line below shows it), no
     inline ` + sub <name>` or ⚠️ markers in the member list.
+
+    #238: when a zone has a power-band floor, append
+    ` _(minimum XM)_` to the zone name so officers can see the
+    requirement next to the zone instead of having to cross-reference
+    the Member Rules library.
     """
     z = session.preset.find_zone(zone_name)
     if z is None:
@@ -1124,9 +1189,10 @@ def _render_zone_line(session: RosterBuilderSession, zone_name: str) -> str:
 
     from storm_icons import zone_emoji_prefix
     icon = zone_emoji_prefix(zone_name)  # "" until #158 emojis upload.
+    min_suffix = _zone_minimum_suffix(session, zone_name)
 
     if session.is_phase_aware:
-        header = f"{icon}**{zone_name}**"
+        header = f"{icon}**{zone_name}**{min_suffix}"
 
         phase_lines: list[str] = []
         for p in session.iter_phases():
@@ -1144,7 +1210,10 @@ def _render_zone_line(session: RosterBuilderSession, zone_name: str) -> str:
     sel_cap = int(z.max_players)
     member_keys = session.assignments_for_phase(session.selected_phase).get(zone_name, [])
     names_part = _format_zone_member_list(session, member_keys, phase=session.selected_phase)
-    return f"{icon}**{zone_name}** ({sel_count}/{sel_cap}): {names_part}"
+    return (
+        f"{icon}**{zone_name}**{min_suffix} "
+        f"({sel_count}/{sel_cap}): {names_part}"
+    )
 
 
 def _render_builder_embed(session: RosterBuilderSession) -> discord.Embed:
@@ -1318,6 +1387,18 @@ def _render_builder_embed(session: RosterBuilderSession) -> discord.Embed:
         # current session state.
         paired = af.get("auto_paired_subs") or []
         lines.append(f"- Auto-paired subs: {len(paired)}")
+        # #238: subs whose power was below the floor for every
+        # remaining open primary zone get a dedicated warning line so
+        # officers can see *why* they stayed in the Available pool.
+        from storm_strategy import format_power as _fmt_pw
+        for entry in af.get("unpaired_subs_below_floor") or []:
+            lines.append(
+                f"- ⚠️ Couldn't auto-pair **{entry['name']}** "
+                f"({_fmt_pw(int(entry['power']))}). Their power "
+                f"doesn't meet the minimum requirement "
+                f"({_fmt_pw(int(entry['min_floor']))}) for any "
+                f"remaining open positions."
+            )
         # Decision #8 (#171): no truncation. Officers need every gap +
         # every conflict listed so they can make slotting decisions
         # manually. `(+N more)` hid exactly the entries they needed.

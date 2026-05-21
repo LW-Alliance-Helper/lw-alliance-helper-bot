@@ -2923,6 +2923,150 @@ class TestAutoFillSummarySplitsPairedFromPrimary:
         assert summary["auto_paired_subs"] == []
 
 
+class TestZoneMinimumSuffix:
+    """#238: zone names in the builder embed include `_(minimum XM)_`
+    when a power-band rule sets a floor, so officers can read the
+    requirement next to the zone instead of cross-referencing the
+    Member Rules library."""
+
+    def test_no_suffix_when_floor_is_zero(self):
+        # No power_band rule + zero preset floor → no suffix.
+        session = _make_session(team="A", members={
+            "1001": {"key": "1001", "name": "Alice", "discord_id": "1001",
+                     "power": 412_000_000, "not_on_discord": False},
+        })
+        suffix = srb._zone_minimum_suffix(session, "Mercenary Factory")
+        # Mercenary Factory has no preset floor in the default fixture.
+        assert suffix == "" or "minimum" not in suffix
+
+    def test_suffix_renders_when_power_band_floor_set(self):
+        import storm_member_rules as smr
+        band = smr.Rule(
+            rule_type="power_band", subject="80000000",
+            value="Power Tower", sub_type="",
+        )
+        session = _make_session(team="A", members={
+            "1001": {"key": "1001", "name": "Alice", "discord_id": "1001",
+                     "power": 412_000_000, "not_on_discord": False},
+        }, power_band_rules=[band])
+        suffix = srb._zone_minimum_suffix(session, "Power Tower")
+        assert suffix == " _(minimum 80M)_"
+
+    def test_render_zone_line_includes_suffix_flat_mode(self):
+        import storm_member_rules as smr
+        band = smr.Rule(
+            rule_type="power_band", subject="80000000",
+            value="Power Tower", sub_type="",
+        )
+        session = _make_session(team="A", members={
+            "1001": {"key": "1001", "name": "Alice", "discord_id": "1001",
+                     "power": 412_000_000, "not_on_discord": False},
+        }, power_band_rules=[band])
+        line = srb._render_zone_line(session, "Power Tower")
+        # Bold name, italic minimum, then (count/cap) and members.
+        assert "**Power Tower**" in line
+        assert "_(minimum 80M)_" in line
+        # Suffix sits between the zone name and the (n/cap) marker.
+        assert line.index("_(minimum 80M)_") < line.index("(0/")
+
+
+class TestUnpairedSubBelowFloor:
+    """#238: when a sub stays in the Available pool because their power
+    is below the floor for every remaining unpaired primary's zone,
+    the auto-fill summary surfaces the reason so officers can see why
+    instead of guessing at a bug."""
+
+    @staticmethod
+    def _short_fixture(weak_power: int) -> dict[str, dict]:
+        """4 strong starters + 1 weak sub. Small enough that no
+        unplaced-starter overflow muddies the pairing test (all
+        starters fit in the single Power Tower zone). The 5th member
+        becomes the sub pool's only entry."""
+        members = {}
+        for i in range(4):
+            key = f"100{i:02d}"
+            members[key] = {
+                "key": key, "name": f"S{i:02d}", "discord_id": key,
+                "power": 400_000_000 - i * 10_000_000,
+                "not_on_discord": False,
+            }
+        members["10004"] = {
+            "key": "10004", "name": "Weak", "discord_id": "10004",
+            "power": weak_power, "not_on_discord": False,
+        }
+        return members
+
+    def test_unpaired_sub_below_floor_listed_with_reason(self):
+        import storm_member_rules as smr
+        band = smr.Rule(
+            rule_type="power_band", subject="80000000",
+            value="Power Tower", sub_type="",
+        )
+        zones = [
+            ss.ZoneRow(zone="Power Tower", max_players=4,
+                       min_power_a=80_000_000, priority=1),
+        ]
+        members = self._short_fixture(weak_power=50_000_000)
+        session = _make_session(
+            team="A", members=members, preset_zones=zones,
+            power_band_rules=[band], sub_mode="paired",
+        )
+        summary = srb._auto_fill_session(session)
+        # The weak sub couldn't pair (below 80M floor for Power Tower).
+        # All 4 primaries stay unpaired (no eligible sub), and the
+        # weak sub is below every unpaired primary's floor.
+        names = [e["name"] for e in summary.get("unpaired_subs_below_floor", [])]
+        assert "Weak" in names, (
+            "Sub below the floor for every remaining primary's zone "
+            "should be surfaced in unpaired_subs_below_floor"
+        )
+
+    def test_no_entry_when_sub_meets_floor(self):
+        """If the sub's power meets the floor for an unpaired primary,
+        they don't get flagged as 'below floor' — they'd actually
+        have paired up, so they aren't in the unpaired pool to begin
+        with."""
+        import storm_member_rules as smr
+        band = smr.Rule(
+            rule_type="power_band", subject="80000000",
+            value="Power Tower", sub_type="",
+        )
+        zones = [
+            ss.ZoneRow(zone="Power Tower", max_players=4,
+                       min_power_a=80_000_000, priority=1),
+        ]
+        # Weak's power is above 80M floor — should pair, not flag.
+        members = self._short_fixture(weak_power=100_000_000)
+        session = _make_session(
+            team="A", members=members, preset_zones=zones,
+            power_band_rules=[band], sub_mode="paired",
+        )
+        summary = srb._auto_fill_session(session)
+        assert summary["unpaired_subs_below_floor"] == []
+
+    def test_pool_mode_skips_unpaired_check(self):
+        """Pool mode never pairs anyone, so the `unpaired_subs_below_floor`
+        list stays empty even when subs are below zone floors."""
+        import storm_member_rules as smr
+        band = smr.Rule(
+            rule_type="power_band", subject="80000000",
+            value="Power Tower", sub_type="",
+        )
+        zones = [
+            ss.ZoneRow(zone="Power Tower", max_players=4,
+                       min_power_a=80_000_000, priority=1),
+        ]
+        members = self._short_fixture(weak_power=50_000_000)
+        session = _make_session(
+            team="A", members=members, preset_zones=zones,
+            power_band_rules=[band], sub_mode="pool",
+        )
+        summary = srb._auto_fill_session(session)
+        # Pool mode populates session.subs but doesn't do pairing, so
+        # no floor-blocked entries.
+        assert summary["unpaired_subs_below_floor"] == []
+
+
 class TestAutoFillSummaryRenderingNoTruncation:
     """Decision #8 (#171): the auto-fill summary lists every gap +
     every conflict — no `(+N more)` truncation. Officers need the full

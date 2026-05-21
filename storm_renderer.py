@@ -390,7 +390,12 @@ _CS_LAYOUT = EventLayout(
             text=Box(22.24, 333.97, 127.34, 166.65),
             icon=Box(150.62, 331.22, 96, 96),
         ),
-        "Defense System 1": ZoneLayout(
+        # Canonical CS map placement: Defense System I sits on the
+        # LEFT side and Defense System II on the RIGHT (tester report
+        # 2026-05-21). Pre-2026-05-21 the names were swapped relative
+        # to the in-game map, which surfaced as the wrong building name
+        # next to each pill on the rendered PNG.
+        "Defense System 2": ZoneLayout(
             title=Box(797.71, 313.41, 223.34, 16.79),
             text=Box(893.71, 333.97, 127.34, 166.65),
             icon=Box(797.71, 331.22, 96, 96),
@@ -401,7 +406,7 @@ _CS_LAYOUT = EventLayout(
             icon=Box(416.05, 348.75, 96, 96),
         ),
         # Mid-lower
-        "Defense System 2": ZoneLayout(
+        "Defense System 1": ZoneLayout(
             title=Box(22.24, 537.41, 223.34, 16.79),
             text=Box(22.24, 557.83, 127.34, 166.65),
             icon=Box(150.62, 555.22, 96, 96),

@@ -1161,7 +1161,31 @@ def _draw_zone(canvas, zlayout: ZoneLayout, canonical: str,
     # vertical headroom between adjacent zones in the layout grid).
     # Central zones cap at `max_rows` per the spec (7). Headers don't
     # count toward the cap; only content rows do.
-    max_rows = zlayout.max_rows if zlayout.max_rows is not None else _OUTER_MAX_ROWS
+    nominal_max_rows = (
+        zlayout.max_rows if zlayout.max_rows is not None else _OUTER_MAX_ROWS
+    )
+
+    # #236 follow-up: the `nominal_max_rows` ceiling was sized assuming
+    # Inter-sized rows (~18 px at 8 pt). CJK / Arabic fallback fonts
+    # render at ~24 px per row at the same em, so a 7-row CJK pill is
+    # ~50 px taller than a 7-row Inter pill and overlaps the next
+    # zone's label below it. Scale the cap down so the pixel height
+    # ceiling stays roughly constant across scripts. Overflow members
+    # drop into the existing post-Approve ephemeral warning path.
+    inter_row_h = _font_row_height(font_regular)
+    actual_max_row_h = inter_row_h
+    for block in phase_blocks:
+        for name in (block.members or []):
+            actual_max_row_h = max(
+                actual_max_row_h,
+                _font_row_height(_font_for_text(name, font_regular.size)),
+            )
+    if actual_max_row_h > inter_row_h and nominal_max_rows > 0:
+        max_rows = max(
+            1, int(nominal_max_rows * inter_row_h / actual_max_row_h),
+        )
+    else:
+        max_rows = nominal_max_rows
 
     lines = _build_flow_lines(
         phase_blocks, font_regular,

@@ -1325,11 +1325,21 @@ def _draw_subs_section(canvas, layout: EventLayout,
     else:
         fm = _try_font(flat_font_px, bold=False)
         fm_bold = _try_font(flat_font_px, bold=True)
-    # Subs panel padding matches the design source (#235): 14 px left +
-    # right, 12 px top + bottom. At SCALE=2 that's 7 SVG horizontal,
-    # 6 SVG vertical.
+    # Subs panel padding (#235 + 2026-05-21 follow-up):
+    # - 14 px left + right (design source) — `pad_x`
+    # - 12 px bottom (design source) — `pad_y_bottom`
+    # - 18 px top — `pad_y_top`. The design source's 12 px top looked
+    #   too tight under the "Subs" header pill once the renderer was
+    #   accommodating real font metrics; paired-mode top padding from
+    #   the layout (~42 px before the Primary/Sub header) sets the
+    #   visual benchmark, so flat-mode steps up a notch from design
+    #   to feel less cramped.
     pad_x = max(8, _s(7))
-    pad_y = max(6, _s(6))
+    pad_y_top = max(9, _s(9))
+    pad_y_bottom = max(6, _s(6))
+    # Paired mode only uses pad_y for the bottom-clipping check; flat
+    # mode uses pad_y_top + pad_y_bottom asymmetrically.
+    pad_y = pad_y_bottom
     line_gap = max(2, _s(3))
     x0, y0, x1, _y1_full = _s_box(content_box)
 
@@ -1380,7 +1390,7 @@ def _draw_subs_section(canvas, layout: EventLayout,
     else:
         flat_count = len([s for s in roster.subs])
         if flat_count == 0:
-            content_h_px = 2 * pad_y + _font_row_height(fm)
+            content_h_px = pad_y_top + pad_y_bottom + _font_row_height(fm)
         else:
             # Take the max row height across every sub name so a CJK
             # row anywhere in the list grows the pill instead of
@@ -1393,10 +1403,10 @@ def _draw_subs_section(canvas, layout: EventLayout,
                 ),
             )
             content_h_px = (
-                pad_y
+                pad_y_top
                 + flat_count * (max_row_h + line_gap)
                 - line_gap
-                + pad_y
+                + pad_y_bottom
             )
     # Never grow beyond the layout's default; only shrink.
     content_h_px = min(content_h_px, _y1_full - y0)
@@ -1418,7 +1428,9 @@ def _draw_subs_section(canvas, layout: EventLayout,
 
     layer = Image.new("RGBA", canvas.size, (0, 0, 0, 0))
     d = ImageDraw.Draw(layer)
-    cy = y0 + pad_y
+    # Flat mode starts content at the asymmetric top padding; paired
+    # mode uses layout-defined offsets and ignores `cy`.
+    cy = y0 + pad_y_top
 
     if use_pairs:
         # Table: "Primary" / "Sub" headers, thick underline, one row per

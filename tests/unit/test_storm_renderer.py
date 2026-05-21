@@ -425,6 +425,87 @@ class TestMapBasedRender:
         assert png[:8] == b"\x89PNG\r\n\x1a\n"
 
 
+class TestFontFallbackForNonLatinNames:
+    """#236: Inter covers Latin / Cyrillic / Greek; CJK + Arabic
+    player names need bundled Noto fallback fonts. The script-detection
+    helper picks the right family per string."""
+
+    def test_latin_name_keeps_inter(self):
+        assert sr._script_family_for_text("Alice") == "inter"
+        assert sr._script_family_for_text("Member 5") == "inter"
+        assert sr._script_family_for_text("José") == "inter"  # Spanish
+        assert sr._script_family_for_text("João") == "inter"  # Portuguese
+        assert sr._script_family_for_text("Müller") == "inter"  # German
+        assert sr._script_family_for_text("") == "inter"  # empty edge
+
+    def test_cyrillic_name_keeps_inter(self):
+        # Inter covers Cyrillic — Russian player names render on Inter
+        # directly, no fallback needed.
+        assert sr._script_family_for_text("Алексей") == "inter"
+
+    def test_korean_name_picks_cjk(self):
+        # Hangul Syllables block.
+        assert sr._script_family_for_text("김민준") == "cjk"
+        assert sr._script_family_for_text("이서연") == "cjk"
+
+    def test_japanese_name_picks_cjk(self):
+        # Hiragana + Katakana + Kanji.
+        assert sr._script_family_for_text("たなか") == "cjk"
+        assert sr._script_family_for_text("タナカ") == "cjk"
+        assert sr._script_family_for_text("田中") == "cjk"
+
+    def test_chinese_name_picks_cjk(self):
+        # CJK Unified Ideographs.
+        assert sr._script_family_for_text("王伟") == "cjk"
+        assert sr._script_family_for_text("张三") == "cjk"
+
+    def test_arabic_name_picks_arabic(self):
+        assert sr._script_family_for_text("محمد") == "arabic"
+        assert sr._script_family_for_text("علي") == "arabic"
+
+    def test_mixed_latin_and_cjk_picks_cjk(self):
+        # Mixed strings (e.g. "한국 Member" or "Member 김") need the CJK
+        # font for the whole string so the non-Latin characters don't
+        # show as .notdef boxes. CJK fonts also render Latin (just with
+        # a slightly different aesthetic).
+        assert sr._script_family_for_text("한국 Member") == "cjk"
+        assert sr._script_family_for_text("Member 김") == "cjk"
+
+    def test_font_loader_returns_a_font(self):
+        # Smoke test the actual loader so a font-file-missing scenario
+        # would surface here rather than crashing render().
+        from PIL.ImageFont import FreeTypeFont
+        f = sr._font_for_text("김민준", 16)
+        # Either the Noto fallback loaded, or it gracefully fell back
+        # to Inter (the catch path inside `_font_for_text`).
+        assert f is not None
+        # The Inter latin font also returns; both should be FreeTypeFont
+        # or load_default (PIL's fallback for missing files).
+        f2 = sr._font_for_text("Alice", 16)
+        assert f2 is not None
+
+    def test_render_with_mixed_script_names_doesnt_crash(self):
+        """Smoke: a roster with Korean, Japanese, Chinese, Arabic, and
+        Latin names renders without raising. The exact pixels aren't
+        tested (visual review concern), but PIL must accept every
+        glyph via the right font family."""
+        roster = sr.RosterData(
+            title="Desert Storm — Mixed",
+            zones=[
+                sr.RosterZone(name="Power Tower", max_players=4, members=[
+                    "Alice", "김민준", "田中", "محمد",
+                ]),
+                sr.RosterZone(name="Nuclear Silo", max_players=4, members=[
+                    "José", "王伟", "타나카", "علي",
+                ]),
+            ],
+            subs=["Алексей", "한국 Member"],
+            event_type="DS",
+        )
+        png = sr.render(roster)
+        assert png[:8] == b"\x89PNG\r\n\x1a\n"
+
+
 class TestRosterFromSessionStructuredFields:
     """#140 plumbs new structured fields (event_type, preset_name,
     team_label, event_date_label, phase_count) so the map renderer

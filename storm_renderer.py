@@ -96,6 +96,15 @@ class RosterData:
 _HERE = os.path.dirname(os.path.abspath(__file__))
 _INTER_REGULAR = os.path.join(_HERE, "assets", "fonts", "Inter-Regular.ttf")
 _INTER_BOLD = os.path.join(_HERE, "assets", "fonts", "Inter-Bold.ttf")
+# Fallback fonts for non-Latin scripts (#236). Inter covers Latin +
+# Cyrillic + Greek; these handle CJK and Arabic player names that
+# would otherwise render as `.notdef` tofu boxes.
+_NOTO_CJK_REGULAR = os.path.join(
+    _HERE, "assets", "fonts", "NotoSansCJKsc-Regular.otf",
+)
+_NOTO_ARABIC_REGULAR = os.path.join(
+    _HERE, "assets", "fonts", "NotoSansArabic-Regular.ttf",
+)
 _ICONS_DS_DIR = os.path.join(_HERE, "assets", "storm_icons", "ds")
 _ICONS_CS_DIR = os.path.join(_HERE, "assets", "storm_icons", "cs")
 
@@ -630,6 +639,80 @@ def _try_font(size: int, bold: bool = False):
     return ImageFont.load_default()
 
 
+# Unicode ranges that need a fallback font because Inter's coverage is
+# Latin / Cyrillic / Greek only. Order matters when the same string
+# contains multiple scripts — the first matching range wins.
+_FALLBACK_SCRIPT_RANGES = (
+    # CJK Unified Ideographs (Chinese + Japanese Kanji)
+    (0x4E00, 0x9FFF, "cjk"),
+    # CJK Extension A
+    (0x3400, 0x4DBF, "cjk"),
+    # Hiragana + Katakana (Japanese)
+    (0x3040, 0x30FF, "cjk"),
+    # Hangul Syllables (Korean)
+    (0xAC00, 0xD7AF, "cjk"),
+    # Hangul Jamo (Korean component letters)
+    (0x1100, 0x11FF, "cjk"),
+    # Halfwidth and Fullwidth Forms (CJK punctuation / fullwidth Latin)
+    (0xFF00, 0xFFEF, "cjk"),
+    # CJK Symbols and Punctuation
+    (0x3000, 0x303F, "cjk"),
+    # Arabic
+    (0x0600, 0x06FF, "arabic"),
+    # Arabic Supplement
+    (0x0750, 0x077F, "arabic"),
+    # Arabic Presentation Forms-A
+    (0xFB50, 0xFDFF, "arabic"),
+    # Arabic Presentation Forms-B
+    (0xFE70, 0xFEFF, "arabic"),
+)
+
+
+def _script_family_for_text(text: str) -> str:
+    """Return `"inter"` if Inter can render every character in `text`,
+    or the fallback family name (`"cjk"` / `"arabic"`) for the first
+    out-of-coverage character. Used by `_font_for_text` so a member
+    name in Korean or Chinese picks the Noto fallback while a Latin
+    name stays on Inter."""
+    if not text:
+        return "inter"
+    for ch in text:
+        cp = ord(ch)
+        for lo, hi, family in _FALLBACK_SCRIPT_RANGES:
+            if lo <= cp <= hi:
+                return family
+    return "inter"
+
+
+def _font_for_text(text: str, size: int, *, bold: bool = False):
+    """Pick a font capable of rendering `text` (#236). Latin /
+    Cyrillic / Greek stay on Inter (the project font); CJK and Arabic
+    fall back to the bundled Noto fonts.
+
+    Only `bold=True` for Inter is supported today — the bundled Noto
+    fallbacks ship Regular only since CJK/Arabic bold is rare in the
+    bot's render output and the Bold weights would each double the
+    asset size. A `bold=True` request for a non-Latin string returns
+    the Regular weight of the fallback rather than the missing Bold
+    file.
+    """
+    from PIL import ImageFont
+    family = _script_family_for_text(text)
+    if family == "inter":
+        return _try_font(size, bold=bold)
+    if family == "cjk":
+        fallback_path = _NOTO_CJK_REGULAR
+    else:  # arabic
+        fallback_path = _NOTO_ARABIC_REGULAR
+    try:
+        return ImageFont.truetype(fallback_path, size)
+    except (OSError, IOError):
+        # Fallback file missing (e.g. partial deployment) — render
+        # with Inter; the characters that need the fallback will show
+        # as .notdef boxes but the rest of the post still goes through.
+        return _try_font(size, bold=bold)
+
+
 def _draw_header(draw, layout: EventLayout, roster: RosterData) -> None:
     """Header strip: charcoal bar with left / center / right text.
     Left text combines the event name with the preset name when
@@ -979,15 +1062,20 @@ def _draw_flow_lines(draw, anchor: Box, lines: list[dict],
                 # after the previous, so packed names have breathing
                 # room rather than running together at 8 pt.
                 x = x0 + pad_x + indent + idx * (slot_width_px + col_gap)
-                draw.text((x, cy), name, fill=_TEXT_MUTED, font=font_regular)
+                # Per-name font picker so CJK / Arabic player names
+                # render with their fallback fonts (#236) instead of
+                # the Inter `.notdef` tofu box.
+                name_font = _font_for_text(name, font_regular.size)
+                draw.text((x, cy), name, fill=_TEXT_MUTED, font=name_font)
             cy += font_regular.size
         elif line["type"] == "long":
             if prev_type == "header":
                 cy += header_gap
             elif prev_type is not None:
                 cy += line_gap
+            name_font = _font_for_text(line["name"], font_regular.size)
             draw.text((x0 + pad_x + indent, cy), line["name"],
-                      fill=_TEXT_MUTED, font=font_regular)
+                      fill=_TEXT_MUTED, font=name_font)
             cy += font_regular.size
         elif line["type"] == "empty":
             if prev_type == "header":
@@ -1259,10 +1347,14 @@ def _draw_subs_section(canvas, layout: EventLayout,
             row_y = row1_y + i * row_step_px
             if row_y + fm.size > y1 - pad_y:
                 break
+            # Per-name font picker so CJK / Arabic player names render
+            # with their fallback fonts (#236) instead of tofu boxes.
+            primary_font = _font_for_text(primary, fm.size)
+            sub_font = _font_for_text(sub, fm.size)
             d.text((primary_x, row_y), primary,
-                   fill=_TEXT_DARK, font=fm)
+                   fill=_TEXT_DARK, font=primary_font)
             d.text((sub_x, row_y), sub,
-                   fill=_TEXT_DARK, font=fm)
+                   fill=_TEXT_DARK, font=sub_font)
             if i < len(pairs_list) - 1:
                 div_y = row_y + _s(layout.pairs_row_step * 0.625)
                 if div_y < y1 - 4:
@@ -1277,7 +1369,9 @@ def _draw_subs_section(canvas, layout: EventLayout,
         for name in roster.subs:
             if cy + fm.size > y1 - pad_y:
                 break
-            d.text((x0 + pad_x + 4, cy), name, fill=_TEXT_DARK, font=fm)
+            # Per-name font picker for CJK / Arabic fallback (#236).
+            name_font = _font_for_text(name, fm.size)
+            d.text((x0 + pad_x + 4, cy), name, fill=_TEXT_DARK, font=name_font)
             cy += fm.size + line_gap
 
     canvas.alpha_composite(layer)

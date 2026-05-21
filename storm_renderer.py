@@ -725,11 +725,11 @@ class _OverflowEntry:
 # Padding inside the text pill. Top/bottom is slightly larger than
 # left/right so the pill has visual breathing room without the
 # horizontal slot grid feeling cramped.
-_PILL_PAD_X_SVG = 6.0
-# Bumped 7.0 → 9.0 in #235 — tester noted the last row in each pill sat
-# too close to the bottom edge. 9 gives noticeable breathing room
-# without making short pills look chunky.
-_PILL_PAD_Y_SVG = 9.0
+# Pill padding matches the design source (#235): 14 px left + right,
+# 12 px top + bottom. At SCALE=2 that's 7 SVG horizontal, 6 SVG
+# vertical.
+_PILL_PAD_X_SVG = 7.0
+_PILL_PAD_Y_SVG = 6.0
 _PILL_LINE_GAP_SVG = 2.0
 _PILL_HEADER_GAP_SVG = 3.0      # gap between a Stage header and its first row
 _PILL_STAGE_GAP_SVG = 6.0       # gap between end of Stage 1's rows and Stage 2's header
@@ -1172,19 +1172,20 @@ def _draw_subs_section(canvas, layout: EventLayout,
     else:
         fm = _try_font(flat_font_px, bold=False)
         fm_bold = _try_font(flat_font_px, bold=True)
-    pad_x = max(8, _s(6))
-    # Bumped 6 → 9 in #235 — tester noted the subs pill was cramped at
-    # the bottom. `pad_y` is used at both the top and the bottom of the
-    # flat-mode pill, so a single bump improves breathing room evenly.
-    pad_y = max(9, _s(9))
+    # Subs panel padding matches the design source (#235): 14 px left +
+    # right, 12 px top + bottom. At SCALE=2 that's 7 SVG horizontal,
+    # 6 SVG vertical.
+    pad_x = max(8, _s(7))
+    pad_y = max(6, _s(6))
     line_gap = max(2, _s(3))
     x0, y0, x1, _y1_full = _s_box(content_box)
 
     # #228 follow-up: shrink the subs pill vertically when it isn't
     # completely full, matching the dynamic-height behaviour of every
     # other pill on the canvas. Pairs mode height comes from the
-    # last-row offset + a row-step tail; flat mode height comes from
-    # N rows of font + line gap + top/bottom padding.
+    # last-row offset + a fixed 12 px tail (design source's bottom
+    # padding); flat mode comes from N rows of font + line gap + top
+    # and bottom padding.
     if use_pairs:
         pairs_count = len(roster.paired_subs)
         if pairs_count == 0:
@@ -1195,11 +1196,10 @@ def _draw_subs_section(canvas, layout: EventLayout,
                 layout.pairs_row1_offset_y
                 + (pairs_count - 1) * layout.pairs_row_step
             )
-            # Bumped tail multiplier 0.55 → 0.85 in #235 so the last
-            # paired row has visible breathing room above the pill's
-            # rounded bottom corner.
-            tail_svg = layout.pairs_row_step * 0.85
-            content_h_px = _s(last_row_top_svg + tail_svg)
+            # Tail = design source's 12 px bottom padding. Replaces the
+            # row-step multiplier (#235) which produced ~11 px and read
+            # as cramped to the tester.
+            content_h_px = _s(last_row_top_svg) + _s(6)
     else:
         flat_count = len([s for s in roster.subs])
         if flat_count == 0:

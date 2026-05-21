@@ -284,7 +284,8 @@ class TrainCog(commands.Cog):
         else:
             import premium
             window_days = await premium.get_limit(
-                "train_log_days", interaction.guild_id, interaction=interaction,
+                "train_log_days", interaction.guild_id,
+                interaction=interaction, bot=interaction.client,
             ) or 30
             cutoff = today - timedelta(days=window_days)
             recent = []

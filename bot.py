@@ -26,7 +26,7 @@ DISCORD_TOKEN = os.getenv("DISCORD_TOKEN")
 # Semantic versioning per https://semver.org. Bump on each release; the
 # CHANGELOG.md file is the human-readable record of what each version
 # changed.
-__version__ = "1.3.0"
+__version__ = "1.3.3"
 
 # ── Sentry error reporting ───────────────────────────────────────────────────
 #
@@ -721,6 +721,20 @@ async def on_message(message):
     await bot.process_commands(message)
 
 
+@bot.event
+async def on_command_error(ctx, error):
+    # This bot is slash-only — `command_prefix="!"` exists only because
+    # `commands.Bot` requires one. Every `!something` typed in a server
+    # the bot shares with Dyno/MEE6/etc. (which also use `!`) dispatches
+    # here and, with no matching command, logs at ERROR by default —
+    # filling Railway logs and Sentry with noise. Swallow CommandNotFound
+    # specifically; re-raise anything else so a future prefix command's
+    # bugs still surface.
+    if isinstance(error, commands.CommandNotFound):
+        return
+    raise error
+
+
 # ── /growth command group ─────────────────────────────────────────────────────
 #
 # `/growth overview` keeps the embed + action buttons leadership has
@@ -1208,7 +1222,7 @@ async def events_log_slash(interaction: discord.Interaction):
         )
         return
 
-    days   = await premium.get_limit("events_log_days", interaction.guild_id, interaction=interaction)
+    days   = await premium.get_limit("events_log_days", interaction.guild_id, interaction=interaction, bot=bot)
     days   = days or 30  # safety; LIMITS always returns int here
     cutoff = datetime.now(tz=timezone.utc) - timedelta(days=days)
     matches = []

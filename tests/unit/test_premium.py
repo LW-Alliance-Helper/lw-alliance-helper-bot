@@ -83,10 +83,11 @@ def _isolate_premium_env(monkeypatch, temp_db):
     _premium.clear_cache()
 
 
-def _make_entitlement(sku_id: int, deleted: bool = False):
+def _make_entitlement(sku_id: int, deleted: bool = False, ends_at=None):
     ent = MagicMock()
     ent.sku_id  = sku_id
     ent.deleted = deleted
+    ent.ends_at = ends_at
     return ent
 
 
@@ -241,10 +242,13 @@ class TestAssignmentLayeredIsPremium:
     @pytest.mark.asyncio
     async def test_no_sku_means_not_premium_even_with_assignment(self, fresh_premium):
         """Without PREMIUM_SKU_ID, user_has_active_subscription returns
-        False, so the assigned guild can't resolve premium."""
+        None (transient), so is_premium returns False without caching.
+        The next call with a configured environment can still resolve True."""
         fresh_premium.assign(555000111, TEST_GUILD_ID)
         bot = MagicMock()
         assert await fresh_premium.is_premium(TEST_GUILD_ID, bot=bot) is False
+        # Cache must NOT have been poisoned by the SKU-missing path.
+        assert fresh_premium._cache_get(TEST_GUILD_ID) is None
 
 
 # ── Caching of is_premium / user-subscription ────────────────────────────────
@@ -323,6 +327,193 @@ class TestPremiumCaching:
         finally:
             _premium.clear_cache()
 
+    @pytest.mark.asyncio
+    async def test_bot_none_does_not_poison_per_guild_cache(self, monkeypatch):
+        """Regression: a caller that doesn't pass `bot=` must not cache
+        False at the per-guild level. If it did, every subsequent caller
+        (including the one that DOES pass bot correctly) would hit that
+        False for the full 5-minute TTL and lock the subscriber out.
+        """
+        monkeypatch.setenv("PREMIUM_SKU_ID", "12345")
+        import premium as _premium
+        importlib.reload(_premium)
+        try:
+            _premium.assign(555000111, TEST_GUILD_ID)
+
+            # First call: no bot, simulating a setup_cog or background loop.
+            # Returns False (we can't verify the subscription) but must
+            # NOT cache that False.
+            assert await _premium.is_premium(TEST_GUILD_ID) is False
+
+            # Second call: with bot, simulating /sync_members. The cache
+            # must have been left alone so this call hits the real lookup
+            # and returns True.
+            async def fake_iter(**kw):
+                yield _make_entitlement(sku_id=12345)
+
+            bot = MagicMock()
+            bot.entitlements = MagicMock(side_effect=lambda **kw: fake_iter(**kw))
+
+            assert await _premium.is_premium(TEST_GUILD_ID, bot=bot) is True
+        finally:
+            _premium.clear_cache()
+
+    @pytest.mark.asyncio
+    async def test_interaction_client_supplies_bot_when_kwarg_omitted(self, monkeypatch):
+        """is_premium pulls bot off interaction.client when bot= isn't
+        passed, so the 11 setup_cog call sites that pass only interaction=
+        still get a real entitlement check.
+        """
+        monkeypatch.setenv("PREMIUM_SKU_ID", "12345")
+        import premium as _premium
+        importlib.reload(_premium)
+        try:
+            _premium.assign(555000111, TEST_GUILD_ID)
+
+            async def fake_iter(**kw):
+                yield _make_entitlement(sku_id=12345)
+
+            bot = MagicMock()
+            bot.entitlements = MagicMock(side_effect=lambda **kw: fake_iter(**kw))
+
+            interaction = MagicMock()
+            interaction.client = bot
+
+            # Caller passes only interaction, not bot. Should still resolve
+            # to True because is_premium falls back to interaction.client.
+            assert await _premium.is_premium(TEST_GUILD_ID, interaction=interaction) is True
+        finally:
+            _premium.clear_cache()
+
+
+# ── Silent-fallback counters ──────────────────────────────────────────────────
+
+class TestSilentFallbackCounts:
+    """Each silent-fallback path (no SKU, no bot, no assignment table)
+    logs once per process and increments a counter on every subsequent
+    hit. The counters are the observability surface that catches
+    regressions where a refactor drops bot= on a premium call site.
+    """
+
+    @pytest.mark.asyncio
+    async def test_no_bot_increments_counter_silently_after_first_log(
+        self, monkeypatch, capsys,
+    ):
+        """The first hit prints a [PREMIUM] line; subsequent hits
+        increment the counter silently."""
+        # SKU set so the no_bot branch is the one we actually hit.
+        monkeypatch.setenv("PREMIUM_SKU_ID", "12345")
+        import premium as _premium
+        importlib.reload(_premium)
+        try:
+            _premium.assign(555000111, TEST_GUILD_ID)
+            # First call: warning fires, counter goes 0 -> 1.
+            await _premium.is_premium(TEST_GUILD_ID, bot=None)
+            first_out = capsys.readouterr().out
+            assert "silent fallback (no_bot)" in first_out
+            assert _premium.silent_fallback_counts()["no_bot"] == 1
+
+            # Second + third calls: no new output, counter keeps climbing.
+            await _premium.is_premium(TEST_GUILD_ID, bot=None)
+            await _premium.is_premium(TEST_GUILD_ID, bot=None)
+            later_out = capsys.readouterr().out
+            assert "silent fallback (no_bot)" not in later_out
+            assert _premium.silent_fallback_counts()["no_bot"] == 3
+        finally:
+            _premium.clear_cache()
+
+    @pytest.mark.asyncio
+    async def test_no_sku_path_tracks_separately(self, fresh_premium):
+        """Each fallback reason has its own counter so the diagnostic
+        can distinguish "we forgot to plumb bot=" from "Discord SKU
+        was never configured."
+        """
+        fresh_premium.assign(555000111, TEST_GUILD_ID)
+        await fresh_premium.is_premium(TEST_GUILD_ID, bot=MagicMock())
+        counts = fresh_premium.silent_fallback_counts()
+        # SKU was never set, so the no_sku path ran. bot was provided
+        # but the no_bot path wasn't hit.
+        assert counts["no_sku"] >= 1
+        assert counts["no_bot"] == 0
+
+    def test_snapshot_is_a_copy_not_live_view(self, fresh_premium):
+        """`silent_fallback_counts()` must hand back a copy — a caller
+        mutating the dict shouldn't poison the internal counters."""
+        snapshot = fresh_premium.silent_fallback_counts()
+        snapshot["no_bot"] = 9999
+        assert fresh_premium.silent_fallback_counts()["no_bot"] == 0
+
+
+# ── _entitlement_matches (ends_at defense-in-depth) ───────────────────────────
+
+class TestEntitlementEndsAt:
+    """bot.entitlements(exclude_ended=True) is supposed to filter ended
+    subscriptions server-side, but if Discord or discord.py ever stops
+    honoring that flag, _entitlement_matches must still reject ended ones.
+    """
+
+    @pytest.mark.asyncio
+    async def test_past_ends_at_treated_as_ended(self, monkeypatch):
+        from datetime import datetime, timezone, timedelta
+        monkeypatch.setenv("PREMIUM_SKU_ID", "12345")
+        import premium as _premium
+        importlib.reload(_premium)
+        try:
+            _premium.assign(555000111, TEST_GUILD_ID)
+            past = datetime.now(timezone.utc) - timedelta(days=1)
+
+            async def fake_iter(**kw):
+                yield _make_entitlement(sku_id=12345, ends_at=past)
+
+            bot = MagicMock()
+            bot.entitlements = MagicMock(side_effect=lambda **kw: fake_iter(**kw))
+
+            # Entitlement has ends_at in the past — must NOT grant premium.
+            assert await _premium.is_premium(TEST_GUILD_ID, bot=bot) is False
+        finally:
+            _premium.clear_cache()
+
+    @pytest.mark.asyncio
+    async def test_future_ends_at_still_active(self, monkeypatch):
+        from datetime import datetime, timezone, timedelta
+        monkeypatch.setenv("PREMIUM_SKU_ID", "12345")
+        import premium as _premium
+        importlib.reload(_premium)
+        try:
+            _premium.assign(555000111, TEST_GUILD_ID)
+            future = datetime.now(timezone.utc) + timedelta(days=14)
+
+            async def fake_iter(**kw):
+                yield _make_entitlement(sku_id=12345, ends_at=future)
+
+            bot = MagicMock()
+            bot.entitlements = MagicMock(side_effect=lambda **kw: fake_iter(**kw))
+
+            assert await _premium.is_premium(TEST_GUILD_ID, bot=bot) is True
+        finally:
+            _premium.clear_cache()
+
+    @pytest.mark.asyncio
+    async def test_missing_ends_at_treated_as_active(self, monkeypatch):
+        """Older entitlements / SKU types without an ends_at attribute
+        must still resolve to active when otherwise valid. The check
+        should only reject when ends_at is set AND in the past."""
+        monkeypatch.setenv("PREMIUM_SKU_ID", "12345")
+        import premium as _premium
+        importlib.reload(_premium)
+        try:
+            _premium.assign(555000111, TEST_GUILD_ID)
+
+            async def fake_iter(**kw):
+                yield _make_entitlement(sku_id=12345, ends_at=None)
+
+            bot = MagicMock()
+            bot.entitlements = MagicMock(side_effect=lambda **kw: fake_iter(**kw))
+
+            assert await _premium.is_premium(TEST_GUILD_ID, bot=bot) is True
+        finally:
+            _premium.clear_cache()
+
 
 # ── get_limit ─────────────────────────────────────────────────────────────────
 
@@ -364,6 +555,85 @@ class TestIsPremiumFeature:
     def test_unknown_feature_is_false(self, fresh_premium):
         assert fresh_premium.is_premium_feature("not_a_feature") is False
         assert fresh_premium.is_premium_feature("")              is False
+
+    def test_survey_numeric_is_not_premium_anymore(self, fresh_premium):
+        """1.1.5 promoted numeric survey questions to free tier. The
+        PREMIUM_FEATURES set must reflect that — leaving the name in
+        the set would be misleading documentation and would cause
+        feature_gate('survey_numeric', ...) to actually gate it.
+        """
+        assert fresh_premium.is_premium_feature("survey_numeric") is False
+        assert "survey_numeric" not in fresh_premium.PREMIUM_FEATURES
+
+
+# ── feature_gate ──────────────────────────────────────────────────────────────
+
+class TestFeatureGate:
+    """feature_gate is the canonical premium check for named features.
+    It validates the name against PREMIUM_FEATURES (KeyError on unknown)
+    and delegates to is_premium for the entitlement lookup.
+    """
+
+    @pytest.mark.asyncio
+    async def test_known_feature_returns_true_for_premium_guild(
+        self, fresh_premium_with_bypass,
+    ):
+        # Bypass guild → is_premium True → feature_gate True.
+        assert await fresh_premium_with_bypass.feature_gate(
+            "member_sync", PREMIUM_TEST_GUILD_ID,
+        ) is True
+
+    @pytest.mark.asyncio
+    async def test_known_feature_returns_false_for_free_guild(
+        self, fresh_premium_with_bypass,
+    ):
+        # Non-bypass guild with no assignment → is_premium False.
+        assert await fresh_premium_with_bypass.feature_gate(
+            "storm_participation_dm", TEST_GUILD_ID,
+        ) is False
+
+    @pytest.mark.asyncio
+    async def test_unknown_feature_raises_keyerror(self, fresh_premium):
+        with pytest.raises(KeyError) as excinfo:
+            await fresh_premium.feature_gate("not_a_feature", TEST_GUILD_ID)
+        # Error should hint at the fix.
+        assert "PREMIUM_FEATURES" in str(excinfo.value)
+
+    @pytest.mark.asyncio
+    async def test_survey_numeric_no_longer_gates(self, fresh_premium):
+        """Regression: survey_numeric was removed from PREMIUM_FEATURES
+        when 1.1.5 promoted numeric questions to free. Calling
+        feature_gate('survey_numeric', ...) must now raise so any
+        leftover gate call site fails loudly instead of silently
+        locking free-tier users out of a free feature.
+        """
+        with pytest.raises(KeyError):
+            await fresh_premium.feature_gate("survey_numeric", TEST_GUILD_ID)
+
+    @pytest.mark.asyncio
+    async def test_delegates_to_is_premium_with_bot(
+        self, fresh_premium, monkeypatch,
+    ):
+        """feature_gate must thread bot= through so the per-guild
+        entitlement check sees the real subscription state — same
+        contract as is_premium itself."""
+        monkeypatch.setenv("PREMIUM_SKU_ID", "12345")
+        import premium as _premium
+        importlib.reload(_premium)
+        try:
+            _premium.assign(555000111, TEST_GUILD_ID)
+
+            async def fake_iter(**kw):
+                yield _make_entitlement(sku_id=12345)
+
+            bot = MagicMock()
+            bot.entitlements = MagicMock(side_effect=lambda **kw: fake_iter(**kw))
+
+            assert await _premium.feature_gate(
+                "member_sync", TEST_GUILD_ID, bot=bot,
+            ) is True
+        finally:
+            _premium.clear_cache()
 
 
 # ── Messaging helpers ─────────────────────────────────────────────────────────

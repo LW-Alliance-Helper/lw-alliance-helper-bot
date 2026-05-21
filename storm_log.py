@@ -884,8 +884,9 @@ async def _send_storm_reminder(bot, interaction: discord.Interaction, event_type
         get_member_roster_config, get_member_roster_sheet, get_storm_config,
     )
 
-    if not await premium.is_premium(
-        interaction.guild_id, interaction=interaction, bot=bot,
+    if not await premium.feature_gate(
+        "storm_participation_dm", interaction.guild_id,
+        interaction=interaction, bot=bot,
     ):
         await interaction.response.send_message(
             embed=premium.premium_locked_embed(
@@ -1013,7 +1014,8 @@ async def _show_storm_log(interaction: discord.Interaction, event: str, date: st
     # Free tier sees only the most recent N storm participation log entries.
     import premium
     recent_cap = await premium.get_limit(
-        "storm_log_recent", interaction.guild_id, interaction=interaction,
+        "storm_log_recent", interaction.guild_id,
+        interaction=interaction, bot=interaction.client,
     )
     if recent_cap is not None:
         recent_dates = await asyncio.get_event_loop().run_in_executor(

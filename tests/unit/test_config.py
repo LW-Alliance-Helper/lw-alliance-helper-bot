@@ -906,3 +906,41 @@ class TestDescribeSheetError:
         assert "ValueError" in msg
         assert "bad input" in msg
         assert "guild=1" in msg
+
+
+class TestNormalizeSpreadsheetId:
+    """normalize_spreadsheet_id should extract the ID when the user pastes a
+    full sheet URL into the /setup Step 5 prompt. Saving the raw URL leads to
+    a 404 dead-end at gc.open_by_key time with no usable diagnostic."""
+
+    def test_extracts_id_from_full_url(self):
+        import config
+        url = "https://docs.google.com/spreadsheets/d/1yQ6tgzrj4c23xK7X5l1GyWM9uMpgCgCC3iz8ZvyMg18/edit?gid=2117513184"
+        assert config.normalize_spreadsheet_id(url) == "1yQ6tgzrj4c23xK7X5l1GyWM9uMpgCgCC3iz8ZvyMg18"
+
+    def test_extracts_id_from_url_without_query_string(self):
+        import config
+        url = "https://docs.google.com/spreadsheets/d/1yQ6tgzrj4c23xK7X5l1GyWM9uMpgCgCC3iz8ZvyMg18/edit"
+        assert config.normalize_spreadsheet_id(url) == "1yQ6tgzrj4c23xK7X5l1GyWM9uMpgCgCC3iz8ZvyMg18"
+
+    def test_extracts_id_from_url_without_scheme(self):
+        import config
+        url = "docs.google.com/spreadsheets/d/1yQ6tgzrj4c23xK7X5l1GyWM9uMpgCgCC3iz8ZvyMg18/edit"
+        assert config.normalize_spreadsheet_id(url) == "1yQ6tgzrj4c23xK7X5l1GyWM9uMpgCgCC3iz8ZvyMg18"
+
+    def test_bare_id_passes_through_unchanged(self):
+        import config
+        sid = "1yQ6tgzrj4c23xK7X5l1GyWM9uMpgCgCC3iz8ZvyMg18"
+        assert config.normalize_spreadsheet_id(sid) == sid
+
+    def test_strips_surrounding_whitespace(self):
+        import config
+        assert config.normalize_spreadsheet_id("  abc123  ") == "abc123"
+
+    def test_empty_string_returns_empty(self):
+        import config
+        assert config.normalize_spreadsheet_id("") == ""
+
+    def test_none_returns_empty(self):
+        import config
+        assert config.normalize_spreadsheet_id(None) == ""

@@ -1105,6 +1105,24 @@ def describe_sheet_error(e: Exception, *,
     return f"{type(e).__name__}: {e}{suffix}"
 
 
+def normalize_spreadsheet_id(value: str) -> str:
+    """Pull a Google Sheets spreadsheet ID out of whatever the user pasted.
+
+    Discord's `/setup` Step 5 prompts for the ID, but users routinely paste
+    the full sheet URL (`https://docs.google.com/spreadsheets/d/{ID}/edit?...`)
+    instead. The stored URL then gets fed to `gc.open_by_key(...)` which
+    requests `/v4/spreadsheets/https://docs.google.com/...` and Google 404s
+    on the resulting nonsense, with no signal back that the input was wrong.
+
+    Strips whitespace, extracts the ID segment from a `/spreadsheets/d/{ID}`
+    URL if one is present, and otherwise returns the value as-is.
+    """
+    import re
+    cleaned = (value or "").strip()
+    m = re.search(r"/spreadsheets/d/([a-zA-Z0-9_-]+)", cleaned)
+    return m.group(1) if m else cleaned
+
+
 def is_setup_complete(guild_id: int) -> bool:
     """Check if a guild has completed setup."""
     cfg = get_config(guild_id)
@@ -1137,40 +1155,43 @@ def get_premium_assignment_for_user(user_id: int) -> Optional[int]:
         return row["guild_id"] if row else None
 
 
-def set_premium_assignment(user_id: int, guild_id: int) -> Optional[int]:
-    """Assign or move this user's license to `guild_id`.
+def set_premium_assignment(user_id: int, guild_id: int) -> bool:
+    """Assign or move this user's license to `guild_id`. Atomic.
 
-    Returns the user_id of any prior assignment that was cleared from
-    `guild_id` (a different subscriber being displaced should never happen
-    because callers reject duplicates first, but this still surfaces the
-    fact so the caller can invalidate caches correctly). The previous
-    guild this user was assigned to (if any) is replaced atomically;
-    callers should invalidate the premium cache for both the old and new
-    guild_ids.
+    Returns True if the assignment now points (user_id → guild_id), or
+    False if another subscriber already holds `guild_id` (race-protection:
+    refuses to silently displace them). The race window matters only when
+    two subscribers attempt to claim the same guild at nearly the same
+    instant — slash-command surfaces pre-check via
+    `get_premium_assignment_for_guild` before calling, and that check is
+    still the primary defense. This atomic check is the safety net.
+
+    The previous guild this user was assigned to (if any) is replaced
+    in the same upsert; callers should invalidate the premium cache for
+    both the old and new guild_ids on a True return.
     """
     from datetime import datetime, timezone
+    import sqlite3
     now = datetime.now(timezone.utc).isoformat()
-    with _get_conn() as conn:
-        # Check if another user already holds this guild — unique on
-        # guild_id would otherwise raise. Callers should have rejected
-        # this case before calling, but defend against a race.
-        prior_row = conn.execute(
-            "SELECT user_id FROM premium_assignments WHERE guild_id = ? AND user_id != ?",
-            (guild_id, user_id),
-        ).fetchone()
-        prior_user = prior_row["user_id"] if prior_row else None
-        if prior_user is not None:
-            conn.execute("DELETE FROM premium_assignments WHERE user_id = ?", (prior_user,))
-
-        conn.execute(
-            "INSERT INTO premium_assignments (user_id, guild_id, assigned_at) "
-            "VALUES (?, ?, ?) "
-            "ON CONFLICT(user_id) DO UPDATE SET guild_id = excluded.guild_id, "
-            "assigned_at = excluded.assigned_at",
-            (user_id, guild_id, now),
-        )
-        conn.commit()
-        return prior_user
+    try:
+        with _get_conn() as conn:
+            # ON CONFLICT(user_id) handles the same-user-moving-guilds case.
+            # The UNIQUE(guild_id) constraint catches the race where another
+            # subscriber claimed this guild between the caller's pre-check
+            # and this insert — that path raises IntegrityError, the
+            # transaction rolls back, both rows stay untouched.
+            conn.execute(
+                "INSERT INTO premium_assignments (user_id, guild_id, assigned_at) "
+                "VALUES (?, ?, ?) "
+                "ON CONFLICT(user_id) DO UPDATE SET guild_id = excluded.guild_id, "
+                "assigned_at = excluded.assigned_at",
+                (user_id, guild_id, now),
+            )
+            conn.commit()
+        return True
+    except sqlite3.IntegrityError:
+        # UNIQUE(guild_id) violation: another user holds the target guild.
+        return False
 
 
 def remove_premium_assignment(user_id: int) -> Optional[int]:

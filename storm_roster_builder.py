@@ -430,6 +430,10 @@ class RosterBuilderSession:
         # knows what rules applied, what got filled, what gapped.
         # None until auto-fill runs at least once.
         self.auto_fill_summary: dict | None = None
+        # True when the candidate pool was constrained by a saved
+        # `storm_team_plans` row (#239). Auto-fill respects the plan's
+        # primary/sub split instead of re-deriving by power.
+        self.team_plan_applied: bool = False
 
     @property
     def is_structured(self) -> bool:
@@ -766,6 +770,7 @@ def _fill_priority_greedy(
 def _auto_fill_session(
     session: RosterBuilderSession,
     *, strategy: str = "balanced",
+    plan: dict | None = None,
 ) -> dict:
     """Auto-fill the roster from member rules and the LW 20-starters-plus-10-subs
     team rule (#219).
@@ -898,6 +903,15 @@ def _auto_fill_session(
     # (deterministic, stable across re-runs of auto-fill on the same
     # signups). Power-unknown members flow to `gaps`. Pinned members
     # always occupy starter seats regardless of rank.
+    #
+    # Plan-aware branch (#239): when a saved team plan exists for this
+    # event+team, the in-game commitment overrides the by-power split.
+    # The plan's primaries become starters; the plan's subs become the
+    # sub pool. Pinned members still occupy starter seats first; a
+    # pin-vs-sub conflict surfaces in `summary["conflicts"]` and the
+    # pin wins. Plan keys that aren't in `session.members` (e.g. the
+    # member's vote changed to "cannot" after the plan was saved) are
+    # also surfaced as conflicts.
     from storm import team_seats
     starters_target, subs_target = team_seats(session.event_type)
 
@@ -909,34 +923,86 @@ def _auto_fill_session(
         m = session.members[key]
         return (-(m.get("power") or 0), key)
 
-    power_known: list[str] = [
-        k for k, m in session.members.items() if m.get("power") is not None
-    ]
-    power_known.sort(key=_power_rank_key)
+    # Auto-load the saved plan if the caller didn't pass one. Tests
+    # inject an explicit plan; production callers usually let the
+    # session's (guild, event, team) coordinates drive the lookup.
+    if plan is None and session.event_date and session.team:
+        try:
+            import config
+            plan = config.get_storm_team_plan(
+                session.guild_id, session.event_type,
+                session.event_date, session.team,
+            )
+        except Exception:
+            plan = None
 
-    for key, m in session.members.items():
-        if m.get("power") is None and key not in pinned_keys:
-            summary["gaps"].append(m["name"])
+    plan_applied = bool(plan and (plan.get("primaries") or plan.get("subs")))
+    plan_sub_keys: set[str] = set()
+    if plan_applied:
+        member_keys = set(session.members.keys())
+        plan_primary_keys = set(plan.get("primaries") or []) & member_keys
+        plan_sub_keys = set(plan.get("subs") or []) & member_keys
+        # Pinning beats sub marking — surface the conflict for the
+        # officer but keep the per-member rule's intent.
+        pinned_in_subs = pinned_keys & plan_sub_keys
+        for k in sorted(pinned_in_subs):
+            mname = session.members.get(k, {}).get("name", k)
+            summary["conflicts"].append(
+                f"{mname} is pinned by a per-member rule but the saved "
+                f"team plan marks them as a sub — pin wins."
+            )
+        plan_sub_keys -= pinned_keys
+        # Plan keys missing from the pool (vote changed to cannot,
+        # member removed from roster between plan save and builder
+        # open, etc.) — surface so the officer can re-open the plan
+        # picker and clean up.
+        all_plan_keys = set(plan.get("primaries") or []) | set(plan.get("subs") or [])
+        missing_plan_keys = all_plan_keys - member_keys
+        for k in sorted(missing_plan_keys):
+            summary["conflicts"].append(
+                f"plan key {k} missing from pool (vote changed or "
+                f"member dropped from roster)"
+            )
+        # Gaps still apply: any member with no parseable power that
+        # isn't pinned. Plan-driven and signup-driven paths share the
+        # gaps semantics.
+        for key, m in session.members.items():
+            if m.get("power") is None and key not in pinned_keys:
+                summary["gaps"].append(m["name"])
 
-    starters: list[str] = list(pinned_keys)
-    starters_set: set[str] = set(starters)
-    for key in power_known:
-        if len(starters) >= starters_target:
-            break
-        if key in starters_set:
-            continue
-        starters.append(key)
-        starters_set.add(key)
+        starters: list[str] = list(pinned_keys | plan_primary_keys)
+        starters_set: set[str] = set(starters)
+        summary["starters_short"] = max(0, starters_target - len(starters))
+        sub_pool: list[str] = sorted(plan_sub_keys)
+    else:
+        power_known: list[str] = [
+            k for k, m in session.members.items() if m.get("power") is not None
+        ]
+        power_known.sort(key=_power_rank_key)
 
-    summary["starters_short"] = max(0, starters_target - len(starters))
+        for key, m in session.members.items():
+            if m.get("power") is None and key not in pinned_keys:
+                summary["gaps"].append(m["name"])
 
-    sub_pool: list[str] = []
-    for key in power_known:
-        if len(sub_pool) >= subs_target:
-            break
-        if key in starters_set:
-            continue
-        sub_pool.append(key)
+        starters = list(pinned_keys)
+        starters_set = set(starters)
+        for key in power_known:
+            if len(starters) >= starters_target:
+                break
+            if key in starters_set:
+                continue
+            starters.append(key)
+            starters_set.add(key)
+
+        summary["starters_short"] = max(0, starters_target - len(starters))
+
+        sub_pool = []
+        for key in power_known:
+            if len(sub_pool) >= subs_target:
+                break
+            if key in starters_set:
+                continue
+            sub_pool.append(key)
 
     # ── 3. Per-phase fill via the selected strategy (#226) ──
     # priority=0 means "no priority set" so it sorts to the end via 9999.
@@ -1100,21 +1166,26 @@ def _auto_fill_session(
                 })
 
     # ── 5. Spillover into session.subs ──
-    # Everything power-known that didn't land in a zone or a paired-sub
-    # seat ends up in the flat sub pool. In pool mode this is the only
-    # surface for the 10 designated subs; in paired mode it's overflow
-    # (typically empty when 30 signed up, non-empty for under-30
-    # alliances where some unplaced starters couldn't find a primary
-    # to pair with).
+    # Plan-aware (#239): session.subs is exactly the plan's sub list
+    # (intersected with the current pool). Non-plan members never spill
+    # in — they aren't part of the in-game commitment, so dumping them
+    # into the sub pool would contradict the officer's saved plan.
+    # Legacy mode: everything power-known that didn't land in a zone or
+    # a paired-sub seat ends up in the flat sub pool. In pool mode this
+    # is the only surface for the 10 designated subs; in paired mode
+    # it's overflow.
     assigned = session.assigned_member_keys()
-    for key, m in session.members.items():
-        if key in assigned:
-            continue
-        if m.get("power") is None:
-            # Already added to summary["gaps"] in step 2; skip so we
-            # don't double-report.
-            continue
-        session.subs.append(key)
+    if plan_applied:
+        session.subs = sorted(plan_sub_keys - assigned)
+    else:
+        for key, m in session.members.items():
+            if key in assigned:
+                continue
+            if m.get("power") is None:
+                # Already added to summary["gaps"] in step 2; skip so we
+                # don't double-report.
+                continue
+            session.subs.append(key)
 
     session.selected_phase = original_phase
     session.auto_fill_summary = summary
@@ -1520,7 +1591,14 @@ class RosterBuilderView(discord.ui.View):
     options reflect the current zone + eligibility."""
 
     def __init__(self, session: RosterBuilderSession):
-        super().__init__(timeout=900)
+        # Bumped 900 → 3600 (15 min → 1 hour) after tester report
+        # 2026-05-21: building a real roster — manual moves, auto-fill
+        # iterations, pairing edits — easily took longer than 15 min and
+        # the View timeout dropped the in-memory session, losing the
+        # whole build. Proper fix is persistence (auto-save to SQLite);
+        # 1 hour is the interim guardrail so officers have breathing
+        # room while persistence ships.
+        super().__init__(timeout=3600)
         self.session = session
         self.message: Optional[discord.Message] = None
         self._rebuild()
@@ -2099,12 +2177,28 @@ class RosterBuilderView(discord.ui.View):
             views in this project respect.
           - The session lock would stick until process restart, which
             blocks legitimate re-opens for the same event indefinitely.
+
+        Post-2026-05-21 tester report: also surface a clear "your
+        builder timed out, your in-progress work was lost" message
+        above the disabled buttons so officers don't blame the
+        Interaction failed UX. The message points them at re-opening
+        the builder. Persistence (auto-save to SQLite so re-opens
+        recover state) is a follow-up issue.
         """
         for item in self.children:
             item.disabled = True
         if self.message is not None:
             try:
-                await self.message.edit(view=self)
+                await self.message.edit(
+                    content=(
+                        "⏰ Roster builder timed out after 1 hour of "
+                        "inactivity. In-progress assignments were lost; "
+                        "re-open the builder to start over. Working on "
+                        "a save-and-resume feature so this doesn't keep "
+                        "happening."
+                    ),
+                    view=self,
+                )
             except discord.HTTPException:
                 pass
         self._release_session_lock()
@@ -3423,6 +3517,28 @@ def _signup_filter_keys(
     return out
 
 
+def _team_plan_keys_or_signup_keys(
+    guild_id: int, event_type: str, event_date: str, team: str,
+) -> tuple[set[str], bool]:
+    """Return the constrained candidate pool for the structured builder
+    (#239).
+
+    When a `storm_team_plans` row exists for this (guild, event, team),
+    the pool is the plan's 30 members — the bot mirrors the in-game
+    commitment instead of fighting it. Falls back to the vote-bucket
+    filter for alliances that don't use the plan step, so today's
+    behaviour is byte-identical when no plan is saved.
+
+    Returns `(allowed_keys, plan_was_applied)`. The bool lets the
+    caller surface a banner so officers know why the pool shrank.
+    """
+    import config
+    plan = config.get_storm_team_plan(guild_id, event_type, event_date, team)
+    if plan and (plan["primaries"] or plan["subs"]):
+        return set(plan["primaries"]) | set(plan["subs"]), True
+    return _signup_filter_keys(guild_id, event_type, event_date, team), False
+
+
 # ── Long-mail picker (#237) ─────────────────────────────────────────────────
 #
 # When the rendered mail body exceeds Discord's 2000-char per-message
@@ -4272,10 +4388,14 @@ async def open_roster_builder(
     )
 
     # Structured-mode pool filter: keep only members who signed up
-    # compatible with this team. Unknown signups (not on roster) are
-    # surfaced as a soft warning but don't gate the builder.
+    # compatible with this team. When the officer saved a team plan
+    # via 📋 Team A/B plan (#239), the pool tightens further to the
+    # 30 members on that plan — bot mirrors the in-game commitment.
+    # Unknown signups (not on roster) are surfaced as a soft warning
+    # but don't gate the builder.
+    plan_was_applied = False
     if is_structured:
-        signup_keys = _signup_filter_keys(
+        signup_keys, plan_was_applied = _team_plan_keys_or_signup_keys(
             interaction.guild_id, event_type, event_date, team,
         )
         before_count = len(members)
@@ -4326,6 +4446,12 @@ async def open_roster_builder(
         if before_count and before_count == len(members):
             # Defensive — everyone on roster voted; not really an error.
             pass
+        if plan_was_applied:
+            roster_errors.append(
+                "Pool constrained to saved 30-member team plan (📋). "
+                "Edit the plan via the officer view to change who's "
+                "eligible."
+            )
 
     rules = await asyncio.to_thread(
         smr.list_rules, interaction.guild_id, event_type,
@@ -4375,6 +4501,7 @@ async def open_roster_builder(
         event_date=event_date,
         sub_mode=sub_mode,
     )
+    session.team_plan_applied = plan_was_applied
     # Seed errors from the roster read FIRST so _apply_rules_to_session
     # can append its own (e.g. unmatched per_member subjects) without
     # being clobbered.

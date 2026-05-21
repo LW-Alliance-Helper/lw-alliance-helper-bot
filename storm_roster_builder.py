@@ -31,6 +31,7 @@ from __future__ import annotations
 import asyncio
 import io
 import logging
+import re
 from typing import Optional
 
 import discord
@@ -3341,6 +3342,105 @@ def _signup_filter_keys(
     return out
 
 
+# ── Long-mail picker (#237) ─────────────────────────────────────────────────
+#
+# When the rendered mail body exceeds Discord's 2000-char per-message
+# ceiling, the officer picks how to handle it instead of the bot
+# silently choosing (the pre-#237 behaviour from #234). Two options:
+#
+#   📨 Send as 2 posts   — splits at the next natural heading break so
+#                          the second message always starts with a
+#                          `**Heading**` line and sections stay
+#                          together.
+#   📎 Send as .txt      — full mail as a .txt file attachment
+#                          alongside the image (the #234 fallback).
+#
+# Plus a Cancel button so the officer can back out and edit the
+# roster before re-trying.
+
+_HEADING_RE = re.compile(r'^(\*\*[^*\n]+\*\*)\s*$', re.MULTILINE)
+
+
+def _split_mail_at_heading(
+    mail: str, max_len: int = 2000,
+) -> Optional[tuple[str, str]]:
+    """Split a long mail body at a natural heading break (#237). The
+    second message always starts with a `**Heading**` line so
+    sections stay together for context.
+
+    Returns `(part1, part2)` where each part fits within `max_len`.
+    Picks the heading closest to the midpoint. Returns `None` when
+    no heading split keeps both halves under the ceiling — caller
+    falls back to the .txt attachment path.
+    """
+    candidates = [m.start() for m in _HEADING_RE.finditer(mail)]
+    # A valid split position p means part_1 = mail[:p],
+    # part_2 = mail[p:]. Both must fit, and p must be > 0 (otherwise
+    # part_1 is empty).
+    valid = [
+        p for p in candidates
+        if 0 < p and p <= max_len and (len(mail) - p) <= max_len
+    ]
+    if not valid:
+        return None
+    mid = len(mail) // 2
+    best = min(valid, key=lambda p: abs(p - mid))
+    return mail[:best].rstrip(), mail[best:]
+
+
+class _LongMailPickerView(discord.ui.View):
+    """Ephemeral picker shown when the rendered mail exceeds Discord's
+    2000-char message ceiling (#237). Three buttons: split / attach /
+    cancel. Sets `self.choice` and stops the view; the caller awaits
+    `view.wait()` then reads the choice."""
+
+    def __init__(self, *, owner_id: int):
+        super().__init__(timeout=120)
+        self.owner_id = owner_id
+        self.choice: Optional[str] = None  # "split" | "txt" | "cancel"
+        self.message: Optional[discord.Message] = None
+
+    async def interaction_check(self, inter: discord.Interaction) -> bool:
+        if inter.user.id != self.owner_id:
+            await inter.response.send_message(
+                "⛔ Only the officer who clicked Approve can pick the "
+                "post format.",
+                ephemeral=True,
+            )
+            return False
+        return True
+
+    async def _pick(self, inter: discord.Interaction, choice: str) -> None:
+        if self.is_finished():
+            return
+        self.choice = choice
+        for item in self.children:
+            item.disabled = True
+        try:
+            await inter.response.edit_message(view=self)
+        except discord.HTTPException:
+            pass
+        self.stop()
+
+    @discord.ui.button(label="📨 Send as 2 posts",
+                       style=discord.ButtonStyle.primary)
+    async def split_btn(self, inter: discord.Interaction,
+                        _btn: discord.ui.Button):
+        await self._pick(inter, "split")
+
+    @discord.ui.button(label="📎 Send as .txt attachment",
+                       style=discord.ButtonStyle.primary)
+    async def attach_btn(self, inter: discord.Interaction,
+                         _btn: discord.ui.Button):
+        await self._pick(inter, "txt")
+
+    @discord.ui.button(label="↩️ Cancel",
+                       style=discord.ButtonStyle.secondary)
+    async def cancel_btn(self, inter: discord.Interaction,
+                         _btn: discord.ui.Button):
+        await self._pick(inter, "cancel")
+
+
 async def _finalize_structured_roster(
     interaction: discord.Interaction, view: RosterBuilderView,
     *, include_image: bool = False,
@@ -3478,57 +3578,135 @@ async def _finalize_structured_roster(
     post_status: str
     post_error: Optional[str] = None
     posted_to_mention: Optional[str] = None
+    # #237: when the mail exceeds Discord's 2000-char ceiling and a
+    # post channel is configured, ask the officer to pick the format
+    # ("Send as 2 posts" or "Send as .txt attachment"). Pre-#237 the
+    # bot silently attached the mail as .txt (#234). The picker is
+    # only shown when both conditions hold; short mail and
+    # no-channel branches skip it entirely.
+    long_mail_choice: Optional[str] = None
+    if len(mail) > _MAX_MESSAGE_CONTENT and post_channel is not None:
+        picker = _LongMailPickerView(owner_id=interaction.user.id)
+        try:
+            picker.message = await interaction.followup.send(
+                "📋 This message goes over the limit Discord allows for "
+                "a single post. To be able to post this for you, we "
+                "have two options:\n\n"
+                "📨 **Send as 2 posts** splits at the next natural "
+                "break so the second post starts with a section "
+                "heading.\n\n"
+                "📎 **Send as .txt attachment** posts the full mail as "
+                "a file alongside the image. Copy the file's contents "
+                "to send in-game.",
+                view=picker,
+                ephemeral=True,
+            )
+        except discord.HTTPException as e:
+            logger.warning(
+                "[STORM STRUCTURED] long-mail picker followup failed "
+                "(guild=%s event=%s): %s",
+                s.guild_id, s.event_type, e,
+            )
+            # Fall back to the #234 .txt behaviour if the picker can't
+            # be sent — better than leaving the interaction stuck.
+            long_mail_choice = "txt"
+        if long_mail_choice is None:
+            await picker.wait()
+            long_mail_choice = picker.choice or "cancel"
+        if long_mail_choice == "cancel":
+            # Officer cancelled — release the session lock so they can
+            # reopen the builder, then exit without posting / writing
+            # the rosters_tab.
+            try:
+                view._release_session_lock()
+            except AttributeError:
+                pass
+            view.stop()
+            try:
+                await interaction.followup.send(
+                    "↩️ Cancelled. Roster wasn't posted; you can keep "
+                    "editing the builder if you'd like.",
+                    ephemeral=True,
+                )
+            except discord.HTTPException:
+                pass
+            return
+
     if not post_channel_id:
         post_status = "no_channel"
     elif post_channel is None:
         post_status = "channel_gone"
     else:
-        # Discord caps message content at 2000 chars. A full roster
-        # (20 starters + 10 subs + every zone + phase headers) easily
-        # exceeds that for large alliances, so when the mail is too
-        # long we attach it as a .txt file instead of sending inline.
-        # The image render (if any) still rides as a second attachment
-        # on the same message so the post stays one Discord message.
-        # (Tester report 2026-05-21: long-mail HTTPException left the
-        # Approve & Post interaction stuck in "thinking…" because the
-        # recovery ephemeral also blew the 2000-char ceiling.)
-        files: list[discord.File] = []
-        if len(mail) > _MAX_MESSAGE_CONTENT:
-            txt_name = (
-                f"{s.event_type.lower()}-roster"
-                + (f"-{s.event_date}" if s.event_date else "")
-                + (f"-team-{s.team}" if s.team else "")
-                + ".txt"
-            )
-            files.append(discord.File(
-                io.BytesIO(mail.encode("utf-8")), filename=txt_name,
-            ))
-            content = (
-                f"📋 **{s.event_type} Roster** — full mail attached "
-                f"(longer than Discord's 2000-char message limit). "
-                f"Copy from the attachment to send in-game."
-            )
-        else:
-            content = mail
-        if image_file is not None:
-            files.append(image_file)
+        # Three post-send shapes depending on (mail length, officer's
+        # long_mail_choice):
+        #   - short mail               → one post, content=mail [+ image]
+        #   - long mail + "split"      → two posts, split at heading;
+        #                                image rides post 1
+        #   - long mail + "txt" / fallback → one post, mail as .txt
+        #                                attachment [+ image]
+        # Errors (HTTPException, perms, rate limit) on any of these
+        # fall through to `post_status = "send_failed"` with the
+        # exception message captured.
+        post_status = "posted_ok"
         try:
-            # `file=` for one attachment, `files=` for two+, so the
-            # single-image happy path (still the common case) preserves
-            # its kwarg shape and existing tests.
-            if len(files) == 1:
-                await post_channel.send(content, file=files[0])
-            elif len(files) > 1:
-                await post_channel.send(content, files=files)
-            else:
-                await post_channel.send(content)
+            if (
+                long_mail_choice == "split"
+                and len(mail) > _MAX_MESSAGE_CONTENT
+            ):
+                parts = _split_mail_at_heading(mail)
+                if parts is not None:
+                    part1, part2 = parts
+                    if image_file is not None:
+                        await post_channel.send(part1, file=image_file)
+                    else:
+                        await post_channel.send(part1)
+                    await post_channel.send(part2)
+                else:
+                    # No clean heading split — fall back to .txt path
+                    # so the officer still gets the full mail.
+                    long_mail_choice = "txt"
+
+            if (
+                long_mail_choice != "split"
+                or len(mail) <= _MAX_MESSAGE_CONTENT
+            ):
+                files: list[discord.File] = []
+                if len(mail) > _MAX_MESSAGE_CONTENT:
+                    txt_name = (
+                        f"{s.event_type.lower()}-roster"
+                        + (f"-{s.event_date}" if s.event_date else "")
+                        + (f"-team-{s.team}" if s.team else "")
+                        + ".txt"
+                    )
+                    files.append(discord.File(
+                        io.BytesIO(mail.encode("utf-8")), filename=txt_name,
+                    ))
+                    content = (
+                        f"📋 **{s.event_type} Roster** — full mail "
+                        f"attached (longer than Discord's 2000-char "
+                        f"message limit). Copy from the attachment to "
+                        f"send in-game."
+                    )
+                else:
+                    content = mail
+                if image_file is not None:
+                    files.append(image_file)
+                # `file=` for one attachment, `files=` for two+, so the
+                # single-image happy path preserves its kwarg shape +
+                # existing tests.
+                if len(files) == 1:
+                    await post_channel.send(content, file=files[0])
+                elif len(files) > 1:
+                    await post_channel.send(content, files=files)
+                else:
+                    await post_channel.send(content)
             posted_to_mention = post_channel.mention
-            post_status = "posted_ok"
         except Exception as e:
             post_status = "send_failed"
             post_error = str(e)
             logger.warning(
-                "[STORM STRUCTURED] failed to post mail to channel=%s guild=%s: %s",
+                "[STORM STRUCTURED] failed to post mail to channel=%s "
+                "guild=%s: %s",
                 post_channel_id, s.guild_id, e,
             )
 

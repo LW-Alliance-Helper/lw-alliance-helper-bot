@@ -2390,43 +2390,78 @@ class TestFinalizePostOutcomes:
         assert "Member 7" in second_msg
         assert "Member 14" in second_msg
 
+    # ── #237 long-mail picker ─────────────────────────────────────
+
+    def _stub_picker(self, choice: str):
+        """Return a context-manager that patches `_LongMailPickerView`
+        so `await picker.wait()` returns immediately with the given
+        pre-set choice. Tests bypass the actual Discord view round-
+        trip without giving up on exercising the rest of the long-
+        mail flow."""
+        from unittest.mock import patch, AsyncMock, MagicMock
+        instance = MagicMock()
+        instance.choice = choice
+        instance.message = MagicMock()
+        instance.wait = AsyncMock(return_value=None)
+        return patch.object(
+            srb, "_LongMailPickerView", return_value=instance,
+        )
+
     @pytest.mark.asyncio
-    async def test_long_mail_body_posts_as_txt_attachment(self, fake_env):
-        """Tester report 2026-05-21: a roster whose mail body exceeded
-        Discord's 2000-char message ceiling raised HTTPException 50035
-        on `post_channel.send(mail)`, then the recovery ephemeral also
-        blew the same ceiling, leaving Approve & Post stuck in
-        "thinking…" forever. Fix: when the mail is too long, attach it
-        as a .txt file so the post still goes through."""
+    async def test_long_mail_shows_picker_before_posting(self, fake_env):
+        """#237: a roster mail >2000 chars must open the officer-facing
+        picker (Send as 2 posts / Send as .txt / Cancel) instead of
+        the bot silently picking the format."""
         from unittest.mock import patch
         ch = self._make_fake_channel(12345, mention="<#12345>")
         inter, view, _ = self._make_structured_view(
             fake_env, channel=ch, channel_id=12345,
         )
-        long_mail = "X" * 2500  # 500 chars over the limit
-        with patch("storm_roster_builder._build_mail_body", return_value=long_mail):
+        long_mail = "X" * 2500
+        with self._stub_picker("txt"), \
+             patch("storm_roster_builder._build_mail_body", return_value=long_mail):
+            await srb._finalize_structured_roster(inter, view)
+
+        # The picker followup must have fired; the body explains the
+        # two options to the officer.
+        picker_call = next(
+            (c for c in inter.followup.send.await_args_list
+             if "goes over the limit" in (c.args[0] if c.args else "")),
+            None,
+        )
+        assert picker_call is not None, (
+            "long mail must trigger the picker followup, not post directly"
+        )
+
+    @pytest.mark.asyncio
+    async def test_long_mail_txt_choice_attaches_as_file(self, fake_env):
+        """Picker → "Send as .txt attachment" path keeps the #234
+        behaviour: full mail rides as a .txt file with a short
+        placeholder in the inline content."""
+        from unittest.mock import patch
+        ch = self._make_fake_channel(12345, mention="<#12345>")
+        inter, view, _ = self._make_structured_view(
+            fake_env, channel=ch, channel_id=12345,
+        )
+        long_mail = "X" * 2500
+        with self._stub_picker("txt"), \
+             patch("storm_roster_builder._build_mail_body", return_value=long_mail):
             await srb._finalize_structured_roster(inter, view)
 
         ch.send.assert_awaited_once()
         kwargs = ch.send.await_args.kwargs
-        # Should land as a single-file attachment (the .txt mail body),
-        # not as inline content.
-        assert "file" in kwargs, (
-            "long mail should attach as .txt, not blow Discord's "
-            "2000-char inline limit"
-        )
+        assert "file" in kwargs
         attached = kwargs["file"]
         assert isinstance(attached, discord.File)
         assert attached.filename.endswith(".txt")
-        # Inline content is the short placeholder, well under 2000.
         content = ch.send.await_args.args[0]
         assert len(content) < 2000
         assert "full mail attached" in content
 
     @pytest.mark.asyncio
-    async def test_long_mail_with_image_attaches_both_files(self, fake_env):
-        """Long mail + with-image path attaches both the .txt and the
-        .png so the single Discord message carries everything."""
+    async def test_long_mail_txt_with_image_attaches_both(self, fake_env):
+        """Picker → "Send as .txt attachment" + with-image attaches
+        both files on a single Discord message."""
         from unittest.mock import patch
         ch = self._make_fake_channel(12345, mention="<#12345>")
         inter, view, _ = self._make_structured_view(
@@ -2434,14 +2469,13 @@ class TestFinalizePostOutcomes:
         )
         long_mail = "X" * 2500
         fake_png = b"\x89PNG\r\n\x1a\nfake-png-bytes"
-        with patch("storm_renderer.render", return_value=fake_png), \
+        with self._stub_picker("txt"), \
+             patch("storm_renderer.render", return_value=fake_png), \
              patch("storm_roster_builder._build_mail_body", return_value=long_mail):
             await srb._finalize_structured_roster(inter, view, include_image=True)
 
         ch.send.assert_awaited_once()
         kwargs = ch.send.await_args.kwargs
-        # Two attachments — .txt mail and .png image — should land via
-        # the `files=` kwarg (the multi-attachment form).
         assert "files" in kwargs
         files = kwargs["files"]
         assert len(files) == 2
@@ -2450,26 +2484,104 @@ class TestFinalizePostOutcomes:
         assert any(n.endswith(".png") for n in names)
 
     @pytest.mark.asyncio
+    async def test_long_mail_split_choice_posts_two_messages(self, fake_env):
+        """Picker → "Send as 2 posts" splits at a heading and posts
+        both parts. The second post always starts with a `**Heading**`
+        line so sections stay together."""
+        from unittest.mock import patch
+        ch = self._make_fake_channel(12345, mention="<#12345>")
+        inter, view, _ = self._make_structured_view(
+            fake_env, channel=ch, channel_id=12345,
+        )
+        # Build a long mail with a clear heading midway so the split
+        # helper has a natural break point.
+        long_mail = (
+            "**Stage 1**\n\n"
+            + ("Member line\n" * 100)
+            + "\n**Stage 2**\n\n"
+            + ("Other line\n" * 100)
+        )
+        with self._stub_picker("split"), \
+             patch("storm_roster_builder._build_mail_body", return_value=long_mail):
+            await srb._finalize_structured_roster(inter, view)
+
+        # Two posts, both under 2000 chars; second starts with **Stage 2**.
+        assert ch.send.await_count == 2
+        call1, call2 = ch.send.await_args_list
+        part1 = call1.args[0] if call1.args else ""
+        part2 = call2.args[0] if call2.args else ""
+        assert len(part1) <= 2000
+        assert len(part2) <= 2000
+        assert part2.lstrip().startswith("**Stage 2**")
+
+    @pytest.mark.asyncio
+    async def test_long_mail_split_with_image_attaches_to_first_post(self, fake_env):
+        """Split + with-image: the PNG attaches to the first post so
+        readers see the image alongside the opening section."""
+        from unittest.mock import patch
+        ch = self._make_fake_channel(12345, mention="<#12345>")
+        inter, view, _ = self._make_structured_view(
+            fake_env, channel=ch, channel_id=12345,
+        )
+        long_mail = (
+            "**Stage 1**\n\n"
+            + ("Line\n" * 200)
+            + "\n**Stage 2**\n\n"
+            + ("Line\n" * 200)
+        )
+        fake_png = b"\x89PNG\r\n\x1a\nfake-png-bytes"
+        with self._stub_picker("split"), \
+             patch("storm_renderer.render", return_value=fake_png), \
+             patch("storm_roster_builder._build_mail_body", return_value=long_mail):
+            await srb._finalize_structured_roster(inter, view, include_image=True)
+
+        assert ch.send.await_count == 2
+        # First post carries the image; second is text-only.
+        assert "file" in ch.send.await_args_list[0].kwargs
+        assert "file" not in ch.send.await_args_list[1].kwargs
+
+    @pytest.mark.asyncio
+    async def test_long_mail_cancel_choice_aborts_without_posting(self, fake_env):
+        """Picker → Cancel: nothing posts, view stops, officer gets a
+        friendly "cancelled" ephemeral."""
+        from unittest.mock import patch
+        ch = self._make_fake_channel(12345, mention="<#12345>")
+        inter, view, _ = self._make_structured_view(
+            fake_env, channel=ch, channel_id=12345,
+        )
+        long_mail = "X" * 2500
+        with self._stub_picker("cancel"), \
+             patch("storm_roster_builder._build_mail_body", return_value=long_mail):
+            await srb._finalize_structured_roster(inter, view)
+
+        # Channel never gets a post.
+        ch.send.assert_not_awaited()
+        # Officer sees a cancelled-ephemeral.
+        cancel_call = next(
+            (c for c in inter.followup.send.await_args_list
+             if "Cancelled" in (c.args[0] if c.args else "")),
+            None,
+        )
+        assert cancel_call is not None
+
+    @pytest.mark.asyncio
     async def test_recovery_ephemeral_never_exceeds_message_limit(self, fake_env):
         """Defensive: when the post fails (any cause), the officer
         ephemeral must always fit in 2000 chars so the interaction
         doesn't stay stuck in "thinking…". Tester report 2026-05-21."""
         from unittest.mock import patch
-        # Force a send_failed branch by raising from channel.send.
         ch = self._make_fake_channel(
             12345, send_raises=Exception("Some failure"),
         )
         inter, view, _ = self._make_structured_view(
             fake_env, channel=ch, channel_id=12345,
         )
-        # A mail body big enough that the unbudgeted preview would have
-        # blown the ceiling.
         long_mail = "Y" * 2500
-        with patch("storm_roster_builder._build_mail_body", return_value=long_mail):
+        with self._stub_picker("txt"), \
+             patch("storm_roster_builder._build_mail_body", return_value=long_mail):
             await srb._finalize_structured_roster(inter, view)
 
         inter.followup.send.assert_awaited()
-        # Every followup.send must fit in 2000 chars.
         for call in inter.followup.send.await_args_list:
             content = call.args[0] if call.args else call.kwargs.get("content", "")
             assert len(content) <= 2000, (
@@ -2499,6 +2611,66 @@ class TestFinalizePostOutcomes:
         # Only the standard confirmation ephemeral fires; no overflow
         # warning because there's nothing to warn about.
         assert inter.followup.send.await_count == 1
+
+
+class TestSplitMailAtHeading:
+    """#237: the long-mail picker's "Send as 2 posts" choice splits at
+    a natural heading break so the second message always starts with
+    a `**Heading**` line and sections stay together for context."""
+
+    def test_splits_at_heading_nearest_midpoint(self):
+        mail = (
+            "**Stage 1**\n\n"
+            + "x" * 800
+            + "\n**Stage 2**\n\n"
+            + "y" * 800
+        )
+        parts = srb._split_mail_at_heading(mail)
+        assert parts is not None
+        part1, part2 = parts
+        assert len(part1) <= 2000
+        assert len(part2) <= 2000
+        # Second part begins with the Stage 2 heading.
+        assert part2.startswith("**Stage 2**")
+
+    def test_prefers_heading_closest_to_midpoint(self):
+        # Three headings; midpoint is closest to the second.
+        body = (
+            "**Section A**\n\n"
+            + "a" * 500
+            + "\n**Section B**\n\n"
+            + "b" * 500
+            + "\n**Section C**\n\n"
+            + "c" * 500
+        )
+        parts = srb._split_mail_at_heading(body)
+        assert parts is not None
+        part1, part2 = parts
+        # Section B is closest to the midpoint, so part2 starts there.
+        assert part2.startswith("**Section B**")
+
+    def test_returns_none_when_no_valid_heading_split(self):
+        # A mail with one giant section after the heading — splitting
+        # at the heading would leave part2 way over the ceiling.
+        mail = "Header line\n\n" + "z" * 5000
+        parts = srb._split_mail_at_heading(mail, max_len=2000)
+        # No `**Heading**` markers at all → no valid split.
+        assert parts is None
+
+    def test_strips_trailing_whitespace_from_first_part(self):
+        mail = (
+            "**Stage 1**\n\n"
+            + "data\n\n\n\n"  # trailing newlines before the split
+            + "**Stage 2**\n\n"
+            + "more"
+        )
+        parts = srb._split_mail_at_heading(mail)
+        assert parts is not None
+        part1, part2 = parts
+        # Part 1's trailing whitespace stripped so the next post
+        # doesn't start with leading blank lines.
+        assert not part1.endswith("\n\n")
+        assert part2.startswith("**Stage 2**")
 
 
 class TestPowerSnapshotAtFinalize:

@@ -730,7 +730,7 @@ class TestSyncMembersGate:
         assert "Members" in (content or "")
 
 
-# ── /sync_members error-message clarity (regression: opaque <Response [404]>) ─
+# ── /members sync error-message clarity (regression: opaque <Response [404]>) ─
 
 class TestSyncMembersErrorMessage:
     """When write_roster raises a gspread error, the user-facing followup
@@ -771,7 +771,7 @@ class TestSyncMembersErrorMessage:
         err = gspread.exceptions.APIError(resp)
 
         with patch("member_roster.write_roster", side_effect=err):
-            await cog.sync_members.callback(cog, interaction)
+            await cog.members_sync.callback(cog, interaction)
 
         call    = interaction.followup.send.call_args
         content = call.args[0] if call.args else call.kwargs.get("content")
@@ -808,7 +808,7 @@ class TestSyncMembersErrorMessage:
         err = gspread.exceptions.WorksheetNotFound("Member Roster")
 
         with patch("member_roster.write_roster", side_effect=err):
-            await cog.sync_members.callback(cog, interaction)
+            await cog.members_sync.callback(cog, interaction)
 
         call    = interaction.followup.send.call_args
         content = call.args[0] if call.args else call.kwargs.get("content")

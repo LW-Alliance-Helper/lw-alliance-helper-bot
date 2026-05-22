@@ -150,92 +150,255 @@ class TestLoadRosteredSlots:
 
 
 class TestLoadAttendance:
-    def test_empty_when_no_attendance_tab(self, fake_env):
+    """Post-#245 attendance reads from the unified `<DS|CS> Member
+    Log` tab and expands each member's `showed_up` flag back across
+    their assigned slots so the picker can pre-check existing
+    recorded statuses."""
+
+    def test_empty_when_no_slots_provided(self, fake_env):
+        """Without a slots list there's no key to expand against —
+        the function returns empty rather than guessing."""
         fake, gid = fake_env
-        existing, errors = sa.load_attendance(gid, "DS", "2026-05-18")
+        existing, errors = sa.load_attendance(gid, "DS", "2026-05-18", slots=[])
         assert existing == {}
         assert errors == []
 
-    def test_reads_prior_status(self, fake_env):
+    def test_empty_when_no_member_log_tab(self, fake_env):
         fake, gid = fake_env
-        # Pre-populate attendance tab.
-        att_ws = fake.add_worksheet("DS Attendance")
-        att_ws._rows = [
-            list(sa._ATTENDANCE_HEADER),
-            ["2026-05-18", "A", "Power Tower", "Alice", "attended", "999", ""],
-            ["2026-05-18", "A", "Power Tower", "Bob",   "no_show",  "999", ""],
+        slots = [{"team": "A", "zone": "Power Tower", "member": "Alice",
+                  "discord_id": "1", "role": "primary"}]
+        existing, errors = sa.load_attendance(
+            gid, "DS", "2026-05-18", slots=slots,
+        )
+        assert existing == {}
+        assert errors == []
+
+    def test_expands_yes_to_attended_for_assigned_slot(self, fake_env):
+        """Post-#245 only `yes` is written for showed_up; historical
+        `no` cells (from pre-fix writes) still read back as no_show
+        on the picker so officers can correct them in place."""
+        fake, gid = fake_env
+        ml = fake.add_worksheet("DS Member Log")
+        ml._rows = [
+            ["Event Date", "Member", "showed_up"],
+            ["2026-05-18", "Alice", "yes"],
+            ["2026-05-18", "Bob",   "no"],  # legacy "no" still readable
         ]
-        existing, _errs = sa.load_attendance(gid, "DS", "2026-05-18")
+        slots = [
+            {"team": "A", "zone": "Power Tower", "member": "Alice",
+             "discord_id": "1", "role": "primary"},
+            {"team": "A", "zone": "Power Tower", "member": "Bob",
+             "discord_id": "2", "role": "primary"},
+        ]
+        existing, _errs = sa.load_attendance(
+            gid, "DS", "2026-05-18", slots=slots,
+        )
         assert existing[("A", "Power Tower", "Alice")]["status"] == "attended"
         assert existing[("A", "Power Tower", "Bob")]["status"]   == "no_show"
 
     def test_isolates_event_dates(self, fake_env):
         fake, gid = fake_env
-        att_ws = fake.add_worksheet("DS Attendance")
-        att_ws._rows = [
-            list(sa._ATTENDANCE_HEADER),
-            ["2026-05-18", "A", "Power Tower", "Alice", "attended", "999", ""],
-            ["2026-05-25", "A", "Power Tower", "Frank", "attended", "999", ""],
+        ml = fake.add_worksheet("DS Member Log")
+        ml._rows = [
+            ["Event Date", "Member", "showed_up"],
+            ["2026-05-18", "Alice", "yes"],
+            ["2026-05-25", "Frank", "yes"],
         ]
-        existing, _errs = sa.load_attendance(gid, "DS", "2026-05-18")
-        # Frank (different date) must not appear.
+        slots = [
+            {"team": "A", "zone": "Power Tower", "member": "Alice",
+             "discord_id": "1", "role": "primary"},
+        ]
+        existing, _errs = sa.load_attendance(
+            gid, "DS", "2026-05-18", slots=slots,
+        )
         keys = set(existing.keys())
-        assert ("A", "Power Tower", "Frank") not in keys
         assert ("A", "Power Tower", "Alice") in keys
+        assert not any(k[2] == "Frank" for k in keys)
+
+    def test_unknown_member_flag_dropped(self, fake_env):
+        """Member Log carries a flag for a member that isn't in the
+        current roster slots (e.g., the member was unassigned after
+        attendance was recorded). The expansion drops them — without
+        slot context there's no team/zone key to assign."""
+        fake, gid = fake_env
+        ml = fake.add_worksheet("DS Member Log")
+        ml._rows = [
+            ["Event Date", "Member", "showed_up"],
+            ["2026-05-18", "Ghost", "yes"],
+        ]
+        slots = [
+            {"team": "A", "zone": "Power Tower", "member": "Alice",
+             "discord_id": "1", "role": "primary"},
+        ]
+        existing, _errs = sa.load_attendance(
+            gid, "DS", "2026-05-18", slots=slots,
+        )
+        assert existing == {}
 
 
 # ── Save ─────────────────────────────────────────────────────────────────────
 
 
-class TestSaveAttendance:
-    def test_writes_one_row_per_status(self, fake_env):
+class TestSaveAttendanceWritesMemberLog:
+    """Post-#245 `save_attendance` writes ONLY to the unified
+    `<DS|CS> Member Log` tab. The legacy `DS Attendance` /
+    `CS Attendance` tab is no longer appended to — existing data
+    there is preserved on the Sheet but not touched by the bot."""
+
+    def test_writes_showed_up_column_to_member_log(self, fake_env):
+        """Only `attended` writes `yes`. Everything else (no_show,
+        sub_activated, unrecorded) writes blank — see the docstring on
+        `_collapse_slot_statuses_to_member_flag` for the rationale
+        (member marked no_show may actually have sat out; blank
+        avoids inflating no-show counts in Trends queries)."""
         fake, gid = fake_env
         statuses = {
             ("A", "Power Tower",  "Alice"): "attended",
-            ("A", "Power Tower",  "Bob"):   "no_show",
-            ("A", "Nuclear Silo", "Carol"): "sub_activated",
-            ("A", "",             "Dan"):   "",            # unrecorded → skipped
+            ("A", "Power Tower",  "Bob"):   "no_show",       # → ""
+            ("A", "Nuclear Silo", "Carol"): "sub_activated",  # legacy → ""
+            ("A", "",             "Dan"):   "",               # unrecorded → ""
         }
         errors = sa.save_attendance(
             gid, "DS", "2026-05-18",
             statuses=statuses, officer_id=999,
         )
         assert errors == []
-        att = fake.worksheet("DS Attendance")
-        rows = att.get_all_values()
-        # Header + 3 recorded rows (Dan unrecorded → skipped).
-        assert len(rows) == 4
-        data = {(r[3], r[4]) for r in rows[1:]}
-        assert ("Alice", "attended")      in data
-        assert ("Bob",   "no_show")       in data
-        assert ("Carol", "sub_activated") in data
-        # Dan unrecorded → not present.
-        assert not any(r[3] == "Dan" for r in rows[1:])
+        ml = fake.worksheet("DS Member Log")
+        rows = ml.get_all_values()
+        # Header + 4 member rows (Alice, Bob, Carol, Dan).
+        assert rows[0] == ["Event Date", "Member", "showed_up"]
+        data = {r[1]: r[2] for r in rows[1:]}
+        assert data["Alice"] == "yes"
+        assert data["Bob"]   == ""
+        assert data["Carol"] == ""
+        assert data["Dan"]   == ""
 
-    def test_replaces_prior_rows_for_same_event(self, fake_env):
+    def test_legacy_attendance_tab_untouched(self, fake_env):
+        """The legacy `DS Attendance` tab is not created or written
+        by the bot post-cutover. Officers who pre-populated it manually
+        on the Sheet keep that history; the bot's writes go elsewhere."""
         fake, gid = fake_env
-        # Pre-populate stale entries.
-        att = fake.add_worksheet("DS Attendance")
-        att._rows = [
-            list(sa._ATTENDANCE_HEADER),
-            ["2026-05-18", "A", "Power Tower", "Alice", "no_show", "111", ""],
-            ["2026-05-18", "A", "Power Tower", "Bob",   "attended", "111", ""],
-            ["2026-05-25", "B", "Power Tower", "Frank", "attended", "111", ""],
+        sa.save_attendance(
+            gid, "DS", "2026-05-18",
+            statuses={("A", "Power Tower", "Alice"): "attended"},
+            officer_id=999,
+        )
+        assert "DS Attendance" not in fake._tabs
+
+    def test_rerun_for_same_event_replaces_member_rows(self, fake_env):
+        """Officer re-runs attendance for the same event: the prior
+        flags for those members are replaced cleanly (upsert), not
+        duplicated. Rows for other event dates stay intact."""
+        fake, gid = fake_env
+        ml = fake.add_worksheet("DS Member Log")
+        ml._rows = [
+            ["Event Date", "Member", "showed_up"],
+            ["2026-05-18", "Alice", "no"],
+            ["2026-05-18", "Bob",   "no"],
+            ["2026-05-25", "Alice", "yes"],
         ]
-        statuses = {("A", "Power Tower", "Alice"): "attended"}
-        errors = sa.save_attendance(
+        sa.save_attendance(
+            gid, "DS", "2026-05-18",
+            statuses={("A", "Power Tower", "Alice"): "attended"},
+            officer_id=999,
+        )
+        rows = ml.get_all_values()
+        # No duplicate Alice row for 2026-05-18; the 2026-05-25 entry
+        # is preserved.
+        on_18 = [r for r in rows[1:] if r[0] == "2026-05-18"]
+        alice_18 = [r for r in on_18 if r[1] == "Alice"]
+        assert len(alice_18) == 1
+        assert alice_18[0][2] == "yes"
+        on_25 = [r for r in rows[1:] if r[0] == "2026-05-25"]
+        assert any(r[1] == "Alice" and r[2] == "yes" for r in on_25)
+
+    def test_multi_slot_attended_anywhere_collapses_to_yes(self, fake_env):
+        """A member playing two slots (different zones, same team) —
+        attended on one, unrecorded on the other — collapses to
+        showed_up=yes. Aggregation rule: ANY attended → yes."""
+        fake, gid = fake_env
+        statuses = {
+            ("A", "Power Tower",  "Alice"): "attended",
+            ("A", "Nuclear Silo", "Alice"): "",          # unrecorded
+        }
+        sa.save_attendance(
             gid, "DS", "2026-05-18",
             statuses=statuses, officer_id=999,
         )
+        ml = fake.worksheet("DS Member Log")
+        rows = ml.get_all_values()
+        alice_rows = [r for r in rows[1:] if r[1] == "Alice"]
+        assert len(alice_rows) == 1
+        assert alice_rows[0][2] == "yes"
+
+    def test_multi_slot_no_show_anywhere_collapses_to_blank(self, fake_env):
+        """A member playing two slots, no_show on one and unrecorded
+        on the other → showed_up="" (blank). The `no_show` mark
+        alone doesn't drive a "no" cell because the member may have
+        actually sat out — we only ever write a positive `yes` when
+        explicitly marked attended."""
+        fake, gid = fake_env
+        statuses = {
+            ("A", "Power Tower",  "Bob"): "no_show",
+            ("A", "Nuclear Silo", "Bob"): "",
+        }
+        sa.save_attendance(
+            gid, "DS", "2026-05-18",
+            statuses=statuses, officer_id=999,
+        )
+        ml = fake.worksheet("DS Member Log")
+        rows = ml.get_all_values()
+        bob_rows = [r for r in rows[1:] if r[1] == "Bob"]
+        assert len(bob_rows) == 1
+        assert bob_rows[0][2] == ""
+
+    def test_empty_statuses_short_circuits(self, fake_env):
+        """No slots at all → nothing to write, no errors."""
+        fake, gid = fake_env
+        errors = sa.save_attendance(
+            gid, "DS", "2026-05-18", statuses={}, officer_id=999,
+        )
         assert errors == []
-        rows = att.get_all_values()
-        # 2026-05-18 rows replaced; 2026-05-25 preserved.
-        data_for_18 = [r for r in rows[1:] if r[0] == "2026-05-18"]
-        assert len(data_for_18) == 1
-        assert data_for_18[0][3] == "Alice"
-        assert data_for_18[0][4] == "attended"
-        # The unrelated event date row survives.
-        assert any(r[0] == "2026-05-25" and r[3] == "Frank" for r in rows[1:])
+        # No tab created when there's nothing to write.
+        assert "DS Member Log" not in fake._tabs
+
+
+class TestCollapseHelper:
+    """Direct test of the per-slot → per-member status aggregation."""
+
+    def test_attended_wins_over_no_show(self):
+        flags = sa._collapse_slot_statuses_to_member_flag({
+            ("A", "Z1", "Alice"): "attended",
+            ("A", "Z2", "Alice"): "no_show",
+        })
+        assert flags["Alice"] == "yes"
+
+    def test_no_show_only_collapses_to_blank(self):
+        """`no_show` is no longer written as a "no" cell — see the
+        collapse helper's docstring for why (member marked no_show
+        may actually have sat out)."""
+        flags = sa._collapse_slot_statuses_to_member_flag({
+            ("A", "Z1", "Bob"): "no_show",
+        })
+        assert flags["Bob"] == ""
+
+    def test_unrecorded_only(self):
+        flags = sa._collapse_slot_statuses_to_member_flag({
+            ("A", "Z1", "Carol"): "",
+        })
+        assert flags["Carol"] == ""
+
+    def test_legacy_sub_activated_treated_as_unrecorded(self):
+        flags = sa._collapse_slot_statuses_to_member_flag({
+            ("A", "Z1", "Dan"): "sub_activated",
+        })
+        assert flags["Dan"] == ""
+
+    def test_blank_member_skipped(self):
+        flags = sa._collapse_slot_statuses_to_member_flag({
+            ("A", "Z1", ""): "attended",
+        })
+        assert flags == {}
 
 
 # ── Session ──────────────────────────────────────────────────────────────────
@@ -460,154 +623,24 @@ class TestOverrideBelowFloorSurface:
         assert by_name["Dan"]["override_below_floor"] is True
 
 
-class TestSaveAttendanceAtomicity:
-    """The prior `ws.clear()` + `ws.update(A1)` pattern wiped the
-    alliance's entire attendance history if the update raised. The
-    new write-then-blank-trailing pattern leaves prior data intact
-    on a write failure."""
+class TestSaveAttendanceMemberLogAtomicity:
+    """Member-Log write semantics live in `storm_log.upsert_member_log_rows`
+    (covered in `test_storm_member_log.py`). At the attendance layer we
+    confirm only that a Member-Log write failure surfaces as a soft
+    error rather than swallowing silently."""
 
-    def test_write_failure_does_not_wipe_history(self, fake_env, monkeypatch):
+    def test_member_log_write_failure_surfaces_soft_error(
+        self, fake_env, monkeypatch,
+    ):
         fake, gid = fake_env
-        att = fake.add_worksheet("DS Attendance")
-        att._rows = [
-            list(sa._ATTENDANCE_HEADER),
-            ["2026-05-11", "A", "Power Tower", "Old", "attended", "111", ""],
-            ["2026-05-18", "A", "Power Tower", "Alice", "no_show", "111", ""],
-        ]
 
-        # Force ws.update to raise on the first call (the main payload
-        # write). Prior implementation called ws.clear() before this,
-        # which would have wiped every row. The new implementation must
-        # leave the sheet untouched.
-        original_update = att.update
-        def _raising_update(*args, **kwargs):
+        def _raise_upsert(*args, **kwargs):
             raise RuntimeError("simulated 503")
-        att.update = _raising_update
 
-        errors = sa.save_attendance(
-            gid, "DS", "2026-05-18",
-            statuses={("A", "Power Tower", "Alice"): "attended"},
-            officer_id=999,
-        )
-        assert errors and "prior data intact" in errors[0]
-        # Restore so we can read.
-        att.update = original_update
-        rows = att.get_all_values()
-        # Original two rows are still there — nothing was lost.
-        assert ["2026-05-11", "A", "Power Tower", "Old", "attended", "111", ""] in rows
-        assert ["2026-05-18", "A", "Power Tower", "Alice", "no_show", "111", ""] in rows
-
-    def test_trailing_blank_removes_stale_rows_when_shrinking(self, fake_env):
-        fake, gid = fake_env
-        att = fake.add_worksheet("DS Attendance")
-        # Three prior rows, all for our event — all should be replaced.
-        att._rows = [
-            list(sa._ATTENDANCE_HEADER),
-            ["2026-05-18", "A", "Power Tower", "Alice", "attended", "111", ""],
-            ["2026-05-18", "A", "Power Tower", "Bob",   "no_show",  "111", ""],
-            ["2026-05-18", "A", "Nuclear Silo","Carol", "attended", "111", ""],
-        ]
-        # New payload has only one recorded row — the others should
-        # be blanked out, not left as stale data.
-        errors = sa.save_attendance(
-            gid, "DS", "2026-05-18",
-            statuses={("A", "Power Tower", "Alice"): "attended"},
-            officer_id=999,
-        )
-        assert errors == []
-        rows = att.get_all_values()
-        # Header + 1 data row, the trailing 2 rows blanked.
-        non_blank_data = [r for r in rows[1:] if any(c for c in r)]
-        assert len(non_blank_data) == 1
-        assert non_blank_data[0][3] == "Alice"
-
-
-class TestSaveAttendanceCarryForward:
-    """A roster edit between attendance saves used to silently drop
-    prior recorded attendance for members removed from the roster.
-    save_attendance now carries forward prior_existing rows whose
-    slot isn't in the current `statuses`."""
-
-    def test_removed_member_attendance_preserved(self, fake_env):
-        fake, gid = fake_env
-        att = fake.add_worksheet("DS Attendance")
-        # Officer A recorded a no_show for Erin yesterday.
-        prior_existing = {
-            ("A", "Power Tower", "Erin"): {
-                "status": "no_show",
-                "recorded_by": "111",
-                "recorded_at": "2026-05-19T10:00:00+00:00",
-            },
-        }
-        # Officer B re-runs attendance after Erin was unassigned from
-        # this event (so Erin is NOT in current statuses).
-        statuses = {("A", "Power Tower", "Alice"): "attended"}
-        errors = sa.save_attendance(
-            gid, "DS", "2026-05-18",
-            statuses=statuses, officer_id=999,
-            prior_existing=prior_existing,
-        )
-        assert errors == []
-        rows = att.get_all_values()
-        members = {r[3]: r for r in rows[1:] if any(c for c in r)}
-        # Erin's no_show row carried forward — not silently dropped.
-        assert "Erin" in members
-        assert members["Erin"][4] == "no_show"
-        # Alice's new attendance recorded.
-        assert members["Alice"][4] == "attended"
-
-
-class TestSaveAttendanceRecordedBySemantics:
-    """recorded_by is preserved when the status is unchanged so
-    officer B's save doesn't silently rewrite officer A's audit row.
-    A genuine status edit takes the current officer's ID."""
-
-    def test_unchanged_status_keeps_prior_recorded_by(self, fake_env):
-        fake, gid = fake_env
-        att = fake.add_worksheet("DS Attendance")
-        prior_existing = {
-            ("A", "Power Tower", "Alice"): {
-                "status": "attended",
-                "recorded_by": "111",   # original officer
-                "recorded_at": "2026-05-19T10:00:00+00:00",
-            },
-        }
-        # Officer 999 re-opens the view (status pre-fills as "attended"),
-        # makes no edits to Alice, and saves.
-        statuses = {("A", "Power Tower", "Alice"): "attended"}
-        sa.save_attendance(
-            gid, "DS", "2026-05-18",
-            statuses=statuses, officer_id=999,
-            prior_existing=prior_existing,
-        )
-        rows = att.get_all_values()
-        alice = next(r for r in rows[1:] if r and r[3] == "Alice")
-        # recorded_by is still 111, not 999.
-        assert alice[5] == "111"
-        # recorded_at is unchanged.
-        assert alice[6] == "2026-05-19T10:00:00+00:00"
-
-    def test_changed_status_takes_current_officer(self, fake_env):
-        fake, gid = fake_env
-        att = fake.add_worksheet("DS Attendance")
-        prior_existing = {
-            ("A", "Power Tower", "Alice"): {
-                "status": "attended",
-                "recorded_by": "111",
-                "recorded_at": "2026-05-19T10:00:00+00:00",
-            },
-        }
-        # Officer 999 changes Alice's status from attended → no_show.
-        statuses = {("A", "Power Tower", "Alice"): "no_show"}
-        sa.save_attendance(
-            gid, "DS", "2026-05-18",
-            statuses=statuses, officer_id=999,
-            prior_existing=prior_existing,
-        )
-        rows = att.get_all_values()
-        alice = next(r for r in rows[1:] if r and r[3] == "Alice")
-        # recorded_by reflects the new officer.
-        assert alice[5] == "999"
-        # recorded_at is current (UTC iso suffix).
-        assert alice[6].endswith("+00:00")
-        assert alice[4] == "no_show"
+        with patch("storm_log.upsert_member_log_rows", _raise_upsert):
+            errors = sa.save_attendance(
+                gid, "DS", "2026-05-18",
+                statuses={("A", "Power Tower", "Alice"): "attended"},
+                officer_id=999,
+            )
+        assert errors and "member-log write failed" in errors[0]

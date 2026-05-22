@@ -294,6 +294,7 @@ _PREMIUM_GATED_LABELS = {
     seh.HUB_BTN_VIEW_SIGNUPS,
     seh.HUB_BTN_ATTENDANCE,
     seh.HUB_BTN_REMIND,
+    seh.HUB_BTN_TRENDS,
     seh.HUB_BTN_PAST_ROSTERS,
 }
 
@@ -323,7 +324,7 @@ def _make_view(
 
 
 class TestEventHubViewPremiumGating:
-    def test_premium_tier_renders_eleven_active_buttons(self):
+    def test_premium_tier_renders_twelve_active_buttons(self):
         view = _make_view(is_premium=True)
         labels = {c.label for c in view.children}
         # Every active label appears, none of the locked variants.
@@ -361,14 +362,16 @@ class TestEventHubViewPremiumGating:
         rather than concatenating both."""
         view = _make_view(is_premium=False)
         locked = [c.label for c in view.children if c.label.startswith("💎 ")]
-        # Five premium-gated buttons in the hub.
-        assert len(locked) == 5
-        # 📣/👁️/📋/🔔/📜 are the original emoji that should NOT survive
-        # the locked rewrite (they're the leading character on the
-        # premium-gated active labels).
+        # Six premium-gated buttons in the hub (#246 added the Trends
+        # Viewer to the existing five).
+        assert len(locked) == 6
+        # 📣/👁️/📋/🔔/🔍/📜 are the original emoji that should NOT
+        # survive the locked rewrite (they're the leading character
+        # on the premium-gated active labels).
         for label in locked:
             assert "📣" not in label  # Post sign-up
             assert "🔔" not in label  # DM reminder
+            assert "🔍" not in label  # Trends viewer (#246)
 
     def test_button_layout_three_rows(self):
         view = _make_view(is_premium=True)
@@ -378,8 +381,9 @@ class TestEventHubViewPremiumGating:
         assert sum(1 for c in view.children if c.row == 0) == 4
         # Row 1 has the four comms + config buttons.
         assert sum(1 for c in view.children if c.row == 1) == 4
-        # Row 2 has the three reference + setup buttons.
-        assert sum(1 for c in view.children if c.row == 2) == 3
+        # Row 2 has four reference + setup buttons (#246 added the
+        # Trends Viewer alongside Logs / Past Rosters / Setup).
+        assert sum(1 for c in view.children if c.row == 2) == 4
 
     def test_primary_action_buttons_use_coloured_styles(self):
         view = _make_view(is_premium=True)

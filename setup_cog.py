@@ -5100,17 +5100,245 @@ async def run_storm_setup(interaction: discord.Interaction, bot, event_type: str
 # Free-tier question types are universally available; Premium types are gated
 # in the wizard. `roster_names` is unique to participation logs — it draws
 # from the roster source the user configures here.
-_PARTICIPATION_FREE_TYPES = ["text", "yes_no", "numeric", "roster_names"]
-_PARTICIPATION_PREMIUM_TYPES = ["single_select", "multi_select", "date"]
+#
+# #244: `roster_multi_select` and `derived_count` are new per-member capture
+# types. They write to the new `DS Member Log` / `CS Member Log` Sheet tab
+# (one row per (event_date, member)) so the Trends Viewer in #246 can
+# aggregate across events. `roster_names` keeps working unchanged for
+# alliances on the legacy free-text-list pattern.
+_PARTICIPATION_FREE_TYPES = [
+    "text", "yes_no", "numeric", "roster_names", "roster_multi_select",
+]
+_PARTICIPATION_PREMIUM_TYPES = [
+    "single_select", "multi_select", "date", "derived_count",
+]
 _PARTICIPATION_TYPE_LABELS = {
     "text":          "Text: short typed answer",
     "yes_no":        "Yes / No",
     "numeric":       "Numeric: number with optional min/max",
     "roster_names":  "Roster names: pick or type member names",
+    "roster_multi_select": "Roster multi-select: pick members from a dropdown",
     "single_select": "💎 Single-select dropdown",
     "multi_select":  "💎 Multi-select dropdown",
     "date":          "💎 Date (formatted entry)",
+    "derived_count": "💎 Derived count: bot counts past events per member",
 }
+
+# #244: question types that produce *per-member* data (one flag per
+# member per event) rather than *event-level* data (one answer per
+# event). These get written to the new `DS Member Log` / `CS Member
+# Log` Sheet tab instead of the existing participation log tab. Used
+# by `storm_log.run_log_flow` to branch the write paths.
+_PARTICIPATION_PER_MEMBER_TYPES = ("roster_multi_select", "derived_count")
+
+
+async def _run_participation_preset_picker_step(
+    channel, bot, user, cancel_event, *,
+    cmd_name: str,
+    is_premium_flag: bool,
+    existing_questions: list[dict],
+    cap: int | None,
+) -> list[dict] | None:
+    """#247 — multi-select preset picker for participation questions.
+
+    Returns the list of question dicts the officer picked (already
+    converted from preset shape via `defaults.preset_to_question`).
+    Empty list when the officer skipped or no presets remain.
+    `None` on timeout / cancel — caller propagates.
+
+    Filters out presets whose key is already in `existing_questions`
+    so re-running setup doesn't duplicate columns. When nothing is
+    left to offer, the function returns `[]` without bothering the
+    officer.
+    """
+    import wizard_registry
+    from defaults import (
+        storm_participation_presets, preset_to_question,
+    )
+
+    # Always show both tiers' presets so free-tier officers can see
+    # what Premium would unlock. The free-tier set is the base; the
+    # Premium-only set is appended with a 💎 prefix on the visible
+    # label so officers can tell them apart at a glance.
+    free_set = storm_participation_presets(is_premium=False)
+    full_set = storm_participation_presets(is_premium=True)
+    free_keys = {p["key"] for p in free_set}
+    existing_keys = {q.get("key") for q in existing_questions if q.get("key")}
+    # Available list = everything except already-configured. Premium
+    # presets stay in the visible list for free-tier users so they
+    # can see what's available; picking one fires the upsell ack.
+    available = [p for p in full_set if p["key"] not in existing_keys]
+    if not available:
+        return []
+
+    def _is_premium_only(p: dict) -> bool:
+        return p["key"] not in free_keys
+
+    # Default-check the presets marked `default_checked` in defaults.py
+    # (currently just "Did this member show up?"). Premium-only ones
+    # are never default-checked on free tier — defaulting to a 💎
+    # preset would force the upsell ack just for hitting Add.
+    default_checked = {
+        p["key"] for p in available
+        if p.get("default_checked")
+        and (is_premium_flag or not _is_premium_only(p))
+    }
+
+    class _PresetPickerView(discord.ui.View):
+        def __init__(self):
+            super().__init__(timeout=300)
+            self.action: str | None = None
+            self.selected: set[str] = set(default_checked)
+            self.cancelled = False
+
+            options = []
+            for p in available[:25]:  # Discord 25-option cap
+                emoji = p.get("emoji", "")
+                # Premium-only on free tier: 💎 prefix + a Premium hint
+                # in the description so officers can't miss it.
+                if _is_premium_only(p) and not is_premium_flag:
+                    label = f"💎 {emoji} {p['label']}"[:100]
+                    description = f"💎 Premium · {p.get('description', '')}"[:100]
+                else:
+                    label = f"{emoji} {p['label']}"[:100]
+                    description = p.get("description", "")[:100]
+                options.append(discord.SelectOption(
+                    label=label,
+                    value=p["key"],
+                    description=description,
+                    default=(p["key"] in default_checked),
+                ))
+            sel = discord.ui.Select(
+                placeholder="Pick the preset questions you want…",
+                options=options,
+                min_values=0,
+                max_values=min(len(options), 25),
+                row=0,
+            )
+
+            async def _on_select(inter: discord.Interaction):
+                self.selected = set(sel.values)
+                await inter.response.defer()
+
+            sel.callback = _on_select
+            self.add_item(sel)
+
+        @discord.ui.button(
+            label="✅ Add picked presets",
+            style=discord.ButtonStyle.success, row=1,
+        )
+        async def add(self, inter: discord.Interaction, _btn):
+            self.action = "add"
+            for c in self.children:
+                c.disabled = True
+            await wizard_registry.safe_edit_response(inter, view=self)
+            self.stop()
+
+        @discord.ui.button(
+            label="↩️ Skip presets",
+            style=discord.ButtonStyle.secondary, row=1,
+        )
+        async def skip(self, inter: discord.Interaction, _btn):
+            self.action = "skip"
+            for c in self.children:
+                c.disabled = True
+            await wizard_registry.safe_edit_response(inter, view=self)
+            self.stop()
+
+    prem_count_visible = sum(1 for p in available if _is_premium_only(p))
+    tier_note = ""
+    if is_premium_flag:
+        if prem_count_visible > 0:
+            tier_note = f"\n💎 *Includes {prem_count_visible} Premium preset(s).*"
+    else:
+        if prem_count_visible > 0:
+            tier_note = (
+                f"\n💎 *Presets marked with 💎 are Premium-only. Run "
+                f"`/upgrade` to unlock {prem_count_visible} additional "
+                f"preset(s).*"
+            )
+
+    view = _PresetPickerView()
+    await channel.send(
+        f"**Step 6.6: Use any preset questions?**\n"
+        f"Pre-configured templates for the common participation "
+        f"questions. Pick any you want and they'll land in your "
+        f"question list ready to use. You can still customise them "
+        f"later in the next step.{tier_note}",
+        view=view,
+    )
+    await wait_view_or_cancel(view, cancel_event)
+    if view.cancelled:
+        return None
+    if view.action is None:
+        await channel.send(f"⏰ Timed out. Run `/{cmd_name}` to start again.")
+        return None
+    if view.action == "skip" or not view.selected:
+        return []
+
+    # Drop Premium-only picks on free tier (the picker shows them as a
+    # teaser; selecting one surfaces the upsell). Officers can still
+    # pick the free presets in the same submission.
+    selected_in_order = [p for p in available if p["key"] in view.selected]
+    if not is_premium_flag:
+        premium_picks = [p for p in selected_in_order if _is_premium_only(p)]
+        if premium_picks:
+            labels = ", ".join(f"**{p['label']}**" for p in premium_picks)
+            await channel.send(
+                f"💎 *Skipped Premium-only preset(s):* {labels}. Run "
+                f"`/upgrade` to unlock them, then re-run setup to add."
+            )
+            selected_in_order = [
+                p for p in selected_in_order if not _is_premium_only(p)
+            ]
+        if not selected_in_order:
+            return []
+
+    # Enforce free-tier cap. Premium has no cap. Trim selections by
+    # cap-already-spent so officers don't accidentally land past it.
+    if cap is not None:
+        room = max(0, cap - len(existing_questions))
+        if room < len(selected_in_order):
+            await channel.send(
+                f"⚠️ Free tier caps participation questions at {cap}. "
+                f"You picked {len(selected_in_order)} preset(s), but only "
+                f"{room} fit. Added the first {room}; ignore or upgrade "
+                f"for the rest."
+            )
+            selected_in_order = selected_in_order[:room]
+
+    additions = [preset_to_question(p) for p in selected_in_order]
+
+    # Dependency check: derived_count presets reference a source
+    # question. Warn if the officer picked a derived_count without its
+    # source AND the source isn't already configured. The question
+    # still lands in the list — it'll just be inert until the source
+    # exists.
+    added_keys = {q["key"] for q in additions} | existing_keys
+    warnings: list[str] = []
+    for q in additions:
+        src = q.get("source_question_key")
+        if not src:
+            continue
+        if src in added_keys:
+            continue
+        # Find the source preset's friendly label, if any.
+        src_label = src
+        for p in storm_participation_presets(True):
+            if p["key"] == src:
+                src_label = p["label"]
+                break
+        warnings.append(
+            f"⚠️ **{q['label']}** needs the **{src_label}** question "
+            f"as its source. Pick that one too in the next step, or "
+            f"this column will stay empty until the source is added."
+        )
+    if warnings:
+        await channel.send("\n".join(warnings))
+
+    summary = ", ".join(f"**{q['label']}**" for q in additions)
+    await channel.send(f"✅ Added preset(s): {summary}")
+    return additions
 
 
 async def _run_storm_participation_step(
@@ -5142,11 +5370,12 @@ async def _run_storm_participation_step(
     )
 
     # ── 6.1 Enable? ────────────────────────────────────────────────────────────
+    parent_cmd = "desertstorm" if event_type == "DS" else "canyonstorm"
     enable_prompt = (
         f"**Step 6 of 7: Participation Tracking**\n"
-        f"Do you want to track {label} participation? Leadership runs "
-        f"`/{cmd_name.replace('setup_', '')}_participation` after each event "
-        f"to log who showed up, who sat out, etc.\n"
+        f"Do you want to track {label} participation? Leadership clicks "
+        f"**📊 Fill out participation questions** on `/{parent_cmd}` "
+        f"after each event to log who showed up, who sat out, etc.\n"
         f"You'll define the questions yourself, so the tracker matches how "
         f"your alliance runs the event."
     )
@@ -5337,9 +5566,25 @@ async def _run_storm_participation_step(
         await channel.send(f"⚠️ `{raw_start}` isn't a number. Run `/{cmd_name}` to start again.")
         return None
 
-    # ── 6.6 Questions builder ──────────────────────────────────────────────────
+    # ── 6.6 Preset picker (#247) ───────────────────────────────────────────────
+    # Offer pre-configured question templates so officers don't have to
+    # spell out the common shapes by hand. Free tier sees the 3 base
+    # templates; Premium sees the 3 derived/auto-prefill ones too. The
+    # picker filters out templates already present in the existing
+    # questions list (re-entry case) — re-run setup then "add from
+    # presets" without duplicating columns.
     questions = list(cur_part.get("questions") or [])
     cap = None if is_premium_flag else 3
+    preset_additions = await _run_participation_preset_picker_step(
+        channel, bot, user, cancel_event,
+        cmd_name=cmd_name,
+        is_premium_flag=is_premium_flag,
+        existing_questions=questions,
+        cap=cap,
+    )
+    if preset_additions is None:
+        return None
+    questions.extend(preset_additions)
 
     def _summarize() -> str:
         if not questions:
@@ -5410,9 +5655,10 @@ async def _run_storm_participation_step(
         )
         view = _BuilderView(len(questions))
         await channel.send(
-            f"**Step 6.6: Participation Questions**\n"
-            f"Each question becomes a column on your sheet and a step in the "
-            f"`/{cmd_name.replace('setup_', '')}_participation` flow.\n"
+            f"**Step 6.7: Participation Questions**\n"
+            f"Each question becomes a column on your sheet and a step in "
+            f"the **📊 Fill out participation questions** flow on "
+            f"`/{parent_cmd}`.\n"
             f"Examples: *Vote count*, *Sitting out*, *Did anyone show up late?*\n"
             f"{cap_note}\n\n{_summarize()}",
             view=view,
@@ -5442,6 +5688,7 @@ async def _run_storm_participation_step(
                 cmd_name=cmd_name,
                 is_premium_flag=is_premium_flag,
                 existing=existing,
+                all_questions=questions,
             )
             if new_q is None:
                 return None
@@ -6476,9 +6723,15 @@ def _col_index_to_letter(idx: int) -> str:
 async def _build_participation_question(
     channel, bot, user, cancel_event, *,
     cmd_name: str, is_premium_flag: bool, existing: dict | None,
+    all_questions: list[dict] | None = None,
 ) -> dict | None:
     """Add or edit a single participation question. Mirrors the survey
-    question builder's shape but with participation-specific types."""
+    question builder's shape but with participation-specific types.
+
+    `all_questions` (#244): the full configured-so-far list. Lets the
+    derived_count type's source picker enumerate existing
+    roster_multi_select questions to point at.
+    """
 
     def check(m):
         return m.author == user and m.channel == channel
@@ -6593,7 +6846,223 @@ async def _build_participation_question(
         fmt = reply.content.strip()
         q["date_format"] = "%m/%d/%Y" if fmt.lower() in ("", "default") else fmt
 
+    elif q_type == "roster_multi_select":
+        # #244 — paginated multi-select against the alliance roster.
+        # Optional auto-prefill source (Premium only). Free tier always
+        # captures manually.
+        if is_premium_flag:
+            class _PrefillView(discord.ui.View):
+                def __init__(self):
+                    super().__init__(timeout=120)
+                    self.selected: str | None = None
+                    self.cancelled = False
+
+                @discord.ui.button(
+                    label="🗳️ Pre-fill from Discord poll signups",
+                    style=discord.ButtonStyle.primary,
+                )
+                async def from_poll(self, inter, _btn):
+                    self.selected = "discord_poll"
+                    for c in self.children:
+                        c.disabled = True
+                    await wizard_registry.safe_edit_response(
+                        inter,
+                        content="✅ Pre-fill source: **Discord poll signups**",
+                        view=self,
+                    )
+                    self.stop()
+
+                @discord.ui.button(
+                    label="✋ Manual selection only",
+                    style=discord.ButtonStyle.secondary,
+                )
+                async def manual(self, inter, _btn):
+                    self.selected = ""
+                    for c in self.children:
+                        c.disabled = True
+                    await wizard_registry.safe_edit_response(
+                        inter,
+                        content="✅ Pre-fill source: **Manual selection only**",
+                        view=self,
+                    )
+                    self.stop()
+
+            pv = _PrefillView()
+            await channel.send(
+                "**Auto-prefill source (💎 Premium, optional)**\n"
+                "Want the bot to pre-check members based on a signal? "
+                "Officers can still toggle any member; pre-fills are a "
+                "starting point.\n\n"
+                "• **Discord poll signups**: pre-check members who "
+                "voted to attend in the signup poll for this event "
+                "(useful for the 'Who didn't vote?' shape — invert "
+                "the answer at participation time).\n"
+                "• **Manual only**: no pre-fill; officer picks from "
+                "the full roster.",
+                view=pv,
+            )
+            await wait_view_or_cancel(pv, cancel_event)
+            if pv.cancelled or pv.selected is None:
+                await channel.send(f"⏰ Timed out. Run `/{cmd_name}` to start again.")
+                return None
+            if pv.selected:
+                q["prefill_source"] = pv.selected
+        # Free tier: prefill_source not set; officer always picks manually.
+
+    elif q_type == "derived_count":
+        # #244 — Premium-only. The bot reads past Per-Member Log rows
+        # for the source question and counts per member. Officer can
+        # override at participation time.
+
+        # Source question picker — must be a roster_multi_select.
+        source_candidates = [
+            other for other in (all_questions or [])
+            if other.get("type") == "roster_multi_select"
+        ]
+        if not source_candidates:
+            await channel.send(
+                "⚠️ **Derived count needs a source question** of type "
+                "`Roster multi-select` to read from. Add one of those "
+                "first, then come back and add this derived count.\n"
+                "Skipping this question for now."
+            )
+            return None
+
+        class _SourceView(discord.ui.View):
+            def __init__(self):
+                super().__init__(timeout=120)
+                self.selected: str | None = None
+                self.cancelled = False
+                options = [
+                    discord.SelectOption(
+                        label=(s.get("label") or s.get("key", "?"))[:100],
+                        value=s.get("key", ""),
+                    )
+                    for s in source_candidates[:25]
+                ]
+                sel = discord.ui.Select(
+                    placeholder="Pick the source roster multi-select question…",
+                    options=options,
+                )
+
+                async def _cb(inter):
+                    self.selected = sel.values[0]
+                    sel.disabled = True
+                    await wizard_registry.safe_edit_response(
+                        inter,
+                        content=f"✅ Source question: `{self.selected}`",
+                        view=self,
+                    )
+                    self.stop()
+                sel.callback = _cb
+                self.add_item(sel)
+
+        sv = _SourceView()
+        await channel.send(
+            "**Source question** *(💎 Premium)*\n"
+            "Which roster multi-select question's history should this "
+            "count read from?",
+            view=sv,
+        )
+        await wait_view_or_cancel(sv, cancel_event)
+        if sv.cancelled or sv.selected is None:
+            await channel.send(f"⏰ Timed out. Run `/{cmd_name}` to start again.")
+            return None
+        q["source_question_key"] = sv.selected
+
+        # Lookback window — number of past events to scan.
+        attempts = 3
+        lookback = 4
+        while attempts > 0:
+            raw = await wait_for_msg_simple(
+                channel, bot, user, cancel_event,
+                "**Lookback window** *(💎 Premium)*\n"
+                "How many past captured events should the count cover? "
+                "(e.g. `4` for 'past 4 events'). Default is 4.",
+            )
+            if raw is None:
+                return None
+            raw = raw.strip()
+            if not raw:
+                break
+            try:
+                lookback = max(1, int(raw))
+                break
+            except ValueError:
+                attempts -= 1
+                await channel.send(
+                    f"⚠️ `{raw}` isn't a number. Please re-enter."
+                )
+        q["lookback_events"] = lookback
+
+        # Show-during-log toggle.
+        class _ShowDuringLogView(discord.ui.View):
+            def __init__(self):
+                super().__init__(timeout=120)
+                self.selected: bool | None = None
+                self.cancelled = False
+
+            @discord.ui.button(
+                label="📊 Show counts per member during the log",
+                style=discord.ButtonStyle.primary,
+            )
+            async def yes_btn(self, inter, _btn):
+                self.selected = True
+                for c in self.children:
+                    c.disabled = True
+                await wizard_registry.safe_edit_response(
+                    inter, content="✅ Show during the log: **Yes**", view=self,
+                )
+                self.stop()
+
+            @discord.ui.button(
+                label="🔕 Only show in the Trends Viewer",
+                style=discord.ButtonStyle.secondary,
+            )
+            async def no_btn(self, inter, _btn):
+                self.selected = False
+                for c in self.children:
+                    c.disabled = True
+                await wizard_registry.safe_edit_response(
+                    inter, content="✅ Show during the log: **No**", view=self,
+                )
+                self.stop()
+
+        sd = _ShowDuringLogView()
+        await channel.send(
+            "**Show during participation log?** *(💎 Premium)*\n"
+            "When officers run the log, should this count display per "
+            "member next to their name? Off by default — the count "
+            "still lives in the Trends Viewer either way.",
+            view=sd,
+        )
+        await wait_view_or_cancel(sd, cancel_event)
+        if sd.cancelled or sd.selected is None:
+            await channel.send(f"⏰ Timed out. Run `/{cmd_name}` to start again.")
+            return None
+        q["show_during_log"] = bool(sd.selected)
+
     return q
+
+
+async def wait_for_msg_simple(
+    channel, bot, user, cancel_event, prompt: str,
+    *, timeout: int = 120,
+) -> str | None:
+    """Minimal message-wait helper for inline use inside
+    `_build_participation_question`. Returns the user's reply text
+    or None on cancel/timeout."""
+
+    def check(m):
+        return m.author == user and m.channel == channel
+
+    await channel.send(prompt)
+    try:
+        reply = await bot.wait_for("message", check=check, timeout=timeout)
+        return reply.content
+    except asyncio.TimeoutError:
+        await channel.send("⏰ Timed out.")
+        return None
 
 
 async def run_event_setup(interaction: discord.Interaction, bot):

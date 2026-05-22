@@ -59,8 +59,13 @@ _VALID_STATUSES = (STATUS_ATTENDED, STATUS_NO_SHOW)
 
 
 # ── Sheet I/O ────────────────────────────────────────────────────────────────
+#
+# Post-#245 the bot writes attendance to the unified `<DS|CS> Member
+# Log` tab (#244) instead of the per-slot legacy attendance tab. The
+# legacy schema is kept here as a reference for any officer reading
+# the alliance's pre-cutover history; the bot no longer writes to it.
 
-_ATTENDANCE_HEADER = [
+_LEGACY_ATTENDANCE_HEADER = [
     "Event Date", "Team", "Zone", "Member", "Status",
     "Recorded By", "Recorded At (UTC)",
 ]
@@ -190,64 +195,156 @@ def load_rostered_slots(
 
 def load_attendance(
     guild_id: int, event_type: str, event_date: str,
+    *,
+    slots: Optional[list[dict]] = None,
 ) -> tuple[dict[tuple[str, str, str], dict], list[str]]:
-    """Load existing attendance rows for an event so re-running the
-    command pre-fills the picker. Returns
-    `({(team, zone, member): row}, errors)` keyed for fast lookup."""
-    import config
+    """Load existing attendance for an event so re-running the picker
+    pre-fills with what's already recorded. Returns
+    `({(team, zone, member): row}, errors)` keyed for fast lookup.
+
+    Post-#245 source: the unified `DS Member Log` / `CS Member Log`
+    tab. The Member Log is keyed by `(event_date, member)` with a
+    `showed_up` column; this function expands each member's flag back
+    across their assigned slots so the picker UI can pre-check.
+
+    `slots` is the rostered-slot list for this event (from
+    `load_rostered_slots`). Without it, no expansion is possible and
+    the function returns an empty dict.
+
+    Pre-cutover events (those whose attendance was recorded against
+    the legacy `DS Attendance` / `CS Attendance` tab) will not
+    pre-fill — per the #245 ticket this is a clean cutover with no
+    backfill. Officers re-recording an old event will see "unrecorded"
+    for every slot and can re-mark as needed; the legacy tab data
+    remains visible on the Sheet for reference.
+    """
+    import storm_log
+
     errors: list[str] = []
+    if not slots:
+        return {}, errors
+
+    try:
+        member_flags = _read_member_log_for_date(
+            guild_id, event_type, event_date,
+        )
+    except Exception as e:
+        return {}, [f"member-log read failed: {e}"]
+
+    if not member_flags:
+        return {}, errors
+
+    flag_to_status = {"yes": STATUS_ATTENDED, "no": STATUS_NO_SHOW}
+    out: dict[tuple[str, str, str], dict] = {}
+    for slot in slots:
+        member = slot.get("member") or ""
+        if not member:
+            continue
+        flag = member_flags.get(member, "")
+        status = flag_to_status.get(flag)
+        if not status:
+            continue
+        key = (slot.get("team", ""), slot.get("zone", ""), member)
+        out[key] = {
+            "status":       status,
+            "recorded_by":  "",   # Audit fields no longer captured.
+            "recorded_at":  "",
+        }
+    _ = storm_log  # storm_log import kept for future audit-log hooks
+    return out, errors
+
+
+def _read_member_log_for_date(
+    guild_id: int, event_type: str, event_date: str,
+) -> dict[str, str]:
+    """Read the `showed_up` column for the given event from the
+    Per-Member Log tab. Returns `{member: flag}` where flag is
+    `"yes"` / `"no"` / `""`. Empty dict when the tab doesn't exist
+    or has no rows for this date."""
+    import config
+    import storm_log
+
     try:
         sh = config.get_spreadsheet(guild_id)
-    except Exception as e:
-        return {}, [f"spreadsheet open failed: {e}"]
-    if sh is None:
-        return {}, []
-
-    tab = _attendance_tab_name(guild_id, event_type)
-    if not tab:
-        return {}, []
-    try:
-        ws = config.get_or_create_worksheet(sh, tab, header_row=_ATTENDANCE_HEADER)
     except Exception:
-        return {}, []  # tab create/open failed → no existing attendance
+        return {}
+    if sh is None:
+        return {}
 
+    tab = storm_log._member_log_tab_name(event_type)
     try:
-        values = ws.get_all_values()
-    except Exception as e:
-        return {}, [f"attendance read failed: {e}"]
+        ws = sh.worksheet(tab)
+    except Exception:
+        return {}
+    try:
+        all_values = ws.get_all_values()
+    except Exception:
+        return {}
+    if not all_values or len(all_values) < 2:
+        return {}
 
-    if not values or len(values) < 2:
-        return {}, []
+    header = all_values[0]
+    if len(header) < 2 or header[:2] != ["Event Date", "Member"]:
+        return {}
+    try:
+        col_idx = header.index(storm_log.ATTENDANCE_QUESTION_KEY)
+    except ValueError:
+        return {}
 
-    header = [c.strip() for c in values[0]]
-
-    def _col(name: str) -> int:
-        try:
-            return header.index(name)
-        except ValueError:
-            return -1
-
-    date_col   = _col("Event Date")
-    team_col   = _col("Team")
-    zone_col   = _col("Zone")
-    member_col = _col("Member")
-    status_col = _col("Status")
-    by_col     = _col("Recorded By")
-    at_col     = _col("Recorded At (UTC)")
-
-    out: dict[tuple[str, str, str], dict] = {}
-    for row in values[1:]:
-        def _cell(idx: int) -> str:
-            return row[idx].strip() if 0 <= idx < len(row) else ""
-        if _cell(date_col) != event_date:
+    out: dict[str, str] = {}
+    for row in all_values[1:]:
+        if len(row) < 2:
             continue
-        key = (_cell(team_col), _cell(zone_col), _cell(member_col))
-        out[key] = {
-            "status":       _cell(status_col),
-            "recorded_by":  _cell(by_col),
-            "recorded_at":  _cell(at_col),
-        }
-    return out, errors
+        if row[0] != event_date:
+            continue
+        member = row[1]
+        if not member:
+            continue
+        out[member] = row[col_idx] if col_idx < len(row) else ""
+    return out
+
+
+def _collapse_slot_statuses_to_member_flag(
+    statuses: dict[tuple[str, str, str], str],
+) -> dict[str, str]:
+    """Roll up per-slot attendance statuses to one `showed_up` value
+    per member (#245).
+
+    The attendance UI is per-slot (a member playing two zones across
+    teams has two status entries), but the Per-Member Log keys rows
+    by member. Aggregation rule:
+      - `attended` on ANY slot → "yes"
+      - everything else (no_show, unrecorded, legacy `sub_activated`)
+        → "" (empty)
+
+    The asymmetry is deliberate. A member marked `no_show` may
+    actually have *sat out* — the officer didn't unassign them in the
+    roster builder, so they appear in the attendance picker, but
+    they weren't really registered to play. Writing "no" for that
+    case inflates the no-show count in Trends Viewer queries like
+    "How many times did members not show up?" — the count includes
+    sit-outs as no-shows, which isn't what the officer is asking.
+    Leaving the cell blank for no_show / unrecorded keeps the
+    showed_up column as a presence indicator: `yes` = confirmed
+    attended; blank = either didn't attend, sat out, or wasn't
+    recorded. Trends queries against showed_up should use `< 1` or
+    similar to find members who never had a `yes` in the window.
+
+    Result feeds `storm_log.upsert_member_log_rows` with one entry per
+    member found in `statuses`.
+    """
+    by_member: dict[str, list[str]] = {}
+    for (_team, _zone, member), status in statuses.items():
+        if not member:
+            continue
+        by_member.setdefault(member, []).append(status or "")
+    flags: dict[str, str] = {}
+    for member, vals in by_member.items():
+        if any(v == "attended" for v in vals):
+            flags[member] = "yes"
+        else:
+            flags[member] = ""
+    return flags
 
 
 def save_attendance(
@@ -257,141 +354,57 @@ def save_attendance(
     officer_id: int,
     prior_existing: Optional[dict[tuple[str, str, str], dict]] = None,
 ) -> list[str]:
-    """Replace this event's attendance rows on the Sheet with the
-    officer's current state. Returns soft errors (empty on success).
+    """Persist this event's attendance for the Trends Viewer (#246).
 
-    Write strategy is write-then-blank-trailing (atomic-ish), NOT
-    clear-then-write. The prior implementation called `ws.clear()`
-    before `ws.update(...)`; if the update raised (rate limit, 5xx,
-    token expiry), the alliance lost their ENTIRE attendance history.
+    Per #245 this writes ONLY to the Per-Member Log tab — the legacy
+    per-slot `DS Attendance` / `CS Attendance` tab is no longer
+    appended to by the bot. Existing data on the legacy tab is
+    preserved (officers can still read it from the Sheet), but new
+    attendance lands in the unified `DS Member Log` / `CS Member Log`
+    so the Trends Viewer can include attendance counts alongside the
+    other per-member questions configured in #244.
 
-    Write order now:
-      1. Read existing values (already done above).
-      2. Compose the new full payload in memory.
-      3. `ws.update("A1", kept, ...)` — overwrites in place.
-      4. If the new payload is shorter than the old, blank the trailing
-         rows.
-    A failure between (3) and (4) leaves stale data in trailing rows but
-    the alliance's primary attendance history is intact.
+    Status aggregation collapses per-slot rows to one per-member
+    `showed_up` value (see `_collapse_slot_statuses_to_member_flag`).
+    `prior_existing` is unused after the cutover — the upsert in
+    `storm_log.upsert_member_log_rows` replaces rows for this
+    (event_date, member) cleanly on every save.
 
-    `prior_existing` (if provided) is the snapshot of attendance rows
-    loaded at view-open time. Slots that were recorded then but are no
-    longer in `statuses` (because the underlying roster changed) are
-    CARRIED FORWARD so a roster edit between attendance sessions doesn't
-    silently drop prior recorded attendance.
-
-    `recorded_by` semantics: preserved from `prior_existing` when the
-    status is unchanged (so officer B saving without editing doesn't
-    overwrite officer A's audit row); current officer when the status
-    was edited or is new.
+    Returns soft errors (empty on success).
     """
-    import config
-    from config import _utcnow_iso
+    import storm_log
 
     errors: list[str] = []
-    try:
-        sh = config.get_spreadsheet(guild_id)
-    except Exception as e:
-        return [f"spreadsheet open failed: {e}"]
-    if sh is None:
-        return ["spreadsheet not configured"]
-
-    tab = _attendance_tab_name(guild_id, event_type)
-    if not tab:
-        return ["no attendance tab configured"]
-
-    ws = config.get_or_create_worksheet(sh, tab, header_row=_ATTENDANCE_HEADER)
-
-    try:
-        all_values = ws.get_all_values()
-    except Exception as e:
-        return [f"attendance read-before-write failed: {e}"]
-
-    header = all_values[0] if all_values else list(_ATTENDANCE_HEADER)
-    date_idx = 0  # Always col 0 by convention; check header for safety
-    if header and "Event Date" in header:
-        date_idx = header.index("Event Date")
-    team_idx   = header.index("Team")   if "Team"   in header else 1
-    zone_idx   = header.index("Zone")   if "Zone"   in header else 2
-    member_idx = header.index("Member") if "Member" in header else 3
-
-    old_row_count = len(all_values)
-    kept = [header]
-    for row in all_values[1:] if all_values else []:
-        if row and len(row) > date_idx and str(row[date_idx]).strip() == event_date:
-            continue
-        kept.append(row)
-
-    # Carry forward any prior attendance rows whose slot isn't in the
-    # current `statuses` — that's a roster-edit-after-attendance case.
-    # Without this, removing a slot in the roster silently drops the
-    # recorded attendance for that slot.
-    prior = prior_existing or {}
-    carried_forward = 0
-    for prior_key, prior_row in prior.items():
-        if prior_key in statuses:
-            continue
-        if not prior_row.get("status"):
-            continue
-        team, zone, member = prior_key
-        kept.append([
-            event_date, team, zone, member,
-            prior_row["status"],
-            prior_row.get("recorded_by") or "",
-            prior_row.get("recorded_at") or "",
-        ])
-        carried_forward += 1
-
-    recorded_at = _utcnow_iso()
-    for (team, zone, member), status in statuses.items():
-        if not status:
-            continue  # Skip unrecorded slots.
-        # Preserve recorded_by + recorded_at when the status is unchanged
-        # so a second officer's save doesn't silently rewrite the first
-        # officer's audit row.
-        prior_row = prior.get((team, zone, member))
-        if prior_row and prior_row.get("status") == status:
-            row_recorded_by = prior_row.get("recorded_by") or str(officer_id)
-            row_recorded_at = prior_row.get("recorded_at") or recorded_at
-        else:
-            row_recorded_by = str(officer_id)
-            row_recorded_at = recorded_at
-        kept.append([
-            event_date, team, zone, member, status,
-            row_recorded_by, row_recorded_at,
-        ])
-
-    # Atomic-ish write: overwrite in place, then blank the trailing rows
-    # that the new payload didn't reach.
-    try:
-        ws.update("A1", kept, value_input_option="RAW")
-    except Exception as e:
-        # The Sheet is untouched if the update raised before any write
-        # — prior history is intact.
-        errors.append(f"attendance write failed (prior data intact): {e}")
+    flags = _collapse_slot_statuses_to_member_flag(statuses)
+    if not flags:
+        # Nothing to record — UI surfaces this as "no slots recorded".
         return errors
 
-    new_row_count = len(kept)
-    if new_row_count < old_row_count:
-        try:
-            blanks = [[""] * len(header) for _ in range(old_row_count - new_row_count)]
-            ws.update(
-                f"A{new_row_count + 1}", blanks, value_input_option="RAW",
-            )
-        except Exception as e:
-            # Soft error — the new data is written; only stale trailing
-            # rows remain, which is recoverable on the next save.
-            errors.append(
-                f"attendance trailing-blank failed (new data written, "
-                f"stale rows {new_row_count + 1}..{old_row_count} may remain): {e}"
-            )
+    per_member_data = {
+        member: {storm_log.ATTENDANCE_QUESTION_KEY: value}
+        for member, value in flags.items()
+    }
 
-    if carried_forward:
-        logger.info(
-            "[STORM ATTENDANCE] carried forward %d attendance row(s) for "
-            "slots removed from current roster (guild=%s event=%s/%s)",
-            carried_forward, guild_id, event_type, event_date,
+    try:
+        storm_log.upsert_member_log_rows(
+            guild_id, event_type, event_date,
+            per_member_data,
+            [storm_log.ATTENDANCE_QUESTION_KEY],
         )
+    except Exception as e:
+        errors.append(f"member-log write failed (prior data intact): {e}")
+        return errors
+
+    recorded_count = sum(1 for v in flags.values() if v)
+    logger.info(
+        "[STORM ATTENDANCE] %d member(s) recorded to Member Log "
+        "(guild=%s event=%s/%s)",
+        recorded_count, guild_id, event_type, event_date,
+    )
+    # `officer_id` and `prior_existing` no longer drive the Sheet
+    # write (the legacy `recorded_by` audit column rides on the now-
+    # frozen legacy tab). Officer attribution moves to bot logs.
+    _ = officer_id, prior_existing
     return errors
 
 
@@ -833,17 +846,18 @@ async def handle_storm_attendance(
 
     await interaction.response.defer(thinking=True)
 
-    # gspread reads off the event loop. Two parallel Sheet fetches
-    # in one go via `asyncio.gather` so the user-facing wait is one
-    # round-trip, not two stacked sequentially.
-    slots_task = asyncio.to_thread(
+    # gspread reads off the event loop. Post-#245 the attendance read
+    # needs the slots list to expand Member Log flags back into the
+    # per-slot picker shape, so the rosters read sequences before the
+    # member-log read (one extra round-trip per officer command — the
+    # ~30-member alliance overhead is negligible).
+    slots, slot_errors = await asyncio.to_thread(
         load_rostered_slots, interaction.guild_id, et, date_clean,
     )
-    attendance_task = asyncio.to_thread(
-        load_attendance, interaction.guild_id, et, date_clean,
-    )
-    (slots, slot_errors), (existing, attendance_errors) = await asyncio.gather(
-        slots_task, attendance_task,
+    existing, attendance_errors = await asyncio.to_thread(
+        load_attendance,
+        interaction.guild_id, et, date_clean,
+        slots=slots,
     )
 
     if not slots:

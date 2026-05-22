@@ -51,6 +51,7 @@ HUB_BTN_PRESETS = "🧮 Manage strategy presets"
 HUB_BTN_RULES = "👤 Manage member rules"
 HUB_BTN_DRAFT = "📄 Generate mail"
 HUB_BTN_LOGS = "📜 View past participation logs"
+HUB_BTN_TRENDS = "🔍 View trends across events"
 HUB_BTN_PAST_ROSTERS = "📜 View past rosters"
 HUB_BTN_SETUP = "⚙️ Open setup"
 
@@ -322,6 +323,16 @@ class _EventHubView(discord.ui.View):
             disabled=False, row=2,
             callback=self._on_log,
         )
+        # Trends Viewer (Premium): same reference row as Logs and Past
+        # Rosters — same data lineage (post-event lookback) just a
+        # different lens.
+        self._add_button(
+            label=_locked(HUB_BTN_TRENDS) if premium_off else HUB_BTN_TRENDS,
+            style=discord.ButtonStyle.secondary,
+            disabled=premium_off,
+            row=2,
+            callback=self._on_trends,
+        )
         self._add_button(
             label=_locked(HUB_BTN_PAST_ROSTERS) if premium_off else HUB_BTN_PAST_ROSTERS,
             style=discord.ButtonStyle.secondary,
@@ -403,6 +414,10 @@ class _EventHubView(discord.ui.View):
     async def _on_log(self, inter: discord.Interaction) -> None:
         from storm_log import handle_storm_log
         await handle_storm_log(self.bot, inter, self.event_type, None)
+
+    async def _on_trends(self, inter: discord.Interaction) -> None:
+        from storm_trends import handle_storm_trends
+        await handle_storm_trends(self.bot, inter, self.event_type)
 
     async def _on_setup(self, inter: discord.Interaction) -> None:
         # Post-#201: the per-feature setup wizards moved behind the

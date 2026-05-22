@@ -17,6 +17,7 @@ storm_history.py). Each button is a thin dispatcher.
 """
 from __future__ import annotations
 
+import asyncio
 import logging
 from typing import Optional
 
@@ -481,7 +482,13 @@ async def handle_event_hub(
         )
         is_premium = False
 
-    embed = _build_event_hub_embed(guild, event_type, is_premium=is_premium)
+    # `_build_event_hub_embed` reads strategy presets from gspread, which
+    # is a blocking network call. Run it off the event loop so the bot's
+    # heartbeat doesn't stall on cold connections (the Railway redeploy
+    # boot path was hitting 10-20s blocks before this `to_thread` wrap).
+    embed = await asyncio.to_thread(
+        _build_event_hub_embed, guild, event_type, is_premium=is_premium,
+    )
     view = _EventHubView(
         bot=bot,
         guild_id=guild.id,

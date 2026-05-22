@@ -574,39 +574,52 @@ class TestPairedSubsNameWrap:
         # doesn't fit on one line.
         lines = sr._wrap_name_to_lines("Mrs. Corporal", font, 50)
         assert len(lines) >= 2
-        # No word is split across lines when a clean break exists.
-        for line in lines:
-            assert " " not in line or line.count(" ") <= 1
-        # Every character is preserved across the wrapped lines.
-        assert "".join(lines).replace(" ", "") == "Mrs.Corporal"
+        # Every character is preserved across the wrapped lines
+        # (hyphens are typographic break markers added by the wrap,
+        # not part of the original name; strip them before comparing).
+        recovered = "".join(lines).replace(" ", "").replace("-", "")
+        assert recovered == "Mrs.Corporal"
 
-    def test_hard_breaks_single_token_when_no_space_available(self):
+    def test_hard_breaks_single_token_with_hyphen(self):
         """For camelCase / digit-suffix usernames without spaces,
-        hard-break at the character boundary that just fits. Every
-        character is preserved so the disambiguating suffix
-        (`99` vs `01`) isn't lost."""
+        hard-break with a hyphen at the broken line's end so readers
+        know the name continues on the next line (typographic
+        convention). Every character of the input is preserved."""
         font = sr._try_font(16)
-        # "dominicsteele99" — 15 chars, no spaces. Constrain the
-        # budget so it has to break but not so aggressively that the
-        # suffix splits across lines.
         lines = sr._wrap_name_to_lines("dominicsteele99", font, 100)
         assert len(lines) >= 2
-        # Every character preserved across the wrap — no truncation.
-        # This is the load-bearing assertion: "99" vs "01" survives.
-        assert "".join(lines) == "dominicsteele99"
+        # Hyphen at the break point of the first line.
+        assert lines[0].endswith("-")
+        # Strip hyphens, recover the original name. This is the
+        # load-bearing assertion: "99" vs "01" survives the wrap.
+        recovered = "".join(lines).replace("-", "")
+        assert recovered == "dominicsteele99"
 
     def test_truncation_never_happens_even_under_extreme_constraint(self):
         """Even with a budget tight enough to force many wrap points,
-        every character of the input is preserved across the lines.
-        The whole point of the wrap (vs. truncate) is that no
-        information is ever lost — verify by reconstruction."""
+        every character of the input is preserved across the lines
+        (modulo the typographic break-hyphens). The whole point of
+        the wrap (vs. truncate) is that no information is ever lost."""
         font = sr._try_font(16)
         original = "dominicsteele99"
         for budget in (200, 100, 60, 30):
             lines = sr._wrap_name_to_lines(original, font, budget)
-            assert "".join(lines) == original, (
+            recovered = "".join(lines).replace("-", "")
+            assert recovered == original, (
                 f"At budget={budget}, wrap dropped characters: {lines}"
             )
+
+    def test_space_wrap_lines_have_no_hyphen(self):
+        """Word-wrap doesn't add hyphens — the space IS the natural
+        break signal. Hyphens only appear on mid-word hard-breaks."""
+        font = sr._try_font(16)
+        # Each word fits the budget individually, just not together.
+        lines = sr._wrap_name_to_lines("aaa bbb ccc", font, 30)
+        assert len(lines) >= 2
+        # None of the lines end with a hyphen — they ended at word
+        # boundaries.
+        for line in lines:
+            assert not line.endswith("-")
 
     def test_returns_name_unchanged_if_fits(self):
         """Even very long names return as one line when the column

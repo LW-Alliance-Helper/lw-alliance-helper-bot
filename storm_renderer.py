@@ -701,19 +701,22 @@ def _wrap_name_to_lines(
 ) -> list[str]:
     """Wrap a long member name to fit within `max_width_px` per line.
 
-    Strategy (#236 follow-up 2026-05-23): officers reported names like
-    "Mrs. Corporal" crowding the Primary column and names like
-    "LokisBabyGirl" running past the pill divider. Wrap, never
-    truncate — usernames like `dominicsteele99` vs `dominicsteele01`
-    differ only in the suffix; truncation would lose the unique
-    identifier.
+    Strategy (#236 follow-up 2026-05-23):
 
     1. If the name already fits, return it as one line.
-    2. If the name has spaces, greedy word-wrap.
+    2. If the name has spaces, greedy word-wrap (no hyphen — the
+       natural word boundary signals the break).
     3. If a single token still exceeds the budget (e.g. camelCase
-       handles with no spaces), hard-break at the character boundary
-       that just fits. Recurse on the remainder so very long handles
-       split into as many lines as needed.
+       handles with no spaces), hard-break with a hyphen at the end
+       of the broken line so readers know the name continues.
+       Examples: `dominicsteele99` → `["dominicstee-", "le99"]`.
+    4. Anti-orphan: if the natural hard-break would leave a 1-2 char
+       tail, prefer a balanced midpoint split — keeps both lines
+       substantive.
+
+    Never truncates. Usernames like `dominicsteele99` vs
+    `dominicsteele01` differ only in the suffix; trimming would lose
+    the disambiguating identifier.
     """
     if not name:
         return [""]
@@ -727,8 +730,7 @@ def _wrap_name_to_lines(
 
     # Word-wrap when the name has spaces. Greedy: keep adding words
     # to the current line until the next one wouldn't fit, then start
-    # a new line. A single overflowing word still has to be hard-
-    # broken (the inner loop handles that).
+    # a new line. No hyphen — the space IS the natural break signal.
     if " " in name:
         words = name.split(" ")
         lines: list[str] = []
@@ -745,7 +747,7 @@ def _wrap_name_to_lines(
             if current:
                 lines.append(current)
             # The new word alone might still overflow — recurse to
-            # hard-break it.
+            # hard-break it (which will hyphenate appropriately).
             try:
                 if font.getlength(word) > max_width_px:
                     lines.extend(_wrap_name_to_lines(word, font, max_width_px))
@@ -758,15 +760,17 @@ def _wrap_name_to_lines(
             lines.append(current)
         return lines or [name]
 
-    # No spaces — hard-break at the character boundary that just fits.
-    # Find the longest prefix whose pixel width <= budget, push the
-    # remainder to a follow-up line, recurse if the remainder still
-    # overflows. Preserves every character (no truncation).
-    lo, hi = 1, len(name)
+    # No spaces — hard-break with a hyphen. Find the longest prefix
+    # such that `prefix + "-"` fits in the budget. Recurse on the
+    # remainder. Hyphen tells the reader the name continues on the
+    # next line (common typographic convention).
+    lo, hi = 1, len(name) - 1  # always need at least 1 char left for the tail
+    if hi < lo:
+        return [name]
     while lo < hi:
         mid = (lo + hi + 1) // 2
         try:
-            width = font.getlength(name[:mid])
+            width = font.getlength(name[:mid] + "-")
         except (AttributeError, TypeError):
             return [name]
         if width <= max_width_px:
@@ -774,10 +778,32 @@ def _wrap_name_to_lines(
         else:
             hi = mid - 1
     prefix_len = max(1, lo)
-    head = name[:prefix_len]
+
+    # Anti-orphan: if the natural break would leave a 1-3 char tail
+    # (e.g. "LokisBabyGirl" → "LokisBabyG-" + "irl"), prefer a
+    # balanced midpoint split so the wrap reads cleanly. Both halves
+    # must fit (head with hyphen, tail without). Threshold is 3 so
+    # "irl"-style 3-letter tails redistribute too — feels less like
+    # a chopped suffix.
+    tail_len_natural = len(name) - prefix_len
+    if tail_len_natural <= 3 and len(name) >= 6:
+        bal_mid = len(name) // 2
+        head_bal = name[:bal_mid]
+        tail_bal = name[bal_mid:]
+        try:
+            head_fits = font.getlength(head_bal + "-") <= max_width_px
+            tail_fits = font.getlength(tail_bal) <= max_width_px
+        except (AttributeError, TypeError):
+            head_fits = tail_fits = False
+        if head_fits and tail_fits:
+            return [head_bal + "-", tail_bal]
+
+    head = name[:prefix_len] + "-"
     tail = name[prefix_len:]
     if not tail:
-        return [head]
+        # Defensive — shouldn't happen since we ensured 1+ char tail
+        # via the binary-search bound.
+        return [name]
     return [head] + _wrap_name_to_lines(tail, font, max_width_px)
 
 
@@ -1457,25 +1483,24 @@ def _draw_subs_section(canvas, layout: EventLayout,
     # (#236 follow-up + 2026-05-23 wrap fix).
     pairs_row_tops: list[int] = []
     pairs_wrapped: list[tuple[list[str], list[str], int]] = []
-    # 2026-05-23: column-width budgets for the Primary / Sub names.
-    # Computed from the pill's actual right edge so wrapped lines
-    # never run past the divider. Small inter-column gap so Primary
-    # text never visually touches Sub text. Small end pad on Sub so
-    # the longest sub name doesn't kiss the pill border.
-    _inter_col_gap_svg = 4.0
-    _end_pad_svg = 4.0
-    primary_col_w_px = max(
-        _s(8),
-        _s(layout.subs_pair_right_x
-           - layout.subs_pair_left_x
-           - _inter_col_gap_svg),
-    )
-    sub_col_w_px = max(
-        _s(8),
-        _s(content_box.x + content_box.w
-           - layout.subs_pair_right_x
-           - _end_pad_svg),
-    )
+    # 2026-05-23 simplification: the divider line endpoints
+    # (`pairs_divider_x0` and `pairs_divider_x1`) are the canonical
+    # left/right borders for the paired-subs text area. Every text
+    # edge sits 12 px inside the borders, and the two columns get
+    # 12 px between them. Predictable layout, doesn't depend on
+    # other layout constants drifting.
+    _PAD_PX = 12
+    inner_left_px = _s(layout.pairs_divider_x0) + _PAD_PX
+    inner_right_px = _s(layout.pairs_divider_x1) - _PAD_PX
+    inner_width_px = max(_PAD_PX, inner_right_px - inner_left_px)
+    col_width_px = max(_s(8), (inner_width_px - _PAD_PX) // 2)
+    primary_col_w_px = col_width_px
+    sub_col_w_px = col_width_px
+    # Override the layout's column-anchor x values so text draws at
+    # the canonical 12-px-inside-divider positions instead of the
+    # historical SVG-derived anchors.
+    derived_primary_x_px = inner_left_px
+    derived_sub_x_px = inner_left_px + col_width_px + _PAD_PX
     if use_pairs:
         pairs_count = len(roster.paired_subs)
         if pairs_count == 0:
@@ -1513,17 +1538,20 @@ def _draw_subs_section(canvas, layout: EventLayout,
                     line_step_px,
                 )
                 pairs_wrapped.append((primary_lines, sub_lines, row_lines))
-                # Step = max(nominal layout step, actual row height +
-                # a small breathing margin). Latin-only single-line
-                # rows keep the nominal spacing; wrapped / CJK rows
-                # expand as needed.
-                cy += max(nominal_step_px, last_row_h + _s(2))
+                # 2026-05-23 simplification: 12 px above + 12 px below
+                # each row's text. Dividers between rows sit midway,
+                # so each row gets 12 px clearance from the adjacent
+                # divider. `last_row_h + _PAD_PX * 2` is the minimum
+                # row step; nominal layout step caps the minimum when
+                # text height is small (Latin single-line) so rows
+                # don't bunch up tighter than the design intent.
+                cy += max(nominal_step_px, last_row_h + _PAD_PX * 2)
             last_row_top = pairs_row_tops[-1]
             # Pill bottom = last row top + last row's actual height +
-            # design source's 12 px bottom padding (`_s(6)` at SCALE=2).
+            # 12 px bottom padding (the canonical 12 px rule).
             content_h_px = (
                 (last_row_top - _s(box_top_svg))
-                + last_row_h + _s(6)
+                + last_row_h + _PAD_PX
             )
     else:
         flat_count = len([s for s in roster.subs])
@@ -1577,8 +1605,12 @@ def _draw_subs_section(canvas, layout: EventLayout,
         # max font height when CJK / Arabic names appear (#236
         # follow-up).
         box_top = content_box.y
-        primary_x = _s(layout.subs_pair_left_x)
-        sub_x = _s(layout.subs_pair_right_x)
+        # 2026-05-23 simplification: column x positions derived from
+        # the divider boundaries with 12 px text padding, not from
+        # the historical `subs_pair_*_x` SVG anchors. Keeps text
+        # anchored to a predictable, divider-aware coordinate system.
+        primary_x = derived_primary_x_px
+        sub_x = derived_sub_x_px
         header_y = _s(box_top + layout.pairs_header_offset_y)
         underline_y = _s(box_top + layout.pairs_underline_offset_y)
 

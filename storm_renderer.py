@@ -648,20 +648,27 @@ def _try_font(size: int, bold: bool = False):
 # Latin / Cyrillic / Greek only. Order matters when the same string
 # contains multiple scripts — the first matching range wins.
 _FALLBACK_SCRIPT_RANGES = (
-    # CJK Unified Ideographs (Chinese + Japanese Kanji)
-    (0x4E00, 0x9FFF, "cjk"),
-    # CJK Extension A
-    (0x3400, 0x4DBF, "cjk"),
-    # Hiragana + Katakana (Japanese)
-    (0x3040, 0x30FF, "cjk"),
-    # Hangul Syllables (Korean)
-    (0xAC00, 0xD7AF, "cjk"),
     # Hangul Jamo (Korean component letters)
     (0x1100, 0x11FF, "cjk"),
+    # Broad CJK band covering: CJK Symbols and Punctuation (3000–303F),
+    # Hiragana (3040–309F), Katakana (30A0–30FF), Bopomofo (3100–312F),
+    # Hangul Compatibility Jamo (3130–318F — caught the tester's
+    # "ㅇ" character render-as-tofu bug 2026-05-23), Kanbun + Bopomofo
+    # Extended (3190–31BF), CJK Strokes (31C0–31EF), Katakana
+    # Phonetic Extensions (31F0–31FF), Enclosed CJK Letters and
+    # Months (3200–32FF), CJK Compatibility (3300–33FF), CJK
+    # Extension A (3400–4DBF), CJK Unified Ideographs (4E00–9FFF).
+    (0x3000, 0x9FFF, "cjk"),
+    # Hangul Syllables (Korean)
+    (0xAC00, 0xD7AF, "cjk"),
+    # Hangul Jamo Extended-B
+    (0xD7B0, 0xD7FF, "cjk"),
+    # CJK Compatibility Ideographs
+    (0xF900, 0xFAFF, "cjk"),
+    # CJK Compatibility Forms + Vertical Forms + Small Form Variants
+    (0xFE10, 0xFE6F, "cjk"),
     # Halfwidth and Fullwidth Forms (CJK punctuation / fullwidth Latin)
     (0xFF00, 0xFFEF, "cjk"),
-    # CJK Symbols and Punctuation
-    (0x3000, 0x303F, "cjk"),
     # Arabic
     (0x0600, 0x06FF, "arabic"),
     # Arabic Supplement
@@ -687,6 +694,91 @@ def _script_family_for_text(text: str) -> str:
             if lo <= cp <= hi:
                 return family
     return "inter"
+
+
+def _wrap_name_to_lines(
+    name: str, font, max_width_px: int,
+) -> list[str]:
+    """Wrap a long member name to fit within `max_width_px` per line.
+
+    Strategy (#236 follow-up 2026-05-23): officers reported names like
+    "Mrs. Corporal" crowding the Primary column and names like
+    "LokisBabyGirl" running past the pill divider. Wrap, never
+    truncate — usernames like `dominicsteele99` vs `dominicsteele01`
+    differ only in the suffix; truncation would lose the unique
+    identifier.
+
+    1. If the name already fits, return it as one line.
+    2. If the name has spaces, greedy word-wrap.
+    3. If a single token still exceeds the budget (e.g. camelCase
+       handles with no spaces), hard-break at the character boundary
+       that just fits. Recurse on the remainder so very long handles
+       split into as many lines as needed.
+    """
+    if not name:
+        return [""]
+    try:
+        if font.getlength(name) <= max_width_px:
+            return [name]
+    except (AttributeError, TypeError):
+        # `getlength` missing on the PIL default font fallback; treat
+        # the whole name as fitting (no wrap) to avoid crashing render.
+        return [name]
+
+    # Word-wrap when the name has spaces. Greedy: keep adding words
+    # to the current line until the next one wouldn't fit, then start
+    # a new line. A single overflowing word still has to be hard-
+    # broken (the inner loop handles that).
+    if " " in name:
+        words = name.split(" ")
+        lines: list[str] = []
+        current = ""
+        for word in words:
+            candidate = (current + " " + word).strip()
+            try:
+                fits = font.getlength(candidate) <= max_width_px
+            except (AttributeError, TypeError):
+                fits = True
+            if fits:
+                current = candidate
+                continue
+            if current:
+                lines.append(current)
+            # The new word alone might still overflow — recurse to
+            # hard-break it.
+            try:
+                if font.getlength(word) > max_width_px:
+                    lines.extend(_wrap_name_to_lines(word, font, max_width_px))
+                    current = ""
+                else:
+                    current = word
+            except (AttributeError, TypeError):
+                current = word
+        if current:
+            lines.append(current)
+        return lines or [name]
+
+    # No spaces — hard-break at the character boundary that just fits.
+    # Find the longest prefix whose pixel width <= budget, push the
+    # remainder to a follow-up line, recurse if the remainder still
+    # overflows. Preserves every character (no truncation).
+    lo, hi = 1, len(name)
+    while lo < hi:
+        mid = (lo + hi + 1) // 2
+        try:
+            width = font.getlength(name[:mid])
+        except (AttributeError, TypeError):
+            return [name]
+        if width <= max_width_px:
+            lo = mid
+        else:
+            hi = mid - 1
+    prefix_len = max(1, lo)
+    head = name[:prefix_len]
+    tail = name[prefix_len:]
+    if not tail:
+        return [head]
+    return [head] + _wrap_name_to_lines(tail, font, max_width_px)
 
 
 def _font_for_text(text: str, size: int, *, bold: bool = False):
@@ -1358,7 +1450,32 @@ def _draw_subs_section(canvas, layout: EventLayout,
     # pill height calculation and the draw loop agree on placement,
     # even when CJK / Arabic names step rows further apart than the
     # layout's nominal `pairs_row_step` (#236 follow-up).
+    # Pair-row metadata: parallel lists of row tops + wrapped name
+    # lines per pair. Computed once here so the pill-height calc and
+    # the draw loop agree even when CJK / long-name wrapping pushes
+    # rows further apart than the layout's nominal `pairs_row_step`
+    # (#236 follow-up + 2026-05-23 wrap fix).
     pairs_row_tops: list[int] = []
+    pairs_wrapped: list[tuple[list[str], list[str], int]] = []
+    # 2026-05-23: column-width budgets for the Primary / Sub names.
+    # Computed from the pill's actual right edge so wrapped lines
+    # never run past the divider. Small inter-column gap so Primary
+    # text never visually touches Sub text. Small end pad on Sub so
+    # the longest sub name doesn't kiss the pill border.
+    _inter_col_gap_svg = 4.0
+    _end_pad_svg = 4.0
+    primary_col_w_px = max(
+        _s(8),
+        _s(layout.subs_pair_right_x
+           - layout.subs_pair_left_x
+           - _inter_col_gap_svg),
+    )
+    sub_col_w_px = max(
+        _s(8),
+        _s(content_box.x + content_box.w
+           - layout.subs_pair_right_x
+           - _end_pad_svg),
+    )
     if use_pairs:
         pairs_count = len(roster.paired_subs)
         if pairs_count == 0:
@@ -1368,22 +1485,38 @@ def _draw_subs_section(canvas, layout: EventLayout,
             box_top_svg = content_box.y
             row1_y_px = _s(box_top_svg + layout.pairs_row1_offset_y)
             nominal_step_px = _s(layout.pairs_row_step)
+            line_step_px = _font_row_height(fm)
             cy = row1_y_px
-            last_row_h = _font_row_height(fm)
+            last_row_h = line_step_px
             for primary, sub in roster.paired_subs.items():
                 pairs_row_tops.append(cy)
                 primary_font = _font_for_text(primary, fm.size)
                 sub_font = _font_for_text(sub, fm.size)
-                last_row_h = max(
-                    _font_row_height(primary_font),
-                    _font_row_height(sub_font),
-                    _font_row_height(fm),
+                # Wrap each name to its column budget. Long names
+                # split across multiple lines instead of running into
+                # the next column or past the divider.
+                primary_lines = _wrap_name_to_lines(
+                    primary, primary_font, primary_col_w_px,
                 )
+                sub_lines = _wrap_name_to_lines(
+                    sub, sub_font, sub_col_w_px,
+                )
+                # Per-line height = the per-font row height (covers
+                # CJK descenders); row height = N lines × per-line
+                # height for the side with more lines.
+                primary_line_h = _font_row_height(primary_font)
+                sub_line_h = _font_row_height(sub_font)
+                row_lines = max(len(primary_lines), len(sub_lines))
+                last_row_h = max(
+                    primary_line_h * len(primary_lines),
+                    sub_line_h * len(sub_lines),
+                    line_step_px,
+                )
+                pairs_wrapped.append((primary_lines, sub_lines, row_lines))
                 # Step = max(nominal layout step, actual row height +
-                # a small breathing margin). Latin-only rosters keep
-                # the existing nominal spacing; CJK / Arabic rows
-                # expand as needed without clipping into the next
-                # row's ascender.
+                # a small breathing margin). Latin-only single-line
+                # rows keep the nominal spacing; wrapped / CJK rows
+                # expand as needed.
                 cy += max(nominal_step_px, last_row_h + _s(2))
             last_row_top = pairs_row_tops[-1]
             # Pill bottom = last row top + last row's actual height +
@@ -1462,25 +1595,38 @@ def _draw_subs_section(canvas, layout: EventLayout,
         pairs_list = list(roster.paired_subs.items())
         for i, (primary, sub) in enumerate(pairs_list):
             row_y = pairs_row_tops[i]
-            # Per-name font picker so CJK / Arabic player names render
-            # with their fallback fonts (#236) instead of tofu boxes.
             primary_font = _font_for_text(primary, fm.size)
             sub_font = _font_for_text(sub, fm.size)
+            # Pre-computed wrap lines from the geometry pass above
+            # (2026-05-23): each side may be 1+ lines depending on
+            # name length vs column width. Hard-break preserves every
+            # character (no truncation — usernames like
+            # `dominicsteele99` vs `dominicsteele01` would lose their
+            # disambiguating suffix if we trimmed).
+            primary_lines, sub_lines, _row_lines = pairs_wrapped[i]
+            primary_line_h = _font_row_height(primary_font)
+            sub_line_h = _font_row_height(sub_font)
             row_h = max(
-                _font_row_height(primary_font),
-                _font_row_height(sub_font),
+                primary_line_h * len(primary_lines),
+                sub_line_h * len(sub_lines),
                 _font_row_height(fm),
             )
             if row_y + row_h > y1 - pad_y:
                 break
-            d.text((primary_x, row_y), primary,
-                   fill=_TEXT_DARK, font=primary_font)
-            d.text((sub_x, row_y), sub,
-                   fill=_TEXT_DARK, font=sub_font)
+            for li, line in enumerate(primary_lines):
+                d.text(
+                    (primary_x, row_y + li * primary_line_h),
+                    line, fill=_TEXT_DARK, font=primary_font,
+                )
+            for li, line in enumerate(sub_lines):
+                d.text(
+                    (sub_x, row_y + li * sub_line_h),
+                    line, fill=_TEXT_DARK, font=sub_font,
+                )
             if i < len(pairs_list) - 1:
-                # Place the divider midway between this row and the
-                # next one (`pairs_row_tops[i+1]`) so it stays
-                # centered regardless of variable row stepping.
+                # Place the divider midway between this row's bottom
+                # and the next row's top so it stays centered
+                # regardless of variable wrap-driven row heights.
                 next_top = pairs_row_tops[i + 1]
                 div_y = (row_y + row_h + next_top) // 2
                 if div_y < y1 - 4:

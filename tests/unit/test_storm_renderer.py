@@ -551,3 +551,108 @@ class TestRosterFromSessionStructuredFields:
         ic_blocks = [z for z in data.zones if z.canonical_zone == "Info Center"]
         assert len(ic_blocks) == 2
         assert {b.phase for b in ic_blocks} == {1, 2}
+
+
+class TestPairedSubsNameWrap:
+    """Tester report 2026-05-23: long member names in the paired-subs
+    column ran past the pill divider OR sat too close to the next
+    column. Fix is wrap-at-fit, never truncate (usernames like
+    `dominicsteele99` vs `dominicsteele01` differ only in the suffix
+    — truncation would lose the disambiguating identifier)."""
+
+    def test_short_name_stays_one_line(self):
+        font = sr._try_font(16)
+        # "Alice" trivially fits any reasonable column.
+        assert sr._wrap_name_to_lines("Alice", font, 200) == ["Alice"]
+
+    def test_wraps_at_space_when_available(self):
+        """A name with a space wraps cleanly between words when the
+        column is too narrow for the whole thing — preserves
+        readability vs. mid-word hard-break."""
+        font = sr._try_font(16)
+        # Constrain the budget tight enough that "Mrs. Corporal"
+        # doesn't fit on one line.
+        lines = sr._wrap_name_to_lines("Mrs. Corporal", font, 50)
+        assert len(lines) >= 2
+        # No word is split across lines when a clean break exists.
+        for line in lines:
+            assert " " not in line or line.count(" ") <= 1
+        # Every character is preserved across the wrapped lines.
+        assert "".join(lines).replace(" ", "") == "Mrs.Corporal"
+
+    def test_hard_breaks_single_token_when_no_space_available(self):
+        """For camelCase / digit-suffix usernames without spaces,
+        hard-break at the character boundary that just fits. Every
+        character is preserved so the disambiguating suffix
+        (`99` vs `01`) isn't lost."""
+        font = sr._try_font(16)
+        # "dominicsteele99" — 15 chars, no spaces. Constrain the
+        # budget so it has to break but not so aggressively that the
+        # suffix splits across lines.
+        lines = sr._wrap_name_to_lines("dominicsteele99", font, 100)
+        assert len(lines) >= 2
+        # Every character preserved across the wrap — no truncation.
+        # This is the load-bearing assertion: "99" vs "01" survives.
+        assert "".join(lines) == "dominicsteele99"
+
+    def test_truncation_never_happens_even_under_extreme_constraint(self):
+        """Even with a budget tight enough to force many wrap points,
+        every character of the input is preserved across the lines.
+        The whole point of the wrap (vs. truncate) is that no
+        information is ever lost — verify by reconstruction."""
+        font = sr._try_font(16)
+        original = "dominicsteele99"
+        for budget in (200, 100, 60, 30):
+            lines = sr._wrap_name_to_lines(original, font, budget)
+            assert "".join(lines) == original, (
+                f"At budget={budget}, wrap dropped characters: {lines}"
+            )
+
+    def test_returns_name_unchanged_if_fits(self):
+        """Even very long names return as one line when the column
+        is wide enough."""
+        font = sr._try_font(16)
+        assert sr._wrap_name_to_lines("dominicsteele99", font, 1000) == [
+            "dominicsteele99"
+        ]
+
+    def test_empty_name_returns_empty_list_entry(self):
+        font = sr._try_font(16)
+        assert sr._wrap_name_to_lines("", font, 100) == [""]
+
+    def test_paired_render_with_long_names_doesnt_crash(self):
+        """Smoke: render paired subs with names that exceed the
+        column width. Wrap must complete + the PNG must encode."""
+        roster = sr.RosterData(
+            title="DS — Long names smoke test",
+            zones=[],
+            subs=[],
+            paired_subs={
+                "Mrs. Corporal":   "LokisBabyGirl",
+                "dominicsteele99": "dominicsteele01",
+                "KayyyShawty":     "Wally",
+            },
+            event_type="DS",
+        )
+        png = sr.render(roster)
+        assert png[:8] == b"\x89PNG\r\n\x1a\n"
+
+
+class TestHangulCompatibilityJamoCoverage:
+    """Tester report 2026-05-23: a member's name with `ㅇ` (Hangul
+    Compatibility Jamo, U+3147) rendered as a tofu box because the
+    range wasn't in the script-detection table. Noto Sans CJK SC has
+    the glyph; my range check just didn't route through it."""
+
+    def test_hangul_compatibility_jamo_routes_to_cjk(self):
+        # U+3147 — the character the tester hit.
+        assert sr._script_family_for_text("ㅇ") == "cjk"
+
+    def test_mixed_latin_plus_compatibility_jamo_routes_to_cjk(self):
+        # "LANDERSㅇ" — the actual rendering name from the tester
+        # screenshot.
+        assert sr._script_family_for_text("LANDERSㅇ") == "cjk"
+
+    def test_bopomofo_routes_to_cjk(self):
+        # ㄅ — U+3105, Bopomofo. Falls in the broadened CJK band.
+        assert sr._script_family_for_text("ㄅ") == "cjk"

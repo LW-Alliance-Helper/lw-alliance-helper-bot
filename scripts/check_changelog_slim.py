@@ -46,14 +46,21 @@ def _baseline_lines(path: Path) -> set[str]:
     by definition, which is also fine).
     """
     try:
-        # Explicit UTF-8 — Windows defaults to cp1252 which chokes on
-        # the em-dashes/arrows that show up in our changelog entries.
+        # `git show HEAD:<path>` only accepts paths relative to the repo
+        # root. The hook passes absolute Windows paths which git rejects
+        # with "exists on disk, but not in 'HEAD'", so resolve against
+        # the repo toplevel before invoking show.
+        toplevel = Path(subprocess.run(
+            ["git", "rev-parse", "--show-toplevel"],
+            capture_output=True, check=True, text=True,
+        ).stdout.strip()).resolve()
+        rel = path.resolve().relative_to(toplevel).as_posix()
         result = subprocess.run(
-            ["git", "show", f"HEAD:{path.as_posix()}"],
+            ["git", "show", f"HEAD:{rel}"],
             capture_output=True, check=True,
         )
         return set(result.stdout.decode("utf-8", errors="replace").splitlines())
-    except (subprocess.CalledProcessError, FileNotFoundError):
+    except (subprocess.CalledProcessError, FileNotFoundError, ValueError):
         return set()
 
 

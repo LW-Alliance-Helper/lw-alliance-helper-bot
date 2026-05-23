@@ -4022,25 +4022,180 @@ def _build_mail_for_phase(
     )
 
 
-def _build_mail_body(session: RosterBuilderSession) -> str:
-    """Top-level mail builder. Flat presets emit one block. Phase-aware
-    presets (#152) emit one block per phase separated by `Phase N`
-    headers so leadership can copy-paste the full event into one mail.
+def _build_combined_phase_zones_block(session: RosterBuilderSession) -> str:
+    """For phase-aware presets: build a single zones block grouped
+    BY ZONE with each zone's stages stacked inside (matches the
+    image-render organization so readers see the same shape in the
+    text mail as on the PNG).
 
-    Walks `session.iter_phases()` so a 2-phase preset emits Phase 1 + 2
-    and a 3-phase preset emits Phase 1 + 2 + 3. Pre-#152-extension the
-    builder hardcoded Phase 1 + Phase 2 only; 3-phase Phase 3 was
-    silently dropped from the mailed roster while auto-fill + rosters_tab
-    still recorded those slots.
+    Format per zone:
+        **Zone Name**:
+        Stage 1
+            Alice
+            Bob
+        Stage 2
+            Carol
+
+    Replaces the prior per-phase template repetition that ballooned
+    3-stage CS mails — the template's greeting + subs + time were
+    rendered once PER PHASE (3 copies in a 3-stage event), pushing
+    the mail past Discord's 2000-char limit on rosters that fit
+    comfortably otherwise.
+    """
+    from storm_icons import zone_emoji_prefix
+
+    is_cs = session.event_type == "CS"
+    if is_cs:
+        from storm import CS_ZONE_STRUCTURE
+        # CS_ZONE_STRUCTURE is [(stage, key, label), ...]. For
+        # phase-aware presets the static stage is ignored (phases
+        # are dynamic); we just want each unique zone in canonical
+        # first-appearance order.
+        canonical_zones: list[str] = []
+        seen: set[str] = set()
+        for _stage, _key, label in CS_ZONE_STRUCTURE:
+            if label not in seen:
+                canonical_zones.append(label)
+                seen.add(label)
+    else:
+        from storm import DS_ZONE_STRUCTURE
+        canonical_zones = list(DS_ZONE_STRUCTURE)
+
+    # Build a {zone: {phase: [members]}} pivot so we can iterate
+    # zone-major and emit each zone's stage stack in one block.
+    by_zone: dict[str, dict[int, list[str]]] = {}
+    phases = list(session.iter_phases())
+    for phase in phases:
+        zones_for_phase, _subs = _mail_zone_and_sub_lists(
+            session, phase=phase,
+        )
+        for zone, members in zones_for_phase.items():
+            if not members:
+                continue
+            by_zone.setdefault(zone, {})[phase] = list(members)
+
+    # Indent for the assignee names under each stage header. 4 spaces
+    # reads clearly in monospaced Discord copies and survives the
+    # template's {zones} substitution.
+    indent = "    "
+
+    blocks: list[str] = []
+
+    def _emit_zone(zone_label: str, phase_map: dict[int, list[str]]) -> None:
+        zone_lines = [f"{zone_emoji_prefix(zone_label)}**{zone_label}**:"]
+        for phase in phases:
+            members = phase_map.get(phase)
+            if not members:
+                continue
+            zone_lines.append(f"Stage {phase}")
+            for m in members:
+                zone_lines.append(f"{indent}{m}")
+        blocks.append("\n".join(zone_lines))
+
+    rendered: set[str] = set()
+    for zone in canonical_zones:
+        if zone in by_zone:
+            _emit_zone(zone, by_zone[zone])
+            rendered.add(zone)
+    # Non-canonical zones (legacy fixtures / test data) — append at
+    # the tail so nothing silently disappears.
+    for zone, phase_map in by_zone.items():
+        if zone in rendered:
+            continue
+        _emit_zone(zone, phase_map)
+
+    return "\n\n".join(blocks)
+
+
+def _build_phase_aware_mail(session: RosterBuilderSession) -> str:
+    """Phase-aware mail builder. Renders the alliance's template ONCE
+    with `{zones}` substituted by the combined-phases block so the
+    greeting / subs / time copy only appears once instead of per
+    stage. Eliminates the 3× duplication that broke 3-stage CS
+    rosters past Discord's 2000-char message limit.
+    """
+    from config import (
+        get_storm_template, format_storm_slot, get_storm_slot_for_key,
+    )
+
+    event_type = session.event_type
+    template = ""
+    if session.guild_id:
+        template = (
+            get_storm_template(session.guild_id, event_type, None) or ""
+        )
+
+    # Subs: walk every phase to collect paired-mode pairings plus the
+    # event-level pool. Dedupe so a paired primary isn't double-listed.
+    # `_mail_zone_and_sub_lists` returns:
+    #   phase 1 → phase-1 pairings + global sub pool
+    #   phase N (N>1) → only phase-N pairings
+    sub_names_combined: list[str] = []
+    seen_subs: set[str] = set()
+    for phase in session.iter_phases():
+        _zones_p, sub_names_p = _mail_zone_and_sub_lists(
+            session, phase=phase,
+        )
+        for s in sub_names_p:
+            if s in seen_subs:
+                continue
+            sub_names_combined.append(s)
+            seen_subs.add(s)
+    subs_block = (
+        "\n".join(sub_names_combined) if sub_names_combined else "(none)"
+    )
+
+    # Time string (matches the per-phase builder's `time_key="1"`).
+    slot = (
+        get_storm_slot_for_key(event_type, "1")
+        if session.guild_id else None
+    )
+    if slot is not None:
+        h, m = slot
+        time_str = format_storm_slot(h, m, session.guild_id)
+    else:
+        time_str = "1"
+
+    zones_block = _build_combined_phase_zones_block(session)
+
+    if template:
+        return template.format(
+            alliance_name="Alliance",
+            zones=zones_block,
+            subs=subs_block,
+            time=time_str,
+        )
+
+    # Fallback plain format (no alliance template configured).
+    label = "Desert Storm" if event_type == "DS" else "Canyon Storm"
+    return "\n".join([
+        f"**{label}**",
+        "",
+        "**Zone Assignments**",
+        zones_block,
+        "",
+        "**Subs**",
+        subs_block,
+        "",
+        f"**Time:** {time_str}",
+    ])
+
+
+def _build_mail_body(session: RosterBuilderSession) -> str:
+    """Top-level mail builder. Flat presets render the template
+    once. Phase-aware presets (#152) also render the template ONCE
+    but pass a combined `{zones}` block with `**Stage N**` headers
+    between phases — the prior per-phase-template path duplicated
+    the greeting / subs / time block N times and ballooned 3-stage
+    rosters past Discord's 2000-char message limit (tester report
+    2026-05-23).
+
+    Walks `session.iter_phases()` so a 2-phase preset emits Phase 1
+    + 2 and a 3-phase preset emits Phase 1 + 2 + 3.
     """
     if not session.is_phase_aware:
         return _build_mail_for_phase(session, phase=1)
-
-    blocks: list[str] = []
-    for phase in session.iter_phases():
-        body = _build_mail_for_phase(session, phase=phase)
-        blocks.append(f"**Stage {phase}**\n\n{body}")
-    return "\n\n".join(blocks)
+    return _build_phase_aware_mail(session)
 
 
 async def _send_mail_preview(

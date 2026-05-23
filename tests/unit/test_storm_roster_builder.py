@@ -3621,33 +3621,51 @@ class TestMailBodyPhaseAware:
         assert "Stage 2" not in body
         assert "Alice" in body
 
-    def test_phase_aware_mail_emits_phase_headers(self):
+    def test_phase_aware_mail_emits_stage_headers_grouped_by_zone(self):
+        """Phase-aware mail groups BY ZONE with stages stacked under
+        each zone's heading — matches the PNG render organization.
+        Each zone shows its Stage N entries indented below."""
         s = _make_phase_aware_session()
         s.assignments["Info Center"].append("1")          # Alice in P1
         s.assignments_p2["Arsenal"].append("2")           # Bob in P2
         body = srb._build_mail_body(s)
-        assert "**Stage 1**" in body
-        assert "**Stage 2**" in body
-        # Both members appear, each under its phase block.
-        p1_start = body.index("**Stage 1**")
-        p2_start = body.index("**Stage 2**")
-        assert "Alice" in body[p1_start:p2_start]
-        assert "Bob"   in body[p2_start:]
+        assert "Stage 1" in body
+        assert "Stage 2" in body
+        # Alice sits under Info Center; Bob under Arsenal.
+        info_idx = body.index("Info Center")
+        arsenal_idx = body.index("Arsenal")
+        # Alice should appear after the Info Center heading. Walk the
+        # block: each zone's stage 1/2/3 are stacked under it.
+        assert "Alice" in body[info_idx:arsenal_idx] or (
+            arsenal_idx < info_idx
+            and "Alice" in body[info_idx:]
+        )
+        # Stage label appears right under the zone name (zone-major
+        # ordering, not stage-major).
+        # Find the first "Stage 1" after the Info Center heading.
+        first_zone_idx = min(info_idx, arsenal_idx)
+        assert body.index("Stage 1") > first_zone_idx
+        # Assignees are indented 4 spaces under their stage.
+        assert "    Alice" in body
+        assert "    Bob" in body
 
-    def test_phase_aware_mail_subs_only_in_phase_one_block(self):
+    def test_phase_aware_mail_renders_template_once(self):
+        """Phase-aware mail uses the template ONCE — greeting / subs
+        / time appear exactly one time each, no per-stage repeats
+        (the 3-stage CS use case previously blew past Discord's
+        2000-char limit because the template wrapped each phase
+        block)."""
         s = _make_phase_aware_session()
-        s.assignments["Info Center"].append("1")
-        s.assignments_p2["Arsenal"].append("2")
-        s.subs.append("3")
+        s.assignments["Info Center"].append("1")          # P1
+        s.assignments_p2["Arsenal"].append("2")           # P2
+        s.subs.append("3")                                # Cyrus
         body = srb._build_mail_body(s)
-        # Phase 1 block carries the subs line (Cyrus); phase 2 doesn't
-        # double-print them.
-        p1_start = body.index("**Stage 1**")
-        p2_start = body.index("**Stage 2**")
-        p1_block = body[p1_start:p2_start]
-        p2_block = body[p2_start:]
-        assert "Cyrus" in p1_block
-        assert "Cyrus" not in p2_block
+        # Cyrus appears exactly once in the body (was twice or more
+        # before with per-phase template rendering).
+        assert body.count("Cyrus") == 1
+        # Fallback template adds these section headers exactly once.
+        assert body.count("**Subs**") <= 1
+        assert body.count("**Time:") <= 1
 
 
 class TestPhaseAwareEligibility:

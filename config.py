@@ -291,6 +291,11 @@ def init_db():
                 -- Structured storm flow (#38 + #54)
                 structured_flow_enabled  INTEGER DEFAULT 0,
                 power_metric_column      TEXT    DEFAULT 'B',
+                -- Roster Sheet column letter (A-Z) holding the member
+                -- display name / alias for the structured roster
+                -- builder. Empty = fall back to
+                -- guild_member_roster_config.display_col.
+                alias_metric_column      TEXT    DEFAULT '',
                 sub_mode                 TEXT    DEFAULT 'pool',
                 signup_channel_id        INTEGER DEFAULT 0,
                 signup_schedule_cron     TEXT    DEFAULT '',
@@ -681,6 +686,14 @@ def init_db():
             # event-type-aware defaults at read time.
             ("structured_flow_enabled", "INTEGER DEFAULT 0"),
             ("power_metric_column",     "TEXT    DEFAULT 'B'"),
+            # Roster Sheet column letter (A-Z) that holds the member's
+            # display name / alias for the structured roster builder.
+            # Empty string falls back to `guild_member_roster_config.display_col`
+            # (the bot's default Display Name column). Alliances that
+            # repurposed column C for something else (e.g. power) need
+            # to point the builder at their actual alias column or it
+            # will read the wrong cell as the member name.
+            ("alias_metric_column",     "TEXT    DEFAULT ''"),
             ("sub_mode",                "TEXT    DEFAULT 'pool'"),
             ("signup_channel_id",       "INTEGER DEFAULT 0"),
             ("signup_schedule_cron",    "TEXT    DEFAULT ''"),
@@ -1643,6 +1656,7 @@ def get_storm_config(guild_id: int, event_type: str) -> dict:
         # default_structured_tab() / get_structured_storm_config().
         "structured_flow_enabled": 0,
         "power_metric_column":     "B",
+        "alias_metric_column":     "",
         "sub_mode":                "pool",
         "signup_channel_id":       0,
         "signup_schedule_cron":    "",
@@ -1817,6 +1831,10 @@ def get_structured_storm_config(guild_id: int, event_type: str) -> dict:
     return {
         "structured_flow_enabled": bool(cfg.get("structured_flow_enabled")),
         "power_metric_column":     (cfg.get("power_metric_column") or "B").upper(),
+        # Empty string means "fall back to member_roster_config.display_col"
+        # — surfaced as the empty default in the wizard's Keep current /
+        # Define my own picker so officers can leave it unset.
+        "alias_metric_column":     (cfg.get("alias_metric_column") or "").upper(),
         "sub_mode":                cfg.get("sub_mode") or "pool",
         "signup_channel_id":       int(cfg.get("signup_channel_id") or 0),
         "signup_schedule_cron":    cfg.get("signup_schedule_cron") or "",
@@ -1895,6 +1913,7 @@ def save_structured_storm_config(
     guild_id: int, event_type: str, *,
     structured_flow_enabled: bool = False,
     power_metric_column: str        = "B",
+    alias_metric_column: str        = "",
     sub_mode: str                   = "pool",
     signup_channel_id: int          = 0,
     signup_schedule_cron: str       = "",
@@ -1933,11 +1952,19 @@ def save_structured_storm_config(
         dow = -1
     if not (-1 <= dow <= 6):
         dow = -1
+    # Normalise the alias column letter. Empty (or anything not a single
+    # A-Z letter) stays empty so the reader can fall back to the member
+    # roster config's display_col instead of pointing at column A by
+    # accident.
+    alias_letter = (alias_metric_column or "").strip().upper()
+    if not (len(alias_letter) == 1 and "A" <= alias_letter <= "Z"):
+        alias_letter = ""
     with _get_conn() as conn:
         cur = conn.execute(
             "UPDATE guild_storm_config SET "
             "  structured_flow_enabled = ?, "
             "  power_metric_column = ?, "
+            "  alias_metric_column = ?, "
             "  sub_mode = ?, "
             "  signup_channel_id = ?, "
             "  signup_schedule_cron = ?, "
@@ -1952,7 +1979,9 @@ def save_structured_storm_config(
             "WHERE guild_id = ? AND event_type = ?",
             (
                 1 if structured_flow_enabled else 0,
-                (power_metric_column or "B").strip().upper()[:1] or "B", sub_mode,
+                (power_metric_column or "B").strip().upper()[:1] or "B",
+                alias_letter,
+                sub_mode,
                 int(signup_channel_id or 0), signup_schedule_cron,
                 signups_tab, rosters_tab, attendance_tab,
                 strategies_tab, member_rules_tab,

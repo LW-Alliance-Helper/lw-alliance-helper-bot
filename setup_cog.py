@@ -868,7 +868,7 @@ async def ask_keep_or_change(
                 for item in self.children: item.disabled = True
                 await wizard_registry.safe_edit_response(
                     inter,
-                    content=f"✅ Using **{chosen}**", view=self
+                    content=f"{prompt}\n\n✅ Using **{chosen}**", view=self
                 )
                 self.stop()
             keep_btn.callback = _keep_cb
@@ -886,7 +886,7 @@ async def ask_keep_or_change(
                     for item in self.children: item.disabled = True
                     await wizard_registry.safe_edit_response(
                         inter,
-                        content=f"✅ Reverted to default: **{default}**", view=self
+                        content=f"{prompt}\n\n✅ Reverted to default: **{default}**", view=self
                     )
                     self.stop()
                 revert_btn.callback = _revert_cb
@@ -905,7 +905,7 @@ async def ask_keep_or_change(
                 for item in self.children: item.disabled = True
                 try:
                     await inter.message.edit(
-                        content=f"✅ Using **{self.value}**", view=self
+                        content=f"{prompt}\n\n✅ Using **{self.value}**", view=self
                     )
                 except discord.HTTPException:
                     pass
@@ -1833,19 +1833,21 @@ async def _send_view_configuration(interaction: discord.Interaction, cfg) -> Non
     ds_slot_labels = get_storm_slot_labels("DS", interaction.guild_id)
     cs_slot_labels = get_storm_slot_labels("CS", interaction.guild_id)
 
-    def _team_time_line(team_letter: str, idx, slot_lbls, setup_cmd: str) -> str:
+    def _team_time_line(team_letter: str, idx, slot_lbls, setup_hint: str) -> str:
         """Render the Team A/B time line for the /setup config view.
         Falls back to a nudge toward the setup wizard when the alliance
         hasn't picked the slot yet (#251)."""
         if idx in (1, 2) and len(slot_lbls) >= idx:
             return f"**Team {team_letter} Time:** {slot_lbls[idx - 1]}"
-        return f"**Team {team_letter} Time:** *not set — Step 3 of `/{setup_cmd}`*"
+        return f"**Team {team_letter} Time:** *not set — Step 3 of {setup_hint}*"
 
+    ds_hint = "`/setup` → ⚔️ Desert Storm"
+    cs_hint = "`/setup` → 🏜️ Canyon Storm"
     ds_lines = [
         f"**Sheet Tab:** {ds.get('tab_name', '*not set*')}",
         f"**Log Channel:** {_channel(cfg.ds_log_channel_id)}",
-        _team_time_line("A", ds.get("team_a_slot_index"), ds_slot_labels, "setup_desertstorm"),
-        _team_time_line("B", ds.get("team_b_slot_index"), ds_slot_labels, "setup_desertstorm"),
+        _team_time_line("A", ds.get("team_a_slot_index"), ds_slot_labels, ds_hint),
+        _team_time_line("B", ds.get("team_b_slot_index"), ds_slot_labels, ds_hint),
         f"**Mail Template:** {_yn(ds.get('mail_template'))}",
     ]
     embed.add_field(name="⚔️ Desert Storm", value="\n".join(ds_lines)[:1024], inline=False)
@@ -1853,8 +1855,8 @@ async def _send_view_configuration(interaction: discord.Interaction, cfg) -> Non
     cs_lines = [
         f"**Sheet Tab:** {cs.get('tab_name', '*not set*')}",
         f"**Log Channel:** {_channel(cfg.cs_log_channel_id)}",
-        _team_time_line("A", cs.get("team_a_slot_index"), cs_slot_labels, "setup_canyonstorm"),
-        _team_time_line("B", cs.get("team_b_slot_index"), cs_slot_labels, "setup_canyonstorm"),
+        _team_time_line("A", cs.get("team_a_slot_index"), cs_slot_labels, cs_hint),
+        _team_time_line("B", cs.get("team_b_slot_index"), cs_slot_labels, cs_hint),
         f"**Mail Template:** {_yn(cs.get('mail_template'))}",
     ]
     embed.add_field(name="🏜️ Canyon Storm", value="\n".join(cs_lines)[:1024], inline=False)
@@ -1901,9 +1903,9 @@ async def _send_view_configuration(interaction: discord.Interaction, cfg) -> Non
     embed.add_field(name="🌟 Shiny Tasks", value="\n".join(st_lines)[:1024], inline=False)
 
     if is_premium_flag:
-        embed.set_footer(text="💎 Premium is active. Run any /setup_* command to update a section.")
+        embed.set_footer(text="💎 Premium is active. Run /setup and click a section button to update it.")
     else:
-        embed.set_footer(text="Run /upgrade for Premium • /help for all commands • /setup_* to update a section")
+        embed.set_footer(text="Run /upgrade for Premium • /help for all commands • /setup to update a section")
     await interaction.followup.send(embed=embed, ephemeral=True)
 
 
@@ -4541,7 +4543,14 @@ async def run_storm_setup(interaction: discord.Interaction, bot, event_type: str
     channel  = interaction.channel
     user     = interaction.user
     label    = "Desert Storm" if event_type == "DS" else "Canyon Storm"
-    cmd_name = "setup_desertstorm" if event_type == "DS" else "setup_canyonstorm"
+    # cmd_name is the user-facing hint shown after `Run /` in timeout /
+    # footer messages throughout this wizard. The old `/setup_desertstorm`
+    # and `/setup_canyonstorm` slash commands were consolidated under the
+    # `/setup` hub (#201); the hint now points officers at the button
+    # they actually need to click. For internal slug uses (channel-name
+    # suggestion) helpers derive a separate `cmd_short` from `event_type`.
+    storm_button = "⚔️ Desert Storm" if event_type == "DS" else "🏜️ Canyon Storm"
+    cmd_name = f"setup → {storm_button}"
     cancel_event = wizard_registry.register(user.id)
 
     def check(m):
@@ -4714,6 +4723,18 @@ async def run_storm_setup(interaction: discord.Interaction, bot, event_type: str
         "B":    "Team B only",
     }
 
+    # Capture the prompt so the button callbacks can preserve it in the
+    # edited message — otherwise the question disappears the moment a
+    # button is clicked and officers scrolling back to review what they
+    # answered see only the bare confirmation line.
+    team_prompt = (
+        f"**Step 2 of 8: Which teams do you run for {label}?**"
+        + (
+            f"\nCurrent: **{_team_blurb[saved_teams]}**"
+            if storm_already_configured else ""
+        )
+    )
+
     class TeamChoiceView(discord.ui.View):
         def __init__(self):
             super().__init__(timeout=120)
@@ -4723,45 +4744,66 @@ async def run_storm_setup(interaction: discord.Interaction, bot, event_type: str
         async def both(self, inter: discord.Interaction, button: discord.ui.Button):
             self.selected = "both"
             for item in self.children: item.disabled = True
-            await wizard_registry.safe_edit_response(inter, content="✅ Teams: **Team A & Team B**", view=self)
+            await wizard_registry.safe_edit_response(
+                inter,
+                content=f"{team_prompt}\n\n✅ Teams: **Team A & Team B**",
+                view=self,
+            )
             self.stop()
 
         @discord.ui.button(label="Team A only", style=discord.ButtonStyle.secondary)
         async def a_only(self, inter: discord.Interaction, button: discord.ui.Button):
             self.selected = "A"
             for item in self.children: item.disabled = True
-            await wizard_registry.safe_edit_response(inter, content="✅ Teams: **Team A only**", view=self)
+            await wizard_registry.safe_edit_response(
+                inter,
+                content=f"{team_prompt}\n\n✅ Teams: **Team A only**",
+                view=self,
+            )
             self.stop()
 
         @discord.ui.button(label="Team B only", style=discord.ButtonStyle.secondary)
         async def b_only(self, inter: discord.Interaction, button: discord.ui.Button):
             self.selected = "B"
             for item in self.children: item.disabled = True
-            await wizard_registry.safe_edit_response(inter, content="✅ Teams: **Team B only**", view=self)
+            await wizard_registry.safe_edit_response(
+                inter,
+                content=f"{team_prompt}\n\n✅ Teams: **Team B only**",
+                view=self,
+            )
             self.stop()
 
         # Re-entry: keep the previously-saved choice without re-clicking.
-        # Only rendered when the alliance has a saved value to keep.
+        # Surface the actual saved selection on the button label (set in
+        # post-construction below) so officers can see at a glance what
+        # "Keep current" would preserve. Removed entirely when the
+        # alliance has no saved value yet (fresh setup).
         @discord.ui.button(label="Keep current", style=discord.ButtonStyle.success)
         async def keep_current(self, inter: discord.Interaction, button: discord.ui.Button):
             self.selected = saved_teams
             for item in self.children: item.disabled = True
             await wizard_registry.safe_edit_response(
-                inter, content=f"✅ Teams: **{_team_blurb[saved_teams]}** (kept current)", view=self,
+                inter,
+                content=(
+                    f"{team_prompt}\n\n"
+                    f"✅ Teams: **{_team_blurb[saved_teams]}** (kept current)"
+                ),
+                view=self,
             )
             self.stop()
 
     team_view = TeamChoiceView()
-    if not storm_already_configured:
+    if storm_already_configured:
+        # Surface the saved value on the Keep current button so the
+        # officer can see what would be preserved without reading the
+        # prompt — mirrors the convention used by `ask_keep_or_change`.
+        team_view.keep_current.label = (
+            f"✅ Keep current: {_team_blurb[saved_teams]}"[:80]
+        )
+    else:
         # Hide Keep current on fresh setup — there's no current value to keep.
         team_view.remove_item(team_view.keep_current)
-    await channel.send(
-        (
-            f"**Step 2 of 8: Which teams do you run for {label}?**"
-            + (f"\nCurrent: **{_team_blurb[saved_teams]}**" if storm_already_configured else "")
-        ),
-        view=team_view,
-    )
+    await channel.send(team_prompt, view=team_view)
     await wait_view_or_cancel(team_view, cancel_event)
     if team_view.cancelled:
         return
@@ -4784,6 +4826,19 @@ async def run_storm_setup(interaction: discord.Interaction, bot, event_type: str
     async def pick_team_slot(team_letter: str, saved_idx):
         """Single-team slot picker. Returns 1 / 2 (selected), or None on
         cancel / timeout. `saved_idx` drives whether Keep current renders."""
+        current_line = (
+            f"\nCurrent: **{slot_labels[saved_idx - 1]}**"
+            if saved_idx in (1, 2) else ""
+        )
+        # Capture the prompt so each button callback can echo it in the
+        # edited message — keeps the original question visible when the
+        # officer scrolls back to review what they chose, instead of
+        # leaving only the bare confirmation line.
+        slot_prompt = (
+            f"Which time slot does **Team {team_letter}** run for {label}?"
+            + current_line
+        )
+
         class TeamSlotView(discord.ui.View):
             def __init__(self):
                 super().__init__(timeout=180)
@@ -4795,7 +4850,11 @@ async def run_storm_setup(interaction: discord.Interaction, bot, event_type: str
                 for item in self.children: item.disabled = True
                 await wizard_registry.safe_edit_response(
                     inter,
-                    content=f"✅ Team {team_letter}: **{slot_labels[0]}**", view=self,
+                    content=(
+                        f"{slot_prompt}\n\n"
+                        f"✅ Team {team_letter}: **{slot_labels[0]}**"
+                    ),
+                    view=self,
                 )
                 self.stop()
 
@@ -4805,7 +4864,11 @@ async def run_storm_setup(interaction: discord.Interaction, bot, event_type: str
                 for item in self.children: item.disabled = True
                 await wizard_registry.safe_edit_response(
                     inter,
-                    content=f"✅ Team {team_letter}: **{slot_labels[1]}**", view=self,
+                    content=(
+                        f"{slot_prompt}\n\n"
+                        f"✅ Team {team_letter}: **{slot_labels[1]}**"
+                    ),
+                    view=self,
                 )
                 self.stop()
 
@@ -4816,22 +4879,26 @@ async def run_storm_setup(interaction: discord.Interaction, bot, event_type: str
                 kept_label = slot_labels[saved_idx - 1] if saved_idx in (1, 2) else "—"
                 await wizard_registry.safe_edit_response(
                     inter,
-                    content=f"✅ Team {team_letter}: **{kept_label}** (kept current)", view=self,
+                    content=(
+                        f"{slot_prompt}\n\n"
+                        f"✅ Team {team_letter}: **{kept_label}** (kept current)"
+                    ),
+                    view=self,
                 )
                 self.stop()
 
         view = TeamSlotView()
         if saved_idx not in (1, 2):
             view.remove_item(view.keep_current)
-        current_line = (
-            f"\nCurrent: **{slot_labels[saved_idx - 1]}**"
-            if saved_idx in (1, 2) else ""
-        )
-        await channel.send(
-            f"Which time slot does **Team {team_letter}** run for {label}?"
-            + current_line,
-            view=view,
-        )
+        else:
+            # Surface the saved slot on the Keep current button so the
+            # officer can see what would be preserved without reading
+            # back through the prompt — matches the convention used by
+            # `ask_keep_or_change` elsewhere in the wizard.
+            view.keep_current.label = (
+                f"✅ Keep current: {slot_labels[saved_idx - 1]}"[:80]
+            )
+        await channel.send(slot_prompt, view=view)
         await wait_view_or_cancel(view, cancel_event)
         if view.cancelled:
             return None
@@ -5242,6 +5309,7 @@ async def run_storm_setup(interaction: discord.Interaction, bot, event_type: str
         guild_id, event_type,
         structured_flow_enabled=structured_cfg["structured_flow_enabled"],
         power_metric_column    =structured_cfg.get("power_metric_column", "B"),
+        alias_metric_column    =structured_cfg.get("alias_metric_column", ""),
         sub_mode               =structured_cfg["sub_mode"],
         signup_channel_id      =structured_cfg["signup_channel_id"],
         signup_schedule_cron   =structured_cfg.get("signup_schedule_cron", ""),
@@ -5289,15 +5357,24 @@ async def run_storm_setup(interaction: discord.Interaction, bot, event_type: str
     else:
         embed.add_field(name="Participation Tracking", value="❌ Disabled", inline=False)
     if structured_cfg["structured_flow_enabled"]:
+        _alias_letter = (structured_cfg.get("alias_metric_column") or "").strip().upper()
+        alias_blurb = (
+            f" · Alias column: `{_alias_letter}`"
+            if _alias_letter else
+            " · Alias column: *default (Display Name)*"
+        )
+        signup_blurb = (
+            f" · Sign-up channel: <#{structured_cfg['signup_channel_id']}>"
+            if structured_cfg["signup_channel_id"] else ""
+        )
         embed.add_field(
             name="Structured Roster Flow",
             value=(
-                f"✅ Enabled · Power column: `{structured_cfg.get('power_metric_column', 'B')}` · "
-                f"Sub mode: `{structured_cfg['sub_mode']}` · "
-                f"Sign-up channel: <#{structured_cfg['signup_channel_id']}>"
-                if structured_cfg["signup_channel_id"] else
-                f"✅ Enabled · Power column: `{structured_cfg.get('power_metric_column', 'B')}` · "
+                f"✅ Enabled · Power column: "
+                f"`{structured_cfg.get('power_metric_column', 'B')}`"
+                f"{alias_blurb} · "
                 f"Sub mode: `{structured_cfg['sub_mode']}`"
+                f"{signup_blurb}"
             ),
             inline=False,
         )
@@ -6520,7 +6597,11 @@ async def _run_structured_flow_setup_step(
     result.setdefault("signup_time", "")
     result.setdefault("power_refresh_dm_enabled", False)
 
-    cmd_short = cmd_name.replace("setup_", "")
+    # Internal slug for channel-name suggestion (e.g. `desertstorm-signups`).
+    # Derived from event_type directly so it stays a clean slug even
+    # after cmd_name became a user-facing hint pointing at the `/setup`
+    # hub button (#201).
+    cmd_short = "desertstorm" if event_type == "DS" else "canyonstorm"
 
     # ── Premium opt-in question ────────────────────────────────────────────
     structured_opted_in = False
@@ -6605,6 +6686,45 @@ async def _run_structured_flow_setup_step(
         if not (len(cleaned) == 1 and "A" <= cleaned <= "Z"):
             cleaned = "B"
         result["power_metric_column"] = cleaned
+
+        # Alias / display-name column — independent of the Member
+        # Roster sync's display_col, which defaults to column C and
+        # silently collides with alliances that overwrote C with their
+        # own power column. Asking for the alias letter explicitly here
+        # lets officers point the structured roster builder at the
+        # column on their roster Sheet that actually holds the name
+        # they want shown next to each assignment. Empty (default)
+        # falls back to display_col so alliances using the bot-managed
+        # roster shape don't need to touch this step.
+        current_alias = (
+            result.get("alias_metric_column") or ""
+        ).strip().upper()
+        if not (len(current_alias) == 1 and "A" <= current_alias <= "Z"):
+            current_alias = ""
+        picked_alias = await ask_keep_or_change(
+            channel,
+            f"**Alias / Display Name Column** _(optional)_\n"
+            f"Which column on your roster Sheet stores the member name "
+            f"or alias you want shown next to each {label} assignment? "
+            f"Enter a single column letter (A–Z), or leave blank to use "
+            f"the bot's default Display Name column. If your alliance "
+            f"overwrote column C with custom data (a power column, an "
+            f"officer note, etc.), set this to the column that actually "
+            f"holds the alias or the roster builder will read the wrong "
+            f"cell as the member name.",
+            default="",
+            current=current_alias,
+            modal_title="Alias / Display Name Column",
+            modal_label="Column letter (A–Z, blank for default)",
+            timeout_cmd=cmd_name,
+            cancel_event=cancel_event,
+        )
+        if picked_alias is None:
+            return None
+        alias_cleaned = str(picked_alias).strip().upper()
+        if not (len(alias_cleaned) == 1 and "A" <= alias_cleaned <= "Z"):
+            alias_cleaned = ""
+        result["alias_metric_column"] = alias_cleaned
 
         # Sub mode — Kevin's first-sweep _edited convention: the
         # green/default button reads `Use Default: <X>` on first run

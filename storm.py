@@ -878,7 +878,13 @@ async def _show_storm_overview(interaction: discord.Interaction, event_type: str
     label    = "Desert Storm" if event_type == "DS" else "Canyon Storm"
     icon     = "⚔️" if event_type == "DS" else "🏜️"
     cmd_name = "desertstorm" if event_type == "DS" else "canyonstorm"
-    setup_cmd = "setup_desertstorm" if event_type == "DS" else "setup_canyonstorm"
+    # The per-event `/setup_*` slash commands were retired in favour of
+    # the `/setup` hub (#201); point officers at the hub + correct
+    # button instead of a non-existent slash command.
+    setup_hint = (
+        "setup → ⚔️ Desert Storm" if event_type == "DS"
+        else "setup → 🏜️ Canyon Storm"
+    )
 
     cfg  = get_config(interaction.guild_id)
     scfg = get_storm_config(interaction.guild_id, event_type)
@@ -931,7 +937,7 @@ async def _show_storm_overview(interaction: discord.Interaction, event_type: str
     except Exception as e:
         embed.add_field(name="Current Mail Template", value=f"⚠️ Could not load: {e}", inline=False)
 
-    embed.set_footer(text=f"Run /{setup_cmd} to update. Run /{cmd_name} draft to generate a draft.")
+    embed.set_footer(text=f"Run /{setup_hint} to update. Run /{cmd_name} draft to generate a draft.")
     await interaction.followup.send(embed=embed, ephemeral=True)
 
 # ══════════════════════════════════════════════════════════════════════════════

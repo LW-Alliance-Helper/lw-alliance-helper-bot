@@ -26,28 +26,62 @@ import discord
 logger = logging.getLogger(__name__)
 
 
-# ── Time labels ──────────────────────────────────────────────────────────────
+# ── Team-ordered slot labels ─────────────────────────────────────────────────
 #
-# Game-defined slot times are rendered via `config.get_storm_slot_labels`
-# (same helper TimeSelectView and the draft flow already use), so the
-# sign-up message and the draft show consistent time labels.
+# Pre-#251 this helper returned the two game-defined slots in slot order
+# (slot 1 then slot 2). Now it returns labels in TEAM order — Team A's
+# label first, Team B's label second — driven by the per-guild
+# `team_*_slot_index` mapping (or a per-week override the officer
+# picked). When both teams share a slot the labels are intentionally
+# identical; downstream callers (button rendering, mail `{time}`)
+# treat that as the desired outcome rather than an anomaly.
 
-def _slot_labels(event_type: str, guild_id: int) -> tuple[str, str]:
-    """Return (label_a, label_b) for the two game-defined time slots.
+def _slot_labels(
+    event_type: str, guild_id: int,
+    *,
+    override_a_idx: int | None = None,
+    override_b_idx: int | None = None,
+    event_date: str | None = None,
+) -> tuple[str, str]:
+    """Return (team_a_label, team_b_label) for an event (#251).
 
-    Both DS and CS have two slots (DS_SERVER_TIMES / CS_SERVER_TIMES per
-    `config.py`); the alliance's `teams` config gates which slot(s) the
-    post actually surfaces. Pre-Rule A / #166 the CS branch hardcoded
-    single-slot, which contradicted #166's revert.
+    `override_a_idx` / `override_b_idx`, when set (1 or 2), pin the
+    label for that team for this single render — used by the weekly
+    override path when the officer picks a non-default slot. When
+    overrides aren't supplied, falls back to `config.resolve_storm_team_slots`
+    (which checks `storm_registration_posts` for a per-event mapping
+    before falling back to the guild default).
+
+    Returns empty strings for teams that haven't been assigned a slot
+    yet — callers gate posting on whether the labels the alliance's
+    `teams` setting requires are non-empty.
     """
-    from config import get_storm_slot_labels
-    try:
-        labels = get_storm_slot_labels(event_type, guild_id)
-    except Exception:
-        labels = []
-    label_a = labels[0] if len(labels) > 0 else ""
-    label_b = labels[1] if len(labels) > 1 else ""
-    return (label_a, label_b)
+    from config import (
+        get_storm_slot_label_by_index, resolve_storm_team_slots,
+    )
+
+    if override_a_idx in (1, 2) or override_b_idx in (1, 2):
+        a_idx = override_a_idx if override_a_idx in (1, 2) else None
+        b_idx = override_b_idx if override_b_idx in (1, 2) else None
+        # Fill in non-overridden side from the resolved guild/event mapping
+        # so a partial override doesn't blank the other team's label.
+        if a_idx is None or b_idx is None:
+            resolved_a, resolved_b = resolve_storm_team_slots(
+                guild_id, event_type, event_date,
+            )
+            if a_idx is None:
+                a_idx = resolved_a
+            if b_idx is None:
+                b_idx = resolved_b
+    else:
+        a_idx, b_idx = resolve_storm_team_slots(
+            guild_id, event_type, event_date,
+        )
+
+    return (
+        get_storm_slot_label_by_index(event_type, a_idx, guild_id),
+        get_storm_slot_label_by_index(event_type, b_idx, guild_id),
+    )
 
 
 def _today_in_guild_tz(guild_id: int | None) -> _dt.date:
@@ -102,6 +136,8 @@ async def post_registration(
     event_date: str,
     *,
     structured: dict | None = None,
+    override_a_idx: int | None = None,
+    override_b_idx: int | None = None,
 ) -> dict:
     """Build and post a structured-flow sign-up message for one event.
 
@@ -111,6 +147,15 @@ async def post_registration(
     hub button (which shapes the response into user-facing copy) and
     the auto-scheduler loop (#131) (which logs status).
 
+    `override_a_idx` / `override_b_idx`, when set (1 or 2), pin the
+    team→slot mapping for this single event, recorded on the
+    `storm_registration_posts` row. Without them, the guild default
+    from `guild_storm_config.team_*_slot_index` is used. The status
+    `missing_slot_labels` now signals "leadership hasn't picked the
+    team→slot mapping yet for the slots the alliance's `teams` setting
+    requires" (#251), not "no game-time constants" — the constants are
+    always defined.
+
     Returns a dict carrying at minimum a `status` key. Possible values:
       * `ok`               — message sent + recorded; `message_id` and
                              `channel_id` populated.
@@ -119,8 +164,8 @@ async def post_registration(
       * `no_channel`       — `signup_channel_id` isn't configured.
       * `channel_gone`     — channel_id set but the channel was deleted
                              or the bot can't see it.
-      * `missing_slot_labels` — alliance hasn't set the time-option labels;
-                                posting would surface buttons with empty labels.
+      * `missing_slot_labels` — alliance hasn't set Team A's / Team B's
+                                slot mapping for this event type yet.
       * `forbidden`        — channel.send raised Forbidden.
       * `send_failed`      — other Discord error during send; `error`
                              populated with str(exception).
@@ -151,7 +196,20 @@ async def post_registration(
     if teams_setting not in ("both", "A", "B"):
         teams_setting = "both"
 
-    time_a, time_b = _slot_labels(event_type, guild.id)
+    # Resolve final team→slot indices for this event. Overrides win;
+    # otherwise the guild default applies.
+    resolved_a, resolved_b = config.resolve_storm_team_slots(
+        guild.id, event_type, event_date,
+    )
+    final_a_idx = override_a_idx if override_a_idx in (1, 2) else resolved_a
+    final_b_idx = override_b_idx if override_b_idx in (1, 2) else resolved_b
+
+    time_a, time_b = _slot_labels(
+        event_type, guild.id,
+        override_a_idx=final_a_idx,
+        override_b_idx=final_b_idx,
+        event_date=event_date,
+    )
     # Slot-label validation gates only the slots an alliance actually
     # uses. A `teams=A` alliance with no Team B time configured is fine;
     # their post only needs the Team A label.
@@ -186,6 +244,8 @@ async def post_registration(
         message_id=posted.id,
         time_a_label=(time_a or ""),
         time_b_label=(time_b or ""),
+        team_a_slot_index=final_a_idx or 0,
+        team_b_slot_index=final_b_idx or 0,
     )
 
     try:
@@ -278,14 +338,217 @@ async def handle_post_signup(
     # Defer so the post helper has headroom over the 3-second window.
     await interaction.response.defer(ephemeral=True)
 
+    # Pre-check the team→slot mapping (#251) before opening the override
+    # picker — there's no point asking "keep or override" when there's
+    # no default to keep yet.
+    import config as _config
+    cfg = _config.get_storm_config(interaction.guild_id, et) or {}
+    teams_setting = (cfg.get("teams") or "both").strip()
+    if teams_setting not in ("both", "A", "B"):
+        teams_setting = "both"
+    default_a_idx, default_b_idx = _config.resolve_storm_team_slots(
+        interaction.guild_id, et, date_clean,
+    )
+    needs_a = teams_setting in ("both", "A")
+    needs_b = teams_setting in ("both", "B")
+    if (needs_a and default_a_idx not in (1, 2)) or (needs_b and default_b_idx not in (1, 2)):
+        await interaction.followup.send(
+            _format_post_result_message(
+                et, date_clean, {"status": "missing_slot_labels"},
+            ),
+            ephemeral=True,
+        )
+        return
+
+    # Run the per-week confirm + optional override picker. Returns the
+    # indices to post with (either the defaults or the officer's pick),
+    # or None if the officer cancelled / timed out.
+    chosen = await _run_post_signup_confirm_flow(
+        interaction, et, date_clean,
+        teams_setting=teams_setting,
+        default_a_idx=default_a_idx, default_b_idx=default_b_idx,
+    )
+    if chosen is None:
+        return
+    final_a_idx, final_b_idx = chosen
+
     result = await post_registration(
         bot, interaction.guild, et, date_clean,
         structured=structured,
+        override_a_idx=final_a_idx,
+        override_b_idx=final_b_idx,
     )
     await interaction.followup.send(
         _format_post_result_message(et, date_clean, result),
         ephemeral=True,
     )
+
+
+async def _run_post_signup_confirm_flow(
+    interaction: discord.Interaction,
+    event_type: str,
+    event_date: str,
+    *,
+    teams_setting: str,
+    default_a_idx: int | None,
+    default_b_idx: int | None,
+) -> tuple[int | None, int | None] | None:
+    """Confirm-and-optionally-override flow for the weekly sign-up post (#251).
+
+    Renders an ephemeral confirmation listing the team→slot mapping in
+    effect (the guild default) and offers three actions:
+
+      • **Post with these times** — use the guild default.
+      • **Override for this week** — walk a sequential per-team slot
+        picker (one ephemeral message per running team), then post
+        with the picked indices. The guild default is not modified.
+      • **Cancel** — bail out without posting.
+
+    Returns `(team_a_slot_index, team_b_slot_index)` for the post (each
+    either 1, 2, or None for an unused team), or `None` if the officer
+    cancelled or timed out.
+    """
+    from config import get_storm_slot_labels
+    from storm_date_helpers import format_event_date
+    try:
+        slot_labels = get_storm_slot_labels(event_type, interaction.guild_id)
+    except Exception:
+        slot_labels = []
+
+    def _label_for(idx):
+        if idx in (1, 2) and len(slot_labels) >= idx:
+            return slot_labels[idx - 1]
+        return "—"
+
+    label = "Desert Storm" if event_type == "DS" else "Canyon Storm"
+    emoji = "⚔️" if event_type == "DS" else "🏜️"
+    date_pretty = format_event_date(event_date)
+
+    needs_a = teams_setting in ("both", "A")
+    needs_b = teams_setting in ("both", "B")
+
+    summary_lines = [f"{emoji} **{label} sign-up for {date_pretty}**", ""]
+    if needs_a:
+        summary_lines.append(f"🅰️ Team A: **{_label_for(default_a_idx)}**")
+    if needs_b:
+        summary_lines.append(f"🅱️ Team B: **{_label_for(default_b_idx)}**")
+    summary_lines.append("")
+    summary_lines.append(
+        "Post with these times, or override them for this week only?"
+    )
+
+    class _ConfirmView(discord.ui.View):
+        def __init__(self):
+            super().__init__(timeout=180)
+            self.outcome: str | None = None  # "post" | "override" | "cancel"
+
+        @discord.ui.button(label="✅ Post with these times", style=discord.ButtonStyle.success)
+        async def post(self, inter: discord.Interaction, button: discord.ui.Button):
+            self.outcome = "post"
+            for item in self.children:
+                item.disabled = True
+            await inter.response.edit_message(view=self)
+            self.stop()
+
+        @discord.ui.button(label="✏️ Override for this week", style=discord.ButtonStyle.primary)
+        async def override(self, inter: discord.Interaction, button: discord.ui.Button):
+            self.outcome = "override"
+            for item in self.children:
+                item.disabled = True
+            await inter.response.edit_message(view=self)
+            self.stop()
+
+        @discord.ui.button(label="❌ Cancel", style=discord.ButtonStyle.secondary)
+        async def cancel(self, inter: discord.Interaction, button: discord.ui.Button):
+            self.outcome = "cancel"
+            for item in self.children:
+                item.disabled = True
+            await inter.response.edit_message(view=self)
+            self.stop()
+
+    confirm_view = _ConfirmView()
+    await interaction.followup.send(
+        "\n".join(summary_lines), view=confirm_view, ephemeral=True,
+    )
+    timed_out = await confirm_view.wait()
+    if timed_out or confirm_view.outcome in (None, "cancel"):
+        if confirm_view.outcome != "cancel":
+            await interaction.followup.send(
+                "⏰ Timed out. Click **📣 Post sign-up poll** again to retry.",
+                ephemeral=True,
+            )
+        else:
+            await interaction.followup.send(
+                "❌ Sign-up post cancelled. Nothing was posted.",
+                ephemeral=True,
+            )
+        return None
+
+    if confirm_view.outcome == "post":
+        return (default_a_idx, default_b_idx)
+
+    # ── Override path: pick per running team ──────────────────────────
+    async def _pick(team_letter: str, current_idx) -> int | None:
+        class _SlotPick(discord.ui.View):
+            def __init__(self):
+                super().__init__(timeout=180)
+                self.selected: int | None = None
+
+            @discord.ui.button(label=slot_labels[0] if len(slot_labels) > 0 else "Slot 1",
+                                style=discord.ButtonStyle.primary)
+            async def s1(self, inter: discord.Interaction, button: discord.ui.Button):
+                self.selected = 1
+                for item in self.children:
+                    item.disabled = True
+                await inter.response.edit_message(view=self)
+                self.stop()
+
+            @discord.ui.button(label=slot_labels[1] if len(slot_labels) > 1 else "Slot 2",
+                                style=discord.ButtonStyle.primary)
+            async def s2(self, inter: discord.Interaction, button: discord.ui.Button):
+                self.selected = 2
+                for item in self.children:
+                    item.disabled = True
+                await inter.response.edit_message(view=self)
+                self.stop()
+
+            @discord.ui.button(label="Keep current default", style=discord.ButtonStyle.success)
+            async def keep(self, inter: discord.Interaction, button: discord.ui.Button):
+                self.selected = current_idx if current_idx in (1, 2) else None
+                for item in self.children:
+                    item.disabled = True
+                await inter.response.edit_message(view=self)
+                self.stop()
+
+        pick = _SlotPick()
+        await interaction.followup.send(
+            f"Which time slot does **Team {team_letter}** run this week?\n"
+            f"Current default: **{_label_for(current_idx)}**",
+            view=pick, ephemeral=True,
+        )
+        timed_out = await pick.wait()
+        if timed_out or pick.selected is None:
+            await interaction.followup.send(
+                "⏰ Override timed out. Nothing was posted.",
+                ephemeral=True,
+            )
+            return None
+        return pick.selected
+
+    new_a_idx = default_a_idx
+    new_b_idx = default_b_idx
+    if needs_a:
+        picked = await _pick("A", default_a_idx)
+        if picked is None:
+            return None
+        new_a_idx = picked
+    if needs_b:
+        picked = await _pick("B", default_b_idx)
+        if picked is None:
+            return None
+        new_b_idx = picked
+
+    return (new_a_idx, new_b_idx)
 
 
 def _format_post_result_message(
@@ -332,14 +595,11 @@ def _format_post_result_message(
             f"the bot can't see it. Re-run `{setup_cmd}` to pick a new channel."
         )
     if status == "missing_slot_labels":
-        if event_type == "DS":
-            return (
-                f"⚠️ Both Desert Storm time slots need to be configured before "
-                f"posting a sign-up. Run `{setup_cmd}` and pick the two times first."
-            )
         return (
-            f"⚠️ The Canyon Storm time slot needs to be configured before "
-            f"posting a sign-up. Run `{setup_cmd}` and pick the time first."
+            f"⚠️ Your alliance hasn't picked which time slot each team runs "
+            f"at for {label} yet. Run `{setup_cmd}` and complete **Step 3: "
+            f"Team Time Slots** first — you can override the picks for a "
+            f"single week from this same button after the default is set."
         )
     if status == "forbidden":
         cid = result.get("channel_id")

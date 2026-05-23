@@ -1833,11 +1833,19 @@ async def _send_view_configuration(interaction: discord.Interaction, cfg) -> Non
     ds_slot_labels = get_storm_slot_labels("DS", interaction.guild_id)
     cs_slot_labels = get_storm_slot_labels("CS", interaction.guild_id)
 
+    def _team_time_line(team_letter: str, idx, slot_lbls, setup_cmd: str) -> str:
+        """Render the Team A/B time line for the /setup config view.
+        Falls back to a nudge toward the setup wizard when the alliance
+        hasn't picked the slot yet (#251)."""
+        if idx in (1, 2) and len(slot_lbls) >= idx:
+            return f"**Team {team_letter} Time:** {slot_lbls[idx - 1]}"
+        return f"**Team {team_letter} Time:** *not set — Step 3 of `/{setup_cmd}`*"
+
     ds_lines = [
         f"**Sheet Tab:** {ds.get('tab_name', '*not set*')}",
         f"**Log Channel:** {_channel(cfg.ds_log_channel_id)}",
-        f"**Time Option 1:** {ds_slot_labels[0]}",
-        f"**Time Option 2:** {ds_slot_labels[1]}",
+        _team_time_line("A", ds.get("team_a_slot_index"), ds_slot_labels, "setup_desertstorm"),
+        _team_time_line("B", ds.get("team_b_slot_index"), ds_slot_labels, "setup_desertstorm"),
         f"**Mail Template:** {_yn(ds.get('mail_template'))}",
     ]
     embed.add_field(name="⚔️ Desert Storm", value="\n".join(ds_lines)[:1024], inline=False)
@@ -1845,8 +1853,8 @@ async def _send_view_configuration(interaction: discord.Interaction, cfg) -> Non
     cs_lines = [
         f"**Sheet Tab:** {cs.get('tab_name', '*not set*')}",
         f"**Log Channel:** {_channel(cfg.cs_log_channel_id)}",
-        f"**Time Option 1:** {cs_slot_labels[0]}",
-        f"**Time Option 2:** {cs_slot_labels[1]}",
+        _team_time_line("A", cs.get("team_a_slot_index"), cs_slot_labels, "setup_canyonstorm"),
+        _team_time_line("B", cs.get("team_b_slot_index"), cs_slot_labels, "setup_canyonstorm"),
         f"**Mail Template:** {_yn(cs.get('mail_template'))}",
     ]
     embed.add_field(name="🏜️ Canyon Storm", value="\n".join(cs_lines)[:1024], inline=False)
@@ -4634,6 +4642,34 @@ async def run_storm_setup(interaction: discord.Interaction, bot, event_type: str
             (current.get("teams") or "both"), "A & B",
         )
         fields.insert(1, ("Teams", _summary_teams))
+
+        # Team time-slot mapping (#251). Surfaced so officers can see at
+        # a glance whether the slots are set, and what they're set to,
+        # without having to re-enter the wizard's Step 3.
+        from config import get_storm_slot_labels as _gslot
+        try:
+            _slot_lbls = _gslot(event_type, guild_id)
+        except Exception:
+            _slot_lbls = []
+        _team_summary = (current.get("teams") or "both").strip()
+        _a_idx = current.get("team_a_slot_index")
+        _b_idx = current.get("team_b_slot_index")
+
+        def _slot_blurb(idx):
+            if idx in (1, 2) and len(_slot_lbls) >= idx:
+                return _slot_lbls[idx - 1]
+            return "*not set*"
+
+        if _team_summary == "A":
+            _times_value = f"Team A: {_slot_blurb(_a_idx)}"
+        elif _team_summary == "B":
+            _times_value = f"Team B: {_slot_blurb(_b_idx)}"
+        else:
+            _times_value = (
+                f"Team A: {_slot_blurb(_a_idx)} · "
+                f"Team B: {_slot_blurb(_b_idx)}"
+            )
+        fields.insert(2, ("Team Times", _times_value))
         emoji = "⚔️" if event_type == "DS" else "🏜️"
         proceed = await ask_proceed_with_existing_config(
             channel,
@@ -4654,7 +4690,7 @@ async def run_storm_setup(interaction: discord.Interaction, bot, event_type: str
     hardcoded_tab = "DS Assignments" if event_type == "DS" else "CS Assignments"
     tab_name = await ask_keep_or_change(
         channel,
-        f"**Step 1 of 7: Sheet Tab**\n"
+        f"**Step 1 of 8: Sheet Tab**\n"
         f"Which tab in your Google Sheet stores the {label} zone assignments?\n"
         f"⚠️ *Make sure this tab exists in your sheet before continuing.*\n"
         f"ℹ️ *The bot will manage the data structure of this tab automatically. "
@@ -4721,7 +4757,7 @@ async def run_storm_setup(interaction: discord.Interaction, bot, event_type: str
         team_view.remove_item(team_view.keep_current)
     await channel.send(
         (
-            f"**Step 2 of 7: Which teams do you run for {label}?**"
+            f"**Step 2 of 8: Which teams do you run for {label}?**"
             + (f"\nCurrent: **{_team_blurb[saved_teams]}**" if storm_already_configured else "")
         ),
         view=team_view,
@@ -4734,7 +4770,95 @@ async def run_storm_setup(interaction: discord.Interaction, bot, event_type: str
         return
     teams = team_view.selected
 
-    # ── Step 3: Storm log channel ─────────────────────────────────────────────
+    # ── Step 3: Team time slots (#251) ────────────────────────────────────────
+    # DS / CS each have two game-defined time slots; this step records
+    # which slot each team the alliance runs is on. Both teams can pick
+    # the same slot. Independent per event type. The mapping is the
+    # default for every weekly sign-up; the officer can override it for
+    # a single week when posting that week's sign-up.
+    from config import get_storm_slot_labels
+    slot_labels = get_storm_slot_labels(event_type, guild_id)
+    saved_a_idx = current.get("team_a_slot_index")
+    saved_b_idx = current.get("team_b_slot_index")
+
+    async def pick_team_slot(team_letter: str, saved_idx):
+        """Single-team slot picker. Returns 1 / 2 (selected), or None on
+        cancel / timeout. `saved_idx` drives whether Keep current renders."""
+        class TeamSlotView(discord.ui.View):
+            def __init__(self):
+                super().__init__(timeout=180)
+                self.selected = None
+
+            @discord.ui.button(label=slot_labels[0], style=discord.ButtonStyle.primary)
+            async def slot1(self, inter: discord.Interaction, button: discord.ui.Button):
+                self.selected = 1
+                for item in self.children: item.disabled = True
+                await wizard_registry.safe_edit_response(
+                    inter,
+                    content=f"✅ Team {team_letter}: **{slot_labels[0]}**", view=self,
+                )
+                self.stop()
+
+            @discord.ui.button(label=slot_labels[1], style=discord.ButtonStyle.primary)
+            async def slot2(self, inter: discord.Interaction, button: discord.ui.Button):
+                self.selected = 2
+                for item in self.children: item.disabled = True
+                await wizard_registry.safe_edit_response(
+                    inter,
+                    content=f"✅ Team {team_letter}: **{slot_labels[1]}**", view=self,
+                )
+                self.stop()
+
+            @discord.ui.button(label="Keep current", style=discord.ButtonStyle.success)
+            async def keep_current(self, inter: discord.Interaction, button: discord.ui.Button):
+                self.selected = saved_idx
+                for item in self.children: item.disabled = True
+                kept_label = slot_labels[saved_idx - 1] if saved_idx in (1, 2) else "—"
+                await wizard_registry.safe_edit_response(
+                    inter,
+                    content=f"✅ Team {team_letter}: **{kept_label}** (kept current)", view=self,
+                )
+                self.stop()
+
+        view = TeamSlotView()
+        if saved_idx not in (1, 2):
+            view.remove_item(view.keep_current)
+        current_line = (
+            f"\nCurrent: **{slot_labels[saved_idx - 1]}**"
+            if saved_idx in (1, 2) else ""
+        )
+        await channel.send(
+            f"Which time slot does **Team {team_letter}** run for {label}?"
+            + current_line,
+            view=view,
+        )
+        await wait_view_or_cancel(view, cancel_event)
+        if view.cancelled:
+            return None
+        if not view.selected:
+            await channel.send(f"⏰ Timed out. Run `/{cmd_name}` to start again.")
+            return None
+        return view.selected
+
+    await channel.send(
+        f"**Step 3 of 8: Team Time Slots**\n"
+        f"Select the time when you typically run each {label} team. "
+        f"You can override these for a single week when you send out the "
+        f"sign up, if needed."
+    )
+
+    team_a_slot = None
+    team_b_slot = None
+    if teams in ("both", "A"):
+        team_a_slot = await pick_team_slot("A", saved_a_idx)
+        if team_a_slot is None:
+            return
+    if teams in ("both", "B"):
+        team_b_slot = await pick_team_slot("B", saved_b_idx)
+        if team_b_slot is None:
+            return
+
+    # ── Step 4: Storm log channel ─────────────────────────────────────────────
     # Reused by /[event]_log lookups and by the participation flow when
     # leadership posts the participation summary.
     log_ch_view = ChannelSelectStep(
@@ -4750,7 +4874,7 @@ async def run_storm_setup(interaction: discord.Interaction, bot, event_type: str
             "Pick a new one below."
         )
     await channel.send(
-        f"**Step 3 of 7: Storm Log Channel**\n"
+        f"**Step 4 of 8: Storm Log Channel**\n"
         f"Select the channel where {label} participation/log summaries will be posted:",
         view=log_ch_view,
     )
@@ -4777,7 +4901,7 @@ async def run_storm_setup(interaction: discord.Interaction, bot, event_type: str
         )
     parent_cmd = "desertstorm" if event_type == "DS" else "canyonstorm"
     await channel.send(
-        f"**Step 4 of 7: Mail Post Channel**\n"
+        f"**Step 5 of 8: Mail Post Channel**\n"
         f"When leadership clicks **Post & Copy** at the end of "
         f"`/{parent_cmd}` → **📄 Generate mail**, the finished mail "
         f"will be posted to this channel:",
@@ -4958,7 +5082,7 @@ async def run_storm_setup(interaction: discord.Interaction, bot, event_type: str
                 "✅ Keep current: Separate templates"
             )
         prompt_lines = [
-            "**Step 5 of 7: Mail Template**",
+            "**Step 6 of 8: Mail Template**",
             "Do you want one template that applies to both teams, or separate templates per team?",
         ]
         if saved_share_mode is not None:
@@ -4998,7 +5122,7 @@ async def run_storm_setup(interaction: discord.Interaction, bot, event_type: str
         # Single-team mode — only the saved row for the picked team is
         # relevant; the other side stays empty.
         saved_for_team = saved_template_a if teams == "A" else saved_template_b
-        await channel.send("**Step 5 of 7: Mail Template**")
+        await channel.send("**Step 6 of 8: Mail Template**")
         template = await get_template(team_label, saved_template=saved_for_team)
         if template is None:
             return
@@ -5037,7 +5161,7 @@ async def run_storm_setup(interaction: discord.Interaction, bot, event_type: str
     parent_cmd = "desertstorm" if event_type == "DS" else "canyonstorm"
     remind_dm = await ask_keep_or_change(
         channel,
-        f"**Step 7 of 7: {label} Reminder DM (💎 Premium)**\n"
+        f"**Step 8 of 8: {label} Reminder DM (💎 Premium)**\n"
         f"When leadership clicks **🔔 Send DM reminder to roster** on "
         f"`/{parent_cmd}`, the bot DMs every roster member this message. "
         f"Free guilds can configure it now; it just won't fire until "
@@ -5060,7 +5184,7 @@ async def run_storm_setup(interaction: discord.Interaction, bot, event_type: str
     # ── Save ───────────────────────────────────────────────────────────────────
     from config import (
         save_storm_config, save_participation_config, update_config_field,
-        save_structured_storm_config,
+        save_structured_storm_config, save_storm_team_slots,
     )
     # `teams` carries the wizard's Step 2 choice ('both' / 'A' / 'B') so
     # the strategy preset editor can hide Min Power inputs for a team the
@@ -5083,6 +5207,15 @@ async def run_storm_setup(interaction: discord.Interaction, bot, event_type: str
                       post_channel_id=post_channel_id,
                       dm_reminder_message=dm_reminder_message,
                       teams=teams_persisted)
+
+    # Persist the per-team slot mapping (#251). Kept separate from
+    # save_storm_config so this step can be re-run without re-typing the
+    # rest of the config — same precedent as save_structured_storm_config.
+    save_storm_team_slots(
+        guild_id, event_type,
+        team_a_slot_index=team_a_slot,
+        team_b_slot_index=team_b_slot,
+    )
 
     # Persist the participation config to the (guild, event_type) row.
     save_participation_config(
@@ -5125,6 +5258,23 @@ async def run_storm_setup(interaction: discord.Interaction, bot, event_type: str
     embed = discord.Embed(title=f"✅ {label} Configured", color=discord.Color.green())
     embed.add_field(name="Sheet Tab",    value=tab_name, inline=True)
     embed.add_field(name="Teams",        value={"both": "A & B", "A": "A only", "B": "B only"}[teams], inline=True)
+    # Team time-slot mapping (#251) — surfaced inline alongside the
+    # other event-shape fields so officers can confirm their slot picks
+    # made it through the wizard.
+    def _slot_lbl(idx):
+        if idx in (1, 2) and len(slot_labels) >= idx:
+            return slot_labels[idx - 1]
+        return "—"
+    if teams == "A":
+        embed.add_field(name="Team Times", value=f"A: {_slot_lbl(team_a_slot)}", inline=False)
+    elif teams == "B":
+        embed.add_field(name="Team Times", value=f"B: {_slot_lbl(team_b_slot)}", inline=False)
+    else:
+        embed.add_field(
+            name="Team Times",
+            value=f"A: {_slot_lbl(team_a_slot)} · B: {_slot_lbl(team_b_slot)}",
+            inline=False,
+        )
     embed.add_field(name="Timezone",     value=tz_label, inline=True)
     embed.add_field(name="Log Channel",  value=f"<#{log_channel_id}>", inline=True)
     embed.add_field(name="Post Channel", value=f"<#{post_channel_id}>", inline=True)
@@ -5487,7 +5637,7 @@ async def _run_storm_participation_step(
     # ── 6.1 Enable? ────────────────────────────────────────────────────────────
     parent_cmd = "desertstorm" if event_type == "DS" else "canyonstorm"
     enable_prompt = (
-        f"**Step 6 of 7: Participation Tracking**\n"
+        f"**Step 7 of 8: Participation Tracking**\n"
         f"Do you want to track {label} participation? Leadership clicks "
         f"**📊 Fill out participation questions** on `/{parent_cmd}` "
         f"after each event to log who showed up, who sat out, etc.\n"

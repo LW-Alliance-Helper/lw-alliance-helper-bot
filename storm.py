@@ -888,13 +888,30 @@ async def _show_storm_overview(interaction: discord.Interaction, event_type: str
         title=f"{icon} {label}",
         color=discord.Color.dark_red() if event_type == "DS" else discord.Color.gold(),
     )
-    from config import get_storm_slot_labels
-    slot_labels = get_storm_slot_labels(event_type, interaction.guild_id)
+    from config import get_storm_team_slot_labels
+    # Show the TEAM-mapped time labels (#251) — what each team actually
+    # runs at, driven by the saved per-team slot picks in /setup_*storm
+    # Step 3. Falls back to "*not set*" when the alliance hasn't picked
+    # yet; setup-cmd hint is already in the footer below.
+    team_a_label, team_b_label = get_storm_team_slot_labels(
+        interaction.guild_id, event_type,
+    )
+    teams_setting = (scfg.get("teams") or "both").strip()
 
     embed.add_field(name="Sheet Tab",   value=scfg.get("tab_name", "*not set*"),                        inline=False)
     embed.add_field(name="Log Channel", value=f"<#{log_channel_id}>" if log_channel_id else "*not set*", inline=False)
-    embed.add_field(name="Time Option 1", value=slot_labels[0], inline=False)
-    embed.add_field(name="Time Option 2", value=slot_labels[1], inline=False)
+    if teams_setting in ("both", "A"):
+        embed.add_field(
+            name="Team A Time",
+            value=team_a_label if team_a_label else "*not set*",
+            inline=False,
+        )
+    if teams_setting in ("both", "B"):
+        embed.add_field(
+            name="Team B Time",
+            value=team_b_label if team_b_label else "*not set*",
+            inline=False,
+        )
 
     # Build the rendered mail template — same templating used by /[event]_draft
     try:

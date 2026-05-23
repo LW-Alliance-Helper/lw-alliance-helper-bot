@@ -1030,3 +1030,214 @@ class TestRosterDraftCrud:
     def test_delete_returns_zero_when_no_row(self, seeded_db):
         import config
         assert config.delete_roster_draft(TEST_GUILD_ID, "DS", "A") == 0
+
+
+class TestStormTeamSlotMapping:
+    """Per-team time-slot mapping (#251). Each event type (DS / CS)
+    stores Team A's slot index and Team B's slot index independently;
+    both teams can share a slot. Slots are 1 or 2 (game-defined times
+    in DS_SERVER_TIMES / CS_SERVER_TIMES). NULL = officer hasn't picked
+    yet — sign-up posts gate on this."""
+
+    def test_unset_guild_returns_none_indices(self, seeded_db):
+        import config
+        a, b = config.resolve_storm_team_slots(TEST_GUILD_ID, "DS")
+        assert a is None
+        assert b is None
+
+    def test_save_round_trip_persists_indices(self, seeded_db):
+        import config
+        config.save_storm_team_slots(TEST_GUILD_ID, "DS", 1, 2)
+        cfg = config.get_storm_config(TEST_GUILD_ID, "DS")
+        assert cfg["team_a_slot_index"] == 1
+        assert cfg["team_b_slot_index"] == 2
+
+    def test_ds_and_cs_are_independent(self, seeded_db):
+        """Saving DS doesn't affect CS — each event type has its own
+        (guild_id, event_type) row."""
+        import config
+        config.save_storm_team_slots(TEST_GUILD_ID, "DS", 1, 2)
+        config.save_storm_team_slots(TEST_GUILD_ID, "CS", 2, 1)
+        ds = config.get_storm_config(TEST_GUILD_ID, "DS")
+        cs = config.get_storm_config(TEST_GUILD_ID, "CS")
+        assert (ds["team_a_slot_index"], ds["team_b_slot_index"]) == (1, 2)
+        assert (cs["team_a_slot_index"], cs["team_b_slot_index"]) == (2, 1)
+
+    def test_both_teams_can_share_a_slot(self, seeded_db):
+        """If an alliance runs both teams at the same time, both
+        indices can be the same slot — that's a legal saved state."""
+        import config
+        config.save_storm_team_slots(TEST_GUILD_ID, "DS", 1, 1)
+        cfg = config.get_storm_config(TEST_GUILD_ID, "DS")
+        assert cfg["team_a_slot_index"] == 1
+        assert cfg["team_b_slot_index"] == 1
+
+    def test_invalid_index_normalises_to_none(self, seeded_db):
+        """Non-1/2 inputs (typos, out-of-range, strings) clamp to None
+        rather than corrupting the row."""
+        import config
+        config.save_storm_team_slots(TEST_GUILD_ID, "DS", 0, 99)
+        cfg = config.get_storm_config(TEST_GUILD_ID, "DS")
+        assert cfg["team_a_slot_index"] is None
+        assert cfg["team_b_slot_index"] is None
+
+    def test_partial_team_save_supports_single_team_alliances(self, seeded_db):
+        """A teams=A alliance only needs Team A's slot; passing None
+        for Team B's index leaves that column NULL."""
+        import config
+        config.save_storm_team_slots(TEST_GUILD_ID, "DS", 1, None)
+        cfg = config.get_storm_config(TEST_GUILD_ID, "DS")
+        assert cfg["team_a_slot_index"] == 1
+        assert cfg["team_b_slot_index"] is None
+
+    def test_save_does_not_clobber_other_storm_config_fields(self, seeded_db):
+        """save_storm_team_slots is UPDATE-only against the two slot
+        columns — re-running it must not blank tab_name, templates,
+        or any other field on the storm config row."""
+        import config
+        config.save_storm_config(
+            TEST_GUILD_ID, "DS", tab_name="DS Custom Tab",
+            mail_template="Custom mail body",
+            timezone="America/New_York", log_channel_id=999,
+            post_channel_id=777,
+            dm_reminder_message="custom dm",
+            teams="A",
+        )
+        config.save_storm_team_slots(TEST_GUILD_ID, "DS", 2, 1)
+        cfg = config.get_storm_config(TEST_GUILD_ID, "DS")
+        assert cfg["tab_name"] == "DS Custom Tab"
+        assert cfg["mail_template"] == "Custom mail body"
+        assert cfg["log_channel_id"] == 999
+        assert cfg["post_channel_id"] == 777
+        assert cfg["dm_reminder_message"] == "custom dm"
+        assert cfg["teams"] == "A"
+        assert cfg["team_a_slot_index"] == 2
+        assert cfg["team_b_slot_index"] == 1
+
+
+class TestResolveStormTeamSlots:
+    """resolve_storm_team_slots (#251) prefers a per-event override
+    (captured on storm_registration_posts when the sign-up post went
+    out) and falls back to the guild default. Lets attendance + the
+    SignupView vote-ack render the times that were actually in effect
+    on that specific event, even if leadership later changed the saved
+    default."""
+
+    def test_falls_back_to_guild_default_when_no_post(self, seeded_db):
+        import config
+        config.save_storm_team_slots(TEST_GUILD_ID, "DS", 1, 2)
+        a, b = config.resolve_storm_team_slots(
+            TEST_GUILD_ID, "DS", "2026-05-29",
+        )
+        assert (a, b) == (1, 2)
+
+    def test_per_event_override_wins_over_guild_default(self, seeded_db):
+        """When the officer picked an override for a single week, the
+        storm_registration_posts row stores those indices and they
+        win over the saved guild default for that event_date."""
+        import config
+        config.save_storm_team_slots(TEST_GUILD_ID, "DS", 1, 2)
+        config.record_storm_registration_post(
+            TEST_GUILD_ID, "DS", "2026-05-29",
+            channel_id=111, message_id=222,
+            time_a_label="A label", time_b_label="B label",
+            team_a_slot_index=2, team_b_slot_index=2,
+        )
+        a, b = config.resolve_storm_team_slots(
+            TEST_GUILD_ID, "DS", "2026-05-29",
+        )
+        assert (a, b) == (2, 2)
+
+    def test_other_event_date_keeps_guild_default(self, seeded_db):
+        """The per-event override only applies to its own event_date —
+        a different event picks up the saved default."""
+        import config
+        config.save_storm_team_slots(TEST_GUILD_ID, "DS", 1, 2)
+        config.record_storm_registration_post(
+            TEST_GUILD_ID, "DS", "2026-05-29",
+            channel_id=111, message_id=222,
+            time_a_label="A", time_b_label="B",
+            team_a_slot_index=2, team_b_slot_index=2,
+        )
+        a, b = config.resolve_storm_team_slots(
+            TEST_GUILD_ID, "DS", "2026-06-05",
+        )
+        assert (a, b) == (1, 2)
+
+    def test_no_event_date_returns_guild_default(self, seeded_db):
+        import config
+        config.save_storm_team_slots(TEST_GUILD_ID, "CS", 2, 1)
+        a, b = config.resolve_storm_team_slots(TEST_GUILD_ID, "CS")
+        assert (a, b) == (2, 1)
+
+
+class TestGetStormTeamSlotLabels:
+    """get_storm_team_slot_labels (#251) returns labels in TEAM order
+    — used by the SignupView vote-ack, the on-behalf select, the
+    storm overview embed, and the /setup hub config view to keep
+    every surface aligned with the team→slot mapping members vote on."""
+
+    def test_returns_team_ordered_labels(self, seeded_db):
+        import config
+        config.save_storm_team_slots(TEST_GUILD_ID, "DS", 1, 2)
+        slot_labels = config.get_storm_slot_labels("DS", TEST_GUILD_ID)
+        a, b = config.get_storm_team_slot_labels(TEST_GUILD_ID, "DS")
+        assert a == slot_labels[0]
+        assert b == slot_labels[1]
+
+    def test_returns_empty_strings_when_unset(self, seeded_db):
+        """No mapping saved → empty strings, which is what the sign-up
+        post creation flow tests for to gate posting."""
+        import config
+        a, b = config.get_storm_team_slot_labels(TEST_GUILD_ID, "DS")
+        assert (a, b) == ("", "")
+
+    def test_partial_mapping_only_returns_set_team_label(self, seeded_db):
+        """teams=A alliance with only Team A's slot set — Team B's
+        label is empty, but Team A's renders correctly."""
+        import config
+        config.save_storm_team_slots(TEST_GUILD_ID, "DS", 2, None)
+        slot_labels = config.get_storm_slot_labels("DS", TEST_GUILD_ID)
+        a, b = config.get_storm_team_slot_labels(TEST_GUILD_ID, "DS")
+        assert a == slot_labels[1]
+        assert b == ""
+
+
+class TestStormRegistrationPostIndices:
+    """Per-event team→slot indices on storm_registration_posts (#251)
+    capture the mapping in effect when each individual sign-up post
+    went out. Lets attendance reconstruct the times that were live on
+    a specific event without re-deriving them from a possibly-changed
+    guild default."""
+
+    def test_record_persists_indices(self, seeded_db):
+        import config
+        config.record_storm_registration_post(
+            TEST_GUILD_ID, "DS", "2026-05-29",
+            channel_id=111, message_id=222,
+            time_a_label="A label", time_b_label="B label",
+            team_a_slot_index=1, team_b_slot_index=2,
+        )
+        post = config.get_storm_registration_post(
+            TEST_GUILD_ID, "DS", "2026-05-29",
+        )
+        assert post is not None
+        assert post["team_a_slot_index"] == 1
+        assert post["team_b_slot_index"] == 2
+        assert post["time_a_label"] == "A label"
+        assert post["time_b_label"] == "B label"
+
+    def test_indices_default_to_zero_on_legacy_callsites(self, seeded_db):
+        """Existing callers that don't pass indices keep working — the
+        kwargs default to 0 (the schema's "legacy / unknown" sentinel)."""
+        import config
+        config.record_storm_registration_post(
+            TEST_GUILD_ID, "DS", "2026-05-29",
+            channel_id=111, message_id=222,
+            time_a_label="A", time_b_label="B",
+        )
+        post = config.get_storm_registration_post(
+            TEST_GUILD_ID, "DS", "2026-05-29",
+        )
+        assert post["team_a_slot_index"] == 0
+        assert post["team_b_slot_index"] == 0

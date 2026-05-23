@@ -17,28 +17,76 @@ from tests.unit.test_config import TEST_GUILD_ID
 
 
 class TestSlotLabels:
-    """_slot_labels delegates to config.get_storm_slot_labels (already
-    covered in detail by its own tests). These verify the wiring."""
+    """_slot_labels is now team-ordered (#251). Returns the labels for
+    Team A first, Team B second, driven by `team_a_slot_index` /
+    `team_b_slot_index` on `guild_storm_config` (or a per-event
+    override from `storm_registration_posts`). Empty strings come back
+    when the alliance hasn't picked a slot for that team yet — the
+    sign-up post creation flow uses that as the "missing_slot_labels"
+    signal."""
 
-    def test_ds_returns_two_non_empty_labels(self):
-        a, b = ssp._slot_labels("DS", guild_id=12345)
-        # Both labels should include the "server time" annotation that
-        # config.format_storm_slot adds.
-        assert a and b
+    def test_returns_empty_when_no_mapping_set(self, seeded_db):
+        """Without team-slot picks, both labels are empty (the gate
+        for `missing_slot_labels` in `post_registration`)."""
+        a, b = ssp._slot_labels("DS", guild_id=TEST_GUILD_ID)
+        assert a == ""
+        assert b == ""
+
+    def test_returns_team_ordered_labels_after_mapping_saved(self, seeded_db):
+        """Saved mapping picks slot 1 for Team A and slot 2 for Team B —
+        labels come back in TEAM order matching the picks."""
+        import config
+        config.save_storm_team_slots(TEST_GUILD_ID, "DS", 1, 2)
+        slot_labels = config.get_storm_slot_labels("DS", TEST_GUILD_ID)
+        a, b = ssp._slot_labels("DS", guild_id=TEST_GUILD_ID)
+        assert a == slot_labels[0]
+        assert b == slot_labels[1]
         assert "server time" in a
         assert "server time" in b
 
-    def test_cs_returns_two_non_empty_labels(self):
-        """Post Rule A / #166 — CS supports two time slots just like DS.
-        Pre-#166 fix this returned (label, "") which contradicted the
-        revert in storm_signup_view."""
-        a, b = ssp._slot_labels("CS", guild_id=12345)
-        assert a and b
-        assert "server time" in a
-        assert "server time" in b
+    def test_both_teams_can_share_a_slot(self, seeded_db):
+        """When both teams pick the same slot, both labels return the
+        same string — the invariant 3-button SignupView layout still
+        renders, just with identical Team A and Team B labels."""
+        import config
+        config.save_storm_team_slots(TEST_GUILD_ID, "CS", 2, 2)
+        slot_labels = config.get_storm_slot_labels("CS", TEST_GUILD_ID)
+        a, b = ssp._slot_labels("CS", guild_id=TEST_GUILD_ID)
+        assert a == slot_labels[1]
+        assert b == slot_labels[1]
+        assert a == b
 
-    def test_unknown_event_returns_safe_default(self):
-        a, b = ssp._slot_labels("XX", guild_id=12345)
+    def test_override_pins_label_for_single_render(self, seeded_db):
+        """Override indices win over the saved guild default — the
+        per-week officer-pick path for the `📣 Post sign-up poll`
+        confirmation flow."""
+        import config
+        config.save_storm_team_slots(TEST_GUILD_ID, "DS", 1, 2)
+        slot_labels = config.get_storm_slot_labels("DS", TEST_GUILD_ID)
+        # Override Team A to slot 2 for this render only.
+        a, b = ssp._slot_labels(
+            "DS", guild_id=TEST_GUILD_ID,
+            override_a_idx=2, override_b_idx=2,
+        )
+        assert a == slot_labels[1]
+        assert b == slot_labels[1]
+
+    def test_partial_override_fills_other_team_from_default(self, seeded_db):
+        """Only Team A overridden — Team B's label still comes from the
+        saved default. Lets the override flow ask only the running team
+        without blanking the unchanged side."""
+        import config
+        config.save_storm_team_slots(TEST_GUILD_ID, "DS", 1, 2)
+        slot_labels = config.get_storm_slot_labels("DS", TEST_GUILD_ID)
+        a, b = ssp._slot_labels(
+            "DS", guild_id=TEST_GUILD_ID,
+            override_a_idx=2,  # only override A
+        )
+        assert a == slot_labels[1]
+        assert b == slot_labels[1]  # saved B = slot 2
+
+    def test_unknown_event_returns_safe_default(self, seeded_db):
+        a, b = ssp._slot_labels("XX", guild_id=TEST_GUILD_ID)
         # Helper falls through gracefully — never crashes.
         assert isinstance(a, str)
         assert isinstance(b, str)

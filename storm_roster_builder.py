@@ -4660,7 +4660,19 @@ async def _finalize_structured_roster(
         # long_mail_choice):
         #   - short mail               → one post, content=mail [+ image]
         #   - long mail + "split"      → two posts, split at heading;
-        #                                image rides post 1
+        #                                image rides post 2 (the LAST
+        #                                message). Tester report
+        #                                2026-05-23: attaching the
+        #                                image to post 1 was wrong —
+        #                                the second message starts
+        #                                with a heading that has no
+        #                                visual link to the image
+        #                                above it, and officers had
+        #                                to scroll up to find the
+        #                                roster image. Image on the
+        #                                last post keeps the roster
+        #                                visual adjacent to the last
+        #                                visible heading.
         #   - long mail + "txt" / fallback → one post, mail as .txt
         #                                attachment [+ image]
         # Errors (HTTPException, perms, rate limit) on any of these
@@ -4675,11 +4687,11 @@ async def _finalize_structured_roster(
                 parts = _split_mail_at_heading(mail)
                 if parts is not None:
                     part1, part2 = parts
+                    await post_channel.send(part1)
                     if image_file is not None:
-                        await post_channel.send(part1, file=image_file)
+                        await post_channel.send(part2, file=image_file)
                     else:
-                        await post_channel.send(part1)
-                    await post_channel.send(part2)
+                        await post_channel.send(part2)
                 else:
                     # No clean heading split — fall back to .txt path
                     # so the officer still gets the full mail.

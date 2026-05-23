@@ -2760,9 +2760,13 @@ class TestFinalizePostOutcomes:
         assert part2.lstrip().startswith("**Stage 2**")
 
     @pytest.mark.asyncio
-    async def test_long_mail_split_with_image_attaches_to_first_post(self, fake_env):
-        """Split + with-image: the PNG attaches to the first post so
-        readers see the image alongside the opening section."""
+    async def test_long_mail_split_with_image_attaches_to_last_post(self, fake_env):
+        """Split + with-image: the PNG attaches to the LAST post —
+        the second message starts with a heading, and putting the
+        image after that heading keeps the roster visual adjacent
+        to the section it depicts (tester report 2026-05-23:
+        attaching to post 1 made readers scroll up to find the
+        image after reading the second post)."""
         from unittest.mock import patch
         ch = self._make_fake_channel(12345, mention="<#12345>")
         inter, view, _ = self._make_structured_view(
@@ -2781,9 +2785,10 @@ class TestFinalizePostOutcomes:
             await srb._finalize_structured_roster(inter, view, include_image=True)
 
         assert ch.send.await_count == 2
-        # First post carries the image; second is text-only.
-        assert "file" in ch.send.await_args_list[0].kwargs
-        assert "file" not in ch.send.await_args_list[1].kwargs
+        # First post is text-only; second post (the LAST message)
+        # carries the image.
+        assert "file" not in ch.send.await_args_list[0].kwargs
+        assert "file" in ch.send.await_args_list[1].kwargs
 
     @pytest.mark.asyncio
     async def test_long_mail_cancel_choice_aborts_without_posting(self, fake_env):

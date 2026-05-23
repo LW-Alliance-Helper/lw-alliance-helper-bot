@@ -516,7 +516,7 @@ class _TrendsView(discord.ui.View):
         return True
 
     # ── Callbacks ───────────────────────────────────────────────────────
-    async def _refresh(self, inter: discord.Interaction, *, results: bool = False):
+    async def _redraw(self, inter: discord.Interaction, *, results: bool = False):
         self._build()
         embed = (_render_results_embed(self.state)
                  if results else _render_builder_embed(self.state))
@@ -528,7 +528,7 @@ class _TrendsView(discord.ui.View):
         sel: discord.ui.Select = inter.data["values"]  # type: ignore
         self.state.question_key = sel[0] if sel else self.state.question_key
         self.state.last_query = None  # invalidate stale results
-        await self._refresh(inter)
+        await self._redraw(inter)
 
     async def _on_operator(self, inter: discord.Interaction):
         if not await self._guard(inter):
@@ -536,7 +536,7 @@ class _TrendsView(discord.ui.View):
         sel: list = inter.data.get("values") or []
         if sel:
             self.state.operator = sel[0]
-        await self._refresh(inter)
+        await self._redraw(inter)
 
     async def _on_threshold(self, inter: discord.Interaction):
         if not await self._guard(inter):
@@ -547,7 +547,7 @@ class _TrendsView(discord.ui.View):
                 self.state.threshold = int(sel[0])
             except ValueError:
                 pass
-        await self._refresh(inter)
+        await self._redraw(inter)
 
     async def _on_lookback(self, inter: discord.Interaction):
         if not await self._guard(inter):
@@ -558,7 +558,7 @@ class _TrendsView(discord.ui.View):
                 self.state.lookback = int(sel[0])
             except ValueError:
                 pass
-        await self._refresh(inter)
+        await self._redraw(inter)
 
     async def _on_team_cycle(self, inter: discord.Interaction):
         if not await self._guard(inter):
@@ -571,7 +571,7 @@ class _TrendsView(discord.ui.View):
         self.state.team_filter = _TEAM_FILTER_CYCLE[
             (idx + 1) % len(_TEAM_FILTER_CYCLE)
         ]
-        await self._refresh(inter)
+        await self._redraw(inter)
 
     async def _on_run(self, inter: discord.Interaction):
         if not await self._guard(inter):

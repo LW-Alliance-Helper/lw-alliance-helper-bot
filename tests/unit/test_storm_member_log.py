@@ -561,3 +561,197 @@ class TestPaginatedRosterMultiSelectView:
         assert v.confirmed is True
         # `selected_set` survives intact for `run_log_flow` to read.
         assert v.selected_set == {"alice"}
+
+
+# ── _LogDatePickerView (#251) ────────────────────────────────────────────────
+
+
+class TestLogDatePickerView:
+    """The participation-log flow's date entry was a free-text prompt
+    that nobody loved. The view now lists recent saved event dates as
+    a dropdown with Today / Yesterday quick picks and a
+    `Type a different date` fallback that hands back to the existing
+    `wait_for_msg` path."""
+
+    def test_today_and_yesterday_quick_picks_always_present(self):
+        from storm_log import _LogDatePickerView
+        import discord as _discord
+        v = _LogDatePickerView(recent_dates=[])
+        select = next(
+            c for c in v.children if isinstance(c, _discord.ui.Select)
+        )
+        values = [o.value for o in select.options]
+        assert "__today__" in values
+        assert "__yesterday__" in values
+        assert "__manual__" in values
+
+    def test_recent_dates_listed_newest_first(self):
+        from storm_log import _LogDatePickerView
+        import discord as _discord
+        v = _LogDatePickerView(
+            recent_dates=["2026-05-15", "2026-05-08", "2026-05-01"],
+        )
+        select = next(
+            c for c in v.children if isinstance(c, _discord.ui.Select)
+        )
+        dated_values = [o.value for o in select.options
+                        if not o.value.startswith("__")]
+        # Caller passes dates already sorted newest-first.
+        assert dated_values == ["2026-05-15", "2026-05-08", "2026-05-01"]
+
+    def test_today_yesterday_dedupe_with_recent(self):
+        """If today or yesterday is in the saved list, the listed
+        entry is skipped — the quick-pick row already covers it."""
+        from storm_log import _LogDatePickerView
+        from datetime import date as _date, timedelta as _td
+        import discord as _discord
+        today_iso = _date.today().isoformat()
+        v = _LogDatePickerView(
+            recent_dates=[today_iso, "2026-04-01"],
+        )
+        select = next(
+            c for c in v.children if isinstance(c, _discord.ui.Select)
+        )
+        dated_values = [o.value for o in select.options
+                        if not o.value.startswith("__")]
+        assert today_iso not in dated_values
+        assert "2026-04-01" in dated_values
+
+    @pytest.mark.asyncio
+    async def test_select_today_resolves_to_date(self):
+        from storm_log import _LogDatePickerView
+        from datetime import date as _date
+        v = _LogDatePickerView(recent_dates=[])
+        select = next(
+            c for c in v.children if hasattr(c, "options")
+        )
+        inter = MagicMock()
+        inter.data = {"values": ["__today__"]}
+        inter.response.edit_message = AsyncMock()
+        await select.callback(inter)
+        assert v.picked_date == _date.today()
+        assert v.confirmed is True
+        assert v.wants_manual is False
+
+    @pytest.mark.asyncio
+    async def test_select_manual_flags_wants_manual(self):
+        from storm_log import _LogDatePickerView
+        v = _LogDatePickerView(recent_dates=["2026-05-15"])
+        select = next(c for c in v.children if hasattr(c, "options"))
+        inter = MagicMock()
+        inter.data = {"values": ["__manual__"]}
+        inter.response.edit_message = AsyncMock()
+        await select.callback(inter)
+        assert v.wants_manual is True
+        assert v.picked_date is None
+
+    @pytest.mark.asyncio
+    async def test_select_saved_date_parses_iso(self):
+        from storm_log import _LogDatePickerView
+        from datetime import date as _date
+        v = _LogDatePickerView(recent_dates=["2026-05-15"])
+        select = next(c for c in v.children if hasattr(c, "options"))
+        inter = MagicMock()
+        inter.data = {"values": ["2026-05-15"]}
+        inter.response.edit_message = AsyncMock()
+        await select.callback(inter)
+        assert v.picked_date == _date(2026, 5, 15)
+
+
+class TestCollectRecentEventDates:
+    """Pulls candidate dates from `storm_signups` (every alliance with
+    a posted poll) AND the structured-flow rosters tab (Premium)."""
+
+    def test_returns_signup_dates_newest_first(self):
+        from storm_log import _collect_recent_event_dates
+        fake_rows = [
+            {"event_date": "2026-04-24"},
+            {"event_date": "2026-05-08"},
+            {"event_date": "2026-05-15"},
+        ]
+        fake_conn = MagicMock()
+        fake_conn.__enter__ = MagicMock(return_value=fake_conn)
+        fake_conn.__exit__ = MagicMock(return_value=False)
+        fake_conn.execute = MagicMock()
+        fake_conn.execute.return_value.fetchall = MagicMock(
+            return_value=fake_rows,
+        )
+        with patch("config._get_conn", return_value=fake_conn), \
+             patch("storm_history.list_event_dates", return_value=([], [])):
+            dates = _collect_recent_event_dates(TEST_GUILD_ID, "DS")
+        assert dates == ["2026-05-15", "2026-05-08", "2026-04-24"]
+
+    def test_merges_signup_and_roster_sources(self):
+        from storm_log import _collect_recent_event_dates
+        fake_signup_rows = [{"event_date": "2026-05-15"}]
+        fake_conn = MagicMock()
+        fake_conn.__enter__ = MagicMock(return_value=fake_conn)
+        fake_conn.__exit__ = MagicMock(return_value=False)
+        fake_conn.execute = MagicMock()
+        fake_conn.execute.return_value.fetchall = MagicMock(
+            return_value=fake_signup_rows,
+        )
+        with patch("config._get_conn", return_value=fake_conn), \
+             patch("storm_history.list_event_dates",
+                   return_value=(["2026-05-08", "2026-04-01"], [])):
+            dates = _collect_recent_event_dates(TEST_GUILD_ID, "DS")
+        # Three distinct dates, newest first.
+        assert dates == ["2026-05-15", "2026-05-08", "2026-04-01"]
+
+    def test_dedupe_across_sources(self):
+        from storm_log import _collect_recent_event_dates
+        fake_signup_rows = [{"event_date": "2026-05-15"}]
+        fake_conn = MagicMock()
+        fake_conn.__enter__ = MagicMock(return_value=fake_conn)
+        fake_conn.__exit__ = MagicMock(return_value=False)
+        fake_conn.execute = MagicMock()
+        fake_conn.execute.return_value.fetchall = MagicMock(
+            return_value=fake_signup_rows,
+        )
+        with patch("config._get_conn", return_value=fake_conn), \
+             patch("storm_history.list_event_dates",
+                   return_value=(["2026-05-15"], [])):
+            dates = _collect_recent_event_dates(TEST_GUILD_ID, "DS")
+        assert dates == ["2026-05-15"]
+
+    def test_malformed_dates_filtered(self):
+        from storm_log import _collect_recent_event_dates
+        fake_signup_rows = [
+            {"event_date": "garbage"},
+            {"event_date": "2026-13-50"},
+            {"event_date": "2026-05-15"},
+        ]
+        fake_conn = MagicMock()
+        fake_conn.__enter__ = MagicMock(return_value=fake_conn)
+        fake_conn.__exit__ = MagicMock(return_value=False)
+        fake_conn.execute = MagicMock()
+        fake_conn.execute.return_value.fetchall = MagicMock(
+            return_value=fake_signup_rows,
+        )
+        with patch("config._get_conn", return_value=fake_conn), \
+             patch("storm_history.list_event_dates",
+                   return_value=([], [])):
+            dates = _collect_recent_event_dates(TEST_GUILD_ID, "DS")
+        assert dates == ["2026-05-15"]
+
+    def test_limit_respected(self):
+        from storm_log import _collect_recent_event_dates
+        fake_signup_rows = [
+            {"event_date": f"2026-{m:02d}-15"} for m in range(1, 13)
+        ]
+        fake_conn = MagicMock()
+        fake_conn.__enter__ = MagicMock(return_value=fake_conn)
+        fake_conn.__exit__ = MagicMock(return_value=False)
+        fake_conn.execute = MagicMock()
+        fake_conn.execute.return_value.fetchall = MagicMock(
+            return_value=fake_signup_rows,
+        )
+        with patch("config._get_conn", return_value=fake_conn), \
+             patch("storm_history.list_event_dates",
+                   return_value=([], [])):
+            dates = _collect_recent_event_dates(TEST_GUILD_ID, "DS", limit=4)
+        assert len(dates) == 4
+        # Newest 4 (sorted desc).
+        assert dates == [
+            "2026-12-15", "2026-11-15", "2026-10-15", "2026-09-15",
+        ]

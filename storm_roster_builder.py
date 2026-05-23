@@ -1738,7 +1738,7 @@ class RosterBuilderView(discord.ui.View):
                         if not await self._guard_owner(inter):
                             return
                         s.selected_phase = p
-                        await self._refresh(inter)
+                        await self._redraw(inter)
                     return _on_phase
 
                 btn.callback = _make_callback(phase)
@@ -1775,7 +1775,7 @@ class RosterBuilderView(discord.ui.View):
                     return
                 s.selected_zone = zone_select.values[0]
                 s.show_below_floor = False
-                await self._refresh(inter)
+                await self._redraw(inter)
 
             zone_select.callback = _on_zone
             self.add_item(zone_select)
@@ -1901,7 +1901,7 @@ class RosterBuilderView(discord.ui.View):
                 # assignment. This matches the spec that some primaries
                 # won't get a sub (e.g. 10 subs, 20 primaries) so a
                 # forced prompt after every primary was always wrong.
-                await self._refresh(inter)
+                await self._redraw(inter)
 
             member_select.callback = _on_member
             self.add_item(member_select)
@@ -1928,7 +1928,7 @@ class RosterBuilderView(discord.ui.View):
             s.prune_stale_overrides()
             s.prune_stale_pairings()
             s.auto_fill_summary = None
-            await self._refresh(inter)
+            await self._redraw(inter)
 
         unassign_btn.callback = _unassign
         self.add_item(unassign_btn)
@@ -1968,7 +1968,7 @@ class RosterBuilderView(discord.ui.View):
             s.prune_stale_overrides()
             s.prune_stale_pairings()
             s.auto_fill_summary = None
-            await self._refresh(inter)
+            await self._redraw(inter)
 
         move_to_subs_btn.callback = _move_to_subs
         self.add_item(move_to_subs_btn)
@@ -2050,7 +2050,7 @@ class RosterBuilderView(discord.ui.View):
                     {z: names for z, names in s.assignments.items() if names},
                     len(s.subs), len(s.paired_subs),
                 )
-                await self._refresh(inter)
+                await self._redraw(inter)
 
             self._run_auto_fill = _run_auto_fill  # noqa — captured by the picker view
 
@@ -2282,8 +2282,8 @@ class RosterBuilderView(discord.ui.View):
             return False
         return True
 
-    async def _refresh(self, inter: discord.Interaction) -> None:
-        # `_refresh` is the chokepoint user-action button callbacks
+    async def _redraw(self, inter: discord.Interaction) -> None:
+        # `_redraw` is the chokepoint user-action button callbacks
         # call after mutating session state. Flip the user-action flag
         # so the autosave inside `_rebuild` fires (#240 follow-up:
         # skip the initial __init__-driven rebuild, save real edits).

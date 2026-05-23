@@ -302,6 +302,179 @@ class ShortSelectView(discord.ui.View):
         self.stop()
 
 
+def _collect_recent_event_dates(
+    guild_id: int, event_type: str, *, limit: int = 6,
+) -> list[str]:
+    """Return up to `limit` recent event dates (ISO `YYYY-MM-DD`,
+    newest first) the officer is likely logging participation for.
+
+    Pulls from two sources so the dropdown stays useful across both
+    free-tier and Premium alliances:
+      - `storm_signups` (every alliance posting a signup poll
+        accumulates dates here)
+      - `storm_history.list_event_dates` (structured-flow rosters)
+
+    De-duplicated; malformed dates filtered; returns empty list when
+    no historical data exists yet (caller falls back to today / type-
+    your-own affordances).
+    """
+    import datetime as _dt
+    candidates: set[str] = set()
+
+    # storm_signups via SQLite. Cheap query (events posted with polls).
+    try:
+        import config
+        with config._get_conn() as conn:
+            rows = conn.execute(
+                "SELECT DISTINCT event_date FROM storm_signups "
+                "WHERE guild_id = ? AND event_type = ? "
+                "ORDER BY event_date DESC LIMIT ?",
+                (int(guild_id), event_type, limit * 2),
+            ).fetchall()
+        for r in rows:
+            d = (r["event_date"] or "").strip()
+            if not d:
+                continue
+            try:
+                _dt.date.fromisoformat(d)
+            except ValueError:
+                continue
+            candidates.add(d)
+    except Exception as e:
+        print(f"[LOG] _collect_recent_event_dates signups read failed "
+              f"(guild {guild_id}): {e}")
+
+    # Structured-flow rosters (Premium).
+    try:
+        from storm_history import list_event_dates
+        rdates, _errs = list_event_dates(
+            guild_id, event_type, limit=limit * 2,
+        )
+        candidates.update(d for d in rdates if d)
+    except Exception as e:
+        print(f"[LOG] _collect_recent_event_dates rosters read failed "
+              f"(guild {guild_id}): {e}")
+
+    return sorted(candidates, reverse=True)[:limit]
+
+
+class _LogDatePickerView(discord.ui.View):
+    """Date picker for the participation log flow (#251).
+
+    Replaces the text-typed date entry with a dropdown of recent
+    saved event dates (storm signups + structured rosters), plus
+    Today / Yesterday quick picks and a `Type a different date`
+    fallback that hands back to the existing `wait_for_msg` path.
+
+    Officer selection lands in:
+      - `picked_date`: a `datetime.date` when a listed date was picked
+      - `wants_manual`: True when the officer chose to type a date
+      - `cancelled`: True on explicit cancel / timeout
+    """
+
+    def __init__(self, recent_dates: list[str]):
+        super().__init__(timeout=WIZARD_TIMEOUT)
+        self.picked_date: "date | None" = None
+        self.wants_manual: bool = False
+        self.cancelled: bool = False
+        # `confirmed` participates in the shared `wait_for_view` helper
+        # (storm_log's run_log_flow contract): True only after the
+        # officer commits to a choice (pick / cancel). A bare timeout
+        # leaves it False so the caller can treat the view as expired.
+        self.confirmed: bool = False
+        self._build(recent_dates)
+
+    def _build(self, recent_dates: list[str]):
+        import datetime as _dt
+        today = _dt.date.today()
+        yesterday = today - _dt.timedelta(days=1)
+
+        options: list[discord.SelectOption] = []
+        # Always-present quick picks. Use `today` / `yesterday` as the
+        # value so the callback can resolve to a date without re-parsing.
+        options.append(discord.SelectOption(
+            label=f"Today ({today.strftime('%a %b %d')})",
+            value="__today__",
+            description=today.isoformat(),
+        ))
+        options.append(discord.SelectOption(
+            label=f"Yesterday ({yesterday.strftime('%a %b %d')})",
+            value="__yesterday__",
+            description=yesterday.isoformat(),
+        ))
+
+        # Recent saved event dates. Skip today/yesterday if they're
+        # already in the saved list (avoid duplicates).
+        skip = {today.isoformat(), yesterday.isoformat()}
+        for d in recent_dates:
+            if d in skip:
+                continue
+            try:
+                dt = _dt.date.fromisoformat(d)
+            except ValueError:
+                continue
+            label = dt.strftime("%a %b %d, %Y")
+            options.append(discord.SelectOption(
+                label=label[:100], value=d, description=d,
+            ))
+            if len(options) >= 24:  # 24 dates + 1 "type my own" = 25 cap
+                break
+
+        # Type-your-own fallback.
+        options.append(discord.SelectOption(
+            label="✏️ Type a different date…",
+            value="__manual__",
+            description="Free-form date entry",
+        ))
+
+        select = discord.ui.Select(
+            placeholder="Pick the event date…",
+            min_values=1, max_values=1,
+            options=options, row=0,
+        )
+
+        async def _on_pick(inter: discord.Interaction):
+            values = inter.data.get("values") or []
+            value = values[0] if values else ""
+            if value == "__manual__":
+                self.wants_manual = True
+            elif value == "__today__":
+                self.picked_date = today
+            elif value == "__yesterday__":
+                self.picked_date = yesterday
+            else:
+                try:
+                    self.picked_date = _dt.date.fromisoformat(value)
+                except ValueError:
+                    self.wants_manual = True
+            self.confirmed = True
+            for item in self.children:
+                item.disabled = True
+            try:
+                await inter.response.edit_message(view=self)
+            except discord.HTTPException:
+                pass
+            self.stop()
+
+        select.callback = _on_pick
+        self.add_item(select)
+
+    @discord.ui.button(
+        label="↩️ Cancel",
+        style=discord.ButtonStyle.secondary, row=1,
+    )
+    async def cancel(self, inter: discord.Interaction, _btn):
+        self.cancelled = True
+        self.confirmed = True
+        for item in self.children:
+            item.disabled = True
+        try:
+            await inter.response.edit_message(view=self)
+        except discord.HTTPException:
+            pass
+        self.stop()
+
+
 class _PaginatedRosterMultiSelectView(discord.ui.View):
     """Roster-wide multi-select with Discord-friendly pagination (#244).
 
@@ -985,27 +1158,51 @@ async def run_log_flow(bot, channel, user, event_type):
         )
 
         # ── Step 1: Date (always asked, never configurable) ──────────────────
-        raw_date = await wait_for_msg(
-            "**Step 1: Event date**\n"
-            "Type the date (e.g. `April 14`, `4/14`) or type `today`:"
+        # Officers can pick from recent saved event dates (storm
+        # signups + structured rosters) — typing a date from scratch
+        # was a tester pain point. Free-text remains an option for
+        # backfilling old events that pre-date the saved data.
+        recent_dates = await asyncio.get_event_loop().run_in_executor(
+            None, _collect_recent_event_dates, guild_id, event_type,
         )
-        if raw_date is None:
+        picker = _LogDatePickerView(recent_dates)
+        picker_msg = await channel.send(
+            "**Step 1: Event date**\nPick the date this log is for:",
+            view=picker,
+        )
+        if not await wait_for_view(picker, picker_msg):
             if cancel_event.is_set():
                 await channel.send("❌ Log cancelled.")
             return
-
-        if raw_date.lower() == "today":
-            log_date = date.today()
+        if picker.cancelled:
+            await channel.send("❌ Log cancelled.")
+            return
+        if picker.picked_date is not None:
+            log_date = picker.picked_date
         else:
-            from train import parse_date_and_name
-            parsed_d, _, _ = parse_date_and_name(f"{raw_date} - placeholder")
-            if not parsed_d:
-                await channel.send(
-                    f"⚠️ Could not parse `{raw_date}` as a date. "
-                    f"Run {log_hint} to start again."
-                )
+            # Free-text fallback — officer chose "Type a different date".
+            raw_date = await wait_for_msg(
+                "Type the date (e.g. `April 14`, `4/14`) or type "
+                "`today`:"
+            )
+            if raw_date is None:
+                if cancel_event.is_set():
+                    await channel.send("❌ Log cancelled.")
                 return
-            log_date = parsed_d
+            if raw_date.lower() == "today":
+                log_date = date.today()
+            else:
+                from train import parse_date_and_name
+                parsed_d, _, _ = parse_date_and_name(
+                    f"{raw_date} - placeholder",
+                )
+                if not parsed_d:
+                    await channel.send(
+                        f"⚠️ Could not parse `{raw_date}` as a date. "
+                        f"Run {log_hint} to start again."
+                    )
+                    return
+                log_date = parsed_d
 
         # ── Roster (lazy — only loaded if any question needs it) ─────────────
         roster_loaded = False

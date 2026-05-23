@@ -615,7 +615,7 @@ class _AttendanceView(discord.ui.View):
                 )
                 return
             self.selected_key = (parts[0], parts[1], parts[2])
-            await self._refresh(inter)
+            await self._redraw(inter)
 
         picker.callback = _on_pick
         self.add_item(picker)
@@ -657,7 +657,7 @@ class _AttendanceView(discord.ui.View):
             if self.selected_key is not None:
                 s.statuses[self.selected_key] = STATUS_UNRECORDED
             self.selected_key = None
-            await self._refresh(inter)
+            await self._redraw(inter)
 
         clear_btn.callback = _on_clear
         self.add_item(clear_btn)
@@ -678,14 +678,14 @@ class _AttendanceView(discord.ui.View):
                     return
                 s.page = max(0, s.page - 1)
                 self.selected_key = None
-                await self._refresh(inter)
+                await self._redraw(inter)
 
             async def _next(inter: discord.Interaction):
                 if not await self._guard_owner(inter):
                     return
                 s.page = min(s.total_pages() - 1, s.page + 1)
                 self.selected_key = None
-                await self._refresh(inter)
+                await self._redraw(inter)
 
             prev_btn.callback = _prev
             next_btn.callback = _next
@@ -717,7 +717,7 @@ class _AttendanceView(discord.ui.View):
                 for key, current in s.statuses.items():
                     if not current:
                         s.statuses[key] = status
-            await self._refresh(inter)
+            await self._redraw(inter)
         return _cb
 
     async def _on_save(self, inter: discord.Interaction):
@@ -769,7 +769,7 @@ class _AttendanceView(discord.ui.View):
             return False
         return True
 
-    async def _refresh(self, inter: discord.Interaction):
+    async def _redraw(self, inter: discord.Interaction):
         self._build()
         await inter.response.edit_message(
             embed=_render_embed(self.session), view=self,

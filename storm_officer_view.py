@@ -1698,6 +1698,15 @@ async def _open_team_plan(
         )
         return
 
+    # Log entry so the click is at least visible in Railway logs even
+    # if downstream silently fails. logger.info routes to stdout.
+    logger.info(
+        "[STORM TEAM PLAN] open click for guild=%s event=%s/%s team=%s "
+        "by user=%s",
+        officer_view.guild_id, officer_view.event_type,
+        officer_view.event_date, team, inter.user.id,
+    )
+
     # Defer immediately so any downstream blip (SQLite contention, slow
     # bucket walk, picker-view construction) never blows the 3-second
     # initial-response token. A tester reported `Interaction Failed` on
@@ -1707,11 +1716,16 @@ async def _open_team_plan(
     try:
         await inter.response.defer(ephemeral=True)
     except discord.HTTPException as e:
-        logger.warning(
+        # Re-raise so the outer `_plan_a` / `_plan_b` wrapper's
+        # logger.exception captures the full traceback. The wrapper
+        # will also attempt a followup.send (which will likely also
+        # fail if the interaction is dead) — at minimum the bot logs
+        # have a record.
+        logger.exception(
             "[STORM TEAM PLAN] defer failed for guild=%s event=%s team=%s: %s",
             officer_view.guild_id, officer_view.event_type, team, e,
         )
-        return
+        raise
 
     import config
 
@@ -1830,18 +1844,31 @@ async def _open_team_plan(
                 step1.message = await inter.followup.send(
                     "\n".join(intro_lines), view=step1, ephemeral=True,
                 )
-            except discord.HTTPException:
-                step1.message = None
+            except discord.HTTPException as e:
+                # Surface the failure — the prior swallow meant the
+                # picker silently hung on `await step1.wait()` because
+                # no message ever appeared. Re-raise so the outer
+                # `_plan_a` / `_plan_b` wrapper logs + acks.
+                logger.exception(
+                    "[STORM TEAM PLAN] followup.send failed for guild=%s "
+                    "event=%s team=%s: %s",
+                    officer_view.guild_id, officer_view.event_type, team, e,
+                )
+                raise
             first_response = False
         else:
-            # Re-entry after step 2 "back" — use followup, the original
-            # interaction response was already consumed.
+            # Re-entry after step 2 "back" — same followup path.
             try:
                 step1.message = await inter.followup.send(
                     "\n".join(intro_lines), view=step1, ephemeral=True,
                 )
-            except discord.HTTPException:
-                step1.message = None
+            except discord.HTTPException as e:
+                logger.exception(
+                    "[STORM TEAM PLAN] re-entry followup.send failed for "
+                    "guild=%s event=%s team=%s: %s",
+                    officer_view.guild_id, officer_view.event_type, team, e,
+                )
+                raise
 
         await step1.wait()
         if step1.cleared:

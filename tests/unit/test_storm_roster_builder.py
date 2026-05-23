@@ -7,7 +7,7 @@ view + modal are integration territory and not unit-tested here.
 """
 
 import pytest
-from unittest.mock import MagicMock, patch
+from unittest.mock import AsyncMock, MagicMock, patch
 
 import discord
 import storm_roster_builder as srb
@@ -504,12 +504,20 @@ class TestEmbedRendering:
         # 300M is the Min A floor for Power Tower.
         assert "300M" in embed.description
 
-    def test_renders_below_floor_toggle_state(self):
-        session = _make_session(team="A")
-        session.show_below_floor = True
+    def test_power_unknown_hint_surfaces_in_embed(self):
+        """The 👁️ Show/Hide below-minimum toggle was retired —
+        below-floor members are always in the picker now and the
+        embed no longer carries a toggle-state line. Power-unknown
+        members instead get a confirm-flow hint so officers know they
+        can still be picked."""
+        # Add a member with no parseable power to trigger the hint.
+        session = _make_session(team="A", members={
+            "9": {"key": "9", "name": "Ghost", "discord_id": "9",
+                  "power": None, "not_on_discord": False},
+        })
         embed = srb._render_builder_embed(session)
-        assert "below minimum" in embed.description.lower() or \
-               "below-minimum" in embed.description.lower()
+        assert "power unknown" in embed.description.lower()
+        assert "confirmation" in embed.description.lower()
 
     def test_capacity_summary_present(self):
         session = _make_session(team="A")
@@ -4492,3 +4500,210 @@ class TestDraftFollowupPolish:
             view = srb.RosterBuilderView(session)
         labels = [getattr(c, "label", "") for c in view.children]
         assert any("Done" in lab for lab in labels)
+
+
+# ── _AssignConfirmView (#250) ────────────────────────────────────────────────
+
+
+class TestAssignConfirmView:
+    """The picker no longer hard-blocks officers on over-max or
+    below-floor. Both surface an ephemeral confirm — leadership
+    overrides knowingly. Both conditions together fold into one
+    confirm so officers don't see two sequential dialogs."""
+
+    def _parent_view_mock(self, session):
+        parent = MagicMock()
+        parent.session = session
+        parent.message = MagicMock()
+        parent.message.edit = AsyncMock()
+        parent._user_action_since_open = False
+        parent._rebuild = MagicMock()
+        # Owner-guard reads session.user_id; nothing else on parent.
+        return parent
+
+    def _full_session(self):
+        members = {
+            "1001": {"key": "1001", "name": "Alice",
+                     "discord_id": "1001",
+                     "power": 412_000_000, "not_on_discord": False},
+            "1002": {"key": "1002", "name": "Bob",
+                     "discord_id": "1002",
+                     "power": 350_000_000, "not_on_discord": False},
+            "1003": {"key": "1003", "name": "Carol",
+                     "discord_id": "1003",
+                     "power": 305_000_000, "not_on_discord": False},
+            "1004": {"key": "1004", "name": "Dan",
+                     "discord_id": "1004",
+                     "power": 301_000_000, "not_on_discord": False},
+            "1005": {"key": "1005", "name": "Erin",
+                     "discord_id": "1005",
+                     "power": 300_500_000, "not_on_discord": False},
+            "1006": {"key": "1006", "name": "Frank",
+                     "discord_id": "1006",
+                     "power": 100_000_000, "not_on_discord": False},
+        }
+        session = _make_session(team="A", members=members)
+        session.selected_zone = "Power Tower"
+        # Power Tower cap=4. Fill it.
+        session.assignments["Power Tower"] = ["1001", "1002", "1003", "1004"]
+        return session
+
+    @pytest.mark.asyncio
+    async def test_over_max_yes_assigns_member(self):
+        session = self._full_session()
+        parent = self._parent_view_mock(session)
+        confirm = srb._AssignConfirmView(
+            parent_view=parent,
+            member_key="1005",
+            member_label="Erin",
+            zone="Power Tower",
+            phase=1,
+            over_max=True, cap=4,
+            below_floor=False, member_power=300_500_000, floor_power=None,
+        )
+        inter = MagicMock()
+        inter.user.id = 42
+        inter.response.edit_message = AsyncMock()
+        await confirm.yes(inter)
+        # Erin landed in the zone — now 5 / cap 4.
+        assert "1005" in session.assignments["Power Tower"]
+        assert len(session.assignments["Power Tower"]) == 5
+
+    @pytest.mark.asyncio
+    async def test_below_floor_yes_records_override(self):
+        session = self._full_session()
+        # Power Tower is full; clear so we exercise the pure below-floor
+        # path (not over-max).
+        session.assignments["Power Tower"] = []
+        parent = self._parent_view_mock(session)
+        confirm = srb._AssignConfirmView(
+            parent_view=parent,
+            member_key="1006",
+            member_label="Frank",
+            zone="Power Tower",
+            phase=1,
+            over_max=False, cap=4,
+            below_floor=True,
+            member_power=100_000_000, floor_power=300_000_000,
+        )
+        inter = MagicMock()
+        inter.user.id = 42
+        inter.response.edit_message = AsyncMock()
+        await confirm.yes(inter)
+        # Frank assigned + below-floor override recorded.
+        assert "1006" in session.assignments["Power Tower"]
+        assert "1006" in session.below_floor_overrides
+
+    @pytest.mark.asyncio
+    async def test_both_conditions_one_confirm(self):
+        """Over-max + below-floor on the same pick → single confirm
+        handles both. Yes records the below-floor override AND lets
+        the zone go over cap."""
+        session = self._full_session()
+        parent = self._parent_view_mock(session)
+        confirm = srb._AssignConfirmView(
+            parent_view=parent,
+            member_key="1006",
+            member_label="Frank",
+            zone="Power Tower",
+            phase=1,
+            over_max=True, cap=4,
+            below_floor=True,
+            member_power=100_000_000, floor_power=300_000_000,
+        )
+        inter = MagicMock()
+        inter.user.id = 42
+        inter.response.edit_message = AsyncMock()
+        await confirm.yes(inter)
+        # Frank assigned over cap and below floor; override recorded.
+        assert "1006" in session.assignments["Power Tower"]
+        assert len(session.assignments["Power Tower"]) == 5
+        assert "1006" in session.below_floor_overrides
+
+    @pytest.mark.asyncio
+    async def test_no_leaves_state_unchanged(self):
+        session = self._full_session()
+        parent = self._parent_view_mock(session)
+        before_assign = list(session.assignments["Power Tower"])
+        before_overrides = set(session.below_floor_overrides)
+        confirm = srb._AssignConfirmView(
+            parent_view=parent,
+            member_key="1005",
+            member_label="Erin",
+            zone="Power Tower",
+            phase=1,
+            over_max=True, cap=4,
+            below_floor=False, member_power=300_500_000, floor_power=None,
+        )
+        inter = MagicMock()
+        inter.user.id = 42
+        inter.response.edit_message = AsyncMock()
+        await confirm.no(inter)
+        assert session.assignments["Power Tower"] == before_assign
+        assert session.below_floor_overrides == before_overrides
+
+    @pytest.mark.asyncio
+    async def test_non_owner_blocked(self):
+        session = self._full_session()
+        parent = self._parent_view_mock(session)
+        confirm = srb._AssignConfirmView(
+            parent_view=parent,
+            member_key="1005",
+            member_label="Erin",
+            zone="Power Tower",
+            phase=1,
+            over_max=True, cap=4,
+            below_floor=False, member_power=300_500_000, floor_power=None,
+        )
+        inter = MagicMock()
+        inter.user.id = 999  # not the owner (42)
+        inter.response.send_message = AsyncMock()
+        await confirm.yes(inter)
+        # No assignment landed; rejection sent.
+        assert "1005" not in session.assignments["Power Tower"]
+        inter.response.send_message.assert_called_once()
+        args = inter.response.send_message.call_args.args
+        assert "Only the builder's owner" in args[0]
+
+    def test_picker_no_longer_renders_toggle_button(self):
+        """The 👁️ Show/Hide below-minimum button is retired."""
+        from unittest.mock import patch
+        members = {
+            "1001": {"key": "1001", "name": "Alice", "discord_id": "1001",
+                     "power": 412_000_000, "not_on_discord": False},
+            "1002": {"key": "1002", "name": "Bob", "discord_id": "1002",
+                     "power": 100_000_000, "not_on_discord": False},
+        }
+        session = _make_session(team="A", members=members)
+        session.selected_zone = "Power Tower"
+        with patch.object(srb, "_autosave_draft"):
+            view = srb.RosterBuilderView(session)
+        labels = [getattr(c, "label", "") for c in view.children]
+        assert not any("Show members below" in lab for lab in labels)
+        assert not any("Hide members below" in lab for lab in labels)
+
+    def test_picker_includes_below_floor_members(self):
+        """Below-floor members appear in the picker without needing a
+        toggle — they get a 'below minimum' description instead."""
+        from unittest.mock import patch
+        members = {
+            "1001": {"key": "1001", "name": "Alice", "discord_id": "1001",
+                     "power": 412_000_000, "not_on_discord": False},
+            "1002": {"key": "1002", "name": "Bob", "discord_id": "1002",
+                     "power": 100_000_000, "not_on_discord": False},
+        }
+        session = _make_session(team="A", members=members)
+        session.selected_zone = "Power Tower"  # min A = 300M
+        with patch.object(srb, "_autosave_draft"):
+            view = srb.RosterBuilderView(session)
+        # Find the member Select.
+        selects = [c for c in view.children
+                   if isinstance(c, discord.ui.Select)]
+        # The first select is the zone picker; the next is members.
+        member_select = next(
+            s for s in selects
+            if any(o.value == "1002" for o in s.options)
+        )
+        bob_option = next(o for o in member_select.options if o.value == "1002")
+        assert bob_option.description == "below minimum"
+

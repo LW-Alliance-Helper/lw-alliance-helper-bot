@@ -1444,13 +1444,12 @@ def _render_builder_embed(session: RosterBuilderSession) -> discord.Embed:
                 f"🎯 Active zone: {active_icon}{selected} · minimum "
                 f"{format_power(effective_floor) if effective_floor else '(none)'}"
             )
-        if session.show_below_floor:
-            lines.append("👁️ Members below minimum visible in the picker.")
     has_unknown = any(m.get("power") is None for m in session.members.values())
     if has_unknown:
         lines.append(
-            "_Members with no parseable power read as 'power unknown'; "
-            "toggle the override to assign them anyway._"
+            "_Members with no parseable power read as 'power unknown'. "
+            "They can still be picked — you'll get a confirmation before "
+            "the bot assigns them._"
         )
 
     if session.roster_errors:
@@ -1598,10 +1597,17 @@ def _effective_floor_for_zone(
 def _eligible_member_keys_for_zone(
     session: RosterBuilderSession, zone_name: str,
 ) -> tuple[list[str], list[str]]:
-    """Return (eligible_keys, below_floor_keys). Both exclude already-
-    assigned members. `eligible` excludes power-unknown unless
-    `show_below_floor` is on; below-floor is included only when the
-    override toggle is on.
+    """Return (eligible_keys, below_floor_keys). Both lists exclude
+    already-assigned members.
+
+    `eligible` is members at or above the effective floor with a
+    parseable power. `below_floor_keys` is everyone else (below the
+    floor, or power unknown).
+
+    The picker UI uses both lists: eligible members are shown plain,
+    below-floor members are shown with a "below minimum" description.
+    Picking a below-floor member surfaces an `_AssignConfirmView`
+    confirm dialog — the bot doesn't gate the assign.
 
     The effective floor is the lower of (preset floor, lowest matching
     power_band rule threshold) — so power_band rules can grant
@@ -1774,11 +1780,11 @@ class RosterBuilderView(discord.ui.View):
             zone_select.callback = _on_zone
             self.add_item(zone_select)
 
-        # Row 1 — member picker (eligibility-gated)
+        # Row 1 — member picker. Below-floor members are ALWAYS in the
+        # pool — leadership picks via confirmation, not via a hide/show
+        # toggle. The bot stops being a gatekeeper.
         eligible, below = _eligible_member_keys_for_zone(s, s.selected_zone)
-        pool = list(eligible)
-        if s.show_below_floor:
-            pool.extend(below)
+        pool = list(eligible) + list(below)
         if pool:
             options: list[discord.SelectOption] = []
             seen_values: set[str] = set()
@@ -1796,8 +1802,8 @@ class RosterBuilderView(discord.ui.View):
                 ))
             placeholder = (
                 f"Pick a member for {s.selected_zone or 'a zone'}…"
-                if eligible or s.show_below_floor else
-                "No eligible members. Toggle below-minimum override"
+                if pool else
+                "No members available for this zone."
             )
             # Surface overflow so the officer knows the dropdown is
             # truncated — Discord caps Select options at 25 and a
@@ -1821,33 +1827,69 @@ class RosterBuilderView(discord.ui.View):
                     )
                     return
                 key = member_select.values[0]
-                # Capacity check.
                 cap = s.zone_capacity(s.selected_zone)
-                if s.zone_member_count(s.selected_zone) >= cap:
+                is_over_max = s.zone_member_count(s.selected_zone) >= cap
+                is_below = key in below
+                # Officers occasionally need to push a body over a
+                # zone cap or assign someone below the power minimum.
+                # Either condition surfaces an ephemeral confirm —
+                # the bot is a tool, not a gatekeeper. Both conditions
+                # together fold into a single confirm so leadership
+                # doesn't see two sequential dialogs for the same
+                # pick.
+                if is_over_max or is_below:
+                    member = s.members.get(key, {"name": key})
+                    member_label = _format_member_label(member)
+                    member_power = member.get("power")
+                    floor_power = (
+                        _effective_floor_for_zone(s, s.selected_zone)
+                        if is_below else None
+                    )
+                    prompt_lines = []
+                    if is_over_max:
+                        prompt_lines.append(
+                            f"⚠️ **{s.selected_zone}** is already at the "
+                            f"maximum of **{cap}** member(s)."
+                        )
+                    if is_below:
+                        if member_power is None:
+                            prompt_lines.append(
+                                f"⚠️ **{member_label}** has no parseable "
+                                f"power — they may not meet the minimum."
+                            )
+                        else:
+                            from storm_strategy import format_power
+                            floor_text = (
+                                format_power(floor_power)
+                                if floor_power else "the minimum"
+                            )
+                            prompt_lines.append(
+                                f"⚠️ **{member_label}**'s power is below "
+                                f"**{s.selected_zone}**'s minimum "
+                                f"({floor_text})."
+                            )
+                    prompt_lines.append(
+                        f"Do you want to assign **{member_label}** "
+                        f"anyway?"
+                    )
+                    confirm = _AssignConfirmView(
+                        parent_view=self,
+                        member_key=key,
+                        member_label=member_label,
+                        zone=s.selected_zone,
+                        phase=s.selected_phase,
+                        over_max=is_over_max,
+                        cap=cap,
+                        below_floor=is_below,
+                        member_power=member_power,
+                        floor_power=floor_power,
+                    )
                     await inter.response.send_message(
-                        f"⚠️ **{s.selected_zone}** is already full ({cap} members). "
-                        f"Unassign someone before adding another.",
+                        "\n".join(prompt_lines),
+                        view=confirm,
                         ephemeral=True,
                     )
                     return
-                # Override confirmation for below-floor.
-                if key in below and not s.show_below_floor:
-                    # Shouldn't happen since the option isn't in the pool,
-                    # but be defensive.
-                    await inter.response.send_message(
-                        "⚠️ Toggle the below-minimum override to assign this member.",
-                        ephemeral=True,
-                    )
-                    return
-                # Record the override for the audit trail — anyone in
-                # `below` at assign time was assigned despite being
-                # below the effective floor (or having unknown power).
-                # Phase-aware (#152): both the assignment and the
-                # override flag write into the currently selected
-                # phase's dicts, so a member added to Phase 2 doesn't
-                # show up on Phase 1's audit trail.
-                if key in below:
-                    s.below_floor_overrides_for_phase(s.selected_phase).add(key)
                 s.assignments_for_phase(s.selected_phase)[s.selected_zone].append(key)
                 # Any manual edit invalidates the auto-fill summary —
                 # the names and counts the officer is reading no longer
@@ -1864,23 +1906,10 @@ class RosterBuilderView(discord.ui.View):
             member_select.callback = _on_member
             self.add_item(member_select)
 
-        # Row 2 — action buttons
-        toggle_label = (
-            "👁️ Hide members below minimum" if s.show_below_floor
-            else "👁️ Show members below minimum"
-        )
-        toggle_btn = discord.ui.Button(
-            label=toggle_label, style=discord.ButtonStyle.secondary, row=action_row,
-        )
-
-        async def _toggle(inter: discord.Interaction):
-            if not await self._guard_owner(inter):
-                return
-            s.show_below_floor = not s.show_below_floor
-            await self._refresh(inter)
-
-        toggle_btn.callback = _toggle
-        self.add_item(toggle_btn)
+        # Row 2 — action buttons. The 👁️ Show/Hide below-minimum
+        # toggle was retired: below-floor members are always in the
+        # picker, leadership picks via confirmation, not via a
+        # hide/show toggle.
 
         unassign_btn = discord.ui.Button(
             label="↩️ Remove current zone assignees", style=discord.ButtonStyle.secondary, row=action_row,
@@ -2316,6 +2345,152 @@ class RosterBuilderView(discord.ui.View):
             except discord.HTTPException:
                 pass
         self._release_session_lock()
+
+
+class _AssignConfirmView(discord.ui.View):
+    """Ephemeral yes/no confirm for assigning a member to a zone when
+    one or both rule violations would otherwise block the assign:
+
+      - `over_max`: the zone is already at its `max_players` cap
+      - `below_floor`: the member's power is below the zone's
+        effective minimum (or the member's power is unknown)
+
+    Tester feedback: officers occasionally need to push a body into
+    a zone that's already maxed out, or assign someone who comes
+    short of the minimum. The bot shouldn't hard-block — let
+    leadership knowingly override and capture the audit trail.
+
+    Yes → assigns the member, marks the below-floor override flag
+          when applicable (so audit / rendering still surfaces "this
+          person was assigned despite being under the floor"),
+          refreshes the parent view, dismisses the ephemeral.
+    No  → just dismisses; parent state unchanged.
+
+    Both `over_max` and `below_floor` can be true simultaneously —
+    the dialog text covers both conditions in one ephemeral so
+    leadership doesn't see two sequential confirms for the same
+    pick.
+    """
+
+    def __init__(
+        self,
+        *,
+        parent_view: "RosterBuilderView",
+        member_key: str,
+        member_label: str,
+        zone: str,
+        phase: int,
+        over_max: bool,
+        cap: int,
+        below_floor: bool,
+        member_power: int | None = None,
+        floor_power: int | None = None,
+    ):
+        super().__init__(timeout=120)
+        self.parent_view = parent_view
+        self.member_key = member_key
+        self.member_label = member_label
+        self.zone = zone
+        self.phase = phase
+        self.over_max = over_max
+        self.cap = cap
+        self.below_floor = below_floor
+        self.member_power = member_power
+        self.floor_power = floor_power
+
+        # Buttons built imperatively (not via @discord.ui.button) so the
+        # callbacks remain regular methods callable from unit tests.
+        yes_btn = discord.ui.Button(
+            label="✅ Yes, assign anyway",
+            style=discord.ButtonStyle.danger, row=0,
+        )
+        yes_btn.callback = self.yes
+        self.add_item(yes_btn)
+
+        no_btn = discord.ui.Button(
+            label="↩️ No, cancel",
+            style=discord.ButtonStyle.secondary, row=0,
+        )
+        no_btn.callback = self.no
+        self.add_item(no_btn)
+
+    async def _guard_owner(self, inter: discord.Interaction) -> bool:
+        if inter.user.id != self.parent_view.session.user_id:
+            await inter.response.send_message(
+                "⛔ Only the builder's owner can confirm.", ephemeral=True,
+            )
+            return False
+        return True
+
+    async def yes(self, inter: discord.Interaction):
+        if not await self._guard_owner(inter):
+            return
+        if self.is_finished():
+            return
+        self.stop()
+        for item in self.children:
+            item.disabled = True
+
+        s = self.parent_view.session
+        # Below-floor overrides still drive the audit trail and the
+        # embed rendering (e.g. zone line marks who was assigned
+        # under the floor). Over-max has no separate audit set in
+        # v1 — the embed already shows zone counts as `(N/cap)`, so
+        # a 5/4 reads as obviously over.
+        if self.below_floor:
+            s.below_floor_overrides_for_phase(self.phase).add(self.member_key)
+        s.assignments_for_phase(self.phase)[self.zone].append(self.member_key)
+        s.auto_fill_summary = None
+
+        # Build the ack copy matching what was overridden.
+        reasons = []
+        if self.over_max:
+            reasons.append(f"over the maximum of {self.cap}")
+        if self.below_floor:
+            reasons.append("below the minimum power")
+        ack_reason = " and ".join(reasons) if reasons else "with overrides"
+
+        try:
+            await inter.response.edit_message(
+                content=(
+                    f"✅ Added **{self.member_label}** to **{self.zone}** "
+                    f"({ack_reason}). Builder above is updated."
+                ),
+                view=None,
+            )
+        except discord.HTTPException:
+            pass
+
+        # Refresh the main builder via its captured message handle.
+        try:
+            if self.parent_view.message is not None:
+                self.parent_view._user_action_since_open = True
+                self.parent_view._rebuild()
+                await self.parent_view.message.edit(
+                    embed=_render_builder_embed(s),
+                    view=self.parent_view,
+                )
+        except discord.HTTPException:
+            pass
+
+    async def no(self, inter: discord.Interaction):
+        if not await self._guard_owner(inter):
+            return
+        if self.is_finished():
+            return
+        self.stop()
+        for item in self.children:
+            item.disabled = True
+        try:
+            await inter.response.edit_message(
+                content=(
+                    f"↩️ Cancelled. **{self.member_label}** was not "
+                    f"added to **{self.zone}**."
+                ),
+                view=None,
+            )
+        except discord.HTTPException:
+            pass
 
 
 def _zone_of_primary(session: RosterBuilderSession, primary_key: str) -> str:

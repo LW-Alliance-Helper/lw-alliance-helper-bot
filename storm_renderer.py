@@ -365,25 +365,29 @@ _DS_LAYOUT = EventLayout(
 
 
 _CS_LAYOUT = EventLayout(
-    # Post-#227: canvas height shrunk from 1045 to 938 SVG (~107 SVG)
-    # so the bottom spawn rectangles sit close to the Sample Warehouse
-    # icon row rather than carrying a huge empty band below. The
-    # subs sidebar contracts to match; logo slot below the pair table
-    # stays generous enough at the new bottom.
-    svg_w=1235.67, svg_h=938.44,
+    # Canvas height bumped from 938 → 1028 SVG (+90) per the tester
+    # report 2026-05-23: same row-spacing pain DS had — mid-upper
+    # pills (Serum Factory 1 / 2, Power Tower) clipped into the
+    # mid-lower row's titles, and the bottom Sample Warehouse pills
+    # ran past the canvas bottom on roster-builder loads with full
+    # phase-aware rosters. Each row below the top shifts down ~30
+    # SVG; centre column (Power Tower / Virus Lab) tracks halfway
+    # between outer rows.
+    svg_w=1235.67, svg_h=1028.44,
     header=Box(0, 0, 1235.67, 48.00),
-    bg_main=Box(1.30, 46.77, 1049.07, 889.44),
-    bg_subs=Box(1050.26, 47.62, 184.79, 889.44),
+    bg_main=Box(1.30, 46.77, 1049.07, 979.44),
+    bg_subs=Box(1050.26, 47.62, 184.79, 979.44),
     spawn_rects=[
         # CS spawn bands — game-defined factions.
         # Rulebringers (blue) — single horizontal band at top.
         (Box(343.01, 47.48, 349.54, 38.33),    (92, 124, 199, 204)),
-        # Dawnbreakers (red) — split into two horizontal bands at bottom.
-        (Box(117.97, 897.88, 392.00, 38.33),   (208, 102, 99, 204)),
-        (Box(550.35, 897.88, 374.27, 38.33),   (208, 102, 99, 204)),
+        # Dawnbreakers (red) — split into two horizontal bands at
+        # bottom. Shifted down with the taller canvas.
+        (Box(117.97, 987.88, 392.00, 38.33),   (208, 102, 99, 204)),
+        (Box(550.35, 987.88, 374.27, 38.33),   (208, 102, 99, 204)),
     ],
     zones={
-        # Top row
+        # Top row — unchanged
         "Data Center 1": ZoneLayout(
             title=Box(246.62, 100.23, 223.34, 16.79),
             text=Box(342.62, 120.80, 127.34, 188.82),
@@ -394,11 +398,12 @@ _CS_LAYOUT = EventLayout(
             text=Box(574.38, 120.80, 127.34, 188.82),
             icon=Box(700.91, 116.89, 96, 96),
         ),
-        # Mid-upper
+        # Mid-upper — shifted +30 SVG so the row's titles don't
+        # collide with the top row's pills under typical content.
         "Serum Factory 1": ZoneLayout(
-            title=Box(22.24, 313.41, 223.34, 16.79),
-            text=Box(22.24, 333.97, 127.34, 166.65),
-            icon=Box(150.62, 331.22, 96, 96),
+            title=Box(22.24, 343.41, 223.34, 16.79),
+            text=Box(22.24, 363.97, 127.34, 166.65),
+            icon=Box(150.62, 361.22, 96, 96),
         ),
         # Canonical CS map placement: Defense System I sits on the
         # LEFT side and Defense System II on the RIGHT (tester report
@@ -406,56 +411,58 @@ _CS_LAYOUT = EventLayout(
         # to the in-game map, which surfaced as the wrong building name
         # next to each pill on the rendered PNG.
         "Defense System 2": ZoneLayout(
-            title=Box(797.71, 313.41, 223.34, 16.79),
-            text=Box(893.71, 333.97, 127.34, 166.65),
-            icon=Box(797.71, 331.22, 96, 96),
+            title=Box(797.71, 343.41, 223.34, 16.79),
+            text=Box(893.71, 363.97, 127.34, 166.65),
+            icon=Box(797.71, 361.22, 96, 96),
         ),
         "Power Tower": ZoneLayout(
-            title=Box(417.83, 332.24, 223.34, 16.79),
-            text=Box(514.63, 354.94, 127.34, 188.82),
-            icon=Box(416.05, 348.75, 96, 96),
+            title=Box(417.83, 362.24, 223.34, 16.79),
+            text=Box(514.63, 384.94, 127.34, 188.82),
+            icon=Box(416.05, 378.75, 96, 96),
         ),
-        # Mid-lower
+        # Mid-lower — shifted +60 SVG total.
         "Defense System 1": ZoneLayout(
-            title=Box(22.24, 537.41, 223.34, 16.79),
-            text=Box(22.24, 557.83, 127.34, 166.65),
-            icon=Box(150.62, 555.22, 96, 96),
+            title=Box(22.24, 597.41, 223.34, 16.79),
+            text=Box(22.24, 617.83, 127.34, 166.65),
+            icon=Box(150.62, 615.22, 96, 96),
         ),
         "Serum Factory 2": ZoneLayout(
-            title=Box(797.71, 537.41, 223.34, 16.79),
-            text=Box(893.71, 557.83, 127.34, 166.65),
-            icon=Box(797.71, 555.22, 96, 96),
+            title=Box(797.71, 597.41, 223.34, 16.79),
+            text=Box(893.71, 617.83, 127.34, 166.65),
+            icon=Box(797.71, 615.22, 96, 96),
         ),
         "Virus Lab": ZoneLayout(
-            title=Box(417.83, 576.87, 223.34, 16.79),
-            text=Box(417.83, 597.29, 127.34, 88.66),
-            icon=Box(545.16, 593.62, 96, 96),
+            title=Box(417.83, 636.87, 223.34, 16.79),
+            text=Box(417.83, 657.29, 127.34, 88.66),
+            icon=Box(545.16, 653.62, 96, 96),
         ),
-        # Bottom row
+        # Bottom row — shifted +90 SVG total.
         "Sample Warehouse 1": ZoneLayout(
-            title=Box(21.97, 763.69, 223.34, 16.79),
-            text=Box(117.97, 784.26, 127.34, 188.82),
-            icon=Box(21.97, 781.68, 96, 96),
+            title=Box(21.97, 853.69, 223.34, 16.79),
+            text=Box(117.97, 874.26, 127.34, 188.82),
+            icon=Box(21.97, 871.68, 96, 96),
         ),
         "Sample Warehouse 2": ZoneLayout(
-            title=Box(285.97, 763.69, 223.34, 16.79),
-            text=Box(381.97, 784.26, 127.34, 188.82),
-            icon=Box(285.97, 781.68, 96, 96),
+            title=Box(285.97, 853.69, 223.34, 16.79),
+            text=Box(381.97, 874.26, 127.34, 188.82),
+            icon=Box(285.97, 871.68, 96, 96),
         ),
         "Sample Warehouse 3": ZoneLayout(
-            title=Box(549.97, 763.69, 223.34, 16.79),
-            text=Box(549.97, 784.26, 127.34, 188.82),
-            icon=Box(677.31, 781.68, 96, 96),
+            title=Box(549.97, 853.69, 223.34, 16.79),
+            text=Box(549.97, 874.26, 127.34, 188.82),
+            icon=Box(677.31, 871.68, 96, 96),
         ),
         "Sample Warehouse 4": ZoneLayout(
-            title=Box(797.97, 763.69, 223.34, 16.79),
-            text=Box(797.97, 784.26, 127.34, 188.82),
-            icon=Box(925.31, 781.68, 96, 96),
+            title=Box(797.97, 853.69, 223.34, 16.79),
+            text=Box(797.97, 874.26, 127.34, 188.82),
+            icon=Box(925.31, 871.68, 96, 96),
         ),
     },
     subs_title=Box(1059.68, 63.08, 167.59, 16.79),
-    subs_text_flat=Box(1059.69, 91.64, 167.59, 150.61),
-    subs_text_pairs=Box(1059.69, 91.64, 167.59, 369.32),
+    # Subs section grows with the taller canvas so the pair table
+    # has room for long pairings without bumping into the logo.
+    subs_text_flat=Box(1059.69, 91.64, 167.59, 240.61),
+    subs_text_pairs=Box(1059.69, 91.64, 167.59, 459.32),
     subs_pair_left_x=1075.03,
     subs_pair_right_x=1147.59,
     # CS pairs offsets relative to a "flat-position" pairs box at

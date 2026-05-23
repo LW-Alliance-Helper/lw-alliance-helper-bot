@@ -4842,10 +4842,9 @@ async def run_storm_setup(interaction: discord.Interaction, bot, event_type: str
 
     await channel.send(
         f"**Step 3 of 8: Team Time Slots**\n"
-        f"Pick which game-defined time slot each team runs at. "
-        f"Both teams can pick the **same** slot if you run them together. "
-        f"You can override the pick for a single week when you post that "
-        f"week's sign-up — this is just the saved default."
+        f"Select the time when you typically run each {label} team. "
+        f"You can override these for a single week when you send out the "
+        f"sign up, if needed."
     )
 
     team_a_slot = None

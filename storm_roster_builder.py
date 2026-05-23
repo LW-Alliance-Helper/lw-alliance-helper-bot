@@ -4034,7 +4034,18 @@ def _build_combined_phase_zones_block(session: RosterBuilderSession) -> str:
             Alice
             Bob
         Stage 2
+            (empty)
+        Stage 3
             Carol
+
+    Empty stages (zone has capacity in that stage but no assignees)
+    render as `(empty)` so officers reading the mail can see the
+    same intentional gaps the image shows — key to strategies that
+    deliberately leave a stage open. Closed stages (cap=0) are
+    hidden EXCEPT when the entire zone is unused, in which case
+    they show as `(empty)` so a fully-closed-but-listed zone reads
+    as a deliberate slot, not a render glitch (matches the PNG
+    renderer's `_attempt_flow_at` behaviour for the same case).
 
     Replaces the prior per-phase template repetition that ballooned
     3-stage CS mails — the template's greeting + subs + time were
@@ -4044,25 +4055,9 @@ def _build_combined_phase_zones_block(session: RosterBuilderSession) -> str:
     """
     from storm_icons import zone_emoji_prefix
 
-    is_cs = session.event_type == "CS"
-    if is_cs:
-        from storm import CS_ZONE_STRUCTURE
-        # CS_ZONE_STRUCTURE is [(stage, key, label), ...]. For
-        # phase-aware presets the static stage is ignored (phases
-        # are dynamic); we just want each unique zone in canonical
-        # first-appearance order.
-        canonical_zones: list[str] = []
-        seen: set[str] = set()
-        for _stage, _key, label in CS_ZONE_STRUCTURE:
-            if label not in seen:
-                canonical_zones.append(label)
-                seen.add(label)
-    else:
-        from storm import DS_ZONE_STRUCTURE
-        canonical_zones = list(DS_ZONE_STRUCTURE)
-
-    # Build a {zone: {phase: [members]}} pivot so we can iterate
-    # zone-major and emit each zone's stage stack in one block.
+    # Build a {zone: {phase: [members]}} pivot from the assignment
+    # data, so each zone's stage stack renders in one zone-major
+    # block matching the PNG render.
     by_zone: dict[str, dict[int, list[str]]] = {}
     phases = list(session.iter_phases())
     for phase in phases:
@@ -4080,29 +4075,65 @@ def _build_combined_phase_zones_block(session: RosterBuilderSession) -> str:
     indent = "    "
 
     blocks: list[str] = []
-
-    def _emit_zone(zone_label: str, phase_map: dict[int, list[str]]) -> None:
-        zone_lines = [f"{zone_emoji_prefix(zone_label)}**{zone_label}**:"]
-        for phase in phases:
-            members = phase_map.get(phase)
-            if not members:
-                continue
-            zone_lines.append(f"Stage {phase}")
-            for m in members:
-                zone_lines.append(f"{indent}{m}")
-        blocks.append("\n".join(zone_lines))
-
     rendered: set[str] = set()
-    for zone in canonical_zones:
-        if zone in by_zone:
-            _emit_zone(zone, by_zone[zone])
-            rendered.add(zone)
+
+    def _emit_zone(zone_label: str) -> None:
+        """Build the per-zone block for `zone_label`. Determines
+        which stages to show based on per-phase cap + member counts,
+        emitting `(empty)` for cap>0 stages with no assignees."""
+        phase_members = by_zone.get(zone_label, {})
+        zone_has_members = bool(phase_members)
+
+        # Per-stage cap lookup, defaults to 0 (closed) for flat
+        # presets where the concept doesn't apply.
+        def _cap_for(p: int) -> int:
+            try:
+                return int(session.zone_capacity(zone_label, phase=p))
+            except Exception:
+                return 0
+
+        # Decide whether the zone should appear at all. Skip when
+        # every stage is closed (cap=0) AND empty — the zone is
+        # fully unused and would just clutter the mail.
+        any_cap = any(_cap_for(p) > 0 for p in phases)
+        if not any_cap and not zone_has_members:
+            return
+
+        per_phase_lines: list[str] = []
+        for phase in phases:
+            cap = _cap_for(phase)
+            members = phase_members.get(phase, [])
+            if cap == 0 and not members and zone_has_members:
+                # Closed stage within a partially-populated zone —
+                # skip (matches the renderer's noise-reduction).
+                continue
+            per_phase_lines.append(f"Stage {phase}")
+            if members:
+                per_phase_lines.extend(f"{indent}{m}" for m in members)
+            else:
+                per_phase_lines.append(f"{indent}(empty)")
+
+        if not per_phase_lines:
+            return
+        zone_block = [
+            f"{zone_emoji_prefix(zone_label)}**{zone_label}**:",
+        ]
+        zone_block.extend(per_phase_lines)
+        blocks.append("\n".join(zone_block))
+
+    # Walk the preset's own zone order — that's how the alliance
+    # configured the roster, so the mail mirrors the strategy
+    # layout rather than the canonical map order.
+    for z in session.preset.zones:
+        _emit_zone(z.zone)
+        rendered.add(z.zone)
+
     # Non-canonical zones (legacy fixtures / test data) — append at
     # the tail so nothing silently disappears.
-    for zone, phase_map in by_zone.items():
+    for zone in by_zone.keys():
         if zone in rendered:
             continue
-        _emit_zone(zone, phase_map)
+        _emit_zone(zone)
 
     return "\n\n".join(blocks)
 

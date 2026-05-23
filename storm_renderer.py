@@ -176,19 +176,18 @@ _LONG_NAME_CHARS = 20
 # Nuclear Silo / Mercenary Factory). Outer pills grow vertically until
 # they collide with the next zone; central pills cap here so the icon
 # above stays visible.
-_CENTRAL_MAX_ROWS = 7
+_CENTRAL_MAX_ROWS = 10
 
 # Max content rows for outer zones (DS left / right columns, all CS
-# zones). The actual rendered pill height for a 2-stage outer pill
-# with C content rows is ~78 + 25*C px (padding + 2 stage headers +
-# row spacing). At SCALE=2 the available vertical between adjacent
-# outer zones is ~296 px (148 SVG), which leaves room for ~8 content
-# rows before the pill overlaps the next zone's title. We pick 7 so
-# there's a one-row buffer against unexpected line growth (long
-# names, future spacing tweaks) and the algorithm spills to 2-col
-# packing before the pill gets too tall. Was 11 pre-#228 dev review;
-# the higher cap let busy zones grow past their lane.
-_OUTER_MAX_ROWS = 7
+# zones). Was 7 (pre-#228 dev review picked it for a 2-stage layout
+# with tight vertical spacing). Bumped to 10 on 2026-05-23 after the
+# DS / CS canvas-height bumps gave each row ~30 SVG more vertical
+# headroom, and CS 3-stage rosters with 4 names per stage need
+# more content rows before tipping into overflow. 10 rows at ~20
+# SVG/row + 3 stage headers + padding ≈ 270 SVG, which still fits
+# comfortably under the ~360 SVG vertical lane on the bumped
+# layouts.
+_OUTER_MAX_ROWS = 10
 
 
 @dataclass(frozen=True)
@@ -228,6 +227,12 @@ class ZoneLayout:
     icon: Box
     max_cols: int = 2
     max_rows: Optional[int] = None
+    # Override the auto-detected pill extend direction. Used by CS
+    # PT/VL where the pill sits to the side of the icon but should
+    # nonetheless extend in BOTH directions to use all neighbour-
+    # budget rather than only the side away from the icon. Values:
+    # "left" / "right" / "both" / None (auto-detect).
+    extend_direction: Optional[str] = None
 
 
 @dataclass(frozen=True)
@@ -365,45 +370,78 @@ _DS_LAYOUT = EventLayout(
 
 
 _CS_LAYOUT = EventLayout(
-    # Canvas height bumped from 938 → 1028 SVG (+90) per the tester
-    # report 2026-05-23: same row-spacing pain DS had — mid-upper
-    # pills (Serum Factory 1 / 2, Power Tower) clipped into the
-    # mid-lower row's titles, and the bottom Sample Warehouse pills
-    # ran past the canvas bottom on roster-builder loads with full
-    # phase-aware rosters. Each row below the top shifts down ~30
-    # SVG; centre column (Power Tower / Virus Lab) tracks halfway
-    # between outer rows.
-    svg_w=1235.67, svg_h=1028.44,
+    # Canvas restructured 2026-05-23 (round 2): tester report on the
+    # CS preview — SW row was crowding the bottom spawn band and
+    # adjacent SW pills collided when long names landed in them.
+    # Three changes:
+    #   1. SW row: icon ABOVE pill (was beside); pill spans the full
+    #      lane width so 2-col rosters fit without wrap, eliminating
+    #      the SW1↔SW2 / SW3↔SW4 pill-collision case.
+    #   2. SF / DS edge zones pulled in 30 SVG from canvas edges so
+    #      long-name pills extend toward the centre without clipping
+    #      off the canvas.
+    #   3. Canvas height bumped to 1240 SVG (+212 from prior 1028)
+    #      so 3-stage CS rosters with paired subs have headroom AND
+    #      so SW pills don't crowd the bottom spawn band — tester
+    #      asked for "more spacing between text boxes and spawn
+    #      zones" on the SW row specifically.
+    svg_w=1235.67, svg_h=1240.00,
     header=Box(0, 0, 1235.67, 48.00),
-    bg_main=Box(1.30, 46.77, 1049.07, 979.44),
-    bg_subs=Box(1050.26, 47.62, 184.79, 979.44),
+    bg_main=Box(1.30, 46.77, 1049.07, 1191.00),
+    bg_subs=Box(1050.26, 47.62, 184.79, 1191.00),
     spawn_rects=[
         # CS spawn bands — game-defined factions.
         # Rulebringers (blue) — single horizontal band at top.
         (Box(343.01, 47.48, 349.54, 38.33),    (92, 124, 199, 204)),
         # Dawnbreakers (red) — split into two horizontal bands at
-        # bottom. Shifted down with the taller canvas.
-        (Box(117.97, 987.88, 392.00, 38.33),   (208, 102, 99, 204)),
-        (Box(550.35, 987.88, 374.27, 38.33),   (208, 102, 99, 204)),
+        # the very bottom. SW pills end ~y=1100 with content; the
+        # spawn band sits at y=1199 with ~99 SVG of breathing room.
+        (Box(117.97, 1199.00, 392.00, 38.33),   (208, 102, 99, 204)),
+        (Box(550.35, 1199.00, 374.27, 38.33),   (208, 102, 99, 204)),
     ],
     zones={
-        # Top row — unchanged
+        # Top row — DCs symmetric around the BLUE SPAWN BAND
+        # (centre x≈518) per tester ask 2026-05-23 round 8: the
+        # subs sidebar pushes the canvas math-centre to ~525, but
+        # the visual balance point is the spawn band above the
+        # zones, not the math centre. Each DC is 297 SVG wide
+        # (icon 96 + gap 1 + pill 200) with a 92 SVG gap.
+        #   DC1: 175-472 (icon 175-271, pill 272-472)
+        #   DC2: 564-861 (pill 564-764, icon 765-861)
+        # DC1.center (323.5) and DC2.center (712.5) are both 194.5
+        # SVG from the spawn-band centre at x≈518.
+        # `max_rows=8` caps the pill height (DC.text.y=120 to
+        # SF1.title.y=343 = 223 SVG of vertical room; 8 content
+        # rows + 3 stage headers + padding ≈ 210 SVG fits with a
+        # ~13 SVG safety buffer before the pill bottom touches the
+        # SF1 title box).
         "Data Center 1": ZoneLayout(
-            title=Box(246.62, 100.23, 223.34, 16.79),
-            text=Box(342.62, 120.80, 127.34, 188.82),
-            icon=Box(246.62, 116.89, 96, 96),
+            title=Box(175.00, 100.23, 297.00, 16.79),
+            text=Box(272.00, 120.80, 200.00, 188.82),
+            icon=Box(175.00, 116.89, 96, 96),
+            max_rows=8,
         ),
         "Data Center 2": ZoneLayout(
-            title=Box(574.38, 100.23, 223.34, 16.79),
-            text=Box(574.38, 120.80, 127.34, 188.82),
-            icon=Box(700.91, 116.89, 96, 96),
+            title=Box(564.00, 100.23, 297.00, 16.79),
+            text=Box(564.00, 120.80, 200.00, 188.82),
+            icon=Box(765.00, 116.89, 96, 96),
+            max_rows=8,
         ),
-        # Mid-upper — shifted +30 SVG so the row's titles don't
-        # collide with the top row's pills under typical content.
+        # Mid-upper — round 5 tester feedback 2026-05-23: SF/DS pills
+        # were too narrow. Layout now pulls SF/DS inward and widens
+        # their pills from 127 → 150 SVG, while PT shifts left and VL
+        # shifts right so PT/VL icons sit closer to their adjacent
+        # outer-zone icons (more horizontal room for text boxes,
+        # tighter icon clustering).
+        #
+        # Horizontal map (mid-upper):
+        #   SF1: 84-332 (pill 84-234, icon 236-332)
+        #   PT:  386-684 (icon 386-482, pill 484-684)
+        #   DS2: 742-990 (icon 742-838, pill 840-990)
         "Serum Factory 1": ZoneLayout(
-            title=Box(22.24, 343.41, 223.34, 16.79),
-            text=Box(22.24, 363.97, 127.34, 166.65),
-            icon=Box(150.62, 361.22, 96, 96),
+            title=Box(84.00, 343.41, 247.34, 16.79),
+            text=Box(84.00, 363.97, 150.00, 166.65),
+            icon=Box(236.00, 361.22, 96, 96),
         ),
         # Canonical CS map placement: Defense System I sits on the
         # LEFT side and Defense System II on the RIGHT (tester report
@@ -411,58 +449,76 @@ _CS_LAYOUT = EventLayout(
         # to the in-game map, which surfaced as the wrong building name
         # next to each pill on the rendered PNG.
         "Defense System 2": ZoneLayout(
-            title=Box(797.71, 343.41, 223.34, 16.79),
-            text=Box(893.71, 363.97, 127.34, 166.65),
-            icon=Box(797.71, 361.22, 96, 96),
+            title=Box(742.00, 343.41, 247.34, 16.79),
+            text=Box(840.00, 363.97, 150.00, 166.65),
+            icon=Box(742.00, 361.22, 96, 96),
         ),
+        # Central zones: PT shifts left, pill keeps 200 SVG width.
+        # `extend_direction="both"` so the pill consumes both the
+        # icon-side and pill-side neighbour budgets when long names
+        # need extra room.
         "Power Tower": ZoneLayout(
-            title=Box(417.83, 362.24, 223.34, 16.79),
-            text=Box(514.63, 384.94, 127.34, 188.82),
-            icon=Box(416.05, 378.75, 96, 96),
+            title=Box(386.00, 362.24, 298.00, 16.79),
+            text=Box(484.00, 384.94, 200.00, 188.82),
+            icon=Box(386.00, 378.75, 96, 96),
+            extend_direction="both",
         ),
-        # Mid-lower — shifted +60 SVG total.
+        # Mid-lower — matches SF row horizontal positions.
         "Defense System 1": ZoneLayout(
-            title=Box(22.24, 597.41, 223.34, 16.79),
-            text=Box(22.24, 617.83, 127.34, 166.65),
-            icon=Box(150.62, 615.22, 96, 96),
+            title=Box(84.00, 597.41, 247.34, 16.79),
+            text=Box(84.00, 617.83, 150.00, 166.65),
+            icon=Box(236.00, 615.22, 96, 96),
         ),
         "Serum Factory 2": ZoneLayout(
-            title=Box(797.71, 597.41, 223.34, 16.79),
-            text=Box(893.71, 617.83, 127.34, 166.65),
-            icon=Box(797.71, 615.22, 96, 96),
+            title=Box(742.00, 597.41, 247.34, 16.79),
+            text=Box(840.00, 617.83, 150.00, 166.65),
+            icon=Box(742.00, 615.22, 96, 96),
         ),
+        # VL shifts right (mirror of PT shifting left). Pill at left
+        # of icon, both also marked `extend_direction="both"`.
         "Virus Lab": ZoneLayout(
-            title=Box(417.83, 636.87, 223.34, 16.79),
-            text=Box(417.83, 657.29, 127.34, 88.66),
-            icon=Box(545.16, 653.62, 96, 96),
+            title=Box(366.00, 636.87, 298.00, 16.79),
+            text=Box(366.00, 657.29, 200.00, 88.66),
+            icon=Box(568.00, 653.62, 96, 96),
+            extend_direction="both",
         ),
-        # Bottom row — shifted +90 SVG total.
+        # Bottom row — RESTRUCTURED 2026-05-23: icon ABOVE pill,
+        # pill fills the full lane width. Each SW lane is 224 SVG
+        # wide so a 2-column roster (4 names per stage) fits
+        # comfortably without wrap. Icon centred horizontally in
+        # the lane below the title.
+        #
+        # Per-lane vertical stack:
+        #   y=853  title (h≈17)
+        #   y=873  icon (h=96, x = lane.x + (lane.w - 96)/2)
+        #   y=975  pill text (full lane width, grows down)
         "Sample Warehouse 1": ZoneLayout(
             title=Box(21.97, 853.69, 223.34, 16.79),
-            text=Box(117.97, 874.26, 127.34, 188.82),
-            icon=Box(21.97, 871.68, 96, 96),
+            text=Box(21.97, 975.69, 223.34, 60.00),
+            icon=Box(85.64, 873.69, 96, 96),
         ),
         "Sample Warehouse 2": ZoneLayout(
             title=Box(285.97, 853.69, 223.34, 16.79),
-            text=Box(381.97, 874.26, 127.34, 188.82),
-            icon=Box(285.97, 871.68, 96, 96),
+            text=Box(285.97, 975.69, 223.34, 60.00),
+            icon=Box(349.64, 873.69, 96, 96),
         ),
         "Sample Warehouse 3": ZoneLayout(
             title=Box(549.97, 853.69, 223.34, 16.79),
-            text=Box(549.97, 874.26, 127.34, 188.82),
-            icon=Box(677.31, 871.68, 96, 96),
+            text=Box(549.97, 975.69, 223.34, 60.00),
+            icon=Box(613.64, 873.69, 96, 96),
         ),
         "Sample Warehouse 4": ZoneLayout(
             title=Box(797.97, 853.69, 223.34, 16.79),
-            text=Box(797.97, 874.26, 127.34, 188.82),
-            icon=Box(925.31, 871.68, 96, 96),
+            text=Box(797.97, 975.69, 223.34, 60.00),
+            icon=Box(861.64, 873.69, 96, 96),
         ),
     },
     subs_title=Box(1059.68, 63.08, 167.59, 16.79),
     # Subs section grows with the taller canvas so the pair table
-    # has room for long pairings without bumping into the logo.
-    subs_text_flat=Box(1059.69, 91.64, 167.59, 240.61),
-    subs_text_pairs=Box(1059.69, 91.64, 167.59, 459.32),
+    # has room for 30-row paired-subs renders without bumping into
+    # the logo at the bottom of the sidebar.
+    subs_text_flat=Box(1059.69, 91.64, 167.59, 450.00),
+    subs_text_pairs=Box(1059.69, 91.64, 167.59, 669.00),
     subs_pair_left_x=1075.03,
     subs_pair_right_x=1147.59,
     # CS pairs offsets relative to a "flat-position" pairs box at
@@ -973,7 +1029,11 @@ def _pill_extend_direction(zlayout) -> str:
       icon center > pill center  → icon is to the right → grow LEFT
       icon center < pill center  → icon is to the left  → grow RIGHT
       centers aligned (central)  → grow BOTH directions
+
+    `ZoneLayout.extend_direction` overrides the auto-detection.
     """
+    if zlayout.extend_direction in ("left", "right", "both"):
+        return zlayout.extend_direction
     icon_cx = zlayout.icon.x + zlayout.icon.w / 2
     pill_cx = zlayout.text.x + zlayout.text.w / 2
     if abs(icon_cx - pill_cx) < 5.0:
@@ -984,25 +1044,66 @@ def _pill_extend_direction(zlayout) -> str:
 def _safe_pill_extension_px(zlayout, layout) -> tuple[int, int]:
     """Return `(left_budget_px, right_budget_px)` — how far the pill
     can grow leftward / rightward from its default `text` box before
-    hitting the canvas edge OR the midpoint to the nearest neighbour
-    zone in the same horizontal band.
+    hitting (a) the canvas edge less a fixed margin, or (b) the
+    midpoint to the nearest neighbour zone in the same horizontal
+    band.
 
     Without this clamp, long-name auto-extension pushed Serum Factory
     pills off the CS canvas edge and would make Sample Warehouse
     pills collide with their neighbours' pills/icons when populated
     densely with long names.
 
+    `_CANVAS_MARGIN_SVG` keeps a visible buffer between the pill and
+    the canvas border so the Defense System / Serum Factory pills
+    never read as "touching the edge" (tester ask 2026-05-23).
+
     "Same band" = icon-centre y within `_BAND_EPSILON_SVG` units —
     keeps the constraint scoped to the row so a top-row zone doesn't
     constrain a bottom-row zone vertically.
     """
-    canvas_w_px = _s(layout.svg_w)
+    # The bounding region for the main zone area is `bg_main` — the
+    # subs sidebar sits to the right of it and must never be invaded
+    # by a zone's pill extension (tester ask 2026-05-23 round 4:
+    # SF2/DS2 pills were overflowing into the subs area on long-name
+    # auto-extension because the helper used the FULL canvas width
+    # as the right bound instead of bg_main).
+    bg_left_px = _s(layout.bg_main.x)
+    bg_right_px = _s(layout.bg_main.x) + _s(layout.bg_main.w)
+    canvas_margin_px = _s(_CANVAS_MARGIN_SVG)
     pill_left_px = _s(zlayout.text.x)
     pill_right_px = _s(zlayout.text.x) + _s(zlayout.text.w)
     icon_cy = zlayout.icon.y + zlayout.icon.h / 2
 
-    left_neighbour_right_px = 0  # canvas left edge
-    right_neighbour_left_px = canvas_w_px  # canvas right edge
+    # Inset from the bg_main bounds so even maximally-extended pills
+    # carry a visible margin to the canvas border AND never crash
+    # into the subs sidebar.
+    left_neighbour_right_px = bg_left_px + canvas_margin_px
+    right_neighbour_left_px = bg_right_px - canvas_margin_px
+
+    # Same-zone icon clamp — the pill must never grow past its OWN
+    # icon. PT's icon sits at x=386-482 with the pill at x=484-684;
+    # without this clamp, the asymmetric "both" extension on long
+    # names pushed the pill leftward to ~x=412, overlapping the
+    # icon at x=482. Mirror for VL whose icon is right of the pill.
+    own_icon_left_px = _s(zlayout.icon.x)
+    own_icon_right_px = _s(zlayout.icon.x) + _s(zlayout.icon.w)
+    # 2-SVG gap between pill and icon so they're visibly distinct.
+    icon_gap_px = _s(2.0)
+    if own_icon_right_px <= pill_left_px:
+        # Icon is to the LEFT of the pill — clamp left extension to
+        # icon right edge + gap so the pill never overlaps it.
+        left_neighbour_right_px = max(
+            left_neighbour_right_px, own_icon_right_px + icon_gap_px,
+        )
+    if own_icon_left_px >= pill_right_px:
+        # Icon is to the RIGHT of the pill — clamp right extension.
+        right_neighbour_left_px = min(
+            right_neighbour_left_px, own_icon_left_px - icon_gap_px,
+        )
+
+    # Half of the inter-pill gap so each side's budget keeps a
+    # visible buffer to the neighbour even at max auto-extension.
+    half_pill_gap_px = _s(_PILL_NEIGHBOUR_GAP_SVG) // 2
 
     for other in layout.zones.values():
         if other is zlayout:
@@ -1020,17 +1121,22 @@ def _safe_pill_extension_px(zlayout, layout) -> tuple[int, int]:
         other_left_svg = min(other.text.x, other.icon.x)
         other_right_px = _s(other_right_svg)
         other_left_px = _s(other_left_svg)
-        # Constrain in the direction the other zone sits.
+        # Constrain in the direction the other zone sits. Take the
+        # midpoint as the *natural* budget boundary, then add half
+        # the inter-pill gap so neither zone's max extension touches
+        # the other.
         if other_right_px <= pill_left_px:
-            # Neighbour is to our LEFT. Take midpoint as the budget
-            # boundary so both zones get equal room when both grow
-            # toward each other.
+            # Neighbour is to our LEFT.
             mid_px = (other_right_px + pill_left_px) // 2
-            left_neighbour_right_px = max(left_neighbour_right_px, mid_px)
+            left_neighbour_right_px = max(
+                left_neighbour_right_px, mid_px + half_pill_gap_px,
+            )
         elif other_left_px >= pill_right_px:
             # Neighbour is to our RIGHT.
             mid_px = (other_left_px + pill_right_px) // 2
-            right_neighbour_left_px = min(right_neighbour_left_px, mid_px)
+            right_neighbour_left_px = min(
+                right_neighbour_left_px, mid_px - half_pill_gap_px,
+            )
 
     left_budget_px = max(0, pill_left_px - left_neighbour_right_px)
     right_budget_px = max(0, right_neighbour_left_px - pill_right_px)
@@ -1043,6 +1149,20 @@ def _safe_pill_extension_px(zlayout, layout) -> tuple[int, int]:
 # row spacing (~190 SVG), so it scopes the constraint cleanly to
 # the row.
 _BAND_EPSILON_SVG = 120.0
+
+# Minimum visible buffer between the outer edge of any auto-extended
+# pill and the canvas border. Tester ask 2026-05-23 (round 3): keep
+# 24 SVG of padding on the edges so zones never touch the canvas
+# border. Matches the static title placement for SF1/SF2/DS1/DS2 —
+# both default position AND auto-extension respect this margin.
+_CANVAS_MARGIN_SVG = 24.0
+
+# Minimum visible gap between two adjacent zones' pills when both
+# auto-extend toward each other (tester ask 2026-05-23 round 6:
+# both Data Center pills extending into the centre line touched at
+# the midpoint, reading as a single merged block). Half the gap is
+# subtracted from each side's budget at the midpoint clamp.
+_PILL_NEIGHBOUR_GAP_SVG = 20.0
 
 
 def _max_line_width_px(lines: list[dict], font_regular, font_bold,
@@ -1521,8 +1641,21 @@ def _draw_zone(canvas, zlayout: ZoneLayout, canonical: str,
             pill_x_px = _s(zlayout.text.x)
         elif direction == "left":
             pill_x_px = _s(zlayout.text.x) - extend_used_px
-        else:  # both
-            pill_x_px = _s(zlayout.text.x) - extend_used_px // 2
+        else:  # both — split asymmetrically across the per-side
+            # budgets so a zone with lopsided neighbour-room (e.g.
+            # CS Power Tower: 118 SVG left, 29 SVG right) actually
+            # uses what's available on each side instead of halving
+            # the extension and crashing the lighter-budget side.
+            if max_extension_px > 0 and (
+                left_budget_px > 0 or right_budget_px > 0
+            ):
+                left_share_px = min(
+                    left_budget_px,
+                    int(extend_used_px * left_budget_px / max_extension_px),
+                )
+            else:
+                left_share_px = extend_used_px // 2
+            pill_x_px = _s(zlayout.text.x) - left_share_px
         # Re-derive slot_width with the (possibly clamped) pill so
         # the row layout gets the right horizontal room.
         pill_content_width_px = pill_w_px - 2 * pad_x - indent

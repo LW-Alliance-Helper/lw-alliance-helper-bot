@@ -1224,9 +1224,16 @@ class _TeamPlanRosterPickerView(discord.ui.View):
             picks_on_this_page = [
                 c for c in page_candidates if c["target_id"] in selected_set
             ]
+            # Defensive: fall back to the target_id when name is
+            # missing or empty. Discord rejects SelectOption with an
+            # empty label, and bucket entries sometimes carry an
+            # empty name field (the bucket builder couldn't resolve a
+            # display name — usually a member who left Discord since
+            # the on-behalf vote landed). The id is a better degraded
+            # label than crashing the whole picker.
             options = [
                 discord.SelectOption(
-                    label=c["name"][:100],
+                    label=(c["name"] or c["target_id"] or "(unknown)")[:100],
                     value=c["target_id"][:100],
                     default=(c["target_id"] in selected_set),
                 )
@@ -1468,9 +1475,12 @@ class _TeamPlanSubPickerView(discord.ui.View):
             picks_on_this_page = [
                 c for c in page_chosen if c["target_id"] in selected_set
             ]
+            # Same defensive fallback as the step-1 picker — an empty
+            # name would 400 the whole message and silently break the
+            # Mark-subs step.
             options = [
                 discord.SelectOption(
-                    label=c["name"][:100],
+                    label=(c["name"] or c["target_id"] or "(unknown)")[:100],
                     value=c["target_id"][:100],
                     default=(c["target_id"] in selected_set),
                 )

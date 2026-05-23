@@ -609,7 +609,8 @@ def render(roster: RosterData) -> bytes:
                          canonical, roster.event_type)
             continue
         _draw_zone(canvas, zlayout, canonical, phase_blocks,
-                   icon_files, icons_dir, roster, overflow)
+                   icon_files, icons_dir, roster, overflow,
+                   layout=layout)
 
     # 5. Subs section — picks flat or pairs variant on data shape.
     _draw_subs_section(canvas, layout, roster)
@@ -980,6 +981,70 @@ def _pill_extend_direction(zlayout) -> str:
     return "left" if icon_cx > pill_cx else "right"
 
 
+def _safe_pill_extension_px(zlayout, layout) -> tuple[int, int]:
+    """Return `(left_budget_px, right_budget_px)` — how far the pill
+    can grow leftward / rightward from its default `text` box before
+    hitting the canvas edge OR the midpoint to the nearest neighbour
+    zone in the same horizontal band.
+
+    Without this clamp, long-name auto-extension pushed Serum Factory
+    pills off the CS canvas edge and would make Sample Warehouse
+    pills collide with their neighbours' pills/icons when populated
+    densely with long names.
+
+    "Same band" = icon-centre y within `_BAND_EPSILON_SVG` units —
+    keeps the constraint scoped to the row so a top-row zone doesn't
+    constrain a bottom-row zone vertically.
+    """
+    canvas_w_px = _s(layout.svg_w)
+    pill_left_px = _s(zlayout.text.x)
+    pill_right_px = _s(zlayout.text.x) + _s(zlayout.text.w)
+    icon_cy = zlayout.icon.y + zlayout.icon.h / 2
+
+    left_neighbour_right_px = 0  # canvas left edge
+    right_neighbour_left_px = canvas_w_px  # canvas right edge
+
+    for other in layout.zones.values():
+        if other is zlayout:
+            continue
+        other_icon_cy = other.icon.y + other.icon.h / 2
+        # Same row check.
+        if abs(other_icon_cy - icon_cy) > _BAND_EPSILON_SVG:
+            continue
+        # Outer extents of the neighbour (whichever is further out:
+        # icon or pill).
+        other_right_svg = max(
+            other.text.x + other.text.w,
+            other.icon.x + other.icon.w,
+        )
+        other_left_svg = min(other.text.x, other.icon.x)
+        other_right_px = _s(other_right_svg)
+        other_left_px = _s(other_left_svg)
+        # Constrain in the direction the other zone sits.
+        if other_right_px <= pill_left_px:
+            # Neighbour is to our LEFT. Take midpoint as the budget
+            # boundary so both zones get equal room when both grow
+            # toward each other.
+            mid_px = (other_right_px + pill_left_px) // 2
+            left_neighbour_right_px = max(left_neighbour_right_px, mid_px)
+        elif other_left_px >= pill_right_px:
+            # Neighbour is to our RIGHT.
+            mid_px = (other_left_px + pill_right_px) // 2
+            right_neighbour_left_px = min(right_neighbour_left_px, mid_px)
+
+    left_budget_px = max(0, pill_left_px - left_neighbour_right_px)
+    right_budget_px = max(0, right_neighbour_left_px - pill_right_px)
+    return left_budget_px, right_budget_px
+
+
+# Two icon-centre y values within this distance count as the same
+# horizontal band for the safe-extension calculation. ~120 SVG is
+# wider than any single zone's icon (96 SVG) but narrower than the
+# row spacing (~190 SVG), so it scopes the constraint cleanly to
+# the row.
+_BAND_EPSILON_SVG = 120.0
+
+
 def _max_line_width_px(lines: list[dict], font_regular, font_bold,
                        slot_width_px: int, col_gap_px: int) -> int:
     """Maximum rendered pixel width across all lines in a flow layout.
@@ -1017,7 +1082,9 @@ def _max_line_width_px(lines: list[dict], font_regular, font_bold,
 def _attempt_flow_at(phase_blocks: list[RosterZone], font_regular,
                      pill_content_width_px: int, cols: int,
                      max_rows: int,
-                     canonical_zone: str) -> tuple[list[dict], list[_OverflowEntry]]:
+                     canonical_zone: str,
+                     wrap_max_px: int | None = None,
+                     ) -> tuple[list[dict], list[_OverflowEntry]]:
     """Attempt the slot layout at `cols` columns. Returns the lines +
     any members that didn't fit within `max_rows` content rows.
 
@@ -1077,6 +1144,13 @@ def _attempt_flow_at(phase_blocks: list[RosterZone], font_regular,
                 content_rows += 1
             continue
 
+        # When `wrap_max_px` is set (pill clamped to canvas-safe
+        # bounds), each row slot has a known width budget. Names whose
+        # rendered pixel width exceeds the slot get force-promoted to
+        # "long" rows and hyphen-wrapped via `_wrap_name_to_lines` so
+        # they stay readable instead of spilling off the canvas.
+        slot_width_px = wrap_max_px
+
         current_row: list[str] = []
         for raw_name in block.members:
             # In-game LW usernames are hard-capped at 20 chars. Sheet
@@ -1087,6 +1161,15 @@ def _attempt_flow_at(phase_blocks: list[RosterZone], font_regular,
             # At 1 col every name takes the full row anyway (the col
             # IS the row), so the threshold only matters at 2+ cols.
             is_long = cols > 1 and len(name) >= _LONG_NAME_CHARS
+            # Pixel-width check: when the pill is clamped, any name
+            # that overflows the slot must wrap. Force to "long" so
+            # the wrap pieces stack vertically in their own rows.
+            if slot_width_px is not None and not is_long:
+                try:
+                    if font_regular.getlength(name) > slot_width_px:
+                        is_long = True
+                except (AttributeError, TypeError):
+                    pass
             if is_long:
                 if current_row:
                     if not _budget_ok():
@@ -1099,13 +1182,28 @@ def _attempt_flow_at(phase_blocks: list[RosterZone], font_regular,
                         lines.append({"type": "row", "items": current_row})
                         content_rows += 1
                         current_row = []
-                if not _budget_ok():
-                    overflow.append(_OverflowEntry(
-                        canonical_zone, block.phase, name,
-                    ))
-                    continue
-                lines.append({"type": "long", "name": name})
-                content_rows += 1
+                # Hyphen-wrap when constrained — the pill won't grow,
+                # so multi-char names need to break across rows.
+                if wrap_max_px is not None:
+                    # 1-col long rows can use the full pill width;
+                    # multi-col promoted-long rows are bounded by
+                    # the slot width.
+                    wrap_budget = (
+                        pill_content_width_px if cols == 1 else wrap_max_px
+                    )
+                    pieces = _wrap_name_to_lines(
+                        name, font_regular, wrap_budget,
+                    )
+                else:
+                    pieces = [name]
+                for piece in pieces:
+                    if not _budget_ok():
+                        overflow.append(_OverflowEntry(
+                            canonical_zone, block.phase, piece,
+                        ))
+                        continue
+                    lines.append({"type": "long", "name": piece})
+                    content_rows += 1
             else:
                 current_row.append(name)
                 if len(current_row) >= cols:
@@ -1134,13 +1232,18 @@ def _attempt_flow_at(phase_blocks: list[RosterZone], font_regular,
 def _build_flow_lines(phase_blocks: list[RosterZone], font_regular,
                       pill_content_width_px: int, max_cols: int,
                       max_rows: int, canonical_zone: str,
-                      overflow: list[_OverflowEntry]) -> list[dict]:
+                      overflow: list[_OverflowEntry],
+                      wrap_max_px: int | None = None) -> list[dict]:
     """Try the slot layout at 1 col first. If it overflows `max_rows`,
     re-try at 2 cols, then `max_cols` cols. Take the first column
     count where no overflow occurs; if even `max_cols` cols can't fit
     everyone, take the max-cols attempt and accumulate its overflow.
     This implements the alliance lead's "columns are the fallback"
-    rule from #227's design review."""
+    rule from #227's design review.
+
+    `wrap_max_px` (when set) signals that the caller has clamped the
+    pill width to canvas-safe bounds and any name exceeding the slot
+    width must hyphen-wrap rather than overflow."""
     best_lines: list[dict] = []
     best_overflow: list[_OverflowEntry] = []
     for cols in range(1, max_cols + 1):
@@ -1149,6 +1252,7 @@ def _build_flow_lines(phase_blocks: list[RosterZone], font_regular,
             pill_content_width_px=pill_content_width_px,
             cols=cols, max_rows=max_rows,
             canonical_zone=canonical_zone,
+            wrap_max_px=wrap_max_px,
         )
         if not attempt_overflow:
             return lines
@@ -1290,7 +1394,8 @@ def _draw_zone(canvas, zlayout: ZoneLayout, canonical: str,
                phase_blocks: list[RosterZone],
                icon_files: dict, icons_dir: str,
                roster: RosterData,
-               overflow: list[_OverflowEntry]) -> None:
+               overflow: list[_OverflowEntry],
+               layout: "EventLayout" = None) -> None:
     """Render the three pills + icon for one canonical zone slot.
 
     `phase_blocks` is the list of `RosterZone` entries for this zone
@@ -1373,24 +1478,79 @@ def _draw_zone(canvas, zlayout: ZoneLayout, canonical: str,
         lines, font_regular, font_bold, slot_width_px, col_gap_px,
     )
     default_pill_w_px = _s(zlayout.text.w)
+
+    # Safe-extent clamp (2026-05-23 tester ask): the pill grows away
+    # from the icon to fit long-row names, but unconstrained that
+    # extension pushed Serum Factory pills off the CS canvas edge
+    # and would crash adjacent Sample Warehouse pills into each
+    # other. Compute how far each direction can safely grow, then
+    # clamp `required_pill_w_px` to that ceiling. When the requested
+    # width exceeds the budget, we re-flow the lines with a
+    # `wrap_max_px` constraint so long names hyphen-wrap inside
+    # the pill instead of spilling out.
+    if layout is not None:
+        left_budget_px, right_budget_px = _safe_pill_extension_px(
+            zlayout, layout,
+        )
+    else:
+        # Defensive fallback — no layout context means we trust the
+        # caller's bounds.
+        left_budget_px = right_budget_px = float("inf")
+
+    direction = _pill_extend_direction(zlayout)
+    if direction == "right":
+        max_extension_px = right_budget_px
+    elif direction == "left":
+        max_extension_px = left_budget_px
+    else:  # both
+        max_extension_px = left_budget_px + right_budget_px
+
+    max_safe_pill_w_px = default_pill_w_px + max_extension_px
+
     if required_pill_w_px > default_pill_w_px:
-        extend_px = required_pill_w_px - default_pill_w_px
-        direction = _pill_extend_direction(zlayout)
+        # Pill wants to grow. Cap at the safe-extent ceiling and
+        # flag a re-flow when the clamp bites.
+        if required_pill_w_px > max_safe_pill_w_px:
+            pill_w_px = max_safe_pill_w_px
+            needs_reflow = True
+        else:
+            pill_w_px = required_pill_w_px
+            needs_reflow = False
+        extend_used_px = pill_w_px - default_pill_w_px
         if direction == "right":
             pill_x_px = _s(zlayout.text.x)
-            pill_w_px = required_pill_w_px
         elif direction == "left":
-            pill_x_px = _s(zlayout.text.x) - extend_px
-            pill_w_px = required_pill_w_px
+            pill_x_px = _s(zlayout.text.x) - extend_used_px
         else:  # both
-            pill_x_px = _s(zlayout.text.x) - extend_px // 2
-            pill_w_px = required_pill_w_px
-        # Re-derive slot_width with the wider pill so the row layout
-        # gets the extra horizontal room.
+            pill_x_px = _s(zlayout.text.x) - extend_used_px // 2
+        # Re-derive slot_width with the (possibly clamped) pill so
+        # the row layout gets the right horizontal room.
         pill_content_width_px = pill_w_px - 2 * pad_x - indent
         slot_width_px = max(
             1, (pill_content_width_px - total_gap_px) // cols_used,
         )
+        if needs_reflow:
+            # Re-build lines with the slot constraint so long names
+            # hyphen-wrap inside the cell rather than overflowing.
+            lines = _build_flow_lines(
+                phase_blocks, font_regular,
+                pill_content_width_px=pill_content_width_px,
+                max_cols=zlayout.max_cols,
+                max_rows=max_rows,
+                canonical_zone=canonical,
+                overflow=overflow,
+                wrap_max_px=slot_width_px,
+            )
+            # Recompute cols_used + slot_width since the re-flow may
+            # have picked a different column count under constraint.
+            cols_used = 1
+            for line in lines:
+                if line["type"] == "row" and len(line["items"]) > cols_used:
+                    cols_used = len(line["items"])
+            total_gap_px = col_gap_px * (cols_used - 1)
+            slot_width_px = max(
+                1, (pill_content_width_px - total_gap_px) // cols_used,
+            )
     else:
         pill_x_px = _s(zlayout.text.x)
         pill_w_px = default_pill_w_px

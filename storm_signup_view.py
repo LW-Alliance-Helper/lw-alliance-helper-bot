@@ -294,16 +294,19 @@ async def _handle_signup_click(interaction: discord.Interaction, vote_code: str)
     # is dropped.
     label = _VOTE_CONFIRMATIONS.get(vote, vote)
     if vote in ("a", "b"):
+        # #251: read TEAM-ordered labels (driven by per-event mapping
+        # captured on storm_registration_posts, falling back to the
+        # guild default) so the ack matches the button the member just
+        # clicked — even when the officer overrode the slot for this
+        # specific week.
         try:
-            from config import get_storm_slot_labels
-            slot_labels = get_storm_slot_labels(event_type, guild_id) or []
+            from config import get_storm_team_slot_labels
+            team_a_label, team_b_label = get_storm_team_slot_labels(
+                guild_id, event_type, event_date,
+            )
         except Exception:
-            slot_labels = []
-        slot_label = ""
-        if vote == "a" and len(slot_labels) >= 1:
-            slot_label = slot_labels[0]
-        elif vote == "b" and len(slot_labels) >= 2:
-            slot_label = slot_labels[1]
+            team_a_label, team_b_label = "", ""
+        slot_label = team_a_label if vote == "a" else team_b_label
         if slot_label:
             label = f"{label}: {slot_label}"
     try:

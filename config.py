@@ -302,6 +302,14 @@ def init_db():
                 poll_day_of_week         INTEGER DEFAULT -1,
                 signup_time              TEXT    DEFAULT '',
                 power_refresh_dm_enabled INTEGER DEFAULT 0,
+                -- Per-team time-slot mapping (#251). 1 or 2, indexing into
+                -- DS_SERVER_TIMES / CS_SERVER_TIMES. NULL until leadership
+                -- picks the mapping in /setup_storm_<DS|CS>. The signup
+                -- post creation flow blocks with a "pick team times first"
+                -- message when a slot needed by the alliance's `teams`
+                -- setting is still NULL. Both teams can share a slot.
+                team_a_slot_index        INTEGER,
+                team_b_slot_index        INTEGER,
                 PRIMARY KEY (guild_id, event_type)
             )
         """)
@@ -406,14 +414,21 @@ def init_db():
         # double-post.
         conn.execute("""
             CREATE TABLE IF NOT EXISTS storm_registration_posts (
-                guild_id     INTEGER NOT NULL,
-                event_type   TEXT    NOT NULL,
-                event_date   TEXT    NOT NULL,
-                channel_id   INTEGER NOT NULL,
-                message_id   INTEGER NOT NULL,
-                time_a_label TEXT    DEFAULT '',
-                time_b_label TEXT    DEFAULT '',
-                posted_at    TEXT    NOT NULL,
+                guild_id           INTEGER NOT NULL,
+                event_type         TEXT    NOT NULL,
+                event_date         TEXT    NOT NULL,
+                channel_id         INTEGER NOT NULL,
+                message_id         INTEGER NOT NULL,
+                time_a_label       TEXT    DEFAULT '',
+                time_b_label       TEXT    DEFAULT '',
+                -- Per-event team→slot indices (#251). 1 or 2 indexing into
+                -- DS_SERVER_TIMES / CS_SERVER_TIMES. Captured at post time
+                -- from either the guild default (guild_storm_config.team_*_slot_index)
+                -- or a one-week override the officer picked when posting.
+                -- 0 = legacy / unknown.
+                team_a_slot_index  INTEGER DEFAULT 0,
+                team_b_slot_index  INTEGER DEFAULT 0,
+                posted_at          TEXT    NOT NULL,
                 PRIMARY KEY (guild_id, event_type, event_date)
             )
         """)
@@ -686,6 +701,10 @@ def init_db():
             # or unparseable. Once per (guild, event_type, event_date,
             # voter) — see storm_power_refresh_dms_sent below.
             ("power_refresh_dm_enabled", "INTEGER DEFAULT 0"),
+            # Per-team time-slot mapping (#251) — see CREATE TABLE comment.
+            # No SQL default: NULL signals "leadership hasn't picked yet."
+            ("team_a_slot_index",        "INTEGER"),
+            ("team_b_slot_index",        "INTEGER"),
         ]:
             try:
                 conn.execute(f"ALTER TABLE guild_storm_config ADD COLUMN {col} {definition}")
@@ -910,6 +929,21 @@ def init_db():
                 conn.execute(f"ALTER TABLE guild_storm_config DROP COLUMN {col}")
                 conn.commit()
                 print(f"[CONFIG] Dropped {col} from guild_storm_config")
+            except Exception:
+                pass
+
+        # ── Per-event team→slot indices on storm_registration_posts (#251) ────
+        # Captures the team-time mapping that was in effect when the
+        # sign-up post went out, so attendance can reconstruct "what slot
+        # was Team A on this event" without re-parsing the label.
+        for col, definition in (
+            ("team_a_slot_index", "INTEGER DEFAULT 0"),
+            ("team_b_slot_index", "INTEGER DEFAULT 0"),
+        ):
+            try:
+                conn.execute(f"ALTER TABLE storm_registration_posts ADD COLUMN {col} {definition}")
+                conn.commit()
+                print(f"[CONFIG] Added {col} to storm_registration_posts")
             except Exception:
                 pass
 
@@ -1454,6 +1488,72 @@ def get_storm_slot_labels(event_type: str, guild_id: int) -> list[str]:
     return [format_storm_slot(h, m, guild_id) for h, m in times]
 
 
+def get_storm_slot_label_by_index(
+    event_type: str, slot_index: int | None, guild_id: int,
+) -> str:
+    """Render the label for a specific game slot (#251).
+
+    `slot_index` is 1 or 2 (matching the `team_*_slot_index` columns);
+    returns "" for None / out-of-range so callers can detect "unset"
+    rather than fall back to a possibly-misleading default.
+    """
+    if slot_index not in (1, 2):
+        return ""
+    labels = get_storm_slot_labels(event_type, guild_id)
+    if len(labels) < slot_index:
+        return ""
+    return labels[slot_index - 1]
+
+
+def resolve_storm_team_slots(
+    guild_id: int, event_type: str, event_date: str | None = None,
+) -> tuple[int | None, int | None]:
+    """Return (team_a_slot_index, team_b_slot_index) for an event (#251).
+
+    Resolution order:
+      1. If `event_date` is set and a `storm_registration_posts` row
+         exists with non-zero indices, return those (the per-event
+         mapping captured when the sign-up post went out — may differ
+         from the current guild default if leadership picked an
+         override for that week).
+      2. Otherwise return the guild default from `guild_storm_config`.
+
+    Returns `(None, None)` for either index that isn't configured.
+    Callers gate signup-post creation on "both required indices set"
+    per the alliance's `teams` config.
+    """
+    if event_date:
+        post = get_storm_registration_post(guild_id, event_type, event_date)
+        if post:
+            a = post.get("team_a_slot_index") or 0
+            b = post.get("team_b_slot_index") or 0
+            if a or b:
+                return (a if a in (1, 2) else None,
+                        b if b in (1, 2) else None)
+
+    cfg = get_storm_config(guild_id, event_type) or {}
+    a = cfg.get("team_a_slot_index")
+    b = cfg.get("team_b_slot_index")
+    return (a if a in (1, 2) else None,
+            b if b in (1, 2) else None)
+
+
+def get_storm_team_slot_labels(
+    guild_id: int, event_type: str, event_date: str | None = None,
+) -> tuple[str, str]:
+    """Return (team_a_label, team_b_label) in TEAM ORDER (#251).
+
+    Driven by `resolve_storm_team_slots`. Empty strings for teams that
+    haven't been assigned a slot yet — callers gate posting on whether
+    the labels the alliance's `teams` config requires are non-empty.
+    """
+    a_idx, b_idx = resolve_storm_team_slots(guild_id, event_type, event_date)
+    return (
+        get_storm_slot_label_by_index(event_type, a_idx, guild_id),
+        get_storm_slot_label_by_index(event_type, b_idx, guild_id),
+    )
+
+
 def get_storm_slot_for_key(event_type: str, time_key: str) -> tuple[int, int] | None:
     """Resolve a TimeSelectView selection (`"1"` / `"2"`) to (hour, minute).
 
@@ -1554,6 +1654,9 @@ def get_storm_config(guild_id: int, event_type: str) -> dict:
         "poll_day_of_week":        -1,
         "signup_time":             "",
         "power_refresh_dm_enabled": 0,
+        # Per-team time-slot mapping (#251) — NULL until setup-touched.
+        "team_a_slot_index":       None,
+        "team_b_slot_index":       None,
     }
     return _normalize_storm_templates(fallback, event_type)
 
@@ -1615,6 +1718,49 @@ def save_storm_config(guild_id: int, event_type: str, tab_name: str,
             "teams=excluded.teams",
             (guild_id, event_type, tab_name, default_text, templates_json, default_template,
              timezone, log_channel_id, post_channel_id, dm_reminder_message, teams_value)
+        )
+        conn.commit()
+
+
+def save_storm_team_slots(
+    guild_id: int, event_type: str,
+    team_a_slot_index: int | None,
+    team_b_slot_index: int | None,
+) -> None:
+    """Persist the per-team time-slot mapping (#251) for a guild + event type.
+
+    Each index is 1 or 2 (or None to reset). Stored on the existing
+    `guild_storm_config` row (created with empty defaults if it doesn't
+    exist yet). Kept separate from `save_storm_config` so the setup
+    wizard's team-time step can be re-run without touching the rest of
+    the storm config — same precedent as `save_structured_storm_config`.
+    """
+    def _norm(v):
+        if v is None:
+            return None
+        try:
+            i = int(v)
+        except (TypeError, ValueError):
+            return None
+        return i if i in (1, 2) else None
+
+    a = _norm(team_a_slot_index)
+    b = _norm(team_b_slot_index)
+
+    with _get_conn() as conn:
+        # Ensure a row exists so the UPDATE has something to bite into.
+        # Defaults from the CREATE TABLE definition apply on the INSERT
+        # path; the UPDATE path only touches the two slot columns.
+        conn.execute(
+            "INSERT OR IGNORE INTO guild_storm_config (guild_id, event_type) "
+            "VALUES (?, ?)",
+            (int(guild_id), event_type),
+        )
+        conn.execute(
+            "UPDATE guild_storm_config "
+            "SET team_a_slot_index = ?, team_b_slot_index = ? "
+            "WHERE guild_id = ? AND event_type = ?",
+            (a, b, int(guild_id), event_type),
         )
         conn.commit()
 
@@ -2263,22 +2409,32 @@ def record_storm_registration_post(
     *,
     time_a_label: str = "",
     time_b_label: str = "",
+    team_a_slot_index: int = 0,
+    team_b_slot_index: int = 0,
 ) -> bool:
     """Record a freshly-posted sign-up message. Idempotent on
     (guild_id, event_type, event_date) — re-running for the same event
     is a no-op. Returns True if a new row was inserted, False if the
-    event date already has a post."""
+    event date already has a post.
+
+    `team_a_slot_index` / `team_b_slot_index` capture the team→slot
+    mapping (#251) in effect when this specific post went out — either
+    the guild default or a one-week override the officer picked. 0
+    means "legacy / unknown" (rows written before #251).
+    """
     posted_at = _utcnow_iso()
     with _get_conn() as conn:
         cur = conn.execute(
             "INSERT OR IGNORE INTO storm_registration_posts "
             "(guild_id, event_type, event_date, channel_id, message_id, "
-            " time_a_label, time_b_label, posted_at) "
-            "VALUES (?, ?, ?, ?, ?, ?, ?, ?)",
+            " time_a_label, time_b_label, team_a_slot_index, team_b_slot_index, posted_at) "
+            "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
             (
                 int(guild_id), event_type, event_date,
                 int(channel_id), int(message_id),
-                time_a_label, time_b_label, posted_at,
+                time_a_label, time_b_label,
+                int(team_a_slot_index or 0), int(team_b_slot_index or 0),
+                posted_at,
             ),
         )
         conn.commit()
@@ -2310,12 +2466,34 @@ def get_recent_storm_registration_posts(within_days: int = 14) -> list[dict]:
     with _get_conn() as conn:
         rows = conn.execute(
             "SELECT guild_id, event_type, event_date, channel_id, message_id, "
-            "       time_a_label, time_b_label, posted_at "
+            "       time_a_label, time_b_label, team_a_slot_index, team_b_slot_index, "
+            "       posted_at "
             "FROM storm_registration_posts "
             "WHERE event_date >= ?",
             (cutoff,),
         ).fetchall()
     return [dict(r) for r in rows]
+
+
+def get_storm_registration_post(
+    guild_id: int, event_type: str, event_date: str,
+) -> dict | None:
+    """Return the storm_registration_posts row for (guild, event_type,
+    event_date), or None if no post has been recorded.
+
+    Used by attendance / mail-rendering paths that need to know the
+    team→slot mapping (#251) that was actually in effect when the
+    sign-up post went out, not the current guild default. Returns the
+    full row as a dict including `time_a_label`, `time_b_label`,
+    `team_a_slot_index`, `team_b_slot_index`.
+    """
+    with _get_conn() as conn:
+        row = conn.execute(
+            "SELECT * FROM storm_registration_posts "
+            "WHERE guild_id = ? AND event_type = ? AND event_date = ?",
+            (int(guild_id), event_type, event_date),
+        ).fetchone()
+    return dict(row) if row else None
 
 
 # ── Saved roster-image pointers (#140 follow-up) ────────────────────────────

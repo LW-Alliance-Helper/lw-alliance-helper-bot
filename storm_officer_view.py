@@ -552,25 +552,28 @@ _ON_BEHALF_PAGE_SIZE = 25
 
 def _vote_select_options(
     event_type: str, guild_id: int, teams_setting: str,
+    event_date: str | None = None,
 ) -> list[discord.SelectOption]:
     """Build the on-behalf Vote-select options to match the sign-up buttons.
 
-    Reads the event's slot labels via `get_storm_slot_labels` so the wording
-    surfaces *the same* `<local> (HH:MM server time)` strings members see on
-    the sign-up post. The set of options branches on `teams_setting` to match
-    the sign-up Variants A/B/C — single-team alliances only see their team
-    + Cannot; both-teams alliances see all four choices.
+    Reads the **team-ordered** slot labels via `get_storm_team_slot_labels`
+    (#251), so the wording surfaces *the same* `<local> (HH:MM server time)`
+    strings members see on the sign-up post — including any per-event
+    override the officer picked when posting that week's sign-up. The
+    set of options branches on `teams_setting` to match the sign-up
+    Variants A/B/C — single-team alliances only see their team + Cannot;
+    both-teams alliances see all four choices.
     """
-    from config import get_storm_slot_labels
+    from config import get_storm_team_slot_labels
     try:
-        slot_labels = get_storm_slot_labels(event_type, guild_id)
+        team_a_label, team_b_label = get_storm_team_slot_labels(
+            guild_id, event_type, event_date,
+        )
     except Exception:
-        slot_labels = ["", ""]
-    slot_a = slot_labels[0] if len(slot_labels) > 0 else ""
-    slot_b = slot_labels[1] if len(slot_labels) > 1 else ""
+        team_a_label, team_b_label = "", ""
 
-    label_a = f"Team A: {slot_a}" if slot_a else "Team A"
-    label_b = f"Team B: {slot_b}" if slot_b else "Team B"
+    label_a = f"Team A: {team_a_label}" if team_a_label else "Team A"
+    label_b = f"Team B: {team_b_label}" if team_b_label else "Team B"
 
     teams = (teams_setting or "both").strip()
     if teams not in ("both", "A", "B"):
@@ -886,6 +889,7 @@ class _OnBehalfVoteView(discord.ui.View):
             self.parent_view.event_type,
             self.parent_view.guild_id,
             self.teams_setting,
+            event_date=getattr(self.parent_view, "event_date", None),
         )
         for opt in vote_options:
             opt.default = (opt.value == self.selected_vote)

@@ -1911,8 +1911,48 @@ class RosterBuilderView(discord.ui.View):
         # picker, leadership picks via confirmation, not via a
         # hide/show toggle.
 
+        # Edit-single-member affordance. Lists the zone's current
+        # members + a destination select (other zones or 🗑️ Remove)
+        # so officers can surgically move or remove one person without
+        # nuking the whole zone. Disabled when the current zone is
+        # empty — there's nothing to edit.
+        zone_count = (
+            s.zone_member_count(s.selected_zone)
+            if s.selected_zone else 0
+        )
+        edit_btn = discord.ui.Button(
+            label="✏️ Edit zone members",
+            style=discord.ButtonStyle.secondary,
+            row=action_row,
+            disabled=(not s.selected_zone or zone_count == 0),
+        )
+
+        async def _edit_zone(inter: discord.Interaction):
+            if not await self._guard_owner(inter):
+                return
+            if not s.selected_zone:
+                await inter.response.send_message(
+                    "⚠️ Pick a zone first.", ephemeral=True,
+                )
+                return
+            edit_view = _ZoneMemberEditView(
+                parent_view=self,
+                zone=s.selected_zone,
+                phase=s.selected_phase,
+            )
+            await inter.response.send_message(
+                f"✏️ Editing **{s.selected_zone}** — pick a member, "
+                f"then pick where to send them.",
+                view=edit_view,
+                ephemeral=True,
+            )
+
+        edit_btn.callback = _edit_zone
+        self.add_item(edit_btn)
+
         unassign_btn = discord.ui.Button(
-            label="↩️ Remove current zone assignees", style=discord.ButtonStyle.secondary, row=action_row,
+            label="🧹 Clear this zone",
+            style=discord.ButtonStyle.secondary, row=action_row,
         )
 
         async def _unassign(inter: discord.Interaction):
@@ -2345,6 +2385,250 @@ class RosterBuilderView(discord.ui.View):
             except discord.HTTPException:
                 pass
         self._release_session_lock()
+
+
+class _ZoneMemberEditView(discord.ui.View):
+    """Ephemeral picker for surgical edits to a single zone's roster
+    (#251 tester ask). Replaces the "wipe entire zone + re-add"
+    workflow with two specific actions:
+
+      - 🗑️ Remove a single member from the zone.
+      - ↔️ Move a single member to a different zone (same team /
+        phase).
+
+    Two selects + Apply / Cancel buttons. The destination select
+    surfaces the destination's current count vs cap so officers see
+    at a glance whether the move would push the destination over
+    max — they make an informed choice without a separate confirm
+    dialog (the Edit dialog itself IS the confirm surface).
+    """
+
+    REMOVE_VALUE = "__remove__"
+
+    def __init__(
+        self,
+        *,
+        parent_view: "RosterBuilderView",
+        zone: str,
+        phase: int,
+    ):
+        super().__init__(timeout=300)
+        self.parent_view = parent_view
+        self.zone = zone
+        self.phase = phase
+        self.selected_member: Optional[str] = None
+        self.selected_destination: Optional[str] = None
+        self._build()
+
+    async def _guard_owner(self, inter: discord.Interaction) -> bool:
+        if inter.user.id != self.parent_view.session.user_id:
+            await inter.response.send_message(
+                "⛔ Only the builder's owner can edit.", ephemeral=True,
+            )
+            return False
+        return True
+
+    def _build(self) -> None:
+        self.clear_items()
+        s = self.parent_view.session
+
+        zone_members = list(
+            s.assignments_for_phase(self.phase).get(self.zone, [])
+        )
+
+        # Member select (row 0) — the zone's current members.
+        if zone_members:
+            member_options = []
+            for k in zone_members[:25]:
+                m = s.members.get(k, {"name": k})
+                member_options.append(discord.SelectOption(
+                    label=_format_member_label(m)[:100],
+                    value=k[:100],
+                    default=(k == self.selected_member),
+                ))
+            m_placeholder = (
+                f"Picked: {self._picked_member_label()}"
+                if self.selected_member else
+                f"Pick a member from {self.zone}…"
+            )
+            m_select = discord.ui.Select(
+                placeholder=m_placeholder[:150],
+                options=member_options,
+                min_values=1, max_values=1, row=0,
+            )
+
+            async def _on_member_pick(inter: discord.Interaction):
+                if not await self._guard_owner(inter):
+                    return
+                vals = inter.data.get("values") or []
+                self.selected_member = vals[0] if vals else None
+                # Picking a new member clears any prior destination
+                # choice so officers don't accidentally re-apply a
+                # stale destination.
+                self.selected_destination = None
+                self._build()
+                try:
+                    await inter.response.edit_message(view=self)
+                except discord.HTTPException:
+                    pass
+
+            m_select.callback = _on_member_pick
+            self.add_item(m_select)
+
+        # Destination select (row 1) — only shown once a member is
+        # picked. Includes "🗑️ Remove from zone" plus every other
+        # zone on the team's preset with its current count/cap so
+        # officers can spot over-cap destinations before clicking
+        # Apply.
+        if self.selected_member:
+            dest_options = [discord.SelectOption(
+                label="🗑️ Remove (no destination zone)"[:100],
+                value=self.REMOVE_VALUE,
+                default=(self.selected_destination == self.REMOVE_VALUE),
+            )]
+            for z in s.preset.zones:
+                if z.zone == self.zone:
+                    continue
+                count = s.zone_member_count(z.zone)
+                cap = s.zone_capacity(z.zone)
+                cap_hint = f"({count}/{cap})"
+                # Surface destination capacity so the officer sees
+                # over-cap moves before clicking Apply.
+                over_hint = " ⚠️ at cap" if count >= cap and cap > 0 else ""
+                label = f"↔️ Move to {z.zone} {cap_hint}{over_hint}"
+                dest_options.append(discord.SelectOption(
+                    label=label[:100],
+                    value=z.zone[:100],
+                    default=(self.selected_destination == z.zone),
+                ))
+                if len(dest_options) >= 25:  # Discord cap
+                    break
+
+            d_placeholder = (
+                f"Destination: {self.selected_destination}"
+                if self.selected_destination else
+                "Pick where to send them (or Remove)…"
+            )
+            d_select = discord.ui.Select(
+                placeholder=d_placeholder[:150],
+                options=dest_options,
+                min_values=1, max_values=1, row=1,
+            )
+
+            async def _on_dest_pick(inter: discord.Interaction):
+                if not await self._guard_owner(inter):
+                    return
+                vals = inter.data.get("values") or []
+                self.selected_destination = vals[0] if vals else None
+                self._build()
+                try:
+                    await inter.response.edit_message(view=self)
+                except discord.HTTPException:
+                    pass
+
+            d_select.callback = _on_dest_pick
+            self.add_item(d_select)
+
+        # Apply / Cancel (row 2).
+        can_apply = (
+            self.selected_member is not None
+            and self.selected_destination is not None
+        )
+        apply_btn = discord.ui.Button(
+            label="✅ Apply",
+            style=discord.ButtonStyle.success,
+            disabled=not can_apply,
+            row=2,
+        )
+        apply_btn.callback = self._on_apply
+        self.add_item(apply_btn)
+
+        cancel_btn = discord.ui.Button(
+            label="↩️ Cancel",
+            style=discord.ButtonStyle.secondary,
+            row=2,
+        )
+        cancel_btn.callback = self._on_cancel
+        self.add_item(cancel_btn)
+
+    def _picked_member_label(self) -> str:
+        if not self.selected_member:
+            return ""
+        m = self.parent_view.session.members.get(
+            self.selected_member, {"name": self.selected_member},
+        )
+        return _format_member_label(m)
+
+    async def _on_apply(self, inter: discord.Interaction):
+        if not await self._guard_owner(inter):
+            return
+        if self.is_finished():
+            return
+        s = self.parent_view.session
+        member_key = self.selected_member or ""
+        dest = self.selected_destination or ""
+        if not member_key or not dest:
+            return
+        member = s.members.get(member_key, {"name": member_key})
+        member_label = _format_member_label(member)
+
+        # Remove from source zone first. The source slot list is the
+        # canonical state; pruning stale overrides + pairings catches
+        # the member's pair-sub mapping (if any) automatically.
+        try:
+            s.assignments_for_phase(self.phase)[self.zone].remove(member_key)
+        except ValueError:
+            pass  # already gone from source somehow — be defensive
+
+        if dest == self.REMOVE_VALUE:
+            ack = (
+                f"🗑️ Removed **{member_label}** from **{self.zone}**."
+            )
+        else:
+            s.assignments_for_phase(self.phase)[dest].append(member_key)
+            ack = (
+                f"↔️ Moved **{member_label}** from **{self.zone}** "
+                f"to **{dest}**."
+            )
+
+        s.prune_stale_overrides()
+        s.prune_stale_pairings()
+        s.auto_fill_summary = None
+        self.stop()
+        for item in self.children:
+            item.disabled = True
+        try:
+            await inter.response.edit_message(content=ack, view=None)
+        except discord.HTTPException:
+            pass
+
+        # Refresh the parent builder so the new state is visible.
+        try:
+            if self.parent_view.message is not None:
+                self.parent_view._user_action_since_open = True
+                self.parent_view._rebuild()
+                await self.parent_view.message.edit(
+                    embed=_render_builder_embed(s),
+                    view=self.parent_view,
+                )
+        except discord.HTTPException:
+            pass
+
+    async def _on_cancel(self, inter: discord.Interaction):
+        if not await self._guard_owner(inter):
+            return
+        if self.is_finished():
+            return
+        self.stop()
+        for item in self.children:
+            item.disabled = True
+        try:
+            await inter.response.edit_message(
+                content="↩️ Edit cancelled. No changes made.",
+                view=None,
+            )
+        except discord.HTTPException:
+            pass
 
 
 class _AssignConfirmView(discord.ui.View):

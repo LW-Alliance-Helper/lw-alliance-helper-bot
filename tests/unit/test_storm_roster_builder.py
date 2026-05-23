@@ -4707,3 +4707,239 @@ class TestAssignConfirmView:
         bob_option = next(o for o in member_select.options if o.value == "1002")
         assert bob_option.description == "below minimum"
 
+
+# ── _ZoneMemberEditView (#251 tester ask) ───────────────────────────────────
+
+
+class TestZoneMemberEditView:
+    """Surgical edits to a single zone — remove a single member, or
+    move one to another zone. Replaces the bulk wipe-and-re-add
+    workflow the tester reported was the only path."""
+
+    def _parent_view_mock(self, session):
+        parent = MagicMock()
+        parent.session = session
+        parent.message = MagicMock()
+        parent.message.edit = AsyncMock()
+        parent._user_action_since_open = False
+        parent._rebuild = MagicMock()
+        return parent
+
+    def _seeded_session(self):
+        members = {
+            "1001": {"key": "1001", "name": "Alice", "discord_id": "1001",
+                     "power": 412_000_000, "not_on_discord": False},
+            "1002": {"key": "1002", "name": "Bob", "discord_id": "1002",
+                     "power": 350_000_000, "not_on_discord": False},
+            "1003": {"key": "1003", "name": "Carol", "discord_id": "1003",
+                     "power": 305_000_000, "not_on_discord": False},
+        }
+        session = _make_session(team="A", members=members)
+        session.selected_zone = "Power Tower"
+        session.assignments["Power Tower"] = ["1001", "1002"]
+        session.assignments["Nuclear Silo"] = ["1003"]
+        return session
+
+    def test_empty_zone_shows_only_action_buttons(self):
+        """Edit view with no members in the zone exposes only the
+        Cancel + (disabled) Apply buttons — no Select to render."""
+        session = self._seeded_session()
+        session.assignments["Power Tower"] = []
+        parent = self._parent_view_mock(session)
+        v = srb._ZoneMemberEditView(
+            parent_view=parent, zone="Power Tower", phase=1,
+        )
+        selects = [c for c in v.children if isinstance(c, discord.ui.Select)]
+        # No member select, no destination select.
+        assert selects == []
+
+    def test_zone_with_members_renders_member_select(self):
+        session = self._seeded_session()
+        parent = self._parent_view_mock(session)
+        v = srb._ZoneMemberEditView(
+            parent_view=parent, zone="Power Tower", phase=1,
+        )
+        selects = [c for c in v.children if isinstance(c, discord.ui.Select)]
+        # Member select only — destination select appears after a pick.
+        assert len(selects) == 1
+        values = {o.value for o in selects[0].options}
+        assert values == {"1001", "1002"}
+
+    def test_destination_select_appears_after_member_pick(self):
+        session = self._seeded_session()
+        parent = self._parent_view_mock(session)
+        v = srb._ZoneMemberEditView(
+            parent_view=parent, zone="Power Tower", phase=1,
+        )
+        v.selected_member = "1001"
+        v._build()
+        selects = [c for c in v.children if isinstance(c, discord.ui.Select)]
+        assert len(selects) == 2
+        # The destination select includes Remove + every other zone.
+        dest_select = selects[1]
+        values = [o.value for o in dest_select.options]
+        assert "__remove__" in values
+        assert "Nuclear Silo" in values
+        # Source zone not offered as destination.
+        assert "Power Tower" not in values
+
+    def test_apply_button_disabled_until_both_selects_made(self):
+        session = self._seeded_session()
+        parent = self._parent_view_mock(session)
+        v = srb._ZoneMemberEditView(
+            parent_view=parent, zone="Power Tower", phase=1,
+        )
+        apply_btn = next(
+            c for c in v.children
+            if isinstance(c, discord.ui.Button) and c.label.startswith("✅")
+        )
+        assert apply_btn.disabled is True
+
+        v.selected_member = "1001"
+        v._build()
+        apply_btn = next(
+            c for c in v.children
+            if isinstance(c, discord.ui.Button) and c.label.startswith("✅")
+        )
+        # Still disabled — destination not yet picked.
+        assert apply_btn.disabled is True
+
+        v.selected_destination = "Nuclear Silo"
+        v._build()
+        apply_btn = next(
+            c for c in v.children
+            if isinstance(c, discord.ui.Button) and c.label.startswith("✅")
+        )
+        assert apply_btn.disabled is False
+
+    @pytest.mark.asyncio
+    async def test_apply_remove_drops_member_from_zone(self):
+        session = self._seeded_session()
+        parent = self._parent_view_mock(session)
+        v = srb._ZoneMemberEditView(
+            parent_view=parent, zone="Power Tower", phase=1,
+        )
+        v.selected_member = "1001"
+        v.selected_destination = v.REMOVE_VALUE
+        inter = MagicMock()
+        inter.user.id = 42
+        inter.response.edit_message = AsyncMock()
+        await v._on_apply(inter)
+        assert "1001" not in session.assignments["Power Tower"]
+        # Other zone untouched.
+        assert session.assignments["Nuclear Silo"] == ["1003"]
+
+    @pytest.mark.asyncio
+    async def test_apply_move_relocates_member_to_destination(self):
+        session = self._seeded_session()
+        parent = self._parent_view_mock(session)
+        v = srb._ZoneMemberEditView(
+            parent_view=parent, zone="Power Tower", phase=1,
+        )
+        v.selected_member = "1001"
+        v.selected_destination = "Nuclear Silo"
+        inter = MagicMock()
+        inter.user.id = 42
+        inter.response.edit_message = AsyncMock()
+        await v._on_apply(inter)
+        # Alice gone from source.
+        assert "1001" not in session.assignments["Power Tower"]
+        # Alice now in destination.
+        assert "1001" in session.assignments["Nuclear Silo"]
+        # Original Nuclear Silo member preserved.
+        assert "1003" in session.assignments["Nuclear Silo"]
+
+    @pytest.mark.asyncio
+    async def test_cancel_leaves_state_unchanged(self):
+        session = self._seeded_session()
+        parent = self._parent_view_mock(session)
+        v = srb._ZoneMemberEditView(
+            parent_view=parent, zone="Power Tower", phase=1,
+        )
+        v.selected_member = "1001"
+        v.selected_destination = "Nuclear Silo"
+        before_source = list(session.assignments["Power Tower"])
+        before_dest = list(session.assignments["Nuclear Silo"])
+        inter = MagicMock()
+        inter.user.id = 42
+        inter.response.edit_message = AsyncMock()
+        await v._on_cancel(inter)
+        assert session.assignments["Power Tower"] == before_source
+        assert session.assignments["Nuclear Silo"] == before_dest
+
+    @pytest.mark.asyncio
+    async def test_non_owner_blocked(self):
+        session = self._seeded_session()
+        parent = self._parent_view_mock(session)
+        v = srb._ZoneMemberEditView(
+            parent_view=parent, zone="Power Tower", phase=1,
+        )
+        v.selected_member = "1001"
+        v.selected_destination = v.REMOVE_VALUE
+        inter = MagicMock()
+        inter.user.id = 999  # not the owner (42)
+        inter.response.send_message = AsyncMock()
+        await v._on_apply(inter)
+        # No state change; rejection sent.
+        assert "1001" in session.assignments["Power Tower"]
+        inter.response.send_message.assert_called_once()
+        assert "Only the builder's owner" in (
+            inter.response.send_message.call_args.args[0]
+        )
+
+    def test_main_picker_renders_edit_button_when_zone_has_members(self):
+        from unittest.mock import patch
+        members = {
+            "1001": {"key": "1001", "name": "Alice", "discord_id": "1001",
+                     "power": 412_000_000, "not_on_discord": False},
+        }
+        session = _make_session(team="A", members=members)
+        session.selected_zone = "Power Tower"
+        session.assignments["Power Tower"] = ["1001"]
+        with patch.object(srb, "_autosave_draft"):
+            view = srb.RosterBuilderView(session)
+        labels = [getattr(c, "label", "") for c in view.children]
+        edit_btn = next(
+            (c for c in view.children
+             if isinstance(c, discord.ui.Button)
+             and (c.label or "").startswith("✏️")),
+            None,
+        )
+        assert edit_btn is not None
+        assert edit_btn.disabled is False
+
+    def test_main_picker_edit_button_disabled_when_zone_empty(self):
+        from unittest.mock import patch
+        members = {
+            "1001": {"key": "1001", "name": "Alice", "discord_id": "1001",
+                     "power": 412_000_000, "not_on_discord": False},
+        }
+        session = _make_session(team="A", members=members)
+        session.selected_zone = "Power Tower"
+        # Zone has no assignees yet.
+        with patch.object(srb, "_autosave_draft"):
+            view = srb.RosterBuilderView(session)
+        edit_btn = next(
+            (c for c in view.children
+             if isinstance(c, discord.ui.Button)
+             and (c.label or "").startswith("✏️")),
+            None,
+        )
+        assert edit_btn is not None
+        assert edit_btn.disabled is True
+
+    def test_main_picker_renders_renamed_clear_button(self):
+        """`Remove current zone assignees` was a destructive name that
+        invited misclicks; it's now `🧹 Clear this zone`."""
+        from unittest.mock import patch
+        members = {
+            "1001": {"key": "1001", "name": "Alice", "discord_id": "1001",
+                     "power": 412_000_000, "not_on_discord": False},
+        }
+        session = _make_session(team="A", members=members)
+        with patch.object(srb, "_autosave_draft"):
+            view = srb.RosterBuilderView(session)
+        labels = [getattr(c, "label", "") for c in view.children]
+        assert any("Clear this zone" in lab for lab in labels)
+        assert not any("Remove current zone assignees" in lab for lab in labels)
+

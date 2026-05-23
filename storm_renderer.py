@@ -260,15 +260,23 @@ class EventLayout:
 
 
 _DS_LAYOUT = EventLayout(
-    svg_w=1107.60, svg_h=764.26,
+    # Canvas height bumped from 764 → 884 SVG (+120) per tester
+    # feedback that Oil Refinery II's pill overlapped Science Hub's
+    # icon when both stages had 5-6 names. Each of the four outer
+    # rows is shifted down by ~30 SVG, central rows track halfway
+    # between them — pills now have ~90 SVG of breathing room
+    # between the bottom of the row-3 pill and the row-4 icon
+    # (previously ~30 SVG, which clipped at typical roster size).
+    svg_w=1107.60, svg_h=884.26,
     header=Box(0, 0, 1107.60, 48.00),
-    bg_main=Box(1.30, 46.75, 920.03, 715.24),
-    bg_subs=Box(921.27, 46.71, 184.79, 715.24),
+    bg_main=Box(1.30, 46.75, 920.03, 835.24),
+    bg_subs=Box(921.27, 46.71, 184.79, 835.24),
     spawn_rects=[
         # DS spawn squares — narrow vertical strips at left/right edges.
-        # Game-defined colours: Team A blue, Team B red.
-        (Box(0, 289.84, 38.33, 213.57),       (92, 124, 199, 204)),    # blue
-        (Box(883.01, 287.32, 38.33, 213.57),  (208, 102, 99, 204)),    # red
+        # Game-defined colours: Team A blue, Team B red. Centered
+        # vertically with the new taller canvas (+60 SVG).
+        (Box(0, 349.84, 38.33, 213.57),       (92, 124, 199, 204)),    # blue
+        (Box(883.01, 347.32, 38.33, 213.57),  (208, 102, 99, 204)),    # red
     ],
     zones={
         "Info Center": ZoneLayout(
@@ -277,19 +285,19 @@ _DS_LAYOUT = EventLayout(
             icon=Box(175.08, 102.42, 96, 96),
         ),
         "Oil Refinery I": ZoneLayout(
-            title=Box(58.31, 252.84, 223.34, 16.79),
-            text=Box(154.31, 273.41, 127.34, 60.00),
-            icon=Box(57.47, 269.52, 96, 96),
+            title=Box(58.31, 282.84, 223.34, 16.79),
+            text=Box(154.31, 303.41, 127.34, 60.00),
+            icon=Box(57.47, 299.52, 96, 96),
         ),
         "Field Hospital I": ZoneLayout(
-            title=Box(58.31, 420.84, 223.34, 16.79),
-            text=Box(154.31, 441.41, 127.34, 60.00),
-            icon=Box(58.31, 437.63, 96, 96),
+            title=Box(58.31, 480.84, 223.34, 16.79),
+            text=Box(154.31, 501.41, 127.34, 60.00),
+            icon=Box(58.31, 497.63, 96, 96),
         ),
         "Field Hospital II": ZoneLayout(
-            title=Box(51.19, 589.63, 223.34, 16.79),
-            text=Box(52.01, 610.20, 127.34, 60.00),
-            icon=Box(178.70, 606.42, 96, 96),
+            title=Box(51.19, 679.63, 223.34, 16.79),
+            text=Box(52.01, 700.20, 127.34, 60.00),
+            icon=Box(178.70, 696.42, 96, 96),
         ),
         # Central DS zones use 3 column slots (vs 2 for outer) and cap
         # at 7 vertical rows so the pill can't outgrow the space below
@@ -303,16 +311,16 @@ _DS_LAYOUT = EventLayout(
             max_rows=_CENTRAL_MAX_ROWS,
         ),
         "Nuclear Silo": ZoneLayout(
-            title=Box(362.89, 329.72, 200.00, 16.79),
-            text=Box(362.89, 434.32, 200.00, 60.00),
-            icon=Box(415.57, 341.69, 96, 96),
+            title=Box(362.89, 374.72, 200.00, 16.79),
+            text=Box(362.89, 479.32, 200.00, 60.00),
+            icon=Box(415.57, 386.69, 96, 96),
             max_cols=3,
             max_rows=_CENTRAL_MAX_ROWS,
         ),
         "Mercenary Factory": ZoneLayout(
-            title=Box(362.89, 563.90, 200.00, 16.79),
-            text=Box(362.89, 676.49, 200.00, 60.00),
-            icon=Box(413.21, 580.68, 96, 96),
+            title=Box(362.89, 653.90, 200.00, 16.79),
+            text=Box(362.89, 766.49, 200.00, 60.00),
+            icon=Box(413.21, 670.68, 96, 96),
             max_cols=3,
             max_rows=_CENTRAL_MAX_ROWS,
         ),
@@ -322,24 +330,26 @@ _DS_LAYOUT = EventLayout(
             icon=Box(658.95, 102.95, 96, 96),
         ),
         "Field Hospital III": ZoneLayout(
-            title=Box(640.77, 252.09, 223.34, 16.79),
-            text=Box(641.59, 272.65, 127.34, 60.00),
-            icon=Box(768.29, 268.87, 96, 96),
+            title=Box(640.77, 282.09, 223.34, 16.79),
+            text=Box(641.59, 302.65, 127.34, 60.00),
+            icon=Box(768.29, 298.87, 96, 96),
         ),
         "Oil Refinery II": ZoneLayout(
-            title=Box(644.13, 420.91, 223.34, 16.79),
-            text=Box(644.12, 441.48, 127.34, 60.00),
-            icon=Box(771.46, 437.63, 96, 96),
+            title=Box(644.13, 480.91, 223.34, 16.79),
+            text=Box(644.12, 501.48, 127.34, 60.00),
+            icon=Box(771.46, 497.63, 96, 96),
         ),
         "Science Hub": ZoneLayout(
-            title=Box(658.94, 589.74, 223.34, 16.79),
-            text=Box(754.94, 610.31, 127.34, 60.00),
-            icon=Box(658.94, 606.42, 96, 96),
+            title=Box(658.94, 679.74, 223.34, 16.79),
+            text=Box(754.94, 700.31, 127.34, 60.00),
+            icon=Box(658.94, 696.42, 96, 96),
         ),
     },
     subs_title=Box(930.68, 78.16, 167.59, 16.79),
-    subs_text_flat=Box(930.69, 106.73, 167.59, 150.61),
-    subs_text_pairs=Box(930.69, 106.73, 167.59, 369.32),
+    # Subs section grows with the taller canvas so the pair table has
+    # room to render long pairings without bumping into the logo.
+    subs_text_flat=Box(930.69, 106.73, 167.59, 270.61),
+    subs_text_pairs=Box(930.69, 106.73, 167.59, 489.32),
     subs_pair_left_x=946.03,
     subs_pair_right_x=1018.60,
     pairs_header_offset_y=287.82 - 266.73,       # ≈ 21.09
@@ -1020,16 +1030,33 @@ def _attempt_flow_at(phase_blocks: list[RosterZone], font_regular,
     content_rows = 0
     blocks_sorted = sorted(phase_blocks, key=lambda b: b.phase)
 
+    # A zone with no members in ANY phase still occupies its canonical
+    # slot on the map — Field Hospitals III/IV with cap=0 both stages
+    # were being rendered as empty pills with no Stage labels at all,
+    # which read as a broken render rather than "closed". For zones
+    # like that, we DO want every phase row labeled with "(empty)" so
+    # officers can see at a glance that the zone is part of the map
+    # and just hasn't been assigned. For zones that DO have members
+    # in some phase, hide the closed-empty phases (less noise on
+    # populated zones — e.g. Nuclear Silo's Stage 1 cap=0 + Stage 2
+    # cap>0 with members keeps the Stage 1 row hidden).
+    zone_has_members = any(b.members for b in phase_blocks)
+
     def _budget_ok() -> bool:
         return content_rows < max_rows
 
     for block in blocks_sorted:
         if not block.members and block.phase == 0:
             continue
-        # Closed-empty stages inside an otherwise-populated zone don't
-        # contribute a Stage header. Dangling empty stage rows would
-        # read as noise.
-        if block.phase >= 1 and block.max_players == 0 and not block.members:
+        # Closed-empty stage skip applies ONLY when other phases of
+        # the same zone carry members — otherwise the whole zone
+        # would render contentless and look like a broken slot.
+        if (
+            block.phase >= 1
+            and block.max_players == 0
+            and not block.members
+            and zone_has_members
+        ):
             continue
 
         # Stage header always renders (when present), but doesn't tick

@@ -669,3 +669,80 @@ class TestHangulCompatibilityJamoCoverage:
     def test_bopomofo_routes_to_cjk(self):
         # ㄅ — U+3105, Bopomofo. Falls in the broadened CJK band.
         assert sr._script_family_for_text("ㄅ") == "cjk"
+
+
+# ── Closed-empty zone rendering ─────────────────────────────────────────────
+
+
+class TestClosedEmptyZoneRendering:
+    """Tester report 2026-05-23: Field Hospitals II/III/IV with cap=0
+    on both stages and no members rendered as completely blank pills
+    on the PNG — no Stage labels, looked like a broken slot. The fix
+    renders the per-stage `(empty)` lines for fully-empty zones so
+    officers can see the slot exists; partially-populated zones still
+    hide their closed-empty stages so noise stays minimal."""
+
+    def _font_factory(self):
+        return sr._try_font(sr._pt_to_px(sr._LABEL_PT), bold=False)
+
+    def test_fully_empty_zone_renders_both_stage_headers(self):
+        font = self._font_factory()
+        phase_blocks = [
+            sr.RosterZone(name="S1", max_players=0, members=[],
+                          phase=1, canonical_zone="Field Hospital II"),
+            sr.RosterZone(name="S2", max_players=0, members=[],
+                          phase=2, canonical_zone="Field Hospital II"),
+        ]
+        lines, overflow = sr._attempt_flow_at(
+            phase_blocks, font,
+            pill_content_width_px=200, cols=1, max_rows=7,
+            canonical_zone="Field Hospital II",
+        )
+        types = [ln["type"] for ln in lines]
+        # Both stage headers + their (empty) rows survive.
+        assert types == ["header", "empty", "header", "empty"]
+        assert overflow == []
+
+    def test_partial_zone_still_hides_closed_empty_stage(self):
+        """Stage 1 cap=0 empty + Stage 2 cap>0 with members → only
+        Stage 2 renders. Reduces noise on zones where the closed
+        phase is the deliberate "this stage doesn't apply" config."""
+        font = self._font_factory()
+        phase_blocks = [
+            sr.RosterZone(name="S1", max_players=0, members=[],
+                          phase=1, canonical_zone="Mercenary Factory"),
+            sr.RosterZone(name="S2", max_players=3,
+                          members=["Alice", "Bob", "Carol"],
+                          phase=2, canonical_zone="Mercenary Factory"),
+        ]
+        lines, overflow = sr._attempt_flow_at(
+            phase_blocks, font,
+            pill_content_width_px=200, cols=1, max_rows=7,
+            canonical_zone="Mercenary Factory",
+        )
+        # Header for Stage 2 plus its 3 single-name rows. No Stage 1
+        # header.
+        types = [ln["type"] for ln in lines]
+        assert types == ["header", "row", "row", "row"]
+        # The lone header is Stage 2.
+        assert lines[0]["text"] == "Stage 2:"
+
+    def test_stage_with_cap_above_zero_but_empty_still_labels(self):
+        """Stage 1 cap=3 + no members → (empty) row shows. Same
+        behaviour as before — the cap>0 case was never broken."""
+        font = self._font_factory()
+        phase_blocks = [
+            sr.RosterZone(name="S1", max_players=3, members=[],
+                          phase=1, canonical_zone="Field Hospital I"),
+            sr.RosterZone(name="S2", max_players=0, members=[],
+                          phase=2, canonical_zone="Field Hospital I"),
+        ]
+        lines, overflow = sr._attempt_flow_at(
+            phase_blocks, font,
+            pill_content_width_px=200, cols=1, max_rows=7,
+            canonical_zone="Field Hospital I",
+        )
+        # Stage 1 labels + (empty), Stage 2 also labels + (empty)
+        # since the whole zone is empty.
+        types = [ln["type"] for ln in lines]
+        assert types == ["header", "empty", "header", "empty"]

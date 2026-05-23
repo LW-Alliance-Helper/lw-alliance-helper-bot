@@ -746,3 +746,62 @@ class TestClosedEmptyZoneRendering:
         # since the whole zone is empty.
         types = [ln["type"] for ln in lines]
         assert types == ["header", "empty", "header", "empty"]
+
+    def test_three_stage_zone_keeps_empty_post_open_stages(self):
+        """Sample Warehouse 1: cap=2 across all three stages, members
+        in Stage 1 only. Stages 2 and 3 must render as `(empty)` —
+        the canonical mid-rotation case where the strategy is "use
+        this zone in Stage 1, then deliberately leave it open." The
+        old behaviour was already correct here; this test pins it
+        against regression."""
+        font = self._font_factory()
+        phase_blocks = [
+            sr.RosterZone(name="S1", max_players=2,
+                          members=["Alice", "Bob"],
+                          phase=1, canonical_zone="Sample Warehouse 1"),
+            sr.RosterZone(name="S2", max_players=2, members=[],
+                          phase=2, canonical_zone="Sample Warehouse 1"),
+            sr.RosterZone(name="S3", max_players=2, members=[],
+                          phase=3, canonical_zone="Sample Warehouse 1"),
+        ]
+        lines, overflow = sr._attempt_flow_at(
+            phase_blocks, font,
+            pill_content_width_px=200, cols=1, max_rows=8,
+            canonical_zone="Sample Warehouse 1",
+        )
+        types = [ln["type"] for ln in lines]
+        # Stage 1 (header + 2 single-name rows), Stage 2 (header +
+        # empty), Stage 3 (header + empty).
+        assert types == [
+            "header", "row", "row",
+            "header", "empty",
+            "header", "empty",
+        ]
+        assert lines[0]["text"] == "Stage 1:"
+        assert lines[3]["text"] == "Stage 2:"
+        assert lines[5]["text"] == "Stage 3:"
+
+    def test_zone_opens_at_stage_three_hides_stages_one_and_two(self):
+        """Virus Lab: cap=0 Stages 1+2, cap=2 Stage 3 with members.
+        Stages 1 and 2 must NOT render — the building isn't part of
+        the strategy until Stage 3, and ghost stage headers for it
+        would mislead members reading the post."""
+        font = self._font_factory()
+        phase_blocks = [
+            sr.RosterZone(name="S1", max_players=0, members=[],
+                          phase=1, canonical_zone="Virus Lab"),
+            sr.RosterZone(name="S2", max_players=0, members=[],
+                          phase=2, canonical_zone="Virus Lab"),
+            sr.RosterZone(name="S3", max_players=2,
+                          members=["Alice", "Bob"],
+                          phase=3, canonical_zone="Virus Lab"),
+        ]
+        lines, overflow = sr._attempt_flow_at(
+            phase_blocks, font,
+            pill_content_width_px=200, cols=1, max_rows=8,
+            canonical_zone="Virus Lab",
+        )
+        # Only Stage 3 lines survive.
+        types = [ln["type"] for ln in lines]
+        assert types == ["header", "row", "row"]
+        assert lines[0]["text"] == "Stage 3:"

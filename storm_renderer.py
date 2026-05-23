@@ -1224,17 +1224,22 @@ def _attempt_flow_at(phase_blocks: list[RosterZone], font_regular,
     content_rows = 0
     blocks_sorted = sorted(phase_blocks, key=lambda b: b.phase)
 
-    # A zone with no members in ANY phase still occupies its canonical
-    # slot on the map — Field Hospitals III/IV with cap=0 both stages
-    # were being rendered as empty pills with no Stage labels at all,
-    # which read as a broken render rather than "closed". For zones
-    # like that, we DO want every phase row labeled with "(empty)" so
-    # officers can see at a glance that the zone is part of the map
-    # and just hasn't been assigned. For zones that DO have members
-    # in some phase, hide the closed-empty phases (less noise on
-    # populated zones — e.g. Nuclear Silo's Stage 1 cap=0 + Stage 2
-    # cap>0 with members keeps the Stage 1 row hidden).
-    zone_has_members = any(b.members for b in phase_blocks)
+    # Stage-visibility rule: find the first phase the zone opens
+    # (cap > 0). Stages BEFORE that are deliberately closed
+    # (Defense Systems / Serum Factories open at Stage 2; Virus Lab
+    # at Stage 3) and must NOT render as Stage headers — officers
+    # don't want ghost stages for buildings that aren't part of the
+    # strategy yet. Stages from first-open onward render either
+    # member names or `(empty)` so deliberate gaps are visible.
+    # If no phase opens (Field Hospitals III/IV with cap=0
+    # everywhere), keep every block so the canonical slot still
+    # draws as a fully-closed zone with Stage headers + `(empty)`,
+    # instead of looking like a broken render.
+    first_open_phase: int | None = None
+    for _b in blocks_sorted:
+        if _b.phase >= 1 and _b.max_players > 0:
+            first_open_phase = _b.phase
+            break
 
     def _budget_ok() -> bool:
         return content_rows < max_rows
@@ -1242,14 +1247,13 @@ def _attempt_flow_at(phase_blocks: list[RosterZone], font_regular,
     for block in blocks_sorted:
         if not block.members and block.phase == 0:
             continue
-        # Closed-empty stage skip applies ONLY when other phases of
-        # the same zone carry members — otherwise the whole zone
-        # would render contentless and look like a broken slot.
+        # Hide phases before the zone opens — same rule as the
+        # mail builder and the summary embed, so all three surfaces
+        # stay consistent.
         if (
-            block.phase >= 1
-            and block.max_players == 0
-            and not block.members
-            and zone_has_members
+            first_open_phase is not None
+            and block.phase >= 1
+            and block.phase < first_open_phase
         ):
             continue
 

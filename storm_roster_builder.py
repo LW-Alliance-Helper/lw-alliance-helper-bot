@@ -1276,8 +1276,22 @@ def _render_zone_line(session: RosterBuilderSession, zone_name: str) -> str:
     if session.is_phase_aware:
         header = f"{icon}**{zone_name}**{min_suffix}"
 
+        phases_seq = list(session.iter_phases())
+        # Find first phase where this zone opens (cap > 0). Stages
+        # BEFORE that are deliberately closed (DS / SF open at Stage
+        # 2, VL at Stage 3) — hide them so officers don't see a noisy
+        # `0/0` stub for stages the building isn't part of yet. Mirrors
+        # the same skip-before-first-open rule the mail builder uses.
+        first_open: int | None = None
+        for p in phases_seq:
+            if int(z.max_for_phase(p)) > 0:
+                first_open = p
+                break
+
         phase_lines: list[str] = []
-        for p in session.iter_phases():
+        for p in phases_seq:
+            if first_open is not None and p < first_open:
+                continue
             members = session.assignments_for_phase(p).get(zone_name, [])
             cap = int(z.max_for_phase(p))
             count = len(members)
@@ -1286,6 +1300,8 @@ def _render_zone_line(session: RosterBuilderSession, zone_name: str) -> str:
             # row under the zone header without relying on Discord's
             # inconsistent leading-space rendering in embed bodies.
             phase_lines.append(f"   └ Stage {p}: {count}/{cap} · {names}")
+        if not phase_lines:
+            return header
         return "\n".join([header] + phase_lines)
 
     sel_count = session.zone_member_count(zone_name)
@@ -3975,7 +3991,20 @@ def _mail_zone_and_sub_lists(
     # the right pairings per block. Overflow flat-list names append
     # after, but only on phase 1's return (sub pool is event-level).
     sub_names: list[str] = []
+    paired_sub_keys: set[str] = set()
     if is_paired:
+        # Collect every key that's been paired across ALL phases —
+        # paired subs stay in `session.subs` too (the pairing layer
+        # doesn't move them out), so we have to suppress them from
+        # the overflow list below or they double-render as both a
+        # `Primary ↔ Sub` line AND a bare name.
+        if session.is_phase_aware:
+            for p in session.iter_phases():
+                paired_sub_keys.update(
+                    session.paired_subs_for_phase(p).values()
+                )
+        else:
+            paired_sub_keys.update(pairings.values())
         for primary_key, sub_key in pairings.items():
             primary_m = session.members.get(primary_key)
             sub_m = session.members.get(sub_key)
@@ -3984,6 +4013,8 @@ def _mail_zone_and_sub_lists(
             sub_names.append(f"{primary_m['name']} ↔ {sub_m['name']}")
     if phase == 1:
         for k in session.subs:
+            if k in paired_sub_keys:
+                continue
             m = session.members.get(k)
             if m is not None:
                 sub_names.append(m["name"])
@@ -4096,20 +4127,30 @@ def _build_zone_grouped_block(session: RosterBuilderSession) -> str:
             except Exception:
                 return 0
 
+        # Find the first phase where the zone opens (cap > 0). Stages
+        # BEFORE that are deliberately closed (e.g., Defense Systems
+        # opens at Stage 2; Virus Lab at Stage 3), so hide them
+        # entirely. Stages from first-open onward render either
+        # member names or `(empty)` so officers can see deliberate
+        # gaps — matches the PNG image so the mail and image read
+        # consistently.
+        first_open: int | None = None
+        for p in phases:
+            if _cap_for(p) > 0:
+                first_open = p
+                break
+
         # Skip the zone entirely if every stage is closed and empty
         # (fully unused — listing it would just clutter the mail).
-        any_cap = any(_cap_for(p) > 0 for p in phases)
-        if not any_cap and not zone_has_members:
+        if first_open is None and not zone_has_members:
             return
 
         inner_lines: list[str] = []
         for phase in phases:
-            cap = _cap_for(phase)
-            members = phase_members.get(phase, [])
-            if cap == 0 and not members and zone_has_members:
-                # Closed stage within a partially-populated zone —
-                # skip (matches the renderer's noise-reduction).
+            if first_open is not None and phase < first_open:
+                # Building not open yet at this stage — hide.
                 continue
+            members = phase_members.get(phase, [])
             if is_phase_aware:
                 inner_lines.append(f"Stage {phase}")
             if members:
@@ -4117,7 +4158,7 @@ def _build_zone_grouped_block(session: RosterBuilderSession) -> str:
             elif is_phase_aware:
                 # Only phase-aware presets surface `(empty)`
                 # markers — flat presets with no assignees just
-                # render nothing (zone skipped via the any_cap
+                # render nothing (zone skipped via the first_open
                 # check above when truly unused).
                 inner_lines.append(f"{indent}(empty)")
 

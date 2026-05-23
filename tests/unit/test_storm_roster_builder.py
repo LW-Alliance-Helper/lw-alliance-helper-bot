@@ -3042,6 +3042,68 @@ class TestPairedSubMailRendering:
         # Pairing line first, overflow name after.
         assert subs == ["Alice ↔ Bob", "Carol"]
 
+    def test_paired_mode_sub_not_duplicated_when_still_in_subs_pool(self):
+        """Manual pair-assign leaves the sub in `session.subs` (the
+        pairing layer doesn't move it out). The mail must NOT
+        double-render: `Alice ↔ Bob` AND a bare `Bob` line both
+        showed up in the subs block before the dedup, which read as
+        a roster bug to the tester."""
+        members = {
+            "1001": {"key": "1001", "name": "Alice", "discord_id": "1001",
+                     "power": 412_000_000, "not_on_discord": False},
+            "1002": {"key": "1002", "name": "Bob",   "discord_id": "1002",
+                     "power": 280_000_000, "not_on_discord": False},
+        }
+        session = _make_session(team="A", members=members, sub_mode="paired")
+        session.assignments["Power Tower"].append("1001")
+        session.paired_subs["1001"] = "1002"
+        # Realistic state after manual pair-assign: Bob is still in
+        # the global sub pool because the pairing UI doesn't move
+        # him out of session.subs.
+        session.subs.append("1002")
+        zones, subs = srb._mail_zone_and_sub_lists(session)
+        assert zones == {"Power Tower": ["Alice"]}
+        # Bob appears exactly once — as the right half of the pair,
+        # NOT also as a bare overflow name.
+        assert subs == ["Alice ↔ Bob"]
+
+    def test_paired_mode_dedup_spans_all_phases_for_phase_aware(self):
+        """A sub paired in Stage 2 (but not Stage 1) must still be
+        deduped against the overflow pool. Otherwise a CS 3-stage
+        roster could double-render the sub if they're only paired in
+        a later stage."""
+        members = {
+            "1": {"key": "1", "name": "Alice", "discord_id": "1",
+                  "power": 412_000_000, "not_on_discord": False},
+            "2": {"key": "2", "name": "Bob", "discord_id": "2",
+                  "power": 280_000_000, "not_on_discord": False},
+        }
+        zones = [
+            ss.ZoneRow(
+                zone="Data Center 1", max_players=0,
+                max_phase1=1, max_phase2=1, max_phase3=1,
+                min_power_a=0, min_power_b=0,
+            ),
+        ]
+        preset = ss.PresetBuffer(
+            name="Multi-phase", event_type="CS", zones=zones,
+            uses_phases=True, phase_count=3,
+        )
+        session = srb.RosterBuilderSession(
+            guild_id=1, user_id=42, event_type="CS",
+            team="A", preset=preset, members=members,
+            per_member_rules=[], power_band_rules=[],
+            sub_mode="paired",
+        )
+        session.assignments_p2["Data Center 1"].append("1")
+        session.paired_subs_p2["1"] = "2"
+        session.subs.append("2")
+        # Phase 1: no pairings, overflow includes Bob (would normally
+        # show him bare) — but Bob is paired in Phase 2, so dedup
+        # against ALL phases must suppress the bare name.
+        _zones1, subs1 = srb._mail_zone_and_sub_lists(session, phase=1)
+        assert subs1 == []
+
 
 class TestRostersTabHeaderMigration:
     """Audit Major M3: existing alliances' rosters_tab kept the 9-column
@@ -3703,6 +3765,62 @@ class TestMailBodyPhaseAware:
         assert "Info Center" in body
         assert "Alice" in body
 
+    def test_phase_aware_mail_hides_stages_before_zone_opens(self):
+        """A zone that opens at Stage 2 (DS Defense Systems / SF) or
+        Stage 3 (CS Virus Lab) must NOT render Stage 1 lines in the
+        mail. The image hides closed-pre-open phases; the mail must
+        match so officers don't see ghost stages for buildings that
+        aren't part of the strategy yet."""
+        s = _make_phase_aware_session()
+        # Arsenal opens at Stage 2 only (P1=0, P2=4 in the fixture).
+        s.assignments_p2["Arsenal"].append("2")
+        body = srb._build_mail_body(s)
+        arsenal_idx = body.index("Arsenal")
+        # Walk to the end of Arsenal's block (next zone heading or EOF).
+        arsenal_block = body[arsenal_idx:].split("\n\n", 1)[0]
+        # No Stage 1 entry for Arsenal — building isn't open yet.
+        assert "Stage 1" not in arsenal_block
+        # Stage 2 IS shown with Bob assigned.
+        assert "Stage 2" in arsenal_block
+        assert "Bob" in arsenal_block
+
+    def test_phase_aware_mail_renders_empty_after_zone_opens(self):
+        """A stage that's open (cap>0) but has no assignees renders
+        `(empty)` — even when that stage sits at the back of the
+        sequence (Sample Warehouses Stage 2/3 in the tester's CS
+        config). Tests the post-first-open behavior: every cap>0
+        stage from first-open onward must appear."""
+        zones = [
+            ss.ZoneRow(
+                zone="Sample Warehouse 1", max_players=0,
+                max_phase1=2, max_phase2=2, max_phase3=2,
+                min_power_a=0, min_power_b=0,
+            ),
+        ]
+        preset = ss.PresetBuffer(
+            name="SW Test", event_type="CS", zones=zones,
+            uses_phases=True, phase_count=3,
+        )
+        members = {
+            "1": {"key": "1", "name": "Alice", "discord_id": "1",
+                  "power": 500_000_000, "not_on_discord": False},
+        }
+        s = srb.RosterBuilderSession(
+            guild_id=1, user_id=42, event_type="CS",
+            team="A", preset=preset, members=members,
+            per_member_rules=[], power_band_rules=[],
+            sub_mode="pool",
+        )
+        # Only Stage 1 gets a member; Stages 2 + 3 have capacity but
+        # nobody assigned — must show as `(empty)`.
+        s.assignments["Sample Warehouse 1"].append("1")
+        body = srb._build_mail_body(s)
+        assert "Stage 1" in body
+        assert "Alice" in body
+        assert "Stage 2" in body
+        assert "Stage 3" in body
+        assert body.count("(empty)") == 2
+
 
 class TestPhaseAwareEligibility:
     """The picker excludes already-assigned members in the *current*
@@ -4050,6 +4168,20 @@ class TestPhaseAwareEmbedRendering:
         # Old inline P1/P2 syntax must be gone.
         assert "(P1:" not in line
         assert "(P2:" not in line
+
+    def test_phase_aware_zone_line_hides_stages_before_zone_opens(self):
+        """A zone that opens at Stage 2 (e.g., Defense Systems / Serum
+        Factories) must NOT render a Stage 1 row in the summary embed.
+        Officers should see only the stages where the building is
+        actually part of the strategy — mirrors the mail builder and
+        the PNG renderer so all three surfaces read consistently."""
+        s = _make_phase_aware_session()
+        # Arsenal opens at Stage 2 only (P1=0, P2=4 in the fixture).
+        line = srb._render_zone_line(s, "Arsenal")
+        assert "Stage 1:" not in line
+        assert "Stage 2:" in line
+        # Header row is still present.
+        assert "**Arsenal**" in line
 
     def test_flat_zone_line_keeps_single_row_shape(self):
         s = _make_session(team="A", members={

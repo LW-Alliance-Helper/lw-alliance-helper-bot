@@ -3283,7 +3283,7 @@ mail system). Default DS template from
 
 `{alliance_name}` is hardcoded to the literal string `Alliance` by
 `build_ds_mail`. Alliances who want their actual guild name
-customise the template via `/desertstorm_draft`. `{zones}` renders
+customise the template via `/setup_desertstorm` Step 5. `{zones}` renders
 in canonical `DS_ZONE_STRUCTURE` order with each zone as a bold
 header followed by one member per line. Empty zones are skipped.
 

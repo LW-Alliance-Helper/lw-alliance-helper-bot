@@ -4746,7 +4746,7 @@ async def run_storm_setup(interaction: discord.Interaction, bot, event_type: str
         return
     log_channel_id = log_ch_view.selected_channel.id
 
-    # ── Step 4: Post channel (where /[event]_draft posts the final mail) ─────
+    # ── Step 4: Post channel (where 📄 Generate mail posts the final mail) ───
     post_ch_view = ChannelSelectStep(
         f"Select the {label} mail post channel...",
         suggested_name=f"{'desert' if event_type == 'DS' else 'canyon'}-storm",
@@ -4759,11 +4759,12 @@ async def run_storm_setup(interaction: discord.Interaction, bot, event_type: str
             f"⚠️ Your previously configured {label} mail post channel no longer exists. "
             "Pick a new one below."
         )
+    parent_cmd = "desertstorm" if event_type == "DS" else "canyonstorm"
     await channel.send(
         f"**Step 4 of 7: Mail Post Channel**\n"
-        f"When leadership clicks **Post & Copy** at the end of `/"
-        f"{'desertstorm' if event_type == 'DS' else 'canyonstorm'}_draft`, "
-        f"the finished mail will be posted to this channel:",
+        f"When leadership clicks **Post & Copy** at the end of "
+        f"`/{parent_cmd}` → **📄 Generate mail**, the finished mail "
+        f"will be posted to this channel:",
         view=post_ch_view,
     )
     await wait_view_or_cancel(post_ch_view, cancel_event)
@@ -4914,19 +4915,22 @@ async def run_storm_setup(interaction: discord.Interaction, bot, event_type: str
         return  # cancelled / timed out
 
     # ── Step 7: Reminder DM body (💎 Premium) ─────────────────────────────────
-    # The body of the DM that fires when leadership runs
-    # /[event]_remind. Stored per (guild_id, event_type) so DS and CS
-    # can have different copy. Free guilds can configure this now too —
-    # it just won't fire until they upgrade.
+    # The body of the DM that fires when leadership clicks
+    # 🔔 Send DM reminder to roster on the storm hub. Stored per
+    # (guild_id, event_type) so DS and CS can have different copy. Free
+    # guilds can configure this now too — it just won't fire until they
+    # upgrade.
     from storm_log import DEFAULT_STORM_REMINDER_DM
     default_remind_dm = DEFAULT_STORM_REMINDER_DM.format(label=label)
     saved_remind_dm   = (current.get("dm_reminder_message") or "").strip()
+    parent_cmd = "desertstorm" if event_type == "DS" else "canyonstorm"
     remind_dm = await ask_keep_or_change(
         channel,
         f"**Step 7 of 7: {label} Reminder DM (💎 Premium)**\n"
-        f"When leadership runs `/{cmd_name.replace('setup_', '')}_remind`, the bot DMs every "
-        f"roster member this message. Free guilds can configure it now; it just won't "
-        f"fire until you have Premium + Member Roster Sync.\n\n"
+        f"When leadership clicks **🔔 Send DM reminder to roster** on "
+        f"`/{parent_cmd}`, the bot DMs every roster member this message. "
+        f"Free guilds can configure it now; it just won't fire until "
+        f"you have Premium + Member Roster Sync.\n\n"
         f"Use `{{name}}` as a placeholder for the member's roster name (optional).",
         default=default_remind_dm,
         current=saved_remind_dm,

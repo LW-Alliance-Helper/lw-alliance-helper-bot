@@ -317,8 +317,8 @@ Same shape as Step 3 (`ChannelSelectStep`). Suggested-name default is
 ┌──────────────────────────────────────────────────────────────────────┐
 │ Step 4 of 7: Mail Post Channel                                       │
 │ When leadership clicks Post & Copy at the end of                     │
-│ /desertstorm_draft, the finished mail will be posted to this         │
-│ channel:                                                             │
+│ /desertstorm → 📄 Generate mail, the finished mail will be posted    │
+│ to this channel:                                                     │
 └──────────────────────────────────────────────────────────────────────┘
 [✅ Keep current: #desert-storm]
 [ChannelSelect: Select the Desert Storm mail post channel...]
@@ -326,7 +326,7 @@ Same shape as Step 3 (`ChannelSelectStep`). Suggested-name default is
 ```
 
 *(CS: copy reads "When leadership clicks Post & Copy at the end of
-`/canyonstorm_draft`…")*
+`/canyonstorm` → **📄 Generate mail**…")*
 
 ---
 
@@ -447,9 +447,9 @@ Six sub-steps gated behind a Yes/No enable.
 ```
 ┌──────────────────────────────────────────────────────────────────────┐
 │ Step 6 of 7: Participation Tracking                                  │
-│ Do you want to track Desert Storm participation? Leadership runs     │
-│ /desertstorm_participation after each event to log who showed up,    │
-│ who sat out, etc.                                                    │
+│ Do you want to track Desert Storm participation? Leadership clicks   │
+│ 📊 Fill out participation questions on /desertstorm after each       │
+│ event to log who showed up, who sat out, etc.                        │
 │ You'll define the questions yourself, so the tracker matches how     │
 │ your alliance runs the event.                                        │
 └──────────────────────────────────────────────────────────────────────┘
@@ -605,7 +605,7 @@ event.
 ┌──────────────────────────────────────────────────────────────────────┐
 │ Step 6.6: Participation Questions                                    │
 │ Each question becomes a column on your sheet and a step in the       │
-│ /desertstorm_participation flow.                                     │
+│ 📊 Fill out participation questions flow on /desertstorm.            │
 │ Examples: Vote count, Sitting out, Did anyone show up late?          │
 │ Free tier limit: 3 questions.                                        │
 │                                                                      │
@@ -627,7 +627,7 @@ Premium replaces the cap line with:
 ┌──────────────────────────────────────────────────────────────────────┐
 │ Step 6.6: Participation Questions                                    │
 │ Each question becomes a column on your sheet and a step in the       │
-│ /desertstorm_participation flow.                                     │
+│ 📊 Fill out participation questions flow on /desertstorm.            │
 │ Examples: Vote count, Sitting out, Did anyone show up late?          │
 │ Free tier limit: 3 questions.                                        │
 │                                                                      │
@@ -1033,9 +1033,10 @@ Same shape as Section 10.
 ```
 ┌──────────────────────────────────────────────────────────────────────┐
 │ Step 7 of 7: Desert Storm Reminder DM (💎 Premium)                   │
-│ When leadership runs /desertstorm_remind, the bot DMs every roster   │
-│ member this message. Free guilds can configure it now; it just       │
-│ won't fire until you have Premium + Member Roster Sync.              │
+│ When leadership clicks 🔔 Send DM reminder to roster on              │
+│ /desertstorm, the bot DMs every roster member this message. Free     │
+│ guilds can configure it now; it just won't fire until you have       │
+│ Premium + Member Roster Sync.                                        │
 │                                                                      │
 │ Use {name} as a placeholder for the member's roster name (optional). │
 └──────────────────────────────────────────────────────────────────────┘

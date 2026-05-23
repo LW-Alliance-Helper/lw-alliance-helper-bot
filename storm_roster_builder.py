@@ -4022,44 +4022,49 @@ def _build_mail_for_phase(
     )
 
 
-def _build_combined_phase_zones_block(session: RosterBuilderSession) -> str:
-    """For phase-aware presets: build a single zones block grouped
-    BY ZONE with each zone's stages stacked inside (matches the
-    image-render organization so readers see the same shape in the
-    text mail as on the PNG).
+def _build_zone_grouped_block(session: RosterBuilderSession) -> str:
+    """Zones block grouped BY ZONE with each zone's content stacked
+    inside. Matches the PNG render's organization so the mail and
+    image read consistently. Handles BOTH flat and phase-aware
+    presets (DS + CS):
 
-    Format per zone:
-        **Zone Name**:
-        Stage 1
-            Alice
-            Bob
-        Stage 2
-            (empty)
-        Stage 3
-            Carol
+      Flat preset (one stage):
+          **Zone Name**:
+              Alice
+              Bob
 
-    Empty stages (zone has capacity in that stage but no assignees)
-    render as `(empty)` so officers reading the mail can see the
-    same intentional gaps the image shows — key to strategies that
-    deliberately leave a stage open. Closed stages (cap=0) are
-    hidden EXCEPT when the entire zone is unused, in which case
-    they show as `(empty)` so a fully-closed-but-listed zone reads
-    as a deliberate slot, not a render glitch (matches the PNG
-    renderer's `_attempt_flow_at` behaviour for the same case).
+      Phase-aware preset (multi-stage):
+          **Zone Name**:
+          Stage 1
+              Alice
+              Bob
+          Stage 2
+              (empty)
+          Stage 3
+              Carol
+
+    Empty stages (cap > 0 in that stage but no assignees) render as
+    `(empty)` so officers reading the mail can see deliberate gaps
+    — key to strategies that intentionally leave a stage open.
+    Closed stages (cap=0) are hidden EXCEPT when the entire zone is
+    unused, in which case the zone is omitted from the mail entirely
+    (otherwise every closed canonical preset zone would clutter the
+    mail with "(empty)" everywhere).
 
     Replaces the prior per-phase template repetition that ballooned
     3-stage CS mails — the template's greeting + subs + time were
-    rendered once PER PHASE (3 copies in a 3-stage event), pushing
-    the mail past Discord's 2000-char limit on rosters that fit
-    comfortably otherwise.
+    rendered once PER PHASE, pushing the mail past Discord's
+    2000-char limit on rosters that fit comfortably otherwise.
     """
     from storm_icons import zone_emoji_prefix
+
+    is_phase_aware = session.is_phase_aware
+    phases = list(session.iter_phases()) if is_phase_aware else [1]
 
     # Build a {zone: {phase: [members]}} pivot from the assignment
     # data, so each zone's stage stack renders in one zone-major
     # block matching the PNG render.
     by_zone: dict[str, dict[int, list[str]]] = {}
-    phases = list(session.iter_phases())
     for phase in phases:
         zones_for_phase, _subs = _mail_zone_and_sub_lists(
             session, phase=phase,
@@ -4069,37 +4074,35 @@ def _build_combined_phase_zones_block(session: RosterBuilderSession) -> str:
                 continue
             by_zone.setdefault(zone, {})[phase] = list(members)
 
-    # Indent for the assignee names under each stage header. 4 spaces
-    # reads clearly in monospaced Discord copies and survives the
-    # template's {zones} substitution.
+    # Indent for assignee names under each stage header (or under
+    # the zone header for flat presets). 4 spaces reads clearly in
+    # monospaced Discord copies and survives the template's {zones}
+    # substitution.
     indent = "    "
 
     blocks: list[str] = []
     rendered: set[str] = set()
 
     def _emit_zone(zone_label: str) -> None:
-        """Build the per-zone block for `zone_label`. Determines
-        which stages to show based on per-phase cap + member counts,
-        emitting `(empty)` for cap>0 stages with no assignees."""
+        """Build the per-zone block. Phase-aware presets emit
+        Stage N sub-headers within the zone block; flat presets
+        emit members directly under the zone."""
         phase_members = by_zone.get(zone_label, {})
         zone_has_members = bool(phase_members)
 
-        # Per-stage cap lookup, defaults to 0 (closed) for flat
-        # presets where the concept doesn't apply.
         def _cap_for(p: int) -> int:
             try:
                 return int(session.zone_capacity(zone_label, phase=p))
             except Exception:
                 return 0
 
-        # Decide whether the zone should appear at all. Skip when
-        # every stage is closed (cap=0) AND empty — the zone is
-        # fully unused and would just clutter the mail.
+        # Skip the zone entirely if every stage is closed and empty
+        # (fully unused — listing it would just clutter the mail).
         any_cap = any(_cap_for(p) > 0 for p in phases)
         if not any_cap and not zone_has_members:
             return
 
-        per_phase_lines: list[str] = []
+        inner_lines: list[str] = []
         for phase in phases:
             cap = _cap_for(phase)
             members = phase_members.get(phase, [])
@@ -4107,18 +4110,23 @@ def _build_combined_phase_zones_block(session: RosterBuilderSession) -> str:
                 # Closed stage within a partially-populated zone —
                 # skip (matches the renderer's noise-reduction).
                 continue
-            per_phase_lines.append(f"Stage {phase}")
+            if is_phase_aware:
+                inner_lines.append(f"Stage {phase}")
             if members:
-                per_phase_lines.extend(f"{indent}{m}" for m in members)
-            else:
-                per_phase_lines.append(f"{indent}(empty)")
+                inner_lines.extend(f"{indent}{m}" for m in members)
+            elif is_phase_aware:
+                # Only phase-aware presets surface `(empty)`
+                # markers — flat presets with no assignees just
+                # render nothing (zone skipped via the any_cap
+                # check above when truly unused).
+                inner_lines.append(f"{indent}(empty)")
 
-        if not per_phase_lines:
+        if not inner_lines:
             return
         zone_block = [
             f"{zone_emoji_prefix(zone_label)}**{zone_label}**:",
         ]
-        zone_block.extend(per_phase_lines)
+        zone_block.extend(inner_lines)
         blocks.append("\n".join(zone_block))
 
     # Walk the preset's own zone order — that's how the alliance
@@ -4138,12 +4146,19 @@ def _build_combined_phase_zones_block(session: RosterBuilderSession) -> str:
     return "\n\n".join(blocks)
 
 
-def _build_phase_aware_mail(session: RosterBuilderSession) -> str:
-    """Phase-aware mail builder. Renders the alliance's template ONCE
-    with `{zones}` substituted by the combined-phases block so the
-    greeting / subs / time copy only appears once instead of per
-    stage. Eliminates the 3× duplication that broke 3-stage CS
-    rosters past Discord's 2000-char message limit.
+# Back-compat alias for tests / callers that may reference the old
+# phase-aware-only name. The implementation now handles flat too.
+_build_combined_phase_zones_block = _build_zone_grouped_block
+
+
+def _build_unified_mail(session: RosterBuilderSession) -> str:
+    """Unified mail builder for the Approve & Post flow. Renders the
+    alliance's template ONCE with `{zones}` substituted by the
+    zone-grouped block (matches the PNG layout), `{subs}` by the
+    deduped sub list, and `{time}` by the configured slot. Works
+    for BOTH flat and phase-aware presets across DS and CS — the
+    structure stays consistent across the four cases so officers
+    see the same shape on every roster.
     """
     from config import (
         get_storm_template, format_storm_slot, get_storm_slot_for_key,
@@ -4163,7 +4178,11 @@ def _build_phase_aware_mail(session: RosterBuilderSession) -> str:
     #   phase N (N>1) → only phase-N pairings
     sub_names_combined: list[str] = []
     seen_subs: set[str] = set()
-    for phase in session.iter_phases():
+    phases_for_subs = (
+        list(session.iter_phases())
+        if session.is_phase_aware else [1]
+    )
+    for phase in phases_for_subs:
         _zones_p, sub_names_p = _mail_zone_and_sub_lists(
             session, phase=phase,
         )
@@ -4187,7 +4206,7 @@ def _build_phase_aware_mail(session: RosterBuilderSession) -> str:
     else:
         time_str = "1"
 
-    zones_block = _build_combined_phase_zones_block(session)
+    zones_block = _build_zone_grouped_block(session)
 
     if template:
         return template.format(
@@ -4212,21 +4231,23 @@ def _build_phase_aware_mail(session: RosterBuilderSession) -> str:
     ])
 
 
-def _build_mail_body(session: RosterBuilderSession) -> str:
-    """Top-level mail builder. Flat presets render the template
-    once. Phase-aware presets (#152) also render the template ONCE
-    but pass a combined `{zones}` block with `**Stage N**` headers
-    between phases — the prior per-phase-template path duplicated
-    the greeting / subs / time block N times and ballooned 3-stage
-    rosters past Discord's 2000-char message limit (tester report
-    2026-05-23).
+# Back-compat alias — older callers / tests reference this name.
+_build_phase_aware_mail = _build_unified_mail
 
-    Walks `session.iter_phases()` so a 2-phase preset emits Phase 1
-    + 2 and a 3-phase preset emits Phase 1 + 2 + 3.
+
+def _build_mail_body(session: RosterBuilderSession) -> str:
+    """Top-level mail builder for the Approve & Post flow. Routes
+    both flat and phase-aware presets through the same zone-grouped
+    builder so the mail structure matches across DS + CS, flat +
+    phase-aware. The PNG render organisation (zone-major, optional
+    stage labels, indented assignees) is mirrored in the mail.
+
+    The classic `/desertstorm draft` and `/canyonstorm draft` flows
+    still use the original `storm.build_ds_mail` / `build_cs_mail`
+    builders and are unaffected — this only changes the structured
+    roster builder's mail.
     """
-    if not session.is_phase_aware:
-        return _build_mail_for_phase(session, phase=1)
-    return _build_phase_aware_mail(session)
+    return _build_unified_mail(session)
 
 
 async def _send_mail_preview(

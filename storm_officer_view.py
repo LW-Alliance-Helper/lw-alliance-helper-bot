@@ -1698,6 +1698,21 @@ async def _open_team_plan(
         )
         return
 
+    # Defer immediately so any downstream blip (SQLite contention, slow
+    # bucket walk, picker-view construction) never blows the 3-second
+    # initial-response token. A tester reported `Interaction Failed` on
+    # 📋 Team B plan with nothing in the logs — that's the textbook
+    # signature of a timed-out interaction token. The actual error (if
+    # any) surfaces through the followup-error path below.
+    try:
+        await inter.response.defer(ephemeral=True)
+    except discord.HTTPException as e:
+        logger.warning(
+            "[STORM TEAM PLAN] defer failed for guild=%s event=%s team=%s: %s",
+            officer_view.guild_id, officer_view.event_type, team, e,
+        )
+        return
+
     import config
 
     # Candidate pool: voted-yes for this team. "either" voters appear
@@ -1709,7 +1724,7 @@ async def _open_team_plan(
     elif team == "B":
         eligible_buckets = ("b", "either")
     else:
-        await inter.response.send_message(
+        await inter.followup.send(
             f"⚠️ Unknown team `{team}`.", ephemeral=True,
         )
         return
@@ -1776,7 +1791,7 @@ async def _open_team_plan(
         candidates.sort(key=lambda c: c["name"].lower())
 
     if not candidates:
-        await inter.response.send_message(
+        await inter.followup.send(
             f"⚠️ No eligible players for Team {team} yet. Members need to "
             f"vote {'A' if team == 'A' else 'B'} or Either before they "
             f"can appear in the picker.",
@@ -1807,11 +1822,14 @@ async def _open_team_plan(
             prior_picks, prior_subs, prior_saved_at,
         )
         if first_response:
+            # Always use followup.send — we deferred up front so the
+            # initial response slot is already consumed. Followup
+            # messages return a Message object directly, no separate
+            # `original_response()` fetch needed.
             try:
-                await inter.response.send_message(
+                step1.message = await inter.followup.send(
                     "\n".join(intro_lines), view=step1, ephemeral=True,
                 )
-                step1.message = await inter.original_response()
             except discord.HTTPException:
                 step1.message = None
             first_response = False
@@ -2208,7 +2226,23 @@ class OfficerView(discord.ui.View):
             )
 
             async def _plan_a(inter: discord.Interaction):
-                await _open_team_plan(inter, self, team="A")
+                try:
+                    await _open_team_plan(inter, self, team="A")
+                except Exception as e:
+                    logger.exception(
+                        "[STORM TEAM PLAN] open failed for guild=%s "
+                        "event=%s team=A: %s",
+                        self.guild_id, self.event_type, e,
+                    )
+                    try:
+                        await inter.followup.send(
+                            "⚠️ Couldn't open the Team A plan picker. "
+                            "Bot logs have details. Try clicking 🔄 "
+                            "Refresh and try again.",
+                            ephemeral=True,
+                        )
+                    except discord.HTTPException:
+                        pass
 
             a_plan_btn.callback = _plan_a
             self.add_item(a_plan_btn)
@@ -2223,7 +2257,23 @@ class OfficerView(discord.ui.View):
             )
 
             async def _plan_b(inter: discord.Interaction):
-                await _open_team_plan(inter, self, team="B")
+                try:
+                    await _open_team_plan(inter, self, team="B")
+                except Exception as e:
+                    logger.exception(
+                        "[STORM TEAM PLAN] open failed for guild=%s "
+                        "event=%s team=B: %s",
+                        self.guild_id, self.event_type, e,
+                    )
+                    try:
+                        await inter.followup.send(
+                            "⚠️ Couldn't open the Team B plan picker. "
+                            "Bot logs have details. Try clicking 🔄 "
+                            "Refresh and try again.",
+                            ephemeral=True,
+                        )
+                    except discord.HTTPException:
+                        pass
 
             b_plan_btn.callback = _plan_b
             self.add_item(b_plan_btn)

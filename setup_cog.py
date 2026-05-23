@@ -4571,6 +4571,22 @@ async def run_storm_setup(interaction: discord.Interaction, bot, event_type: str
     saved_log_ch = saved_log_ch or 0
     saved_post_ch = current.get("post_channel_id") or 0
 
+    # Per-team saved mail templates — drives Step 5 Keep-current (#231).
+    # save_storm_config persists DS_A / DS_B (and CS_A / CS_B) rows per
+    # team; the base DS / CS row mirrors whichever side has content. Read
+    # the per-team rows directly so the wizard can distinguish "saved
+    # custom" from "saved default" from "no row".
+    saved_template_a = ""
+    saved_template_b = ""
+    if has_storm_config(guild_id, f"{event_type}_A"):
+        saved_template_a = (
+            get_storm_config(guild_id, f"{event_type}_A").get("mail_template") or ""
+        ).strip()
+    if has_storm_config(guild_id, f"{event_type}_B"):
+        saved_template_b = (
+            get_storm_config(guild_id, f"{event_type}_B").get("mail_template") or ""
+        ).strip()
+
     # Default template and placeholders per event type
     if event_type == "DS":
         default_template  = DEFAULT_DS_TEMPLATE
@@ -4777,70 +4793,140 @@ async def run_storm_setup(interaction: discord.Interaction, bot, event_type: str
 
     # ── Step 5: Mail template(s) ───────────────────────────────────────────────
 
-    async def get_template(team_label: str) -> str | None:
-        """Get template for one team — show default with use/edit choice."""
+    async def get_template(team_label: str, saved_template: str = "") -> str | None:
+        """Get template for one team — show default with use/edit choice.
+
+        When `saved_template` is a non-empty body that differs from the
+        hardcoded default, render a 3-button view (Keep current / Use
+        default / Edit) so re-entering officers can preserve their
+        custom body. Pre-#231 the only options were Use default (which
+        silently overwrote the saved custom) and Edit (which forced a
+        re-paste from scratch).
+        """
+        saved_is_custom = bool(saved_template) and saved_template != default_template
+
         class TemplateChoiceView(discord.ui.View):
             def __init__(self):
                 super().__init__(timeout=300)
-                self.use_default = None
+                self.outcome: str | None = None  # "keep" | "default" | "edit"
 
-            @discord.ui.button(label="✅ Use default template", style=discord.ButtonStyle.success)
-            async def use_def(self, inter: discord.Interaction, button: discord.ui.Button):
-                self.use_default = True
+            # Re-entry only — only added when saved_is_custom.
+            @discord.ui.button(label="✅ Keep current custom template", style=discord.ButtonStyle.success)
+            async def keep(self, inter: discord.Interaction, button: discord.ui.Button):
+                self.outcome = "keep"
                 for item in self.children: item.disabled = True
                 await wizard_registry.safe_edit_response(
                     inter,
-                    content=f"✅ Using default template for {team_label}.", view=self
+                    content=f"✅ Keeping your saved custom template for {team_label}.", view=self
                 )
+                self.stop()
+
+            @discord.ui.button(label="↩️ Use default template", style=discord.ButtonStyle.secondary)
+            async def use_def(self, inter: discord.Interaction, button: discord.ui.Button):
+                self.outcome = "default"
+                for item in self.children: item.disabled = True
+                msg = (
+                    f"✅ Reverted to default template for {team_label}."
+                    if saved_is_custom else
+                    f"✅ Using default template for {team_label}."
+                )
+                await wizard_registry.safe_edit_response(inter, content=msg, view=self)
                 self.stop()
 
             @discord.ui.button(label="✏️ Edit template", style=discord.ButtonStyle.secondary)
             async def edit(self, inter: discord.Interaction, button: discord.ui.Button):
-                self.use_default = False
+                self.outcome = "edit"
                 for item in self.children: item.disabled = True
                 await wizard_registry.safe_edit_response(inter, view=self)
                 self.stop()
 
         choice_view = TemplateChoiceView()
+        if not saved_is_custom:
+            # First-time / saved-equals-default — drop the Keep current
+            # button and let the default-color Use default button act as
+            # the success default like the pre-#231 view.
+            choice_view.remove_item(choice_view.keep)
+            choice_view.use_def.style = discord.ButtonStyle.success
+
+        custom_block = (
+            f"\n\nHere is your saved custom template:\n```\n{saved_template}\n```"
+            if saved_is_custom else ""
+        )
+        question = (
+            "Would you like to keep your custom template, revert to the default, or edit it?"
+            if saved_is_custom else
+            "Would you like to use this or edit it?"
+        )
         await channel.send(
             f"**{label} Mail Template: {team_label}**\n"
             f"When you draft the mail each week, you will be able to select the time slot "
             f"when you are running that team's {label}.\n\n"
             f"Here is the default template:\n"
-            f"```\n{default_template}\n```\n"
-            f"Would you like to use this or edit it?",
+            f"```\n{default_template}\n```"
+            f"{custom_block}\n\n"
+            f"{question}",
             view=choice_view,
         )
         await wait_view_or_cancel(choice_view, cancel_event)
         if choice_view.cancelled:
             return
-        if choice_view.use_default is None:
+        if choice_view.outcome is None:
             await channel.send(f"⏰ Timed out. Run `/{cmd_name}` to start again.")
             return None
-        if choice_view.use_default:
+        if choice_view.outcome == "keep":
+            return saved_template
+        if choice_view.outcome == "default":
             return default_template
 
-        # User wants to edit — show variables and ask for input
+        # User wants to edit — show variables and ask for input. When a
+        # custom body is saved, point them at it as the natural starting
+        # point so they can copy-modify instead of typing from scratch.
+        reference_label = "current custom" if saved_is_custom else "default"
         await channel.send(
             f"Paste your custom template for **{team_label}**. "
-            f"You can copy the default above and modify it, or write your own.\n\n"
+            f"You can copy the {reference_label} above and modify it, or write your own.\n\n"
             f"**Available placeholders:**\n{placeholder_info}\n\n"
             f"*This form will time out in 5 minutes. "
             f"You can run `/{cmd_name}` again if it times out.*"
         )
         try:
             reply = await bot.wait_for("message", check=check, timeout=300)
-            return reply.content.strip() or default_template
+            fallback = saved_template if saved_is_custom else default_template
+            return reply.content.strip() or fallback
         except asyncio.TimeoutError:
             await channel.send(f"⏰ Timed out. Run `/{cmd_name}` to start again.")
             return None
 
     if teams == "both":
-        # Ask if one template for both or separate
+        # Derive saved shared-vs-separate from per-team rows so re-entry
+        # offers Keep current instead of forcing officers to re-pick
+        # (#231). Only resolvable when BOTH team rows have non-empty
+        # bodies — switching from A-only / B-only to both is first-time
+        # for the shared/separate decision.
+        if saved_template_a and saved_template_b:
+            saved_share_mode = (
+                "shared" if saved_template_a == saved_template_b else "separate"
+            )
+        else:
+            saved_share_mode = None
+
         class SharedTemplateView(discord.ui.View):
             def __init__(self):
                 super().__init__(timeout=120)
                 self.selected = None
+
+            # Re-entry only — removed when saved_share_mode is None.
+            @discord.ui.button(label="Keep current", style=discord.ButtonStyle.success)
+            async def keep_current(self, inter: discord.Interaction, button: discord.ui.Button):
+                self.selected = saved_share_mode
+                for item in self.children: item.disabled = True
+                ack = (
+                    "✅ Kept current: **One shared template** for Team A & B"
+                    if saved_share_mode == "shared" else
+                    "✅ Kept current: **Separate templates** for Team A & Team B"
+                )
+                await wizard_registry.safe_edit_response(inter, content=ack, view=self)
+                self.stop()
 
             @discord.ui.button(label="One template for both teams", style=discord.ButtonStyle.primary)
             async def shared(self, inter: discord.Interaction, button: discord.ui.Button):
@@ -4863,11 +4949,25 @@ async def run_storm_setup(interaction: discord.Interaction, bot, event_type: str
                 self.stop()
 
         shared_view = SharedTemplateView()
-        await channel.send(
-            "**Step 5 of 7: Mail Template**\n"
+        if saved_share_mode is None:
+            shared_view.remove_item(shared_view.keep_current)
+        else:
+            shared_view.keep_current.label = (
+                "✅ Keep current: One shared template"
+                if saved_share_mode == "shared" else
+                "✅ Keep current: Separate templates"
+            )
+        prompt_lines = [
+            "**Step 5 of 7: Mail Template**",
             "Do you want one template that applies to both teams, or separate templates per team?",
-            view=shared_view,
-        )
+        ]
+        if saved_share_mode is not None:
+            prompt_lines.append(
+                "Current: **"
+                + ("One shared template" if saved_share_mode == "shared" else "Separate templates")
+                + "**."
+            )
+        await channel.send("\n".join(prompt_lines), view=shared_view)
         await wait_view_or_cancel(shared_view, cancel_event)
         if shared_view.cancelled:
             return
@@ -4875,20 +4975,31 @@ async def run_storm_setup(interaction: discord.Interaction, bot, event_type: str
             await channel.send(f"⏰ Timed out. Run `/{cmd_name}` to start again.")
             return
 
-        template_a = await get_template("Team A & B" if shared_view.selected == "shared" else "Team A")
-        if template_a is None:
-            return
-        if shared_view.selected == "separate":
-            template_b = await get_template("Team B")
+        if shared_view.selected == "shared":
+            # Shared mode — feed the saved A template (equal to B on a
+            # prior shared save) as the Keep-current candidate. When the
+            # prior save was separate, leave it blank so the user gets a
+            # first-time template prompt for the new shared body.
+            shared_saved = saved_template_a if saved_share_mode == "shared" else ""
+            template_a = await get_template("Team A & B", saved_template=shared_saved)
+            if template_a is None:
+                return
+            template_b = template_a
+        else:
+            template_a = await get_template("Team A", saved_template=saved_template_a)
+            if template_a is None:
+                return
+            template_b = await get_template("Team B", saved_template=saved_template_b)
             if template_b is None:
                 return
-        else:
-            template_b = template_a
 
     else:
         team_label = "Team A" if teams == "A" else "Team B"
+        # Single-team mode — only the saved row for the picked team is
+        # relevant; the other side stays empty.
+        saved_for_team = saved_template_a if teams == "A" else saved_template_b
         await channel.send("**Step 5 of 7: Mail Template**")
-        template = await get_template(team_label)
+        template = await get_template(team_label, saved_template=saved_for_team)
         if template is None:
             return
         template_a = template if teams == "A" else ""

@@ -337,7 +337,7 @@ Branches on Step 2's `teams` choice.
 ### 7a. Teams = A only or B only
 
 Skip the shared/separate question entirely; go straight to
-`get_template(team_label)`.
+`get_template(team_label, saved_template=…)`.
 
 ```
 ┌──────────────────────────────────────────────────────────────────────┐
@@ -346,6 +346,8 @@ Skip the shared/separate question entirely; go straight to
 ```
 
 Then for the single team (label is `Team A` or `Team B`):
+
+#### First-time / saved-equals-default variant
 
 ```
 ┌──────────────────────────────────────────────────────────────────────┐
@@ -368,11 +370,57 @@ Then for the single team (label is `Team A` or `Team B`):
 [✅ Use default template]  [✏️ Edit template]
 ```
 
-`✅ Use default template` → confirmation line, advance:
+#### Re-entry with saved custom variant (post-#231)
+
+When a custom template body is already saved for this team (different
+from the hardcoded default), the prompt also surfaces the saved body
+and the view picks up a third button so the officer can keep what
+they already have:
+
+```
+┌──────────────────────────────────────────────────────────────────────┐
+│ Desert Storm Mail Template: Team A                                   │
+│ When you draft the mail each week, you will be able to select the    │
+│ time slot when you are running that team's Desert Storm.             │
+│                                                                      │
+│ Here is the default template:                                        │
+│ ```                                                                  │
+│ Hello {alliance_name}!                                               │
+│ …                                                                    │
+│ ```                                                                  │
+│                                                                      │
+│ Here is your saved custom template:                                  │
+│ ```                                                                  │
+│ Apex DS — Team A                                                     │
+│ {zones}                                                              │
+│ Subs: {subs}                                                         │
+│ ```                                                                  │
+│ Would you like to keep your custom template, revert to the default,  │
+│ or edit it?                                                          │
+└──────────────────────────────────────────────────────────────────────┘
+[✅ Keep current custom template]
+[↩️ Use default template]
+[✏️ Edit template]
+```
+
+`✅ Use default template` (first-time variant) or `↩️ Use default
+template` (re-entry variant) → confirmation line, advance:
 
 ```
 ┌──────────────────────────────────────────────────────────────────────┐
 │ ✅ Using default template for Team A.                               │
+└──────────────────────────────────────────────────────────────────────┘
+```
+
+(Re-entry variant's confirmation reads `✅ Reverted to default
+template for Team A.` instead, making the overwrite intent explicit.)
+
+`✅ Keep current custom template` (re-entry variant only) → keeps the
+saved body verbatim:
+
+```
+┌──────────────────────────────────────────────────────────────────────┐
+│ ✅ Keeping your saved custom template for Team A.                    │
 └──────────────────────────────────────────────────────────────────────┘
 ```
 
@@ -395,9 +443,15 @@ Then for the single team (label is `Team A` or `Team B`):
 (Kevin types the body as a regular channel message)
 ```
 
+On re-entry, the prompt instead reads `You can copy the current custom
+above and modify it, or write your own.` so the saved body is the
+natural starting point.
+
 ### 7b. Teams = both (Team A & B)
 
 `SharedTemplateView` runs first:
+
+#### First-time variant
 
 ```
 ┌──────────────────────────────────────────────────────────────────────┐
@@ -408,9 +462,30 @@ Then for the single team (label is `Team A` or `Team B`):
 [One template for both teams]  [Separate templates per team]
 ```
 
-(Note: this view has **no Keep current button** on re-entry — tracked
-as #231. If Kevin runs the wizard again, he has to re-pick the
-shared/separate choice.)
+#### Re-entry variant (post-#231)
+
+When both team rows already have a saved template body, the wizard
+derives the prior choice (equal bodies → shared, different → separate)
+and surfaces a Keep current button. Switching to the other mode still
+works via the existing two buttons:
+
+```
+┌──────────────────────────────────────────────────────────────────────┐
+│ Step 5 of 7: Mail Template                                           │
+│ Do you want one template that applies to both teams, or separate     │
+│ templates per team?                                                  │
+│ Current: One shared template.                                        │
+└──────────────────────────────────────────────────────────────────────┘
+[✅ Keep current: One shared template]
+[One template for both teams]
+[Separate templates per team]
+```
+
+(or `Keep current: Separate templates` when the prior save was
+per-team.) When the alliance is switching from a single-team config
+to both teams for the first time, only one team row has content, so
+the wizard can't derive a prior shared/separate choice and falls back
+to the first-time variant above.
 
 After `One template for both teams`:
 

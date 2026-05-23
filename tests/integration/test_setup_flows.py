@@ -760,13 +760,13 @@ class TestRunStormSetup:
                     "roster_tab": "", "roster_name_col": 0,
                     "roster_alias_col": -1, "roster_start_row": 2}
 
-        # TeamChoiceView (inline) → selected="A", TemplateChoiceView → use_default=True
+        # TeamChoiceView (inline) → selected="A", TemplateChoiceView → outcome="default"
         with patch("setup_cog.ChannelSelectStep", return_value=log_view), \
              patch("setup_cog._run_storm_participation_step", side_effect=_skip_participation), \
              patch_keep_or_change(["DS Assignments"]):
             make_send_handler(
                 interaction.channel,
-                view_overrides={"selected": "A", "use_default": True},
+                view_overrides={"selected": "A", "outcome": "default"},
             )
             await run_storm_setup(interaction, bot, "DS")
 
@@ -795,7 +795,7 @@ class TestRunStormSetup:
              patch_keep_or_change(["CS Assignments"]):
             make_send_handler(
                 interaction.channel,
-                view_overrides={"selected": "A", "use_default": True},
+                view_overrides={"selected": "A", "outcome": "default"},
             )
             await run_storm_setup(interaction, bot, "CS")
 
@@ -888,7 +888,7 @@ class TestRunStormSetup:
                     # Summary -> Edit; team -> A; template -> use default.
                     "proceed":     True,
                     "selected":    "A",
-                    "use_default": True,
+                    "outcome":     "default",
                     "cancelled":   False,
                 },
             )
@@ -897,6 +897,75 @@ class TestRunStormSetup:
         assert len(ch_call_kwargs) == 2
         assert ch_call_kwargs[0]["current_id"] == 555900
         assert ch_call_kwargs[1]["current_id"] == 555950
+
+    @pytest.mark.asyncio
+    async def test_re_entry_keep_current_preserves_custom_template(self, seeded_db):
+        """#231: a saved custom mail template body survives the re-entry
+        wizard when the officer clicks Keep current on the template
+        choice. Pre-#231 the wizard offered Use default (which silently
+        overwrote the custom body) or Edit (force re-paste); there was
+        no path to keep what was already saved."""
+        import config
+        from setup_cog import run_storm_setup
+        from defaults import DEFAULT_DS_TEMPLATE
+
+        custom_body = "Apex DS — Team A\n\n{zones}\n\nSubs: {subs}"
+        assert custom_body != DEFAULT_DS_TEMPLATE
+
+        config.save_storm_config(
+            TEST_GUILD_ID, "DS",
+            tab_name="DS Assignments", mail_template=custom_body,
+            timezone="America/New_York",
+            log_channel_id=555700, post_channel_id=555800,
+        )
+        config.save_storm_config(
+            TEST_GUILD_ID, "DS_A",
+            tab_name="DS Assignments", mail_template=custom_body,
+            timezone="America/New_York",
+            log_channel_id=555700, post_channel_id=555800,
+        )
+        config.update_config_field(TEST_GUILD_ID, "ds_log_channel_id", 555700)
+
+        interaction = make_mock_interaction()
+        bot         = AsyncMock()
+
+        log_ch  = MagicMock(id=555700)
+        post_ch = MagicMock(id=555800)
+        ch_iter = iter([
+            MagicMock(confirmed=True, cancelled=False, is_current_stale=False,
+                      selected_channel=log_ch,  wait=AsyncMock()),
+            MagicMock(confirmed=True, cancelled=False, is_current_stale=False,
+                      selected_channel=post_ch, wait=AsyncMock()),
+        ])
+
+        async def _skip_participation(*args, **kwargs):
+            return {"enabled": 0, "tab_name": "", "questions": [],
+                    "roster_tab": "", "roster_name_col": 0,
+                    "roster_alias_col": -1, "roster_start_row": 2}
+
+        with patch("setup_cog.ChannelSelectStep", side_effect=lambda *a, **kw: next(ch_iter)), \
+             patch("setup_cog._run_storm_participation_step", side_effect=_skip_participation), \
+             patch_keep_or_change(["DS Assignments", ""]):
+            make_send_handler(
+                interaction.channel,
+                view_overrides={
+                    # Summary -> Edit; team -> A; template -> keep current.
+                    "proceed":  True,
+                    "selected": "A",
+                    "outcome":  "keep",
+                    "cancelled": False,
+                },
+            )
+            await run_storm_setup(interaction, bot, "DS")
+
+        # The team-A row's body is the data-loss target. It must still
+        # be the alliance's saved custom, not silently overwritten with
+        # the hardcoded default.
+        cfg_a = config.get_storm_config(TEST_GUILD_ID, "DS_A")
+        assert cfg_a["mail_template"] == custom_body, (
+            "Keep current must preserve the saved custom template body "
+            "verbatim; pre-#231 the silent-clobber would land DEFAULT here."
+        )
 
 
 # ── /setup_growth ─────────────────────────────────────────────────────────────

@@ -78,7 +78,7 @@ class TestStormSetupWithParticipation:
              patch_keep_or_change(["DS Assignments"]):
             make_send_handler(
                 interaction.channel,
-                view_overrides={"selected": "A", "use_default": True},
+                view_overrides={"selected": "A", "outcome": "default"},
             )
             await run_storm_setup(interaction, bot, "DS")
 
@@ -124,7 +124,7 @@ class TestStormSetupWithParticipation:
              patch_keep_or_change(["CS Assignments"]):
             make_send_handler(
                 interaction.channel,
-                view_overrides={"selected": "B", "use_default": True},
+                view_overrides={"selected": "B", "outcome": "default"},
             )
             await run_storm_setup(interaction, bot, "CS")
 

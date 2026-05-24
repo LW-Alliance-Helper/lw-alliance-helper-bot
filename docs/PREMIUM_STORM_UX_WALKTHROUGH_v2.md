@@ -928,6 +928,109 @@ Click `↩️ Switch to: No`:
 
 ---
 
+### Screen 2.12a — Stale-Power DM follow-up (Premium + opted-in, #255)
+
+Only surfaces when Screen 2.12 came back Yes. Lets leadership extend
+the nudge so it also fires when a member's power value is still
+parseable but stale — older than a configured number of days. Three
+sub-screens share the cooldown row with the missing-power nudge so
+members get at most one DM per (member, event_date) regardless of
+which branch triggered it.
+
+**2.12a.1 — Yes/No prompt (first-time variant)**
+
+```
+┌──────────────────────────────────────────────────────────────────────┐
+│ **Stale-Power DM (💎 Premium)**                                      │
+│ On top of the missing-power nudge for **Desert Storm**, should the   │
+│ bot also DM when a member's power value is older than a configured   │
+│ number of days? Currently **off**. At most one DM per member per     │
+│ event date (shared with the missing-power nudge).                    │
+└──────────────────────────────────────────────────────────────────────┘
+[Yes]  [No]
+```
+
+Re-entry shows `_KeepOrFlipYesNoGate` with the saved threshold inline
+(e.g. `Currently on at 7 days.`). No → wipe the days + source fields
+so re-enabling later starts from defaults.
+
+**2.12a.2 — Days threshold**
+
+```
+┌──────────────────────────────────────────────────────────────────────┐
+│ **Stale-Power Threshold (💎 Premium)**                               │
+│ How many days old must a member's power value be before the bot DMs  │
+│ them? Recommended: **7**. Range: 1–365.                              │
+└──────────────────────────────────────────────────────────────────────┘
+[✅ Keep current: 7 days]  [✏️ Set days]
+```
+
+First-time variant drops `Keep current` and promotes `Set days
+(default: 7)`. Set days opens a modal with a single TextInput. Re-prompts
+up to 3 times on garbage input; bails after the third with `⚠️ Couldn't
+parse a stale-days threshold after 3 tries. Run /[command] to start
+again.`. Negative or >365 values clamp at the boundary.
+
+**2.12a.3 — Last-Updated Source picker**
+
+Survey shortcut: when the Power Data Source is already the Survey's
+`Squad Powers` tab, the wizard reads row 1 of that tab, locates the
+`Date Modified` column, stores its letter, and skips the picker
+entirely. Officer sees a one-line confirmation:
+
+```
+┌──────────────────────────────────────────────────────────────────────┐
+│ ✅ Auto-detected the survey's **Date Modified** column (`N`) on tab  │
+│ `Squad Powers` — using that as the last-updated source.              │
+└──────────────────────────────────────────────────────────────────────┘
+```
+
+Otherwise the full picker fires (mirroring the Power Data Source idiom
+at Screen 2.4):
+
+```
+┌──────────────────────────────────────────────────────────────────────┐
+│ **Last-Updated Source (💎 Premium)**                                 │
+│ Where on the Sheet does the bot find each member's last-updated      │
+│ timestamp? We support the bot's own Squad Power Survey, a manually-  │
+│ maintained column, or an export from a different bot.                │
+│                                                                      │
+│ • **Tab**: the Sheet tab with the timestamp.                         │
+│ • **Last-updated column**: the column with the timestamp values      │
+│   (e.g. `N`).                                                        │
+│ • **Name-match column**: blank reuses the Power Data Source's match  │
+│   column. Same row-matching rules: Discord ID first, name fallback.  │
+│                                                                      │
+│ _Date formats are auto-detected. MM/DD/YYYY, DD/MM/YYYY, ISO 8601,   │
+│ and `May 5, 2026`-style long-month all work. Rows whose timestamp    │
+│ doesn't parse are silently skipped._                                 │
+└──────────────────────────────────────────────────────────────────────┘
+[✅ Keep current]  [✏️ Define source]
+```
+
+First-time setup drops `Keep current` and promotes `Set source: <power
+tab name>`. Pre-fills the modal with the Power Data Source's tab + the
+match column from Power Data Source (so officers whose power and
+timestamp live on the same tab can one-click accept).
+
+**DM body branching at sign-up time**
+
+The click handler (`_maybe_send_power_refresh_dm` in `storm_signup_view`)
+picks one of two trigger reasons:
+
+| Trigger              | DM body                                                                                                                                                  |
+|----------------------|----------------------------------------------------------------------------------------------------------------------------------------------------------|
+| Missing power        | `Heads up, your **{header}** on the alliance roster Sheet isn't readable. Please update it before the next storm…`                                       |
+| Stale power (#255)   | `Heads up, your **{header}** on the alliance roster Sheet was last updated **{N}** days ago. Please refresh it before the next storm…`                   |
+
+Missing wins when both could fire (a row with `power=None AND
+last_updated=<some old date>` triggers the missing branch only).
+Members whose `last_updated` doesn't parse against any supported
+format are silently skipped — we don't punish them for an
+alliance-side data-quality issue.
+
+---
+
 ### Screen 2.13a — Strategy Presets explainer (Premium + opted-in only)
 
 The wizard posts a plain-text explainer before asking for the tab

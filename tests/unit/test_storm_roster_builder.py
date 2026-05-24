@@ -407,6 +407,176 @@ class TestReadPowerColumnHeader:
         assert srb._read_power_column_header(gid, "DS") == ""
 
 
+class TestLastUpdatedOverlay:
+    """#255 — when the alliance configures a Last-Updated source, the
+    roster reader overlays each member's most-recent timestamp from
+    that source. The DM-trigger logic (storm_signup_view) consumes
+    this `last_updated` key alongside `power`."""
+
+    def test_skipped_when_no_last_updated_config(self, fake_env):
+        """No last-updated source configured (default) → `last_updated`
+        key never appears on member dicts. Existing callsites that
+        don't care about staleness see the same shape they always have."""
+        fake, gid = fake_env
+        members, _errs = srb._read_roster_powers(gid, "DS")
+        assert "last_updated" not in members["1001"]
+
+    def test_cross_tab_overlay_resolves_dates_by_id(self, fake_env):
+        """Squad Powers tab has a Date Modified column; the overlay
+        parses each row's date and exposes it as a `datetime.date`
+        on the member."""
+        import datetime as _dt
+        fake, gid = fake_env
+        import config
+        sp = fake.add_worksheet("Squad Powers")
+        sp._rows = [
+            ["Discord ID", "1st Squad Power", "Date Modified"],
+            ["1001",       "500M",            "5/24/2026"],
+            ["1002",       "350M",            "4/10/2026"],
+        ]
+        config.save_structured_storm_config(
+            gid, "DS",
+            structured_flow_enabled=True,
+            power_metric_column="B",
+            power_metric_tab="Squad Powers",
+            power_match_column="A",
+            power_last_updated_tab="Squad Powers",
+            power_last_updated_column="C",
+            # Empty match column reuses the power match column.
+            power_last_updated_match_column="",
+            power_refresh_stale_days=7,
+        )
+        members, errs = srb._read_roster_powers(gid, "DS")
+        assert errs == []
+        assert members["1001"]["last_updated"] == _dt.date(2026, 5, 24)
+        assert members["1002"]["last_updated"] == _dt.date(2026, 4, 10)
+        # Members without a row on the source tab get None — DM
+        # path silently skips the stale check for them.
+        assert members["1003"]["last_updated"] is None
+
+    def test_unparseable_timestamp_yields_none(self, fake_env):
+        """Garbage in the Date Modified cell parses to None — that
+        row gets skipped without crashing the read."""
+        fake, gid = fake_env
+        import config
+        sp = fake.add_worksheet("Squad Powers")
+        sp._rows = [
+            ["Discord ID", "1st Squad Power", "Date Modified"],
+            ["1001",       "500M",            "two weeks ago"],
+            ["1002",       "350M",            "4/10/2026"],
+        ]
+        config.save_structured_storm_config(
+            gid, "DS",
+            structured_flow_enabled=True,
+            power_metric_column="B",
+            power_metric_tab="Squad Powers",
+            power_match_column="A",
+            power_last_updated_tab="Squad Powers",
+            power_last_updated_column="C",
+            power_refresh_stale_days=7,
+        )
+        members, _errs = srb._read_roster_powers(gid, "DS")
+        assert members["1001"]["last_updated"] is None
+        assert members["1002"] is not None
+
+    def test_dmy_column_locks_to_dmy_format(self, fake_env):
+        """A column with `25/12/2025`-style values (first component
+        > 12) auto-detects DMY and parses every cell that way."""
+        import datetime as _dt
+        fake, gid = fake_env
+        import config
+        sp = fake.add_worksheet("Squad Powers")
+        sp._rows = [
+            ["Discord ID", "1st Squad Power", "Date Modified"],
+            # First value is unambiguous DMY (24 > 12).
+            ["1001",       "500M",            "24/5/2026"],
+            # Second value would be ambiguous on its own; locks to DMY
+            # by the column-wide flag and resolves to May 10.
+            ["1002",       "350M",            "10/5/2026"],
+        ]
+        config.save_structured_storm_config(
+            gid, "DS",
+            structured_flow_enabled=True,
+            power_metric_column="B",
+            power_metric_tab="Squad Powers",
+            power_match_column="A",
+            power_last_updated_tab="Squad Powers",
+            power_last_updated_column="C",
+            power_refresh_stale_days=7,
+        )
+        members, _errs = srb._read_roster_powers(gid, "DS")
+        assert members["1001"]["last_updated"] == _dt.date(2026, 5, 24)
+        assert members["1002"]["last_updated"] == _dt.date(2026, 5, 10)
+
+    def test_separate_tab_lookup_by_name(self, fake_env):
+        """Last-updated source lives on a different tab than power,
+        matched by member name rather than Discord ID."""
+        import datetime as _dt
+        fake, gid = fake_env
+        import config
+        # Power lives on Squad Powers by ID.
+        sp = fake.add_worksheet("Squad Powers")
+        sp._rows = [
+            ["Discord ID", "1st Squad Power"],
+            ["1001",       "500M"],
+        ]
+        # Last-updated lives on a completely separate tab, matched by name.
+        lu = fake.add_worksheet("Audit Log")
+        lu._rows = [
+            ["Member Name", "Updated At"],
+            ["Alice",       "2026-05-24"],
+        ]
+        config.save_structured_storm_config(
+            gid, "DS",
+            structured_flow_enabled=True,
+            power_metric_column="B",
+            power_metric_tab="Squad Powers",
+            power_match_column="A",
+            power_last_updated_tab="Audit Log",
+            power_last_updated_column="B",
+            # Different match column on the separate tab.
+            power_last_updated_match_column="A",
+            power_refresh_stale_days=7,
+        )
+        members, _errs = srb._read_roster_powers(gid, "DS")
+        assert members["1001"]["last_updated"] == _dt.date(2026, 5, 24)
+
+    def test_missing_source_tab_surfaces_error_and_falls_through(self, fake_env):
+        """Configured Last-Updated tab doesn't exist → soft error and
+        every member's last_updated is None (no crash)."""
+        fake, gid = fake_env
+        import config
+        config.save_structured_storm_config(
+            gid, "DS",
+            structured_flow_enabled=True,
+            power_metric_column="F",
+            power_last_updated_tab="Nonexistent Audit Tab",
+            power_last_updated_column="B",
+            power_refresh_stale_days=7,
+        )
+        members, errs = srb._read_roster_powers(gid, "DS")
+        assert any("Nonexistent Audit Tab" in e for e in errs)
+        assert all(m.get("last_updated") is None for m in members.values())
+
+    def test_overlay_skipped_when_column_empty(self, fake_env):
+        """`power_last_updated_tab` set but column letter empty — the
+        config is half-configured and the overlay is silently skipped.
+        Members keep their default shape with no `last_updated` key."""
+        fake, gid = fake_env
+        import config
+        config.save_structured_storm_config(
+            gid, "DS",
+            structured_flow_enabled=True,
+            power_metric_column="F",
+            power_last_updated_tab="Squad Powers",
+            power_last_updated_column="",  # half-configured
+            power_refresh_stale_days=7,
+        )
+        members, _errs = srb._read_roster_powers(gid, "DS")
+        # No `last_updated` key on the member dicts.
+        assert all("last_updated" not in m for m in members.values())
+
+
 # ── Session + eligibility ────────────────────────────────────────────────────
 
 

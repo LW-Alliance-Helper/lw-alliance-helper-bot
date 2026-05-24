@@ -6560,6 +6560,11 @@ class _InlinePostFirstSignupOffer(discord.ui.View):
             result = await post_registration(
                 self.bot, guild, self.event_type, target_date,
                 structured=structured,
+                # Leadership-triggered repost (#265): bypass the
+                # once-per-event guard so the first-sign-up wizard
+                # button can post even if an earlier post is still on
+                # the channel.
+                force=True,
             )
             await inter.followup.send(
                 _format_post_result_message(self.event_type, target_date, result),

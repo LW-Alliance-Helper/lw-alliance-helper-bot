@@ -35,6 +35,35 @@ from tests.integration.test_setup_flows import (
 
 # ── /setup_desertstorm + /setup_canyonstorm with participation enabled ────────
 
+def _fake_structured_flow_opted_out():
+    """Return the dict shape `_run_structured_flow_setup_step` produces
+    when the officer declines the Premium structured roster flow.
+    Lets tests that only care about earlier wizard steps stub it out
+    without having to drive the Premium sub-flow's full UI. Without
+    this stub, the sub-flow runs against an undermocked bot/channel
+    and exhausts the test's prepared replies (StopIteration)."""
+    return {
+        "structured_flow_enabled":         False,
+        "power_metric_column":             "B",
+        "power_metric_tab":                "",
+        "power_match_column":              "",
+        "sub_mode":                        "pool",
+        "signup_channel_id":               0,
+        "signup_schedule_cron":            "",
+        "signups_tab":                     "",
+        "rosters_tab":                     "",
+        "attendance_tab":                  "",
+        "strategies_tab":                  "",
+        "member_rules_tab":                "",
+        "poll_day_of_week":                -1,
+        "signup_time":                     "",
+        "power_refresh_dm_enabled":        False,
+        "roster_dm_starter_template":      "",
+        "roster_dm_paired_sub_template":   "",
+        "roster_dm_pool_sub_template":     "",
+    }
+
+
 class TestStormSetupWithParticipation:
     """The new (#20) participation block — Step 6 of /setup_desertstorm."""
 
@@ -72,9 +101,14 @@ class TestStormSetupWithParticipation:
                 "roster_start_row": 2,
             }
 
+        async def fake_structured(*args, **kwargs):
+            return _fake_structured_flow_opted_out()
+
         with patch("setup_cog.ChannelSelectStep", side_effect=lambda *a, **kw: next(ch_iter)), \
              patch("setup_cog._run_storm_participation_step",
                     side_effect=fake_participation), \
+             patch("setup_cog._run_structured_flow_setup_step",
+                    side_effect=fake_structured), \
              patch_keep_or_change(["DS Assignments"]):
             make_send_handler(
                 interaction.channel,
@@ -118,9 +152,14 @@ class TestStormSetupWithParticipation:
                 "roster_start_row": 2,
             }
 
+        async def fake_structured(*args, **kwargs):
+            return _fake_structured_flow_opted_out()
+
         with patch("setup_cog.ChannelSelectStep", side_effect=lambda *a, **kw: next(ch_iter)), \
              patch("setup_cog._run_storm_participation_step",
                     side_effect=disabled_participation), \
+             patch("setup_cog._run_structured_flow_setup_step",
+                    side_effect=fake_structured), \
              patch_keep_or_change(["CS Assignments"]):
             make_send_handler(
                 interaction.channel,

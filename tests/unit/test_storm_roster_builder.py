@@ -2556,6 +2556,19 @@ class TestFinalizePostOutcomes:
     whether the channel was deleted, the bot was kicked, or something
     else went wrong."""
 
+    def _find_followup(self, inter, needle: str) -> str | None:
+        """Return the first ephemeral followup containing `needle`, or
+        None. Necessary because `_finalize_structured_roster` fires
+        multiple followups on Premium guilds (#226: standard summary,
+        DM-rostered-members prompt, plus optional image-overflow
+        warning) — count-based or last-call assertions break under
+        FORCE_PREMIUM=1 lane."""
+        for call in inter.followup.send.await_args_list:
+            text = call.args[0] if call.args else ""
+            if needle in text:
+                return text
+        return None
+
     def _make_interaction(self, guild=None):
         from unittest.mock import AsyncMock, MagicMock
         inter = MagicMock()
@@ -2655,9 +2668,12 @@ class TestFinalizePostOutcomes:
         )
         await srb._finalize_structured_roster(inter, view)
         ch.send.assert_awaited_once()
-        sent = inter.followup.send.await_args.args[0]
-        assert "Roster posted." in sent
-        assert "<#12345>" in sent
+        summary = self._find_followup(inter, "Roster posted.")
+        assert summary is not None, (
+            "expected a 'Roster posted.' summary followup; got: "
+            f"{[c.args[0] for c in inter.followup.send.await_args_list if c.args]}"
+        )
+        assert "<#12345>" in summary
 
     @pytest.mark.asyncio
     async def test_include_image_attaches_png_to_send(self, fake_env):
@@ -2710,9 +2726,9 @@ class TestFinalizePostOutcomes:
         # No file attached — render failed but post still went through.
         assert "file" not in ch.send.await_args.kwargs
         # Officer ephemeral carries both the success line AND a warning.
-        sent = inter.followup.send.await_args.args[0]
-        assert "Roster posted" in sent
-        assert "Couldn't attach the image" in sent
+        summary = self._find_followup(inter, "Roster posted")
+        assert summary is not None
+        assert "Couldn't attach the image" in summary
 
     @pytest.mark.asyncio
     async def test_overflow_ephemeral_warns_about_clipped_members(self, fake_env):
@@ -2747,16 +2763,17 @@ class TestFinalizePostOutcomes:
         with patch("storm_renderer.render", side_effect=_fake_render):
             await srb._finalize_structured_roster(inter, view, include_image=True)
 
-        # The first followup carries the standard confirmation. The
-        # second followup is the overflow warning.
-        assert inter.followup.send.await_count == 2
-        first_msg = inter.followup.send.await_args_list[0].args[0]
-        second_msg = inter.followup.send.await_args_list[1].args[0]
-        assert "Roster posted" in first_msg
-        assert "didn't fit" in second_msg
-        assert "Nuclear Silo" in second_msg
-        assert "Member 7" in second_msg
-        assert "Member 14" in second_msg
+        # The standard confirmation and overflow warning both fire as
+        # ephemeral followups (the DM-rostered-members prompt also
+        # fires on Premium guilds — find each by content rather than
+        # by call index).
+        summary = self._find_followup(inter, "Roster posted")
+        overflow = self._find_followup(inter, "didn't fit")
+        assert summary is not None
+        assert overflow is not None
+        assert "Nuclear Silo" in overflow
+        assert "Member 7" in overflow
+        assert "Member 14" in overflow
 
     # ── #237 long-mail picker ─────────────────────────────────────
 
@@ -2981,9 +2998,11 @@ class TestFinalizePostOutcomes:
         with patch("storm_renderer.render", side_effect=_fake_render):
             await srb._finalize_structured_roster(inter, view, include_image=True)
 
-        # Only the standard confirmation ephemeral fires; no overflow
-        # warning because there's nothing to warn about.
-        assert inter.followup.send.await_count == 1
+        # No overflow warning fires when there's nothing to warn about.
+        # The standard confirmation (and on Premium, the DM-rostered-
+        # members prompt) still fire — assertion is specifically that
+        # no "didn't fit" warning slipped in.
+        assert self._find_followup(inter, "didn't fit") is None
 
 
 class TestSplitMailAtHeading:

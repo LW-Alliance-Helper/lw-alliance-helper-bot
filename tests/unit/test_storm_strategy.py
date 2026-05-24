@@ -287,7 +287,8 @@ class TestSheetRoundTrip:
         fake, gid = fake_sheet_factory
         buf = ss.PresetBuffer(name="Rulebringers", event_type="CS", faction="Rulebringers", zones=[
             ss.ZoneRow(zone="Some CS Zone", max_players=4,
-                       min_power_a=250_000_000, priority=1),
+                       min_power_a=250_000_000, min_power_b=180_000_000,
+                       priority=1),
         ])
         ok = ss.save_preset(gid, "CS", buf)
         assert ok is True
@@ -296,8 +297,7 @@ class TestSheetRoundTrip:
         assert loaded is not None
         assert loaded.faction == "Rulebringers"
         assert loaded.zones[0].min_power_a == 250_000_000
-        # CS rows don't use min_power_b
-        assert loaded.zones[0].min_power_b == 0
+        assert loaded.zones[0].min_power_b == 180_000_000
 
     def test_list_presets_returns_unique_names(self, fake_sheet_factory):
         fake, gid = fake_sheet_factory
@@ -386,11 +386,24 @@ class TestLoadPresetCsLegacyMigration:
         schema. Stage 1 carries Power Tower at max_phase1=4 / priority 1;
         Stage 3 carries it at max_phase3=4 / priority 3. After load
         they should merge into one "Power Tower" zone with both phase
-        caps + the higher priority preserved."""
+        caps + the higher priority preserved.
+
+        Uses the LEGACY CS header (pre per-team `Min Power A` /
+        `Min Power B` split) so we exercise the migration path that
+        promotes the old `Min Power` column onto the new
+        `Min Power A` slot."""
         import config
         ws = fake.add_worksheet("CS Strategies")
+        legacy_cs_header = [
+            "Preset Name", "Zone", "Max Players",
+            "Max Stage 1", "Max Stage 2", "Max Stage 3",
+            "Min Power",
+            "Priority",
+            "Priority Stage 1", "Priority Stage 2", "Priority Stage 3",
+            "Faction", "Stage Count",
+        ]
         ws._rows = [
-            list(ss._CS_HEADER),
+            list(legacy_cs_header),
             # s1_power_tower row — phase 1 data only
             [
                 "Legacy", "s1_power_tower", "0",
@@ -490,13 +503,29 @@ class TestZoneRowRenderLine:
         assert "180M" in line
         assert "300M" not in line
 
-    def test_cs_ignores_teams_param(self):
+    def test_cs_a_only_shows_only_a(self):
         row = ss.ZoneRow(zone="Power Tower", max_players=4,
-                         min_power_a=250_000_000)
-        # CS storage uses min_power_a for the single floor.
+                         min_power_a=250_000_000, min_power_b=180_000_000)
         line = row.render_line("CS", teams="A")
         assert "Min:" in line
         assert "250M" in line
+        assert "180M" not in line
+
+    def test_cs_b_only_shows_only_b(self):
+        row = ss.ZoneRow(zone="Power Tower", max_players=4,
+                         min_power_a=250_000_000, min_power_b=180_000_000)
+        line = row.render_line("CS", teams="B")
+        assert "180M" in line
+        assert "250M" not in line
+
+    def test_cs_both_shows_per_team_minimums(self):
+        row = ss.ZoneRow(zone="Power Tower", max_players=4,
+                         min_power_a=250_000_000, min_power_b=180_000_000)
+        line = row.render_line("CS", teams="both")
+        assert "Min A:" in line
+        assert "Min B:" in line
+        assert "250M" in line
+        assert "180M" in line
 
     def test_default_teams_is_both(self):
         row = ss.ZoneRow(zone="Nuclear Silo", max_players=4,

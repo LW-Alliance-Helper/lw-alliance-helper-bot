@@ -2,7 +2,7 @@
 Strategy preset editor for Desert Storm and Canyon Storm (#126).
 
 Alliances define named "presets" — saved zone layouts with capacities,
-per-team power floors (DS), and priorities. The same layout gets re-used
+per-team power floors, and priorities. The same layout gets re-used
 each week instead of being hand-built.
 
 Storage shape (Sheet, alliance-owned, source of truth):
@@ -11,7 +11,7 @@ Storage shape (Sheet, alliance-owned, source of truth):
     Preset Name | Zone | Max Players | Min Power A | Min Power B | Priority
 
   CS Strategies columns:
-    Preset Name | Zone | Max Players | Min Power | Priority | Faction
+    Preset Name | Zone | Max Players | Min Power A | Min Power B | Priority | Faction
 
 Preset names are unique per (guild, event_type). Rows for one preset
 share the Preset Name value.
@@ -169,9 +169,10 @@ def _parse_power_cell(value, *, source: str = "") -> tuple[int, bool]:
 # Stored on disk as Sheet rows; buffered in memory during editing.
 
 class ZoneRow:
-    """One zone in a strategy preset. Same shape for DS and CS; the
-    `min_power_b` field is unused for CS (single floor stored in
-    `min_power_a` for code simplicity).
+    """One zone in a strategy preset. Same shape for DS and CS. Both
+    event types carry per-team power floors (`min_power_a` /
+    `min_power_b`); single-team alliances simply leave the unused
+    field at 0.
 
     Phase fields (`max_phase1..3`, `priority_phase1..3`) are only read
     when the parent `PresetBuffer.phase_count >= 2` (see #152). On
@@ -483,7 +484,7 @@ _DS_HEADER = ["Preset Name", "Zone", "Max Players",
               "Stage Count"]
 _CS_HEADER = ["Preset Name", "Zone", "Max Players",
               "Max Stage 1", "Max Stage 2", "Max Stage 3",
-              "Min Power",
+              "Min Power A", "Min Power B",
               "Priority",
               "Priority Stage 1", "Priority Stage 2", "Priority Stage 3",
               "Faction", "Stage Count"]
@@ -619,15 +620,23 @@ def load_preset(guild_id: int, event_type: str, name: str) -> PresetBuffer | Non
             )
             zones.append(zr)
         else:
-            min_p, _ = _parse_power_cell(r.get("Min Power", ""), source=src + " col=Min Power")
+            # CS used to carry a single `Min Power` column before per-
+            # team floors landed; fall back to that legacy cell when
+            # the new `Min Power A` column is absent so existing
+            # alliance sheets keep their saved data.
+            if r.get("Min Power A", "") != "":
+                min_a, _ = _parse_power_cell(r.get("Min Power A", ""), source=src + " col=Min Power A")
+            else:
+                min_a, _ = _parse_power_cell(r.get("Min Power", ""), source=src + " col=Min Power")
+            min_b, _ = _parse_power_cell(r.get("Min Power B", ""), source=src + " col=Min Power B")
             zr = ZoneRow(
                 zone=zone_name,
                 max_players=_safe_int(r.get("Max Players", 0)),
                 max_phase1=_safe_int(r.get("Max Stage 1", 0)),
                 max_phase2=_safe_int(r.get("Max Stage 2", 0)),
                 max_phase3=_safe_int(r.get("Max Stage 3", 0)),
-                min_power_a=min_p,
-                min_power_b=0,
+                min_power_a=min_a,
+                min_power_b=min_b,
                 priority=_safe_int(r.get("Priority", 0)),
                 priority_phase1=_safe_int(r.get("Priority Stage 1", 0)),
                 priority_phase2=_safe_int(r.get("Priority Stage 2", 0)),
@@ -651,7 +660,7 @@ def load_preset(guild_id: int, event_type: str, name: str) -> PresetBuffer | Non
                 existing.max_phase2  = max(existing.max_phase2,  zr.max_phase2)
                 existing.max_phase3  = max(existing.max_phase3,  zr.max_phase3)
                 existing.min_power_a = max(existing.min_power_a, zr.min_power_a)
-                # min_power_b unused on CS; left at 0.
+                existing.min_power_b = max(existing.min_power_b, zr.min_power_b)
                 existing.priority         = max(existing.priority,         zr.priority)
                 existing.priority_phase1  = max(existing.priority_phase1,  zr.priority_phase1)
                 existing.priority_phase2  = max(existing.priority_phase2,  zr.priority_phase2)
@@ -719,7 +728,9 @@ def save_preset(guild_id: int, event_type: str, buf: PresetBuffer) -> bool:
         defaults (0 / 0). Legacy `Use Phases` (truthy → phase_count
         = 2) is honoured here too so an interim 2-phase preset
         round-trips into the new `Stage Count` column on the next
-        save."""
+        save. Legacy CS `Min Power` (single column) maps onto the
+        new `Min Power A` slot — `Min Power B` defaults to empty
+        until leadership sets a Team B floor."""
         out: list[str] = []
         legacy_uses_phases = (
             _parse_uses_phases(row[old_header_idx["Use Phases"]])
@@ -730,6 +741,15 @@ def save_preset(guild_id: int, event_type: str, buf: PresetBuffer) -> bool:
         for col_name in header:
             if col_name == "Stage Count" and "Stage Count" not in old_header_idx:
                 out.append("2" if legacy_uses_phases else "0")
+                continue
+            if (col_name == "Min Power A"
+                    and "Min Power A" not in old_header_idx
+                    and "Min Power" in old_header_idx):
+                legacy_idx = old_header_idx["Min Power"]
+                if 0 <= legacy_idx < len(row):
+                    out.append(str(row[legacy_idx]))
+                else:
+                    out.append("")
                 continue
             idx = old_header_idx.get(col_name, -1)
             if 0 <= idx < len(row):
@@ -761,7 +781,7 @@ def save_preset(guild_id: int, event_type: str, buf: PresetBuffer) -> bool:
             kept.append([
                 buf.name, z.zone, str(z.max_players),
                 str(z.max_phase1), str(z.max_phase2), str(z.max_phase3),
-                str(z.min_power_a),
+                str(z.min_power_a), str(z.min_power_b),
                 str(z.priority),
                 str(z.priority_phase1), str(z.priority_phase2), str(z.priority_phase3),
                 buf.faction,
@@ -931,10 +951,10 @@ class _ZoneEditModal(discord.ui.Modal):
         )
         self.add_item(self.max_input)
 
-        # Resolve which DS teams the alliance runs so the modal only
-        # asks for the relevant floors. The parent view snapshotted this
-        # at open time; reading from there keeps modal + embed in sync
-        # and avoids a second config read per modal open.
+        # Resolve which teams the alliance runs so the modal only
+        # asks for the relevant floors. The parent view snapshotted
+        # this at open time; reading from there keeps modal + embed
+        # in sync and avoids a second config read per modal open.
         self._teams = (
             getattr(view, "teams", "both")
         )
@@ -1144,21 +1164,20 @@ def _clear_pending_edit(view, zone_name: str) -> None:
 
 class _ZonePhaseCapacityAndFloorsModal(discord.ui.Modal):
     """Page 1/2 of the phase-aware wizard — capacities per phase plus
-    the power minimum(s). Field-count math: 3 phase caps + 2 DS-both
-    minimums = exactly 5 fields at the Discord cap. CS and single-team
-    DS use 1 minimum field instead. Pairing capacity + minimums here
-    leaves the priority page (also up to 3 fields) to stand alone."""
+    the power minimum(s). Field-count math: 3 phase caps + 2 both-team
+    minimums = exactly 5 fields at the Discord cap. Single-team
+    alliances use 1 minimum field instead. Pairing capacity + minimums
+    here leaves the priority page (also up to 3 fields) to stand alone.
+    Applies identically to DS and CS per Rule A / #166."""
 
     def __init__(self, view: "_PresetEditorView", zone_name: str):
         phase_count = int(getattr(view.buf, "phase_count", 2) or 2)
-        super().__init__(title=f"{zone_name}: Caps + Min ({phase_count}S)"[:45])
+        super().__init__(title=f"{zone_name}: Caps + Min ({phase_count} Stages)"[:45])
         self._view = view
         self._zone_name = zone_name
         self._phase_count = phase_count
         pending = _stash_pending_edit(view, zone_name)
-        self._teams = (
-            getattr(view, "teams", "both") if view.buf.event_type == "DS" else "both"
-        )
+        self._teams = getattr(view, "teams", "both")
 
         self.max_phase1_input = discord.ui.TextInput(
             label="Max Stage 1",
@@ -1185,39 +1204,26 @@ class _ZonePhaseCapacityAndFloorsModal(discord.ui.Modal):
         else:
             self.max_phase3_input = None
 
-        if view.buf.event_type == "DS":
-            self.power_input = None
-            self.power_a_input = None
-            self.power_b_input = None
-            if self._teams in ("both", "A"):
-                self.power_a_input = discord.ui.TextInput(
-                    label="Min Power Team A",
-                    placeholder="e.g. 80M",
-                    default=format_power(pending["min_power_a"])
-                            if pending["min_power_a"] else "",
-                    required=False, max_length=12,
-                )
-                self.add_item(self.power_a_input)
-            if self._teams in ("both", "B"):
-                self.power_b_input = discord.ui.TextInput(
-                    label="Min Power Team B",
-                    placeholder="e.g. 60M",
-                    default=format_power(pending["min_power_b"])
-                            if pending["min_power_b"] else "",
-                    required=False, max_length=12,
-                )
-                self.add_item(self.power_b_input)
-        else:
-            self.power_a_input = None
-            self.power_b_input = None
-            self.power_input = discord.ui.TextInput(
-                label="Min Power",
-                placeholder="e.g. 70M",
+        self.power_a_input = None
+        self.power_b_input = None
+        if self._teams in ("both", "A"):
+            self.power_a_input = discord.ui.TextInput(
+                label="Min Power Team A",
+                placeholder="e.g. 80M",
                 default=format_power(pending["min_power_a"])
                         if pending["min_power_a"] else "",
                 required=False, max_length=12,
             )
-            self.add_item(self.power_input)
+            self.add_item(self.power_a_input)
+        if self._teams in ("both", "B"):
+            self.power_b_input = discord.ui.TextInput(
+                label="Min Power Team B",
+                placeholder="e.g. 60M",
+                default=format_power(pending["min_power_b"])
+                        if pending["min_power_b"] else "",
+                required=False, max_length=12,
+            )
+            self.add_item(self.power_b_input)
 
     async def on_submit(self, interaction: discord.Interaction):
         pending = _stash_pending_edit(self._view, self._zone_name)
@@ -1240,37 +1246,26 @@ class _ZonePhaseCapacityAndFloorsModal(discord.ui.Modal):
                 return
 
         # Validate the minimum-power field(s).
-        if self._view.buf.event_type == "DS":
-            if self.power_a_input is not None:
-                val, bad = _parse_power_cell(self.power_a_input.value or "")
-                if bad:
-                    await interaction.response.send_message(
-                        f"⚠️ Min Power Team A didn't parse. Got "
-                        f"`{self.power_a_input.value}`. Use `80M` or `80,000,000`.",
-                        ephemeral=True,
-                    )
-                    return
-                pending["min_power_a"] = val
-            if self.power_b_input is not None:
-                val, bad = _parse_power_cell(self.power_b_input.value or "")
-                if bad:
-                    await interaction.response.send_message(
-                        f"⚠️ Min Power Team B didn't parse. Got "
-                        f"`{self.power_b_input.value}`. Use `60M` or `60,000,000`.",
-                        ephemeral=True,
-                    )
-                    return
-                pending["min_power_b"] = val
-        else:
-            val, bad = _parse_power_cell(self.power_input.value or "")
+        if self.power_a_input is not None:
+            val, bad = _parse_power_cell(self.power_a_input.value or "")
             if bad:
                 await interaction.response.send_message(
-                    f"⚠️ Min Power didn't parse. Got "
-                    f"`{self.power_input.value}`. Use `70M` or `70,000,000`.",
+                    f"⚠️ Min Power Team A didn't parse. Got "
+                    f"`{self.power_a_input.value}`. Use `80M` or `80,000,000`.",
                     ephemeral=True,
                 )
                 return
             pending["min_power_a"] = val
+        if self.power_b_input is not None:
+            val, bad = _parse_power_cell(self.power_b_input.value or "")
+            if bad:
+                await interaction.response.send_message(
+                    f"⚠️ Min Power Team B didn't parse. Got "
+                    f"`{self.power_b_input.value}`. Use `60M` or `60,000,000`.",
+                    ephemeral=True,
+                )
+                return
+            pending["min_power_b"] = val
 
         view = _ZoneWizardNextView(
             self._view, self._zone_name,
@@ -1713,13 +1708,13 @@ class _PresetEditorView(discord.ui.View):
                 discord.SelectOption(
                     label="2 Stages",
                     value="2",
-                    description="DS-style migration: Stage 1 → Stage 2.",
+                    description="Stage 1 → Stage 2.",
                     default=self.buf.phase_count == 2,
                 ),
                 discord.SelectOption(
                     label="3 Stages",
                     value="3",
-                    description="CS-style: Stage 1 → 2 → 3.",
+                    description="Stage 1 → 2 → 3.",
                     default=self.buf.phase_count == 3,
                 ),
             ],

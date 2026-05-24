@@ -28,6 +28,12 @@ class _FakeWorksheet:
     def get_all_values(self):
         return [list(r) for r in self._rows]
 
+    def row_values(self, row_number: int):
+        idx = row_number - 1
+        if 0 <= idx < len(self._rows):
+            return list(self._rows[idx])
+        return []
+
     def append_row(self, row, value_input_option=None):
         self._rows.append([str(c) for c in row])
 
@@ -321,6 +327,84 @@ class TestPowerDataSourceFlexibility:
         members, _errs = srb._read_roster_powers(gid, "DS")
         assert members["1001"]["power"] is None
         assert members["1002"]["power"] == 260_000_000
+
+
+class TestReadPowerColumnHeader:
+    """#256 — the power-refresh DM (#138) must name the column the
+    bot actually reads. When the alliance points storm at a separate
+    Power Data Source tab (e.g. `Squad Powers`), the header label
+    needs to come from THAT tab — not from whatever column letter
+    happens to land on in the Member Roster."""
+
+    def test_cross_tab_reads_header_from_power_tab(self, fake_env):
+        """Regression for #256: alliance configures Squad Powers as the
+        power tab, column C. Column C on Squad Powers reads `Squad
+        Power`; column C on the Member Roster reads `Display Name`.
+        The DM must surface `Squad Power`, not `Display Name`."""
+        fake, gid = fake_env
+        import config
+        sp = fake.add_worksheet("Squad Powers")
+        sp._rows = [
+            ["Discord ID", "Name", "Squad Power"],
+            ["1001",       "Alice", "500M"],
+        ]
+        config.save_structured_storm_config(
+            gid, "DS",
+            structured_flow_enabled=True,
+            power_metric_column="C",
+            power_metric_tab="Squad Powers",
+            power_match_column="A",
+        )
+        assert srb._read_power_column_header(gid, "DS") == "Squad Power"
+
+    def test_empty_power_tab_falls_back_to_member_roster(self, fake_env):
+        """Backwards-compat: alliances with empty `power_metric_tab`
+        still get the Member Roster header (pre-flexibility behaviour).
+        Column F on the fake roster is `1st Squad Power`."""
+        fake, gid = fake_env
+        import config
+        config.save_structured_storm_config(
+            gid, "DS",
+            structured_flow_enabled=True,
+            power_metric_column="F",
+            power_metric_tab="",
+            power_match_column="",
+        )
+        assert srb._read_power_column_header(gid, "DS") == "1st Squad Power"
+
+    def test_your_prefix_stripped(self, fake_env):
+        """`Your Power` header reads as `Power` in the DM (so the
+        sentence comes out `your Power`, not `your Your Power`)."""
+        fake, gid = fake_env
+        import config
+        sp = fake.add_worksheet("Squad Powers")
+        sp._rows = [
+            ["Discord ID", "Your Power"],
+            ["1001",       "500M"],
+        ]
+        config.save_structured_storm_config(
+            gid, "DS",
+            structured_flow_enabled=True,
+            power_metric_column="B",
+            power_metric_tab="Squad Powers",
+            power_match_column="A",
+        )
+        assert srb._read_power_column_header(gid, "DS") == "Power"
+
+    def test_missing_power_tab_returns_blank(self, fake_env):
+        """Configured tab doesn't exist on the spreadsheet → return ""
+        so the DM falls back to the generic wording instead of
+        crashing the signup handler."""
+        fake, gid = fake_env
+        import config
+        config.save_structured_storm_config(
+            gid, "DS",
+            structured_flow_enabled=True,
+            power_metric_column="B",
+            power_metric_tab="Nonexistent Tab",
+            power_match_column="A",
+        )
+        assert srb._read_power_column_header(gid, "DS") == ""
 
 
 # ── Session + eligibility ────────────────────────────────────────────────────

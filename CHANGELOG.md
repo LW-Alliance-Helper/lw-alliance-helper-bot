@@ -9,6 +9,13 @@ Each entry is a slim summary — heavier context (root cause, what we
 tried, design rationale) lives in the corresponding commit message
 and PR description.
 
+## [1.4.1] — 2026-05-24
+
+### Fixed
+- Power-refresh DM names the column on the configured Power Data Source tab instead of always reading the Member Roster ([#256](https://github.com/LW-Alliance-Helper/lw-alliance-helper-bot/issues/256)).
+
+Hotfix released direct to main per CLAUDE.md's hotfix exception.
+
 ## [1.4.0] — 2026-05-23
 
 ### Added

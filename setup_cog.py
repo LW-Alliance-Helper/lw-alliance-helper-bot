@@ -1368,7 +1368,8 @@ async def _check_wizard_can_run(interaction: discord.Interaction, command_name: 
     """If the bot can run a wizard in the current channel, return True.
     Otherwise send a clear ephemeral message explaining what perms are
     missing (and how to fix), and return False. Call at the top of
-    every /setup_* command.
+    `/setup` and any setup-hub launcher that opens a wizard in the
+    current channel.
     """
     missing = _missing_wizard_perms(interaction)
     if not missing:

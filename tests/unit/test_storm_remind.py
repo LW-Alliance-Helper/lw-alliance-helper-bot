@@ -145,9 +145,9 @@ class TestStormReminderRosterDisabled:
 
         msg = interaction.response.send_message.call_args.args[0]
         # Post-#201: the /setup_members slash command folded into the
-        # /setup hub's `👥 Members` button. The reminder copy now points
-        # there.
-        assert "Members" in msg
+        # /setup hub's `👥 Member Sync` button. The reminder copy now
+        # points there.
+        assert "Member Sync" in msg
         assert "/setup" in msg
 
 

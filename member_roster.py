@@ -778,7 +778,7 @@ class MemberRosterCog(commands.Cog):
             from config import describe_sheet_error
             diagnosis = describe_sheet_error(e, tab=cfg["tab_name"])
             print(
-                f"[ROSTER] /sync_members failed: "
+                f"[ROSTER] /members sync failed: "
                 f"{describe_sheet_error(e, guild_id=interaction.guild_id, tab=cfg['tab_name'])}"
             )
             await interaction.followup.send(
@@ -1249,7 +1249,7 @@ async def run_member_roster_setup(interaction: discord.Interaction, bot):
         from config import describe_sheet_error
         diagnosis = describe_sheet_error(e, tab=cfg["tab_name"])
         print(
-            f"[ROSTER] /setup_members initial sync failed: "
+            f"[ROSTER] /setup → 👥 Member Sync initial sync failed: "
             f"{describe_sheet_error(e, guild_id=guild_id, tab=cfg['tab_name'])}"
         )
         await channel.send(

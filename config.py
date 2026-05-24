@@ -326,10 +326,11 @@ def init_db():
                 roster_dm_pool_sub_template   TEXT DEFAULT '',
                 -- Per-team time-slot mapping (#251). 1 or 2, indexing into
                 -- DS_SERVER_TIMES / CS_SERVER_TIMES. NULL until leadership
-                -- picks the mapping in /setup_storm_<DS|CS>. The signup
-                -- post creation flow blocks with a "pick team times first"
-                -- message when a slot needed by the alliance's `teams`
-                -- setting is still NULL. Both teams can share a slot.
+                -- picks the mapping in `/setup` → Desert Storm / Canyon
+                -- Storm. The signup post creation flow blocks with a
+                -- "pick team times first" message when a slot needed by
+                -- the alliance's `teams` setting is still NULL. Both
+                -- teams can share a slot.
                 team_a_slot_index        INTEGER,
                 team_b_slot_index        INTEGER,
                 PRIMARY KEY (guild_id, event_type)

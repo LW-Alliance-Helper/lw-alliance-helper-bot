@@ -6772,8 +6772,8 @@ async def _run_structured_flow_setup_step(
                     max_length=2,
                 )
                 self.match_input = discord.ui.TextInput(
-                    label="Name-match column letter (A-Z)",
-                    placeholder="e.g. A — column with Discord ID or name",
+                    label="Member-match column letter (A-Z)",
+                    placeholder="e.g. B — prefer column with Discord IDs",
                     default=effective_match,
                     required=True,
                     max_length=2,
@@ -6890,10 +6890,13 @@ async def _run_structured_flow_setup_step(
             f"• **Tab**: the Sheet tab where power lives.\n"
             f"• **Power column**: the column with the actual power "
             f"value (e.g. `B`).\n"
-            f"• **Name-match column**: the column the bot uses to "
+            f"• **Member-match column**: the column the bot uses to "
             f"match rows to your alliance members. Cells that look "
             f"like Discord IDs match by ID; otherwise the bot matches "
-            f"by name (case-insensitive)."
+            f"by name (case-insensitive). Preferably the column where "
+            f"you have Discord IDs. You can also select a Name column "
+            f"if you'd prefer, but matching may be less reliable than "
+            f"an ID."
             f"{sync_blurb}",
             view=picker,
         )

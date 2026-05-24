@@ -4727,6 +4727,391 @@ class _LongMailPickerView(discord.ui.View):
         await self._pick(inter, "cancel")
 
 
+# ── DM-the-roster (#226 follow-up) ─────────────────────────────────────────
+#
+# Officer-triggered, Premium-only DMs that go out AFTER Approve & Post.
+# Each rostered member gets a personalised message listing exactly which
+# zone(s) and stage(s) they're on. Sub pairings carry the primary's name
+# so the sub knows who they're covering for; pool subs get a generic
+# standby message. Members without a Discord ID or with closed DMs are
+# surfaced in a single ephemeral so leadership knows who to chase up
+# in-game / verbally.
+
+
+def _collect_dm_assignments(
+    session: "RosterBuilderSession",
+) -> "list[tuple[str, list[dict]]]":
+    """Walk the session and collect every member's roster role(s).
+
+    Returns `[(member_key, [{"role": ..., "zone": ..., "phase": ...,
+    "pair_with": ...}, ...]), ...]`. The returned list preserves the
+    preset's zone order so a member with multiple assignments reads
+    them in the same order the mail body does.
+
+    `role` is one of:
+      * `primary`    — assigned to that zone in that phase.
+      * `paired_sub` — paired-mode sub covering a specific primary's
+                       slot for that phase. `pair_with` is the
+                       primary's display name.
+      * `pool_sub`   — in `session.subs` and NOT paired anywhere.
+    """
+    by_member: dict[str, list[dict]] = {}
+    phases = list(session.iter_phases()) if session.is_phase_aware else [1]
+    zone_order = [z.zone for z in session.preset.zones]
+
+    for phase in phases:
+        assignments = session.assignments_for_phase(phase)
+        pairings = session.paired_subs_for_phase(phase)
+        for zone in zone_order:
+            for key in assignments.get(zone, []):
+                by_member.setdefault(key, []).append({
+                    "role":      "primary",
+                    "zone":      zone,
+                    "phase":     phase,
+                    "pair_with": None,
+                })
+        # Paired subs — attribute the sub to the zone(s) their primary
+        # is in for THIS phase, so the DM tells them where they'd be
+        # filling in. A primary in two zones in the same phase
+        # (unusual, but the picker doesn't block it) becomes two
+        # paired_sub rows for the sub.
+        for primary_key, sub_key in pairings.items():
+            if not sub_key:
+                continue
+            primary_zones = [
+                z for z in zone_order
+                if primary_key in assignments.get(z, [])
+            ]
+            primary_m = session.members.get(primary_key)
+            primary_name = (
+                primary_m.get("name") if primary_m else primary_key
+            )
+            for z in primary_zones:
+                by_member.setdefault(sub_key, []).append({
+                    "role":      "paired_sub",
+                    "zone":      z,
+                    "phase":     phase,
+                    "pair_with": primary_name,
+                })
+
+    # Pool subs — anyone in `session.subs` who isn't already covered
+    # as a paired_sub somewhere (paired-mode sessions keep paired
+    # keys in `session.subs` too; the mail dedup handles that, and
+    # the DM dedup needs the same guard).
+    for sub_key in session.subs:
+        existing = by_member.get(sub_key, [])
+        if any(a["role"] == "paired_sub" for a in existing):
+            continue
+        existing.append({
+            "role":      "pool_sub",
+            "zone":      None,
+            "phase":     None,
+            "pair_with": None,
+        })
+        by_member[sub_key] = existing
+
+    return list(by_member.items())
+
+
+def _build_dm_body(
+    session: "RosterBuilderSession",
+    member: dict,
+    assignments: "list[dict]",
+    *,
+    time_label: str,
+    date_label: str,
+) -> str:
+    """Compose the personalised DM body for one rostered member.
+
+    Skips the per-stage prefix on flat presets so the message reads
+    cleanly for single-stage events. Pool-sub-only recipients get the
+    standby copy.
+    """
+    label = "Desert Storm" if session.event_type == "DS" else "Canyon Storm"
+    icon = "⚔️" if session.event_type == "DS" else "🏜️"
+    team_blurb = f" — Team {session.team}" if session.team else ""
+
+    name = (member.get("name") or "").strip() or "there"
+    is_phase_aware = session.is_phase_aware
+
+    # Pool-sub-only: short standby message. The standby DM uses the
+    # same date + time line so the recipient can plan around it.
+    if assignments and all(a["role"] == "pool_sub" for a in assignments):
+        return (
+            f"👋 Hey **{name}**,\n\n"
+            f"You're on the **standby pool** for the **{label}**"
+            f"{team_blurb} roster on **{date_label}** at **{time_label}**.\n\n"
+            f"Stay reachable — if a primary can't make it, leadership "
+            f"may call you in to cover. {icon}"
+        )
+
+    # Build a per-stage / per-zone bullet list. Each line is:
+    #   `• Stage 1 — Power Tower (primary)` (phase-aware)
+    #   `• Power Tower (primary)`           (flat)
+    bullets: list[str] = []
+    for a in assignments:
+        if a["role"] == "pool_sub":
+            # Mixed case (a few primaries + standby in the pool) —
+            # surface the standby line so the recipient sees BOTH
+            # their pinned roles and the pool standby.
+            bullets.append(
+                "• Standby pool — leadership may call you in if a "
+                "primary can't make it."
+            )
+            continue
+        stage_prefix = (
+            f"Stage {a['phase']} — " if is_phase_aware else ""
+        )
+        if a["role"] == "primary":
+            bullets.append(f"• {stage_prefix}**{a['zone']}** (primary)")
+        else:  # paired_sub
+            partner = a.get("pair_with") or "a primary"
+            bullets.append(
+                f"• {stage_prefix}**{a['zone']}** "
+                f"(sub for {partner})"
+            )
+
+    return (
+        f"👋 Hey **{name}**,\n\n"
+        f"You're on the **{label}**{team_blurb} roster for "
+        f"**{date_label}** at **{time_label}**.\n\n"
+        f"**Your assignments:**\n"
+        + "\n".join(bullets)
+        + f"\n\nBe ready! {icon}"
+    )
+
+
+def _resolve_dm_time_label(session: "RosterBuilderSession") -> str:
+    """Look up the team-specific time label (e.g. `4pm EDT (18:00
+    server time)`) for the session's team. Falls back to a sensible
+    placeholder when the alliance hasn't picked their team slot yet
+    (would only happen if the wizard's Step 3 was skipped, which the
+    save guard normally prevents)."""
+    if not session.guild_id:
+        return "(time not configured)"
+    try:
+        from config import get_storm_team_slot_labels
+        a_label, b_label = get_storm_team_slot_labels(
+            session.guild_id, session.event_type, session.event_date,
+        )
+    except Exception:
+        return "(time not configured)"
+    if session.team == "A":
+        return a_label or "(time not configured)"
+    if session.team == "B":
+        return b_label or "(time not configured)"
+    # CS / no-team — pick whichever side has a label.
+    return a_label or b_label or "(time not configured)"
+
+
+def _resolve_dm_date_label(session: "RosterBuilderSession") -> str:
+    """Pretty-print the event date for the DM body. Empty string when
+    the session isn't pinned to a date (free-tier template mode)."""
+    if not session.event_date:
+        return "the next event"
+    try:
+        from storm_date_helpers import format_event_date
+        return format_event_date(session.event_date)
+    except Exception:
+        return session.event_date
+
+
+async def _try_send_personal_dm(
+    bot, discord_id: int, body: str,
+) -> "tuple[bool, str]":
+    """Send `body` to `discord_id` as a DM. Returns (success, reason).
+
+    Reason is empty on success and a short human-readable string on
+    failure, so the officer ephemeral can group recipients by why
+    they didn't get the DM. The bot-side DM helper in dm.py swallows
+    these distinctions; the roster-DM flow needs them surfaced.
+    """
+    try:
+        user = await bot.fetch_user(int(discord_id))
+    except discord.NotFound:
+        return False, "Discord user not found (left server?)"
+    except (discord.HTTPException, ValueError, TypeError) as e:
+        logger.warning(
+            "[STORM DM] fetch_user(%s) failed: %s", discord_id, e,
+        )
+        return False, "Discord lookup failed"
+    try:
+        await user.send(body)
+        return True, ""
+    except discord.Forbidden:
+        return False, "DMs closed by member"
+    except discord.HTTPException as e:
+        logger.warning(
+            "[STORM DM] send to %s failed: %s", discord_id, e,
+        )
+        return False, f"Discord rejected the send ({e.status})"
+
+
+async def _dm_rostered_members(
+    session: "RosterBuilderSession", bot,
+) -> "tuple[int, list[tuple[str, str]]]":
+    """Send a personalised DM to every primary + paired sub + pool sub
+    on the approved roster.
+
+    Returns `(sent_count, failures)`; failures is a list of
+    `(display_name, reason)` tuples that the officer ephemeral renders
+    so leadership knows who to chase up in-game.
+    """
+    time_label = _resolve_dm_time_label(session)
+    date_label = _resolve_dm_date_label(session)
+
+    by_member = _collect_dm_assignments(session)
+    sent = 0
+    failures: list[tuple[str, str]] = []
+
+    for member_key, assignments in by_member:
+        if not assignments:
+            continue
+        m = session.members.get(member_key)
+        if m is None:
+            failures.append((member_key, "member missing from roster"))
+            continue
+        display_name = (m.get("name") or "").strip() or member_key
+        # `not_on_discord` is the explicit alliance / sync-time flag —
+        # surface that as the reason rather than letting the empty-ID
+        # branch below claim "no Discord ID" when the alliance already
+        # marked them as not-on-Discord.
+        if m.get("not_on_discord"):
+            failures.append((display_name, "marked as not on Discord"))
+            continue
+        discord_id_raw = (m.get("discord_id") or "").strip()
+        if not discord_id_raw or not discord_id_raw.isdigit():
+            failures.append((display_name, "no Discord ID linked"))
+            continue
+        body = _build_dm_body(
+            session, m, assignments,
+            time_label=time_label, date_label=date_label,
+        )
+        ok, reason = await _try_send_personal_dm(
+            bot, int(discord_id_raw), body,
+        )
+        if ok:
+            sent += 1
+        else:
+            failures.append((display_name, reason))
+
+    return sent, failures
+
+
+class _DmRosteredMembersView(discord.ui.View):
+    """Single-button view attached to the Approve & Post officer
+    ephemeral. Click fires the DMs, disables the button, and replaces
+    the message with the outcome summary so the officer can't double-
+    send."""
+
+    def __init__(self, session: "RosterBuilderSession", bot, *, owner_id: int):
+        super().__init__(timeout=600)
+        self.session = session
+        self.bot = bot
+        self.owner_id = owner_id
+
+    async def interaction_check(
+        self, interaction: discord.Interaction,
+    ) -> bool:
+        if interaction.user.id != self.owner_id:
+            await interaction.response.send_message(
+                "⛔ Only the officer who posted the roster can fire "
+                "the DMs.",
+                ephemeral=True,
+            )
+            return False
+        return True
+
+    @discord.ui.button(
+        label="📨 DM rostered members",
+        style=discord.ButtonStyle.primary,
+    )
+    async def send_dms(
+        self, interaction: discord.Interaction,
+        _btn: discord.ui.Button,
+    ):
+        # Premium gate. Belt-and-suspenders — the view should only be
+        # attached on Premium guilds, but double-check at click time
+        # so a downgrade between attach and click doesn't fire DMs
+        # the alliance is no longer entitled to.
+        import premium
+        if not await premium.is_premium(
+            self.session.guild_id, bot=self.bot,
+            interaction=interaction,
+        ):
+            await interaction.response.send_message(
+                "💎 DM-the-roster is a Premium feature. Run "
+                "`/upgrade` to enable it.",
+                ephemeral=True,
+            )
+            return
+
+        for item in self.children:
+            item.disabled = True
+
+        await interaction.response.defer(ephemeral=True, thinking=True)
+
+        sent, failures = await _dm_rostered_members(
+            self.session, self.bot,
+        )
+
+        # Render the outcome summary. Keep it under Discord's 2000-char
+        # cap by truncating the failures list when a roster has more
+        # than a handful of issues — the full list goes to the log.
+        lines: list[str] = []
+        if sent and not failures:
+            lines.append(f"✅ DM'd {sent} member(s) on the approved roster.")
+        elif sent:
+            lines.append(
+                f"✅ DM'd {sent} member(s) · "
+                f"⚠️ {len(failures)} couldn't be reached:"
+            )
+        elif failures:
+            lines.append(
+                f"⚠️ Couldn't DM any members "
+                f"({len(failures)} failed):"
+            )
+        else:
+            lines.append(
+                "⚠️ No rostered members to DM — the approved roster "
+                "is empty."
+            )
+
+        if failures:
+            preview_limit = 20
+            for name, reason in failures[:preview_limit]:
+                lines.append(f"• **{name}** — {reason}")
+            if len(failures) > preview_limit:
+                lines.append(
+                    f"_…and {len(failures) - preview_limit} more "
+                    f"(see bot logs for the full list)._"
+                )
+                logger.info(
+                    "[STORM DM] guild=%s event=%s full un-DM'd list: %s",
+                    self.session.guild_id, self.session.event_type,
+                    failures,
+                )
+
+        body = "\n".join(lines)
+        if len(body) > _MAX_MESSAGE_CONTENT:
+            body = body[: _MAX_MESSAGE_CONTENT - 20] + "\n…(truncated)"
+        try:
+            await interaction.followup.send(body, ephemeral=True)
+        except discord.HTTPException as e:
+            logger.warning(
+                "[STORM DM] outcome ephemeral failed (guild=%s event=%s): %s",
+                self.session.guild_id, self.session.event_type, e,
+            )
+
+        # Edit the parent message to remove the now-clicked button so
+        # the officer's confirmation history stays clean.
+        try:
+            await interaction.edit_original_response(view=self)
+        except discord.HTTPException:
+            pass
+        self.stop()
+
+
 async def _finalize_structured_roster(
     interaction: discord.Interaction, view: RosterBuilderView,
     *, include_image: bool = False,
@@ -5103,6 +5488,51 @@ async def _finalize_structured_roster(
             )
         except discord.HTTPException:
             pass  # nothing else to do; at least it's not stuck thinking
+
+    # #226 follow-up — DM-the-roster: offer a one-click button to DM
+    # every primary + paired sub + pool sub their personal assignment.
+    # Only attached on a successful post AND on Premium guilds (the
+    # bot fans out personalised messages, which is a Premium-tier
+    # capability everywhere else in the codebase). Click-time gate
+    # in `_DmRosteredMembersView.send_dms` re-checks Premium so a
+    # downgrade between attach and click doesn't slip past.
+    if post_status == "posted_ok":
+        try:
+            import premium
+            is_premium = await premium.is_premium(
+                s.guild_id, bot=interaction.client,
+                interaction=interaction,
+            )
+        except Exception as e:
+            logger.warning(
+                "[STORM DM] premium check failed (guild=%s): %s",
+                s.guild_id, e,
+            )
+            is_premium = False
+        if is_premium:
+            dm_view = _DmRosteredMembersView(
+                s, interaction.client, owner_id=interaction.user.id,
+            )
+            dm_intro = (
+                "📨 **DM rostered members?**\n"
+                "Click below to DM each rostered member their "
+                "personal assignment(s). Subs in paired mode get a "
+                "note about which primary they're covering; the pool "
+                "subs get a standby message.\n\n"
+                "_Members without a linked Discord ID or with DMs "
+                "closed get listed back here after — no DM goes out "
+                "to them._"
+            )
+            try:
+                await interaction.followup.send(
+                    dm_intro, view=dm_view, ephemeral=True,
+                )
+            except discord.HTTPException as e:
+                logger.warning(
+                    "[STORM DM] DM-the-roster ephemeral failed "
+                    "(guild=%s event=%s): %s",
+                    s.guild_id, s.event_type, e,
+                )
 
     # #228 follow-up: if the rendered image couldn't fit every member
     # (slot grid capped at `max_rows` per zone), surface the names

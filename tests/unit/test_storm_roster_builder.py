@@ -5134,3 +5134,254 @@ class TestZoneMemberEditView:
         assert any("Clear this zone" in lab for lab in labels)
         assert not any("Remove current zone assignees" in lab for lab in labels)
 
+
+class TestDmRosterAssignmentCollection:
+    """#226 follow-up — DM-the-roster collects every primary, paired
+    sub, and pool sub into a single per-member assignment list."""
+
+    def test_primary_assignments_grouped_by_member(self):
+        members = {
+            "1": {"key": "1", "name": "Alice", "discord_id": "1001",
+                  "power": 500_000_000, "not_on_discord": False},
+            "2": {"key": "2", "name": "Bob", "discord_id": "1002",
+                  "power": 400_000_000, "not_on_discord": False},
+        }
+        session = _make_session(team="A", members=members)
+        session.assignments["Power Tower"].append("1")
+        session.assignments["Nuclear Silo"].append("2")
+        collected = dict(srb._collect_dm_assignments(session))
+        assert collected["1"] == [{
+            "role": "primary", "zone": "Power Tower",
+            "phase": 1, "pair_with": None,
+        }]
+        assert collected["2"] == [{
+            "role": "primary", "zone": "Nuclear Silo",
+            "phase": 1, "pair_with": None,
+        }]
+
+    def test_paired_sub_carries_primary_name_and_zone(self):
+        members = {
+            "1": {"key": "1", "name": "Alice", "discord_id": "1001",
+                  "power": 500_000_000, "not_on_discord": False},
+            "2": {"key": "2", "name": "Bob", "discord_id": "1002",
+                  "power": 300_000_000, "not_on_discord": False},
+        }
+        session = _make_session(team="A", members=members,
+                                sub_mode="paired")
+        session.assignments["Power Tower"].append("1")
+        session.paired_subs["1"] = "2"
+        collected = dict(srb._collect_dm_assignments(session))
+        # Primary unchanged.
+        assert collected["1"] == [{
+            "role": "primary", "zone": "Power Tower",
+            "phase": 1, "pair_with": None,
+        }]
+        # Sub gets a paired_sub row pointing back to Alice's zone.
+        assert collected["2"] == [{
+            "role": "paired_sub", "zone": "Power Tower",
+            "phase": 1, "pair_with": "Alice",
+        }]
+
+    def test_pool_sub_collected_separately(self):
+        members = {
+            "1": {"key": "1", "name": "Alice", "discord_id": "1001",
+                  "power": 500_000_000, "not_on_discord": False},
+            "2": {"key": "2", "name": "Carol", "discord_id": "1003",
+                  "power": 200_000_000, "not_on_discord": False},
+        }
+        session = _make_session(team="A", members=members)
+        session.assignments["Power Tower"].append("1")
+        session.subs.append("2")
+        collected = dict(srb._collect_dm_assignments(session))
+        assert collected["2"] == [{
+            "role": "pool_sub", "zone": None, "phase": None,
+            "pair_with": None,
+        }]
+
+    def test_paired_sub_not_double_counted_as_pool_sub(self):
+        """Paired-mode keeps the sub key in `session.subs` (the pairing
+        layer doesn't move it out). Same dedup as the mail subs block
+        (#224) must apply here: the sub gets a paired_sub row, NOT also
+        a pool_sub row, or they'd get two DMs."""
+        members = {
+            "1": {"key": "1", "name": "Alice", "discord_id": "1001",
+                  "power": 500_000_000, "not_on_discord": False},
+            "2": {"key": "2", "name": "Bob", "discord_id": "1002",
+                  "power": 300_000_000, "not_on_discord": False},
+        }
+        session = _make_session(team="A", members=members,
+                                sub_mode="paired")
+        session.assignments["Power Tower"].append("1")
+        session.paired_subs["1"] = "2"
+        session.subs.append("2")
+        collected = dict(srb._collect_dm_assignments(session))
+        assert len(collected["2"]) == 1
+        assert collected["2"][0]["role"] == "paired_sub"
+
+    def test_phase_aware_member_in_multiple_stages(self):
+        """A member who plays in Stage 1 AND Stage 2 gets ONE entry
+        in the per-member list with both stage rows. The DM body then
+        renders both lines so the recipient sees their full
+        commitment in one message."""
+        s = _make_phase_aware_session()
+        s.assignments["Info Center"].append("1")     # Alice in P1
+        s.assignments_p2["Arsenal"].append("1")      # Alice in P2
+        collected = dict(srb._collect_dm_assignments(s))
+        # Alice's list spans both phases.
+        roles = collected["1"]
+        assert len(roles) == 2
+        assert {(r["phase"], r["zone"]) for r in roles} == {
+            (1, "Info Center"), (2, "Arsenal"),
+        }
+
+
+class TestDmRosterBody:
+    """The composed per-member DM body honors flat vs phase-aware,
+    pool-only vs pinned, and team / event-date / time placeholders."""
+
+    def _ctx_labels(self):
+        return {"time_label": "4pm EDT (18:00 server time)",
+                "date_label": "Thursday, May 28, 2026"}
+
+    def test_primary_body_lists_zone(self):
+        members = {
+            "1": {"key": "1", "name": "Alice", "discord_id": "1001",
+                  "power": 500_000_000, "not_on_discord": False},
+        }
+        session = _make_session(team="A", members=members)
+        session.event_date = "2026-05-28"
+        session.assignments["Power Tower"].append("1")
+        body = srb._build_dm_body(
+            session, members["1"],
+            [{"role": "primary", "zone": "Power Tower",
+              "phase": 1, "pair_with": None}],
+            **self._ctx_labels(),
+        )
+        assert "Alice" in body
+        assert "Desert Storm" in body
+        assert "Team A" in body
+        assert "Power Tower" in body
+        assert "(primary)" in body
+        assert "May 28, 2026" in body
+        assert "4pm EDT" in body
+
+    def test_flat_preset_drops_stage_prefix(self):
+        members = {
+            "1": {"key": "1", "name": "Alice", "discord_id": "1001",
+                  "power": 500_000_000, "not_on_discord": False},
+        }
+        session = _make_session(team="A", members=members)
+        body = srb._build_dm_body(
+            session, members["1"],
+            [{"role": "primary", "zone": "Power Tower",
+              "phase": 1, "pair_with": None}],
+            **self._ctx_labels(),
+        )
+        # Flat preset → no "Stage 1" prefix in the bullet line.
+        assert "Stage 1 —" not in body
+
+    def test_phase_aware_keeps_stage_prefix(self):
+        s = _make_phase_aware_session()
+        s.assignments["Info Center"].append("1")
+        body = srb._build_dm_body(
+            s, s.members["1"],
+            [{"role": "primary", "zone": "Info Center",
+              "phase": 1, "pair_with": None}],
+            **self._ctx_labels(),
+        )
+        assert "Stage 1 —" in body
+
+    def test_paired_sub_body_names_primary(self):
+        members = {
+            "2": {"key": "2", "name": "Bob", "discord_id": "1002",
+                  "power": 300_000_000, "not_on_discord": False},
+        }
+        session = _make_session(team="A", members=members,
+                                sub_mode="paired")
+        body = srb._build_dm_body(
+            session, members["2"],
+            [{"role": "paired_sub", "zone": "Power Tower",
+              "phase": 1, "pair_with": "Alice"}],
+            **self._ctx_labels(),
+        )
+        assert "Bob" in body
+        assert "Power Tower" in body
+        assert "sub for Alice" in body
+
+    def test_pool_sub_only_uses_standby_copy(self):
+        members = {
+            "9": {"key": "9", "name": "Carol", "discord_id": "1009",
+                  "power": 100_000_000, "not_on_discord": False},
+        }
+        session = _make_session(team="A", members=members)
+        body = srb._build_dm_body(
+            session, members["9"],
+            [{"role": "pool_sub", "zone": None,
+              "phase": None, "pair_with": None}],
+            **self._ctx_labels(),
+        )
+        assert "standby pool" in body
+        # Pool-only standby skips the assignments bullet list.
+        assert "(primary)" not in body
+        assert "Your assignments" not in body
+
+
+class TestDmRosterSendFlow:
+    """End-to-end DM send flow with mocked Discord — verifies success
+    counting, failure-reason capture, and the not_on_discord shortcut."""
+
+    @pytest.mark.asyncio
+    async def test_dm_send_groups_successes_and_failures(self):
+        members = {
+            "1": {"key": "1", "name": "Alice", "discord_id": "1001",
+                  "power": 500_000_000, "not_on_discord": False},
+            "2": {"key": "2", "name": "Bob", "discord_id": "",
+                  "power": 300_000_000, "not_on_discord": False},
+            "3": {"key": "3", "name": "Carol", "discord_id": "9999",
+                  "power": 200_000_000, "not_on_discord": True},
+        }
+        session = _make_session(team="A", members=members)
+        session.event_date = "2026-05-28"
+        session.assignments["Power Tower"].append("1")
+        session.assignments["Nuclear Silo"].append("2")
+        session.subs.append("3")
+
+        fake_user = MagicMock()
+        fake_user.send = AsyncMock()
+        bot = MagicMock()
+        bot.fetch_user = AsyncMock(return_value=fake_user)
+
+        with patch.object(srb, "_resolve_dm_time_label",
+                          return_value="4pm EDT (18:00 server time)"):
+            sent, failures = await srb._dm_rostered_members(session, bot)
+
+        # Alice was DM'd; Bob has no Discord ID; Carol is marked
+        # not_on_discord and gets shortcut-failed.
+        assert sent == 1
+        names = dict(failures)
+        assert names["Bob"] == "no Discord ID linked"
+        assert names["Carol"] == "marked as not on Discord"
+
+    @pytest.mark.asyncio
+    async def test_closed_dms_reported_as_failure(self):
+        members = {
+            "1": {"key": "1", "name": "Alice", "discord_id": "1001",
+                  "power": 500_000_000, "not_on_discord": False},
+        }
+        session = _make_session(team="A", members=members)
+        session.assignments["Power Tower"].append("1")
+
+        fake_user = MagicMock()
+        fake_user.send = AsyncMock(
+            side_effect=discord.Forbidden(MagicMock(status=403),
+                                          "Cannot send messages to this user"),
+        )
+        bot = MagicMock()
+        bot.fetch_user = AsyncMock(return_value=fake_user)
+
+        with patch.object(srb, "_resolve_dm_time_label",
+                          return_value="4pm EDT"):
+            sent, failures = await srb._dm_rostered_members(session, bot)
+        assert sent == 0
+        assert failures == [("Alice", "DMs closed by member")]
+

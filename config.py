@@ -57,6 +57,11 @@ class GuildConfig:
     tab_survey_history:       str        = "Survey History"
     tab_member_default:       str        = "Season 5 - Off-Season"
     setup_complete:           bool       = False
+    # Opt-out toggle for the release-announcement embed posted to the
+    # leadership channel when a new major/minor version deploys (#253).
+    # Defaults to enabled so existing alliances see the next release;
+    # surfaced as a toggle in the `/setup` re-entry hub.
+    release_announcements_enabled: int   = 1
 
     def parse_time(self, time_str: str) -> tuple[int, int]:
         """Parse 'HH:MM' into (hour, minute)."""
@@ -109,7 +114,8 @@ def init_db():
                 tab_sitouts              TEXT    DEFAULT 'DS-CS Sit-outs',
                 tab_survey_history       TEXT    DEFAULT 'Survey History',
                 tab_member_default       TEXT    DEFAULT 'Season 5 - Off-Season',
-                setup_complete           INTEGER DEFAULT 0
+                setup_complete           INTEGER DEFAULT 0,
+                release_announcements_enabled INTEGER DEFAULT 1
             )
         """)
         conn.commit()
@@ -318,7 +324,8 @@ def init_db():
                 owner_id          INTEGER NOT NULL DEFAULT 0,
                 installer_user_id INTEGER,
                 installed_at      TEXT    NOT NULL,
-                last_seen_at      TEXT    NOT NULL
+                last_seen_at      TEXT    NOT NULL,
+                last_seen_version TEXT    NOT NULL DEFAULT ''
             )
         """)
         conn.commit()
@@ -631,6 +638,28 @@ def init_db():
                     except Exception as _e:
                         print(f"[CONFIG] Could not write back {_table} rowid={_rowid}: {_e}")
 
+        # ── 1.3.4: release-announcement infra (#253) ───────────────────────────
+        # Adds the opt-out toggle on guild_configs and the per-guild
+        # `last_seen_version` so on_ready can detect a major/minor bump and
+        # post a release-notification embed. DEFAULT '1.3.3' on the ALTER
+        # is the migration backfill — existing rows pick up '1.3.3' so the
+        # 1.3.4 deploy itself doesn't fire any announcements, then the
+        # 1.4.0 deploy sees the major.minor change and triggers naturally.
+        # New rows after this migration always get an explicit version via
+        # `upsert_guild_install_metadata(current_version=...)`.
+        try:
+            conn.execute("ALTER TABLE guild_configs ADD COLUMN release_announcements_enabled INTEGER DEFAULT 1")
+            conn.commit()
+            print("[CONFIG] Added release_announcements_enabled to guild_configs")
+        except Exception:
+            pass
+        try:
+            conn.execute("ALTER TABLE guild_install_metadata ADD COLUMN last_seen_version TEXT NOT NULL DEFAULT '1.3.3'")
+            conn.commit()
+            print("[CONFIG] Added last_seen_version to guild_install_metadata (existing rows backfilled to '1.3.3')")
+        except Exception:
+            pass
+
 
 def get_config(guild_id: int) -> Optional[GuildConfig]:
     """Retrieve config for a guild. Returns None if not found."""
@@ -896,6 +925,7 @@ def upsert_guild_install_metadata(
     guild_name: str,
     owner_id: int,
     installer_user_id: Optional[int] = None,
+    current_version: str = "",
 ) -> None:
     """Insert or update the metadata row for a guild.
 
@@ -904,6 +934,13 @@ def upsert_guild_install_metadata(
     `owner_id`, `last_seen_at`; preserves `installed_at` and only fills
     `installer_user_id` if it's still NULL (audit-log lookups can fail on
     later boots even when they succeeded once).
+
+    `current_version` is the bot's `__version__` at the time of the
+    sighting. On first sighting it's written to `last_seen_version` so
+    fresh installs don't trigger a "Welcome to vX.Y.Z" announcement on
+    their next deploy. On subsequent sightings `last_seen_version` is
+    left alone — the release-announcement handler owns updates to that
+    column.
     """
     from datetime import datetime, timezone
     now = datetime.now(timezone.utc).isoformat()
@@ -915,9 +952,11 @@ def upsert_guild_install_metadata(
         if existing is None:
             conn.execute(
                 """INSERT INTO guild_install_metadata
-                   (guild_id, guild_name, owner_id, installer_user_id, installed_at, last_seen_at)
-                   VALUES (?, ?, ?, ?, ?, ?)""",
-                (guild_id, guild_name, owner_id, installer_user_id, now, now),
+                   (guild_id, guild_name, owner_id, installer_user_id,
+                    installed_at, last_seen_at, last_seen_version)
+                   VALUES (?, ?, ?, ?, ?, ?, ?)""",
+                (guild_id, guild_name, owner_id, installer_user_id,
+                 now, now, current_version),
             )
         else:
             prev_installer = existing["installer_user_id"]
@@ -928,6 +967,18 @@ def upsert_guild_install_metadata(
                    WHERE guild_id = ?""",
                 (guild_name, owner_id, new_installer, now, guild_id),
             )
+        conn.commit()
+
+
+def set_last_seen_version(guild_id: int, version: str) -> None:
+    """Update only the `last_seen_version` column for a guild. Called by
+    the release-announcement handler after a successful notification post
+    so the next boot doesn't re-fire the announcement."""
+    with _get_conn() as conn:
+        conn.execute(
+            "UPDATE guild_install_metadata SET last_seen_version = ? WHERE guild_id = ?",
+            (version, guild_id),
+        )
         conn.commit()
 
 

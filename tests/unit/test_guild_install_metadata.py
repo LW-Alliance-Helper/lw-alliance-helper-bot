@@ -27,6 +27,8 @@ def test_schema_creates_metadata_table(temp_db):
     assert cols == {
         "guild_id", "guild_name", "owner_id",
         "installer_user_id", "installed_at", "last_seen_at",
+        # Added in 1.3.4 (#253) — release-announcement bookkeeping.
+        "last_seen_version",
     }
 
 

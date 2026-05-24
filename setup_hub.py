@@ -197,6 +197,7 @@ class _SetupHubView(discord.ui.View):
         self.owner_user_id = owner_user_id
         self.is_premium = is_premium
         self._gate_premium_buttons()
+        self._refresh_release_announcement_label()
 
     def _gate_premium_buttons(self) -> None:
         """Disable Premium-only buttons on free tier and prefix their
@@ -207,6 +208,17 @@ class _SetupHubView(discord.ui.View):
             button.disabled = True
             if not button.label.startswith("💎"):
                 button.label = f"💎 {button.label}"
+
+    def _refresh_release_announcement_label(self) -> None:
+        """Reflect current opt-in state in the toggle button label so
+        officers see the state at a glance without clicking. Called
+        from `__init__` so each hub render picks up the latest value
+        from `guild_configs`."""
+        from config import get_config
+        cfg = get_config(self.guild_id)
+        enabled = bool(cfg.release_announcements_enabled) if cfg else True
+        state = "ON" if enabled else "OFF"
+        self.btn_release_announcements.label = f"📢 Release announcements: {state}"
 
     async def interaction_check(self, interaction: discord.Interaction) -> bool:
         # Hub buttons inherit the same admin-or-leadership gate as the
@@ -256,6 +268,32 @@ class _SetupHubView(discord.ui.View):
     async def btn_reset(self, inter: discord.Interaction, _b: discord.ui.Button):
         from setup_cog import _run_reset_flow
         await _run_reset_flow(inter)
+
+    @discord.ui.button(label="📢 Release announcements", style=discord.ButtonStyle.secondary, row=0)
+    async def btn_release_announcements(self, inter: discord.Interaction, _b: discord.ui.Button):
+        """One-click opt-in/opt-out for the leadership-channel release
+        notification posted on each new major/minor version (#253). The
+        label always reflects current state (set in
+        `_refresh_release_announcement_label`); clicking flips it and
+        replies ephemerally with the new state. Default is ON."""
+        from config import get_config, get_or_create_config, update_config_field
+        cfg = get_config(inter.guild_id) or get_or_create_config(inter.guild_id)
+        currently_on = bool(cfg.release_announcements_enabled)
+        new_value = 0 if currently_on else 1
+        update_config_field(inter.guild_id, "release_announcements_enabled", new_value)
+        if new_value:
+            msg = (
+                "📢 **Release announcements are now ON.** The next time a major "
+                "or minor version of LW Alliance Helper deploys, you'll see a "
+                "short summary embed in your leadership channel."
+            )
+        else:
+            msg = (
+                "📢 **Release announcements are now OFF.** You won't see release "
+                "notifications in your leadership channel. You can turn them "
+                "back on anytime by clicking this button again."
+            )
+        await inter.response.send_message(msg, ephemeral=True)
 
     # ── Row 1: free-tier features ────────────────────────────────────────────
 

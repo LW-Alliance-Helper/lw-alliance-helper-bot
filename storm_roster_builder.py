@@ -81,10 +81,18 @@ def _read_power_column_header(guild_id: int, event_type: str) -> str:
         return ""
     power_letter = (structured.get("power_metric_column") or "B").strip().upper()
     power_col = config.power_column_letter_to_index(power_letter)
+    # Honour the configured Power Data Source tab (#256). Empty
+    # `power_metric_tab` keeps the pre-flexibility behaviour where
+    # power lives on the Member Roster row itself; non-empty points
+    # the lookup at a separate tab (e.g. `Squad Powers`), so the
+    # header label members see in the DM matches the actual column
+    # the bot is reading.
+    configured_power_tab = (structured.get("power_metric_tab") or "").strip()
+    tab_to_read = configured_power_tab or (
+        roster_cfg.get("tab_name") or "Member Roster"
+    )
     try:
-        ws = config.get_member_roster_sheet(
-            guild_id, roster_cfg.get("tab_name") or "Member Roster",
-        )
+        ws = config.get_member_roster_sheet(guild_id, tab_to_read)
         header_row = ws.row_values(1)
     except Exception:
         return ""

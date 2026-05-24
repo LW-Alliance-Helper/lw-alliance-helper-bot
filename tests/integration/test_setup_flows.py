@@ -744,6 +744,38 @@ class TestRunSurveySetup:
 class TestRunStormSetup:
     """Test /setup_desertstorm and /setup_canyonstorm save config correctly."""
 
+    # On the Premium lane (FORCE_PREMIUM=1), the storm setup wizard
+    # reaches `_run_structured_flow_setup_step` after the participation
+    # step — that sub-flow shows views (e.g. `_DowView`) the generic
+    # `make_send_handler` overrides drive with `selected="A"`, which
+    # collides with code that compares `selected < 0` (int). Stub the
+    # sub-flow out with an opted-out config dict so these tests stay
+    # focused on the log/post channel save path.
+    _STRUCTURED_OPTED_OUT = {
+        "structured_flow_enabled":         False,
+        "power_metric_column":             "B",
+        "power_metric_tab":                "",
+        "power_match_column":              "",
+        "sub_mode":                        "pool",
+        "signup_channel_id":               0,
+        "signup_schedule_cron":            "",
+        "signups_tab":                     "",
+        "rosters_tab":                     "",
+        "attendance_tab":                  "",
+        "strategies_tab":                  "",
+        "member_rules_tab":                "",
+        "poll_day_of_week":                -1,
+        "signup_time":                     "",
+        "power_refresh_dm_enabled":        False,
+        "roster_dm_starter_template":      "",
+        "roster_dm_paired_sub_template":   "",
+        "roster_dm_pool_sub_template":     "",
+    }
+
+    @staticmethod
+    async def _fake_structured_optout(*args, **kwargs):
+        return TestRunStormSetup._STRUCTURED_OPTED_OUT
+
     @pytest.mark.asyncio
     async def test_ds_setup_team_a_only(self, seeded_db):
         import config
@@ -763,6 +795,8 @@ class TestRunStormSetup:
         # TeamChoiceView (inline) → selected="A", TemplateChoiceView → outcome="default"
         with patch("setup_cog.ChannelSelectStep", return_value=log_view), \
              patch("setup_cog._run_storm_participation_step", side_effect=_skip_participation), \
+             patch("setup_cog._run_structured_flow_setup_step",
+                    side_effect=self._fake_structured_optout), \
              patch_keep_or_change(["DS Assignments"]):
             make_send_handler(
                 interaction.channel,
@@ -792,6 +826,8 @@ class TestRunStormSetup:
 
         with patch("setup_cog.ChannelSelectStep", return_value=log_view), \
              patch("setup_cog._run_storm_participation_step", side_effect=_skip_participation), \
+             patch("setup_cog._run_structured_flow_setup_step",
+                    side_effect=self._fake_structured_optout), \
              patch_keep_or_change(["CS Assignments"]):
             make_send_handler(
                 interaction.channel,

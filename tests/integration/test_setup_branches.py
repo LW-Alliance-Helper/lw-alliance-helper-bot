@@ -35,6 +35,35 @@ from tests.integration.test_setup_flows import (
 
 # ── /setup_desertstorm + /setup_canyonstorm with participation enabled ────────
 
+def _fake_structured_flow_opted_out():
+    """Return the dict shape `_run_structured_flow_setup_step` produces
+    when the officer declines the Premium structured roster flow.
+    Lets tests that only care about earlier wizard steps stub it out
+    without having to drive the Premium sub-flow's full UI. Without
+    this stub, the sub-flow runs against an undermocked bot/channel
+    and exhausts the test's prepared replies (StopIteration)."""
+    return {
+        "structured_flow_enabled":         False,
+        "power_metric_column":             "B",
+        "power_metric_tab":                "",
+        "power_match_column":              "",
+        "sub_mode":                        "pool",
+        "signup_channel_id":               0,
+        "signup_schedule_cron":            "",
+        "signups_tab":                     "",
+        "rosters_tab":                     "",
+        "attendance_tab":                  "",
+        "strategies_tab":                  "",
+        "member_rules_tab":                "",
+        "poll_day_of_week":                -1,
+        "signup_time":                     "",
+        "power_refresh_dm_enabled":        False,
+        "roster_dm_starter_template":      "",
+        "roster_dm_paired_sub_template":   "",
+        "roster_dm_pool_sub_template":     "",
+    }
+
+
 class TestStormSetupWithParticipation:
     """The new (#20) participation block — Step 6 of /setup_desertstorm."""
 
@@ -72,9 +101,14 @@ class TestStormSetupWithParticipation:
                 "roster_start_row": 2,
             }
 
+        async def fake_structured(*args, **kwargs):
+            return _fake_structured_flow_opted_out()
+
         with patch("setup_cog.ChannelSelectStep", side_effect=lambda *a, **kw: next(ch_iter)), \
              patch("setup_cog._run_storm_participation_step",
                     side_effect=fake_participation), \
+             patch("setup_cog._run_structured_flow_setup_step",
+                    side_effect=fake_structured), \
              patch_keep_or_change(["DS Assignments"]):
             make_send_handler(
                 interaction.channel,
@@ -118,9 +152,14 @@ class TestStormSetupWithParticipation:
                 "roster_start_row": 2,
             }
 
+        async def fake_structured(*args, **kwargs):
+            return _fake_structured_flow_opted_out()
+
         with patch("setup_cog.ChannelSelectStep", side_effect=lambda *a, **kw: next(ch_iter)), \
              patch("setup_cog._run_storm_participation_step",
                     side_effect=disabled_participation), \
+             patch("setup_cog._run_structured_flow_setup_step",
+                    side_effect=fake_structured), \
              patch_keep_or_change(["CS Assignments"]):
             make_send_handler(
                 interaction.channel,
@@ -347,3 +386,69 @@ class TestSetupHubLeadershipGate:
         assert "Leadership" in msg
 
 
+# ── /setup hub release-announcement toggle (#253) ────────────────────────────
+
+
+class TestSetupHubReleaseAnnouncementsToggle:
+    """The hub's 📢 Release announcements button is a one-click toggle
+    for `release_announcements_enabled`. Label reflects current state on
+    render; click flips the saved value and ephemerally confirms."""
+
+    @pytest.mark.asyncio
+    async def test_default_label_reads_on(self, seeded_db):
+        """A guild with the default `release_announcements_enabled = 1`
+        renders the button label as `📢 Release announcements: ON`."""
+        import setup_hub
+        view = setup_hub._SetupHubView(
+            MagicMock(), TEST_GUILD_ID, 1, is_premium=False,
+        )
+        assert view.btn_release_announcements.label.endswith(": ON")
+
+    @pytest.mark.asyncio
+    async def test_label_reflects_opted_out_state(self, seeded_db):
+        """After an explicit opt-out, the label renders OFF."""
+        import config
+        import setup_hub
+        config.update_config_field(TEST_GUILD_ID, "release_announcements_enabled", 0)
+        view = setup_hub._SetupHubView(
+            MagicMock(), TEST_GUILD_ID, 1, is_premium=False,
+        )
+        assert view.btn_release_announcements.label.endswith(": OFF")
+
+    @pytest.mark.asyncio
+    async def test_click_flips_on_to_off(self, seeded_db):
+        """Clicking the button when ON persists OFF and replies with the
+        OFF confirmation copy."""
+        import config
+        import setup_hub
+        view = setup_hub._SetupHubView(
+            MagicMock(), TEST_GUILD_ID, 1, is_premium=False,
+        )
+        interaction = make_mock_interaction()
+        await view.btn_release_announcements.callback(interaction)
+
+        cfg = config.get_config(TEST_GUILD_ID)
+        assert cfg.release_announcements_enabled == 0
+        sent = interaction.response.send_message.call_args
+        msg = sent.args[0] if sent.args else sent.kwargs.get("content", "")
+        assert "now OFF" in msg
+        assert sent.kwargs.get("ephemeral") is True
+
+    @pytest.mark.asyncio
+    async def test_click_flips_off_to_on(self, seeded_db):
+        """Clicking again flips back to ON."""
+        import config
+        import setup_hub
+        config.update_config_field(TEST_GUILD_ID, "release_announcements_enabled", 0)
+        view = setup_hub._SetupHubView(
+            MagicMock(), TEST_GUILD_ID, 1, is_premium=False,
+        )
+        interaction = make_mock_interaction()
+        await view.btn_release_announcements.callback(interaction)
+
+        cfg = config.get_config(TEST_GUILD_ID)
+        assert cfg.release_announcements_enabled == 1
+        sent = interaction.response.send_message.call_args
+        msg = sent.args[0] if sent.args else sent.kwargs.get("content", "")
+        assert "now ON" in msg
+        assert sent.kwargs.get("ephemeral") is True

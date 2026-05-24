@@ -28,6 +28,12 @@ class _FakeWorksheet:
     def get_all_values(self):
         return [list(r) for r in self._rows]
 
+    def row_values(self, row_number: int):
+        idx = row_number - 1
+        if 0 <= idx < len(self._rows):
+            return list(self._rows[idx])
+        return []
+
     def append_row(self, row, value_input_option=None):
         self._rows.append([str(c) for c in row])
 
@@ -321,6 +327,84 @@ class TestPowerDataSourceFlexibility:
         members, _errs = srb._read_roster_powers(gid, "DS")
         assert members["1001"]["power"] is None
         assert members["1002"]["power"] == 260_000_000
+
+
+class TestReadPowerColumnHeader:
+    """#256 — the power-refresh DM (#138) must name the column the
+    bot actually reads. When the alliance points storm at a separate
+    Power Data Source tab (e.g. `Squad Powers`), the header label
+    needs to come from THAT tab — not from whatever column letter
+    happens to land on in the Member Roster."""
+
+    def test_cross_tab_reads_header_from_power_tab(self, fake_env):
+        """Regression for #256: alliance configures Squad Powers as the
+        power tab, column C. Column C on Squad Powers reads `Squad
+        Power`; column C on the Member Roster reads `Display Name`.
+        The DM must surface `Squad Power`, not `Display Name`."""
+        fake, gid = fake_env
+        import config
+        sp = fake.add_worksheet("Squad Powers")
+        sp._rows = [
+            ["Discord ID", "Name", "Squad Power"],
+            ["1001",       "Alice", "500M"],
+        ]
+        config.save_structured_storm_config(
+            gid, "DS",
+            structured_flow_enabled=True,
+            power_metric_column="C",
+            power_metric_tab="Squad Powers",
+            power_match_column="A",
+        )
+        assert srb._read_power_column_header(gid, "DS") == "Squad Power"
+
+    def test_empty_power_tab_falls_back_to_member_roster(self, fake_env):
+        """Backwards-compat: alliances with empty `power_metric_tab`
+        still get the Member Roster header (pre-flexibility behaviour).
+        Column F on the fake roster is `1st Squad Power`."""
+        fake, gid = fake_env
+        import config
+        config.save_structured_storm_config(
+            gid, "DS",
+            structured_flow_enabled=True,
+            power_metric_column="F",
+            power_metric_tab="",
+            power_match_column="",
+        )
+        assert srb._read_power_column_header(gid, "DS") == "1st Squad Power"
+
+    def test_your_prefix_stripped(self, fake_env):
+        """`Your Power` header reads as `Power` in the DM (so the
+        sentence comes out `your Power`, not `your Your Power`)."""
+        fake, gid = fake_env
+        import config
+        sp = fake.add_worksheet("Squad Powers")
+        sp._rows = [
+            ["Discord ID", "Your Power"],
+            ["1001",       "500M"],
+        ]
+        config.save_structured_storm_config(
+            gid, "DS",
+            structured_flow_enabled=True,
+            power_metric_column="B",
+            power_metric_tab="Squad Powers",
+            power_match_column="A",
+        )
+        assert srb._read_power_column_header(gid, "DS") == "Power"
+
+    def test_missing_power_tab_returns_blank(self, fake_env):
+        """Configured tab doesn't exist on the spreadsheet → return ""
+        so the DM falls back to the generic wording instead of
+        crashing the signup handler."""
+        fake, gid = fake_env
+        import config
+        config.save_structured_storm_config(
+            gid, "DS",
+            structured_flow_enabled=True,
+            power_metric_column="B",
+            power_metric_tab="Nonexistent Tab",
+            power_match_column="A",
+        )
+        assert srb._read_power_column_header(gid, "DS") == ""
 
 
 # ── Session + eligibility ────────────────────────────────────────────────────
@@ -2556,6 +2640,19 @@ class TestFinalizePostOutcomes:
     whether the channel was deleted, the bot was kicked, or something
     else went wrong."""
 
+    def _find_followup(self, inter, needle: str) -> str | None:
+        """Return the first ephemeral followup containing `needle`, or
+        None. Necessary because `_finalize_structured_roster` fires
+        multiple followups on Premium guilds (#226: standard summary,
+        DM-rostered-members prompt, plus optional image-overflow
+        warning) — count-based or last-call assertions break under
+        FORCE_PREMIUM=1 lane."""
+        for call in inter.followup.send.await_args_list:
+            text = call.args[0] if call.args else ""
+            if needle in text:
+                return text
+        return None
+
     def _make_interaction(self, guild=None):
         from unittest.mock import AsyncMock, MagicMock
         inter = MagicMock()
@@ -2655,9 +2752,12 @@ class TestFinalizePostOutcomes:
         )
         await srb._finalize_structured_roster(inter, view)
         ch.send.assert_awaited_once()
-        sent = inter.followup.send.await_args.args[0]
-        assert "Roster posted." in sent
-        assert "<#12345>" in sent
+        summary = self._find_followup(inter, "Roster posted.")
+        assert summary is not None, (
+            "expected a 'Roster posted.' summary followup; got: "
+            f"{[c.args[0] for c in inter.followup.send.await_args_list if c.args]}"
+        )
+        assert "<#12345>" in summary
 
     @pytest.mark.asyncio
     async def test_include_image_attaches_png_to_send(self, fake_env):
@@ -2710,9 +2810,9 @@ class TestFinalizePostOutcomes:
         # No file attached — render failed but post still went through.
         assert "file" not in ch.send.await_args.kwargs
         # Officer ephemeral carries both the success line AND a warning.
-        sent = inter.followup.send.await_args.args[0]
-        assert "Roster posted" in sent
-        assert "Couldn't attach the image" in sent
+        summary = self._find_followup(inter, "Roster posted")
+        assert summary is not None
+        assert "Couldn't attach the image" in summary
 
     @pytest.mark.asyncio
     async def test_overflow_ephemeral_warns_about_clipped_members(self, fake_env):
@@ -2747,16 +2847,17 @@ class TestFinalizePostOutcomes:
         with patch("storm_renderer.render", side_effect=_fake_render):
             await srb._finalize_structured_roster(inter, view, include_image=True)
 
-        # The first followup carries the standard confirmation. The
-        # second followup is the overflow warning.
-        assert inter.followup.send.await_count == 2
-        first_msg = inter.followup.send.await_args_list[0].args[0]
-        second_msg = inter.followup.send.await_args_list[1].args[0]
-        assert "Roster posted" in first_msg
-        assert "didn't fit" in second_msg
-        assert "Nuclear Silo" in second_msg
-        assert "Member 7" in second_msg
-        assert "Member 14" in second_msg
+        # The standard confirmation and overflow warning both fire as
+        # ephemeral followups (the DM-rostered-members prompt also
+        # fires on Premium guilds — find each by content rather than
+        # by call index).
+        summary = self._find_followup(inter, "Roster posted")
+        overflow = self._find_followup(inter, "didn't fit")
+        assert summary is not None
+        assert overflow is not None
+        assert "Nuclear Silo" in overflow
+        assert "Member 7" in overflow
+        assert "Member 14" in overflow
 
     # ── #237 long-mail picker ─────────────────────────────────────
 
@@ -2981,9 +3082,11 @@ class TestFinalizePostOutcomes:
         with patch("storm_renderer.render", side_effect=_fake_render):
             await srb._finalize_structured_roster(inter, view, include_image=True)
 
-        # Only the standard confirmation ephemeral fires; no overflow
-        # warning because there's nothing to warn about.
-        assert inter.followup.send.await_count == 1
+        # No overflow warning fires when there's nothing to warn about.
+        # The standard confirmation (and on Premium, the DM-rostered-
+        # members prompt) still fire — assertion is specifically that
+        # no "didn't fit" warning slipped in.
+        assert self._find_followup(inter, "didn't fit") is None
 
 
 class TestSplitMailAtHeading:
@@ -3795,6 +3898,16 @@ class TestSessionThreePhase:
 
 
 class TestMailBodyPhaseAware:
+    # `_build_mail_body` calls `config.get_storm_template` /
+    # `format_storm_slot` / `get_storm_slot_for_key` whenever
+    # `session.guild_id` is truthy (which `_make_session` always sets),
+    # so the path through SQLite is unavoidable here. The fallback copy
+    # already handles an unseeded DB gracefully — we just need
+    # `_get_conn()` to succeed, not a populated config.
+    @pytest.fixture(autouse=True)
+    def _db(self, temp_db):
+        pass
+
     def test_flat_mail_has_no_phase_headers(self):
         s = _make_session(team="A", members={
             "1": {"key": "1", "name": "Alice", "discord_id": "1",
@@ -5362,6 +5475,15 @@ class TestDmRosterBody:
     """The composed per-member DM body honors flat vs phase-aware,
     pool-only vs pinned, and team / event-date / time placeholders."""
 
+    # `_build_dm_body` reads role-keyed templates via
+    # `config.get_roster_dm_templates`, which goes through
+    # `get_storm_config` → `_get_conn()`. The fallback copy in
+    # `defaults.py` already handles an unseeded DB — just need
+    # `_get_conn()` to succeed.
+    @pytest.fixture(autouse=True)
+    def _db(self, temp_db):
+        pass
+
     def _ctx_labels(self):
         return {"time_label": "4pm EDT (18:00 server time)",
                 "date_label": "Thursday, May 28, 2026"}
@@ -5515,6 +5637,13 @@ class TestDmRosterBody:
 class TestDmRosterSendFlow:
     """End-to-end DM send flow with mocked Discord — verifies success
     counting, failure-reason capture, and the not_on_discord shortcut."""
+
+    # `_dm_rostered_members` routes through `_build_dm_body` →
+    # `config.get_roster_dm_templates` → `_get_conn()`; same gotcha as
+    # the `TestDmRosterBody` class above.
+    @pytest.fixture(autouse=True)
+    def _db(self, temp_db):
+        pass
 
     @pytest.mark.asyncio
     async def test_dm_send_groups_successes_and_failures(self):

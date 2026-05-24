@@ -8,10 +8,10 @@ the questions, then:
   - Appends a timestamped row to the Survey History sheet
   - Archives the thread
 
-Slash commands:
-  /survey_post   — Post (or repost) the persistent survey button (leadership)
-  /survey        — Show configured survey(s) — list view when multiple are configured
-  /survey_remind — DM roster members to fill the survey (Premium)
+Slash commands (under the /survey group):
+  /survey overview — Show configured survey(s); Premium: Add / Edit / Remove
+  /survey post     — Post (or repost) the persistent survey button (leadership)
+  /survey remind   — DM roster members or schedule recurring reminders (Premium)
 
 Multi-survey support (Premium): a guild may have a "default" survey plus
 any number of extras, each with its own questions, channel, intro message,
@@ -266,7 +266,7 @@ async def run_survey(bot, thread: discord.Thread, user: discord.Member,
     questions  = survey_cfg.get("questions") or []
 
     if not questions:
-        await thread.send("⚠️ No survey questions configured. Ask leadership to run `/setup_survey`.")
+        await thread.send("⚠️ No survey questions configured. Ask leadership to run `/setup → 📋 Survey`.")
         return
 
     def check(m):
@@ -821,7 +821,7 @@ async def _pick_survey(interaction: discord.Interaction, *, prompt: str) -> dict
 class _SurveyManageView(discord.ui.View):
     """
     The button row shown beneath `/survey`'s list view for premium guilds.
-    Replaces the old `/setup_survey_extra` and `/remove_survey` slash
+    Replaces the old `/setup → 📋 Survey_extra` and `/remove_survey` slash
     commands — Add / Edit / Remove all live here so leadership has one
     surface for survey management.
     """
@@ -890,7 +890,7 @@ async def _send_survey_manage_view(interaction: discord.Interaction, bot):
             value=f"**{n_q}** question(s) · Stats tab: `{tab}` · Channel: {ch_str}",
             inline=False,
         )
-    embed.set_footer(text="Use /survey_post to publish the answer button. /survey_remind to send or schedule reminders.")
+    embed.set_footer(text="Use /survey post to publish the answer button. /survey remind to send or schedule reminders.")
 
     view = _SurveyManageView(has_extras=has_extras)
     await interaction.followup.send(embed=embed, view=view, ephemeral=True)
@@ -899,6 +899,15 @@ async def _send_survey_manage_view(interaction: discord.Interaction, bot):
 # ── Cog ────────────────────────────────────────────────────────────────────────
 
 class SurveyCog(commands.Cog):
+    # /survey is a top-level slash-command group containing overview /
+    # post / remind. `/survey overview` shows the configured surveys
+    # (Premium: Add / Edit / Remove buttons; free: detail view) and is
+    # the replacement for bare /survey.
+    survey_group = app_commands.Group(
+        name="survey",
+        description="Alliance squad-power surveys",
+    )
+
     def __init__(self, bot):
         self.bot = bot
         # Re-register the persistent view (default survey button) and the
@@ -1031,8 +1040,8 @@ class SurveyCog(commands.Cog):
     async def _before_check_scheduled(self):
         await self.bot.wait_until_ready()
 
-    @app_commands.command(
-        name="survey_post",
+    @survey_group.command(
+        name="post",
         description="Post (or repost) the survey button in its configured channel",
     )
     async def survey_post(self, interaction: discord.Interaction):
@@ -1053,7 +1062,7 @@ class SurveyCog(commands.Cog):
             prompt="📋 You have multiple surveys configured — which one do you want to post?",
         )
         if survey is None:
-            await interaction.followup.send("⏰ Picker timed out. Run `/survey_post` again.", ephemeral=True)
+            await interaction.followup.send("⏰ Picker timed out. Run `/survey post` again.", ephemeral=True)
             return
 
         survey_id = survey.get("survey_id") or "default"
@@ -1082,11 +1091,11 @@ class SurveyCog(commands.Cog):
             ephemeral=True,
         )
 
-    @app_commands.command(
-        name="survey",
+    @survey_group.command(
+        name="overview",
         description="Show configured survey(s); Premium gets Add / Edit / Remove buttons here",
     )
-    async def survey(self, interaction: discord.Interaction):
+    async def survey_overview(self, interaction: discord.Interaction):
         if not await _guard(interaction):
             return
 
@@ -1115,7 +1124,7 @@ class SurveyCog(commands.Cog):
         )
 
         if not questions:
-            embed.description = "*No survey questions configured. Run `/setup_survey` to add some.*"
+            embed.description = "*No survey questions configured. Run `/setup → 📋 Survey` to add some.*"
         else:
             lines = []
             for i, q in enumerate(questions, start=1):
@@ -1136,12 +1145,12 @@ class SurveyCog(commands.Cog):
             value="✅ Configured" if scfg.get("intro_message") else "❌ Not configured",
             inline=False,
         )
-        embed.set_footer(text="Run /setup_survey to update. Run /survey_post to post the button.")
+        embed.set_footer(text="Run /setup → 📋 Survey to update. Run /survey post to post the button.")
 
         await interaction.response.send_message(embed=embed, ephemeral=True)
 
-    @app_commands.command(
-        name="survey_remind",
+    @survey_group.command(
+        name="remind",
         description="Send a survey reminder now or manage scheduled reminders",
     )
     async def survey_remind(self, interaction: discord.Interaction):
@@ -1230,7 +1239,7 @@ async def _send_reminder_via_dm(bot, guild_id: int, body: str) -> tuple[int, int
 # ── Wizard hub ────────────────────────────────────────────────────────────────
 
 class _ReminderHubView(discord.ui.View):
-    """Top-level picker shown by /survey_remind."""
+    """Top-level picker shown by /survey remind."""
 
     def __init__(self):
         super().__init__(timeout=120)
@@ -1353,7 +1362,7 @@ async def _run_send_now(interaction: discord.Interaction, bot, is_premium_flag: 
     )
     if survey is None:
         await interaction.followup.send(
-            "⏰ Picker timed out. Run `/survey_remind` again.", ephemeral=True,
+            "⏰ Picker timed out. Run `/survey remind` again.", ephemeral=True,
         )
         return
 
@@ -1368,7 +1377,7 @@ async def _run_send_now(interaction: discord.Interaction, bot, is_premium_flag: 
     )
     await dest_view.wait()
     if dest_view.choice is None:
-        await interaction.followup.send("⏰ Timed out. Run `/survey_remind` again.", ephemeral=True)
+        await interaction.followup.send("⏰ Timed out. Run `/survey remind` again.", ephemeral=True)
         return
 
     if dest_view.choice == "channel":
@@ -1376,7 +1385,7 @@ async def _run_send_now(interaction: discord.Interaction, bot, is_premium_flag: 
         await interaction.followup.send("📢 Pick the channel to post to:", view=ch_view, ephemeral=True)
         await ch_view.wait()
         if ch_view.channel is None:
-            await interaction.followup.send("⏰ Timed out. Run `/survey_remind` again.", ephemeral=True)
+            await interaction.followup.send("⏰ Timed out. Run `/survey remind` again.", ephemeral=True)
             return
         ok = await _send_reminder_to_channel(bot, interaction.guild_id, ch_view.channel.id, body)
         if ok:
@@ -1397,7 +1406,7 @@ async def _run_send_now(interaction: discord.Interaction, bot, is_premium_flag: 
     roster_cfg = get_member_roster_config(interaction.guild_id)
     if not roster_cfg.get("enabled"):
         await interaction.followup.send(
-            "⚙️ DM reminders need Member Roster Sync. Run `/setup_members` first.",
+            "⚙️ DM reminders need Member Sync. Run `/setup` → 👥 Member Sync first.",
             ephemeral=True,
         )
         return
@@ -1461,7 +1470,8 @@ class _DayPickView(discord.ui.View):
 
 async def _run_schedule_wizard(interaction: discord.Interaction, bot, is_premium_flag: bool):
     """Walk leadership through configuring a survey's scheduled reminder."""
-    from config import save_survey_reminder
+    from config import save_survey_reminder, get_config
+    from setup_cog import _format_time_with_tz
     # Pick which survey
     survey = await _pick_survey(
         interaction,
@@ -1469,12 +1479,15 @@ async def _run_schedule_wizard(interaction: discord.Interaction, bot, is_premium
     )
     if survey is None:
         await interaction.followup.send(
-            "⏰ Picker timed out. Run `/survey_remind` again.", ephemeral=True,
+            "⏰ Picker timed out. Run `/survey remind` again.", ephemeral=True,
         )
         return
 
     survey_id   = survey.get("survey_id") or "default"
     survey_name = survey.get("survey_name") or "Default"
+
+    guild_cfg   = get_config(interaction.guild_id)
+    guild_tz    = guild_cfg.timezone if guild_cfg else "America/New_York"
 
     # Show current settings as context
     cur_freq    = survey.get("reminder_frequency") or "off"
@@ -1488,10 +1501,11 @@ async def _run_schedule_wizard(interaction: discord.Interaction, bot, is_premium
         "DM via Member Roster" if cur_use_dm
         else (f"<#{cur_ch}>" if cur_ch else "*(not set)*")
     )
+    cur_time_label = _format_time_with_tz(cur_time, guild_tz) or cur_time
     cur_when = (
         "Off" if cur_freq == "off"
-        else f"Daily at {cur_time}" if cur_freq == "daily"
-        else f"Weekly on {DAYS_OF_WEEK[cur_day]} at {cur_time}"
+        else f"Daily at {cur_time_label}" if cur_freq == "daily"
+        else f"Weekly on {DAYS_OF_WEEK[cur_day]} at {cur_time_label}"
     )
 
     await interaction.followup.send(
@@ -1511,7 +1525,7 @@ async def _run_schedule_wizard(interaction: discord.Interaction, bot, is_premium
     )
     await freq_view.wait()
     if freq_view.choice is None:
-        await interaction.followup.send("⏰ Timed out. Run `/survey_remind` again.", ephemeral=True)
+        await interaction.followup.send("⏰ Timed out. Run `/survey remind` again.", ephemeral=True)
         return
 
     new_freq = freq_view.choice
@@ -1525,7 +1539,7 @@ async def _run_schedule_wizard(interaction: discord.Interaction, bot, is_premium
         )
         await interaction.followup.send(
             f"✅ Scheduled reminders disabled for **{survey_name}**. "
-            f"Run `/survey_remind` again to re-enable.",
+            f"Run `/survey remind` again to re-enable.",
             ephemeral=True,
         )
         return
@@ -1541,12 +1555,15 @@ async def _run_schedule_wizard(interaction: discord.Interaction, bot, is_premium
         )
         await day_view.wait()
         if day_view.day is None:
-            await interaction.followup.send("⏰ Timed out. Run `/survey_remind` again.", ephemeral=True)
+            await interaction.followup.send("⏰ Timed out. Run `/survey remind` again.", ephemeral=True)
             return
         new_day = day_view.day
 
     # ── Step 3: Time of day ───────────────────────────────────────────────────
-    new_time, ok = await _ask_time(interaction, default=cur_time, step_label="Step 3 — Time of day")
+    new_time, ok = await _ask_time(
+        interaction, default=cur_time, step_label="Step 3 — Time of day",
+        tz_name=guild_tz,
+    )
     if not ok:
         return
 
@@ -1560,7 +1577,7 @@ async def _run_schedule_wizard(interaction: discord.Interaction, bot, is_premium
     )
     await dest_view.wait()
     if dest_view.choice is None:
-        await interaction.followup.send("⏰ Timed out. Run `/survey_remind` again.", ephemeral=True)
+        await interaction.followup.send("⏰ Timed out. Run `/survey remind` again.", ephemeral=True)
         return
 
     new_use_dm   = 0
@@ -1572,7 +1589,7 @@ async def _run_schedule_wizard(interaction: discord.Interaction, bot, is_premium
         await interaction.followup.send("📢 Pick the channel to post the reminder to:", view=ch_view, ephemeral=True)
         await ch_view.wait()
         if ch_view.channel is None:
-            await interaction.followup.send("⏰ Timed out. Run `/survey_remind` again.", ephemeral=True)
+            await interaction.followup.send("⏰ Timed out. Run `/survey remind` again.", ephemeral=True)
             return
         new_channel = ch_view.channel.id
 
@@ -1593,28 +1610,32 @@ async def _run_schedule_wizard(interaction: discord.Interaction, bot, is_premium
         message=new_msg,
     )
 
+    new_time_label = _format_time_with_tz(new_time, guild_tz) or new_time
     when = (
-        f"Daily at {new_time}" if new_freq == "daily"
-        else f"Weekly on {DAYS_OF_WEEK[new_day]} at {new_time}"
+        f"Daily at {new_time_label}" if new_freq == "daily"
+        else f"Weekly on {DAYS_OF_WEEK[new_day]} at {new_time_label}"
     )
     where = "DMs to every roster member" if new_use_dm else f"<#{new_channel}>"
     await interaction.followup.send(
         f"✅ **{survey_name} reminders scheduled.**\n"
-        f"**When:** {when} *(in your guild's timezone)*\n"
+        f"**When:** {when}\n"
         f"**Where:** {where}\n"
         f"**Message:** {('*custom*' if new_msg else '*default*')}\n\n"
-        f"Run `/survey_remind` again any time to update or disable.",
+        f"Run `/survey remind` again any time to update or disable.",
         ephemeral=True,
     )
 
 
 async def _ask_time(interaction: discord.Interaction, *, default: str,
-                    step_label: str) -> tuple[str, bool]:
+                    step_label: str, tz_name: str | None = None) -> tuple[str, bool]:
     """
     Ask leadership for a HH:MM time via a one-field modal. Re-prompts up to
-    3 times on unparseable input. Returns (time_str_24h, ok).
+    3 times on unparseable input. Returns (time_str_24h, ok). `tz_name`
+    is used only to render the "current:" hint in the button label as
+    e.g. `8:00am EDT` — saved values are still HH:MM 24h.
     """
-    from setup_cog import _parse_12h_time
+    from setup_cog import _parse_12h_time, _format_time_with_tz
+    current_label = _format_time_with_tz(default, tz_name) or default
 
     class _TimeModal(discord.ui.Modal, title="Reminder time"):
         time_in = discord.ui.TextInput(
@@ -1635,7 +1656,7 @@ async def _ask_time(interaction: discord.Interaction, *, default: str,
         def __init__(self):
             super().__init__(timeout=180)
             self.modal: _TimeModal | None = None
-        @discord.ui.button(label=f"⏰ Set time (current: {default})", style=discord.ButtonStyle.primary)
+        @discord.ui.button(label=f"⏰ Set time (current: {current_label})", style=discord.ButtonStyle.primary)
         async def open_modal(self, inter: discord.Interaction, button: discord.ui.Button):
             self.modal = _TimeModal()
             await inter.response.send_modal(self.modal)
@@ -1652,7 +1673,7 @@ async def _ask_time(interaction: discord.Interaction, *, default: str,
         )
         await view.wait()
         if view.modal is None or view.modal.value is None:
-            await interaction.followup.send("⏰ Timed out. Run `/survey_remind` again.", ephemeral=True)
+            await interaction.followup.send("⏰ Timed out. Run `/survey remind` again.", ephemeral=True)
             return ("", False)
         raw = view.modal.value
         parsed = _parse_12h_time(raw)
@@ -1664,7 +1685,7 @@ async def _ask_time(interaction: discord.Interaction, *, default: str,
         if attempts_left <= 0:
             await interaction.followup.send(
                 "⚠️ Could not read that time after a few tries. "
-                "Run `/survey_remind` to start over.",
+                "Run `/survey remind` to start over.",
                 ephemeral=True,
             )
             return ("", False)
@@ -1732,7 +1753,7 @@ async def _ask_reminder_message(interaction: discord.Interaction, bot,
     )
     await view.wait()
     if view.modal is None or not view.modal.confirmed:
-        await interaction.followup.send("⏰ Timed out. Run `/survey_remind` again.", ephemeral=True)
+        await interaction.followup.send("⏰ Timed out. Run `/survey remind` again.", ephemeral=True)
         return ("", False)
     return ((view.modal.value or "").strip(), True)
 

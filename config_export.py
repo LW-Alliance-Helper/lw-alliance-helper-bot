@@ -746,7 +746,7 @@ def parse_and_validate(file_bytes: bytes) -> dict:
     except UnicodeDecodeError as e:
         raise ImportValidationError(
             f"File isn't valid UTF-8 (offset {e.start}). "
-            f"Make sure you're attaching the JSON file from /export_config "
+            f"Make sure you're attaching the JSON file from /config export "
             f"without converting it through any other tool."
         ) from e
     try:
@@ -768,7 +768,7 @@ def parse_and_validate(file_bytes: bytes) -> dict:
     if not isinstance(schema_version, int):
         raise ImportValidationError(
             "Missing or invalid `schema_version`. This file may not be a "
-            "/export_config output — re-export from the source server."
+            "/config export output — re-export from the source server."
         )
     if schema_version > EXPORT_SCHEMA_VERSION:
         raise ImportValidationError(

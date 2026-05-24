@@ -32,8 +32,8 @@ in-flight wizard breaks.**
 | **Train templates** | 1 ("Default") | Wizard's manage-templates loop locks Add at 1 |
 | **Storm templates per team** | 1 ("Default") | Same |
 | **Growth Custom Interval** | Locked | "Monthly" button still works; "Custom interval" disabled with 🔒 |
-| **`/events_log` window** | 7 days | Older entries hidden in the response (data not deleted) |
-| **`/train_log` window** | 7 days | Same |
+| **`/events log` window** | 7 days | Older entries hidden in the response (data not deleted) |
+| **`/train log` window** | 7 days | Same |
 | **Storm log lookback** | 4 most-recent | Older lookups show upsell embed (sheet data preserved) |
 | **Channel pickers** | Text channels only | Threads not offered in the dropdown |
 
@@ -48,7 +48,7 @@ data stays. You just can't add more until you subscribe or trim.
 These features are new with the Premium launch — there's no "before"
 state to migrate:
 
-- **Member Roster Sync** (`/setup_members`, `/sync_members`) — writes
+- **Member Roster Sync** (`/setup` → 👥 Members, `/members sync`) — writes
   every member's Discord ID to a sheet tab so other premium features
   can find them.
 - **Birthday DMs** — a personal DM in addition to the channel post.
@@ -57,9 +57,9 @@ state to migrate:
   `<@id>` instead of plain text when the roster knows them.
 - **Multiple named templates** — for train prompts and storm mails.
 - **Multiple named surveys** — manage extras from `/survey` (Add / Edit / Remove).
-- **`/survey_remind`, `/desertstorm_remind`, `/canyonstorm_remind`** —
+- **`/survey remind`, `/desertstorm` reminder button, `/canyonstorm` reminder button** —
   manual DM blasts to the whole roster.
-- **30-day windows on `/events_log` and `/train_log`** (vs 7).
+- **30-day windows on `/events log` and `/train log`** (vs 7).
 - **Unlimited storm-log lookback**.
 - **Thread destinations** in every channel-picker step.
 - **Custom-interval growth snapshots** (vs monthly only).
@@ -72,9 +72,9 @@ Premium is a **per-user** subscription that applies to **one server at
 a time**. When you run `/upgrade`, the bot pins your subscription to the
 server you're in. To move it to a different alliance:
 
-- Run **`/premium_assign`** in the alliance you want Premium in.
-- Run **`/premium_status`** to see where it's currently active.
-- Run **`/premium_unassign`** to release the pin without canceling the
+- Run **`/premium assign`** in the alliance you want Premium in.
+- Run **`/premium overview`** to see where it's currently active.
+- Run **`/premium unassign`** to release the pin without canceling the
   subscription (useful for "park it and come back later").
 
 If a server already has Premium from another subscriber, the bot will

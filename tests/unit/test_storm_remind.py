@@ -1,6 +1,6 @@
 """
 Tests for `storm_log._send_storm_reminder` — the Premium-only command
-behind /desertstorm_remind and /canyonstorm_remind. DMs every roster
+behind /desertstorm remind and /canyonstorm remind. DMs every roster
 member with a participation reminder for the upcoming storm.
 
 Audit gap #4 — the entire flow (roster fetch → row iteration → DM
@@ -144,7 +144,11 @@ class TestStormReminderRosterDisabled:
             await _send_storm_reminder(MagicMock(), interaction, "DS")
 
         msg = interaction.response.send_message.call_args.args[0]
-        assert "setup_members" in msg
+        # Post-#201: the /setup_members slash command folded into the
+        # /setup hub's `👥 Member Sync` button. The reminder copy now
+        # points there.
+        assert "Member Sync" in msg
+        assert "/setup" in msg
 
 
 # ── Happy path ───────────────────────────────────────────────────────────────

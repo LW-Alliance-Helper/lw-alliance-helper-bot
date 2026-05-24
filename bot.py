@@ -26,7 +26,7 @@ DISCORD_TOKEN = os.getenv("DISCORD_TOKEN")
 # Semantic versioning per https://semver.org. Bump on each release; the
 # CHANGELOG.md file is the human-readable record of what each version
 # changed.
-__version__ = "1.3.4"
+__version__ = "1.4.0"
 
 # ── Sentry error reporting ───────────────────────────────────────────────────
 #
@@ -98,8 +98,8 @@ WELCOME_DM = (
     "After setup, run **/help** to see every available feature.\n\n"
     "💎 **Premium is a per-user subscription** — one $4.99/mo applies to "
     "**one server at a time**. Run `/upgrade` to subscribe; the bot pins "
-    "your subscription to the server you ran it in. Use `/premium_assign` "
-    "to move it later, or `/premium_status` to see where it's active.\n\n"
+    "your subscription to the server you ran it in. Use `/premium assign` "
+    "to move it later, or `/premium overview` to see where it's active.\n\n"
     "📖 Setup guide: <https://lw-alliance-helper.github.io/setup.html>\n"
     "📋 All commands: <https://lw-alliance-helper.github.io/commands.html>\n"
     "💎 Pricing & Premium: <https://lw-alliance-helper.github.io/pricing.html>\n\n"
@@ -189,12 +189,6 @@ async def on_ready():
     if "train" not in bot.extensions:
         await bot.load_extension("train")
         print(f"[INFO] Train cog loaded")
-    if "storm" not in bot.extensions:
-        await bot.load_extension("storm")
-        print(f"[INFO] Storm cog loaded")
-    if "storm_log" not in bot.extensions:
-        await bot.load_extension("storm_log")
-        print(f"[INFO] Log cog loaded")
     if "survey" not in bot.extensions:
         await bot.load_extension("survey")
         print(f"[INFO] Survey cog loaded")
@@ -210,6 +204,12 @@ async def on_ready():
     if "export_import_cog" not in bot.extensions:
         await bot.load_extension("export_import_cog")
         print(f"[INFO] Export/Import cog loaded")
+    # Storm commands all live under `/desertstorm` and `/canyonstorm`
+    # — one root cog registers both parent groups and dispatches into
+    # the per-feature handler modules (storm.py, storm_log.py, etc.).
+    if "storm_commands_root" not in bot.extensions:
+        await bot.load_extension("storm_commands_root")
+        print(f"[INFO] Storm commands root cog loaded")
 
     # Sync slash commands globally so they work in any server. Commands
     # decorated with `guilds=[...]` are excluded from the global sync;
@@ -269,6 +269,31 @@ async def on_ready():
     for g in bot.guilds:
         await maybe_post_release_announcement(g, bot, __version__)
 
+    # Re-register persistent storm sign-up Views so their buttons keep
+    # working after a restart. Fed from `storm_registration_posts`; safely
+    # a no-op until #124 starts writing to that table. See storm_signup_view.
+    try:
+        from storm_signup_view import register_persistent_signup_views
+        register_persistent_signup_views(bot)
+    except Exception as e:
+        print(f"[STORM SIGNUP] Failed to re-register sign-up views: {e}")
+        sentry_sdk.capture_exception(e)
+
+    # Refresh zone emoji IDs from the bot's own Application Emojis
+    # (#177). Each environment (dev, prod) ships its own Discord
+    # Application with its own emoji set; the bot reads them at boot
+    # so source carries no per-env IDs and storm renders pick up new
+    # icons automatically once `scripts/upload_storm_emojis.py` runs.
+    # Failure (or no-emojis-yet) falls through to plain-text zone
+    # names — never blocks startup.
+    try:
+        from storm_icons import refresh_zone_emoji_ids
+        count = await refresh_zone_emoji_ids(bot)
+        print(f"[STORM ICONS] Loaded {count} application emoji ID(s)")
+    except Exception as e:
+        print(f"[STORM ICONS] Refresh failed: {e}")
+        sentry_sdk.capture_exception(e)
+
     # Only start background tasks once — they persist across reconnects
     if not hasattr(bot, "_tasks_started"):
         bot._tasks_started = True
@@ -282,6 +307,13 @@ async def on_ready():
         print(f"[INFO] Shiny tasks weekly refresh started")
         shiny_tasks_post_task.start()
         print(f"[INFO] Shiny tasks per-minute post loop started")
+        try:
+            from storm_signup_scheduler import start_storm_signup_scheduler
+            start_storm_signup_scheduler(bot)
+            print(f"[INFO] Storm sign-up scheduler started")
+        except Exception as e:
+            print(f"[STORM SCHEDULER] Failed to start: {e}")
+            sentry_sdk.capture_exception(e)
 
 
 @bot.event
@@ -408,7 +440,7 @@ def _format_command_error(error: BaseException, event_id: str | None) -> str:
         return (
             "⚠️ **Discord couldn't find something I needed** — usually a channel, role, or message "
             "that's been deleted since the bot was set up.\n\n"
-            "Try running `/view_configuration` to check that all your configured channels and roles "
+            "Try running `/setup` and clicking **🗂️ View configuration** to check that all your configured channels and roles "
             "still exist.\n\n"
             f"If they look correct and this keeps happening, open an issue at <{ISSUE_TRACKER_URL}> "
             f"with the reference below.{ref_line}"
@@ -720,9 +752,23 @@ async def on_command_error(ctx, error):
     raise error
 
 
-@bot.tree.command(
+# ── /growth command group ─────────────────────────────────────────────────────
+#
+# `/growth overview` keeps the embed + action buttons leadership has
+# always reached via bare `/growth`. The new `/growth breakdown` leaf
+# surfaces the bucket-classification view that previously lived only
+# behind the "📊 See most recent Breakdown" button on the overview
+# embed — so officers can jump straight to it from the slash picker.
+
+growth_group = app_commands.Group(
     name="growth",
-    description="Show growth tracking status with options to run a snapshot or edit config",
+    description="Member-growth snapshots and bucket breakdown",
+)
+
+
+@growth_group.command(
+    name="overview",
+    description="Growth tracking status; buttons for snapshot, breakdown, and config edit",
 )
 async def growth_slash(interaction: discord.Interaction):
     if not await guard(interaction):
@@ -849,10 +895,146 @@ async def growth_slash(interaction: discord.Interaction):
     await interaction.response.send_message(embed=embed, view=GrowthActionView(), ephemeral=True)
 
 
-# ── /events command ────────────────────────────────────────────────────────────
+@growth_group.command(
+    name="breakdown",
+    description="Most-recent bucket breakdown (Increased / Steady / Low / None / Decline)",
+)
+async def growth_breakdown_slash(interaction: discord.Interaction):
+    if not await guard(interaction):
+        return
+    from config import get_growth_config
+    from growth import read_latest_breakdown, format_breakdown_embed
 
-@bot.tree.command(
+    guild_id = interaction.guild_id
+    gcfg = get_growth_config(guild_id)
+
+    await interaction.response.defer(ephemeral=True)
+    try:
+        data = await asyncio.to_thread(read_latest_breakdown, guild_id)
+    except Exception as e:
+        await interaction.followup.send(
+            f"⚠️ Could not load breakdown: {e}", ephemeral=True,
+        )
+        return
+
+    if not data.get("has_data"):
+        await interaction.followup.send(
+            "📊 No breakdown data yet. Run `/growth overview` and click "
+            "**📸 Run Snapshot Now** (or wait for the next scheduled "
+            "snapshot). The breakdown classifies each member's percent "
+            "change between snapshots, so it needs at least two snapshots' "
+            "worth of data before any classification can render.",
+            ephemeral=True,
+        )
+        return
+
+    embed = format_breakdown_embed(
+        metric_labels=data["metric_labels"],
+        breakdown_summary=data["summary"],
+        prev_period_label=data["prev_period_label"],
+        curr_period_label=data["curr_period_label"],
+        label_overrides=gcfg.get("breakdown_labels") or {},
+    )
+    await interaction.followup.send(embed=embed, ephemeral=True)
+
+
+# ── /events command group ─────────────────────────────────────────────────────
+#
+# Discord groups can't be invoked as bare `/events`, so the date-arg
+# behavior that used to live on bare `/events` is now `/events show
+# [date]`, and a new `/events overview` leaf renders a read-only
+# config snapshot (configured event types + next firing dates) for
+# leadership pre-flight. `/events log` is the renamed `/events_log`.
+
+events_group = app_commands.Group(
     name="events",
+    description="View, draft, and audit alliance event announcements",
+)
+
+
+@events_group.command(
+    name="overview",
+    description="Configured event types, next firing dates, and pointers into /events show / log",
+)
+async def events_overview_slash(interaction: discord.Interaction):
+    if not await guard(interaction):
+        return
+
+    from config import get_guild_events, get_config
+    cfg    = get_config(interaction.guild_id)
+    events = get_guild_events(interaction.guild_id, active_only=True)
+    today  = date_cls.today()
+
+    embed = discord.Embed(
+        title="📣 Event Announcements",
+        color=discord.Color.blurple(),
+    )
+
+    if not events:
+        embed.description = (
+            "No event types configured yet. Run `/setup` and click **📣 Events** to add "
+            "Marauder, Siege, or custom event types."
+        )
+        await interaction.response.send_message(embed=embed, ephemeral=True)
+        return
+
+    repeating_lines: list[str] = []
+    manual_lines:    list[str] = []
+    for ev in events:
+        name = ev.get("name") or "(unnamed)"
+        if ev["schedule_type"] == "repeating" and ev.get("anchor_date"):
+            try:
+                anchor   = date_cls.fromisoformat(ev["anchor_date"])
+                interval = int(ev["interval_days"] or 0)
+            except (ValueError, TypeError):
+                repeating_lines.append(f"• **{name}** — schedule invalid (re-open via `/setup` → 📣 Events)")
+                continue
+            upcoming = next_event_dates(
+                from_date=today, count=1, anchor=anchor, cycle=interval,
+            ) if interval > 0 else []
+            if upcoming:
+                next_date = upcoming[0]
+                days = (next_date - today).days
+                when = (
+                    "today" if days == 0
+                    else "tomorrow" if days == 1
+                    else f"in {days} days"
+                )
+                repeating_lines.append(
+                    f"• **{name}** — every {interval}d, next on "
+                    f"{next_date:%a %b} {next_date.day} ({when})"
+                )
+            else:
+                repeating_lines.append(f"• **{name}** — every {interval}d")
+        else:
+            manual_lines.append(f"• **{name}** — manual entries only")
+
+    if repeating_lines:
+        embed.add_field(
+            name=f"Repeating ({len(repeating_lines)})",
+            value="\n".join(repeating_lines)[:1024],
+            inline=False,
+        )
+    if manual_lines:
+        embed.add_field(
+            name=f"Manual ({len(manual_lines)})",
+            value="\n".join(manual_lines)[:1024],
+            inline=False,
+        )
+
+    embed.add_field(
+        name="Sub-commands",
+        value=(
+            "• `/events show [date]` — Open the editor for today or a specific date\n"
+            "• `/events log` — Recent approved event posts"
+        ),
+        inline=False,
+    )
+    await interaction.response.send_message(embed=embed, ephemeral=True)
+
+
+@events_group.command(
+    name="show",
     description="Open the event editor for today or a specific date",
 )
 @app_commands.describe(date="Optional date, e.g. 'April 5' or '4/5' (defaults to today)")
@@ -919,7 +1101,7 @@ async def events_slash(interaction: discord.Interaction, date: str = None):
 
     if not events:
         await interaction.followup.send(
-            "ℹ️ No events configured. Run `/setup_events` to add some.",
+            "ℹ️ No events configured. Run `/setup` and click **📣 Events** to add some.",
             ephemeral=True,
         )
         return
@@ -934,7 +1116,7 @@ async def events_slash(interaction: discord.Interaction, date: str = None):
     if not groups:
         await interaction.followup.send(
             "ℹ️ No repeating events configured. The event editor only "
-            "applies to events with a recurring schedule. Run `/setup_events` "
+            "applies to events with a recurring schedule. Run `/setup` and click **📣 Events** "
             "to add one, or add events directly to your manual schedule.",
             ephemeral=True,
         )
@@ -955,7 +1137,7 @@ async def events_slash(interaction: discord.Interaction, date: str = None):
     if not next_per_group:
         await interaction.followup.send(
             "ℹ️ Couldn't compute the next event date — your repeating events "
-            "have invalid anchor dates. Run `/setup_events` to fix.",
+            "have invalid anchor dates. Run `/setup` and click **📣 Events** to fix.",
             ephemeral=True,
         )
         return
@@ -1009,7 +1191,7 @@ async def events_slash(interaction: discord.Interaction, date: str = None):
     if not event_list:
         await interaction.followup.send(
             "⚠️ No events to show on the next event date — likely a bad timezone "
-            "or default_time on one of your configured events. Run `/setup_events` "
+            "or default_time on one of your configured events. Run `/setup` and click **📣 Events** "
             "to review.",
             ephemeral=True,
         )
@@ -1028,10 +1210,10 @@ async def events_slash(interaction: discord.Interaction, date: str = None):
     print(f"[EVENTS] Manual event editor opened for guild {interaction.guild_id} date {event_date} by {interaction.user}")
 
 
-# ── /events_log command ───────────────────────────────────────────────────────
+# ── /events log command ───────────────────────────────────────────────────────
 
-@bot.tree.command(
-    name="events_log",
+@events_group.command(
+    name="log",
     description="Show recent approved event posts (window depends on your tier)",
 )
 async def events_log_slash(interaction: discord.Interaction):
@@ -1057,7 +1239,7 @@ async def events_log_slash(interaction: discord.Interaction):
         )
         return
 
-    days   = await premium.get_limit("events_log_days", interaction.guild_id, interaction=interaction)
+    days   = await premium.get_limit("events_log_days", interaction.guild_id, interaction=interaction, bot=bot)
     days   = days or 30  # safety; LIMITS always returns int here
     cutoff = datetime.now(tz=timezone.utc) - timedelta(days=days)
     matches = []
@@ -1190,10 +1372,102 @@ def _parse_guild_id(raw: str) -> int | None:
         return None
 
 
-@bot.tree.command(
-    name="admin_guild_info",
+# /admin command group — owner-only, scoped to BOT_ADMIN_GUILD_IDS.
+# Defined as a module-level Group rather than via a cog because the
+# bookkeeping (env-var guild scoping, bot.is_owner check) needs the
+# already-instantiated `bot` here in bot.py. Registered on the tree
+# at the bottom of this admin section so the @admin_group.command
+# decorators below can attach to it.
+admin_group = app_commands.Group(
+    name="admin",
+    description="(Bot owner only) Support + data-removal utilities",
+)
+
+
+@admin_group.command(
+    name="overview",
+    description="(Bot owner only) Fleet snapshot — total guilds, Premium counts, recent installs, stragglers",
+)
+async def admin_overview_slash(interaction: discord.Interaction):
+    if not await _require_bot_owner(interaction):
+        return
+
+    from config import _get_conn  # noqa: PLC0415 — module-level imports already loaded
+    with _get_conn() as conn:
+        total_guilds = conn.execute(
+            "SELECT COUNT(*) FROM guild_install_metadata"
+        ).fetchone()[0]
+        with_setup_complete = conn.execute(
+            "SELECT COUNT(*) FROM guild_configs WHERE setup_complete = 1"
+        ).fetchone()[0]
+        premium_assignments = conn.execute(
+            "SELECT COUNT(*) FROM premium_assignments"
+        ).fetchone()[0]
+        # Recent installs: last 7 days. Use ISO timestamp comparison
+        # (TEXT-sorted, ISO-8601 is lexicographically ordered).
+        cutoff_recent = (datetime.now(timezone.utc) - timedelta(days=7)).isoformat()
+        recent_rows = conn.execute(
+            "SELECT guild_id, guild_name, installed_at FROM guild_install_metadata "
+            "WHERE installed_at >= ? ORDER BY installed_at DESC LIMIT 10",
+            (cutoff_recent,),
+        ).fetchall()
+        # Stale stragglers: no on_ready ping in 14+ days.
+        cutoff_stale = (datetime.now(timezone.utc) - timedelta(days=14)).isoformat()
+        stale_rows = conn.execute(
+            "SELECT guild_id, guild_name, last_seen_at FROM guild_install_metadata "
+            "WHERE last_seen_at < ? ORDER BY last_seen_at ASC LIMIT 10",
+            (cutoff_stale,),
+        ).fetchall()
+
+    embed = discord.Embed(
+        title="🛠️ Admin Overview",
+        color=discord.Color.blurple(),
+    )
+    embed.add_field(
+        name="Fleet",
+        value=(
+            f"**Installed guilds:** {total_guilds}\n"
+            f"**Completed setup:** {with_setup_complete}\n"
+            f"**Premium assignments:** {premium_assignments}"
+        ),
+        inline=False,
+    )
+    if recent_rows:
+        lines = [
+            f"• **{r['guild_name'] or '(unnamed)'}** (`{r['guild_id']}`) — {r['installed_at'][:10]}"
+            for r in recent_rows
+        ]
+        embed.add_field(
+            name=f"Recent installs (last 7 days, top {len(recent_rows)})",
+            value="\n".join(lines)[:1024],
+            inline=False,
+        )
+    else:
+        embed.add_field(
+            name="Recent installs (last 7 days)",
+            value="*(none)*",
+            inline=False,
+        )
+    if stale_rows:
+        lines = [
+            f"• **{r['guild_name'] or '(unnamed)'}** (`{r['guild_id']}`) — last seen {r['last_seen_at'][:10]}"
+            for r in stale_rows
+        ]
+        embed.add_field(
+            name=f"No on_ready in 14+ days (top {len(stale_rows)})",
+            value="\n".join(lines)[:1024],
+            inline=False,
+        )
+    embed.set_footer(
+        text="Use /admin guild_info <id> to drill into one guild, "
+             "or /admin forget_guild <id> to remove install metadata for a data-removal request."
+    )
+    await interaction.response.send_message(embed=embed, ephemeral=True)
+
+
+@admin_group.command(
+    name="guild_info",
     description="(Bot owner only) Look up stored metadata + config for a guild_id.",
-    **_admin_command_kwargs,
 )
 @app_commands.describe(guild_id="Discord guild ID — paste from log line / Sentry tag")
 async def admin_guild_info_slash(interaction: discord.Interaction, guild_id: str):
@@ -1267,7 +1541,7 @@ async def admin_guild_info_slash(interaction: discord.Interaction, guild_id: str
 
 
 class _ForgetGuildConfirm(discord.ui.View):
-    """Two-button confirm for /admin_forget_guild. Auto-cancels on timeout."""
+    """Two-button confirm for /admin forget_guild. Auto-cancels on timeout."""
 
     def __init__(self, guild_id: int, owner_id: int):
         super().__init__(timeout=60)
@@ -1308,10 +1582,9 @@ class _ForgetGuildConfirm(discord.ui.View):
         self.stop()
 
 
-@bot.tree.command(
-    name="admin_forget_guild",
+@admin_group.command(
+    name="forget_guild",
     description="(Bot owner only) Delete the install-metadata row for a guild_id (data-removal request).",
-    **_admin_command_kwargs,
 )
 @app_commands.describe(guild_id="Discord guild ID to forget")
 async def admin_forget_guild_slash(interaction: discord.Interaction, guild_id: str):
@@ -1345,6 +1618,23 @@ async def admin_forget_guild_slash(interaction: discord.Interaction, guild_id: s
 
 # Alias so date_cls doesn't conflict with the `date` parameter name in events_slash
 date_cls = date
+
+
+# Register the /growth Group on the tree once every subcommand has
+# been attached above. Global registration.
+bot.tree.add_command(growth_group)
+
+
+# Register the /events Group on the tree once every subcommand has
+# been attached above. Global registration — every alliance gets it.
+bot.tree.add_command(events_group)
+
+
+# Register the /admin Group on the tree once every subcommand has been
+# attached above. The Group-level guilds= kwarg propagates to all its
+# subcommands, so `BOT_ADMIN_GUILD_IDS` scoping still hides the
+# entire group from every non-admin guild's slash picker.
+bot.tree.add_command(admin_group, **_admin_command_kwargs)
 
 
 # Guard the runtime entry so `import bot` doesn't try to start the bot

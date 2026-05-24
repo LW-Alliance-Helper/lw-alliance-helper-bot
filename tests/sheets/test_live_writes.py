@@ -439,7 +439,7 @@ class TestMemberRosterWrite:
 
         sh = _make_real_spreadsheet()
         with patch.object(member_roster, "get_member_roster_sheet", return_value=ws):
-            written = member_roster.write_roster(guild, _config.get_member_roster_config(TEST_GUILD_ID))
+            written, _report = member_roster.write_roster(guild, _config.get_member_roster_config(TEST_GUILD_ID))
 
         # write_roster returns the count excluding header. Two non-bots.
         assert written == 2

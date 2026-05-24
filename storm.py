@@ -1,9 +1,9 @@
 """
-storm.py — Desert Storm mail generation
+storm.py — Desert Storm + Canyon Storm mail generation
 
-Commands (Leadership only, leadership channel only):
-  /desertstorm_draft — Generate a Desert Storm mail draft for Team A or Team B
-  /canyonstorm_draft — Generate a Canyon Storm mail draft for Team A or Team B
+Reached via the `📄 Generate mail` button on `/desertstorm` and
+`/canyonstorm` (hub-restructure #187). Pre-#187 this was a top-level
+slash subcommand (`/desertstorm draft`).
 
 Flow:
   1. Pick Team (A or B)
@@ -27,17 +27,17 @@ import asyncio
 import json
 import os
 import discord
-from discord import app_commands
-from discord.ext import commands
 from config import get_config
+from storm_event_hub import HUB_COMMAND, HUB_BTN_DRAFT
 import wizard_registry
 
 WIZARD_TIMEOUT = 600  # 10 minutes
 
 
 # ── Default assignments ────────────────────────────────────────────────────────
-# DS rosters start empty per team. Leadership fills them in via
-# `/desertstorm_draft`; the saved sheet is the source of truth thereafter.
+# DS rosters start empty per team. Leadership fills them in via the
+# `📄 Generate mail` button on `/desertstorm`; the saved sheet is the
+# source of truth thereafter.
 
 DEFAULTS = {
     "A": ({}, []),
@@ -63,6 +63,30 @@ DS_ZONE_STRUCTURE: list[str] = [
     "Arsenal",
     "Mercenary Factory",
 ]
+
+
+# ── Canonical team-seat counts (#219) ──────────────────────────────────────────
+# Last War defines every DS and CS team as 20 starters + 10 subs. Alliances
+# do not customise these numbers. The Premium auto-fill in
+# storm_roster_builder relies on this split to decide who lands in zones vs
+# the sub pool, independent of preset zone capacity (which is allowed to
+# exceed the team size so officers can place the same person in multiple
+# stages without enforcement).
+DS_TEAM_STARTERS = 20
+DS_TEAM_SUBS     = 10
+CS_TEAM_STARTERS = 20
+CS_TEAM_SUBS     = 10
+
+
+def team_seats(event_type: str) -> tuple[int, int]:
+    """Return (starters, subs) for the given storm event type.
+
+    `event_type` is "DS" or "CS". Anything else falls back to the DS
+    numbers since both event types share the same split today.
+    """
+    if event_type == "CS":
+        return CS_TEAM_STARTERS, CS_TEAM_SUBS
+    return DS_TEAM_STARTERS, DS_TEAM_SUBS
 
 
 def _non_canonical_ds_zones(zones: dict) -> dict:
@@ -310,7 +334,7 @@ def parse_ds_template(text: str) -> tuple[dict, list, list]:
                 canonical = canonical_by_lower.get(zone_stripped.lower())
                 if canonical is None:
                     errors.append(
-                        f"Unknown zone `{zone_stripped}` — must be one of: "
+                        f"Unknown zone `{zone_stripped}`. Must be one of: "
                         f"{canonical_list}"
                     )
                 else:
@@ -367,18 +391,21 @@ def build_ds_mail(team: str, zones: dict, subs: list, time_key: str,
             zone_lines.append(str(members))
         zone_lines.append("")
 
+    from storm_icons import zone_emoji_prefix
     for zone in DS_ZONE_STRUCTURE:
         members = zones.get(zone)
         if not members or members == "(open)":
             rendered.add(zone)
             continue
-        zone_lines.append(f"**{zone}**")
+        # #158: prefix the zone header with its emoji. No-op until the
+        # emojis upload; safe to land before art for every zone exists.
+        zone_lines.append(f"{zone_emoji_prefix(zone)}**{zone}**")
         _emit_members(members)
         rendered.add(zone)
 
     extra = [(k, v) for k, v in zones.items() if k not in rendered and v and v != "(open)"]
     for key, members in extra:
-        zone_lines.append(f"**{key}**")
+        zone_lines.append(f"{zone_emoji_prefix(key)}**{key}**")
         _emit_members(members)
 
     zones_block = "\n".join(zone_lines).strip()
@@ -414,7 +441,7 @@ def build_ds_mail(team: str, zones: dict, subs: list, time_key: str,
         "**Zone Assignments**",
         zones_block,
         "",
-        "**Sub Pairs**",
+        "**Subs**",
         subs_block,
         "",
         f"**Time:** {time_str}",
@@ -485,7 +512,7 @@ async def _post_and_copy(channel, post_channel_id: int, event_label: str,
 
     suffix = f" (also posted to {posted_to})" if posted_to else ""
     await channel.send(
-        f"✅ **{event_label} Team {team} mail — ready to copy{suffix}:**\n"
+        f"✅ **{event_label} Team {team} mail, ready to copy{suffix}:**\n"
         f"```\n{mail}\n```"
     )
 
@@ -535,7 +562,7 @@ class StormApprovalView(discord.ui.View):
             item.disabled = True
         await interaction.message.edit(view=self)
 
-    @discord.ui.button(label="✅ Looks Good — Post & Copy", style=discord.ButtonStyle.success)
+    @discord.ui.button(label="✅ Looks Good: Post & Copy", style=discord.ButtonStyle.success)
     async def approve(self, interaction: discord.Interaction, button: discord.ui.Button):
         await interaction.response.defer()
         await self._disable(interaction)
@@ -602,8 +629,8 @@ async def _pick_storm_template(bot, channel, guild_id: int | None, event_type: s
     await view.wait()
     if view.selected is None:
         await channel.send(
-            "⏰ Template picker timed out. "
-            "Run `/desertstorm_draft` or `/canyonstorm_draft` to start over."
+            f"⏰ Template picker timed out. Run `{HUB_COMMAND[event_type]}` "
+            f"and click **{HUB_BTN_DRAFT}** to start over."
         )
         return False
     return view.selected
@@ -612,7 +639,7 @@ async def _pick_storm_template(bot, channel, guild_id: int | None, event_type: s
 async def run_ds_draft_flow(bot, channel, user, team: str,
                              current_zones: dict, current_subs: list):
     """
-    Step 2-4 of /desertstorm_draft:
+    Step 2-4 of the `📄 Generate mail` flow (DS):
 
       Step 2 — Pick Time
       Step 3 — Show template, choose Use as-is / Edit
@@ -627,7 +654,7 @@ async def run_ds_draft_flow(bot, channel, user, team: str,
     guild_id = getattr(getattr(channel, "guild", None), "id", None)
 
     # ── Step 2: Pick Time ─────────────────────────────────────────────────────
-    time_msg  = await channel.send("**Step 2 of 4 — Pick Time**\n⏰ What time is Desert Storm this week?")
+    time_msg  = await channel.send("**Step 2 of 4: Pick Time**\n⏰ What time is Desert Storm this week?")
     time_view = TimeSelectView(event_type="DS", guild_id=guild_id)
     await time_msg.edit(view=time_view)
     await time_view.wait()
@@ -636,17 +663,20 @@ async def run_ds_draft_flow(bot, channel, user, team: str,
     except discord.HTTPException:
         pass
     if time_view.selected is None:
-        await channel.send("⏰ Timed out. Use `/desertstorm_draft` to start again.")
+        await channel.send(
+            f"⏰ Timed out. Run `{HUB_COMMAND['DS']}` and click "
+            f"**{HUB_BTN_DRAFT}** to start again."
+        )
         return
     time_key = time_view.selected
 
     # ── Step 3: Mail Template — Use as-is or Edit ─────────────────────────────
     stale = _non_canonical_ds_zones(current_zones)
     if stale:
-        stale_lines = "\n".join(f"• `{k}` — {v}" for k, v in stale.items())
+        stale_lines = "\n".join(f"• `{k}`: {v}" for k, v in stale.items())
         await channel.send(
             "ℹ️ Your saved data has zones that aren't on the canonical "
-            "Desert Storm list — they'll be dropped on the next save:\n"
+            "Desert Storm list. They'll be dropped on the next save:\n"
             f"{stale_lines}\n"
             "Re-enter assignments under the correct zone name in the "
             "template below."
@@ -655,7 +685,7 @@ async def run_ds_draft_flow(bot, channel, user, team: str,
     template = build_ds_template(current_zones, current_subs)
     use_view = TemplateUseEditView()
     await channel.send(
-        f"**Step 3 of 4 — Mail Template (Team {team})**\n"
+        f"**Step 3 of 4: Mail Template (Team {team})**\n"
         f"Here is the saved template for **Team {team}**:\n"
         f"```\n{template}\n```\n"
         f"Use it as-is, or edit it before posting?",
@@ -663,7 +693,10 @@ async def run_ds_draft_flow(bot, channel, user, team: str,
     )
     await use_view.wait()
     if use_view.choice is None:
-        await channel.send("⏰ Timed out. Use `/desertstorm_draft` to start again.")
+        await channel.send(
+            f"⏰ Timed out. Run `{HUB_COMMAND['DS']}` and click "
+            f"**{HUB_BTN_DRAFT}** to start again."
+        )
         return
 
     zones, subs = current_zones, current_subs
@@ -673,13 +706,16 @@ async def run_ds_draft_flow(bot, channel, user, team: str,
             return m.author == user and m.channel == channel
 
         prompt = await channel.send(
-            f"✏️ {user.mention} — copy the block above, make your edits, and paste it back below.\n"
-            f"*(10 minutes to respond — type `cancel` to stop)*"
+            f"✏️ {user.mention}, copy the block above, make your edits, and paste it back below.\n"
+            f"*(10 minutes to respond; type `cancel` to stop)*"
         )
         try:
             reply = await bot.wait_for("message", check=check, timeout=WIZARD_TIMEOUT)
         except asyncio.TimeoutError:
-            await channel.send("⏰ Timed out. Use `/desertstorm_draft` to start again.")
+            await channel.send(
+            f"⏰ Timed out. Run `{HUB_COMMAND['DS']}` and click "
+            f"**{HUB_BTN_DRAFT}** to start again."
+        )
             try:
                 await prompt.delete()
             except discord.HTTPException:
@@ -699,7 +735,8 @@ async def run_ds_draft_flow(bot, channel, user, team: str,
         if not edited_zones:
             await channel.send(
                 "⚠️ Could not parse any zone assignments. "
-                "Make sure the format matches the template and try `/desertstorm_draft` again."
+                "Make sure the format matches the template and re-run "
+                f"`{HUB_COMMAND['DS']}` → **{HUB_BTN_DRAFT}** to try again."
             )
             return
         if errors:
@@ -739,7 +776,7 @@ async def run_ds_draft_flow(bot, channel, user, team: str,
         post_channel_id=post_channel_id,
     )
     await channel.send(
-        f"**Step 4 of 4 — Preview**\n"
+        f"**Step 4 of 4: Preview**\n"
         f"📬 **Desert Storm Team {team} mail preview:**\n\n{mail}\n\nDoes this look right?",
         view=approval_view,
     )
@@ -762,119 +799,75 @@ async def _guard(interaction: discord.Interaction) -> bool:
     return True
 
 
-# ── Cog ────────────────────────────────────────────────────────────────────────
+# ── Slash command handlers ────────────────────────────────────────────────────
+#
+# Wired from the `📄 Generate mail` button on the `/desertstorm` and
+# `/canyonstorm` event hubs (storm_event_hub.py). This module exposes
+# the handler bodies so the hub stays a thin dispatcher.
 
-class StormCog(commands.Cog):
-    def __init__(self, bot):
-        self.bot = bot
 
-    @app_commands.command(
-        name="desertstorm_draft",
-        description="Generate a Desert Storm mail draft for Team A or Team B",
+async def handle_storm_draft(bot, interaction: discord.Interaction, event_type: str) -> None:
+    if not await _guard(interaction):
+        return
+
+    await interaction.response.defer(ephemeral=True)
+    channel = interaction.channel
+    if channel is None:
+        await interaction.followup.send("⚠️ Could not find the channel.", ephemeral=True)
+        return
+
+    is_ds = event_type == "DS"
+    icon = "🔥" if is_ds else "⚡"
+    label = "Desert Storm" if is_ds else "Canyon Storm"
+    parent = "desertstorm" if is_ds else "canyonstorm"
+
+    # Step 1: Pick team
+    team_msg = await channel.send(
+        f"{icon} **{label} Draft** started by {interaction.user.mention}\n\n"
+        f"**Step 1 of 4: Pick Team**\nWhich team are you drafting for?"
     )
-    async def desertstorm_draft(self, interaction: discord.Interaction):
-        if not await _guard(interaction):
-            return
+    team_view = TeamSelectView()
+    await team_msg.edit(view=team_view)
+    await team_view.wait()
+    try:
+        await team_msg.delete()
+    except discord.HTTPException:
+        pass
 
-        await interaction.response.defer(ephemeral=True)
-        channel = interaction.channel
-        if channel is None:
-            await interaction.followup.send("⚠️ Could not find the channel.", ephemeral=True)
-            return
-
-        # Step 1: Pick team
-        team_msg  = await channel.send(
-            f"🔥 **Desert Storm Draft** — started by {interaction.user.mention}\n\n"
-            f"**Step 1 of 4 — Pick Team**\nWhich team are you drafting for?"
+    if team_view.selected is None:
+        event_type = "DS" if is_ds else "CS"
+        await channel.send(
+            f"⏰ Timed out. Run `{HUB_COMMAND[event_type]}` and click "
+            f"**{HUB_BTN_DRAFT}** to start again."
         )
-        team_view = TeamSelectView()
-        await team_msg.edit(view=team_view)
-        await team_view.wait()
-        try:
-            await team_msg.delete()
-        except discord.HTTPException:
-            pass
+        await interaction.followup.send("⏰ Timed out.", ephemeral=True)
+        return
 
-        if team_view.selected is None:
-            await channel.send("⏰ Timed out. Use `/desertstorm_draft` to start again.")
-            await interaction.followup.send("⏰ Timed out.", ephemeral=True)
-            return
+    team = team_view.selected
 
-        team = team_view.selected
-
-        # Load the team's saved assignments so they become the starting template.
+    # Load the team's saved assignments so they become the starting template.
+    if is_ds:
         zones, subs = await asyncio.get_event_loop().run_in_executor(
             None, load_ds_assignments, team, interaction.guild_id,
         )
-
-        await interaction.followup.send(f"✅ Team {team} selected.", ephemeral=True)
-
-        # Steps 2-4: Time → Template (Use as-is / Edit) → Preview (Post & Copy)
-        await run_ds_draft_flow(self.bot, channel, interaction.user, team, zones, subs)
-
-
-    @app_commands.command(
-        name="canyonstorm_draft",
-        description="Generate a Canyon Storm mail draft for Team A or Team B",
-    )
-    async def canyonstorm_draft(self, interaction: discord.Interaction):
-        if not await _guard(interaction):
-            return
-
-        await interaction.response.defer(ephemeral=True)
-        channel = interaction.channel
-        if channel is None:
-            await interaction.followup.send("⚠️ Could not find the channel.", ephemeral=True)
-            return
-
-        # Step 1: Pick team
-        team_msg  = await channel.send(
-            f"⚡ **Canyon Storm Draft** — started by {interaction.user.mention}\n\n"
-            f"**Step 1 of 4 — Pick Team**\nWhich team are you drafting for?"
-        )
-        team_view = TeamSelectView()
-        await team_msg.edit(view=team_view)
-        await team_view.wait()
-        try:
-            await team_msg.delete()
-        except discord.HTTPException:
-            pass
-
-        if team_view.selected is None:
-            await channel.send("⏰ Timed out. Use `/canyonstorm_draft` to start again.")
-            await interaction.followup.send("⏰ Timed out.", ephemeral=True)
-            return
-
-        team = team_view.selected
-
-        # Load the team's saved assignments so they become the starting template.
+    else:
         zones = await asyncio.get_event_loop().run_in_executor(
             None, load_cs_assignments, team, interaction.guild_id,
         )
 
-        await interaction.followup.send(f"✅ Team {team} selected.", ephemeral=True)
+    await interaction.followup.send(f"✅ Team {team} selected.", ephemeral=True)
 
-        # Steps 2-4: Time → Template (Use as-is / Edit) → Preview (Post & Copy)
-        await run_cs_draft_flow(self.bot, channel, interaction.user, team, zones)
+    # Steps 2-4: Time → Template (Use as-is / Edit) → Preview (Post & Copy)
+    if is_ds:
+        await run_ds_draft_flow(bot, channel, interaction.user, team, zones, subs)
+    else:
+        await run_cs_draft_flow(bot, channel, interaction.user, team, zones)
 
 
-    @app_commands.command(
-        name="desertstorm",
-        description="Show the configured Desert Storm setup and current rosters",
-    )
-    async def desertstorm(self, interaction: discord.Interaction):
-        if not await _guard(interaction):
-            return
-        await _show_storm_overview(interaction, "DS")
-
-    @app_commands.command(
-        name="canyonstorm",
-        description="Show the configured Canyon Storm setup and current rosters",
-    )
-    async def canyonstorm(self, interaction: discord.Interaction):
-        if not await _guard(interaction):
-            return
-        await _show_storm_overview(interaction, "CS")
+async def handle_storm_overview(bot, interaction: discord.Interaction, event_type: str) -> None:
+    if not await _guard(interaction):
+        return
+    await _show_storm_overview(interaction, event_type)
 
 
 async def _show_storm_overview(interaction: discord.Interaction, event_type: str):
@@ -885,7 +878,13 @@ async def _show_storm_overview(interaction: discord.Interaction, event_type: str
     label    = "Desert Storm" if event_type == "DS" else "Canyon Storm"
     icon     = "⚔️" if event_type == "DS" else "🏜️"
     cmd_name = "desertstorm" if event_type == "DS" else "canyonstorm"
-    setup_cmd = "setup_desertstorm" if event_type == "DS" else "setup_canyonstorm"
+    # The per-event `/setup_*` slash commands were retired in favour of
+    # the `/setup` hub (#201); point officers at the hub + correct
+    # button instead of a non-existent slash command.
+    setup_hint = (
+        "setup → ⚔️ Desert Storm" if event_type == "DS"
+        else "setup → 🏜️ Canyon Storm"
+    )
 
     cfg  = get_config(interaction.guild_id)
     scfg = get_storm_config(interaction.guild_id, event_type)
@@ -895,13 +894,30 @@ async def _show_storm_overview(interaction: discord.Interaction, event_type: str
         title=f"{icon} {label}",
         color=discord.Color.dark_red() if event_type == "DS" else discord.Color.gold(),
     )
-    from config import get_storm_slot_labels
-    slot_labels = get_storm_slot_labels(event_type, interaction.guild_id)
+    from config import get_storm_team_slot_labels
+    # Show the TEAM-mapped time labels (#251) — what each team actually
+    # runs at, driven by the saved per-team slot picks in /setup_*storm
+    # Step 3. Falls back to "*not set*" when the alliance hasn't picked
+    # yet; setup-cmd hint is already in the footer below.
+    team_a_label, team_b_label = get_storm_team_slot_labels(
+        interaction.guild_id, event_type,
+    )
+    teams_setting = (scfg.get("teams") or "both").strip()
 
     embed.add_field(name="Sheet Tab",   value=scfg.get("tab_name", "*not set*"),                        inline=False)
     embed.add_field(name="Log Channel", value=f"<#{log_channel_id}>" if log_channel_id else "*not set*", inline=False)
-    embed.add_field(name="Time Option 1", value=slot_labels[0], inline=False)
-    embed.add_field(name="Time Option 2", value=slot_labels[1], inline=False)
+    if teams_setting in ("both", "A"):
+        embed.add_field(
+            name="Team A Time",
+            value=team_a_label if team_a_label else "*not set*",
+            inline=False,
+        )
+    if teams_setting in ("both", "B"):
+        embed.add_field(
+            name="Team B Time",
+            value=team_b_label if team_b_label else "*not set*",
+            inline=False,
+        )
 
     # Build the rendered mail template — same templating used by /[event]_draft
     try:
@@ -921,12 +937,8 @@ async def _show_storm_overview(interaction: discord.Interaction, event_type: str
     except Exception as e:
         embed.add_field(name="Current Mail Template", value=f"⚠️ Could not load: {e}", inline=False)
 
-    embed.set_footer(text=f"Run /{setup_cmd} to update. Run /{cmd_name}_draft to generate a draft.")
+    embed.set_footer(text=f"Run /{setup_hint} to update. Run /{cmd_name} draft to generate a draft.")
     await interaction.followup.send(embed=embed, ephemeral=True)
-
-
-async def setup(bot: commands.Bot):
-    await bot.add_cog(StormCog(bot))
 
 # ══════════════════════════════════════════════════════════════════════════════
 # CANYON STORM (CS)
@@ -936,7 +948,8 @@ async def setup(bot: commands.Bot):
 
 # ── CS Defaults ───────────────────────────────────────────────────────────────
 
-# Empty placeholders — alliances fill these via `/canyonstorm_draft`.
+# Empty placeholders — alliances fill these via the `📄 Generate mail`
+# button on `/canyonstorm`.
 # Keys must match the canonical CS_ZONE_STRUCTURE (defined later in this
 # file) plus the CS_SUBS_KEY for {subs}; the existing test suite asserts
 # that property, so any key drift will fail loudly in CI.
@@ -948,12 +961,10 @@ DEFAULT_CS_B = {
     "s1_sw2":            "",
     "s1_sw3":            "",
     "s1_sw4":            "",
-    "s1_floaters":       "",
     "s2_ds1":            "",
     "s2_ds2":            "",
     "s2_sf1":            "",
     "s2_sf2":            "",
-    "s2_floaters":       "",
     "s3_virus_lab":      "",
     "s3_power_tower":    "",
     "s3_dc1":            "",
@@ -1082,12 +1093,10 @@ CS_ZONE_STRUCTURE: list[tuple[int, str, str]] = [
     (1, "s1_sw2",         "Sample Warehouse 2"),
     (1, "s1_sw3",         "Sample Warehouse 3"),
     (1, "s1_sw4",         "Sample Warehouse 4"),
-    (1, "s1_floaters",    "Floaters"),
     (2, "s2_ds1",         "Defense System 1"),
     (2, "s2_ds2",         "Defense System 2"),
     (2, "s2_sf1",         "Serum Factory 1"),
     (2, "s2_sf2",         "Serum Factory 2"),
-    (2, "s2_floaters",    "Floaters"),
     (3, "s3_virus_lab",   "Virus Lab"),
     (3, "s3_power_tower", "Power Tower"),
     (3, "s3_dc1",         "Data Center 1"),
@@ -1244,6 +1253,7 @@ def build_cs_mail(team: str, z: dict, time_key: str, guild_id: int = None,
             zone_lines.append(str(members))
         zone_lines.append("")
 
+    from storm_icons import zone_emoji_prefix
     for stage, key, label in CS_ZONE_STRUCTURE:
         members = z.get(key)
         if not members or members == "(open)":
@@ -1254,7 +1264,9 @@ def build_cs_mail(team: str, z: dict, time_key: str, guild_id: int = None,
             # only needs one extra blank — no double-blank between stages.
             zone_lines.append(f"**Stage {stage}**")
             last_stage = stage
-        zone_lines.append(f"**{label}**")
+        # #158: prefix the zone header with its emoji. No-op until the
+        # emojis upload.
+        zone_lines.append(f"{zone_emoji_prefix(label)}**{label}**")
         _emit_members(members)
         rendered.add(key)
 
@@ -1265,7 +1277,7 @@ def build_cs_mail(team: str, z: dict, time_key: str, guild_id: int = None,
         if zone_lines:
             zone_lines.append("")
         for key, members in extra:
-            zone_lines.append(f"**{key}**")
+            zone_lines.append(f"{zone_emoji_prefix(key)}**{key}**")
             _emit_members(members)
 
     zones_block = "\n".join(zone_lines).strip()
@@ -1314,7 +1326,7 @@ class CSApprovalView(discord.ui.View):
             item.disabled = True
         await interaction.message.edit(view=self)
 
-    @discord.ui.button(label="✅ Looks Good — Post & Copy", style=discord.ButtonStyle.success)
+    @discord.ui.button(label="✅ Looks Good: Post & Copy", style=discord.ButtonStyle.success)
     async def approve(self, interaction: discord.Interaction, button: discord.ui.Button):
         await interaction.response.defer()
         await self._disable(interaction)
@@ -1336,13 +1348,13 @@ class CSApprovalView(discord.ui.View):
 
 async def run_cs_draft_flow(bot, channel, user, team: str, current_zones: dict):
     """
-    Step 2-4 of /canyonstorm_draft: Time → Template (Use as-is / Edit) →
+    Step 2-4 of the `📄 Generate mail` flow (CS): Time → Template (Use as-is / Edit) →
     Preview (Post & Copy). See `run_ds_draft_flow` for the shape.
     """
     guild_id = getattr(getattr(channel, "guild", None), "id", None)
 
     # ── Step 2: Pick Time ─────────────────────────────────────────────────────
-    time_msg  = await channel.send("**Step 2 of 4 — Pick Time**\n⏰ What time is Canyon Storm this week?")
+    time_msg  = await channel.send("**Step 2 of 4: Pick Time**\n⏰ What time is Canyon Storm this week?")
     time_view = TimeSelectView(event_type="CS", guild_id=guild_id)
     await time_msg.edit(view=time_view)
     await time_view.wait()
@@ -1351,17 +1363,20 @@ async def run_cs_draft_flow(bot, channel, user, team: str, current_zones: dict):
     except discord.HTTPException:
         pass
     if time_view.selected is None:
-        await channel.send("⏰ Timed out. Use `/canyonstorm_draft` to start again.")
+        await channel.send(
+            f"⏰ Timed out. Run `{HUB_COMMAND['CS']}` and click "
+            f"**{HUB_BTN_DRAFT}** to start again."
+        )
         return
     time_key = time_view.selected
 
     # ── Step 3: Mail Template — Use as-is or Edit ─────────────────────────────
     stale = _non_canonical_cs_zones(current_zones)
     if stale:
-        stale_lines = "\n".join(f"• `{k}` — {v}" for k, v in stale.items())
+        stale_lines = "\n".join(f"• `{k}`: {v}" for k, v in stale.items())
         await channel.send(
             "ℹ️ Your saved data has zones that aren't on the canonical "
-            "Canyon Storm list — they'll be dropped on the next save:\n"
+            "Canyon Storm list. They'll be dropped on the next save:\n"
             f"{stale_lines}\n"
             "Re-enter assignments under the correct zone name in the "
             "template below."
@@ -1370,7 +1385,7 @@ async def run_cs_draft_flow(bot, channel, user, team: str, current_zones: dict):
     template = build_cs_template(current_zones)
     use_view = TemplateUseEditView()
     await channel.send(
-        f"**Step 3 of 4 — Mail Template (Team {team})**\n"
+        f"**Step 3 of 4: Mail Template (Team {team})**\n"
         f"Here is the saved template for **Team {team}**:\n"
         f"```\n{template}\n```\n"
         f"Use it as-is, or edit it before posting?",
@@ -1378,7 +1393,10 @@ async def run_cs_draft_flow(bot, channel, user, team: str, current_zones: dict):
     )
     await use_view.wait()
     if use_view.choice is None:
-        await channel.send("⏰ Timed out. Use `/canyonstorm_draft` to start again.")
+        await channel.send(
+            f"⏰ Timed out. Run `{HUB_COMMAND['CS']}` and click "
+            f"**{HUB_BTN_DRAFT}** to start again."
+        )
         return
 
     zones = current_zones
@@ -1388,13 +1406,16 @@ async def run_cs_draft_flow(bot, channel, user, team: str, current_zones: dict):
             return m.author == user and m.channel == channel
 
         prompt = await channel.send(
-            f"✏️ {user.mention} — copy the block above, make your edits, and paste it back below.\n"
-            f"*(10 minutes to respond — type `cancel` to stop)*"
+            f"✏️ {user.mention}, copy the block above, make your edits, and paste it back below.\n"
+            f"*(10 minutes to respond; type `cancel` to stop)*"
         )
         try:
             reply = await bot.wait_for("message", check=check, timeout=WIZARD_TIMEOUT)
         except asyncio.TimeoutError:
-            await channel.send("⏰ Timed out. Use `/canyonstorm_draft` to start again.")
+            await channel.send(
+            f"⏰ Timed out. Run `{HUB_COMMAND['CS']}` and click "
+            f"**{HUB_BTN_DRAFT}** to start again."
+        )
             try:
                 await prompt.delete()
             except discord.HTTPException:
@@ -1414,7 +1435,8 @@ async def run_cs_draft_flow(bot, channel, user, team: str, current_zones: dict):
         if not edited_zones:
             await channel.send(
                 "⚠️ Could not parse any assignments. "
-                "Make sure the format matches the template and try `/canyonstorm_draft` again."
+                "Make sure the format matches the template and re-run "
+                f"`{HUB_COMMAND['CS']}` → **{HUB_BTN_DRAFT}** to try again."
             )
             return
         if errors:
@@ -1451,7 +1473,7 @@ async def run_cs_draft_flow(bot, channel, user, team: str, current_zones: dict):
         time_key=time_key, post_channel_id=post_channel_id,
     )
     await channel.send(
-        f"**Step 4 of 4 — Preview**\n"
+        f"**Step 4 of 4: Preview**\n"
         f"📬 **Canyon Storm Team {team} mail preview:**\n\n{mail}\n\nDoes this look right?",
         view=approval_view,
     )

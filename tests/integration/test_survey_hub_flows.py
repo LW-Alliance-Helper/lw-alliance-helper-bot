@@ -1,5 +1,5 @@
 """
-Phase 4 of the full-coverage suite: /survey and /survey_remind hub flows.
+Phase 4 of the full-coverage suite: /survey overview and /survey remind hub flows.
 
 Covers:
 
@@ -87,7 +87,7 @@ class TestSurveyCommandRendering:
             interaction = _make_followup_interaction()
             interaction.entitlements = []  # free tier
 
-            await cog.survey.callback(cog, interaction)
+            await cog.survey_overview.callback(cog, interaction)
 
             # Free-tier path uses response.send_message with an embed.
             sent = interaction.response.send_message.call_args
@@ -126,7 +126,7 @@ class TestSurveyCommandRendering:
             interaction = _make_followup_interaction(guild_id=PREMIUM_TEST_GUILD_ID)
             interaction.entitlements = []
 
-            await cog.survey.callback(cog, interaction)
+            await cog.survey_overview.callback(cog, interaction)
 
             # Premium path defers, then uses followup.send with a view + embed.
             assert interaction.response.defer.called

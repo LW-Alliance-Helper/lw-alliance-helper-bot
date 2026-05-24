@@ -2,7 +2,7 @@
 scheduler.py — Per-guild event scheduler with leadership approval flow.
 
 Schedule logic:
-  - Each guild defines its own events in `guild_events` via `/setup_events`.
+  - Each guild defines its own events in `guild_events` via `the events setup wizard`.
   - Events can be repeating (anchor + interval) or manual one-offs.
   - Times and timezones are per-event; the scheduler computes the next
     fire dt for every active event independently.
@@ -65,7 +65,7 @@ EVENT_LIBRARY = {
     },
     # Other in-game events (Glacieradon, Blimp, etc.) are intentionally NOT
     # listed here — alliance leaders add them as custom events through
-    # /setup_events with the in-game name they prefer. Once we can confirm
+    # the events setup wizard with the in-game name they prefer. Once we can confirm
     # the official in-game names for additional events, they may be added
     # back to this default library.
 }
@@ -76,7 +76,7 @@ OPTIONAL_EVENTS = {k: v for k, v in EVENT_LIBRARY.items() if v["optional"]}
 def _resolve_event_info(key: str, guild_id: int = None) -> dict:
     """
     Resolve an event key to its display info. When a guild has configured
-    events via /setup_events, those take precedence; otherwise fall back to
+    events via the events setup wizard, those take precedence; otherwise fall back to
     the hardcoded EVENT_LIBRARY for backwards compatibility.
 
     Returns {"name", "blurb", "optional"}. Guild-configured events are
@@ -200,7 +200,7 @@ def build_announcement(event_list: list[dict], notes: str = "",
          "blurb" (the EventEditorView's Add Event handler used to do this,
          which made manually-added events render with the lowercase
          short_key fallback even though the user had configured a custom
-         blurb in /setup_events).
+         blurb in the events setup wizard).
       3. Hardcoded EVENT_LIBRARY (legacy guilds).
       4. Generic f-string `"<key> at {time} ({server_time} Server Time)."`.
 
@@ -240,7 +240,7 @@ def build_warning_message(event_list: list[dict], guild_id: int = None) -> str:
 
     Resolution order for the message body:
       1. The event's stored `warning_blurb` (if guild defined a custom 5-min
-         warning text in /setup_events).
+         warning text in the events setup wizard).
       2. The event's stored `announcement_blurb` (if defined) — adapted to
          "in 5 minutes" by substituting the {time} placeholder.
       3. Hardcoded special case for `marauder` (legacy compat).
@@ -348,7 +348,7 @@ class EventEditorView(discord.ui.View):
     async def on_timeout(self):
         """Strip the editor buttons and tell leadership how to re-open it."""
         from wizard_registry import expire_view_message
-        await expire_view_message(self.message, command_hint="/events")
+        await expire_view_message(self.message, command_hint="/events show")
 
     @discord.ui.button(label="➕ Add Event", style=discord.ButtonStyle.primary, row=0)
     async def add_event(self, interaction: discord.Interaction, button: discord.ui.Button):
@@ -598,7 +598,7 @@ class EventEditorView(discord.ui.View):
 
         if not self.event_list:
             await interaction.followup.send(
-                "⚠️ No events in the list. Use `/events` to open a fresh editor.",
+                "⚠️ No events in the list. Use `/events show` to open a fresh editor.",
                 ephemeral=True,
             )
             return
@@ -761,7 +761,7 @@ class ApprovalView(discord.ui.View):
         the draft. Without the message edit, the buttons stayed on screen
         but clicks failed silently with 'Interaction failed'."""
         from wizard_registry import expire_view_message
-        await expire_view_message(self.message, command_hint="/events")
+        await expire_view_message(self.message, command_hint="/events show")
 
 
 # ── Main scheduler loop ────────────────────────────────────────────────────────

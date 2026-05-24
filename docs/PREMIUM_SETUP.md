@@ -23,10 +23,10 @@ portal hasn't granted.
 
 Why this matters:
 
-- **Member Roster Sync** (`/sync_members`) iterates `guild.members` to
+- **Member Roster Sync** (`/members sync`) iterates `guild.members` to
   write the roster sheet. Without this intent, `guild.members` is just
   the small handful of users Discord surfaces via interactions — so
-  `/sync_members` would write 0 rows even though the SKU is paid for.
+  `/members sync` would write 0 rows even though the SKU is paid for.
 - **Auto-resync on join/leave/role-change** depends on the
   `on_member_join` / `on_member_remove` / `on_member_update` gateway
   events firing. Those events do not fire without this intent.
@@ -97,7 +97,7 @@ Other supported environment variables:
 | `PREMIUM_SKU_ID` | Subscription SKU ID | **Required** for real billing |
 | `FORCE_PREMIUM` | `1` / `true` flags every guild as premium | Local dev / staging only |
 | `PREMIUM_BYPASS_GUILD_IDS` | Comma-separated guild IDs that always resolve as premium without a subscription | The bot owner's home server, internal test servers, beta testers |
-| `BOT_ADMIN_GUILD_IDS` | Comma-separated guild IDs where owner-only admin slash commands (`/admin_guild_info`, `/admin_forget_guild`) are registered. Unset = global registration (local dev only) | Set in production to your support / dev guild ID(s) so admin commands don't appear in alliance command pickers |
+| `BOT_ADMIN_GUILD_IDS` | Comma-separated guild IDs where the owner-only `/admin` slash-command group (`/admin overview`, `/admin guild_info`, `/admin forget_guild`) is registered. Unset = global registration (local dev only) | Set in production to your support / dev guild ID(s) so admin commands don't appear in alliance command pickers |
 
 `PREMIUM_BYPASS_GUILD_IDS` is the canonical way to grant a specific
 guild permanent premium status without a Discord subscription — used in
@@ -123,12 +123,15 @@ table; see `premium.py` and issue #41):
   premium button, the bot remembers which guild they ran `/upgrade` in.
   Once the checkout completes, `on_entitlement_create` consumes that
   context and writes the assignment row.
-- **`/premium_assign` moves the pin.** A subscriber runs it from the
+- **`/premium assign` moves the pin.** A subscriber runs it from the
   guild they want Premium in. The bot rejects with the existing
   subscriber's username if the guild is already pinned by someone else.
-- **`/premium_status`** surfaces the current state (active sub +
-  assigned guild, lapsed sub with preserved assignment, etc.).
-- **`/premium_unassign`** releases the pin without canceling the
+- **`/premium overview`** surfaces the current state (active sub +
+  assigned guild, lapsed sub with preserved assignment, etc.). On a
+  free-tier guild with no active subscription it also doubles as the
+  upsell surface, rendering the same pitch + Discord premium button
+  `/upgrade` does.
+- **`/premium unassign`** releases the pin without canceling the
   Discord subscription — useful for "park it and reassign later."
 - **Lapse is not destructive.** When a subscription ends, the
   assignment row stays. If the user resubscribes, Premium auto-resumes
@@ -151,7 +154,7 @@ Once the env var is set and the bot has restarted:
 3. Once subscribed, run **`/help`** — the title should now show
    "💎 Premium" instead of "Free tier", and the embed color should be
    gold instead of blurple.
-4. Run **`/setup_members`** — it should run the wizard instead of
+4. Run **`/setup`** and click **👥 Members** — it should run the wizard instead of
    showing the premium-locked embed.
 
 ## 4. Customer-facing rollout
@@ -191,9 +194,9 @@ A few specific things that *might* surprise existing users:
   upgrade or trim manually.
 - **Storm log lookups**: free tier shows only the 4 most-recent log
   entries. The data isn't deleted from the sheet — it's just not
-  surfaced via `/desertstorm_log` for older dates. Premium users see
+  surfaced via `/desertstorm log` for older dates. Premium users see
   everything.
-- **`/events_log` and `/train_log` windows**: free tier shows 7 days of
+- **`/events log` and `/train log` windows**: free tier shows 7 days of
   history; premium shows 30. Same principle — the data isn't deleted,
   just filtered on read.
 

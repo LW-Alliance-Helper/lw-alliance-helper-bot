@@ -35,6 +35,35 @@ from tests.integration.test_setup_flows import (
 
 # ── /setup_desertstorm + /setup_canyonstorm with participation enabled ────────
 
+def _fake_structured_flow_opted_out():
+    """Return the dict shape `_run_structured_flow_setup_step` produces
+    when the officer declines the Premium structured roster flow.
+    Lets tests that only care about earlier wizard steps stub it out
+    without having to drive the Premium sub-flow's full UI. Without
+    this stub, the sub-flow runs against an undermocked bot/channel
+    and exhausts the test's prepared replies (StopIteration)."""
+    return {
+        "structured_flow_enabled":         False,
+        "power_metric_column":             "B",
+        "power_metric_tab":                "",
+        "power_match_column":              "",
+        "sub_mode":                        "pool",
+        "signup_channel_id":               0,
+        "signup_schedule_cron":            "",
+        "signups_tab":                     "",
+        "rosters_tab":                     "",
+        "attendance_tab":                  "",
+        "strategies_tab":                  "",
+        "member_rules_tab":                "",
+        "poll_day_of_week":                -1,
+        "signup_time":                     "",
+        "power_refresh_dm_enabled":        False,
+        "roster_dm_starter_template":      "",
+        "roster_dm_paired_sub_template":   "",
+        "roster_dm_pool_sub_template":     "",
+    }
+
+
 class TestStormSetupWithParticipation:
     """The new (#20) participation block — Step 6 of /setup_desertstorm."""
 
@@ -72,13 +101,18 @@ class TestStormSetupWithParticipation:
                 "roster_start_row": 2,
             }
 
+        async def fake_structured(*args, **kwargs):
+            return _fake_structured_flow_opted_out()
+
         with patch("setup_cog.ChannelSelectStep", side_effect=lambda *a, **kw: next(ch_iter)), \
              patch("setup_cog._run_storm_participation_step",
                     side_effect=fake_participation), \
+             patch("setup_cog._run_structured_flow_setup_step",
+                    side_effect=fake_structured), \
              patch_keep_or_change(["DS Assignments"]):
             make_send_handler(
                 interaction.channel,
-                view_overrides={"selected": "A", "use_default": True},
+                view_overrides={"selected": "A", "outcome": "default"},
             )
             await run_storm_setup(interaction, bot, "DS")
 
@@ -118,13 +152,18 @@ class TestStormSetupWithParticipation:
                 "roster_start_row": 2,
             }
 
+        async def fake_structured(*args, **kwargs):
+            return _fake_structured_flow_opted_out()
+
         with patch("setup_cog.ChannelSelectStep", side_effect=lambda *a, **kw: next(ch_iter)), \
              patch("setup_cog._run_storm_participation_step",
                     side_effect=disabled_participation), \
+             patch("setup_cog._run_structured_flow_setup_step",
+                    side_effect=fake_structured), \
              patch_keep_or_change(["CS Assignments"]):
             make_send_handler(
                 interaction.channel,
-                view_overrides={"selected": "B", "use_default": True},
+                view_overrides={"selected": "B", "outcome": "default"},
             )
             await run_storm_setup(interaction, bot, "CS")
 
@@ -135,23 +174,25 @@ class TestStormSetupWithParticipation:
         assert gcfg.cs_log_channel_id == 666111
 
 
-# ── /setup_reset ──────────────────────────────────────────────────────────────
+# ── /setup hub: reset flow + view-configuration helper (post-#201) ───────────
 
 class TestSetupResetBranches:
-    """Both confirm and cancel paths of /setup_reset."""
+    """Both confirm and cancel paths of the reset flow, which is now
+    reachable from the `/setup` hub's 🗑️ Reset configuration button.
+    The flow itself is exposed as the module-level `_run_reset_flow`
+    helper — same logic, same gates."""
 
     @pytest.mark.asyncio
-    async def test_setup_reset_confirm_clears_config(self, seeded_db):
+    async def test_reset_flow_confirm_clears_config(self, seeded_db):
         import config
-        from setup_cog import SetupCog
+        import setup_cog
 
-        cog = SetupCog(MagicMock())
         interaction = make_mock_interaction(is_admin=True)
 
-        # ConfirmResetView is defined inline. Drive it by short-circuiting
-        # response.send_message: when the view is passed in, set
-        # confirmed=True and stop() it so the wizard's `await view.wait()`
-        # returns immediately.
+        # _ConfirmResetView is defined inline inside _run_reset_flow.
+        # Drive it by short-circuiting response.send_message: when the
+        # view is passed in, set confirmed=True and stop() it so the
+        # helper's `await view.wait()` returns immediately.
         async def _send(content=None, embed=None, view=None, **kw):
             if view is not None:
                 view.confirmed = True
@@ -160,32 +201,28 @@ class TestSetupResetBranches:
             return MagicMock(id=1)
         interaction.response.send_message = AsyncMock(side_effect=_send)
 
-        await cog.setup_reset.callback(cog, interaction)
+        await setup_cog._run_reset_flow(interaction)
 
         # After reset, the row should be reset to defaults (setup_complete=0)
         cfg = config.get_config(TEST_GUILD_ID)
         assert cfg.setup_complete == 0, (
             "Setup should be cleared after confirm — saw setup_complete still set"
         )
-        # Followup should mention the reset succeeded
         followup_call = interaction.followup.send.call_args
         assert followup_call is not None
         sent_msg = followup_call.args[0] if followup_call.args else followup_call.kwargs.get("content", "")
         assert "reset" in sent_msg.lower()
 
     @pytest.mark.asyncio
-    async def test_setup_reset_cancel_keeps_config(self, seeded_db):
-        """Clicking Cancel (or timing out) preserves the existing config
-        and surfaces the explicit 'Reset cancelled' message."""
+    async def test_reset_flow_cancel_keeps_config(self, seeded_db):
+        """Clicking Cancel preserves the existing config and surfaces the
+        explicit 'Reset cancelled' message."""
         import config
-        from setup_cog import SetupCog
+        import setup_cog
 
-        cog = SetupCog(MagicMock())
         interaction = make_mock_interaction(is_admin=True)
-
         original_tz = config.get_config(TEST_GUILD_ID).timezone
 
-        # Drive the inline ConfirmResetView with confirmed=False (cancel).
         async def _send(content=None, embed=None, view=None, **kw):
             if view is not None:
                 view.confirmed = False
@@ -194,15 +231,12 @@ class TestSetupResetBranches:
             return MagicMock(id=1)
         interaction.response.send_message = AsyncMock(side_effect=_send)
 
-        await cog.setup_reset.callback(cog, interaction)
+        await setup_cog._run_reset_flow(interaction)
 
-        # Config should be preserved
         cfg_after = config.get_config(TEST_GUILD_ID)
         assert cfg_after.setup_complete == 1
         assert cfg_after.timezone       == original_tz
 
-        # The followup message should explicitly mention "cancelled" so
-        # the user knows nothing was reset.
         followup_call = interaction.followup.send.call_args
         assert followup_call is not None
         sent_msg = followup_call.args[0] if followup_call.args else followup_call.kwargs.get("content", "")
@@ -210,47 +244,211 @@ class TestSetupResetBranches:
         assert "still active" in sent_msg.lower()
 
 
-# ── /view_configuration ───────────────────────────────────────────────────────
+# ── /setup → 🗂️ View configuration (post-#201) ───────────────────────────────
 
 class TestViewConfiguration:
+    """Post-#201: the bare `/view_configuration` slash command is gone;
+    its body now sits behind the setup hub's 🗂️ View configuration
+    button, which calls `setup_cog._send_view_configuration`. The
+    button is wired via setup_hub.py; here we exercise the underlying
+    helper directly to cover the same after-setup / before-setup
+    branches the old slash test did."""
 
     @pytest.mark.asyncio
-    async def test_view_configuration_after_setup(self, seeded_db):
-        """Once setup_complete=1, /view_configuration should respond with
-        an embed (not the 'not set up yet' message)."""
-        from setup_cog import SetupCog
-        cog = SetupCog(MagicMock())
+    async def test_view_configuration_after_setup_renders_embed(self, seeded_db):
+        """Once setup_complete=1, the helper renders the configuration
+        embed (not the 'not set up yet' message)."""
+        from setup_cog import _send_view_configuration
+        from config import get_config
 
         interaction = make_mock_interaction(is_admin=True)
-        await cog.view_configuration.callback(cog, interaction)
+        cfg = get_config(TEST_GUILD_ID)
+        assert cfg is not None and cfg.setup_complete
 
-        # Either response.send_message OR followup.send received an embed
+        await _send_view_configuration(interaction, cfg)
+
         sent = (
             interaction.response.send_message.call_args
             or interaction.followup.send.call_args
         )
         assert sent is not None, (
-            "/view_configuration didn't reply at all"
+            "_send_view_configuration didn't reply at all"
         )
-        embed = sent.kwargs.get("embed")
-        # Some pathways send raw text first; either is acceptable as long
-        # as something got sent.
 
     @pytest.mark.asyncio
-    async def test_view_configuration_before_setup(self, temp_db):
-        """If setup isn't complete, /view_configuration should respond
-        with a friendly 'run /setup' message rather than crashing."""
-        from setup_cog import SetupCog
+    async def test_setup_hub_view_button_before_setup_says_not_set_up(self, temp_db):
+        """When setup isn't complete, the hub's 🗂️ View configuration
+        button replies with the friendly 'run /setup' redirect rather
+        than crashing or rendering a half-empty embed. The button's
+        not-set-up guard sits inline in setup_hub.py; we exercise the
+        unbound callback function discord.py stashed on the Button
+        item so we don't have to drive a real Discord interaction."""
+        import setup_hub
+        from unittest.mock import MagicMock as _M
         import config
         # Create a row but don't mark setup_complete
         config.get_or_create_config(TEST_GUILD_ID)
 
-        cog = SetupCog(MagicMock())
         interaction = make_mock_interaction(is_admin=True)
-        await cog.view_configuration.callback(cog, interaction)
+        bot = _M()
+        view = setup_hub._SetupHubView(bot, TEST_GUILD_ID, 1, is_premium=False)
+        # discord.py wraps the decorated coroutine on the Button item.
+        # `Button.callback` is set to a partial bound to the view, so
+        # invoking `view.btn_view_config.callback(interaction)` works.
+        await view.btn_view_config.callback(interaction)
 
         sent = interaction.response.send_message.call_args
         msg = sent.args[0] if sent.args else sent.kwargs.get("content", "")
         assert "/setup" in msg or "set up" in msg.lower()
 
 
+# ── /setup admin-or-leadership gate (#236) ───────────────────────────────────
+
+class TestSetupHubLeadershipGate:
+    """The /setup hub used to be admin-only, which blocked alliances
+    where day-to-day officers don't carry full server-admin
+    permissions. The hub now accepts admins OR members with the
+    configured leadership role — matching the gate every per-feature
+    `/setup_*` wizard already uses."""
+
+    @pytest.mark.asyncio
+    async def test_handle_setup_hub_lets_leadership_role_through(self, seeded_db):
+        """A non-admin member with the configured Leadership role can
+        run `/setup`; the hub embed + view are sent."""
+        import setup_hub
+        from tests.conftest import make_mock_role
+
+        interaction = make_mock_interaction(is_admin=False)
+        interaction.user.roles = [make_mock_role(name="Leadership")]
+        bot = MagicMock()
+
+        with patch("premium.is_premium", AsyncMock(return_value=False)):
+            await setup_hub.handle_setup_hub(bot, interaction)
+
+        sent = interaction.response.send_message.call_args
+        assert sent is not None
+        # The hub call sends an embed + view, not the reject message.
+        kwargs = sent.kwargs
+        assert "embed" in kwargs and "view" in kwargs
+
+    @pytest.mark.asyncio
+    async def test_handle_setup_hub_rejects_unprivileged_user(self, seeded_db):
+        """A user with neither admin nor the Leadership role still hits
+        the reject path, with a message naming the configured role."""
+        import setup_hub
+        from tests.conftest import make_mock_role
+
+        interaction = make_mock_interaction(is_admin=False)
+        interaction.user.roles = [make_mock_role(name="Member")]
+        bot = MagicMock()
+
+        await setup_hub.handle_setup_hub(bot, interaction)
+
+        sent = interaction.response.send_message.call_args
+        msg = sent.args[0] if sent.args else sent.kwargs.get("content", "")
+        assert "Leadership" in msg
+        assert "administrator" in msg.lower()
+
+    @pytest.mark.asyncio
+    async def test_hub_view_interaction_check_lets_leadership_through(self, seeded_db):
+        """The setup hub's button-gate (interaction_check) follows the
+        same admin-or-leadership rule as the slash command."""
+        import setup_hub
+        from tests.conftest import make_mock_role
+
+        interaction = make_mock_interaction(is_admin=False)
+        interaction.user.roles = [make_mock_role(name="Leadership")]
+        view = setup_hub._SetupHubView(
+            MagicMock(), TEST_GUILD_ID, interaction.user.id, is_premium=False,
+        )
+
+        result = await view.interaction_check(interaction)
+        assert result is True
+        interaction.response.send_message.assert_not_called()
+
+    @pytest.mark.asyncio
+    async def test_hub_view_interaction_check_rejects_member_role(self, seeded_db):
+        """A user without the Leadership role still bounces off the
+        hub button gate."""
+        import setup_hub
+        from tests.conftest import make_mock_role
+
+        interaction = make_mock_interaction(is_admin=False)
+        interaction.user.roles = [make_mock_role(name="Member")]
+        view = setup_hub._SetupHubView(
+            MagicMock(), TEST_GUILD_ID, interaction.user.id, is_premium=False,
+        )
+
+        result = await view.interaction_check(interaction)
+        assert result is False
+        sent = interaction.response.send_message.call_args
+        msg = sent.args[0] if sent.args else sent.kwargs.get("content", "")
+        assert "Leadership" in msg
+
+
+# ── /setup hub release-announcement toggle (#253) ────────────────────────────
+
+
+class TestSetupHubReleaseAnnouncementsToggle:
+    """The hub's 📢 Release announcements button is a one-click toggle
+    for `release_announcements_enabled`. Label reflects current state on
+    render; click flips the saved value and ephemerally confirms."""
+
+    @pytest.mark.asyncio
+    async def test_default_label_reads_on(self, seeded_db):
+        """A guild with the default `release_announcements_enabled = 1`
+        renders the button label as `📢 Release announcements: ON`."""
+        import setup_hub
+        view = setup_hub._SetupHubView(
+            MagicMock(), TEST_GUILD_ID, 1, is_premium=False,
+        )
+        assert view.btn_release_announcements.label.endswith(": ON")
+
+    @pytest.mark.asyncio
+    async def test_label_reflects_opted_out_state(self, seeded_db):
+        """After an explicit opt-out, the label renders OFF."""
+        import config
+        import setup_hub
+        config.update_config_field(TEST_GUILD_ID, "release_announcements_enabled", 0)
+        view = setup_hub._SetupHubView(
+            MagicMock(), TEST_GUILD_ID, 1, is_premium=False,
+        )
+        assert view.btn_release_announcements.label.endswith(": OFF")
+
+    @pytest.mark.asyncio
+    async def test_click_flips_on_to_off(self, seeded_db):
+        """Clicking the button when ON persists OFF and replies with the
+        OFF confirmation copy."""
+        import config
+        import setup_hub
+        view = setup_hub._SetupHubView(
+            MagicMock(), TEST_GUILD_ID, 1, is_premium=False,
+        )
+        interaction = make_mock_interaction()
+        await view.btn_release_announcements.callback(interaction)
+
+        cfg = config.get_config(TEST_GUILD_ID)
+        assert cfg.release_announcements_enabled == 0
+        sent = interaction.response.send_message.call_args
+        msg = sent.args[0] if sent.args else sent.kwargs.get("content", "")
+        assert "now OFF" in msg
+        assert sent.kwargs.get("ephemeral") is True
+
+    @pytest.mark.asyncio
+    async def test_click_flips_off_to_on(self, seeded_db):
+        """Clicking again flips back to ON."""
+        import config
+        import setup_hub
+        config.update_config_field(TEST_GUILD_ID, "release_announcements_enabled", 0)
+        view = setup_hub._SetupHubView(
+            MagicMock(), TEST_GUILD_ID, 1, is_premium=False,
+        )
+        interaction = make_mock_interaction()
+        await view.btn_release_announcements.callback(interaction)
+
+        cfg = config.get_config(TEST_GUILD_ID)
+        assert cfg.release_announcements_enabled == 1
+        sent = interaction.response.send_message.call_args
+        msg = sent.args[0] if sent.args else sent.kwargs.get("content", "")
+        assert "now ON" in msg
+        assert sent.kwargs.get("ephemeral") is True

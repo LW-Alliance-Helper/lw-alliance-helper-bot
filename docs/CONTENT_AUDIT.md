@@ -131,13 +131,13 @@ codebase, not just `bot.py`.
 | Error | `⛔ Only server administrators can view configuration.` | `setup_cog.py` |
 | Error | `⚙️ This server hasn't been set up yet. Run \`/setup\` to get started.` | `setup_cog.py` |
 | Error | `⛔ Only server administrators can reset the configuration.` | `setup_cog.py` |
-| Error | `⛔ You need the leadership role (or admin) to run \`/setup_train\`.` | `setup_cog.py` |
-| Error | `⛔ You need the leadership role (or admin) to run \`/setup_growth\`.` | `setup_cog.py` |
-| Error | `⛔ You need the leadership role (or admin) to run \`/setup_birthdays\`.` | `setup_cog.py` |
-| Error | `⛔ You need the leadership role (or admin) to run \`/setup_desertstorm\`.` | `setup_cog.py` |
-| Error | `⛔ You need the leadership role (or admin) to run \`/setup_canyonstorm\`.` | `setup_cog.py` |
-| Error | `⛔ You need the leadership role (or admin) to run \`/setup_events\`.` | `setup_cog.py` |
-| Error | `⛔ You need the leadership role (or admin) to run \`/setup_survey\`.` | `setup_cog.py` |
+| Error | `⛔ You need the leadership role (or admin) to run \`/setup → 🚂 Train\`.` | `setup_cog.py` |
+| Error | `⛔ You need the leadership role (or admin) to run \`/setup → 📈 Growth\`.` | `setup_cog.py` |
+| Error | `⛔ You need the leadership role (or admin) to run \`/setup → 🎂 Birthdays\`.` | `setup_cog.py` |
+| Error | `⛔ You need the leadership role (or admin) to run \`/setup → ⚔️ Desert Storm\`.` | `setup_cog.py` |
+| Error | `⛔ You need the leadership role (or admin) to run \`/setup → 🏜️ Canyon Storm\`.` | `setup_cog.py` |
+| Error | `⛔ You need the leadership role (or admin) to run \`/setup → 📣 Events\`.` | `setup_cog.py` |
+| Error | `⛔ You need the leadership role (or admin) to run \`/setup → 📋 Survey\`.` | `setup_cog.py` |
 | Error | `⛔ You need the leadership role (or admin) to sync the member roster.` | `member_roster.py` |
 | Error | `⛔ You need the leadership role (or admin) to configure the member roster.` | `member_roster.py` |
 
@@ -169,34 +169,34 @@ Each section is a separate field in the embed. Section title and body for each:
 ⚙️ Core Setup
 Configure the bot for your server. Start here before using any other features.
 `/setup` — Configure roles, leadership channel, timezone, and Google Sheet
-`/view_configuration` — View all configured settings across every wizard
-`/setup_reset` — Clear server configuration and start over
+`/setup → 🗂️ View configuration` — View all configured settings across every wizard
+`/setup → 🗑️ Reset configuration` — Clear server configuration and start over
 ```
 
 ```text
 [Event Announcements]
 📣 Event Announcements
-Automate event scheduling for in-game events such as Plague Marauder and Zombie Siege. Drafts are posted to a leadership channel for review before being sent to the public announcement channel — both channels are configured during `/setup_events`.
-`/setup_events` — Configure events, announcement channels, draft time, and 5-min warning
+Automate event scheduling for in-game events such as Plague Marauder and Zombie Siege. Drafts are posted to a leadership channel for review before being sent to the public announcement channel — both channels are configured during `/setup → 📣 Events`.
+`/setup → 📣 Events` — Configure events, announcement channels, draft time, and 5-min warning
 `/events [date]` — Open the event editor for today or a specific date
-`/events_log` — Show approved event posts (7d free / 30d premium)
+`/events log` — Show approved event posts (7d free / 30d premium)
 ```
 
 ```text
 [Train Schedule]
 🚂 Train Schedule
 Track who is assigned the alliance train each day and optionally generate a personalised ChatGPT prompt to write a blurb for that member's announcement.
-`/setup_train` — Configure the train tab, blurb generation, and reminders
+`/setup → 🚂 Train` — Configure the train tab, blurb generation, and reminders
 `/train` — View the schedule with Add / Update / Generate Prompt / Clear buttons
-`/train_log [date]` — Show recent prompt log entries (7d free / 30d premium)
-`/train_addbirthdays` — Manually run the birthday check now
+`/train log [date]` — Show recent prompt log entries (7d free / 30d premium)
+`/train birthdays` — Manually run the birthday check now
 ```
 
 ```text
 [Birthdays]
 🎂 Birthdays
 Track member birthdays from your Google Sheet and optionally post announcements in Discord and assign members to the train schedule on their birthday.
-`/setup_birthdays` — Configure birthday tracking, train integration, and announcements
+`/setup → 🎂 Birthdays` — Configure birthday tracking, train integration, and announcements
 `/birthdays` — Show upcoming birthdays within your configured lookahead window (defaults to 14 days)
 ```
 
@@ -204,41 +204,41 @@ Track member birthdays from your Google Sheet and optionally post announcements 
 [Desert Storm]
 ⚔️ Desert Storm
 Generate weekly Desert Storm team mail drafts and log participation each event. Setup Step 6 lets you turn on participation tracking and define exactly what you want to log — vote count, sit-outs, custom questions — using free types (text, yes/no, numeric, roster names) or 💎 Premium types (single-select, multi-select, date).
-`/setup_desertstorm` — Configure teams, log channel, post channel, mail template, participation
-`/desertstorm` — Show current rosters and the active mail template
-`/desertstorm_draft` — Walk through team → time → template, then preview & post the mail
-`/desertstorm_participation` — Run the configurable participation log for this week
-`/desertstorm_log [date]` — View a Desert Storm log entry (free: 4 most recent / premium: all)
-`/desertstorm_remind` — 💎 DM every roster member to participate in this week's DS
+`/setup → ⚔️ Desert Storm` — Configure teams, log channel, post channel, mail template, participation
+`/desertstorm overview` — Show current rosters and the active mail template
+`/desertstorm draft` — Walk through team → time → template, then preview & post the mail
+`/desertstorm participation` — Run the configurable participation log for this week
+`/desertstorm log [date]` — View a Desert Storm log entry (free: 4 most recent / premium: all)
+`/desertstorm remind` — 💎 DM every roster member to participate in this week's DS
 ```
 
 ```text
 [Canyon Storm]
 🏜️ Canyon Storm
 Generate weekly Canyon Storm team mail drafts and log participation each event. Same flow as Desert Storm — preview in leadership, post to a public channel, plus configurable participation tracking on Setup Step 6.
-`/setup_canyonstorm` — Configure teams, log channel, post channel, mail template, participation
-`/canyonstorm` — Show current rosters and the active mail template
-`/canyonstorm_draft` — Walk through team → time → template, then preview & post the mail
-`/canyonstorm_participation` — Run the configurable participation log for this week
-`/canyonstorm_log [date]` — View a Canyon Storm log entry (free: 4 most recent / premium: all)
-`/canyonstorm_remind` — 💎 DM every roster member to participate in this week's CS
+`/setup → 🏜️ Canyon Storm` — Configure teams, log channel, post channel, mail template, participation
+`/canyonstorm overview` — Show current rosters and the active mail template
+`/canyonstorm draft` — Walk through team → time → template, then preview & post the mail
+`/canyonstorm participation` — Run the configurable participation log for this week
+`/canyonstorm log [date]` — View a Canyon Storm log entry (free: 4 most recent / premium: all)
+`/canyonstorm remind` — 💎 DM every roster member to participate in this week's CS
 ```
 
 ```text
 [Survey]
 📋 Survey
 Collect member statistics through a private Discord thread survey. Each member clicks the survey button, gets walked through your configured questions in their own thread, and their answers land in your Google Sheet automatically. Leadership sees a notification embed in the configured notify channel for every submission.
-`/setup_survey` — Configure the default survey (questions, channels, sheet tabs, intro)
+`/setup → 📋 Survey` — Configure the default survey (questions, channels, sheet tabs, intro)
 `/survey` — View configured survey(s). 💎 Premium gets **Add / Edit / Remove** buttons here for managing multiple surveys.
-`/survey_post` — Post (or repost) the answer button (Premium picks which survey)
-`/survey_remind` — Send now or set up scheduled reminders. Free tier posts to a channel; 💎 Premium adds DM-via-roster delivery.
+`/survey post` — Post (or repost) the answer button (Premium picks which survey)
+`/survey remind` — Send now or set up scheduled reminders. Free tier posts to a channel; 💎 Premium adds DM-via-roster delivery.
 ```
 
 ```text
 [Growth Tracking]
 📈 Growth Tracking
 Take periodic snapshots of your members' stats to track alliance growth over time. You define which metrics to track and how often — snapshots are saved to your Google Sheet.
-`/setup_growth` — Configure source tab, metrics to track, and snapshot schedule
+`/setup → 📈 Growth` — Configure source tab, metrics to track, and snapshot schedule
 `/growth` — Show growth status with options to run a snapshot or edit config
 ```
 
@@ -246,12 +246,12 @@ Take periodic snapshots of your members' stats to track alliance growth over tim
 [Premium Features]
 💎 Premium Features
 Unlock with `/upgrade`. Premium adds member-aware features that build on top of the free tier:
-`/setup_members` — Configure the Member Roster Sync (writes Discord IDs to your sheet so other features can find members by name)
-`/sync_members` — Manually re-sync the member roster now
+`/setup → 👥 Members` — Configure the Member Roster Sync (writes Discord IDs to your sheet so other features can find members by name)
+`/members sync` — Manually re-sync the member roster now
 Multiple named surveys — manage from `/survey` directly via Add / Edit / Remove buttons
-`/survey_remind` — Send DM reminders via Member Roster, or schedule recurring DM reminders per survey
-`/desertstorm_remind` — DM every roster member about this week's DS
-`/canyonstorm_remind` — DM every roster member about this week's CS
+`/survey remind` — Send DM reminders via Member Roster, or schedule recurring DM reminders per survey
+`/desertstorm remind` — DM every roster member about this week's DS
+`/canyonstorm remind` — DM every roster member about this week's CS
 *Plus: personal birthday DMs, train-assignment DMs, auto-mention members in train reminders, use threads as destinations, multi-template train and storm support, advanced survey/participation question types (single-select, multi-select, date), and more.*
 ```
 
@@ -406,18 +406,18 @@ Multiple named surveys — manage from `/survey` directly via Add / Edit / Remov
 
 Now configure the features you want to use. Run each of the commands below for any feature you'd like to enable:
 
-📣 `/setup_events` — Event announcements (Plague Marauder, Zombie Siege, etc.)
-🚂 `/setup_train` — Train schedule, blurb generation, and reminders
-🎂 `/setup_birthdays` — Birthday tracking and announcements
-⚔️ `/setup_desertstorm` — Desert Storm mail drafts and participation logs
-🏜️ `/setup_canyonstorm` — Canyon Storm mail drafts and participation logs
-📋 `/setup_survey` — Squad powers survey
-📈 `/setup_growth` — Growth tracking (snapshot your members' stats over time)
+📣 `/setup → 📣 Events` — Event announcements (Plague Marauder, Zombie Siege, etc.)
+🚂 `/setup → 🚂 Train` — Train schedule, blurb generation, and reminders
+🎂 `/setup → 🎂 Birthdays` — Birthday tracking and announcements
+⚔️ `/setup → ⚔️ Desert Storm` — Desert Storm mail drafts and participation logs
+🏜️ `/setup → 🏜️ Canyon Storm` — Canyon Storm mail drafts and participation logs
+📋 `/setup → 📋 Survey` — Squad powers survey
+📈 `/setup → 📈 Growth` — Growth tracking (snapshot your members' stats over time)
 
 You can set up as many or as few of these as you need. Use `/help` at any time to see all available commands.
 ```
 
-### 4.11 `/view_configuration`
+### 4.11 `/setup → 🗂️ View configuration`
 
 | Type | Copy | File |
 |---|---|---|
@@ -439,7 +439,7 @@ You can set up as many or as few of these as you need. Use `/help` at any time t
 | Helper text | `✅ Enabled` / `❌ Disabled` | `setup_cog.py` |
 | Helper text | `*not set*` / `*none configured*` / `*none*` | `setup_cog.py` |
 
-### 4.12 `/setup_reset`
+### 4.12 `/setup → 🗑️ Reset configuration`
 
 | Type | Copy | File |
 |---|---|---|
@@ -454,7 +454,7 @@ You can set up as many or as few of these as you need. Use `/help` at any time t
 
 ## 5. Events
 
-### 5.1 `/setup_events`
+### 5.1 `/setup → 📣 Events`
 
 #### 5.1.1 Command + entry
 
@@ -489,7 +489,7 @@ You can set up as many or as few of these as you need. Use `/help` at any time t
 | Select placeholder | `Select the announcement channel...` | `setup_cog.py` |
 | Wizard prompt | `**Step 3 of 5 — Draft Posting Time**\nWhat time should the bot post the draft each event day? *(in {tz_label})*\n*(e.g. \`12:00pm\` for noon)*` | `setup_cog.py` |
 | Modal title | `Draft Posting Time` | `setup_cog.py` |
-| Warning | `⚠️ Could not read that time after a few tries. Run \`/setup_events\` to start over.` | `setup_cog.py` |
+| Warning | `⚠️ Could not read that time after a few tries. Run \`/setup → 📣 Events\` to start over.` | `setup_cog.py` |
 | Warning | `⚠️ Could not read **\`{time_raw}\`** as a time. Try \`12:00pm\`, \`9:00am\`, or \`15:30\`. Let's try once more.` | `setup_cog.py` |
 | Wizard prompt | `**Step 4 of 5 — 5-Minute Warning**\nShould the bot automatically post a 5-minute warning before events?\n*(This applies to all events)*` | `setup_cog.py` |
 
@@ -518,11 +518,11 @@ You can set up as many or as few of these as you need. Use `/help` at any time t
 | Success | `✅ Schedule: **Repeating cycle**` | `setup_cog.py` |
 | Success | `✅ Schedule: **Manual (add per event)**` | `setup_cog.py` |
 | Wizard prompt | `**{name} — Anchor Date**\nEnter a recent or upcoming date when this event occurs.\nType the month and day (e.g. \`March 30\`, \`April 14\`)` | `setup_cog.py` |
-| Warning | `⚠️ Could not read that date. Try \`March 30\`. Run \`/setup_events\` to try again.` | `setup_cog.py` |
+| Warning | `⚠️ Could not read that date. Try \`March 30\`. Run \`/setup → 📣 Events\` to try again.` | `setup_cog.py` |
 | Wizard prompt | `**{name} — Cycle Interval**\nHow many days between each occurrence? (e.g. \`3\`)` | `setup_cog.py` |
 | Modal title | `Cycle Interval` | `setup_cog.py` |
 | Input label | `Days between occurrences` | `setup_cog.py` |
-| Warning | `⚠️ Please enter a whole number. Run \`/setup_events\` to try again.` | `setup_cog.py` |
+| Warning | `⚠️ Please enter a whole number. Run \`/setup → 📣 Events\` to try again.` | `setup_cog.py` |
 | Wizard prompt | `**{name} — Announcement Blurb**\nThis message gets posted when this event fires.\nUse \`{time}\` for the event time in your timezone and \`{server_time}\` for Server Time.\n\n**Default:** \`{name} at {time} ({server_time} Server Time).\`` | `setup_cog.py` |
 | Button | `✅ Use default blurb` (success) | `setup_cog.py` |
 | Button | `✏️ Enter my own` (secondary) | `setup_cog.py` |
@@ -538,7 +538,7 @@ You can set up as many or as few of these as you need. Use `/help` at any time t
 |---|---|---|
 | Embed title | `✅ Events Configured` | `setup_cog.py` |
 | Embed field | `Draft Channel` / `Announcement Channel` / `Draft Time` / `5-min Warning` / `Events` | `setup_cog.py` |
-| Embed footer | `Run /setup_events again to add or edit events.` | `setup_cog.py` |
+| Embed footer | `Run /setup → 📣 Events again to add or edit events.` | `setup_cog.py` |
 
 ### 5.2 `/events`
 
@@ -655,7 +655,7 @@ Here is the schedule for events today:
 | Channel post (announcements, generic) | `{name} in 5 minutes! Make sure you're online!` | `scheduler.py` |
 | Channel post (leadership stamp) | `⏱️ **5-minute warning auto-posted** at {_ts}` | `scheduler.py` |
 
-### 5.11 `/events_log`
+### 5.11 `/events log`
 
 | Type | Copy | File |
 |---|---|---|
@@ -673,7 +673,7 @@ Here is the schedule for events today:
 
 ## 6. Train
 
-### 6.1 `/setup_train`
+### 6.1 `/setup → 🚂 Train`
 
 #### 6.1.1 Command + entry
 
@@ -698,13 +698,13 @@ Here is the schedule for events today:
 | Success — kept current | `✅ Using **{current}**` | `setup_cog.py` |
 | Success — reverted to default from saved | `✅ Reverted to default: **{default}**` | `setup_cog.py` |
 | Success — defined own | `✅ Using **{value}**` | `setup_cog.py` |
-| Timeout | `⏰ Timed out. Run \`/setup_train\` to start again.` | `setup_cog.py` |
+| Timeout | `⏰ Timed out. Run \`/setup → 🚂 Train\` to start again.` | `setup_cog.py` |
 
 #### 6.1.3 Step 2 — Blurb Generation
 
 | Type | Copy | File |
 |---|---|---|
-| Wizard prompt | `**Step 2 of 7 — ChatGPT Blurb Generation**\nWould you like the bot to help generate a ChatGPT prompt each day when you assign a train?\nThis lets you quickly produce a personalised announcement blurb for the member.\n*(You can always set this up later by running \`/setup_train\` again)*` | `setup_cog.py` |
+| Wizard prompt | `**Step 2 of 7 — ChatGPT Blurb Generation**\nWould you like the bot to help generate a ChatGPT prompt each day when you assign a train?\nThis lets you quickly produce a personalised announcement blurb for the member.\n*(You can always set this up later by running \`/setup → 🚂 Train\` again)*` | `setup_cog.py` |
 | Button | `Yes` (success) | `setup_cog.py` |
 | Button | `No` (secondary) | `setup_cog.py` |
 | Info | `ℹ️ *Skipping Steps 3–6 (themes, tones, default tone, prompt template) — blurb generation is off.*` | `setup_cog.py` |
@@ -782,7 +782,7 @@ Paste the full ChatGPT prompt. Use these placeholders:
 | Wizard prompt | `**Step 7b of 7 — Reminder Time**\nWhat time should the reminder fire? *(in your timezone: {tz_label})*\n*(e.g. \`10:00pm\`, \`9:00am\`)*` | `setup_cog.py` |
 | Modal title | `Reminder Time` | `setup_cog.py` |
 | Input label | `Time` | `setup_cog.py` |
-| Warning | `⚠️ Could not read that time after a few tries. Run \`/setup_train\` to start over.` | `setup_cog.py` |
+| Warning | `⚠️ Could not read that time after a few tries. Run \`/setup → 🚂 Train\` to start over.` | `setup_cog.py` |
 | Warning | `⚠️ Could not read **\`{time_raw}\`** as a time. Try \`10:00pm\`, \`9:00am\`, or \`22:00\`. Let's try once more.` | `setup_cog.py` |
 
 #### 6.1.9 Save summary
@@ -791,7 +791,7 @@ Paste the full ChatGPT prompt. Use these placeholders:
 |---|---|---|
 | Embed title | `✅ Train Schedule Configured` | `setup_cog.py` |
 | Embed field | `Sheet Tab` / `Blurb Generation` / `Reminders` / `Reminder Channel` / `Reminder Time` / `Default Tone` / `Themes` / `Tones` / `Templates ({count})` / `Default Template Preview` | `setup_cog.py` |
-| Embed footer | `Run /setup_train again to update any of these settings.` | `setup_cog.py` |
+| Embed footer | `Run /setup → 🚂 Train again to update any of these settings.` | `setup_cog.py` |
 
 ### 6.2 `/train` and action bar
 
@@ -909,7 +909,7 @@ Paste the full ChatGPT prompt. Use these placeholders:
 |---|---|---|
 | Default template | `Member: {name}\nTheme: {theme} — {tone}\nNotes: {notes}` *(Tone suffix omitted when empty/Default; Notes line omitted when empty)* | `train.py` |
 
-### 6.11 `/train_log`
+### 6.11 `/train log`
 
 | Type | Copy | File |
 |---|---|---|
@@ -930,7 +930,7 @@ Paste the full ChatGPT prompt. Use these placeholders:
 | Embed footer (free tier) | `Free tier: {window_days}-day window. Upgrade to Premium for 30 days.` | `train_cog.py` |
 | Embed footer (premium) | `Showing the most recent 20 entries within ±{window_days} days. Pass a date to filter.` | `train_cog.py` |
 
-### 6.12 `/train_addbirthdays`
+### 6.12 `/train birthdays`
 
 | Type | Copy | File |
 |---|---|---|
@@ -965,7 +965,7 @@ Paste the full ChatGPT prompt. Use these placeholders:
 
 ## 7. Birthdays
 
-### 7.1 `/setup_birthdays`
+### 7.1 `/setup → 🎂 Birthdays`
 
 #### 7.1.1 Command + entry
 
@@ -993,7 +993,7 @@ Paste the full ChatGPT prompt. Use these placeholders:
 | Type | Copy | File |
 |---|---|---|
 | Wizard prompt | `**Step 3 of 9 — Name Column**\nWhich column contains the member's name?` | `setup_cog.py` |
-| Warning | `⚠️ Please enter a single column letter like \`A\`. Run \`/setup_birthdays\` to try again.` | `setup_cog.py` |
+| Warning | `⚠️ Please enter a single column letter like \`A\`. Run \`/setup → 🎂 Birthdays\` to try again.` | `setup_cog.py` |
 
 #### 7.1.5 Step 4 — Birthday Column
 
@@ -1001,7 +1001,7 @@ Paste the full ChatGPT prompt. Use these placeholders:
 |---|---|---|
 | Wizard prompt | `**Step 4 of 9 — Birthday Column**\nWhich column contains the member's birthday?` | `setup_cog.py` |
 | Modal title | `Birthday Column` | `setup_cog.py` |
-| Warning | `⚠️ Please enter a single column letter like \`B\`. Run \`/setup_birthdays\` to try again.` | `setup_cog.py` |
+| Warning | `⚠️ Please enter a single column letter like \`B\`. Run \`/setup → 🎂 Birthdays\` to try again.` | `setup_cog.py` |
 
 #### 7.1.6 Step 5 — Train Integration
 
@@ -1009,7 +1009,7 @@ Paste the full ChatGPT prompt. Use these placeholders:
 |---|---|---|
 | Wizard prompt | `**Step 5 of 9 — Train Schedule Integration**\nShould the bot automatically add members to the train schedule on their birthday?` | `setup_cog.py` |
 | Info | `ℹ️ *Skipping Steps 6–7 (placement and lookahead) — train integration is off.*` | `setup_cog.py` |
-| Info (when train integration on) | `ℹ️ Heads up: birthdays auto-populate the train schedule **once per day** (on the bot's first tick after server-time midnight). If you need a birthday reflected on the schedule sooner, run \`/train_addbirthdays\` to trigger the check on demand.` | `setup_cog.py` |
+| Info (when train integration on) | `ℹ️ Heads up: birthdays auto-populate the train schedule **once per day** (on the bot's first tick after server-time midnight). If you need a birthday reflected on the schedule sooner, run \`/train birthdays\` to trigger the check on demand.` | `setup_cog.py` |
 
 #### 7.1.7 Step 6 — Birthday Placement
 
@@ -1028,7 +1028,7 @@ Paste the full ChatGPT prompt. Use these placeholders:
 | Wizard prompt | `**Step 7 of 9 — Train Schedule Lookahead**\nSince you enabled train integration, how many days ahead of a member's birthday should the bot pre-populate them on the train schedule? This only applies to train-integration auto-placement; the birthday announcement itself always fires on the day.\n*(we recommend 14)*` | `setup_cog.py` |
 | Modal title | `Lookahead Days` | `setup_cog.py` |
 | Input label | `Number of days` | `setup_cog.py` |
-| Warning | `⚠️ Please enter a number like \`14\`. Run \`/setup_birthdays\` to try again.` | `setup_cog.py` |
+| Warning | `⚠️ Please enter a number like \`14\`. Run \`/setup → 🎂 Birthdays\` to try again.` | `setup_cog.py` |
 
 #### 7.1.9 Step 8 — Birthday Reminders
 
@@ -1039,7 +1039,7 @@ Paste the full ChatGPT prompt. Use these placeholders:
 | Wizard prompt | `**Step 8a of 9 — Birthday Announcement Channel**\nWhich channel should birthday announcements be posted in?` | `setup_cog.py` |
 | Select placeholder | `Select the birthday announcement channel...` | `setup_cog.py` |
 | Wizard prompt | `**Step 8b of 9 — Reminder Time**\nWhat time should birthday announcements be posted? *(in {tz_label})*\n*(e.g. \`8:00am\`, \`12:00pm\`)*` | `setup_cog.py` |
-| Warning | `⚠️ Could not read that time after a few tries. Run \`/setup_birthdays\` to start over.` | `setup_cog.py` |
+| Warning | `⚠️ Could not read that time after a few tries. Run \`/setup → 🎂 Birthdays\` to start over.` | `setup_cog.py` |
 | Warning | `⚠️ Could not read **\`{time_raw}\`** as a time. Try \`8:00am\`, \`12:00pm\`, or \`08:00\`. Let's try once more.` | `setup_cog.py` |
 
 #### 7.1.10 Step 9 — Birthday DM Body (💎 Premium)
@@ -1059,7 +1059,7 @@ Step only runs if reminders were enabled in Step 8. Free guilds can configure th
 |---|---|---|
 | Embed title | `✅ Birthday Tracking Configured` | `setup_cog.py` |
 | Embed field | `Sheet Tab` / `Name Column` / `Birthday Column` / `Discord ID Column` / `Train Integration` / `Placement` / `Lookahead` / `Reminders` / `Reminder Channel` / `Reminder Time` | `setup_cog.py` |
-| Embed footer | `Run /setup_birthdays again to update these settings.` | `setup_cog.py` |
+| Embed footer | `Run /setup → 🎂 Birthdays again to update these settings.` | `setup_cog.py` |
 
 ### 7.2 `/birthdays`
 
@@ -1067,13 +1067,13 @@ Step only runs if reminders were enabled in Step 8. Free guilds can configure th
 |---|---|---|
 | Description | `Show upcoming birthdays from your member sheet (uses your configured lookahead window)` | `train_cog.py` |
 | Error | `⚠️ Could not load birthdays: {e}` | `train_cog.py` |
-| Warning | `⚠️ No birthdays found in **{tab_name}**. Run \`/setup_birthdays\` to verify the tab and column settings.` | `train_cog.py` |
+| Warning | `⚠️ No birthdays found in **{tab_name}**. Run \`/setup → 🎂 Birthdays\` to verify the tab and column settings.` | `train_cog.py` |
 | Embed title | `🎂 Upcoming Birthdays — Next {window_days} Days` | `train_cog.py` |
 | Embed desc (empty) | `*No birthdays in the next 14 days.*` | `train_cog.py` |
 | Embed line (today) | `• **{when:%A, %B} {when.day}** — {name} *(**Today!**)*` | `train_cog.py` |
 | Embed line (tomorrow) | `• **{when:%A, %B} {when.day}** — {name} *(Tomorrow)*` | `train_cog.py` |
 | Embed line (future) | `• **{when:%A, %B} {when.day}** — {name} *(in {days_away} days)*` | `train_cog.py` |
-| Embed footer | `Source: {tab_name} · Run /setup_birthdays to change settings` | `train_cog.py` |
+| Embed footer | `Source: {tab_name} · Run /setup → 🎂 Birthdays to change settings` | `train_cog.py` |
 
 ### 7.3 Daily birthday announcement loop
 
@@ -1111,10 +1111,10 @@ Please manually add {name} to the schedule.
 > `Canyon Storm` labels, the `🔥` (DS) / `⚡` (CS) emoji on the Step 1 wizard
 > header, the embed colors (DS dark red, CS gold), and the legacy log field
 > labels (`Prior Sit-Out No Vote` for DS vs `Prior Sit-Out No Request` for
-> CS). The shared `/desertstorm_remind` / `/canyonstorm_remind` DM uses ⚔️
+> CS). The shared `/desertstorm remind` / `/canyonstorm remind` DM uses ⚔️
 > for both events — possible inconsistency worth flagging.
 
-### 8.1 `/setup_desertstorm` and `/setup_canyonstorm`
+### 8.1 `/setup → ⚔️ Desert Storm` and `/setup → 🏜️ Canyon Storm`
 
 #### 8.1.1 Command + entry
 
@@ -1205,7 +1205,7 @@ Paste your custom template for **{team_label}**. You can copy the default above 
 | Wizard prompt | (see "Participation enable prompt" below) | `setup_cog.py` |
 | Wizard prompt | `**Step 6.1 — Participation Sheet Tab**\nWhich tab should the bot write {label} participation rows to?\nℹ️ *The bot will create this tab automatically if it doesn't exist and will manage the column structure based on the questions you define.*` | `setup_cog.py` |
 | Modal title | `Participation Tab` | `setup_cog.py` |
-| Wizard prompt | `**Step 6.2 — Roster Source: Sheet Tab**\nWhich tab in your sheet has the list of members? The bot reads member names from here when you use a \`Roster names\` question.\n*Tip: this is often the same tab you use for \`/setup_survey\` or \`/setup_birthdays\`.*` | `setup_cog.py` |
+| Wizard prompt | `**Step 6.2 — Roster Source: Sheet Tab**\nWhich tab in your sheet has the list of members? The bot reads member names from here when you use a \`Roster names\` question.\n*Tip: this is often the same tab you use for \`/setup → 📋 Survey\` or \`/setup → 🎂 Birthdays\`.*` | `setup_cog.py` |
 | Modal title | `Roster Tab` | `setup_cog.py` |
 | Wizard prompt | `**Step 6.3 — Roster Source: Name Column**\nWhich column letter has the member name? (e.g. \`A\`, \`B\`, \`E\`)` | `setup_cog.py` |
 | Modal title | `Name column` | `setup_cog.py` |
@@ -1276,7 +1276,7 @@ Examples: *Vote count*, *Sitting out*, *Did anyone show up late?*
 | Embed value | `❌ Disabled` | `setup_cog.py` |
 | Embed footer | `Run /{cmd_name} again to update.` | `setup_cog.py` |
 
-### 8.2 `/desertstorm` and `/canyonstorm` overview
+### 8.2 `/desertstorm overview` and `/canyonstorm overview`
 
 | Type | Copy | File |
 |---|---|---|
@@ -1292,7 +1292,7 @@ Examples: *Vote count*, *Sitting out*, *Did anyone show up late?*
 | Embed field (error) | `Current Mail Template` \| `⚠️ Could not load: {e}` | `storm.py` |
 | Embed footer | `Run /{setup_cmd} to update. Run /{cmd_name}_draft to generate a draft.` | `storm.py` |
 
-### 8.3 `/desertstorm_draft` and `/canyonstorm_draft` — 4-step wizard
+### 8.3 `/desertstorm draft` and `/canyonstorm draft` — 4-step wizard
 
 #### 8.3.1 Command + guard messages
 
@@ -1311,8 +1311,8 @@ Examples: *Vote count*, *Sitting out*, *Did anyone show up late?*
 | Button | `Team A` (primary) | `storm.py` |
 | Button | `Team B` (success) | `storm.py` |
 | Success | `✅ Team {team} selected.` | `storm.py` |
-| Timeout (DS) | `⏰ Timed out. Use \`/desertstorm_draft\` to start again.` | `storm.py` |
-| Timeout (CS) | `⏰ Timed out. Use \`/canyonstorm_draft\` to start again.` | `storm.py` |
+| Timeout (DS) | `⏰ Timed out. Use \`/desertstorm draft\` to start again.` | `storm.py` |
+| Timeout (CS) | `⏰ Timed out. Use \`/canyonstorm draft\` to start again.` | `storm.py` |
 | Timeout (ephemeral) | `⏰ Timed out.` | `storm.py` |
 
 #### 8.3.3 Step 2 — Pick Time
@@ -1333,8 +1333,8 @@ Examples: *Vote count*, *Sitting out*, *Did anyone show up late?*
 | Button | `✏️ Edit` (primary) | `storm.py` |
 | Wizard prompt (edit) | `✏️ {user.mention} — copy the block above, make your edits, and paste it back below.\n*(10 minutes to respond — type \`cancel\` to stop)*` | `storm.py` |
 | Cancel | `❌ Draft cancelled.` | `storm.py` |
-| Error (DS parse fail) | `⚠️ Could not parse any zone assignments. Make sure the format matches the template and try \`/desertstorm_draft\` again.` | `storm.py` |
-| Error (CS parse fail) | `⚠️ Could not parse any assignments. Make sure the format matches the template and try \`/canyonstorm_draft\` again.` | `storm.py` |
+| Error (DS parse fail) | `⚠️ Could not parse any zone assignments. Make sure the format matches the template and try \`/desertstorm draft\` again.` | `storm.py` |
+| Error (CS parse fail) | `⚠️ Could not parse any assignments. Make sure the format matches the template and try \`/canyonstorm draft\` again.` | `storm.py` |
 | Warning (parse) | `⚠️ Some lines were skipped:\n• {error1}\n• {error2}…` | `storm.py` |
 | Validation retry (DS zone line) | `Could not parse zone line: {line}` | `storm.py` |
 | Validation retry (DS unknown zone) | `Unknown zone \`{zone}\` — must be one of: {canonical_list}` | `storm.py` |
@@ -1350,7 +1350,7 @@ Examples: *Vote count*, *Sitting out*, *Did anyone show up late?*
 | Select option | `{template_name}` *(truncated to 100 chars)* | `storm.py` |
 | Wizard prompt | `💎 You have multiple saved templates. Pick one for this draft:` | `storm.py` |
 | Success | `✅ Template: **{name}**` | `storm.py` |
-| Timeout | `⏰ Template picker timed out. Run \`/desertstorm_draft\` or \`/canyonstorm_draft\` to start over.` | `storm.py` |
+| Timeout | `⏰ Template picker timed out. Run \`/desertstorm draft\` or \`/canyonstorm draft\` to start over.` | `storm.py` |
 
 #### 8.3.6 Step 4 — Preview + Post & Copy
 
@@ -1414,14 +1414,12 @@ Sample Warehouse 1: {…}
 Sample Warehouse 2: {…}
 Sample Warehouse 3: {…}
 Sample Warehouse 4: {…}
-Floaters: {…}
 
 STAGE 2
 Defense System 1: {…}
 Defense System 2: {…}
 Serum Factory 1: {…}
 Serum Factory 2: {…}
-Floaters: {…}
 
 STAGE 3
 Virus Lab: {…}
@@ -1438,7 +1436,7 @@ Subs
 …
 ```
 
-### 8.4 `/desertstorm_participation` and `/canyonstorm_participation`
+### 8.4 `/desertstorm participation` and `/canyonstorm participation`
 
 #### 8.4.1 Command + entry messages
 
@@ -1517,7 +1515,7 @@ Question header (all types): `**Step {idx} of {total_steps} — {qlabel}**`
 | Button | `✅ Done` (success) | `storm_log.py` |
 | Button | `Skip (none)` (secondary) | `storm_log.py` |
 
-### 8.5 `/desertstorm_log` and `/canyonstorm_log`
+### 8.5 `/desertstorm log` and `/canyonstorm log`
 
 | Type | Copy | File |
 |---|---|---|
@@ -1536,14 +1534,14 @@ Question header (all types): `**Step {idx} of {total_steps} — {qlabel}**`
 | Channel post (legacy DS — prior) | `**Prior Sit-Out No Vote:** {value or 'None'}` | `storm_log.py` |
 | Channel post (legacy CS — prior) | `**Prior Sit-Out No Request:** {value or 'None'}` | `storm_log.py` |
 
-### 8.6 `/desertstorm_remind` and `/canyonstorm_remind` 💎
+### 8.6 `/desertstorm remind` and `/canyonstorm remind` 💎
 
 | Type | Copy | File |
 |---|---|---|
 | Description | `💎 DM every roster member to participate in this week's Desert Storm` | `storm_log.py` |
 | Description | `💎 DM every roster member to participate in this week's Canyon Storm` | `storm_log.py` |
-| Premium gate | `Storm participation reminders are part of Alliance Helper Premium and require Member Roster Sync (\`/setup_members\`). Run \`/upgrade\` to unlock.` *(passed as `description` to `premium.premium_locked_embed` with `feature_label="Storm participation DMs"`)* | `storm_log.py` |
-| Error | `⚙️ Member Roster Sync isn't configured yet. Run \`/setup_members\` first.` | `storm_log.py` |
+| Premium gate | `Storm participation reminders are part of Alliance Helper Premium and require Member Roster Sync (\`/setup → 👥 Members\`). Run \`/upgrade\` to unlock.` *(passed as `description` to `premium.premium_locked_embed` with `feature_label="Storm participation DMs"`)* | `storm_log.py` |
+| Error | `⚙️ Member Roster Sync isn't configured yet. Run \`/setup → 👥 Members\` first.` | `storm_log.py` |
 | Error | `⚠️ Could not read the roster sheet: {e}` | `storm_log.py` |
 | DM | `⚔️ **{label} reminder** — your alliance is preparing for this week's {label}. Please confirm your participation in Discord and check the team channel for your zone assignment. Good luck out there!` *({label} = `Desert Storm` or `Canyon Storm`; both events use ⚔️ in the DM, not 🏜️)* | `storm_log.py` |
 | Success | `✅ Sent {sent} **{label}** reminder DM{s}. {skipped} skipped.` | `storm_log.py` |
@@ -1552,7 +1550,7 @@ Question header (all types): `**Step {idx} of {total_steps} — {qlabel}**`
 
 ## 9. Survey
 
-### 9.1 `/setup_survey`
+### 9.1 `/setup → 📋 Survey`
 
 #### 9.1.1 Command + entry
 
@@ -1627,11 +1625,11 @@ When your survey is posted, what introductory message do you want your members t
 | Success | `✅ Scale: **{Exact number\|Thousands (K)\|Millions (M)\|Billions (B)}**` | `setup_cog.py` |
 | Wizard prompt (Premium) | `**{q_num} — Numeric Bounds** *(💎 Premium)*\nReply with \`min,max\` (e.g. \`0,100\`), \`min,\` for only a minimum, \`,max\` for only a maximum, or \`none\` to skip both bounds.\n*Bounds are checked against the stored value after scaling.*` | `setup_cog.py` |
 | Note (Free) | `💎 *Min/max bounds are a Premium feature — this question will accept any number.*` | `setup_cog.py` |
-| Warning | `⚠️ Couldn't parse bounds. Run \`/setup_survey\` to try again.` | `setup_cog.py` |
+| Warning | `⚠️ Couldn't parse bounds. Run \`/setup → 📋 Survey\` to try again.` | `setup_cog.py` |
 | Wizard prompt | `**{q_num} — Date Format** *(💎 Premium)*\nReply with a strptime-style format (e.g. \`%m/%d/%Y\`, \`%Y-%m-%d\`), or reply \`default\` for \`%m/%d/%Y\`.` | `setup_cog.py` |
 | Success | `✅ Updated: **{label}**` | `setup_cog.py` |
 | Success | `✅ Added: **{label}** — {n} question(s) so far.` | `setup_cog.py` |
-| Warning | `⚠️ No questions defined. Run \`/setup_survey\` to try again.` | `setup_cog.py` |
+| Warning | `⚠️ No questions defined. Run \`/setup → 📋 Survey\` to try again.` | `setup_cog.py` |
 
 ```text
 [Survey questions intro]
@@ -1652,7 +1650,7 @@ Would you like to use the defaults, edit your existing questions, or start from 
 |---|---|---|
 | Embed title | `✅ Survey Configured` \| `✅ Survey Configured — {name}` | `setup_cog.py` |
 | Embed field | `Survey Channel` / `Notification Channel` / `Stats Tab` / `History Tab` / `Questions` | `setup_cog.py` |
-| Embed footer | `Run {cmd} again to update. Run /survey_post to post the survey button.` | `setup_cog.py` |
+| Embed footer | `Run {cmd} again to update. Run /survey post to post the survey button.` | `setup_cog.py` |
 
 #### 9.1.6 Premium: Add / Edit / Remove Survey
 
@@ -1661,7 +1659,7 @@ Would you like to use the defaults, edit your existing questions, or start from 
 | Wizard prompt | `💎 **Add a Survey**\nType a short display name for the new survey (e.g. \`Off-Season Powers\` or \`Recruit Intake\`). This is what leadership and members will see.` | `setup_cog.py` |
 | Timeout | `⏰ Timed out. Click **➕ Add Survey** on \`/survey\` again to retry.` | `setup_cog.py` |
 | Warning | `⚠️ Empty name — aborting. Click **➕ Add Survey** on \`/survey\` to try again.` | `setup_cog.py` |
-| Success | `✅ Creating new survey **{name}** (id: \`{id}\`).\nWalking you through the same setup steps as \`/setup_survey\`…` | `setup_cog.py` |
+| Success | `✅ Creating new survey **{name}** (id: \`{id}\`).\nWalking you through the same setup steps as \`/setup → 📋 Survey\`…` | `setup_cog.py` |
 | Info | `*You have no extra surveys to remove.* Click **➕ Add Survey** on \`/survey\` to add one.` | `setup_cog.py` |
 | Select placeholder | `Pick a survey to remove…` | `setup_cog.py` |
 | Wizard prompt | `Pick which extra survey to remove:` | `setup_cog.py` |
@@ -1681,14 +1679,14 @@ Would you like to use the defaults, edit your existing questions, or start from 
 |---|---|---|
 | Description | `Show configured survey(s); Premium gets Add / Edit / Remove buttons here` | `survey.py` |
 | Embed title | `📋 Survey Configuration` | `survey.py` |
-| Embed desc (no questions) | `*No survey questions configured. Run \`/setup_survey\` to add some.*` | `survey.py` |
+| Embed desc (no questions) | `*No survey questions configured. Run \`/setup → 📋 Survey\` to add some.*` | `survey.py` |
 | Embed desc (per question, dropdown) | `**{i}. {q['label']}** *(dropdown: {options})*` | `survey.py` |
 | Embed desc (per question, text) | `**{i}. {q['label']}** *(text)*` | `survey.py` |
 | Embed desc (help line) | `   _{q['help']}_` | `survey.py` |
 | Embed field | `Stats Tab` → `*not set*` *(when unset)* | `survey.py` |
 | Embed field | `History Tab` → `*not set*` *(when unset)* | `survey.py` |
 | Embed field | `Intro Message` → `✅ Configured` / `❌ Not configured` | `survey.py` |
-| Embed footer | `Run /setup_survey to update. Run /survey_post to post the button.` | `survey.py` |
+| Embed footer | `Run /setup → 📋 Survey to update. Run /survey post to post the button.` | `survey.py` |
 
 ### 9.3 `/survey` — manage view (Premium)
 
@@ -1700,7 +1698,7 @@ Would you like to use the defaults, edit your existing questions, or start from 
 | Embed field value | `**{n_q}** question(s) · Stats tab: \`{tab}\` · Channel: {ch_str}` | `survey.py` |
 | Embed field value (channel fallback) | `_(uses default channel)_` | `survey.py` |
 | Embed field value (tab fallback) | `*not set*` | `survey.py` |
-| Embed footer | `Use /survey_post to publish the answer button. /survey_remind to send or schedule reminders.` | `survey.py` |
+| Embed footer | `Use /survey post to publish the answer button. /survey remind to send or schedule reminders.` | `survey.py` |
 | Button | `➕ Add Survey` (success) | `survey.py` |
 | Button | `✏️ Edit Survey` (primary) | `survey.py` |
 | Button | `🗑️ Remove Survey` (danger) | `survey.py` |
@@ -1711,14 +1709,14 @@ Would you like to use the defaults, edit your existing questions, or start from 
 Use the buttons below to **Add**, **Edit**, or **Remove** a survey.
 ```
 
-### 9.4 `/survey_post`
+### 9.4 `/survey post`
 
 | Type | Copy | File |
 |---|---|---|
 | Description | `Post (or repost) the survey button in its configured channel` | `survey.py` |
 | Error | `⚙️ Bot not configured. Run \`/setup\` first.` | `survey.py` |
 | Wizard prompt (multi-survey) | `📋 You have multiple surveys configured — which one do you want to post?` | `survey.py` |
-| Timeout | `⏰ Picker timed out. Run \`/survey_post\` again.` | `survey.py` |
+| Timeout | `⏰ Picker timed out. Run \`/survey post\` again.` | `survey.py` |
 | Error | `⚠️ Could not find the survey channel for **{survey_name}**.` | `survey.py` |
 | Channel post (default intro) | (see "Default survey intro" below) | `survey.py` |
 | Button (success) | `📋 Answer` *(label on channel post)* | `survey.py` |
@@ -1748,7 +1746,7 @@ Please fill out this survey each week, if possible, to help us keep track of squ
 
 | Type | Copy | File |
 |---|---|---|
-| Warning | `⚠️ No survey questions configured. Ask leadership to run \`/setup_survey\`.` | `survey.py` |
+| Warning | `⚠️ No survey questions configured. Ask leadership to run \`/setup → 📋 Survey\`.` | `survey.py` |
 | Question prompt (text) | `**{label}**` *(optionally with `\n*{placeholder}*` and `\n*Maximum characters: {max_chars}*`)* | `survey.py` |
 | Question prompt (dropdown) | `**{label}**` | `survey.py` |
 | Select placeholder (dropdown fallback) | `Select {label}...` | `survey.py` |
@@ -1805,7 +1803,7 @@ Your response has been saved successfully! Thanks for keeping your stats up to d
 | Embed field value (missing) | `—` | `survey.py` |
 | Embed field value (no responses) | `*(no responses)*` | `survey.py` |
 
-### 9.6 `/survey_remind` — Send now
+### 9.6 `/survey remind` — Send now
 
 #### 9.6.1 Hub
 
@@ -1839,7 +1837,7 @@ What would you like to do?
 | Wizard prompt (multi-survey pick) | `📋 You have multiple surveys — which one are you reminding members about?` | `survey.py` |
 | Select placeholder | `Pick a survey…` | `survey.py` |
 | Selection echo | `✅ Survey: **{label}**` | `survey.py` |
-| Timeout | `⏰ Picker timed out. Run \`/survey_remind\` again.` | `survey.py` |
+| Timeout | `⏰ Picker timed out. Run \`/survey remind\` again.` | `survey.py` |
 | Wizard prompt (destination) | (see "Send-now destination prompt" below) | `survey.py` |
 | Button | `📢 Post to a channel` (primary) | `survey.py` |
 | Button | `📨 DM via Member Roster` (secondary) | `survey.py` |
@@ -1850,7 +1848,7 @@ What would you like to do?
 | Selection echo | `✅ Channel: {channel.mention}` | `survey.py` |
 | Success (channel) | `✅ Posted reminder for **{survey_name}** in {channel.mention}.` | `survey.py` |
 | Error (channel post) | `⚠️ Could not post to that channel — make sure the bot has permission.` | `survey.py` |
-| Error (DM, no roster) | `⚙️ DM reminders need Member Roster Sync. Run \`/setup_members\` first.` | `survey.py` |
+| Error (DM, no roster) | `⚙️ DM reminders need Member Roster Sync. Run \`/setup → 👥 Members\` first.` | `survey.py` |
 | Success (DM) | `✅ Sent {sent} reminder DM{'s' if sent != 1 else ''} for **{survey_name}**. {skipped} skipped (DMs closed, missing ID, or other failures).` | `survey.py` |
 
 ```text
@@ -1865,7 +1863,7 @@ What would you like to do?
 📋 **Friendly reminder** — your alliance is asking you to fill out **{name}** this week. Open the survey channel in Discord and click the **📋 Answer** button to get started. Thanks!
 ```
 
-### 9.7 `/survey_remind` — Manage scheduled reminders
+### 9.7 `/survey remind` — Manage scheduled reminders
 
 #### 9.7.1 Survey pick + current settings
 
@@ -1890,7 +1888,7 @@ What would you like to do?
 | Button | `Off (disable)` (danger) | `survey.py` |
 | Button | `Daily` (primary) | `survey.py` |
 | Button | `Weekly` (success) | `survey.py` |
-| Success (off) | `✅ Scheduled reminders disabled for **{survey_name}**. Run \`/survey_remind\` again to re-enable.` | `survey.py` |
+| Success (off) | `✅ Scheduled reminders disabled for **{survey_name}**. Run \`/survey remind\` again to re-enable.` | `survey.py` |
 
 #### 9.7.3 Step 2 — Day of week (weekly only)
 
@@ -1910,7 +1908,7 @@ What would you like to do?
 | Modal title | `Reminder time` | `survey.py` |
 | Input label | `Time (e.g. 9:00am, 22:30, 12:00pm)` | `survey.py` |
 | Validation retry | `⚠️ Could not read **\`{raw}\`** as a time. Try \`9:00am\`, \`22:30\`, or \`12:00pm\`. Let's try once more.` | `survey.py` |
-| Validation retry (exhausted) | `⚠️ Could not read that time after a few tries. Run \`/survey_remind\` to start over.` | `survey.py` |
+| Validation retry (exhausted) | `⚠️ Could not read that time after a few tries. Run \`/survey remind\` to start over.` | `survey.py` |
 
 #### 9.7.5 Step 4 — Destination
 
@@ -1956,14 +1954,14 @@ What would you like to do?
 **Where:** {DMs to every roster member | <#channel_id>}
 **Message:** {*custom* | *default*}
 
-Run `/survey_remind` again any time to update or disable.
+Run `/survey remind` again any time to update or disable.
 ```
 
 ---
 
 ## 10. Growth Tracking
 
-### 10.1 `/setup_growth`
+### 10.1 `/setup → 📈 Growth`
 
 #### 10.1.1 Command + entry
 
@@ -1979,7 +1977,7 @@ Run `/survey_remind` again any time to update or disable.
 |---|---|---|
 | Wizard prompt | `**Step 1 of 7 — Enable growth tracking?**\nShould the bot automatically take snapshots of your members' stats on a schedule?` | `setup_cog.py` |
 | Success | `✅ Growth tracking disabled.` | `setup_cog.py` |
-| Timeout | `⏰ Timed out. Run \`/setup_growth\` to start again.` | `setup_cog.py` |
+| Timeout | `⏰ Timed out. Run \`/setup → 📈 Growth\` to start again.` | `setup_cog.py` |
 | Cancel | `❌ Cancelled.` | `setup_cog.py` |
 
 #### 10.1.3 Steps 2–4 (data source)
@@ -1991,11 +1989,11 @@ Run `/survey_remind` again any time to update or disable.
 | Wizard prompt | `**Step 3 of 7 — Data Start Row**\nWhich row does your member data start on? (Row 1 is usually the header)` | `setup_cog.py` |
 | Modal title | `Data Start Row` | `setup_cog.py` |
 | Input label | `Row number` | `setup_cog.py` |
-| Warning | `⚠️ Please enter a row number like \`2\`. Run \`/setup_growth\` to try again.` | `setup_cog.py` |
+| Warning | `⚠️ Please enter a row number like \`2\`. Run \`/setup → 📈 Growth\` to try again.` | `setup_cog.py` |
 | Wizard prompt | `**Step 4 of 7 — Name Column**\nWhich column contains the member's name?` | `setup_cog.py` |
 | Modal title | `Name Column` | `setup_cog.py` |
 | Input label | `Column letter` | `setup_cog.py` |
-| Warning | `⚠️ Please enter a single column letter like \`A\`. Run \`/setup_growth\` to try again.` | `setup_cog.py` |
+| Warning | `⚠️ Please enter a single column letter like \`A\`. Run \`/setup → 📈 Growth\` to try again.` | `setup_cog.py` |
 
 #### 10.1.4 Step 5 — Metrics
 
@@ -2019,7 +2017,7 @@ Run `/survey_remind` again any time to update or disable.
 | Success | `🗑️ Removed: **{label}** (column {col})` | `setup_cog.py` |
 | Wizard prompt | `Editing **{label}** (column {col}). Click below to update.` | `setup_cog.py` |
 | Button | `✏️ Edit values` (primary) | `setup_cog.py` |
-| Warning | `⚠️ No metrics defined. Run \`/setup_growth\` to try again.` | `setup_cog.py` |
+| Warning | `⚠️ No metrics defined. Run \`/setup → 📈 Growth\` to try again.` | `setup_cog.py` |
 
 #### 10.1.5 Step 6 — Growth Tracking Tab
 
@@ -2050,7 +2048,7 @@ Run `/survey_remind` again any time to update or disable.
 |---|---|---|
 | Embed title | `✅ Growth Tracking Configured` | `setup_cog.py` |
 | Embed field | `Source Tab` / `Name Column` / `Data Start Row` / `Growth Tab` / `Snapshot Schedule` / `Metrics` | `setup_cog.py` |
-| Embed footer | `Run /setup_growth again to update. Use /growth to take a manual snapshot.` | `setup_cog.py` |
+| Embed footer | `Run /setup → 📈 Growth again to update. Use /growth to take a manual snapshot.` | `setup_cog.py` |
 
 ### 10.2 `/growth`
 
@@ -2067,7 +2065,7 @@ Run `/survey_remind` again any time to update or disable.
 | Button | `⚙️ Edit Config` (primary) | `bot.py` |
 | Success | `✅ Growth snapshot complete — check the **{tab_growth}** tab.` | `bot.py` |
 | Error | `⚠️ Growth snapshot failed: {e}` | `bot.py` |
-| Info | `Run \`/setup_growth\` to update the growth tracking configuration.` | `bot.py` |
+| Info | `Run \`/setup → 📈 Growth\` to update the growth tracking configuration.` | `bot.py` |
 
 > Note: `growth.py` itself is a backend module — no slash commands or
 > embeds defined there. The `/growth` UI lives in `bot.py`.
@@ -2076,7 +2074,7 @@ Run `/survey_remind` again any time to update or disable.
 
 ## 11. Member Roster Sync 💎
 
-### 11.1 `/setup_members`
+### 11.1 `/setup → 👥 Members`
 
 | Type | Copy | File |
 |---|---|---|
@@ -2115,7 +2113,7 @@ Which tab should the roster be written to?
 |---|---|---|
 | Wizard prompt | (see "Step 2 — Filter by Member Role" below) | `member_roster.py` |
 | Role label fallback | `the configured member role` | `member_roster.py` |
-| Timeout | `⏰ Timed out. Run \`/setup_members\` to start again.` | `member_roster.py` |
+| Timeout | `⏰ Timed out. Run \`/setup → 👥 Members\` to start again.` | `member_roster.py` |
 
 ```text
 [Step 2 — Filter by Member Role]
@@ -2129,14 +2127,14 @@ Pick **No** to include every (non-bot) member of the server.
 | Type | Copy | File |
 |---|---|---|
 | Wizard prompt | (see "Step 3 — Auto-Sync" below) | `member_roster.py` |
-| Timeout | `⏰ Timed out. Run \`/setup_members\` to start again.` | `member_roster.py` |
-| Error (initial sync failed) | `✅ Saved configuration but the initial sync failed: {e}\nTry running \`/sync_members\` once you've fixed the issue.` | `member_roster.py` |
+| Timeout | `⏰ Timed out. Run \`/setup → 👥 Members\` to start again.` | `member_roster.py` |
+| Error (initial sync failed) | `✅ Saved configuration but the initial sync failed: {e}\nTry running \`/members sync\` once you've fixed the issue.` | `member_roster.py` |
 
 ```text
 [Step 3 — Auto-Sync]
 **Step 3 of 3 — Auto-Sync?**
 Should the bot automatically re-sync when members join, leave, or change roles?
-Pick **No** to only sync on `/sync_members`.
+Pick **No** to only sync on `/members sync`.
 ```
 
 #### 11.1.4 Save summary
@@ -2148,16 +2146,16 @@ Pick **No** to only sync on `/sync_members`.
 | Embed field | `Role Filter` → `<@&{role_filter_id}>` or `All non-bots` | `member_roster.py` |
 | Embed field | `Auto-Sync` → `Enabled` / `Disabled` | `member_roster.py` |
 | Embed field | `Initial sync` → `**{count}** members written` | `member_roster.py` |
-| Embed footer | `Run /sync_members to re-sync manually any time.` | `member_roster.py` |
+| Embed footer | `Run /members sync to re-sync manually any time.` | `member_roster.py` |
 
-### 11.2 `/sync_members`
+### 11.2 `/members sync`
 
 | Type | Copy | File |
 |---|---|---|
 | Description | `💎 Manually rebuild the member roster sheet now` | `member_roster.py` |
 | Premium gate (feature_label) | `Member Roster Sync` | `member_roster.py` |
 | Premium gate (description) | `Member Roster Sync writes every member's Discord ID to your sheet so other Premium features (birthday DMs, train DMs, auto-mention, etc.) can find them. Run \`/upgrade\` to unlock it.` | `member_roster.py` |
-| Error | `⚙️ Member Roster Sync isn't configured yet. Run \`/setup_members\` first.` | `member_roster.py` |
+| Error | `⚙️ Member Roster Sync isn't configured yet. Run \`/setup → 👥 Members\` first.` | `member_roster.py` |
 | Error | `⚠️ Sync failed: {e}\nMake sure the bot has access to your sheet and that the **{cfg['tab_name']}** tab can be written to.` | `member_roster.py` |
 | Success | `✅ Synced **{count}** members to the **{cfg['tab_name']}** tab.` | `member_roster.py` |
 
@@ -2214,7 +2212,7 @@ Unlock the full power of Alliance Helper for your alliance.
 • 📊 Custom snapshot intervals + unlimited tracked metrics
 • 🧵 Use threads as destinations for any channel-pickable feature
 • 👥 Member roster sync, birthday DMs, train DMs, survey reminders
-• 📅 30-day history windows on `/events_log` and `/train_log`
+• 📅 30-day history windows on `/events log` and `/train log`
 • 📜 Unlimited storm-log lookback
 
 **$4.99/month**, billed by Discord. Cancel anytime.

@@ -16,9 +16,17 @@ The script is idempotent: setting an item to the status it's already at
 is a no-op, and issues not in the project are skipped silently.
 
 Reads `GH_TOKEN` (a PAT with org-project read/write — the auto-injected
-GITHUB_TOKEN can't touch org Project v2). Issue references are pulled
-from the PR's `closingIssuesReferences` field, so anything Linked-in or
-"Closes #N" in the PR body is included.
+GITHUB_TOKEN can't touch org Project v2). Issue references come from
+two sources, merged:
+
+  1. The PR's `closingIssuesReferences` field — what GitHub auto-infers
+     from `Closes #N` keywords in the body. **Only populates for PRs
+     targeting the default branch (main).**
+  2. A direct regex scan of the PR body for `Closes / Fixes / Resolves
+     #N` (plus the markdown-linked `Closes [#N](...)` variant). This
+     is what makes the In progress / In review / Ready for Release
+     transitions work, since those fire on PRs into dev or release/*
+     where GitHub does not auto-populate `closingIssuesReferences`.
 
 Usage:
   sync_project_status.py --pr 63 --status "Shipped"
@@ -28,6 +36,7 @@ Usage:
 import argparse
 import json
 import os
+import re
 import sys
 import urllib.request
 import urllib.error
@@ -51,6 +60,18 @@ STATUS_OPTIONS = {
     "Shipped":            "1c9d5aae",
     "Canceled":           "6e1f842d",
 }
+
+# GitHub's close keywords (close/closes/closed, fix/fixes/fixed,
+# resolve/resolves/resolved), optionally followed by an `owner/repo`
+# prefix for cross-repo refs, an optional `[` for markdown-linked refs
+# (`Closes [#123](url)`), then `#<number>`. Case-insensitive.
+CLOSE_KEYWORDS_RE = re.compile(
+    r'\b(?:close[sd]?|fix(?:e[sd])?|resolve[sd]?)\b[:\s]+'
+    r'\[?'
+    r'(?:([\w.-]+)/([\w.-]+))?'
+    r'#(\d+)',
+    re.IGNORECASE,
+)
 
 
 def gql(query, variables=None):
@@ -110,13 +131,23 @@ def get_pr_for_commit(sha):
 
 
 def get_closing_issues(pr_number):
-    """Issues this PR will close on merge (per its body's `Closes #N` refs
-    and any explicitly linked issues)."""
+    """Issues this PR will close on merge.
+
+    Sources, merged and deduped by issue number:
+
+    1. `closingIssuesReferences` — GitHub's auto-inferred list. Only
+       populates for PRs targeting the default branch (main).
+    2. Regex scan of the PR body for `Closes / Fixes / Resolves #N`
+       (and the markdown-linked `Closes [#N](url)` variant). This is
+       what makes the In progress / In review / Ready for Release
+       transitions work for PRs into dev or release/*.
+    """
     data = gql(
         """
         query($owner: String!, $repo: String!, $num: Int!) {
           repository(owner: $owner, name: $repo) {
             pullRequest(number: $num) {
+              body
               closingIssuesReferences(first: 50) {
                 nodes { id number }
               }
@@ -127,7 +158,37 @@ def get_closing_issues(pr_number):
         {"owner": ORG, "repo": REPO, "num": pr_number},
     )
     pr = (data.get("repository") or {}).get("pullRequest") or {}
-    return (pr.get("closingIssuesReferences") or {}).get("nodes") or []
+    issues = list((pr.get("closingIssuesReferences") or {}).get("nodes") or [])
+    seen = {issue["number"] for issue in issues}
+
+    body = pr.get("body") or ""
+    body_nums = []
+    for owner, repo, num in CLOSE_KEYWORDS_RE.findall(body):
+        # Skip cross-repo refs that aren't ours.
+        if owner and (owner != ORG or repo != REPO):
+            continue
+        n = int(num)
+        if n in seen:
+            continue
+        body_nums.append(n)
+        seen.add(n)
+
+    for n in body_nums:
+        data = gql(
+            """
+            query($owner: String!, $repo: String!, $num: Int!) {
+              repository(owner: $owner, name: $repo) {
+                issue(number: $num) { id number }
+              }
+            }
+            """,
+            {"owner": ORG, "repo": REPO, "num": n},
+        )
+        issue = (data.get("repository") or {}).get("issue")
+        if issue:
+            issues.append(issue)
+
+    return issues
 
 
 def get_project_item_id(issue_node_id):

@@ -96,10 +96,12 @@ class TestDsDraftFlowTimeouts:
             await run_ds_draft_flow(bot, channel, user, "A",
                                      current_zones={"Z1": "names"}, current_subs=[])
 
-        # Should have surfaced the timeout message
+        # Should have surfaced the timeout message pointing at the hub
+        # button (`📄 Generate mail` on `/desertstorm` since #187).
         contents = _all_send_contents(channel)
         assert any("Timed out" in c for c in contents)
-        assert any("desertstorm_draft" in c for c in contents)
+        assert any("/desertstorm" in c for c in contents)
+        assert any("Generate mail" in c for c in contents)
 
     @pytest.mark.asyncio
     async def test_template_choice_timeout_exits_cleanly(self, seeded_db):
@@ -285,8 +287,8 @@ class TestParticipationFlowGate:
         await run_log_flow(bot, channel, user, "DS")
 
         contents = _all_send_contents(channel)
-        assert any("setup_desertstorm" in c for c in contents), (
-            "Disabled-participation message should point at /setup_desertstorm"
+        assert any("Desert Storm" in c for c in contents), (
+            "Disabled-participation message should point at the Desert Storm setup wizard"
         )
 
     @pytest.mark.asyncio
@@ -314,8 +316,8 @@ class TestParticipationFlowGate:
         await run_log_flow(bot, channel, user, "CS")
 
         contents = _all_send_contents(channel)
-        assert any("setup_canyonstorm" in c for c in contents), (
-            "Empty-questions message should point at /setup_canyonstorm"
+        assert any("Canyon Storm" in c for c in contents), (
+            "Empty-questions message should point at the Canyon Storm setup wizard"
         )
 
 
@@ -359,15 +361,22 @@ class TestParticipationFlowHappyPath:
         channel = _make_channel()
         user    = MagicMock(id=42); user.mention = "@user"
 
-        # _YesNoLogView is defined inline in run_log_flow's module scope.
-        # Driving it: when channel.send sees a view, set value=True (Yes)
-        # and stop().
+        # Two view types appear during run_log_flow:
+        #   _LogDatePickerView (Step 1 — ac5d3dc) — has `wants_manual`;
+        #     setting it true routes the flow to the free-text fallback
+        #     which uses bot.wait_for("message") (where our mock has
+        #     "today" queued).
+        #   _YesNoLogView (yes_no question) — has `value`; set True
+        #     to register a Yes answer.
         def _resolve_view(view):
-            if hasattr(view, "value"):
+            if hasattr(view, "wants_manual"):
+                view.wants_manual = True
+                view.confirmed    = True
+            elif hasattr(view, "value"):
                 view.value     = True
                 view.confirmed = True
-                try: view.stop()
-                except Exception: pass
+            try: view.stop()
+            except Exception: pass
 
         async def _send(content=None, view=None, **kw):
             if view is not None:
@@ -430,6 +439,19 @@ class TestParticipationFlowNumericRetry:
 
         channel = _make_channel()
         user    = MagicMock(id=42); user.mention = "@user"
+
+        # The Step 1 date picker (ac5d3dc) is a discord.ui.View — it
+        # hangs at view.wait() unless a callback resolves it. Route it
+        # to the free-text fallback (`wants_manual=True`) so the flow
+        # consumes our bot.wait_for "today" reply.
+        async def _send(content=None, view=None, **kw):
+            if view is not None and hasattr(view, "wants_manual"):
+                view.wants_manual = True
+                view.confirmed    = True
+                try: view.stop()
+                except Exception: pass
+            return _make_message()
+        channel.send = AsyncMock(side_effect=_send)
 
         captured = {}
         def fake_append(guild_id, event_type, log_date, answers):

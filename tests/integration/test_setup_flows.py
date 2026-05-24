@@ -568,7 +568,7 @@ class TestRunBirthdaySetup:
             await run_birthday_setup(interaction, bot)
 
         assert captured["feature_label"]   == "Birthday tracking"
-        assert captured["setup_command"]   == "setup_birthdays"
+        assert captured["setup_command"]   == "setup → 🎂 Birthdays"
         assert captured["had_prior_config"] is True
         # clear_fn should wipe the DB row when invoked.
         captured["clear_fn"]()
@@ -744,6 +744,38 @@ class TestRunSurveySetup:
 class TestRunStormSetup:
     """Test /setup_desertstorm and /setup_canyonstorm save config correctly."""
 
+    # On the Premium lane (FORCE_PREMIUM=1), the storm setup wizard
+    # reaches `_run_structured_flow_setup_step` after the participation
+    # step — that sub-flow shows views (e.g. `_DowView`) the generic
+    # `make_send_handler` overrides drive with `selected="A"`, which
+    # collides with code that compares `selected < 0` (int). Stub the
+    # sub-flow out with an opted-out config dict so these tests stay
+    # focused on the log/post channel save path.
+    _STRUCTURED_OPTED_OUT = {
+        "structured_flow_enabled":         False,
+        "power_metric_column":             "B",
+        "power_metric_tab":                "",
+        "power_match_column":              "",
+        "sub_mode":                        "pool",
+        "signup_channel_id":               0,
+        "signup_schedule_cron":            "",
+        "signups_tab":                     "",
+        "rosters_tab":                     "",
+        "attendance_tab":                  "",
+        "strategies_tab":                  "",
+        "member_rules_tab":                "",
+        "poll_day_of_week":                -1,
+        "signup_time":                     "",
+        "power_refresh_dm_enabled":        False,
+        "roster_dm_starter_template":      "",
+        "roster_dm_paired_sub_template":   "",
+        "roster_dm_pool_sub_template":     "",
+    }
+
+    @staticmethod
+    async def _fake_structured_optout(*args, **kwargs):
+        return TestRunStormSetup._STRUCTURED_OPTED_OUT
+
     @pytest.mark.asyncio
     async def test_ds_setup_team_a_only(self, seeded_db):
         import config
@@ -760,13 +792,15 @@ class TestRunStormSetup:
                     "roster_tab": "", "roster_name_col": 0,
                     "roster_alias_col": -1, "roster_start_row": 2}
 
-        # TeamChoiceView (inline) → selected="A", TemplateChoiceView → use_default=True
+        # TeamChoiceView (inline) → selected="A", TemplateChoiceView → outcome="default"
         with patch("setup_cog.ChannelSelectStep", return_value=log_view), \
              patch("setup_cog._run_storm_participation_step", side_effect=_skip_participation), \
+             patch("setup_cog._run_structured_flow_setup_step",
+                    side_effect=self._fake_structured_optout), \
              patch_keep_or_change(["DS Assignments"]):
             make_send_handler(
                 interaction.channel,
-                view_overrides={"selected": "A", "use_default": True},
+                view_overrides={"selected": "A", "outcome": "default"},
             )
             await run_storm_setup(interaction, bot, "DS")
 
@@ -792,10 +826,12 @@ class TestRunStormSetup:
 
         with patch("setup_cog.ChannelSelectStep", return_value=log_view), \
              patch("setup_cog._run_storm_participation_step", side_effect=_skip_participation), \
+             patch("setup_cog._run_structured_flow_setup_step",
+                    side_effect=self._fake_structured_optout), \
              patch_keep_or_change(["CS Assignments"]):
             make_send_handler(
                 interaction.channel,
-                view_overrides={"selected": "A", "use_default": True},
+                view_overrides={"selected": "A", "outcome": "default"},
             )
             await run_storm_setup(interaction, bot, "CS")
 
@@ -888,7 +924,7 @@ class TestRunStormSetup:
                     # Summary -> Edit; team -> A; template -> use default.
                     "proceed":     True,
                     "selected":    "A",
-                    "use_default": True,
+                    "outcome":     "default",
                     "cancelled":   False,
                 },
             )
@@ -897,6 +933,75 @@ class TestRunStormSetup:
         assert len(ch_call_kwargs) == 2
         assert ch_call_kwargs[0]["current_id"] == 555900
         assert ch_call_kwargs[1]["current_id"] == 555950
+
+    @pytest.mark.asyncio
+    async def test_re_entry_keep_current_preserves_custom_template(self, seeded_db):
+        """#231: a saved custom mail template body survives the re-entry
+        wizard when the officer clicks Keep current on the template
+        choice. Pre-#231 the wizard offered Use default (which silently
+        overwrote the custom body) or Edit (force re-paste); there was
+        no path to keep what was already saved."""
+        import config
+        from setup_cog import run_storm_setup
+        from defaults import DEFAULT_DS_TEMPLATE
+
+        custom_body = "Apex DS — Team A\n\n{zones}\n\nSubs: {subs}"
+        assert custom_body != DEFAULT_DS_TEMPLATE
+
+        config.save_storm_config(
+            TEST_GUILD_ID, "DS",
+            tab_name="DS Assignments", mail_template=custom_body,
+            timezone="America/New_York",
+            log_channel_id=555700, post_channel_id=555800,
+        )
+        config.save_storm_config(
+            TEST_GUILD_ID, "DS_A",
+            tab_name="DS Assignments", mail_template=custom_body,
+            timezone="America/New_York",
+            log_channel_id=555700, post_channel_id=555800,
+        )
+        config.update_config_field(TEST_GUILD_ID, "ds_log_channel_id", 555700)
+
+        interaction = make_mock_interaction()
+        bot         = AsyncMock()
+
+        log_ch  = MagicMock(id=555700)
+        post_ch = MagicMock(id=555800)
+        ch_iter = iter([
+            MagicMock(confirmed=True, cancelled=False, is_current_stale=False,
+                      selected_channel=log_ch,  wait=AsyncMock()),
+            MagicMock(confirmed=True, cancelled=False, is_current_stale=False,
+                      selected_channel=post_ch, wait=AsyncMock()),
+        ])
+
+        async def _skip_participation(*args, **kwargs):
+            return {"enabled": 0, "tab_name": "", "questions": [],
+                    "roster_tab": "", "roster_name_col": 0,
+                    "roster_alias_col": -1, "roster_start_row": 2}
+
+        with patch("setup_cog.ChannelSelectStep", side_effect=lambda *a, **kw: next(ch_iter)), \
+             patch("setup_cog._run_storm_participation_step", side_effect=_skip_participation), \
+             patch_keep_or_change(["DS Assignments", ""]):
+            make_send_handler(
+                interaction.channel,
+                view_overrides={
+                    # Summary -> Edit; team -> A; template -> keep current.
+                    "proceed":  True,
+                    "selected": "A",
+                    "outcome":  "keep",
+                    "cancelled": False,
+                },
+            )
+            await run_storm_setup(interaction, bot, "DS")
+
+        # The team-A row's body is the data-loss target. It must still
+        # be the alliance's saved custom, not silently overwritten with
+        # the hardcoded default.
+        cfg_a = config.get_storm_config(TEST_GUILD_ID, "DS_A")
+        assert cfg_a["mail_template"] == custom_body, (
+            "Keep current must preserve the saved custom template body "
+            "verbatim; pre-#231 the silent-clobber would land DEFAULT here."
+        )
 
 
 # ── /setup_growth ─────────────────────────────────────────────────────────────
@@ -1033,7 +1138,7 @@ class TestRunGrowthSetup:
             await run_growth_setup(interaction, bot)
 
         assert captured["feature_label"]   == "Growth tracking"
-        assert captured["setup_command"]   == "setup_growth"
+        assert captured["setup_command"]   == "setup → 📈 Growth"
         assert captured["had_prior_config"] is True
         # clear_fn wipes the DB row when invoked.
         captured["clear_fn"]()
@@ -1189,7 +1294,7 @@ class TestRunShinyTasksSetup:
             await run_shiny_tasks_setup(interaction, bot)
 
         assert captured["feature_label"]    == "Shiny tasks announcement"
-        assert captured["setup_command"]    == "setup_shiny_tasks"
+        assert captured["setup_command"]    == "setup → 🌟 Shiny Tasks"
         assert captured["had_prior_config"] is True
         captured["clear_fn"]()
         assert config.has_shiny_tasks_config(TEST_GUILD_ID) is False

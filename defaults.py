@@ -99,6 +99,59 @@ DEFAULT_CS_TEMPLATE = """\
 **Time:** {time}"""
 
 
+# ── Storm roster DM templates (Premium — fired from Approve & Post) ────────
+#
+# Custom-able per (guild, event_type) via the storm setup wizard.
+# Placeholders are SafeDict-substituted at send time — a typo in a
+# saved template renders literally in the DM instead of crashing the
+# fan-out loop and leaving the rest of the roster un-DM'd.
+#
+# Placeholders:
+#   {name}        — member's display name (alias when configured, else
+#                   the Discord display name)
+#   {event_label} — "Desert Storm" or "Canyon Storm"
+#   {team_blurb}  — " Team A" / " Team B" / "" (leading space included
+#                   when present, so `{event_label}{team_blurb}` reads
+#                   naturally for both team-bound DS and team-less CS)
+#   {date}        — formatted event date (e.g. "Thursday, May 28, 2026")
+#   {time}        — team time-slot label (e.g. "4pm EDT (18:00 server time)")
+#   {assignments} — bullet / line list of zones+stages (Starter) or
+#                   "Sub for X" lines (Paired Sub); empty for Pool Sub
+#
+# These templates intentionally use the alliance's voice ("we have
+# you as a Starter", "our roster") — distinct from the mail templates
+# which post to a public channel. The DMs are alliance-to-member
+# nudges that read better in first-person plural; alliances can
+# customise the wording via the setup wizard if they prefer otherwise.
+
+DEFAULT_ROSTER_DM_STARTER = """\
+👋 Hey {name},
+
+We have you as a Starter for our {event_label}{team_blurb} roster for {date} at {time}.
+
+Your assignments:
+{assignments}
+
+Please let us know if you aren't able to participate!"""
+
+DEFAULT_ROSTER_DM_PAIRED_SUB = """\
+👋 Hey {name},
+
+We have you as a Sub for our {event_label}{team_blurb} roster for {date} at {time}.
+
+Your assignment(s):
+{assignments}
+
+Please let us know if you aren't able to participate!"""
+
+DEFAULT_ROSTER_DM_POOL_SUB = """\
+👋 Hey {name},
+
+We have you as a Sub for our {event_label}{team_blurb} roster for {date} at {time}.
+
+Please let us know if you aren't able to participate!"""
+
+
 # ── Shiny Tasks daily announcement (free tier) ──────────────────────────────
 #
 # `{servers}` renders as a comma-separated list with an "and" before the
@@ -110,3 +163,100 @@ DEFAULT_CS_TEMPLATE = """\
 DEFAULT_SHINY_TASKS_MESSAGE = (
     "🌟 Daily shiny tasks are available on servers: {servers}."
 )
+
+
+# ── Storm participation question presets (#247) ─────────────────────────────
+#
+# Templates surfaced in the storm setup wizard's Step 6.6 picker.
+# Officers pick zero or more; each selection adds a pre-configured
+# question to the participation question list. Officer can keep
+# customising (re-label, re-key, edit type-specific fields) via the
+# regular question builder afterward.
+#
+# Field contract (matches the participation question dict shape used
+# by `get_participation_config` and the run_log_flow walker):
+#   key            — stable identifier; doubles as the Sheet column.
+#                    `showed_up` is the canonical attendance column
+#                    (see #245 — `storm_log.ATTENDANCE_QUESTION_KEY`).
+#   label          — officer-facing question label.
+#   type           — one of the question-type ids (#244).
+#   description    — one-line "what this does" for the picker UI.
+#   emoji          — picker-UI glyph (matches the ticket spec).
+#   default_checked — checked by default in the picker.
+#   source_question_key — derived_count only: the question to count.
+#   lookback_events — derived_count only: how many past events to scan.
+#   prefill_source  — roster_multi_select only: `"discord_poll"` for
+#                    the Premium auto-prefill variant.
+
+STORM_PARTICIPATION_PRESETS_FREE = [
+    {
+        "key":             "showed_up",
+        "label":           "Did this member show up?",
+        "type":            "roster_multi_select",
+        "description":     "Roster multi-select. Tracks attendance per event.",
+        "emoji":           "✅",
+        "default_checked": True,
+    },
+    {
+        "key":         "sat_out",
+        "label":       "Who sat out this week?",
+        "type":        "roster_multi_select",
+        "description": "Roster multi-select against your full roster.",
+        "emoji":       "📝",
+    },
+    {
+        "key":         "didnt_vote",
+        "label":       "Who didn't vote this week?",
+        "type":        "roster_multi_select",
+        "description": "Roster multi-select. Manual selection only on free tier.",
+        "emoji":       "🗳️",
+    },
+]
+
+STORM_PARTICIPATION_PRESETS_PREMIUM = [
+    {
+        "key":                 "sit_out_count_4",
+        "label":               "Sit-out count, past 4 events",
+        "type":                "derived_count",
+        "description":         "Derived count from the \"Who sat out?\" question.",
+        "emoji":               "📊",
+        "source_question_key": "sat_out",
+        "lookback_events":     4,
+    },
+    {
+        "key":                 "vote_miss_count_8",
+        "label":               "Vote-miss count, past 8 events",
+        "type":                "derived_count",
+        "description":         "Derived count from the \"Who didn't vote?\" question.",
+        "emoji":               "📊",
+        "source_question_key": "didnt_vote",
+        "lookback_events":     8,
+    },
+    {
+        "key":            "didnt_vote_autoprefill",
+        "label":          "Who didn't vote this week? (auto-prefill from poll)",
+        "type":           "roster_multi_select",
+        "description":    "Variant of the above that pre-checks members from the Discord signup poll.",
+        "emoji":          "🗳️",
+        "prefill_source": "discord_poll",
+    },
+]
+
+
+def storm_participation_presets(is_premium: bool) -> list[dict]:
+    """Return the preset list visible to a guild at its current tier."""
+    if is_premium:
+        return STORM_PARTICIPATION_PRESETS_FREE + STORM_PARTICIPATION_PRESETS_PREMIUM
+    return STORM_PARTICIPATION_PRESETS_FREE
+
+
+def preset_to_question(preset: dict) -> dict:
+    """Convert a preset entry into the question dict shape the
+    participation flow expects. Strips picker-UI fields (description,
+    emoji, default_checked) and keeps only the run-time question
+    fields."""
+    runtime_keys = {
+        "key", "label", "type",
+        "source_question_key", "lookback_events", "prefill_source",
+    }
+    return {k: v for k, v in preset.items() if k in runtime_keys}

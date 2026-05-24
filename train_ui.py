@@ -72,7 +72,7 @@ async def run_blurb_wizard_for_entry(bot, channel, user, date_str: str, name: st
             return reply.content.strip()
         except asyncio.TimeoutError:
             await channel.send(
-                "⏰ Wizard timed out. Run `/train` and click **📋 Generate Prompt** to try again."
+                "⏰ Wizard timed out. Run `/train overview` and click **📋 Generate Prompt** to try again."
             )
             return None
 
@@ -106,7 +106,7 @@ async def run_blurb_wizard_for_entry(bot, channel, user, date_str: str, name: st
             return False
         if theme_view.selected is None:
             await channel.send(
-                "⏰ Wizard timed out. Run `/train` and click **📋 Generate Prompt** to try again."
+                "⏰ Wizard timed out. Run `/train overview` and click **📋 Generate Prompt** to try again."
             )
             return False
         theme = theme_view.selected
@@ -123,7 +123,7 @@ async def run_blurb_wizard_for_entry(bot, channel, user, date_str: str, name: st
             return False
         if tone_view.selected is None:
             await channel.send(
-                "⏰ Wizard timed out. Run `/train` and click **📋 Generate Prompt** to try again."
+                "⏰ Wizard timed out. Run `/train overview` and click **📋 Generate Prompt** to try again."
             )
             return False
         tone = tone_view.selected
@@ -141,7 +141,7 @@ async def run_blurb_wizard_for_entry(bot, channel, user, date_str: str, name: st
         import premium
         from train import get_train_template_names
         template_name = None
-        if await premium.is_premium(guild_id):
+        if await premium.is_premium(guild_id, bot=bot):
             names = get_train_template_names(guild_id)
             if len(names) > 1:
                 class TemplatePickView(discord.ui.View):

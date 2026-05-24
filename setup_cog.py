@@ -4,9 +4,11 @@ setup_cog.py — /setup_* wizards for new guilds
 Walks a server admin through configuring the bot using Discord's native
 role and channel select menus. All values are saved to the config database.
 
-Holds /setup, /setup_reset, /view_configuration, and the per-feature
-/setup_train, /setup_growth, /setup_birthdays, /setup_desertstorm,
-/setup_canyonstorm, /setup_events, /setup_survey commands.
+Holds the `/setup` slash command (which opens the setup hub from
+setup_hub.py) plus every per-feature wizard handler the hub
+dispatches into. The 11 pre-#201 `/setup_*` slash commands
+collapsed into hub buttons; their bodies are now module-level
+`_launch_*_setup` helpers exposed at the bottom of this file.
 """
 
 import asyncio
@@ -19,6 +21,12 @@ from config import (
 )
 import premium
 import wizard_registry
+from storm_event_hub import (
+    HUB_COMMAND,
+    HUB_BTN_POST_SIGNUP,
+    HUB_BTN_PRESETS,
+    HUB_BTN_RULES,
+)
 from wizard_registry import wait_view_or_cancel
 
 WIZARD_TIMEOUT = 120  # 2 minutes per step
@@ -64,6 +72,50 @@ def _format_24h_to_12h(raw: str) -> str:
     period = "am" if hour < 12 else "pm"
     hour12 = hour % 12 or 12
     return f"{hour12}:{minute:02d}{period}"
+
+
+def _format_time_with_tz(time_str: str, tz_name: str | None) -> str:
+    """Render a stored 'HH:MM' 24-hour time as e.g. '8:00am EDT' using
+    the guild's configured timezone. Used everywhere a wizard summary
+    or `/setup` → 🗂️ View configuration shows a saved time back to leadership —
+    bare '08:00' leaves them guessing which timezone the reminder
+    fires in.
+
+    The tz abbreviation comes from `dt.tzname()` anchored on today's
+    date, so the suffix reflects DST for the current date ('EST' in
+    winter vs. 'EDT' in summer).
+
+    Falls back gracefully:
+      * empty / `*not set*` / non-time strings → returned unchanged,
+        so callers can pipe sentinels through without a separate guard;
+      * unparseable HH:MM → returned unchanged;
+      * unknown tz_name → bare 12-hour form without a tz suffix.
+    """
+    if not time_str or ":" not in str(time_str):
+        return time_str or ""
+    try:
+        h_str, m_str = str(time_str).split(":", 1)
+        hour, minute = int(h_str), int(m_str)
+    except (ValueError, AttributeError):
+        return time_str
+    if not (0 <= hour <= 23 and 0 <= minute <= 59):
+        return time_str
+    period = "am" if hour < 12 else "pm"
+    hour12 = hour % 12 or 12
+    base   = f"{hour12}:{minute:02d}{period}"
+    if not tz_name:
+        return base
+    try:
+        from datetime import datetime
+        from zoneinfo import ZoneInfo
+        tz    = ZoneInfo(tz_name)
+        today = datetime.now(tz=tz).date()
+        dt    = datetime(today.year, today.month, today.day,
+                         hour, minute, tzinfo=tz)
+    except Exception:
+        return base
+    abbr = dt.tzname()
+    return f"{base} {abbr}" if abbr else base
 
 
 def _parse_month_day(raw: str) -> str:
@@ -694,7 +746,7 @@ class ModalLaunchView(discord.ui.View):
     overrides the label text (useful for truncating long Sheet IDs).
 
     `on_keep_current` is for modals whose `value` is a read-only
-    derived property (e.g. ``ServerRangeModal`` in `/setup_shiny_tasks`
+    derived property (e.g. ``ServerRangeModal`` in `/setup` → 🌟 Shiny Tasks
     where the wizard reads `min_value` / `max_value` rather than a
     single `value`). When provided, the callable is invoked with the
     modal as its only argument *instead* of the default ``modal.value
@@ -816,7 +868,7 @@ async def ask_keep_or_change(
                 for item in self.children: item.disabled = True
                 await wizard_registry.safe_edit_response(
                     inter,
-                    content=f"✅ Using **{chosen}**", view=self
+                    content=f"{prompt}\n\n✅ Using **{chosen}**", view=self
                 )
                 self.stop()
             keep_btn.callback = _keep_cb
@@ -834,7 +886,7 @@ async def ask_keep_or_change(
                     for item in self.children: item.disabled = True
                     await wizard_registry.safe_edit_response(
                         inter,
-                        content=f"✅ Reverted to default: **{default}**", view=self
+                        content=f"{prompt}\n\n✅ Reverted to default: **{default}**", view=self
                     )
                     self.stop()
                 revert_btn.callback = _revert_cb
@@ -853,7 +905,7 @@ async def ask_keep_or_change(
                 for item in self.children: item.disabled = True
                 try:
                     await inter.message.edit(
-                        content=f"✅ Using **{self.value}**", view=self
+                        content=f"{prompt}\n\n✅ Using **{self.value}**", view=self
                     )
                 except discord.HTTPException:
                     pass
@@ -897,7 +949,7 @@ async def ask_proceed_with_existing_config(
 
     `fields` is a list of ``(label, value)`` tuples rendered as
     embed fields, inline=False. Pass the same tuples that
-    ``/view_configuration`` would render for that feature.
+    ``/setup` → 🗂️ View configuration` would render for that feature.
     """
 
     class EditOrCancelView(discord.ui.View):
@@ -963,8 +1015,11 @@ async def ask_disable_with_clear(
     ``feature_label`` — friendly noun for the message body
     (e.g. "Shiny Tasks announcement").
 
-    ``setup_command`` — slash command leadership should re-run to
-    re-enable, sans the leading slash (e.g. "setup_shiny_tasks").
+    ``setup_command`` — slash navigation leadership should re-run to
+    re-enable, sans the leading slash (e.g. "setup → 🌟 Shiny Tasks").
+    Post-#201 every wizard lives behind a /setup hub button; pass the
+    hub navigation hint here so the rendered message reads
+    "Re-run `/setup → 🌟 Shiny Tasks` and pick Yes to restore."
 
     ``clear_fn`` — callable taking no arguments; runs synchronously
     or via ``await`` (the helper auto-detects). Should wipe the
@@ -1022,7 +1077,7 @@ async def ask_disable_with_clear(
 
         async def on_timeout(self):
             await wizard_registry.expire_view_message(
-                self.message, command_hint=setup_command,
+                self.message, command_hint=f"`/{setup_command}`",
             )
 
     view = ClearConfigView()
@@ -1035,7 +1090,7 @@ async def _manage_train_templates(
     cap: int | None, cancel_event,
 ):
     """
-    Multi-template manager for /setup_train.
+    Multi-template manager for the train setup wizard.
 
     Lets the user view, add, edit, delete, and re-pick the default for the
     guild's saved ChatGPT prompt templates. `cap` is the per-tier maximum
@@ -1133,7 +1188,7 @@ async def _manage_train_templates(
             return None, None
 
         if list_view.action is None:
-            await channel.send("⏰ Timed out. Run `/setup_train` to start again.")
+            await channel.send("⏰ Timed out. Run `/setup` → 🚂 Train to start again.")
             return None, None
 
         if list_view.action == "done":
@@ -1165,7 +1220,7 @@ async def _manage_train_templates(
             if pick.cancelled:
                 return None, None
             if pick.idx is None:
-                await channel.send("⏰ Timed out. Run `/setup_train` to start again.")
+                await channel.send("⏰ Timed out. Run `/setup` → 🚂 Train to start again.")
                 return None, None
             picked_idx = pick.idx
 
@@ -1204,7 +1259,7 @@ async def _manage_train_templates(
             cancel_event,
         )
         if reply is None:
-            await channel.send("⏰ Timed out. Run `/setup_train` to start again.")
+            await channel.send("⏰ Timed out. Run `/setup` → 🚂 Train to start again.")
             return None, None
         new_name = reply.content.strip()
         if new_name.lower() == "cancel" or not new_name:
@@ -1233,7 +1288,7 @@ async def _manage_train_templates(
             cancel_event,
         )
         if reply is None:
-            await channel.send("⏰ Timed out. Run `/setup_train` to start again.")
+            await channel.send("⏰ Timed out. Run `/setup` → 🚂 Train to start again.")
             return None, None
         body_raw = reply.content.strip()
         if body_raw.lower() == "cancel":
@@ -1313,7 +1368,8 @@ async def _check_wizard_can_run(interaction: discord.Interaction, command_name: 
     """If the bot can run a wizard in the current channel, return True.
     Otherwise send a clear ephemeral message explaining what perms are
     missing (and how to fix), and return False. Call at the top of
-    every /setup_* command.
+    `/setup` and any setup-hub launcher that opens a wizard in the
+    current channel.
     """
     missing = _missing_wizard_perms(interaction)
     if not missing:
@@ -1351,233 +1407,173 @@ class SetupCog(commands.Cog):
     def __init__(self, bot):
         self.bot = bot
 
-    @app_commands.command(name="setup", description="Configure Alliance Helper for your server")
+    @app_commands.command(name="setup", description="Open the setup hub — foundations + every feature wizard, in one place")
     async def setup(self, interaction: discord.Interaction):
-        # Only admins can run setup
-        if not interaction.user.guild_permissions.administrator:
-            await interaction.response.send_message(
-                "⛔ Only server administrators can run `/setup`.", ephemeral=True
-            )
-            return
+        from setup_hub import handle_setup_hub
+        await handle_setup_hub(self.bot, interaction)
 
-        if not await _check_wizard_can_run(interaction, "setup"):
-            return
 
-        await interaction.response.send_message(
-            "⚙️ Starting setup — check the channel for prompts!", ephemeral=True
+async def _send_ack(interaction: discord.Interaction, message: str) -> None:
+    """Send an ephemeral ack via whichever path the interaction state
+    allows. The launcher helpers below are reachable from two entry
+    points — the /setup hub's slash command (fresh response slot) and
+    the storm event hub's `⚙️ Open setup` button callback (response
+    slot already consumed by `safe_edit_response` disabling the button
+    row). `response.send_message` only works in the fresh case;
+    `followup.send` only works after the response slot is consumed.
+    Branch on `response.is_done()` so the helpers don't care which
+    caller invoked them.
+    """
+    if interaction.response.is_done():
+        await interaction.followup.send(message, ephemeral=True)
+    else:
+        await interaction.response.send_message(message, ephemeral=True)
+
+
+# Standalone launcher helpers — extracted from the pre-#201 per-feature
+# `/setup_*` slash commands so the setup hub's button callbacks can
+# dispatch into the existing wizard functions without re-instantiating
+# the cog. Mirrors the `open_strategy_list` / `open_member_rule_list`
+# pattern from the storm hub (#187).
+
+async def _launch_train_setup(interaction: discord.Interaction, bot) -> None:
+    if not _has_leadership_or_admin(interaction):
+        await _send_ack(interaction, "⛔ You need the leadership role (or admin) to open the train wizard.")
+        return
+    if not await _check_wizard_can_run(interaction, "setup"):
+        return
+    await _send_ack(interaction, "⚙️ Starting train setup — check the channel for prompts!")
+    await run_train_setup(interaction, bot)
+
+
+async def _launch_growth_setup(interaction: discord.Interaction, bot) -> None:
+    if not _has_leadership_or_admin(interaction):
+        await _send_ack(interaction, "⛔ You need the leadership role (or admin) to open the growth wizard.")
+        return
+    if not await _check_wizard_can_run(interaction, "setup"):
+        return
+    await _send_ack(interaction, "⚙️ Starting growth tracking setup — check the channel for prompts!")
+    await run_growth_setup(interaction, bot)
+
+
+async def _launch_growth_breakdown_setup(interaction: discord.Interaction, bot) -> None:
+    if not _has_leadership_or_admin(interaction):
+        await _send_ack(interaction, "⛔ You need the leadership role (or admin) to open the breakdown wizard.")
+        return
+    if not await premium.is_premium(interaction.guild_id, interaction=interaction):
+        await _send_ack(
+            interaction,
+            "💎 Growth Breakdown configuration is a Premium feature. The "
+            "**📊 See most recent Breakdown** button on `/growth overview` "
+            "(and `/growth breakdown`) works on every tier — this wizard "
+            "configures the auto-post and the customizable thresholds and "
+            "labels. Run `/upgrade` to subscribe.",
         )
-        await run_setup(interaction, self.bot)
+        return
+    if not await _check_wizard_can_run(interaction, "setup"):
+        return
+    await _send_ack(interaction, "⚙️ Starting Growth Breakdown setup — check the channel for prompts!")
+    await run_growth_breakdown_setup(interaction, bot)
 
-    @app_commands.command(name="view_configuration", description="View all configured settings across every setup wizard")
-    async def view_configuration(self, interaction: discord.Interaction):
-        if not interaction.user.guild_permissions.administrator:
-            await interaction.response.send_message(
-                "⛔ Only server administrators can view configuration.", ephemeral=True
-            )
-            return
 
-        cfg = get_config(interaction.guild_id)
-        if not cfg or not cfg.setup_complete:
-            await interaction.response.send_message(
-                "⚙️ This server hasn't been set up yet. Run `/setup` to get started.",
-                ephemeral=True,
-            )
-            return
+async def _launch_birthday_setup(interaction: discord.Interaction, bot) -> None:
+    if not _has_leadership_or_admin(interaction):
+        await _send_ack(interaction, "⛔ You need the leadership role (or admin) to open the birthday wizard.")
+        return
+    if not await _check_wizard_can_run(interaction, "setup"):
+        return
+    await _send_ack(interaction, "⚙️ Starting birthday setup — check the channel for prompts!")
+    await run_birthday_setup(interaction, bot)
 
-        await _send_view_configuration(interaction, cfg)
 
-    @app_commands.command(name="setup_reset", description="Clear this server's configuration and start over")
-    async def setup_reset(self, interaction: discord.Interaction):
-        if not interaction.user.guild_permissions.administrator:
-            await interaction.response.send_message(
-                "⛔ Only server administrators can reset the configuration.", ephemeral=True
-            )
-            return
+async def _launch_storm_setup(interaction: discord.Interaction, bot, event_type: str) -> None:
+    label = "Desert Storm" if event_type == "DS" else "Canyon Storm"
+    if not _has_leadership_or_admin(interaction):
+        await _send_ack(interaction, f"⛔ You need the leadership role (or admin) to open the {label} wizard.")
+        return
+    if not await _check_wizard_can_run(interaction, "setup"):
+        return
+    await _send_ack(interaction, f"⚙️ Starting {label} setup — check the channel for prompts!")
+    await run_storm_setup(interaction, bot, event_type)
 
-        class ConfirmResetView(discord.ui.View):
-            def __init__(self):
-                super().__init__(timeout=60)
-                self.confirmed = False
 
-            @discord.ui.button(label="Yes, reset everything", style=discord.ButtonStyle.danger)
-            async def confirm(self, inner: discord.Interaction, button: discord.ui.Button):
-                self.confirmed = True
-                await inner.response.defer()
-                self.stop()
+async def _launch_event_setup(interaction: discord.Interaction, bot) -> None:
+    if not _has_leadership_or_admin(interaction):
+        await _send_ack(interaction, "⛔ You need the leadership role (or admin) to open the event wizard.")
+        return
+    if not await _check_wizard_can_run(interaction, "setup"):
+        return
+    await _send_ack(interaction, "⚙️ Starting event setup — check the channel for prompts!")
+    await run_event_setup(interaction, bot)
 
-            @discord.ui.button(label="Cancel", style=discord.ButtonStyle.secondary)
-            async def cancel(self, inner: discord.Interaction, button: discord.ui.Button):
-                await inner.response.defer()
-                self.stop()
 
-        view = ConfirmResetView()
+async def _launch_survey_setup(interaction: discord.Interaction, bot) -> None:
+    if not _has_leadership_or_admin(interaction):
+        await _send_ack(interaction, "⛔ You need the leadership role (or admin) to open the survey wizard.")
+        return
+    if not await _check_wizard_can_run(interaction, "setup"):
+        return
+    await _send_ack(interaction, "⚙️ Starting survey setup — check the channel for prompts!")
+    await run_survey_setup(interaction, bot)
+
+
+async def _launch_shiny_tasks_setup(interaction: discord.Interaction, bot) -> None:
+    if not _has_leadership_or_admin(interaction):
+        await _send_ack(interaction, "⛔ You need the leadership role (or admin) to open the shiny-tasks wizard.")
+        return
+    if not await _check_wizard_can_run(interaction, "setup"):
+        return
+    await _send_ack(interaction, "⚙️ Starting Shiny Tasks setup — check the channel for prompts!")
+    await run_shiny_tasks_setup(interaction, bot)
+
+
+async def _run_reset_flow(interaction: discord.Interaction) -> None:
+    """Reset confirmation flow, extracted from the pre-#201
+    `/setup` → 🗑️ Reset configuration slash command so the setup hub's `🗑️ Reset configuration`
+    button can call it without round-tripping through a slash command."""
+    if not interaction.user.guild_permissions.administrator:
         await interaction.response.send_message(
-            "⚠️ Are you sure you want to reset the bot configuration for this server? "
-            "This cannot be undone.",
-            view=view,
+            "⛔ Only server administrators can reset the configuration.",
             ephemeral=True,
         )
-        await view.wait()
-        if view.confirmed:
-            from config import save_config, GuildConfig
-            save_config(GuildConfig(guild_id=interaction.guild_id))
-            await interaction.followup.send(
-                "✅ Configuration reset. Run `/setup` to configure the bot again.",
-                ephemeral=True,
-            )
-        else:
-            await interaction.followup.send(
-                "✅ Reset cancelled. Your configuration is still active and has not been reset.",
-                ephemeral=True,
-            )
+        return
 
-    @app_commands.command(name="setup_train", description="Configure the train schedule — tab, themes, tones, and prompt template")
-    async def setup_train(self, interaction: discord.Interaction):
-        if not _has_leadership_or_admin(interaction):
-            await interaction.response.send_message(
-                "⛔ You need the leadership role (or admin) to run `/setup_train`.",
-                ephemeral=True,
-            )
-            return
-        if not await _check_wizard_can_run(interaction, "setup_train"):
-            return
-        await interaction.response.send_message(
-            "⚙️ Starting train setup — check the channel for prompts!", ephemeral=True
-        )
-        await run_train_setup(interaction, self.bot)
+    class ConfirmResetView(discord.ui.View):
+        def __init__(self):
+            super().__init__(timeout=60)
+            self.confirmed = False
 
-    @app_commands.command(name="setup_growth", description="Configure growth tracking — source tab, metrics, and snapshot frequency")
-    async def setup_growth(self, interaction: discord.Interaction):
-        if not _has_leadership_or_admin(interaction):
-            await interaction.response.send_message(
-                "⛔ You need the leadership role (or admin) to run `/setup_growth`.",
-                ephemeral=True,
-            )
-            return
-        if not await _check_wizard_can_run(interaction, "setup_growth"):
-            return
-        await interaction.response.send_message(
-            "⚙️ Starting growth tracking setup — check the channel for prompts!", ephemeral=True
-        )
-        await run_growth_setup(interaction, self.bot)
+        @discord.ui.button(label="Yes, reset everything", style=discord.ButtonStyle.danger)
+        async def confirm(self, inner: discord.Interaction, _b: discord.ui.Button):
+            self.confirmed = True
+            await inner.response.defer()
+            self.stop()
 
-    @app_commands.command(
-        name="setup_growth_breakdown",
-        description="💎 Premium — Configure the Growth Breakdown auto-post and bucket customization",
+        @discord.ui.button(label="Cancel", style=discord.ButtonStyle.secondary)
+        async def cancel(self, inner: discord.Interaction, _b: discord.ui.Button):
+            await inner.response.defer()
+            self.stop()
+
+    view = ConfirmResetView()
+    await interaction.response.send_message(
+        "⚠️ Are you sure you want to reset the bot configuration for this server? "
+        "This cannot be undone.",
+        view=view,
+        ephemeral=True,
     )
-    async def setup_growth_breakdown(self, interaction: discord.Interaction):
-        if not _has_leadership_or_admin(interaction):
-            await interaction.response.send_message(
-                "⛔ You need the leadership role (or admin) to run `/setup_growth_breakdown`.",
-                ephemeral=True,
-            )
-            return
-        if not await premium.is_premium(interaction.guild_id, interaction=interaction):
-            await interaction.response.send_message(
-                "💎 `/setup_growth_breakdown` is a Premium feature. The "
-                "**📊 See most recent Breakdown** button on `/growth` works on every tier — "
-                "this command configures the auto-post and the customizable "
-                "thresholds and labels. Run `/upgrade` to subscribe.",
-                ephemeral=True,
-            )
-            return
-        if not await _check_wizard_can_run(interaction, "setup_growth_breakdown"):
-            return
-        await interaction.response.send_message(
-            "⚙️ Starting Growth Breakdown setup — check the channel for prompts!",
+    await view.wait()
+    if view.confirmed:
+        from config import save_config, GuildConfig
+        save_config(GuildConfig(guild_id=interaction.guild_id))
+        await interaction.followup.send(
+            "✅ Configuration reset. Run `/setup` to configure the bot again.",
             ephemeral=True,
         )
-        await run_growth_breakdown_setup(interaction, self.bot)
-
-    @app_commands.command(name="setup_birthdays", description="Configure birthday tracking — sheet tab, columns, and lookahead days")
-    async def setup_birthdays(self, interaction: discord.Interaction):
-        if not _has_leadership_or_admin(interaction):
-            await interaction.response.send_message(
-                "⛔ You need the leadership role (or admin) to run `/setup_birthdays`.",
-                ephemeral=True,
-            )
-            return
-        if not await _check_wizard_can_run(interaction, "setup_birthdays"):
-            return
-        await interaction.response.send_message(
-            "⚙️ Starting birthday setup — check the channel for prompts!", ephemeral=True
+    else:
+        await interaction.followup.send(
+            "✅ Reset cancelled. Your configuration is still active and has not been reset.",
+            ephemeral=True,
         )
-        await run_birthday_setup(interaction, self.bot)
-
-    @app_commands.command(name="setup_desertstorm", description="Configure Desert Storm mail template and time options")
-    async def setup_desertstorm(self, interaction: discord.Interaction):
-        if not _has_leadership_or_admin(interaction):
-            await interaction.response.send_message(
-                "⛔ You need the leadership role (or admin) to run `/setup_desertstorm`.",
-                ephemeral=True,
-            )
-            return
-        if not await _check_wizard_can_run(interaction, "setup_desertstorm"):
-            return
-        await interaction.response.send_message(
-            "⚙️ Starting Desert Storm setup — check the channel for prompts!", ephemeral=True
-        )
-        await run_storm_setup(interaction, self.bot, "DS")
-
-    @app_commands.command(name="setup_canyonstorm", description="Configure Canyon Storm mail template and time options")
-    async def setup_canyonstorm(self, interaction: discord.Interaction):
-        if not _has_leadership_or_admin(interaction):
-            await interaction.response.send_message(
-                "⛔ You need the leadership role (or admin) to run `/setup_canyonstorm`.",
-                ephemeral=True,
-            )
-            return
-        if not await _check_wizard_can_run(interaction, "setup_canyonstorm"):
-            return
-        await interaction.response.send_message(
-            "⚙️ Starting Canyon Storm setup — check the channel for prompts!", ephemeral=True
-        )
-        await run_storm_setup(interaction, self.bot, "CS")
-
-    @app_commands.command(name="setup_events", description="Add or edit an event type for announcements (Marauder, Siege, etc.)")
-    async def setup_events(self, interaction: discord.Interaction):
-        if not _has_leadership_or_admin(interaction):
-            await interaction.response.send_message(
-                "⛔ You need the leadership role (or admin) to run `/setup_events`.",
-                ephemeral=True,
-            )
-            return
-        if not await _check_wizard_can_run(interaction, "setup_events"):
-            return
-        await interaction.response.send_message(
-            "⚙️ Starting event setup — check the channel for prompts!", ephemeral=True
-        )
-        await run_event_setup(interaction, self.bot)
-
-    @app_commands.command(name="setup_survey", description="Configure the default survey — channels, tabs, intro, and questions")
-    async def setup_survey(self, interaction: discord.Interaction):
-        if not _has_leadership_or_admin(interaction):
-            await interaction.response.send_message(
-                "⛔ You need the leadership role (or admin) to run `/setup_survey`.",
-                ephemeral=True,
-            )
-            return
-        if not await _check_wizard_can_run(interaction, "setup_survey"):
-            return
-        await interaction.response.send_message(
-            "⚙️ Starting survey setup — check the channel for prompts!", ephemeral=True
-        )
-        await run_survey_setup(interaction, self.bot)
-
-    @app_commands.command(name="setup_shiny_tasks", description="Daily announcement of today's shiny task servers for your Alliance")
-    async def setup_shiny_tasks(self, interaction: discord.Interaction):
-        if not _has_leadership_or_admin(interaction):
-            await interaction.response.send_message(
-                "⛔ You need the leadership role (or admin) to run `/setup_shiny_tasks`.",
-                ephemeral=True,
-            )
-            return
-        if not await _check_wizard_can_run(interaction, "setup_shiny_tasks"):
-            return
-        await interaction.response.send_message(
-            "⚙️ Starting Shiny Tasks setup — check the channel for prompts!", ephemeral=True
-        )
-        await run_shiny_tasks_setup(interaction, self.bot)
 
 
 # ── /Define Various Setup Commands ───────────────────────────────────────────────────────
@@ -1723,7 +1719,7 @@ class YesNoView(discord.ui.View):
         self.stop()
 
 
-# ── /view_configuration helper ───────────────────────────────────────────────
+# ── 🗂️ View configuration helper (used by the /setup hub button) ─────────────
 
 async def _send_view_configuration(interaction: discord.Interaction, cfg) -> None:
     """Build and send a single embed summarising every wizard's configuration."""
@@ -1743,7 +1739,7 @@ async def _send_view_configuration(interaction: discord.Interaction, cfg) -> Non
     growth   = get_growth_config(guild_id)
     shiny    = get_shiny_tasks_config(guild_id)
     events   = get_guild_events(guild_id, active_only=True)
-    is_premium_flag = await premium.is_premium(guild_id, interaction=interaction)
+    is_premium_flag = await premium.is_premium(guild_id, interaction=interaction, bot=interaction.client)
 
     def _yn(v) -> str:
         return "✅ Configured" if v else "❌ Not configured"
@@ -1785,7 +1781,7 @@ async def _send_view_configuration(interaction: discord.Interaction, cfg) -> Non
     ev_lines = [
         f"**Draft Channel:** {_channel(cfg.event_draft_channel_id)}",
         f"**Announcement Channel:** {_channel(cfg.event_announce_channel_id)}",
-        f"**Draft Time:** {cfg.event_draft_time}",
+        f"**Draft Time:** {_format_time_with_tz(cfg.event_draft_time, cfg.timezone)}",
         f"**5-Min Warning:** {_enabled(cfg.event_five_min_warning)}",
     ]
     if events:
@@ -1813,7 +1809,7 @@ async def _send_view_configuration(interaction: discord.Interaction, cfg) -> Non
     train_lines.append(f"**Reminders:** {_enabled(train.get('reminders_enabled'))}")
     if train.get("reminders_enabled"):
         train_lines.append(f"**Reminder Channel:** {_channel(train.get('reminder_channel_id'))}")
-        train_lines.append(f"**Reminder Time:** {train.get('reminder_time', '*not set*')}")
+        train_lines.append(f"**Reminder Time:** {_format_time_with_tz(train.get('reminder_time'), cfg.timezone) or '*not set*'}")
     embed.add_field(name="🚂 Train", value="\n".join(train_lines)[:1024], inline=False)
 
     b_lines = [
@@ -1831,18 +1827,28 @@ async def _send_view_configuration(interaction: discord.Interaction, cfg) -> Non
     ]
     if birthday.get("reminders_enabled"):
         b_lines.append(f"**Reminder Channel:** {_channel(birthday.get('reminder_channel_id'))}")
-        b_lines.append(f"**Reminder Time:** {birthday.get('reminder_time', '*not set*')}")
+        b_lines.append(f"**Reminder Time:** {_format_time_with_tz(birthday.get('reminder_time'), cfg.timezone) or '*not set*'}")
     embed.add_field(name="🎂 Birthdays", value="\n".join(b_lines)[:1024], inline=False)
 
     from config import get_storm_slot_labels
     ds_slot_labels = get_storm_slot_labels("DS", interaction.guild_id)
     cs_slot_labels = get_storm_slot_labels("CS", interaction.guild_id)
 
+    def _team_time_line(team_letter: str, idx, slot_lbls, setup_hint: str) -> str:
+        """Render the Team A/B time line for the /setup config view.
+        Falls back to a nudge toward the setup wizard when the alliance
+        hasn't picked the slot yet (#251)."""
+        if idx in (1, 2) and len(slot_lbls) >= idx:
+            return f"**Team {team_letter} Time:** {slot_lbls[idx - 1]}"
+        return f"**Team {team_letter} Time:** *not set — Step 3 of {setup_hint}*"
+
+    ds_hint = "`/setup` → ⚔️ Desert Storm"
+    cs_hint = "`/setup` → 🏜️ Canyon Storm"
     ds_lines = [
         f"**Sheet Tab:** {ds.get('tab_name', '*not set*')}",
         f"**Log Channel:** {_channel(cfg.ds_log_channel_id)}",
-        f"**Time Option 1:** {ds_slot_labels[0]}",
-        f"**Time Option 2:** {ds_slot_labels[1]}",
+        _team_time_line("A", ds.get("team_a_slot_index"), ds_slot_labels, ds_hint),
+        _team_time_line("B", ds.get("team_b_slot_index"), ds_slot_labels, ds_hint),
         f"**Mail Template:** {_yn(ds.get('mail_template'))}",
     ]
     embed.add_field(name="⚔️ Desert Storm", value="\n".join(ds_lines)[:1024], inline=False)
@@ -1850,8 +1856,8 @@ async def _send_view_configuration(interaction: discord.Interaction, cfg) -> Non
     cs_lines = [
         f"**Sheet Tab:** {cs.get('tab_name', '*not set*')}",
         f"**Log Channel:** {_channel(cfg.cs_log_channel_id)}",
-        f"**Time Option 1:** {cs_slot_labels[0]}",
-        f"**Time Option 2:** {cs_slot_labels[1]}",
+        _team_time_line("A", cs.get("team_a_slot_index"), cs_slot_labels, cs_hint),
+        _team_time_line("B", cs.get("team_b_slot_index"), cs_slot_labels, cs_hint),
         f"**Mail Template:** {_yn(cs.get('mail_template'))}",
     ]
     embed.add_field(name="🏜️ Canyon Storm", value="\n".join(cs_lines)[:1024], inline=False)
@@ -1890,7 +1896,7 @@ async def _send_view_configuration(interaction: discord.Interaction, cfg) -> Non
     if shiny.get("enabled"):
         st_lines += [
             f"**Channel:** {_channel(shiny.get('channel_id'))}",
-            f"**Post Time:** {shiny.get('post_time', '*not set*')}",
+            f"**Post Time:** {_format_time_with_tz(shiny.get('post_time'), cfg.timezone) or '*not set*'}",
             f"**Server Range:** "
             f"{shiny.get('server_min') or '?'} – {shiny.get('server_max') or '?'}",
             f"**Custom Message:** {_yn(shiny.get('message_template'))}",
@@ -1898,9 +1904,9 @@ async def _send_view_configuration(interaction: discord.Interaction, cfg) -> Non
     embed.add_field(name="🌟 Shiny Tasks", value="\n".join(st_lines)[:1024], inline=False)
 
     if is_premium_flag:
-        embed.set_footer(text="💎 Premium is active. Run any /setup_* command to update a section.")
+        embed.set_footer(text="💎 Premium is active. Run /setup and click a section button to update it.")
     else:
-        embed.set_footer(text="Run /upgrade for Premium • /help for all commands • /setup_* to update a section")
+        embed.set_footer(text="Run /upgrade for Premium • /help for all commands • /setup to update a section")
     await interaction.followup.send(embed=embed, ephemeral=True)
 
 
@@ -1991,7 +1997,7 @@ async def run_setup(interaction: discord.Interaction, bot):
     cfg.leadership_role_id   = v.selected_role.id
 
     # ── Step 3: Leadership channel ─────────────────────────────────────────────
-    is_premium_flag = await premium.is_premium(guild_id, interaction=interaction)
+    is_premium_flag = await premium.is_premium(guild_id, interaction=interaction, bot=interaction.client)
     await channel.send(
         "**Step 3 of 6 — Leadership Channel**\n"
         "Pick the channel where I should post drafts, reminders, and approvals "
@@ -2135,16 +2141,19 @@ async def run_setup(interaction: discord.Interaction, bot):
 
     await channel.send(
         "✅ **Core setup complete!**\n\n"
-        "Now configure the features you want to use. Run each of the commands below for any feature you'd like to enable:\n\n"
-        "📣 `/setup_events` — Event announcements (Plague Marauder, Zombie Siege, etc.)\n"
-        "🚂 `/setup_train` — Train schedule, blurb generation, and reminders\n"
-        "🎂 `/setup_birthdays` — Birthday tracking and announcements\n"
-        "⚔️ `/setup_desertstorm` — Desert Storm mail drafts and participation logs\n"
-        "🏜️ `/setup_canyonstorm` — Canyon Storm mail drafts and participation logs\n"
-        "📋 `/setup_survey` — Squad powers survey\n"
-        "📈 `/setup_growth` — Growth tracking (snapshot your members' stats over time)\n"
-        "🌟 `/setup_shiny_tasks` — Daily announcement of today's shiny task servers for your Alliance\n\n"
-        "You can set up as many or as few of these as you need. Use `/help` at any time to see all available commands."
+        "Now configure whichever features you want to use. Run `/setup` "
+        "again to re-open the hub — every feature wizard lives behind a "
+        "labelled button:\n\n"
+        "📣 **Events** — Event announcements (Plague Marauder, Zombie Siege, etc.)\n"
+        "🚂 **Train** — Train schedule, blurb generation, and reminders\n"
+        "🎂 **Birthdays** — Birthday tracking and announcements\n"
+        "⚔️ **Desert Storm** — Mail drafts and participation logs\n"
+        "🏜️ **Canyon Storm** — Mail drafts and participation logs\n"
+        "📋 **Survey** — Squad powers survey\n"
+        "📈 **Growth** — Growth tracking (snapshot your members' stats over time)\n"
+        "🌟 **Shiny Tasks** — Daily announcement of today's shiny task servers for your Alliance\n\n"
+        "Premium features (👥 Member Sync, 📋 Survey, 📊 Growth Breakdown) show as 💎-locked "
+        "until you upgrade. Use `/help` any time to see every command."
     )
     wizard_registry.unregister(user.id, cancel_event)
     print(f"[SETUP] Guild {guild_id} core setup complete")
@@ -2170,7 +2179,7 @@ async def run_growth_setup(interaction: discord.Interaction, bot):
             if cancel_event.is_set():
                 await channel.send("❌ Cancelled.")
             else:
-                await channel.send("⏰ Timed out. Run `/setup_growth` to start again.")
+                await channel.send("⏰ Timed out. Run `/setup` → 📈 Growth to start again.")
             return None
         return reply.content.strip()[:max_chars]
 
@@ -2242,7 +2251,7 @@ async def run_growth_setup(interaction: discord.Interaction, bot):
     if enabled_view.cancelled:
         return
     if enabled_view.selected is None:
-        await channel.send("⏰ Timed out. Run `/setup_growth` to start again.")
+        await channel.send("⏰ Timed out. Run `/setup` → 📈 Growth to start again.")
         return
     if not enabled_view.selected:
         save_growth_config(
@@ -2259,7 +2268,7 @@ async def run_growth_setup(interaction: discord.Interaction, bot):
         await ask_disable_with_clear(
             channel,
             feature_label="Growth tracking",
-            setup_command="setup_growth",
+            setup_command="setup → 📈 Growth",
             had_prior_config=growth_already_configured,
             clear_fn=lambda: clear_growth_config(guild_id),
             cancel_event=cancel_event,
@@ -2299,7 +2308,7 @@ async def run_growth_setup(interaction: discord.Interaction, bot):
     try:
         data_start_row = int(str(start_raw).strip())
     except ValueError:
-        await channel.send("⚠️ Please enter a row number like `2`. Run `/setup_growth` to try again.")
+        await channel.send("⚠️ Please enter a row number like `2`. Run `/setup` → 📈 Growth to try again.")
         return
 
     # ── Step 4: Name column ───────────────────────────────────────────────────
@@ -2318,7 +2327,7 @@ async def run_growth_setup(interaction: discord.Interaction, bot):
         return
     name_col = name_raw.strip().upper()
     if len(name_col) != 1 or not name_col.isalpha():
-        await channel.send("⚠️ Please enter a single column letter like `A`. Run `/setup_growth` to try again.")
+        await channel.send("⚠️ Please enter a single column letter like `A`. Run `/setup` → 📈 Growth to try again.")
         return
 
     # ── Step 5: Metrics ───────────────────────────────────────────────────────
@@ -2372,7 +2381,7 @@ async def run_growth_setup(interaction: discord.Interaction, bot):
 
     while True:
         # Free-tier cap on number of growth metrics
-        metrics_cap = await premium.get_limit("growth_metrics", guild_id, interaction=interaction)
+        metrics_cap = await premium.get_limit("growth_metrics", guild_id, interaction=interaction, bot=interaction.client)
         at_metrics_cap = metrics_cap is not None and len(metrics) >= metrics_cap
 
         class MetricsActionView(discord.ui.View):
@@ -2421,7 +2430,7 @@ async def run_growth_setup(interaction: discord.Interaction, bot):
             return
 
         if action_view.choice is None:
-            await channel.send("⏰ Timed out. Run `/setup_growth` to start again.")
+            await channel.send("⏰ Timed out. Run `/setup` → 📈 Growth to start again.")
             return
         if action_view.choice == "done":
             break
@@ -2465,7 +2474,7 @@ async def run_growth_setup(interaction: discord.Interaction, bot):
         if pick_view.cancelled:
             return
         if pick_view.index is None:
-            await channel.send("⏰ Timed out. Run `/setup_growth` to start again.")
+            await channel.send("⏰ Timed out. Run `/setup` → 📈 Growth to start again.")
             return
 
         if action_view.choice == "delete":
@@ -2506,7 +2515,7 @@ async def run_growth_setup(interaction: discord.Interaction, bot):
             }
 
     if not metrics:
-        await channel.send("⚠️ No metrics defined. Run `/setup_growth` to try again.")
+        await channel.send("⚠️ No metrics defined. Run `/setup` → 📈 Growth to try again.")
         return
 
     # ── Step 6: Growth tracking tab ───────────────────────────────────────────
@@ -2527,7 +2536,7 @@ async def run_growth_setup(interaction: discord.Interaction, bot):
 
     # ── Step 7: Snapshot frequency ────────────────────────────────────────────
     # Custom-interval frequency is a premium-only feature.
-    custom_interval_unlocked = await premium.is_premium(guild_id, interaction=interaction)
+    custom_interval_unlocked = await premium.is_premium(guild_id, interaction=interaction, bot=interaction.client)
 
     class FrequencyView(discord.ui.View):
         def __init__(self):
@@ -2565,7 +2574,7 @@ async def run_growth_setup(interaction: discord.Interaction, bot):
     if freq_view.cancelled:
         return
     if not freq_view.selected:
-        await channel.send("⏰ Timed out. Run `/setup_growth` to start again.")
+        await channel.send("⏰ Timed out. Run `/setup` → 📈 Growth to start again.")
         return
 
     snapshot_frequency = freq_view.selected
@@ -2646,10 +2655,10 @@ async def run_growth_setup(interaction: discord.Interaction, bot):
         next_value = (
             f"<t:{ts}:F> (<t:{ts}:R>)\n"
             f"*Want to start tracking from today instead? "
-            f"Run `/growth` and click **📸 Run Snapshot Now**.*"
+            f"Run `/growth overview` and click **📸 Run Snapshot Now**.*"
         )
     else:
-        next_value = "*Could not compute — check `/growth` for status.*"
+        next_value = "*Could not compute — check `/growth overview` for status.*"
 
     embed = discord.Embed(title="✅ Growth Tracking Configured", color=discord.Color.green())
     embed.add_field(name="Source Tab",        value=tab_source,           inline=False)
@@ -2659,7 +2668,7 @@ async def run_growth_setup(interaction: discord.Interaction, bot):
     embed.add_field(name="Snapshot Schedule", value=freq_desc,            inline=False)
     embed.add_field(name="Next Snapshot",     value=next_value,           inline=False)
     embed.add_field(name="Metrics",           value=metrics_display,      inline=False)
-    embed.set_footer(text="Run /setup_growth again to update. Use /growth to take a manual snapshot.")
+    embed.set_footer(text="Run /setup and click 📈 Growth to update. Use /growth overview to take a manual snapshot.")
     await channel.send(embed=embed)
     wizard_registry.unregister(user.id, cancel_event)
     print(f"[SETUP] Growth config saved for guild {guild_id}")
@@ -2668,8 +2677,8 @@ async def run_growth_setup(interaction: discord.Interaction, bot):
 async def run_growth_breakdown_setup(interaction: discord.Interaction, bot):
     """Premium-only wizard for the Growth Breakdown auto-post + customization.
 
-    The bucket-classification math itself ships free (the `/growth`
-    **📊 See most recent Breakdown** button reads the breakdown tab for any guild that's
+    The bucket-classification math itself ships free (`/growth breakdown`,
+    and the **📊 See most recent Breakdown** button on `/growth overview`, both read the breakdown tab for any guild that's
     enabled growth tracking). This wizard configures the Premium layer:
 
       * sheet tab name for the breakdown
@@ -2698,8 +2707,8 @@ async def run_growth_breakdown_setup(interaction: discord.Interaction, bot):
     current = get_growth_config(guild_id)
     if not current.get("enabled") or not current.get("metrics"):
         await channel.send(
-            "⚙️ Set up growth tracking first — run `/setup_growth` and add at "
-            "least one metric, then come back to `/setup_growth_breakdown` to "
+            "⚙️ Set up growth tracking first — run `/setup` → 📈 Growth and add at "
+            "least one metric, then come back to `/setup` → 📊 Growth Breakdown to "
             "configure the breakdown layer."
         )
         wizard_registry.unregister(user.id, cancel_event)
@@ -2777,7 +2786,7 @@ async def run_growth_breakdown_setup(interaction: discord.Interaction, bot):
     await channel.send(
         "**Step 2 of 5 — Auto-Post After Snapshots?**\n"
         "Each time the bot finishes a snapshot, post the breakdown summary "
-        "to a channel so leadership doesn't have to click `/growth` to see "
+        "to a channel so leadership doesn't have to run `/growth breakdown` to see "
         "who's slowing down.",
         view=autopost_view,
     )
@@ -2785,7 +2794,7 @@ async def run_growth_breakdown_setup(interaction: discord.Interaction, bot):
     if autopost_view.cancelled:
         return
     if autopost_view.selected is None:
-        await channel.send("⏰ Timed out. Run `/setup_growth_breakdown` to start again.")
+        await channel.send("⏰ Timed out. Run `/setup` → 📊 Growth Breakdown to start again.")
         return
 
     post_channel_id = 0
@@ -2812,7 +2821,7 @@ async def run_growth_breakdown_setup(interaction: discord.Interaction, bot):
         if post_ch_view.cancelled:
             return
         if not post_ch_view.confirmed:
-            await channel.send("⏰ Timed out. Run `/setup_growth_breakdown` to start again.")
+            await channel.send("⏰ Timed out. Run `/setup` → 📊 Growth Breakdown to start again.")
             return
         post_channel_id = post_ch_view.selected_channel.id
 
@@ -2912,7 +2921,7 @@ async def run_growth_breakdown_setup(interaction: discord.Interaction, bot):
         if bf_view.cancelled:
             return
         if bf_view.selected is None:
-            await channel.send("⏰ Timed out. Run `/setup_growth_breakdown` to start again.")
+            await channel.send("⏰ Timed out. Run `/setup` → 📊 Growth Breakdown to start again.")
             return
         bucket_filter = bf_view.selected
 
@@ -3030,7 +3039,7 @@ async def run_growth_breakdown_setup(interaction: discord.Interaction, bot):
         return
     if t_view.choice is None:
         await channel.send(
-            "⏰ Timed out or invalid thresholds. Run `/setup_growth_breakdown` to start again."
+            "⏰ Timed out or invalid thresholds. Run `/setup` → 📊 Growth Breakdown to start again."
         )
         return
     if t_view.choice == "defaults":
@@ -3127,7 +3136,7 @@ async def run_growth_breakdown_setup(interaction: discord.Interaction, bot):
         return
     if l_view.choice is None:
         await channel.send(
-            "⏰ Timed out. Run `/setup_growth_breakdown` to start again."
+            "⏰ Timed out. Run `/setup` → 📊 Growth Breakdown to start again."
         )
         return
     if l_view.choice == "defaults":
@@ -3149,7 +3158,7 @@ async def run_growth_breakdown_setup(interaction: discord.Interaction, bot):
     )
     if not saved_ok:
         await channel.send(
-            "⚠️ Couldn't save the breakdown config — make sure `/setup_growth` "
+            "⚠️ Couldn't save the breakdown config — make sure `/setup` → 📈 Growth "
             "has been run for this server first."
         )
         wizard_registry.unregister(user.id, cancel_event)
@@ -3165,7 +3174,7 @@ async def run_growth_breakdown_setup(interaction: discord.Interaction, bot):
         embed.add_field(name="Auto-Post Channel", value=f"<#{post_channel_id}>", inline=False)
         embed.add_field(name="Bucket Filter",     value=bf_text,                inline=False)
     else:
-        embed.add_field(name="Auto-Post", value="❌ Off — use `/growth` → 📊 See most recent Breakdown to view on demand.", inline=False)
+        embed.add_field(name="Auto-Post", value="❌ Off — use `/growth breakdown` (or `/growth overview` → 📊 See most recent Breakdown) to view on demand.", inline=False)
     if thresholds:
         t_text = (
             f"Increased ≥ {thresholds['increased']:g}%, "
@@ -3179,7 +3188,7 @@ async def run_growth_breakdown_setup(interaction: discord.Interaction, bot):
     if labels:
         l_text = ", ".join(f"{DEFAULT_BUCKET_LABELS[b]}→{labels[b]}" for b in BUCKET_ORDER if labels.get(b))
         embed.add_field(name="Custom Labels", value=l_text or "—", inline=False)
-    embed.set_footer(text="Run /setup_growth_breakdown again to update.")
+    embed.set_footer(text="Run /setup and click 📊 Growth Breakdown to update.")
     await channel.send(embed=embed)
     wizard_registry.unregister(user.id, cancel_event)
     print(f"[SETUP] Growth Breakdown config saved for guild {guild_id}")
@@ -3207,13 +3216,15 @@ async def run_train_setup(interaction: discord.Interaction, bot):
             if cancel_event.is_set():
                 await channel.send("❌ Cancelled.")
             else:
-                await channel.send("⏰ Timed out. Run `/setup_train` to start again.")
+                await channel.send("⏰ Timed out. Run `/setup` → 🚂 Train to start again.")
             return None
         return reply.content.strip()[:max_chars]
 
-    from config import get_train_config, has_train_config
+    from config import get_train_config, has_train_config, get_config
     current = get_train_config(guild_id)
     train_already_configured = has_train_config(guild_id)
+    guild_cfg = get_config(guild_id)
+    guild_tz  = guild_cfg.timezone if guild_cfg else "America/New_York"
 
     # ── If already configured, show summary and offer edit or cancel ──────────
     if train_already_configured:
@@ -3231,7 +3242,7 @@ async def run_train_setup(interaction: discord.Interaction, bot):
         if current.get("reminders_enabled"):
             rc = current.get("reminder_channel_id", 0) or 0
             fields.append(("Reminder Channel", f"<#{rc}>" if rc else "*not set*"))
-            fields.append(("Reminder Time",    current.get("reminder_time") or "*not set*"))
+            fields.append(("Reminder Time",    _format_time_with_tz(current.get("reminder_time"), guild_tz) or "*not set*"))
         proceed = await ask_proceed_with_existing_config(
             channel,
             title="🚂 Current Train Setup",
@@ -3270,14 +3281,14 @@ async def run_train_setup(interaction: discord.Interaction, bot):
         "**Step 2 of 8 — ChatGPT Blurb Generation**\n"
         "Would you like the bot to help generate a ChatGPT prompt each day when you assign a train?\n"
         "This lets you quickly produce a personalised announcement blurb for the member.\n"
-        "*(You can always set this up later by running `/setup_train` again)*",
+        "*(You can always set this up later by running `/setup` → 🚂 Train again)*",
         view=blurb_view,
     )
     await wait_view_or_cancel(blurb_view, cancel_event)
     if blurb_view.cancelled:
         return
     if blurb_view.selected is None:
-        await channel.send("⏰ Timed out. Run `/setup_train` to start again.")
+        await channel.send("⏰ Timed out. Run `/setup` → 🚂 Train to start again.")
         return
     blurbs_enabled = 1 if blurb_view.selected else 0
     if not blurbs_enabled:
@@ -3304,9 +3315,9 @@ async def run_train_setup(interaction: discord.Interaction, bot):
 
     # Free-tier slot caps for themes / tones (None = unlimited).
     # Also used by the reminder-channel step to expose threads on premium.
-    is_premium_flag = await premium.is_premium(guild_id, interaction=interaction)
-    themes_cap = await premium.get_limit("themes", guild_id, interaction=interaction)
-    tones_cap  = await premium.get_limit("tones",  guild_id, interaction=interaction)
+    is_premium_flag = await premium.is_premium(guild_id, interaction=interaction, bot=interaction.client)
+    themes_cap = await premium.get_limit("themes", guild_id, interaction=interaction, bot=interaction.client)
+    tones_cap  = await premium.get_limit("tones",  guild_id, interaction=interaction, bot=interaction.client)
 
     def _trim(values: list[str], cap: int | None) -> tuple[list[str], bool]:
         """Trim list to cap. Returns (trimmed_list, was_truncated)."""
@@ -3438,14 +3449,14 @@ async def run_train_setup(interaction: discord.Interaction, bot):
         if tone_default_view.cancelled:
             return
         if not tone_default_view.selected:
-            await channel.send("⏰ Timed out. Run `/setup_train` to start again.")
+            await channel.send("⏰ Timed out. Run `/setup` → 🚂 Train to start again.")
             return
         default_tone = tone_default_view.selected
 
         # ── Step 6: Prompt templates ───────────────────────────────────────────
         # Free tier keeps a single "Default" template; premium can save up to
         # `template_cap` named templates and pick which is the default.
-        template_cap     = await premium.get_limit("train_templates", guild_id, interaction=interaction)
+        template_cap     = await premium.get_limit("train_templates", guild_id, interaction=interaction, bot=interaction.client)
         existing_templates = list(current.get("templates") or [])
         if not existing_templates:
             existing_templates = [{"name": "Default", "template": prompt_template or ""}]
@@ -3474,7 +3485,7 @@ async def run_train_setup(interaction: discord.Interaction, bot):
     if reminder_view.cancelled:
         return
     if reminder_view.selected is None:
-        await channel.send("⏰ Timed out. Run `/setup_train` to start again.")
+        await channel.send("⏰ Timed out. Run `/setup` → 🚂 Train to start again.")
         return
     reminders_enabled  = 1 if reminder_view.selected else 0
     reminder_channel_id = 0
@@ -3515,7 +3526,7 @@ async def run_train_setup(interaction: discord.Interaction, bot):
         if reminder_ch_view.cancelled:
             return
         if not reminder_ch_view.confirmed:
-            await channel.send("⏰ Timed out. Run `/setup_train` to start again.")
+            await channel.send("⏰ Timed out. Run `/setup` → 🚂 Train to start again.")
             return
         reminder_channel_id = reminder_ch_view.selected_channel.id
 
@@ -3558,7 +3569,7 @@ async def run_train_setup(interaction: discord.Interaction, bot):
             if attempts_left <= 0:
                 await channel.send(
                     "⚠️ Could not read that time after a few tries. "
-                    "Run `/setup_train` to start over."
+                    "Run `/setup` → 🚂 Train to start over."
                 )
                 return
             await channel.send(
@@ -3580,7 +3591,7 @@ async def run_train_setup(interaction: discord.Interaction, bot):
             "**Step 8 of 8 — Train DM Body (💎 Premium)**\n"
             "When the train reminder fires, the bot also DMs the assigned member directly. "
             "Free guilds can configure it now — it just won't fire until you have Premium "
-            "+ Member Roster Sync.\n\n"
+            "+ Member Sync.\n\n"
             "Use `{name}` as a placeholder for the member's name (optional).",
             default=DEFAULT_TRAIN_DM,
             current=saved_train_dm,
@@ -3619,7 +3630,7 @@ async def run_train_setup(interaction: discord.Interaction, bot):
     embed.add_field(name="Reminders",       value="Enabled" if reminders_enabled else "Disabled", inline=True)
     if reminders_enabled:
         embed.add_field(name="Reminder Channel", value=f"<#{reminder_channel_id}>", inline=True)
-        embed.add_field(name="Reminder Time",    value=reminder_time,               inline=True)
+        embed.add_field(name="Reminder Time",    value=_format_time_with_tz(reminder_time, guild_tz), inline=True)
     if blurbs_enabled:
         embed.add_field(name="Default Tone", value=default_tone,          inline=True)
         embed.add_field(name="Themes",       value=", ".join(themes),     inline=False)
@@ -3635,7 +3646,7 @@ async def run_train_setup(interaction: discord.Interaction, bot):
         if prompt_template:
             preview = prompt_template[:200] + ("..." if len(prompt_template) > 200 else "")
             embed.add_field(name="Default Template Preview", value=f"```{preview}```", inline=False)
-    embed.set_footer(text="Run /setup_train again to update any of these settings.")
+    embed.set_footer(text="Run /setup and click 🚂 Train to update any of these settings.")
     await channel.send(embed=embed)
     wizard_registry.unregister(user.id, cancel_event)
     print(f"[SETUP] Train config saved for guild {guild_id}")
@@ -3684,7 +3695,7 @@ async def run_create_new_extra_survey(interaction: discord.Interaction, bot):
 
     await channel.send(
         f"✅ Creating new survey **{survey_name}** (id: `{survey_id}`).\n"
-        f"Walking you through the same setup steps as `/setup_survey`…"
+        f"Walking you through the same setup steps as `/setup` → 📋 Survey…"
     )
     await run_survey_setup(
         interaction, bot,
@@ -3897,7 +3908,7 @@ async def run_survey_setup(interaction: discord.Interaction, bot,
         "Configure the survey for your alliance."
     )
 
-    is_premium_flag = await premium.is_premium(guild_id, interaction=interaction)
+    is_premium_flag = await premium.is_premium(guild_id, interaction=interaction, bot=interaction.client)
 
     # ── Step 1: Survey channel ─────────────────────────────────────────────────
     survey_ch_view = ChannelSelectStep(
@@ -3921,7 +3932,7 @@ async def run_survey_setup(interaction: discord.Interaction, bot,
     if survey_ch_view.cancelled:
         return
     if not survey_ch_view.confirmed:
-        await channel.send("⏰ Timed out. Run `/setup_survey` to start again.")
+        await channel.send("⏰ Timed out. Run `/setup` → 📋 Survey to start again.")
         return
     survey_channel_id = survey_ch_view.selected_channel.id
 
@@ -3947,7 +3958,7 @@ async def run_survey_setup(interaction: discord.Interaction, bot,
     if notify_ch_view.cancelled:
         return
     if not notify_ch_view.confirmed:
-        await channel.send("⏰ Timed out. Run `/setup_survey` to start again.")
+        await channel.send("⏰ Timed out. Run `/setup` → 📋 Survey to start again.")
         return
     survey_notify_channel_id = notify_ch_view.selected_channel.id
 
@@ -4037,7 +4048,7 @@ async def run_survey_setup(interaction: discord.Interaction, bot,
                 "the previous step as a guide, or paste in your own."
             )
         else:
-            await channel.send("⏰ Timed out. Run `/setup_survey` to start again.")
+            await channel.send("⏰ Timed out. Run `/setup` → 📋 Survey to start again.")
             return
 
     if intro_message is None:
@@ -4058,7 +4069,7 @@ async def run_survey_setup(interaction: discord.Interaction, bot,
             if cancel_event.is_set():
                 await channel.send("❌ Cancelled.")
             else:
-                await channel.send("⏰ Timed out. Run `/setup_survey` to start again.")
+                await channel.send("⏰ Timed out. Run `/setup` → 📋 Survey to start again.")
             return
         intro_message = intro_reply.content.strip()
 
@@ -4111,7 +4122,7 @@ async def run_survey_setup(interaction: discord.Interaction, bot,
     if q_start_view.cancelled:
         return
     if not q_start_view.choice:
-        await channel.send("⏰ Timed out. Run `/setup_survey` to start again.")
+        await channel.send("⏰ Timed out. Run `/setup` → 📋 Survey to start again.")
         return
 
     if q_start_view.choice == "default":
@@ -4202,7 +4213,7 @@ async def run_survey_setup(interaction: discord.Interaction, bot,
                     return
 
                 if not list_view.action:
-                    await channel.send("⏰ Timed out. Run `/setup_survey` to start again.")
+                    await channel.send("⏰ Timed out. Run `/setup` → 📋 Survey to start again.")
                     return False
 
                 if list_view.action == "finish":
@@ -4221,7 +4232,7 @@ async def run_survey_setup(interaction: discord.Interaction, bot,
                         q_num    = f"Question {idx + 1}"
                     else:
                         # Free-tier cap on number of survey questions
-                        q_cap = await premium.get_limit("survey_questions", guild_id, interaction=interaction)
+                        q_cap = await premium.get_limit("survey_questions", guild_id, interaction=interaction, bot=interaction.client)
                         if q_cap is not None and len(questions) >= q_cap:
                             await channel.send(embed=premium.limit_reached_embed(
                                 feature_label="Survey Questions",
@@ -4242,13 +4253,13 @@ async def run_survey_setup(interaction: discord.Interaction, bot,
                         label_reply = await bot.wait_for("message", check=check, timeout=120)
                         q_label     = label_reply.content.strip() or existing.get("label", "")
                     except asyncio.TimeoutError:
-                        await channel.send("⏰ Timed out. Run `/setup_survey` to start again.")
+                        await channel.send("⏰ Timed out. Run `/setup` → 📋 Survey to start again.")
                         return False
 
                     q_key = q_label.lower().replace(" ", "_").replace("(", "").replace(")", "").replace("/", "_")
 
                     # Type — Numeric is free; Multi-select / Date are Premium.
-                    is_premium_for_q = await premium.is_premium(guild_id, interaction=interaction)
+                    is_premium_for_q = await premium.is_premium(guild_id, interaction=interaction, bot=interaction.client)
                     type_options = [
                         discord.SelectOption(label="Text — member types their answer", value="text"),
                         discord.SelectOption(label="Dropdown — member selects from a list", value="dropdown"),
@@ -4297,7 +4308,7 @@ async def run_survey_setup(interaction: discord.Interaction, bot,
                     if type_view.cancelled:
                         return
                     if not type_view.selected:
-                        await channel.send("⏰ Timed out. Run `/setup_survey` to start again.")
+                        await channel.send("⏰ Timed out. Run `/setup` → 📋 Survey to start again.")
                         return False
                     q_type = type_view.selected
 
@@ -4319,7 +4330,7 @@ async def run_survey_setup(interaction: discord.Interaction, bot,
                         help_raw    = help_reply.content.strip()
                         placeholder = "" if help_raw.lower() == "none" else help_raw
                     except asyncio.TimeoutError:
-                        await channel.send("⏰ Timed out. Run `/setup_survey` to start again.")
+                        await channel.send("⏰ Timed out. Run `/setup` → 📋 Survey to start again.")
                         return False
 
                     # Type-specific extras
@@ -4338,7 +4349,7 @@ async def run_survey_setup(interaction: discord.Interaction, bot,
                             opts_reply = await bot.wait_for("message", check=check, timeout=120)
                             options    = [o.strip() for o in opts_reply.content.split(",") if o.strip()][:25]
                         except asyncio.TimeoutError:
-                            await channel.send("⏰ Timed out. Run `/setup_survey` to start again.")
+                            await channel.send("⏰ Timed out. Run `/setup` → 📋 Survey to start again.")
                             return False
 
                     if q_type == "numeric":
@@ -4400,7 +4411,7 @@ async def run_survey_setup(interaction: discord.Interaction, bot,
                         if mag_view.cancelled:
                             return
                         if not mag_view.selected:
-                            await channel.send("⏰ Timed out. Run `/setup_survey` to start again.")
+                            await channel.send("⏰ Timed out. Run `/setup` → 📋 Survey to start again.")
                             return False
                         extra_meta["magnitude"] = mag_view.selected
 
@@ -4416,7 +4427,7 @@ async def run_survey_setup(interaction: discord.Interaction, bot,
                             try:
                                 bounds_reply = await bot.wait_for("message", check=check, timeout=120)
                             except asyncio.TimeoutError:
-                                await channel.send("⏰ Timed out. Run `/setup_survey` to start again.")
+                                await channel.send("⏰ Timed out. Run `/setup` → 📋 Survey to start again.")
                                 return False
                             raw = bounds_reply.content.strip().lower()
                             if raw not in ("", "none"):
@@ -4426,7 +4437,7 @@ async def run_survey_setup(interaction: discord.Interaction, bot,
                                     if hi_s.strip(): extra_meta["max"] = float(hi_s.strip())
                                 except ValueError:
                                     await channel.send(
-                                        "⚠️ Couldn't parse bounds. Run `/setup_survey` to try again."
+                                        "⚠️ Couldn't parse bounds. Run `/setup` → 📋 Survey to try again."
                                     )
                                     return False
                         else:
@@ -4445,7 +4456,7 @@ async def run_survey_setup(interaction: discord.Interaction, bot,
                         try:
                             fmt_reply = await bot.wait_for("message", check=check, timeout=120)
                         except asyncio.TimeoutError:
-                            await channel.send("⏰ Timed out. Run `/setup_survey` to start again.")
+                            await channel.send("⏰ Timed out. Run `/setup` → 📋 Survey to start again.")
                             return False
                         raw_fmt = fmt_reply.content.strip()
                         extra_meta["date_format"] = (
@@ -4474,7 +4485,7 @@ async def run_survey_setup(interaction: discord.Interaction, bot,
             return
 
     if not questions:
-        await channel.send("⚠️ No questions defined. Run `/setup_survey` to try again.")
+        await channel.send("⚠️ No questions defined. Run `/setup` → 📋 Survey to try again.")
         return
 
     # ── Save — including channel IDs ───────────────────────────────────────────
@@ -4485,7 +4496,7 @@ async def run_survey_setup(interaction: discord.Interaction, bot,
         from config import update_config_field
         update_config_field(guild_id, "survey_channel_id",        survey_channel_id)
         update_config_field(guild_id, "survey_notify_channel_id", survey_notify_channel_id)
-        next_step_cmd = "/setup_survey"
+        next_step_cmd = "/setup → 📋 Survey"
     else:
         # Extra survey: save into guild_extra_surveys; preserve any custom
         # reminder body the leadership previously set.
@@ -4519,7 +4530,7 @@ async def run_survey_setup(interaction: discord.Interaction, bot,
     embed.add_field(name="History Tab",         value=tab_history,                       inline=True)
     embed.add_field(name="Questions",           value=q_summary[:1024],                  inline=False)
     embed.set_footer(
-        text=f"Run {next_step_cmd} again to update. Run /survey_post to post the survey button."
+        text=f"Run {next_step_cmd} again to update. Run /survey post to post the survey button."
     )
     await channel.send(embed=embed)
     wizard_registry.unregister(user.id, cancel_event)
@@ -4533,7 +4544,14 @@ async def run_storm_setup(interaction: discord.Interaction, bot, event_type: str
     channel  = interaction.channel
     user     = interaction.user
     label    = "Desert Storm" if event_type == "DS" else "Canyon Storm"
-    cmd_name = "setup_desertstorm" if event_type == "DS" else "setup_canyonstorm"
+    # cmd_name is the user-facing hint shown after `Run /` in timeout /
+    # footer messages throughout this wizard. The old `/setup_desertstorm`
+    # and `/setup_canyonstorm` slash commands were consolidated under the
+    # `/setup` hub (#201); the hint now points officers at the button
+    # they actually need to click. For internal slug uses (channel-name
+    # suggestion) helpers derive a separate `cmd_short` from `event_type`.
+    storm_button = "⚔️ Desert Storm" if event_type == "DS" else "🏜️ Canyon Storm"
+    cmd_name = f"setup → {storm_button}"
     cancel_event = wizard_registry.register(user.id)
 
     def check(m):
@@ -4553,9 +4571,13 @@ async def run_storm_setup(interaction: discord.Interaction, bot, event_type: str
             return None
         return reply.content.strip()[:max_chars]
 
-    from config import get_storm_config, get_config, has_storm_config
+    from config import (
+        get_storm_config, get_config, has_storm_config,
+        get_structured_storm_config,
+    )
     from defaults import DEFAULT_DS_TEMPLATE, DEFAULT_CS_TEMPLATE
-    current   = get_storm_config(guild_id, event_type)
+    current            = get_storm_config(guild_id, event_type)
+    current_structured = get_structured_storm_config(guild_id, event_type)
     guild_cfg = get_config(guild_id)
     timezone  = guild_cfg.timezone if guild_cfg and guild_cfg.timezone else "America/New_York"
     tz_label  = TIMEZONE_LABELS.get(timezone, timezone)
@@ -4567,27 +4589,47 @@ async def run_storm_setup(interaction: discord.Interaction, bot, event_type: str
     saved_log_ch = saved_log_ch or 0
     saved_post_ch = current.get("post_channel_id") or 0
 
+    # Per-team saved mail templates — drives Step 5 Keep-current (#231).
+    # save_storm_config persists DS_A / DS_B (and CS_A / CS_B) rows per
+    # team; the base DS / CS row mirrors whichever side has content. Read
+    # the per-team rows directly so the wizard can distinguish "saved
+    # custom" from "saved default" from "no row".
+    saved_template_a = ""
+    saved_template_b = ""
+    if has_storm_config(guild_id, f"{event_type}_A"):
+        saved_template_a = (
+            get_storm_config(guild_id, f"{event_type}_A").get("mail_template") or ""
+        ).strip()
+    if has_storm_config(guild_id, f"{event_type}_B"):
+        saved_template_b = (
+            get_storm_config(guild_id, f"{event_type}_B").get("mail_template") or ""
+        ).strip()
+
     # Default template and placeholders per event type
     if event_type == "DS":
         default_template  = DEFAULT_DS_TEMPLATE
         placeholder_info  = (
-            "• `{alliance_name}` — your alliance name\n"
-            "• `{zones}` — zone assignments block\n"
-            "• `{subs}` — substitute members\n"
-            "• `{time}` — event time (auto-filled when drafting)"
+            "• `{alliance_name}`: your alliance name\n"
+            "• `{zones}`: zone assignments block\n"
+            "• `{subs}`: substitute members\n"
+            "• `{time}`: event time (auto-filled when drafting)"
         )
     else:
         default_template  = DEFAULT_CS_TEMPLATE
         placeholder_info  = (
-            "• `{alliance_name}` — your alliance name\n"
-            "• `{zones}` — zone assignments block\n"
-            "• `{subs}` — substitute members\n"
-            "• `{time}` — event time (auto-filled when drafting)"
+            "• `{alliance_name}`: your alliance name\n"
+            "• `{zones}`: zone assignments block\n"
+            "• `{subs}`: substitute members\n"
+            "• `{time}`: event time (auto-filled when drafting)"
         )
 
     # ── If already configured, show summary and offer edit or cancel ─────────
     if storm_already_configured:
         templates = current.get("templates") or []
+        structured_status = (
+            "✅ Enabled" if current_structured.get("structured_flow_enabled")
+            else "❌ Off (preset tabs available on free tier)"
+        )
         fields = [
             ("Sheet Tab",    current.get("tab_name") or "*not set*"),
             ("Log Channel",  f"<#{saved_log_ch}>" if saved_log_ch else "*not set*"),
@@ -4601,7 +4643,43 @@ async def run_storm_setup(interaction: discord.Interaction, bot, event_type: str
                 "Reminder DM",
                 "Custom" if (current.get("dm_reminder_message") or "").strip() else "Default",
             ),
+            ("Structured Roster Flow", structured_status),
         ]
+        # CS reads `teams` like DS does (Rule A / #166), so surface the
+        # field in the re-entry summary for both event types — officers
+        # can see their current single-team / both-teams config.
+        _summary_teams = {"both": "A & B", "A": "A only", "B": "B only"}.get(
+            (current.get("teams") or "both"), "A & B",
+        )
+        fields.insert(1, ("Teams", _summary_teams))
+
+        # Team time-slot mapping (#251). Surfaced so officers can see at
+        # a glance whether the slots are set, and what they're set to,
+        # without having to re-enter the wizard's Step 3.
+        from config import get_storm_slot_labels as _gslot
+        try:
+            _slot_lbls = _gslot(event_type, guild_id)
+        except Exception:
+            _slot_lbls = []
+        _team_summary = (current.get("teams") or "both").strip()
+        _a_idx = current.get("team_a_slot_index")
+        _b_idx = current.get("team_b_slot_index")
+
+        def _slot_blurb(idx):
+            if idx in (1, 2) and len(_slot_lbls) >= idx:
+                return _slot_lbls[idx - 1]
+            return "*not set*"
+
+        if _team_summary == "A":
+            _times_value = f"Team A: {_slot_blurb(_a_idx)}"
+        elif _team_summary == "B":
+            _times_value = f"Team B: {_slot_blurb(_b_idx)}"
+        else:
+            _times_value = (
+                f"Team A: {_slot_blurb(_a_idx)} · "
+                f"Team B: {_slot_blurb(_b_idx)}"
+            )
+        fields.insert(2, ("Team Times", _times_value))
         emoji = "⚔️" if event_type == "DS" else "🏜️"
         proceed = await ask_proceed_with_existing_config(
             channel,
@@ -4616,16 +4694,27 @@ async def run_storm_setup(interaction: discord.Interaction, bot, event_type: str
 
     await channel.send(f"⚙️ **{label} Setup**")
 
-    is_premium_flag = await premium.is_premium(guild_id, interaction=interaction)
+    is_premium_flag = await premium.is_premium(guild_id, interaction=interaction, bot=interaction.client)
 
     # ── Step 1: Sheet tab ──────────────────────────────────────────────────────
-    hardcoded_tab = "DS Assignments" if event_type == "DS" else "CS Assignments"
+    # When Member Sync is enabled, default to the alliance's Member
+    # Sync tab name (typically "Member Roster") — that's the canonical
+    # roster location for everything else in the bot, so suggesting the
+    # same tab here keeps the alliance's mental model coherent. Falls
+    # back to the legacy `DS Assignments` / `CS Assignments` default
+    # when Member Sync isn't configured yet.
+    from config import get_member_roster_config as _gmrc_step1
+    _sync_cfg_step1 = _gmrc_step1(guild_id) if guild_id else {}
+    if _sync_cfg_step1.get("enabled"):
+        hardcoded_tab = _sync_cfg_step1.get("tab_name") or "Member Roster"
+    else:
+        hardcoded_tab = "DS Assignments" if event_type == "DS" else "CS Assignments"
     tab_name = await ask_keep_or_change(
         channel,
-        f"**Step 1 of 7 — Sheet Tab**\n"
+        f"**Step 1 of 9: Sheet Tab**\n"
         f"Which tab in your Google Sheet stores the {label} zone assignments?\n"
         f"⚠️ *Make sure this tab exists in your sheet before continuing.*\n"
-        f"ℹ️ *The bot will manage the data structure of this tab automatically — "
+        f"ℹ️ *The bot will manage the data structure of this tab automatically. "
         f"you don't need to set up any specific columns or formatting beforehand.*",
         default=hardcoded_tab,
         current=current.get("tab_name", ""),
@@ -4638,6 +4727,26 @@ async def run_storm_setup(interaction: discord.Interaction, bot, event_type: str
         return
 
     # ── Step 2: Which teams? ───────────────────────────────────────────────────
+    saved_teams_raw = (current.get("teams") or "both").strip()
+    saved_teams = saved_teams_raw if saved_teams_raw in ("both", "A", "B") else "both"
+    _team_blurb = {
+        "both": "Team A & Team B",
+        "A":    "Team A only",
+        "B":    "Team B only",
+    }
+
+    # Capture the prompt so the button callbacks can preserve it in the
+    # edited message — otherwise the question disappears the moment a
+    # button is clicked and officers scrolling back to review what they
+    # answered see only the bare confirmation line.
+    team_prompt = (
+        f"**Step 2 of 9: Which teams do you run for {label}?**"
+        + (
+            f"\nCurrent: **{_team_blurb[saved_teams]}**"
+            if storm_already_configured else ""
+        )
+    )
+
     class TeamChoiceView(discord.ui.View):
         def __init__(self):
             super().__init__(timeout=120)
@@ -4647,28 +4756,66 @@ async def run_storm_setup(interaction: discord.Interaction, bot, event_type: str
         async def both(self, inter: discord.Interaction, button: discord.ui.Button):
             self.selected = "both"
             for item in self.children: item.disabled = True
-            await wizard_registry.safe_edit_response(inter, content="✅ Teams: **Team A & Team B**", view=self)
+            await wizard_registry.safe_edit_response(
+                inter,
+                content=f"{team_prompt}\n\n✅ Teams: **Team A & Team B**",
+                view=self,
+            )
             self.stop()
 
         @discord.ui.button(label="Team A only", style=discord.ButtonStyle.secondary)
         async def a_only(self, inter: discord.Interaction, button: discord.ui.Button):
             self.selected = "A"
             for item in self.children: item.disabled = True
-            await wizard_registry.safe_edit_response(inter, content="✅ Teams: **Team A only**", view=self)
+            await wizard_registry.safe_edit_response(
+                inter,
+                content=f"{team_prompt}\n\n✅ Teams: **Team A only**",
+                view=self,
+            )
             self.stop()
 
         @discord.ui.button(label="Team B only", style=discord.ButtonStyle.secondary)
         async def b_only(self, inter: discord.Interaction, button: discord.ui.Button):
             self.selected = "B"
             for item in self.children: item.disabled = True
-            await wizard_registry.safe_edit_response(inter, content="✅ Teams: **Team B only**", view=self)
+            await wizard_registry.safe_edit_response(
+                inter,
+                content=f"{team_prompt}\n\n✅ Teams: **Team B only**",
+                view=self,
+            )
+            self.stop()
+
+        # Re-entry: keep the previously-saved choice without re-clicking.
+        # Surface the actual saved selection on the button label (set in
+        # post-construction below) so officers can see at a glance what
+        # "Keep current" would preserve. Removed entirely when the
+        # alliance has no saved value yet (fresh setup).
+        @discord.ui.button(label="Keep current", style=discord.ButtonStyle.success)
+        async def keep_current(self, inter: discord.Interaction, button: discord.ui.Button):
+            self.selected = saved_teams
+            for item in self.children: item.disabled = True
+            await wizard_registry.safe_edit_response(
+                inter,
+                content=(
+                    f"{team_prompt}\n\n"
+                    f"✅ Teams: **{_team_blurb[saved_teams]}** (kept current)"
+                ),
+                view=self,
+            )
             self.stop()
 
     team_view = TeamChoiceView()
-    await channel.send(
-        f"**Step 2 of 7 — Which teams do you run for {label}?**",
-        view=team_view,
-    )
+    if storm_already_configured:
+        # Surface the saved value on the Keep current button so the
+        # officer can see what would be preserved without reading the
+        # prompt — mirrors the convention used by `ask_keep_or_change`.
+        team_view.keep_current.label = (
+            f"✅ Keep current: {_team_blurb[saved_teams]}"[:80]
+        )
+    else:
+        # Hide Keep current on fresh setup — there's no current value to keep.
+        team_view.remove_item(team_view.keep_current)
+    await channel.send(team_prompt, view=team_view)
     await wait_view_or_cancel(team_view, cancel_event)
     if team_view.cancelled:
         return
@@ -4677,7 +4824,120 @@ async def run_storm_setup(interaction: discord.Interaction, bot, event_type: str
         return
     teams = team_view.selected
 
-    # ── Step 3: Storm log channel ─────────────────────────────────────────────
+    # ── Step 3: Team time slots (#251) ────────────────────────────────────────
+    # DS / CS each have two game-defined time slots; this step records
+    # which slot each team the alliance runs is on. Both teams can pick
+    # the same slot. Independent per event type. The mapping is the
+    # default for every weekly sign-up; the officer can override it for
+    # a single week when posting that week's sign-up.
+    from config import get_storm_slot_labels
+    slot_labels = get_storm_slot_labels(event_type, guild_id)
+    saved_a_idx = current.get("team_a_slot_index")
+    saved_b_idx = current.get("team_b_slot_index")
+
+    async def pick_team_slot(team_letter: str, saved_idx):
+        """Single-team slot picker. Returns 1 / 2 (selected), or None on
+        cancel / timeout. `saved_idx` drives whether Keep current renders."""
+        current_line = (
+            f"\nCurrent: **{slot_labels[saved_idx - 1]}**"
+            if saved_idx in (1, 2) else ""
+        )
+        # Capture the prompt so each button callback can echo it in the
+        # edited message — keeps the original question visible when the
+        # officer scrolls back to review what they chose, instead of
+        # leaving only the bare confirmation line.
+        slot_prompt = (
+            f"Which time slot does **Team {team_letter}** run for {label}?"
+            + current_line
+        )
+
+        class TeamSlotView(discord.ui.View):
+            def __init__(self):
+                super().__init__(timeout=180)
+                self.selected = None
+
+            @discord.ui.button(label=slot_labels[0], style=discord.ButtonStyle.primary)
+            async def slot1(self, inter: discord.Interaction, button: discord.ui.Button):
+                self.selected = 1
+                for item in self.children: item.disabled = True
+                await wizard_registry.safe_edit_response(
+                    inter,
+                    content=(
+                        f"{slot_prompt}\n\n"
+                        f"✅ Team {team_letter}: **{slot_labels[0]}**"
+                    ),
+                    view=self,
+                )
+                self.stop()
+
+            @discord.ui.button(label=slot_labels[1], style=discord.ButtonStyle.primary)
+            async def slot2(self, inter: discord.Interaction, button: discord.ui.Button):
+                self.selected = 2
+                for item in self.children: item.disabled = True
+                await wizard_registry.safe_edit_response(
+                    inter,
+                    content=(
+                        f"{slot_prompt}\n\n"
+                        f"✅ Team {team_letter}: **{slot_labels[1]}**"
+                    ),
+                    view=self,
+                )
+                self.stop()
+
+            @discord.ui.button(label="Keep current", style=discord.ButtonStyle.success)
+            async def keep_current(self, inter: discord.Interaction, button: discord.ui.Button):
+                self.selected = saved_idx
+                for item in self.children: item.disabled = True
+                kept_label = slot_labels[saved_idx - 1] if saved_idx in (1, 2) else "—"
+                await wizard_registry.safe_edit_response(
+                    inter,
+                    content=(
+                        f"{slot_prompt}\n\n"
+                        f"✅ Team {team_letter}: **{kept_label}** (kept current)"
+                    ),
+                    view=self,
+                )
+                self.stop()
+
+        view = TeamSlotView()
+        if saved_idx not in (1, 2):
+            view.remove_item(view.keep_current)
+        else:
+            # Surface the saved slot on the Keep current button so the
+            # officer can see what would be preserved without reading
+            # back through the prompt — matches the convention used by
+            # `ask_keep_or_change` elsewhere in the wizard.
+            view.keep_current.label = (
+                f"✅ Keep current: {slot_labels[saved_idx - 1]}"[:80]
+            )
+        await channel.send(slot_prompt, view=view)
+        await wait_view_or_cancel(view, cancel_event)
+        if view.cancelled:
+            return None
+        if not view.selected:
+            await channel.send(f"⏰ Timed out. Run `/{cmd_name}` to start again.")
+            return None
+        return view.selected
+
+    await channel.send(
+        f"**Step 3 of 9: Team Time Slots**\n"
+        f"Select the time when you typically run each {label} team. "
+        f"You can override these for a single week when you send out the "
+        f"sign up, if needed."
+    )
+
+    team_a_slot = None
+    team_b_slot = None
+    if teams in ("both", "A"):
+        team_a_slot = await pick_team_slot("A", saved_a_idx)
+        if team_a_slot is None:
+            return
+    if teams in ("both", "B"):
+        team_b_slot = await pick_team_slot("B", saved_b_idx)
+        if team_b_slot is None:
+            return
+
+    # ── Step 4: Storm log channel ─────────────────────────────────────────────
     # Reused by /[event]_log lookups and by the participation flow when
     # leadership posts the participation summary.
     log_ch_view = ChannelSelectStep(
@@ -4693,7 +4953,7 @@ async def run_storm_setup(interaction: discord.Interaction, bot, event_type: str
             "Pick a new one below."
         )
     await channel.send(
-        f"**Step 3 of 7 — Storm Log Channel**\n"
+        f"**Step 4 of 9: Storm Log Channel**\n"
         f"Select the channel where {label} participation/log summaries will be posted:",
         view=log_ch_view,
     )
@@ -4705,7 +4965,7 @@ async def run_storm_setup(interaction: discord.Interaction, bot, event_type: str
         return
     log_channel_id = log_ch_view.selected_channel.id
 
-    # ── Step 4: Post channel (where /[event]_draft posts the final mail) ─────
+    # ── Step 4: Post channel (where 📄 Generate mail posts the final mail) ───
     post_ch_view = ChannelSelectStep(
         f"Select the {label} mail post channel...",
         suggested_name=f"{'desert' if event_type == 'DS' else 'canyon'}-storm",
@@ -4718,11 +4978,12 @@ async def run_storm_setup(interaction: discord.Interaction, bot, event_type: str
             f"⚠️ Your previously configured {label} mail post channel no longer exists. "
             "Pick a new one below."
         )
+    parent_cmd = "desertstorm" if event_type == "DS" else "canyonstorm"
     await channel.send(
-        f"**Step 4 of 7 — Mail Post Channel**\n"
-        f"When leadership clicks **Post & Copy** at the end of `/"
-        f"{'desertstorm' if event_type == 'DS' else 'canyonstorm'}_draft`, "
-        f"the finished mail will be posted to this channel:",
+        f"**Step 5 of 9: Mail Post Channel**\n"
+        f"When leadership clicks **Post & Copy** at the end of "
+        f"`/{parent_cmd}` → **📄 Generate mail**, the finished mail "
+        f"will be posted to this channel:",
         view=post_ch_view,
     )
     await wait_view_or_cancel(post_ch_view, cancel_event)
@@ -4735,70 +4996,140 @@ async def run_storm_setup(interaction: discord.Interaction, bot, event_type: str
 
     # ── Step 5: Mail template(s) ───────────────────────────────────────────────
 
-    async def get_template(team_label: str) -> str | None:
-        """Get template for one team — show default with use/edit choice."""
+    async def get_template(team_label: str, saved_template: str = "") -> str | None:
+        """Get template for one team — show default with use/edit choice.
+
+        When `saved_template` is a non-empty body that differs from the
+        hardcoded default, render a 3-button view (Keep current / Use
+        default / Edit) so re-entering officers can preserve their
+        custom body. Pre-#231 the only options were Use default (which
+        silently overwrote the saved custom) and Edit (which forced a
+        re-paste from scratch).
+        """
+        saved_is_custom = bool(saved_template) and saved_template != default_template
+
         class TemplateChoiceView(discord.ui.View):
             def __init__(self):
                 super().__init__(timeout=300)
-                self.use_default = None
+                self.outcome: str | None = None  # "keep" | "default" | "edit"
 
-            @discord.ui.button(label="✅ Use default template", style=discord.ButtonStyle.success)
-            async def use_def(self, inter: discord.Interaction, button: discord.ui.Button):
-                self.use_default = True
+            # Re-entry only — only added when saved_is_custom.
+            @discord.ui.button(label="✅ Keep current custom template", style=discord.ButtonStyle.success)
+            async def keep(self, inter: discord.Interaction, button: discord.ui.Button):
+                self.outcome = "keep"
                 for item in self.children: item.disabled = True
                 await wizard_registry.safe_edit_response(
                     inter,
-                    content=f"✅ Using default template for {team_label}.", view=self
+                    content=f"✅ Keeping your saved custom template for {team_label}.", view=self
                 )
+                self.stop()
+
+            @discord.ui.button(label="↩️ Use default template", style=discord.ButtonStyle.secondary)
+            async def use_def(self, inter: discord.Interaction, button: discord.ui.Button):
+                self.outcome = "default"
+                for item in self.children: item.disabled = True
+                msg = (
+                    f"✅ Reverted to default template for {team_label}."
+                    if saved_is_custom else
+                    f"✅ Using default template for {team_label}."
+                )
+                await wizard_registry.safe_edit_response(inter, content=msg, view=self)
                 self.stop()
 
             @discord.ui.button(label="✏️ Edit template", style=discord.ButtonStyle.secondary)
             async def edit(self, inter: discord.Interaction, button: discord.ui.Button):
-                self.use_default = False
+                self.outcome = "edit"
                 for item in self.children: item.disabled = True
                 await wizard_registry.safe_edit_response(inter, view=self)
                 self.stop()
 
         choice_view = TemplateChoiceView()
+        if not saved_is_custom:
+            # First-time / saved-equals-default — drop the Keep current
+            # button and let the default-color Use default button act as
+            # the success default like the pre-#231 view.
+            choice_view.remove_item(choice_view.keep)
+            choice_view.use_def.style = discord.ButtonStyle.success
+
+        custom_block = (
+            f"\n\nHere is your saved custom template:\n```\n{saved_template}\n```"
+            if saved_is_custom else ""
+        )
+        question = (
+            "Would you like to keep your custom template, revert to the default, or edit it?"
+            if saved_is_custom else
+            "Would you like to use this or edit it?"
+        )
         await channel.send(
-            f"**{label} Mail Template — {team_label}**\n"
+            f"**{label} Mail Template: {team_label}**\n"
             f"When you draft the mail each week, you will be able to select the time slot "
             f"when you are running that team's {label}.\n\n"
             f"Here is the default template:\n"
-            f"```\n{default_template}\n```\n"
-            f"Would you like to use this or edit it?",
+            f"```\n{default_template}\n```"
+            f"{custom_block}\n\n"
+            f"{question}",
             view=choice_view,
         )
         await wait_view_or_cancel(choice_view, cancel_event)
         if choice_view.cancelled:
             return
-        if choice_view.use_default is None:
+        if choice_view.outcome is None:
             await channel.send(f"⏰ Timed out. Run `/{cmd_name}` to start again.")
             return None
-        if choice_view.use_default:
+        if choice_view.outcome == "keep":
+            return saved_template
+        if choice_view.outcome == "default":
             return default_template
 
-        # User wants to edit — show variables and ask for input
+        # User wants to edit — show variables and ask for input. When a
+        # custom body is saved, point them at it as the natural starting
+        # point so they can copy-modify instead of typing from scratch.
+        reference_label = "current custom" if saved_is_custom else "default"
         await channel.send(
             f"Paste your custom template for **{team_label}**. "
-            f"You can copy the default above and modify it, or write your own.\n\n"
+            f"You can copy the {reference_label} above and modify it, or write your own.\n\n"
             f"**Available placeholders:**\n{placeholder_info}\n\n"
             f"*This form will time out in 5 minutes. "
             f"You can run `/{cmd_name}` again if it times out.*"
         )
         try:
             reply = await bot.wait_for("message", check=check, timeout=300)
-            return reply.content.strip() or default_template
+            fallback = saved_template if saved_is_custom else default_template
+            return reply.content.strip() or fallback
         except asyncio.TimeoutError:
             await channel.send(f"⏰ Timed out. Run `/{cmd_name}` to start again.")
             return None
 
     if teams == "both":
-        # Ask if one template for both or separate
+        # Derive saved shared-vs-separate from per-team rows so re-entry
+        # offers Keep current instead of forcing officers to re-pick
+        # (#231). Only resolvable when BOTH team rows have non-empty
+        # bodies — switching from A-only / B-only to both is first-time
+        # for the shared/separate decision.
+        if saved_template_a and saved_template_b:
+            saved_share_mode = (
+                "shared" if saved_template_a == saved_template_b else "separate"
+            )
+        else:
+            saved_share_mode = None
+
         class SharedTemplateView(discord.ui.View):
             def __init__(self):
                 super().__init__(timeout=120)
                 self.selected = None
+
+            # Re-entry only — removed when saved_share_mode is None.
+            @discord.ui.button(label="Keep current", style=discord.ButtonStyle.success)
+            async def keep_current(self, inter: discord.Interaction, button: discord.ui.Button):
+                self.selected = saved_share_mode
+                for item in self.children: item.disabled = True
+                ack = (
+                    "✅ Kept current: **One shared template** for Team A & B"
+                    if saved_share_mode == "shared" else
+                    "✅ Kept current: **Separate templates** for Team A & Team B"
+                )
+                await wizard_registry.safe_edit_response(inter, content=ack, view=self)
+                self.stop()
 
             @discord.ui.button(label="One template for both teams", style=discord.ButtonStyle.primary)
             async def shared(self, inter: discord.Interaction, button: discord.ui.Button):
@@ -4821,11 +5152,25 @@ async def run_storm_setup(interaction: discord.Interaction, bot, event_type: str
                 self.stop()
 
         shared_view = SharedTemplateView()
-        await channel.send(
-            "**Step 5 of 7 — Mail Template**\n"
+        if saved_share_mode is None:
+            shared_view.remove_item(shared_view.keep_current)
+        else:
+            shared_view.keep_current.label = (
+                "✅ Keep current: One shared template"
+                if saved_share_mode == "shared" else
+                "✅ Keep current: Separate templates"
+            )
+        prompt_lines = [
+            "**Step 6 of 9: Mail Template**",
             "Do you want one template that applies to both teams, or separate templates per team?",
-            view=shared_view,
-        )
+        ]
+        if saved_share_mode is not None:
+            prompt_lines.append(
+                "Current: **"
+                + ("One shared template" if saved_share_mode == "shared" else "Separate templates")
+                + "**."
+            )
+        await channel.send("\n".join(prompt_lines), view=shared_view)
         await wait_view_or_cancel(shared_view, cancel_event)
         if shared_view.cancelled:
             return
@@ -4833,20 +5178,31 @@ async def run_storm_setup(interaction: discord.Interaction, bot, event_type: str
             await channel.send(f"⏰ Timed out. Run `/{cmd_name}` to start again.")
             return
 
-        template_a = await get_template("Team A & B" if shared_view.selected == "shared" else "Team A")
-        if template_a is None:
-            return
-        if shared_view.selected == "separate":
-            template_b = await get_template("Team B")
+        if shared_view.selected == "shared":
+            # Shared mode — feed the saved A template (equal to B on a
+            # prior shared save) as the Keep-current candidate. When the
+            # prior save was separate, leave it blank so the user gets a
+            # first-time template prompt for the new shared body.
+            shared_saved = saved_template_a if saved_share_mode == "shared" else ""
+            template_a = await get_template("Team A & B", saved_template=shared_saved)
+            if template_a is None:
+                return
+            template_b = template_a
+        else:
+            template_a = await get_template("Team A", saved_template=saved_template_a)
+            if template_a is None:
+                return
+            template_b = await get_template("Team B", saved_template=saved_template_b)
             if template_b is None:
                 return
-        else:
-            template_b = template_a
 
     else:
         team_label = "Team A" if teams == "A" else "Team B"
-        await channel.send("**Step 5 of 7 — Mail Template**")
-        template = await get_template(team_label)
+        # Single-team mode — only the saved row for the picked team is
+        # relevant; the other side stays empty.
+        saved_for_team = saved_template_a if teams == "A" else saved_template_b
+        await channel.send("**Step 6 of 9: Mail Template**")
+        template = await get_template(team_label, saved_template=saved_for_team)
         if template is None:
             return
         template_a = template if teams == "A" else ""
@@ -4861,20 +5217,34 @@ async def run_storm_setup(interaction: discord.Interaction, bot, event_type: str
     if participation_cfg is None:
         return  # cancelled / timed out
 
+    # ── Structured roster flow (#38 + #54) — Premium opt-in + preset tabs ────
+    structured_cfg = await _run_structured_flow_setup_step(
+        channel, bot, user, cancel_event,
+        guild_id=guild_id, event_type=event_type, label=label, cmd_name=cmd_name,
+        is_premium_flag=is_premium_flag,
+        current=current, current_structured=current_structured,
+        interaction_guild=interaction.guild,
+    )
+    if structured_cfg is None:
+        return  # cancelled / timed out
+
     # ── Step 7: Reminder DM body (💎 Premium) ─────────────────────────────────
-    # The body of the DM that fires when leadership runs
-    # /[event]_remind. Stored per (guild_id, event_type) so DS and CS
-    # can have different copy. Free guilds can configure this now too —
-    # it just won't fire until they upgrade.
+    # The body of the DM that fires when leadership clicks
+    # 🔔 Send DM reminder to roster on the storm hub. Stored per
+    # (guild_id, event_type) so DS and CS can have different copy. Free
+    # guilds can configure this now too — it just won't fire until they
+    # upgrade.
     from storm_log import DEFAULT_STORM_REMINDER_DM
     default_remind_dm = DEFAULT_STORM_REMINDER_DM.format(label=label)
     saved_remind_dm   = (current.get("dm_reminder_message") or "").strip()
+    parent_cmd = "desertstorm" if event_type == "DS" else "canyonstorm"
     remind_dm = await ask_keep_or_change(
         channel,
-        f"**Step 7 of 7 — {label} Reminder DM (💎 Premium)**\n"
-        f"When leadership runs `/{cmd_name.replace('setup_', '')}_remind`, the bot DMs every "
-        f"roster member this message. Free guilds can configure it now — it just won't "
-        f"fire until you have Premium + Member Roster Sync.\n\n"
+        f"**Step 9 of 9: {label} Reminder DM (💎 Premium)**\n"
+        f"When leadership clicks **🔔 Send DM reminder to roster** on "
+        f"`/{parent_cmd}`, the bot DMs every roster member this message. "
+        f"Free guilds can configure it now; it just won't fire until "
+        f"you have Premium + Member Sync.\n\n"
         f"Use `{{name}}` as a placeholder for the member's roster name (optional).",
         default=default_remind_dm,
         current=saved_remind_dm,
@@ -4891,21 +5261,40 @@ async def run_storm_setup(interaction: discord.Interaction, bot, event_type: str
     dm_reminder_message = "" if remind_dm == default_remind_dm else remind_dm
 
     # ── Save ───────────────────────────────────────────────────────────────────
-    from config import save_storm_config, save_participation_config, update_config_field
+    from config import (
+        save_storm_config, save_participation_config, update_config_field,
+        save_structured_storm_config, save_storm_team_slots,
+    )
+    # `teams` carries the wizard's Step 2 choice ('both' / 'A' / 'B') so
+    # the strategy preset editor can hide Min Power inputs for a team the
+    # alliance doesn't run (#148). CS rows store 'both' and ignore it.
+    teams_persisted = teams if event_type == "DS" else "both"
     if template_a:
         save_storm_config(guild_id, f"{event_type}_A", tab_name, template_a,
                           timezone, log_channel_id,
                           post_channel_id=post_channel_id,
-                          dm_reminder_message=dm_reminder_message)
+                          dm_reminder_message=dm_reminder_message,
+                          teams=teams_persisted)
     if template_b:
         save_storm_config(guild_id, f"{event_type}_B", tab_name, template_b,
                           timezone, log_channel_id,
                           post_channel_id=post_channel_id,
-                          dm_reminder_message=dm_reminder_message)
+                          dm_reminder_message=dm_reminder_message,
+                          teams=teams_persisted)
     save_storm_config(guild_id, event_type, tab_name, template_a or template_b,
                       timezone, log_channel_id,
                       post_channel_id=post_channel_id,
-                      dm_reminder_message=dm_reminder_message)
+                      dm_reminder_message=dm_reminder_message,
+                      teams=teams_persisted)
+
+    # Persist the per-team slot mapping (#251). Kept separate from
+    # save_storm_config so this step can be re-run without re-typing the
+    # rest of the config — same precedent as save_structured_storm_config.
+    save_storm_team_slots(
+        guild_id, event_type,
+        team_a_slot_index=team_a_slot,
+        team_b_slot_index=team_b_slot,
+    )
 
     # Persist the participation config to the (guild, event_type) row.
     save_participation_config(
@@ -4925,9 +5314,61 @@ async def run_storm_setup(interaction: discord.Interaction, bot, event_type: str
     else:
         update_config_field(guild_id, "cs_log_channel_id", log_channel_id)
 
+    # Persist the structured-flow config (#38 + #54) against the (guild,
+    # event_type) row save_storm_config just created/updated above. The
+    # registration-post schedule is set in #124; left blank here.
+    # Roster DM templates (#226 follow-up) — stored on the same
+    # guild_storm_config row but written via a separate helper so
+    # save_structured_storm_config's signature stays focused. Empty
+    # strings persist as "fall back to the hardcoded default at send
+    # time."
+    from config import save_roster_dm_templates
+    save_roster_dm_templates(
+        guild_id, event_type,
+        starter   =structured_cfg.get("roster_dm_starter_template", ""),
+        paired_sub=structured_cfg.get("roster_dm_paired_sub_template", ""),
+        pool_sub  =structured_cfg.get("roster_dm_pool_sub_template", ""),
+    )
+
+    save_structured_storm_config(
+        guild_id, event_type,
+        structured_flow_enabled=structured_cfg["structured_flow_enabled"],
+        power_metric_column    =structured_cfg.get("power_metric_column", "B"),
+        power_metric_tab       =structured_cfg.get("power_metric_tab", ""),
+        power_match_column     =structured_cfg.get("power_match_column", ""),
+        sub_mode               =structured_cfg["sub_mode"],
+        signup_channel_id      =structured_cfg["signup_channel_id"],
+        signup_schedule_cron   =structured_cfg.get("signup_schedule_cron", ""),
+        signups_tab            =structured_cfg["signups_tab"],
+        rosters_tab            =structured_cfg["rosters_tab"],
+        attendance_tab         =structured_cfg["attendance_tab"],
+        strategies_tab         =structured_cfg["strategies_tab"],
+        member_rules_tab       =structured_cfg["member_rules_tab"],
+        poll_day_of_week       =structured_cfg.get("poll_day_of_week", -1),
+        signup_time            =structured_cfg.get("signup_time", ""),
+        power_refresh_dm_enabled=bool(structured_cfg.get("power_refresh_dm_enabled", False)),
+    )
+
     embed = discord.Embed(title=f"✅ {label} Configured", color=discord.Color.green())
     embed.add_field(name="Sheet Tab",    value=tab_name, inline=True)
     embed.add_field(name="Teams",        value={"both": "A & B", "A": "A only", "B": "B only"}[teams], inline=True)
+    # Team time-slot mapping (#251) — surfaced inline alongside the
+    # other event-shape fields so officers can confirm their slot picks
+    # made it through the wizard.
+    def _slot_lbl(idx):
+        if idx in (1, 2) and len(slot_labels) >= idx:
+            return slot_labels[idx - 1]
+        return "—"
+    if teams == "A":
+        embed.add_field(name="Team Times", value=f"A: {_slot_lbl(team_a_slot)}", inline=False)
+    elif teams == "B":
+        embed.add_field(name="Team Times", value=f"B: {_slot_lbl(team_b_slot)}", inline=False)
+    else:
+        embed.add_field(
+            name="Team Times",
+            value=f"A: {_slot_lbl(team_a_slot)} · B: {_slot_lbl(team_b_slot)}",
+            inline=False,
+        )
     embed.add_field(name="Timezone",     value=tz_label, inline=True)
     embed.add_field(name="Log Channel",  value=f"<#{log_channel_id}>", inline=True)
     embed.add_field(name="Post Channel", value=f"<#{post_channel_id}>", inline=True)
@@ -4941,6 +5382,36 @@ async def run_storm_setup(interaction: discord.Interaction, bot, event_type: str
         )
     else:
         embed.add_field(name="Participation Tracking", value="❌ Disabled", inline=False)
+    if structured_cfg["structured_flow_enabled"]:
+        _pwr_letter = structured_cfg.get("power_metric_column", "B")
+        _pwr_tab = structured_cfg.get("power_metric_tab", "") or ""
+        _pwr_match = structured_cfg.get("power_match_column", "") or ""
+        if _pwr_tab:
+            power_blurb = (
+                f"Power source: `{_pwr_tab}` · column `{_pwr_letter}`"
+                + (f" · matched by `{_pwr_match}`" if _pwr_match else "")
+            )
+        else:
+            power_blurb = f"Power column: `{_pwr_letter}`"
+        signup_blurb = (
+            f" · Sign-up channel: <#{structured_cfg['signup_channel_id']}>"
+            if structured_cfg["signup_channel_id"] else ""
+        )
+        embed.add_field(
+            name="Structured Roster Flow",
+            value=(
+                f"✅ Enabled · {power_blurb} · "
+                f"Sub mode: `{structured_cfg['sub_mode']}`"
+                f"{signup_blurb}"
+            ),
+            inline=False,
+        )
+    else:
+        embed.add_field(
+            name="Structured Roster Flow",
+            value=f"❌ Disabled · Preset tabs: `{structured_cfg['strategies_tab']}` / `{structured_cfg['member_rules_tab']}`",
+            inline=False,
+        )
     if template_a:
         embed.add_field(name="Template A Preview",
                         value=f"```{template_a[:150]}{'...' if len(template_a) > 150 else ''}```",
@@ -4951,6 +5422,45 @@ async def run_storm_setup(interaction: discord.Interaction, bot, event_type: str
                         inline=False)
     embed.set_footer(text=f"Run /{cmd_name} again to update.")
     await channel.send(embed=embed)
+
+    # ── Inline "post first sign-up" offer (#144) ─────────────────────────
+    #
+    # Fires only when the structured flow is opted in, a sign-up channel
+    # is configured, and no sign-up post has been recorded yet for this
+    # guild + event type. Whether auto-scheduling was configured or
+    # skipped, this gives the alliance one fully-live sign-up post right
+    # at the end of setup — the discovery surface #144 is closing.
+    if (
+        structured_cfg["structured_flow_enabled"]
+        and structured_cfg.get("signup_channel_id")
+    ):
+        try:
+            import config as _config
+            with _config._get_conn() as conn:
+                already_posted = conn.execute(
+                    "SELECT 1 FROM storm_registration_posts "
+                    "WHERE guild_id = ? AND event_type = ? LIMIT 1",
+                    (guild_id, event_type),
+                ).fetchone() is not None
+        except Exception:
+            already_posted = True  # err on the side of not nagging
+        if not already_posted:
+            parent = "desertstorm" if event_type == "DS" else "canyonstorm"
+            post_offer = _InlinePostFirstSignupOffer(
+                owner_id=user.id, bot=bot, guild_id=guild_id,
+                event_type=event_type, parent=parent, label=label,
+            )
+            post_offer.message = await channel.send(
+                f"📣 Want to post your first {label} sign-up now? "
+                f"It'll land in <#{structured_cfg['signup_channel_id']}> "
+                f"with vote buttons members can click. You can also wait "
+                f"for the auto-schedule to post it (if you set one up) "
+                f"or run `{HUB_COMMAND[event_type]}` and click "
+                f"**{HUB_BTN_POST_SIGNUP}** later.",
+                view=post_offer,
+            )
+            await wait_view_or_cancel(post_offer, cancel_event)
+
     wizard_registry.unregister(user.id, cancel_event)
     print(f"[SETUP] {label} config saved for guild {guild_id}")
 
@@ -4960,17 +5470,245 @@ async def run_storm_setup(interaction: discord.Interaction, bot, event_type: str
 # Free-tier question types are universally available; Premium types are gated
 # in the wizard. `roster_names` is unique to participation logs — it draws
 # from the roster source the user configures here.
-_PARTICIPATION_FREE_TYPES = ["text", "yes_no", "numeric", "roster_names"]
-_PARTICIPATION_PREMIUM_TYPES = ["single_select", "multi_select", "date"]
+#
+# #244: `roster_multi_select` and `derived_count` are new per-member capture
+# types. They write to the new `DS Member Log` / `CS Member Log` Sheet tab
+# (one row per (event_date, member)) so the Trends Viewer in #246 can
+# aggregate across events. `roster_names` keeps working unchanged for
+# alliances on the legacy free-text-list pattern.
+_PARTICIPATION_FREE_TYPES = [
+    "text", "yes_no", "numeric", "roster_names", "roster_multi_select",
+]
+_PARTICIPATION_PREMIUM_TYPES = [
+    "single_select", "multi_select", "date", "derived_count",
+]
 _PARTICIPATION_TYPE_LABELS = {
-    "text":          "Text — short typed answer",
+    "text":          "Text: short typed answer",
     "yes_no":        "Yes / No",
-    "numeric":       "Numeric — number with optional min/max",
-    "roster_names":  "Roster names — pick or type member names",
+    "numeric":       "Numeric: number with optional min/max",
+    "roster_names":  "Roster names: pick or type member names",
+    "roster_multi_select": "Roster multi-select: pick members from a dropdown",
     "single_select": "💎 Single-select dropdown",
     "multi_select":  "💎 Multi-select dropdown",
     "date":          "💎 Date (formatted entry)",
+    "derived_count": "💎 Derived count: bot counts past events per member",
 }
+
+# #244: question types that produce *per-member* data (one flag per
+# member per event) rather than *event-level* data (one answer per
+# event). These get written to the new `DS Member Log` / `CS Member
+# Log` Sheet tab instead of the existing participation log tab. Used
+# by `storm_log.run_log_flow` to branch the write paths.
+_PARTICIPATION_PER_MEMBER_TYPES = ("roster_multi_select", "derived_count")
+
+
+async def _run_participation_preset_picker_step(
+    channel, bot, user, cancel_event, *,
+    cmd_name: str,
+    is_premium_flag: bool,
+    existing_questions: list[dict],
+    cap: int | None,
+) -> list[dict] | None:
+    """#247 — multi-select preset picker for participation questions.
+
+    Returns the list of question dicts the officer picked (already
+    converted from preset shape via `defaults.preset_to_question`).
+    Empty list when the officer skipped or no presets remain.
+    `None` on timeout / cancel — caller propagates.
+
+    Filters out presets whose key is already in `existing_questions`
+    so re-running setup doesn't duplicate columns. When nothing is
+    left to offer, the function returns `[]` without bothering the
+    officer.
+    """
+    import wizard_registry
+    from defaults import (
+        storm_participation_presets, preset_to_question,
+    )
+
+    # Always show both tiers' presets so free-tier officers can see
+    # what Premium would unlock. The free-tier set is the base; the
+    # Premium-only set is appended with a 💎 prefix on the visible
+    # label so officers can tell them apart at a glance.
+    free_set = storm_participation_presets(is_premium=False)
+    full_set = storm_participation_presets(is_premium=True)
+    free_keys = {p["key"] for p in free_set}
+    existing_keys = {q.get("key") for q in existing_questions if q.get("key")}
+    # Available list = everything except already-configured. Premium
+    # presets stay in the visible list for free-tier users so they
+    # can see what's available; picking one fires the upsell ack.
+    available = [p for p in full_set if p["key"] not in existing_keys]
+    if not available:
+        return []
+
+    def _is_premium_only(p: dict) -> bool:
+        return p["key"] not in free_keys
+
+    # Default-check the presets marked `default_checked` in defaults.py
+    # (currently just "Did this member show up?"). Premium-only ones
+    # are never default-checked on free tier — defaulting to a 💎
+    # preset would force the upsell ack just for hitting Add.
+    default_checked = {
+        p["key"] for p in available
+        if p.get("default_checked")
+        and (is_premium_flag or not _is_premium_only(p))
+    }
+
+    class _PresetPickerView(discord.ui.View):
+        def __init__(self):
+            super().__init__(timeout=300)
+            self.action: str | None = None
+            self.selected: set[str] = set(default_checked)
+            self.cancelled = False
+
+            options = []
+            for p in available[:25]:  # Discord 25-option cap
+                emoji = p.get("emoji", "")
+                # Premium-only on free tier: 💎 prefix + a Premium hint
+                # in the description so officers can't miss it.
+                if _is_premium_only(p) and not is_premium_flag:
+                    label = f"💎 {emoji} {p['label']}"[:100]
+                    description = f"💎 Premium · {p.get('description', '')}"[:100]
+                else:
+                    label = f"{emoji} {p['label']}"[:100]
+                    description = p.get("description", "")[:100]
+                options.append(discord.SelectOption(
+                    label=label,
+                    value=p["key"],
+                    description=description,
+                    default=(p["key"] in default_checked),
+                ))
+            sel = discord.ui.Select(
+                placeholder="Pick the preset questions you want…",
+                options=options,
+                min_values=0,
+                max_values=min(len(options), 25),
+                row=0,
+            )
+
+            async def _on_select(inter: discord.Interaction):
+                self.selected = set(sel.values)
+                await inter.response.defer()
+
+            sel.callback = _on_select
+            self.add_item(sel)
+
+        @discord.ui.button(
+            label="✅ Add picked presets",
+            style=discord.ButtonStyle.success, row=1,
+        )
+        async def add(self, inter: discord.Interaction, _btn):
+            self.action = "add"
+            for c in self.children:
+                c.disabled = True
+            await wizard_registry.safe_edit_response(inter, view=self)
+            self.stop()
+
+        @discord.ui.button(
+            label="↩️ Skip presets",
+            style=discord.ButtonStyle.secondary, row=1,
+        )
+        async def skip(self, inter: discord.Interaction, _btn):
+            self.action = "skip"
+            for c in self.children:
+                c.disabled = True
+            await wizard_registry.safe_edit_response(inter, view=self)
+            self.stop()
+
+    prem_count_visible = sum(1 for p in available if _is_premium_only(p))
+    tier_note = ""
+    if is_premium_flag:
+        if prem_count_visible > 0:
+            tier_note = f"\n💎 *Includes {prem_count_visible} Premium preset(s).*"
+    else:
+        if prem_count_visible > 0:
+            tier_note = (
+                f"\n💎 *Presets marked with 💎 are Premium-only. Run "
+                f"`/upgrade` to unlock {prem_count_visible} additional "
+                f"preset(s).*"
+            )
+
+    view = _PresetPickerView()
+    await channel.send(
+        f"**Step 7.6: Use any preset questions?**\n"
+        f"Pre-configured templates for the common participation "
+        f"questions. Pick any you want and they'll land in your "
+        f"question list ready to use. You can still customise them "
+        f"later in the next step.{tier_note}",
+        view=view,
+    )
+    await wait_view_or_cancel(view, cancel_event)
+    if view.cancelled:
+        return None
+    if view.action is None:
+        await channel.send(f"⏰ Timed out. Run `/{cmd_name}` to start again.")
+        return None
+    if view.action == "skip" or not view.selected:
+        return []
+
+    # Drop Premium-only picks on free tier (the picker shows them as a
+    # teaser; selecting one surfaces the upsell). Officers can still
+    # pick the free presets in the same submission.
+    selected_in_order = [p for p in available if p["key"] in view.selected]
+    if not is_premium_flag:
+        premium_picks = [p for p in selected_in_order if _is_premium_only(p)]
+        if premium_picks:
+            labels = ", ".join(f"**{p['label']}**" for p in premium_picks)
+            await channel.send(
+                f"💎 *Skipped Premium-only preset(s):* {labels}. Run "
+                f"`/upgrade` to unlock them, then re-run setup to add."
+            )
+            selected_in_order = [
+                p for p in selected_in_order if not _is_premium_only(p)
+            ]
+        if not selected_in_order:
+            return []
+
+    # Enforce free-tier cap. Premium has no cap. Trim selections by
+    # cap-already-spent so officers don't accidentally land past it.
+    if cap is not None:
+        room = max(0, cap - len(existing_questions))
+        if room < len(selected_in_order):
+            await channel.send(
+                f"⚠️ Free tier caps participation questions at {cap}. "
+                f"You picked {len(selected_in_order)} preset(s), but only "
+                f"{room} fit. Added the first {room}; ignore or upgrade "
+                f"for the rest."
+            )
+            selected_in_order = selected_in_order[:room]
+
+    additions = [preset_to_question(p) for p in selected_in_order]
+
+    # Dependency check: derived_count presets reference a source
+    # question. Warn if the officer picked a derived_count without its
+    # source AND the source isn't already configured. The question
+    # still lands in the list — it'll just be inert until the source
+    # exists.
+    added_keys = {q["key"] for q in additions} | existing_keys
+    warnings: list[str] = []
+    for q in additions:
+        src = q.get("source_question_key")
+        if not src:
+            continue
+        if src in added_keys:
+            continue
+        # Find the source preset's friendly label, if any.
+        src_label = src
+        for p in storm_participation_presets(True):
+            if p["key"] == src:
+                src_label = p["label"]
+                break
+        warnings.append(
+            f"⚠️ **{q['label']}** needs the **{src_label}** question "
+            f"as its source. Pick that one too in the next step, or "
+            f"this column will stay empty until the source is added."
+        )
+    if warnings:
+        await channel.send("\n".join(warnings))
+
+    summary = ", ".join(f"**{q['label']}**" for q in additions)
+    await channel.send(f"✅ Added preset(s): {summary}")
+    return additions
 
 
 async def _run_storm_participation_step(
@@ -4979,7 +5717,7 @@ async def _run_storm_participation_step(
     is_premium_flag: bool, current: dict,
 ) -> dict | None:
     """
-    Step 6 of /setup_desertstorm and /setup_canyonstorm. Walks leadership
+    Step 6 of the storm setup wizard (DS + CS). Walks leadership
     through enabling/configuring participation log tracking. Returns a
     dict shaped like the one save_participation_config expects, or None
     if the user cancelled or timed out.
@@ -4991,26 +5729,48 @@ async def _run_storm_participation_step(
     import premium
 
     cur_part = get_participation_config(guild_id, event_type)
+    # Treat any prior saved row (enabled true OR disabled with config
+    # bits set) as "re-entry" so the Yes/No prompt offers Keep current
+    # instead of forcing the officer to re-pick. A pristine row has
+    # everything zero / empty.
+    part_previously_saved = (
+        bool(cur_part.get("enabled"))
+        or bool(cur_part.get("tab_name"))
+        or bool(cur_part.get("questions"))
+    )
 
     # ── 6.1 Enable? ────────────────────────────────────────────────────────────
-    enable_view = YesNoView()
-    await channel.send(
-        f"**Step 6 of 7 — Participation Tracking**\n"
-        f"Do you want to track {label} participation? Leadership runs "
-        f"`/{cmd_name.replace('setup_', '')}_participation` after each event "
-        f"to log who showed up, who sat out, etc.\n"
+    parent_cmd = "desertstorm" if event_type == "DS" else "canyonstorm"
+    enable_prompt = (
+        f"**Step 7 of 9: Participation Tracking**\n"
+        f"Do you want to track {label} participation? Leadership clicks "
+        f"**📊 Fill out participation questions** on `/{parent_cmd}` "
+        f"after each event to log who showed up, who sat out, etc.\n"
         f"You'll define the questions yourself, so the tracker matches how "
-        f"your alliance runs the event.",
-        view=enable_view,
+        f"your alliance runs the event."
     )
-    await wait_view_or_cancel(enable_view, cancel_event)
-    if enable_view.cancelled:
-        return None
-    if enable_view.selected is None:
-        await channel.send(f"⏰ Timed out. Run `/{cmd_name}` to start again.")
-        return None
+    if part_previously_saved:
+        gate = _KeepOrFlipYesNoGate(current_value=bool(cur_part.get("enabled")))
+        await channel.send(enable_prompt, view=gate)
+        await wait_view_or_cancel(gate, cancel_event)
+        if getattr(gate, "cancelled", False):
+            return None
+        if gate.value is None:
+            await channel.send(f"⏰ Timed out. Run `/{cmd_name}` to start again.")
+            return None
+        enable_selected = bool(gate.value)
+    else:
+        enable_view = YesNoView()
+        await channel.send(enable_prompt, view=enable_view)
+        await wait_view_or_cancel(enable_view, cancel_event)
+        if enable_view.cancelled:
+            return None
+        if enable_view.selected is None:
+            await channel.send(f"⏰ Timed out. Run `/{cmd_name}` to start again.")
+            return None
+        enable_selected = bool(enable_view.selected)
 
-    if not enable_view.selected:
+    if not enable_selected:
         # Disabled — keep the existing values around but mark off.
         return {
             "enabled":          0,
@@ -5026,7 +5786,7 @@ async def _run_storm_participation_step(
     hardcoded_tab = "DS Participation Log" if event_type == "DS" else "CS Participation Log"
     tab_name = await ask_keep_or_change(
         channel,
-        f"**Step 6.1 — Participation Sheet Tab**\n"
+        f"**Step 7.1: Participation Sheet Tab**\n"
         f"Which tab should the bot write {label} participation rows to?\n"
         f"ℹ️ *The bot will create this tab automatically if it doesn't exist "
         f"and will manage the column structure based on the questions you define.*",
@@ -5055,11 +5815,11 @@ async def _run_storm_participation_step(
     )
     roster_tab = await ask_keep_or_change(
         channel,
-        f"**Step 6.2 — Roster Source: Sheet Tab**\n"
+        f"**Step 7.2: Roster Source: Sheet Tab**\n"
         f"Which tab in your sheet has the list of members? The bot reads "
         f"member names from here when you use a `Roster names` question.\n"
-        f"*Tip: this is often the same tab you use for `/setup_survey` or "
-        f"`/setup_birthdays`.*",
+        f"*Tip: this is often the same tab you use for `/setup` → 📋 Survey or "
+        f"`/setup` → 🎂 Birthdays.*",
         default="Squad Powers",
         current=suggested_tab,
         modal_title="Roster Tab",
@@ -5073,7 +5833,7 @@ async def _run_storm_participation_step(
     saved_name_col_idx = cur_part.get("roster_name_col")
     raw_name_col = await ask_keep_or_change(
         channel,
-        f"**Step 6.3 — Roster Source: Name Column**\n"
+        f"**Step 7.3: Roster Source: Name Column**\n"
         f"Which column letter has the member name? (e.g. `A`, `B`, `E`)",
         default="A",
         current=(
@@ -5093,30 +5853,63 @@ async def _run_storm_participation_step(
         await channel.send(f"⚠️ `{raw_name_col}` isn't a valid column letter. Run `/{cmd_name}` to start again.")
         return None
 
-    alias_view = YesNoView()
-    await channel.send(
-        "**Step 6.4 — Roster Source: Alias Column?**\n"
+    # Re-entry: if the alliance previously configured a roster alias
+    # column (saved as >= 0) OR explicitly opted out (-1) on a prior
+    # save, surface the keep-or-flip gate instead of plain Yes/No.
+    saved_alias_idx = cur_part.get("roster_alias_col")
+    alias_was_previously_answered = (
+        part_previously_saved
+        and isinstance(saved_alias_idx, int)
+    )
+    alias_prompt = (
+        "**Step 7.4: Roster Source: Alias Column?**\n"
         "If you have other names or nicknames that you call your members in these "
         "mails, this helps resolve to their full name in your sheet automatically. "
-        "Do you have an alias column?",
-        view=alias_view,
+        "Do you have an alias column?"
     )
-    await wait_view_or_cancel(alias_view, cancel_event)
-    if alias_view.cancelled:
-        return None
-    if alias_view.selected is None:
-        await channel.send(f"⏰ Timed out. Run `/{cmd_name}` to start again.")
-        return None
+    if alias_was_previously_answered:
+        alias_gate = _KeepOrFlipYesNoGate(
+            current_value=(saved_alias_idx >= 0),
+        )
+        await channel.send(alias_prompt, view=alias_gate)
+        await wait_view_or_cancel(alias_gate, cancel_event)
+        if getattr(alias_gate, "cancelled", False):
+            return None
+        if alias_gate.value is None:
+            await channel.send(f"⏰ Timed out. Run `/{cmd_name}` to start again.")
+            return None
+        alias_selected = bool(alias_gate.value)
+    else:
+        alias_view = YesNoView()
+        await channel.send(alias_prompt, view=alias_view)
+        await wait_view_or_cancel(alias_view, cancel_event)
+        if alias_view.cancelled:
+            return None
+        if alias_view.selected is None:
+            await channel.send(f"⏰ Timed out. Run `/{cmd_name}` to start again.")
+            return None
+        alias_selected = bool(alias_view.selected)
 
     roster_alias_col = -1
-    if alias_view.selected:
+    if alias_selected:
         saved_alias = cur_part.get("roster_alias_col")
-        # Hardcoded default = column right after the name column (a sensible
-        # convention). Saved value (if any) is shown as "current".
+        # Default the alias column to Member Sync's `display_col` slot
+        # when sync is enabled — that's where the bot writes the
+        # Discord display name (the closest thing to an alias the bot
+        # maintains). Otherwise fall back to the historic
+        # "column right after the name column" convention.
+        from config import get_member_roster_config as _gmrc_alias
+        _sync_cfg_alias = _gmrc_alias(guild_id) if guild_id else {}
+        if _sync_cfg_alias.get("enabled"):
+            _alias_default_letter = _col_index_to_letter(
+                int(_sync_cfg_alias.get("display_col", 2))
+            )
+        else:
+            _alias_default_letter = _col_index_to_letter(roster_name_col + 1)
         raw_alias = await ask_keep_or_change(
             channel,
             "**Alias Column**\nWhich column letter has the alias / nickname?",
-            default=_col_index_to_letter(roster_name_col + 1),
+            default=_alias_default_letter,
             current=(
                 _col_index_to_letter(saved_alias)
                 if isinstance(saved_alias, int) and saved_alias >= 0
@@ -5136,7 +5929,7 @@ async def _run_storm_participation_step(
 
     raw_start = await ask_keep_or_change(
         channel,
-        "**Step 6.5 — Roster Source: First Data Row**\n"
+        "**Step 7.5: Roster Source: First Data Row**\n"
         "In your existing roster tab above, which row does the member data start on? "
         "Usually `2` if your sheet has a header row in row 1.",
         default="2",
@@ -5154,17 +5947,33 @@ async def _run_storm_participation_step(
         await channel.send(f"⚠️ `{raw_start}` isn't a number. Run `/{cmd_name}` to start again.")
         return None
 
-    # ── 6.6 Questions builder ──────────────────────────────────────────────────
+    # ── 6.6 Preset picker (#247) ───────────────────────────────────────────────
+    # Offer pre-configured question templates so officers don't have to
+    # spell out the common shapes by hand. Free tier sees the 3 base
+    # templates; Premium sees the 3 derived/auto-prefill ones too. The
+    # picker filters out templates already present in the existing
+    # questions list (re-entry case) — re-run setup then "add from
+    # presets" without duplicating columns.
     questions = list(cur_part.get("questions") or [])
     cap = None if is_premium_flag else 3
+    preset_additions = await _run_participation_preset_picker_step(
+        channel, bot, user, cancel_event,
+        cmd_name=cmd_name,
+        is_premium_flag=is_premium_flag,
+        existing_questions=questions,
+        cap=cap,
+    )
+    if preset_additions is None:
+        return None
+    questions.extend(preset_additions)
 
     def _summarize() -> str:
         if not questions:
-            return "*(no questions yet — every participation log will only ask for the date)*"
+            return "*(no questions yet; every participation log will only ask for the date)*"
         lines = []
         for i, q in enumerate(questions, start=1):
             t = _PARTICIPATION_TYPE_LABELS.get(q.get("type"), q.get("type", "?"))
-            lines.append(f"**{i}. {q.get('label', '?')}** — _{t}_")
+            lines.append(f"**{i}. {q.get('label', '?')}**: _{t}_")
         return "\n".join(lines)
 
     while True:
@@ -5227,9 +6036,10 @@ async def _run_storm_participation_step(
         )
         view = _BuilderView(len(questions))
         await channel.send(
-            f"**Step 6.6 — Participation Questions**\n"
-            f"Each question becomes a column on your sheet and a step in the "
-            f"`/{cmd_name.replace('setup_', '')}_participation` flow.\n"
+            f"**Step 7.7: Participation Questions**\n"
+            f"Each question becomes a column on your sheet and a step in "
+            f"the **📊 Fill out participation questions** flow on "
+            f"`/{parent_cmd}`.\n"
             f"Examples: *Vote count*, *Sitting out*, *Did anyone show up late?*\n"
             f"{cap_note}\n\n{_summarize()}",
             view=view,
@@ -5259,6 +6069,7 @@ async def _run_storm_participation_step(
                 cmd_name=cmd_name,
                 is_premium_flag=is_premium_flag,
                 existing=existing,
+                all_questions=questions,
             )
             if new_q is None:
                 return None
@@ -5278,6 +6089,1422 @@ async def _run_storm_participation_step(
         "roster_alias_col": roster_alias_col,
         "roster_start_row": roster_start_row,
     }
+
+
+# ── Auto-schedule sub-flow (#131) ────────────────────────────────────────────
+
+
+_DOW_NAMES = ["Monday", "Tuesday", "Wednesday", "Thursday",
+              "Friday", "Saturday", "Sunday"]
+
+
+async def _ask_signup_schedule(
+    channel, bot, user, cancel_event, *,
+    label: str, cmd_name: str,
+    current_dow: int, current_time: str,
+    tz_label: str = "",
+    event_type: str = "DS",
+) -> dict | None:
+    """Two-step Premium sub-flow for the auto-scheduler config:
+        * Poll day-of-week (dropdown; or "Skip auto-scheduling").
+          Event day is game-defined (DS = Friday, CS = Thursday); the
+          dropdown only shows poll days that sit between the previous
+          event and the in-game roster lock.
+        * Sign-up post time (HH:MM in guild timezone; modal). Required
+          when a day is picked — Rule F / #163.
+
+    Returns `{"dow": int, "time": str}`. `dow = -1` indicates the
+    alliance explicitly opted out of auto-scheduling (manual
+    `/<parent> post_signup` remains usable). Returns None on cancel
+    or timeout — callers should propagate the None.
+    """
+    parent = "desertstorm" if event_type == "DS" else "canyonstorm"
+    import wizard_registry
+
+    # Per Rule H, valid poll days per event type sit between the day
+    # AFTER the previous event and the day BEFORE the in-game roster
+    # lock. Event days themselves are excluded (game-defined: DS=Fri,
+    # CS=Thu) so same-day poll/event is impossible by construction.
+    # 0=Monday..6=Sunday.
+    if event_type == "DS":
+        # DS event = Friday; roster locks Wednesday before reset.
+        # Valid poll days: Sat, Sun, Mon, Tue, Wed.
+        poll_options = [5, 6, 0, 1, 2]
+        event_label = "Friday"
+    else:
+        # CS event = Thursday; roster locks Monday before reset.
+        # Valid poll days: Fri, Sat, Sun, Mon.
+        poll_options = [4, 5, 6, 0]
+        event_label = "Thursday"
+
+    # ── Step 1: poll day-of-week ──
+    class _DowView(discord.ui.View):
+        def __init__(self, current: int):
+            super().__init__(timeout=300)
+            self.selected: int | None = None
+            self.cancelled = False
+
+            # Keep-current button (#80 pattern). Re-selecting an already
+            # default-marked dropdown option doesn't read as "save" to
+            # leadership, so the picker also exposes an explicit
+            # Keep-current affordance like every other /setup_* re-entry
+            # surface. Label reflects whatever the saved value is: the
+            # day name when a poll day was configured, "Skip
+            # auto-scheduling" when the alliance opted out previously.
+            if 0 <= current <= 6 and current in poll_options:
+                keep_label = f"✅ Keep current: {_DOW_NAMES[current]}"
+            else:
+                keep_label = "✅ Keep current: Skip auto-scheduling"
+            keep_btn = discord.ui.Button(
+                label=keep_label[:80],
+                style=discord.ButtonStyle.success,
+                row=0,
+            )
+
+            async def _on_keep(inter: discord.Interaction):
+                self.selected = current if (0 <= current <= 6 and current in poll_options) else -1
+                for item in self.children: item.disabled = True
+                if self.selected < 0:
+                    await wizard_registry.safe_edit_response(
+                        inter,
+                        content=(
+                            f"✅ Auto-scheduling stays skipped. Post "
+                            f"manually via `{HUB_COMMAND[event_type]}` → "
+                            f"**{HUB_BTN_POST_SIGNUP}** when you're ready."
+                        ),
+                        view=self,
+                    )
+                else:
+                    await wizard_registry.safe_edit_response(
+                        inter,
+                        content=f"✅ Keeping poll day: **{_DOW_NAMES[self.selected]}**.",
+                        view=self,
+                    )
+                self.stop()
+
+            keep_btn.callback = _on_keep
+            self.add_item(keep_btn)
+
+            options = [
+                discord.SelectOption(
+                    label=_DOW_NAMES[i], value=str(i),
+                    default=(i == current),
+                )
+                for i in poll_options
+            ]
+            options.append(discord.SelectOption(
+                label="Skip auto-scheduling (post manually from the hub)",
+                value="-1",
+                default=(current < 0),
+            ))
+            sel = discord.ui.Select(
+                placeholder="When should the bot post the sign-up poll?",
+                min_values=1, max_values=1,
+                options=options,
+                row=1,
+            )
+
+            async def _on_pick(inter: discord.Interaction):
+                try:
+                    self.selected = int(sel.values[0])
+                except ValueError:
+                    self.selected = -1
+                for item in self.children: item.disabled = True
+                if self.selected < 0:
+                    await wizard_registry.safe_edit_response(
+                        inter,
+                        content=(
+                            f"✅ Auto-scheduling skipped. Post manually "
+                            f"via `{HUB_COMMAND[event_type]}` → "
+                            f"**{HUB_BTN_POST_SIGNUP}** when you're ready."
+                        ),
+                        view=self,
+                    )
+                else:
+                    await wizard_registry.safe_edit_response(
+                        inter,
+                        content=f"✅ Poll day: **{_DOW_NAMES[self.selected]}**.",
+                        view=self,
+                    )
+                self.stop()
+
+            sel.callback = _on_pick
+            self.add_item(sel)
+
+    dow_view = _DowView(int(current_dow if current_dow is not None else -1))
+    await channel.send(
+        f"**Auto-Schedule: Poll Day (💎 Premium)**\n"
+        f"**{label}** runs every **{event_label}** in-game. Which day "
+        f"do you want the bot to post the sign-up poll? (The dropdown "
+        f"shows only days that sit between the previous event and the "
+        f"in-game roster lock.)",
+        view=dow_view,
+    )
+    await wait_view_or_cancel(dow_view, cancel_event)
+    if dow_view.cancelled:
+        return None
+    if dow_view.selected is None:
+        await channel.send(f"⏰ Timed out. Run `/{cmd_name}` to start again.")
+        return None
+    if dow_view.selected < 0:
+        # Skipped — return cleared schedule.
+        return {"dow": -1, "time": ""}
+
+    # ── Step 3: sign-up time ──
+    # The alliance opted into auto-scheduling at Step 1 (`dow >= 0`),
+    # so the time field is required (#163 / Rule F). Empty submissions
+    # surface a one-line re-prompt and the modal re-opens.
+    #
+    # Time copy follows the existing convention used by train / birthday
+    # / shiny setup: 12-hour clock for display + parsing, with the
+    # guild's local timezone surfaced inline. Storage stays 24-hour HH:MM
+    # so the scheduler doesn't have to disambiguate at fire time.
+    saved_12h = _format_24h_to_12h(current_time) if current_time else ""
+    tz_hint = f" *(in your timezone: {tz_label})*" if tz_label else ""
+    time_clean: str | None = None
+    for attempt in range(3):
+        time_picked = await ask_keep_or_change(
+            channel,
+            f"**Auto-Schedule: Sign-Up Post Time**\n"
+            f"What time should the bot fire the sign-up post?{tz_hint}\n"
+            f"*(e.g. `2:00pm`, `9:00am`, or 24-hour `14:00`)*",
+            default="12:00pm",
+            current=saved_12h,
+            modal_title="Sign-Up Time",
+            modal_label="e.g. 2:00pm",
+            timeout_cmd=cmd_name,
+            cancel_event=cancel_event,
+        )
+        if time_picked is None:
+            return None
+        raw = str(time_picked).strip()
+        if raw:
+            time_clean = _parse_12h_time(raw) or _normalise_hhmm(raw) or "12:00"
+            break
+        # Empty submission — surface a friendly nudge and re-prompt.
+        await channel.send(
+            "⚠️ A sign-up time is required when auto-scheduling is on. "
+            "Pick a time (e.g. `12:00pm`) or use the default."
+        )
+    if time_clean is None:
+        # Three blank attempts in a row — fall back to the default so
+        # the wizard doesn't loop forever.
+        time_clean = _parse_12h_time("12:00pm") or "12:00"
+
+    return {
+        "dow":  dow_view.selected,
+        "time": time_clean,
+    }
+
+
+def _normalise_hhmm(raw: str) -> str | None:
+    """Thin wrapper around `config.parse_storm_signup_time` kept under
+    the wizard's old name so existing tests / imports keep working.
+    The canonical implementation lives in `config.py` so the scheduler
+    and the wizard can't drift on parsing rules."""
+    from config import parse_storm_signup_time
+    return parse_storm_signup_time(raw)
+
+
+# ── Keep-or-flip Yes/No re-entry gate ───────────────────────────────────────
+# Used by power-refresh DM step (and previously the Judicator role step,
+# now dropped per Rule G / #167).
+
+
+class _KeepOrFlipYesNoGate(discord.ui.View):
+    """Re-entry gate for a yes/no wizard step that already has a saved
+    value. Two buttons: Keep current (success) / Flip (secondary).
+    Sets `self.value` to the resolved bool, or None on timeout."""
+
+    def __init__(
+        self, *,
+        current_value: bool,
+        keep_label_yes: str = "✅ Keep current: Yes",
+        keep_label_no: str = "✅ Keep current: No",
+        flip_label_yes: str = "↩️ Switch to: Yes",
+        flip_label_no: str = "↩️ Switch to: No",
+    ):
+        super().__init__(timeout=WIZARD_TIMEOUT)
+        self.value: bool | None = None
+        self.cancelled = False
+
+        keep_label = keep_label_yes if current_value else keep_label_no
+        flip_label = flip_label_no if current_value else flip_label_yes
+
+        keep_btn = discord.ui.Button(
+            label=keep_label[:80], style=discord.ButtonStyle.success,
+        )
+
+        async def _keep_cb(inter: discord.Interaction):
+            self.value = bool(current_value)
+            for item in self.children: item.disabled = True
+            await wizard_registry.safe_edit_response(
+                inter,
+                content=f"✅ Keeping **{'Yes' if self.value else 'No'}**",
+                view=self,
+            )
+            self.stop()
+
+        keep_btn.callback = _keep_cb
+        self.add_item(keep_btn)
+
+        flip_btn = discord.ui.Button(
+            label=flip_label[:80], style=discord.ButtonStyle.secondary,
+        )
+
+        async def _flip_cb(inter: discord.Interaction):
+            self.value = not bool(current_value)
+            for item in self.children: item.disabled = True
+            await wizard_registry.safe_edit_response(
+                inter,
+                content=f"✅ Switched to **{'Yes' if self.value else 'No'}**",
+                view=self,
+            )
+            self.stop()
+
+        flip_btn.callback = _flip_cb
+        self.add_item(flip_btn)
+
+
+# ── Inline-create offers for the structured-flow setup wizard (#144) ─────────
+#
+# Each offer is a Yes/No view posted after the relevant tab name is saved.
+# It only appears when the underlying table is empty — alliances running
+# setup a second time see their saved values surface as defaults but don't
+# get re-prompted to create the first row.
+
+
+class _InlineCreatePresetOffer(discord.ui.View):
+    """Posted after the Strategy Presets tab name is saved (and the
+    alliance has zero presets). 'Create now' opens the same preset
+    editor as `/<parent> strategy create`."""
+
+    def __init__(self, *, owner_id: int, event_type: str, parent: str,
+                 default_name: str = "Standard"):
+        super().__init__(timeout=300)
+        self.owner_id     = owner_id
+        self.event_type   = event_type
+        self.parent       = parent
+        self.default_name = default_name
+        self.choice: str | None = None
+        self.message: discord.Message | None = None
+
+    async def interaction_check(self, inter: discord.Interaction) -> bool:
+        if inter.user.id != self.owner_id:
+            await inter.response.send_message(
+                "Only the user running setup can pick.",
+                ephemeral=True,
+            )
+            return False
+        return True
+
+    @discord.ui.button(label="✨ Create my first preset now",
+                       style=discord.ButtonStyle.primary)
+    async def create_btn(self, inter: discord.Interaction, _btn):
+        self.choice = "create"
+        for child in self.children:
+            child.disabled = True
+        await inter.response.edit_message(view=self)
+        try:
+            from storm_strategy import seed_default_preset, open_editor_followup
+            buf = seed_default_preset(self.default_name, self.event_type)
+            buf.dirty = True
+            await open_editor_followup(inter, self.event_type, buf)
+        except Exception as e:
+            await inter.followup.send(
+                f"⚠️ Couldn't open the preset editor inline: {e}. "
+                f"Run `{HUB_COMMAND[self.event_type]}` and click "
+                f"**{HUB_BTN_PRESETS}** to retry.",
+                ephemeral=True,
+            )
+        self.stop()
+
+    @discord.ui.button(label="Skip for now", style=discord.ButtonStyle.secondary)
+    async def skip_btn(self, inter: discord.Interaction, _btn):
+        self.choice = "skip"
+        for child in self.children:
+            child.disabled = True
+        await inter.response.edit_message(view=self)
+        self.stop()
+
+    async def on_timeout(self) -> None:
+        from wizard_registry import expire_view_message
+        await expire_view_message(
+            self.message,
+            command_hint=f"`{HUB_COMMAND[self.event_type]}` → **{HUB_BTN_PRESETS}**",
+        )
+
+
+class _InlineCreateMemberRuleOffer(discord.ui.View):
+    """Posted after the Member Rules tab name is saved (and the alliance
+    has zero rules). 'Add one now' opens a streamlined modal for a
+    power-band rule — the most-common rule type. Per-member rules (which
+    need a Discord member picker) remain available via the slash commands."""
+
+    def __init__(self, *, owner_id: int, event_type: str, parent: str):
+        super().__init__(timeout=300)
+        self.owner_id   = owner_id
+        self.event_type = event_type
+        self.parent     = parent
+        self.choice: str | None = None
+        self.message: discord.Message | None = None
+
+    async def interaction_check(self, inter: discord.Interaction) -> bool:
+        if inter.user.id != self.owner_id:
+            await inter.response.send_message(
+                "Only the user running setup can pick.",
+                ephemeral=True,
+            )
+            return False
+        return True
+
+    @discord.ui.button(label="✨ Add a power-band rule now",
+                       style=discord.ButtonStyle.primary)
+    async def create_btn(self, inter: discord.Interaction, _btn):
+        self.choice = "create"
+        for child in self.children:
+            child.disabled = True
+        # Disable the offer message via the bot-owned message handle so a
+        # fast second click can't fire a duplicate picker. The picker
+        # itself sends a fresh ephemeral with its own select + modal.
+        try:
+            from storm_member_rules import InlinePowerBandView
+            picker = InlinePowerBandView(self.event_type, owner_id=inter.user.id)
+            await inter.response.send_message(
+                content=(
+                    "Pick the zone the rule applies to, then click "
+                    "**Set minimum power** to enter the threshold."
+                ),
+                view=picker, ephemeral=True,
+            )
+            picker.message = await inter.original_response()
+        except Exception as e:
+            await inter.response.send_message(
+                f"⚠️ Couldn't open the rule picker: {e}. Run "
+                f"`{HUB_COMMAND[self.event_type]}` and click "
+                f"**{HUB_BTN_RULES}** to retry.",
+                ephemeral=True,
+            )
+        if self.message is not None:
+            try:
+                await self.message.edit(view=self)
+            except discord.HTTPException:
+                pass
+        self.stop()
+
+    @discord.ui.button(label="Skip for now", style=discord.ButtonStyle.secondary)
+    async def skip_btn(self, inter: discord.Interaction, _btn):
+        self.choice = "skip"
+        for child in self.children:
+            child.disabled = True
+        await inter.response.edit_message(view=self)
+        self.stop()
+
+    async def on_timeout(self) -> None:
+        from wizard_registry import expire_view_message
+        await expire_view_message(
+            self.message,
+            command_hint=f"`{HUB_COMMAND[self.event_type]}` → **{HUB_BTN_RULES}**",
+        )
+
+
+class _InlinePostFirstSignupOffer(discord.ui.View):
+    """Posted at the end of the storm setup wizard (DS / CS) when
+    the structured flow is opted in, a sign-up channel is configured,
+    and no sign-up post has been recorded yet. 'Post now' fires
+    `post_registration` against the next configured event date."""
+
+    def __init__(self, *, owner_id: int, bot, guild_id: int,
+                 event_type: str, parent: str, label: str):
+        super().__init__(timeout=300)
+        self.owner_id   = owner_id
+        self.bot        = bot
+        self.guild_id   = guild_id
+        self.event_type = event_type
+        self.parent     = parent
+        self.label      = label
+        self.choice: str | None = None
+        self.message: discord.Message | None = None
+
+    async def interaction_check(self, inter: discord.Interaction) -> bool:
+        if inter.user.id != self.owner_id:
+            await inter.response.send_message(
+                "Only the user who ran setup can pick.",
+                ephemeral=True,
+            )
+            return False
+        return True
+
+    @discord.ui.button(label="📣 Post my first sign-up now",
+                       style=discord.ButtonStyle.primary)
+    async def post_btn(self, inter: discord.Interaction, _btn):
+        self.choice = "post"
+        for child in self.children:
+            child.disabled = True
+        await inter.response.edit_message(view=self)
+        try:
+            from storm_date_helpers import next_event_date
+            from storm_signup_post import post_registration, _format_post_result_message
+            from config import get_structured_storm_config
+            target_date = next_event_date(self.guild_id, self.event_type)
+            structured  = get_structured_storm_config(self.guild_id, self.event_type)
+            guild = self.bot.get_guild(self.guild_id)
+            if guild is None:
+                await inter.followup.send(
+                    "⚠️ The bot can't see this guild right now. Try again "
+                    f"via `{HUB_COMMAND[self.event_type]}` → "
+                    f"**{HUB_BTN_POST_SIGNUP}**.",
+                    ephemeral=True,
+                )
+                return
+            result = await post_registration(
+                self.bot, guild, self.event_type, target_date,
+                structured=structured,
+            )
+            await inter.followup.send(
+                _format_post_result_message(self.event_type, target_date, result),
+                ephemeral=True,
+            )
+        except Exception as e:
+            await inter.followup.send(
+                f"⚠️ Sign-up post failed: {e}. Run "
+                f"`{HUB_COMMAND[self.event_type]}` and click "
+                f"**{HUB_BTN_POST_SIGNUP}** to retry.",
+                ephemeral=True,
+            )
+        self.stop()
+
+    @discord.ui.button(label="Skip: I'll post later", style=discord.ButtonStyle.secondary)
+    async def skip_btn(self, inter: discord.Interaction, _btn):
+        self.choice = "skip"
+        for child in self.children:
+            child.disabled = True
+        await inter.response.edit_message(view=self)
+        self.stop()
+
+    async def on_timeout(self) -> None:
+        from wizard_registry import expire_view_message
+        await expire_view_message(
+            self.message,
+            command_hint=f"`{HUB_COMMAND[self.event_type]}` → **{HUB_BTN_POST_SIGNUP}**",
+        )
+
+
+# ── Structured storm flow setup sub-flow (#38 + #54) ─────────────────────────
+
+async def _run_structured_flow_setup_step(
+    channel, bot, user, cancel_event, *,
+    guild_id: int, event_type: str, label: str, cmd_name: str,
+    is_premium_flag: bool, current: dict, current_structured: dict,
+    interaction_guild,
+) -> dict | None:
+    """
+    Final block of the storm setup wizard (DS + CS). Walks
+    leadership through enabling the structured roster flow (Premium, #38)
+    and / or configuring the strategy preset + member rules tabs (free,
+    #54). Returns a dict shaped like save_structured_storm_config's
+    kwargs, or None if the user cancelled or timed out.
+
+    Branching:
+      * Premium + opted-in: full config (power column, sub mode, signup
+        channel, all 5 tab names).
+      * Premium without opt-in / free tier: preset library tab names only
+        (strategies_tab + member_rules_tab). Other fields keep their
+        current values so nothing gets cleared by accident.
+
+    The registration-post schedule UI is deferred to the registration
+    post sub-issue — this sub-flow leaves `signup_schedule_cron`
+    untouched.
+    """
+    import wizard_registry
+
+    # Build the result on top of the current saved values so that
+    # opting *out* of the structured flow doesn't clear previously
+    # configured fields (e.g. an alliance that opted out for one week
+    # shouldn't lose its preset tab names).
+    result = dict(current_structured)
+    # Force-coerce to the keys save_structured_storm_config expects.
+    result.setdefault("structured_flow_enabled", False)
+    result.setdefault("power_metric_column", "B")
+    result.setdefault("power_metric_tab", "")
+    result.setdefault("power_match_column", "")
+    result.setdefault("sub_mode", "pool")
+    result.setdefault("signup_channel_id", 0)
+    result.setdefault("signup_schedule_cron", "")
+    for tab in ("signups_tab", "rosters_tab", "attendance_tab",
+                "strategies_tab", "member_rules_tab"):
+        result.setdefault(tab, "")
+    result.setdefault("poll_day_of_week", -1)
+    result.setdefault("signup_time", "")
+    result.setdefault("power_refresh_dm_enabled", False)
+    # Roster DM templates (#226 follow-up). Persisted via
+    # `save_roster_dm_templates`, distinct from
+    # `save_structured_storm_config`, but stashed in the same result
+    # dict so the wizard's re-entry surface and the save call site
+    # can hand them off together.
+    result.setdefault("roster_dm_starter_template", "")
+    result.setdefault("roster_dm_paired_sub_template", "")
+    result.setdefault("roster_dm_pool_sub_template", "")
+
+    # Internal slug for channel-name suggestion (e.g. `desertstorm-signups`).
+    # Derived from event_type directly so it stays a clean slug even
+    # after cmd_name became a user-facing hint pointing at the `/setup`
+    # hub button (#201).
+    cmd_short = "desertstorm" if event_type == "DS" else "canyonstorm"
+
+    # ── Premium opt-in question ────────────────────────────────────────────
+    structured_opted_in = False
+    if is_premium_flag:
+        await channel.send(
+            f"**Step 8 of 9: Structured Roster Flow (💎 Premium)**\n"
+            f"The structured flow auto-posts a Discord sign-up poll, captures "
+            f"votes per member, and gives leadership a roster builder that "
+            f"filters members by power for each zone. Replaces the text-template "
+            f"draft for {label} when enabled. You can leave this off and still "
+            f"use the strategy preset library on the free tier."
+        )
+        # Re-entry: the alliance has a previously saved decision (either
+        # explicit on or explicit off after running the wizard before),
+        # so offer Keep-current / Flip rather than forcing a re-pick of
+        # plain Yes/No. `get_structured_storm_config` always returns a
+        # dict with `structured_flow_enabled`, so detect prior setup by
+        # asking has_storm_config directly.
+        from config import has_storm_config
+        already_decided = has_storm_config(guild_id, event_type)
+        if already_decided:
+            structured_gate = _KeepOrFlipYesNoGate(
+                current_value=bool(
+                    current_structured.get("structured_flow_enabled")
+                ),
+            )
+            await channel.send(
+                f"Turn on the structured flow for {label}?",
+                view=structured_gate,
+            )
+            await wait_view_or_cancel(structured_gate, cancel_event)
+            if getattr(structured_gate, "cancelled", False):
+                return None
+            if structured_gate.value is None:
+                await channel.send(f"⏰ Timed out. Run `/{cmd_name}` to start again.")
+                return None
+            structured_opted_in = bool(structured_gate.value)
+        else:
+            enable_view = YesNoView()
+            await channel.send(
+                f"Turn on the structured flow for {label}?",
+                view=enable_view,
+            )
+            await wait_view_or_cancel(enable_view, cancel_event)
+            if getattr(enable_view, "cancelled", False):
+                return None
+            if enable_view.selected is None:
+                await channel.send(f"⏰ Timed out. Run `/{cmd_name}` to start again.")
+                return None
+            structured_opted_in = bool(enable_view.selected)
+    result["structured_flow_enabled"] = structured_opted_in
+
+    # ── Premium + opted-in: full config ────────────────────────────────────
+    if structured_opted_in:
+        # Power Data Source step. Replaces the old single-letter
+        # "Power Metric Column" prompt with a tab + column + match-column
+        # triple. The alliance can point storm at any tab: the Member
+        # Roster (default), the bot's own Squad Powers tab if they use
+        # the Survey, or a custom external tab. The match column
+        # identifies each row — at read time the bot tries Discord ID
+        # first when the cell looks like one, otherwise it falls back
+        # to case-insensitive name match.
+        from config import get_member_roster_config
+        _roster_cfg_for_defaults = get_member_roster_config(guild_id)
+        _sync_enabled = bool(_roster_cfg_for_defaults.get("enabled"))
+        default_tab = (
+            (_roster_cfg_for_defaults.get("tab_name") or "Member Roster")
+            if _sync_enabled else "Member Roster"
+        )
+        if _sync_enabled:
+            default_match_letter = _col_index_to_letter(
+                int(_roster_cfg_for_defaults.get("discord_id_col", 0))
+            )
+        else:
+            default_match_letter = "A"
+
+        saved_tab = (result.get("power_metric_tab") or "").strip()
+        saved_letter = (
+            result.get("power_metric_column") or "B"
+        ).strip().upper()
+        if not (len(saved_letter) == 1 and "A" <= saved_letter <= "Z"):
+            saved_letter = "B"
+        saved_match = (result.get("power_match_column") or "").strip().upper()
+        if not (len(saved_match) == 1 and "A" <= saved_match <= "Z"):
+            saved_match = ""
+
+        # `has_custom` = the alliance has saved values that differ from
+        # the defaults. Drives the 2-button vs 3-button picker layout
+        # below (same idiom `ask_keep_or_change` uses).
+        effective_tab = saved_tab or default_tab
+        effective_match = saved_match or default_match_letter
+        has_custom = (
+            saved_tab != ""
+            or saved_letter != "B"
+            or saved_match != ""
+        )
+
+        class _PowerDataSourceModal(discord.ui.Modal):
+            def __init__(self):
+                super().__init__(title="Power Data Source")
+                self.confirmed = False
+                self.tab_input = discord.ui.TextInput(
+                    label="Power source tab",
+                    placeholder="e.g. Member Roster, Squad Powers",
+                    default=effective_tab,
+                    required=True,
+                    max_length=100,
+                )
+                self.col_input = discord.ui.TextInput(
+                    label="Power column letter (A-Z)",
+                    placeholder="e.g. B",
+                    default=saved_letter,
+                    required=True,
+                    max_length=2,
+                )
+                self.match_input = discord.ui.TextInput(
+                    label="Name-match column letter (A-Z)",
+                    placeholder="e.g. A — column with Discord ID or name",
+                    default=effective_match,
+                    required=True,
+                    max_length=2,
+                )
+                self.add_item(self.tab_input)
+                self.add_item(self.col_input)
+                self.add_item(self.match_input)
+
+            async def on_submit(self, inter: discord.Interaction):
+                self.confirmed = True
+                await inter.response.defer()
+                self.stop()
+
+        class _PowerDataSourcePickerView(discord.ui.View):
+            def __init__(self):
+                super().__init__(timeout=300)
+                self.outcome: str | None = None  # "default" | "keep" | "edit"
+                self.modal: _PowerDataSourceModal | None = None
+
+            @discord.ui.button(
+                label="✅ Use defaults",
+                style=discord.ButtonStyle.success,
+            )
+            async def use_default(
+                self, inter: discord.Interaction, _btn: discord.ui.Button,
+            ):
+                self.outcome = "default"
+                for item in self.children:
+                    item.disabled = True
+                await wizard_registry.safe_edit_response(
+                    inter,
+                    content=(
+                        f"✅ Using defaults: tab `{default_tab}`, "
+                        f"power column `B`, matched by `{default_match_letter}`."
+                    ),
+                    view=self,
+                )
+                self.stop()
+
+            @discord.ui.button(
+                label="✅ Keep current",
+                style=discord.ButtonStyle.success,
+            )
+            async def keep_current(
+                self, inter: discord.Interaction, _btn: discord.ui.Button,
+            ):
+                self.outcome = "keep"
+                for item in self.children:
+                    item.disabled = True
+                await wizard_registry.safe_edit_response(
+                    inter,
+                    content=(
+                        f"✅ Keeping current: tab `{effective_tab}`, "
+                        f"power column `{saved_letter}`, matched by "
+                        f"`{effective_match}`."
+                    ),
+                    view=self,
+                )
+                self.stop()
+
+            @discord.ui.button(
+                label="✏️ Define my own",
+                style=discord.ButtonStyle.secondary,
+            )
+            async def define(
+                self, inter: discord.Interaction, _btn: discord.ui.Button,
+            ):
+                self.modal = _PowerDataSourceModal()
+                await inter.response.send_modal(self.modal)
+                await self.modal.wait()
+                self.outcome = "edit" if self.modal.confirmed else None
+                for item in self.children:
+                    item.disabled = True
+                try:
+                    if inter.message:
+                        await inter.message.edit(view=self)
+                except discord.HTTPException:
+                    pass
+                self.stop()
+
+        picker = _PowerDataSourcePickerView()
+        # Drop the Keep current button when the alliance hasn't
+        # customised yet — promotes Use defaults to the only success
+        # action. Drop Use defaults when the alliance HAS customised
+        # so they don't accidentally wipe their saved values.
+        if has_custom:
+            picker.remove_item(picker.use_default)
+            picker.keep_current.label = (
+                f"✅ Keep current: {effective_tab} · {saved_letter} · "
+                f"matched by {effective_match}"[:80]
+            )
+        else:
+            picker.remove_item(picker.keep_current)
+            picker.use_default.label = (
+                f"✅ Use defaults: {default_tab} · B · matched by "
+                f"{default_match_letter}"[:80]
+            )
+
+        sync_blurb = (
+            f"\n\n_Member Sync is enabled, so we're suggesting tab "
+            f"`{default_tab}` matched by column `{default_match_letter}` "
+            f"(the bot's Discord ID slot)._"
+            if _sync_enabled else
+            "\n\n_Member Sync isn't enabled yet — the default tab "
+            "name is just a placeholder; pick whichever tab actually "
+            "has your power data._"
+        )
+        await channel.send(
+            f"**Power Data Source**\n"
+            f"Tell the bot which Google Sheet tab + column has each "
+            f"member's power value. Storm uses this to gate zone "
+            f"eligibility by power. You can keep power in the Member "
+            f"Roster, a Survey tab, or any custom tab.\n\n"
+            f"• **Tab**: the Sheet tab where power lives.\n"
+            f"• **Power column**: the column with the actual power "
+            f"value (e.g. `B`).\n"
+            f"• **Name-match column**: the column the bot uses to "
+            f"match rows to your alliance members. Cells that look "
+            f"like Discord IDs match by ID; otherwise the bot matches "
+            f"by name (case-insensitive)."
+            f"{sync_blurb}",
+            view=picker,
+        )
+        await wait_view_or_cancel(picker, cancel_event)
+        if getattr(picker, "cancelled", False):
+            return None
+        if picker.outcome is None:
+            await channel.send(
+                f"⏰ Timed out. Run `/{cmd_name}` to start again."
+            )
+            return None
+
+        if picker.outcome == "default":
+            # Persist empty tab + match so a future default change
+            # propagates without re-running the wizard.
+            result["power_metric_tab"] = ""
+            result["power_metric_column"] = "B"
+            result["power_match_column"] = ""
+        elif picker.outcome == "keep":
+            # Saved values already in `result` from the initial
+            # current_structured spread — leave as-is.
+            pass
+        else:  # edit
+            modal = picker.modal
+            assert modal is not None
+            tab_val = (modal.tab_input.value or "").strip()
+            col_val = (modal.col_input.value or "B").strip().upper()
+            match_val = (modal.match_input.value or "").strip().upper()
+            if not (len(col_val) == 1 and "A" <= col_val <= "Z"):
+                col_val = "B"
+            if not (len(match_val) == 1 and "A" <= match_val <= "Z"):
+                match_val = ""  # empty → fall back to discord_id_col
+            # Store tab verbatim only when it differs from the Member
+            # Roster tab; otherwise persist empty so the read path
+            # falls through to the canonical default.
+            member_roster_tab = (
+                _roster_cfg_for_defaults.get("tab_name") or "Member Roster"
+            )
+            result["power_metric_tab"] = (
+                tab_val if tab_val and tab_val != member_roster_tab else ""
+            )
+            result["power_metric_column"] = col_val
+            result["power_match_column"] = match_val
+
+        # Sub mode — Kevin's first-sweep _edited convention: the
+        # green/default button reads `Use Default: <X>` on first run
+        # (no saved value) or `Use Current: <X>` on re-entry. The
+        # other button shows its descriptive label. Matches the
+        # `ask_keep_or_change` pattern the rest of the setup flow
+        # uses so officers learn one button-label idiom across the
+        # whole wizard.
+        _saved_sub_mode = result.get("sub_mode")
+        _has_saved_sub_mode = _saved_sub_mode in ("pool", "paired")
+        _effective_mode = _saved_sub_mode if _has_saved_sub_mode else "pool"
+
+        class SubModeView(discord.ui.View):
+            def __init__(self, current_mode: str, has_saved: bool):
+                super().__init__(timeout=120)
+                self.selected = None
+                self.cancelled = False
+                if current_mode == "pool":
+                    pool_label = (
+                        "Use Current: Pool" if has_saved else "Use Default: Pool"
+                    )
+                    pool_style = discord.ButtonStyle.success
+                    paired_label = "Paired: primary↔sub pairs"
+                    paired_style = discord.ButtonStyle.primary
+                else:
+                    pool_label = "Pool: flat sub list"
+                    pool_style = discord.ButtonStyle.primary
+                    paired_label = "Use Current: Paired"
+                    paired_style = discord.ButtonStyle.success
+
+                pool_btn = discord.ui.Button(label=pool_label, style=pool_style)
+                paired_btn = discord.ui.Button(label=paired_label, style=paired_style)
+
+                async def _pool(inter):
+                    self.selected = "pool"
+                    for item in self.children: item.disabled = True
+                    await wizard_registry.safe_edit_response(
+                        inter, content="✅ Sub mode: Pool", view=self
+                    )
+                    self.stop()
+
+                async def _paired(inter):
+                    self.selected = "paired"
+                    for item in self.children: item.disabled = True
+                    await wizard_registry.safe_edit_response(
+                        inter, content="✅ Sub mode: Paired", view=self
+                    )
+                    self.stop()
+
+                pool_btn.callback = _pool
+                paired_btn.callback = _paired
+                self.add_item(pool_btn)
+                self.add_item(paired_btn)
+
+        sub_view = SubModeView(_effective_mode, _has_saved_sub_mode)
+        await channel.send(
+            "**Sub Mode**\n"
+            "How should subs be tracked when leadership builds a roster?\n"
+            "• **Pool**: flat list of subs; any sub can cover any primary no-show.\n"
+            "• **Paired**: each primary has a specific sub assigned in advance.",
+            view=sub_view,
+        )
+        await wait_view_or_cancel(sub_view, cancel_event)
+        if sub_view.cancelled:
+            return None
+        if sub_view.selected is None:
+            await channel.send(f"⏰ Timed out. Run `/{cmd_name}` to start again.")
+            return None
+        result["sub_mode"] = sub_view.selected
+
+        # Registration post channel
+        signup_ch_view = ChannelSelectStep(
+            f"Select the channel where {label} sign-up polls post...",
+            suggested_name=f"{cmd_short.replace('_', '-')}-signups",
+            include_threads=True,
+            guild=interaction_guild,
+            current_id=result.get("signup_channel_id") or 0,
+        )
+        if signup_ch_view.is_current_stale:
+            await channel.send(
+                f"⚠️ Your previously configured {label} sign-up channel no longer "
+                "exists. Select a new channel."
+            )
+        parent_cmd = "desertstorm" if event_type == "DS" else "canyonstorm"
+        await channel.send(
+            f"**{label} Sign-Up Channel**\n"
+            "The bot will auto-post a sign-up poll here each week. Members click "
+            "buttons to register their availability.\n"
+            f"You can open the officer view via `/{parent_cmd} signups`.",
+            view=signup_ch_view,
+        )
+        await wait_view_or_cancel(signup_ch_view, cancel_event)
+        if signup_ch_view.cancelled:
+            return None
+        if not signup_ch_view.confirmed:
+            await channel.send(f"⏰ Timed out. Run `/{cmd_name}` to start again.")
+            return None
+        result["signup_channel_id"] = signup_ch_view.selected_channel.id
+
+        # Auto-schedule (#131) — Day-of-week + lead days + time-of-day.
+        # All three together drive the storm_signup_scheduler loop. The
+        # alliance can skip all three (leave defaults) and continue
+        # running `/<parent> post_signup` manually.
+        # Resolve tz_label for the time-of-day prompt so the wizard
+        # shows "in your timezone: ET (America/New_York)" alongside the
+        # 12-hour example — matches the train / birthday / shiny
+        # patterns already established in this file.
+        from config import get_config
+        guild_cfg = get_config(guild_id) if guild_id else None
+        tz_str = (
+            guild_cfg.timezone if guild_cfg and guild_cfg.timezone
+            else "America/New_York"
+        )
+        tz_label = TIMEZONE_LABELS.get(tz_str, tz_str)
+        sched_result = await _ask_signup_schedule(
+            channel, bot, user, cancel_event,
+            label=label, cmd_name=cmd_name,
+            current_dow=result.get("poll_day_of_week", -1),
+            current_time=result.get("signup_time", ""),
+            tz_label=tz_label,
+            event_type=event_type,
+        )
+        if sched_result is None:
+            return None
+        result["poll_day_of_week"] = sched_result["dow"]
+        result["signup_time"]      = sched_result["time"]
+
+        # Sign-ups / rosters / attendance tab names — Premium only
+        for tab_key, label_text in (
+            ("signups_tab",    "Sign-Ups"),
+            ("rosters_tab",    "Rosters"),
+            ("attendance_tab", "Attendance"),
+        ):
+            from config import default_structured_tab
+            tab_default = default_structured_tab(event_type, tab_key)
+            picked = await ask_keep_or_change(
+                channel,
+                f"**{label_text} Tab**\n"
+                f"Which Google Sheet tab should store {label} "
+                f"{label_text.lower()}? The bot creates and maintains "
+                f"this tab.",
+                default=tab_default,
+                current=result.get(tab_key, ""),
+                modal_title=f"{label_text} Tab Name",
+                modal_label="Tab name",
+                timeout_cmd=cmd_name,
+                cancel_event=cancel_event,
+            )
+            if picked is None:
+                return None
+            result[tab_key] = picked
+
+        # Power-refresh DM nudge (#138) — Premium-only. When on, the
+        # signup-button handler DMs the voter if their power column
+        # value isn't readable. Cooldown is one nudge per event_date
+        # so members aren't pinged repeatedly.
+        #
+        # Keep-or-change branch on re-entry. If the alliance had the
+        # structured flow enabled previously, the saved Yes/No is
+        # surfaced as "Keep current" so the wizard doesn't force the
+        # officer to re-pick on every re-run. First-time setup
+        # (structured flow not previously enabled) still shows the
+        # standard Yes/No view so the question is asked explicitly.
+        prior_enabled = bool(current_structured.get("structured_flow_enabled"))
+        if prior_enabled:
+            current_yn = bool(current_structured.get("power_refresh_dm_enabled"))
+            gate = _KeepOrFlipYesNoGate(
+                current_value=current_yn,
+                keep_label_yes="✅ Keep current: Yes",
+                keep_label_no="✅ Keep current: No",
+                flip_label_yes="↩️ Switch to: Yes",
+                flip_label_no="↩️ Switch to: No",
+            )
+            await channel.send(
+                f"**Power-Refresh DM (💎 Premium)**\n"
+                f"When a member clicks a sign-up button for **{label}** and "
+                f"their power value (Column "
+                f"**{result.get('power_metric_column', 'B')}** on the roster "
+                f"Sheet) is blank or unparseable, the bot can DM them a "
+                f"one-line nudge to update it. Currently "
+                f"**{'on' if current_yn else 'off'}**. Keep it or flip.",
+                view=gate,
+            )
+            await wait_view_or_cancel(gate, cancel_event)
+            if getattr(gate, "cancelled", False):
+                return None
+            if gate.value is None:
+                await channel.send(
+                    f"⏰ Timed out. Run `/{cmd_name}` to start again."
+                )
+                return None
+            result["power_refresh_dm_enabled"] = bool(gate.value)
+        else:
+            nudge_view = YesNoView()
+            await channel.send(
+                f"**Power-Refresh DM (💎 Premium)**\n"
+                f"When a member clicks a sign-up button for **{label}** and "
+                f"their power value (Column "
+                f"**{result.get('power_metric_column', 'B')}** on the roster "
+                f"Sheet) is blank or unparseable, should the bot DM them a "
+                f"one-line nudge to update it? At most one DM per member "
+                f"per event date.",
+                view=nudge_view,
+            )
+            await wait_view_or_cancel(nudge_view, cancel_event)
+            if getattr(nudge_view, "cancelled", False):
+                return None
+            if nudge_view.selected is None:
+                await channel.send(f"⏰ Timed out. Run `/{cmd_name}` to start again.")
+                return None
+            result["power_refresh_dm_enabled"] = bool(nudge_view.selected)
+
+        # ── Roster DM templates (#226 follow-up) ─────────────────────────
+        #
+        # The Approve & Post flow's `📨 DM rostered members` button
+        # fans out per-member DMs using these three templates. We walk
+        # each role (Starter / Paired Sub / Pool Sub) through the same
+        # Use default / Keep current / Edit picker the mail template
+        # step uses, so officers learn one idiom across the wizard.
+        # Empty saved value = fall back to the hardcoded default at
+        # send time, so a guild that never customises still gets sane
+        # copy.
+        from defaults import (
+            DEFAULT_ROSTER_DM_STARTER,
+            DEFAULT_ROSTER_DM_PAIRED_SUB,
+            DEFAULT_ROSTER_DM_POOL_SUB,
+        )
+        from config import get_roster_dm_templates
+
+        saved_dm_templates = (
+            get_roster_dm_templates(guild_id, event_type)
+            if guild_id else
+            {"starter": "", "paired_sub": "", "pool_sub": ""}
+        )
+
+        dm_placeholder_info = (
+            "• `{name}`: member's display name\n"
+            "• `{event_label}`: `Desert Storm` / `Canyon Storm`\n"
+            "• `{team_blurb}`: ` Team A` / ` Team B` / `` (leading "
+            "space included for you)\n"
+            "• `{date}`: event date (e.g. `Thursday, May 28, 2026`)\n"
+            "• `{time}`: team time slot (e.g. `4pm EDT (18:00 server "
+            "time)`)\n"
+            "• `{assignments}`: per-stage assignments block (Starter "
+            "+ Paired Sub only)"
+        )
+
+        async def _get_dm_template(
+            role_label: str, default_template: str,
+            saved_template: str,
+        ) -> str | None:
+            """Walk one DM template through the Use default / Keep
+            current / Edit picker. Returns the chosen template body,
+            empty string for "use default" (so the DB stays clean
+            when the bot ships an updated default later), or None
+            on cancel / timeout."""
+            saved_is_custom = (
+                bool(saved_template)
+                and saved_template != default_template
+            )
+
+            class _DmTemplateChoiceView(discord.ui.View):
+                def __init__(self):
+                    super().__init__(timeout=300)
+                    self.outcome: str | None = None
+
+                @discord.ui.button(
+                    label="✅ Keep current custom template",
+                    style=discord.ButtonStyle.success,
+                )
+                async def keep(
+                    self, inter: discord.Interaction,
+                    _btn: discord.ui.Button,
+                ):
+                    self.outcome = "keep"
+                    for item in self.children:
+                        item.disabled = True
+                    await wizard_registry.safe_edit_response(
+                        inter,
+                        content=(
+                            f"✅ Keeping your saved {role_label} DM "
+                            f"template."
+                        ),
+                        view=self,
+                    )
+                    self.stop()
+
+                @discord.ui.button(
+                    label="↩️ Use default template",
+                    style=discord.ButtonStyle.secondary,
+                )
+                async def use_def(
+                    self, inter: discord.Interaction,
+                    _btn: discord.ui.Button,
+                ):
+                    self.outcome = "default"
+                    for item in self.children:
+                        item.disabled = True
+                    msg = (
+                        f"✅ Reverted to default {role_label} DM "
+                        f"template."
+                        if saved_is_custom else
+                        f"✅ Using default {role_label} DM template."
+                    )
+                    await wizard_registry.safe_edit_response(
+                        inter, content=msg, view=self,
+                    )
+                    self.stop()
+
+                @discord.ui.button(
+                    label="✏️ Edit template",
+                    style=discord.ButtonStyle.secondary,
+                )
+                async def edit(
+                    self, inter: discord.Interaction,
+                    _btn: discord.ui.Button,
+                ):
+                    self.outcome = "edit"
+                    for item in self.children:
+                        item.disabled = True
+                    await wizard_registry.safe_edit_response(
+                        inter, view=self,
+                    )
+                    self.stop()
+
+            choice_view = _DmTemplateChoiceView()
+            if not saved_is_custom:
+                # First-time / saved-equals-default: drop the Keep
+                # current button and promote Use default to the
+                # success-style primary action.
+                choice_view.remove_item(choice_view.keep)
+                choice_view.use_def.style = discord.ButtonStyle.success
+
+            custom_block = (
+                f"\n\nHere is your saved custom template:\n```\n"
+                f"{saved_template}\n```"
+                if saved_is_custom else ""
+            )
+            question = (
+                "Would you like to keep your custom template, revert "
+                "to the default, or edit it?"
+                if saved_is_custom else
+                "Would you like to use this default or write your own?"
+            )
+            await channel.send(
+                f"**Roster DM Template: {role_label}**\n"
+                f"Sent when leadership clicks 📨 DM rostered members "
+                f"after Approve & Post for {label}.\n\n"
+                f"Here is the default template:\n"
+                f"```\n{default_template}\n```"
+                f"{custom_block}\n\n"
+                f"{question}",
+                view=choice_view,
+            )
+            await wait_view_or_cancel(choice_view, cancel_event)
+            if getattr(choice_view, "cancelled", False):
+                return None
+            if choice_view.outcome is None:
+                await channel.send(
+                    f"⏰ Timed out. Run `/{cmd_name}` to start again."
+                )
+                return None
+            if choice_view.outcome == "keep":
+                return saved_template
+            if choice_view.outcome == "default":
+                # Persist empty string so the bot's future default
+                # updates land for this alliance automatically.
+                return ""
+
+            # Edit branch — pasted as a chat message so multi-line
+            # templates work without fighting a 200-char modal.
+            reference_label = (
+                "current custom" if saved_is_custom else "default"
+            )
+            await channel.send(
+                f"Paste your custom {role_label} DM template. "
+                f"You can copy the {reference_label} above and modify "
+                f"it, or write your own.\n\n"
+                f"**Available placeholders:**\n{dm_placeholder_info}\n\n"
+                f"*This form will time out in 5 minutes. "
+                f"You can run `/{cmd_name}` again if it times out.*"
+            )
+            try:
+                reply = await bot.wait_for(
+                    "message", check=check, timeout=300,
+                )
+                fallback = (
+                    saved_template if saved_is_custom
+                    else default_template
+                )
+                return reply.content.strip() or fallback
+            except asyncio.TimeoutError:
+                await channel.send(
+                    f"⏰ Timed out. Run `/{cmd_name}` to start again."
+                )
+                return None
+
+        await channel.send(
+            f"📨 **Roster DM Templates** _(3 templates, one per role)_"
+            f"\nNext we'll set up the three DMs the bot sends after "
+            f"Approve & Post when leadership clicks 📨 DM rostered "
+            f"members. Each role (Starter, Paired Sub, Pool Sub) gets "
+            f"its own message. You can use the defaults or customise "
+            f"each one."
+        )
+
+        starter_template = await _get_dm_template(
+            "Starter", DEFAULT_ROSTER_DM_STARTER,
+            saved_dm_templates.get("starter", ""),
+        )
+        if starter_template is None:
+            return None
+        result["roster_dm_starter_template"] = starter_template
+
+        paired_template = await _get_dm_template(
+            "Paired Sub", DEFAULT_ROSTER_DM_PAIRED_SUB,
+            saved_dm_templates.get("paired_sub", ""),
+        )
+        if paired_template is None:
+            return None
+        result["roster_dm_paired_sub_template"] = paired_template
+
+        pool_template = await _get_dm_template(
+            "Pool Sub", DEFAULT_ROSTER_DM_POOL_SUB,
+            saved_dm_templates.get("pool_sub", ""),
+        )
+        if pool_template is None:
+            return None
+        result["roster_dm_pool_sub_template"] = pool_template
+
+    # ── Always-ask: preset library + member rules tab names (free + Premium) ──
+    #
+    # Strategy presets + member rules only drive the structured roster
+    # builder, so we only walk through them when the alliance has opted
+    # *in* to the structured flow. Otherwise we'd post Premium-only copy
+    # to a free-tier alliance that just declined the offer above.
+    # Each block (#144):
+    #   1. Posts an explainer so officers know what the concept IS.
+    #   2. Asks for the tab name via `ask_keep_or_change`.
+    #   3. If the alliance has zero rows in that table, offers an inline
+    #      "create your first one now" branch so the new concept is
+    #      immediately reachable.
+    if not structured_opted_in:
+        return result
+
+    parent = "desertstorm" if event_type == "DS" else "canyonstorm"
+    from config import default_structured_tab
+
+    # ── Strategy Presets ────────────────────────────────────────────────
+    # Bullet-list explainer per Kevin's first-sweep _edited.md spec:
+    # leadership sees a structured "what's in a preset" breakdown before
+    # being asked to name a Sheet tab for it (#144).
+    await channel.send(
+        "**Strategy Presets**\n"
+        "A strategy preset is a saved zone layout including:\n"
+        "Maximum players per zone\n"
+        "Optional power requirements\n"
+        "Priority\n"
+        "\n"
+        f"When leadership builds a roster, they pick which preset to "
+        f"apply. The bot uses the preset to gate eligibility and fill "
+        f"out the team.\n"
+        f"\n"
+        f"Manage presets via `{HUB_COMMAND[event_type]}` → "
+        f"**{HUB_BTN_PRESETS}**."
+    )
+    picked = await ask_keep_or_change(
+        channel,
+        f"**Strategy Presets Tab**\n"
+        f"Which Google Sheet tab should store {label} strategy presets? "
+        f"The bot creates and maintains this tab.",
+        default=default_structured_tab(event_type, "strategies_tab"),
+        current=result.get("strategies_tab", ""),
+        modal_title="Strategy Presets Tab Name",
+        modal_label="Tab name",
+        timeout_cmd=cmd_name,
+        cancel_event=cancel_event,
+    )
+    if picked is None:
+        return None
+    result["strategies_tab"] = picked
+
+    # Inline-create offer (only when the alliance has no presets yet).
+    # An unconfigured Sheet (or transient gspread failure) here means the
+    # offer is shown unconditionally — that's the same behaviour the
+    # `/<parent> strategy list` command falls back to, and it's the
+    # less-bad failure mode (offer one extra time vs. miss the discovery
+    # surface entirely for a guild that genuinely has no presets).
+    try:
+        import storm_strategy as ss
+        existing_presets = await asyncio.to_thread(
+            ss.list_presets, guild_id, event_type,
+        )
+    except Exception:
+        existing_presets = []
+    if not existing_presets:
+        preset_offer = _InlineCreatePresetOffer(
+            owner_id=user.id, event_type=event_type, parent=parent,
+        )
+        preset_offer.message = await channel.send(
+            f"Want to create your first {label} preset now? You can also "
+            f"do this later via `{HUB_COMMAND[event_type]}` → "
+            f"**{HUB_BTN_PRESETS}**.",
+            view=preset_offer,
+        )
+        await wait_view_or_cancel(preset_offer, cancel_event)
+        if getattr(preset_offer, "cancelled", False):
+            return None
+        # Either choice is fine — proceed regardless. A timeout also
+        # proceeds; the on_timeout hook strips the buttons.
+
+    # ── Member Rules ────────────────────────────────────────────────────
+    # Per Rule A / #166 both DS and CS support `teams=both/A/B`, so the
+    # per-member rule list (and the example) is the same for both event
+    # types. Kevin's first-sweep _edited spec uses a structured Power-
+    # band + Per-member breakdown with explicit "Example:" lines.
+    await channel.send(
+        "**Member Rules**\n"
+        "Member rules tell the roster builder how to treat individual "
+        "members.\n"
+        "\n"
+        "There are two types of Member rules.\n"
+        "• Power-band:\n"
+        "     Example: `members ≥ 80M are eligible for Power Tower`\n"
+        "     Primary rule type that reads against the power column "
+        "you configured earlier.\n"
+        "• Per-member:\n"
+        "     Used for special cases, example: `Alice always plays on Team A`,\n"
+        "\n"
+        f"Add rules later via `{HUB_COMMAND[event_type]}` → "
+        f"**{HUB_BTN_RULES}**."
+    )
+    picked = await ask_keep_or_change(
+        channel,
+        f"**Member Rules Tab**\n"
+        f"Which Google Sheet tab should store {label} member rules? "
+        f"The bot creates and maintains this tab.",
+        default=default_structured_tab(event_type, "member_rules_tab"),
+        current=result.get("member_rules_tab", ""),
+        modal_title="Member Rules Tab Name",
+        modal_label="Tab name",
+        timeout_cmd=cmd_name,
+        cancel_event=cancel_event,
+    )
+    if picked is None:
+        return None
+    result["member_rules_tab"] = picked
+
+    try:
+        import storm_member_rules as smr
+        existing_rules = await asyncio.to_thread(
+            smr.list_rules, guild_id, event_type,
+        )
+    except Exception:
+        existing_rules = []
+    if not existing_rules:
+        rule_offer = _InlineCreateMemberRuleOffer(
+            owner_id=user.id, event_type=event_type, parent=parent,
+        )
+        # Per Rule A / #166 both DS and CS support per-member rules.
+        # Pointer text is identical for both event types.
+        rule_offer.message = await channel.send(
+            f"Want to add your first {label} rule now? The button opens "
+            f"a quick modal for a power-band rule (the most common type); "
+            f"per-member rules need a Discord member picker, so add those "
+            f"later via `{HUB_COMMAND[event_type]}` → **{HUB_BTN_RULES}**.",
+            view=rule_offer,
+        )
+        await wait_view_or_cancel(rule_offer, cancel_event)
+        if getattr(rule_offer, "cancelled", False):
+            return None
+
+    return result
 
 
 def _col_letter_to_index(letter: str) -> int:
@@ -5306,9 +7533,15 @@ def _col_index_to_letter(idx: int) -> str:
 async def _build_participation_question(
     channel, bot, user, cancel_event, *,
     cmd_name: str, is_premium_flag: bool, existing: dict | None,
+    all_questions: list[dict] | None = None,
 ) -> dict | None:
     """Add or edit a single participation question. Mirrors the survey
-    question builder's shape but with participation-specific types."""
+    question builder's shape but with participation-specific types.
+
+    `all_questions` (#244): the full configured-so-far list. Lets the
+    derived_count type's source picker enumerate existing
+    roster_multi_select questions to point at.
+    """
 
     def check(m):
         return m.author == user and m.channel == channel
@@ -5316,7 +7549,7 @@ async def _build_participation_question(
     # Label
     label_extra = f"\n*Existing label:* `{existing.get('label', '')}`" if existing else ""
     await channel.send(
-        f"**Question — Label**\n"
+        f"**Question: Label**\n"
         f"What's the label for this question? (e.g. `Sitting Out`, `Vote Count`)" + label_extra
     )
     try:
@@ -5361,7 +7594,7 @@ async def _build_participation_question(
 
     type_view = _TypeView()
     type_extra = f"\n*Existing type:* `{existing.get('type')}`" if existing else ""
-    await channel.send(f"**Question — Answer Type**{type_extra}", view=type_view)
+    await channel.send(f"**Question: Answer Type**{type_extra}", view=type_view)
     await wait_view_or_cancel(type_view, cancel_event)
     if type_view.cancelled:
         return
@@ -5375,7 +7608,7 @@ async def _build_participation_question(
     # Type-specific extras
     if q_type == "numeric":
         await channel.send(
-            "**Optional — bounds**\nReply with `min,max` (e.g. `0,500`) or "
+            "**Optional bounds**\nReply with `min,max` (e.g. `0,500`) or "
             "type `none` for no bounds."
         )
         try:
@@ -5392,7 +7625,7 @@ async def _build_participation_question(
                 if hi:
                     q["max"] = float(hi) if "." in hi else int(hi)
             except Exception:
-                await channel.send("⚠️ Couldn't parse those bounds — saving without min/max.")
+                await channel.send("⚠️ Couldn't parse those bounds. Saving without min/max.")
 
     elif q_type in ("single_select", "multi_select"):
         await channel.send(
@@ -5423,7 +7656,223 @@ async def _build_participation_question(
         fmt = reply.content.strip()
         q["date_format"] = "%m/%d/%Y" if fmt.lower() in ("", "default") else fmt
 
+    elif q_type == "roster_multi_select":
+        # #244 — paginated multi-select against the alliance roster.
+        # Optional auto-prefill source (Premium only). Free tier always
+        # captures manually.
+        if is_premium_flag:
+            class _PrefillView(discord.ui.View):
+                def __init__(self):
+                    super().__init__(timeout=120)
+                    self.selected: str | None = None
+                    self.cancelled = False
+
+                @discord.ui.button(
+                    label="🗳️ Pre-fill from Discord poll signups",
+                    style=discord.ButtonStyle.primary,
+                )
+                async def from_poll(self, inter, _btn):
+                    self.selected = "discord_poll"
+                    for c in self.children:
+                        c.disabled = True
+                    await wizard_registry.safe_edit_response(
+                        inter,
+                        content="✅ Pre-fill source: **Discord poll signups**",
+                        view=self,
+                    )
+                    self.stop()
+
+                @discord.ui.button(
+                    label="✋ Manual selection only",
+                    style=discord.ButtonStyle.secondary,
+                )
+                async def manual(self, inter, _btn):
+                    self.selected = ""
+                    for c in self.children:
+                        c.disabled = True
+                    await wizard_registry.safe_edit_response(
+                        inter,
+                        content="✅ Pre-fill source: **Manual selection only**",
+                        view=self,
+                    )
+                    self.stop()
+
+            pv = _PrefillView()
+            await channel.send(
+                "**Auto-prefill source (💎 Premium, optional)**\n"
+                "Want the bot to pre-check members based on a signal? "
+                "Officers can still toggle any member; pre-fills are a "
+                "starting point.\n\n"
+                "• **Discord poll signups**: pre-check members who "
+                "voted to attend in the signup poll for this event "
+                "(useful for the 'Who didn't vote?' shape — invert "
+                "the answer at participation time).\n"
+                "• **Manual only**: no pre-fill; officer picks from "
+                "the full roster.",
+                view=pv,
+            )
+            await wait_view_or_cancel(pv, cancel_event)
+            if pv.cancelled or pv.selected is None:
+                await channel.send(f"⏰ Timed out. Run `/{cmd_name}` to start again.")
+                return None
+            if pv.selected:
+                q["prefill_source"] = pv.selected
+        # Free tier: prefill_source not set; officer always picks manually.
+
+    elif q_type == "derived_count":
+        # #244 — Premium-only. The bot reads past Per-Member Log rows
+        # for the source question and counts per member. Officer can
+        # override at participation time.
+
+        # Source question picker — must be a roster_multi_select.
+        source_candidates = [
+            other for other in (all_questions or [])
+            if other.get("type") == "roster_multi_select"
+        ]
+        if not source_candidates:
+            await channel.send(
+                "⚠️ **Derived count needs a source question** of type "
+                "`Roster multi-select` to read from. Add one of those "
+                "first, then come back and add this derived count.\n"
+                "Skipping this question for now."
+            )
+            return None
+
+        class _SourceView(discord.ui.View):
+            def __init__(self):
+                super().__init__(timeout=120)
+                self.selected: str | None = None
+                self.cancelled = False
+                options = [
+                    discord.SelectOption(
+                        label=(s.get("label") or s.get("key", "?"))[:100],
+                        value=s.get("key", ""),
+                    )
+                    for s in source_candidates[:25]
+                ]
+                sel = discord.ui.Select(
+                    placeholder="Pick the source roster multi-select question…",
+                    options=options,
+                )
+
+                async def _cb(inter):
+                    self.selected = sel.values[0]
+                    sel.disabled = True
+                    await wizard_registry.safe_edit_response(
+                        inter,
+                        content=f"✅ Source question: `{self.selected}`",
+                        view=self,
+                    )
+                    self.stop()
+                sel.callback = _cb
+                self.add_item(sel)
+
+        sv = _SourceView()
+        await channel.send(
+            "**Source question** *(💎 Premium)*\n"
+            "Which roster multi-select question's history should this "
+            "count read from?",
+            view=sv,
+        )
+        await wait_view_or_cancel(sv, cancel_event)
+        if sv.cancelled or sv.selected is None:
+            await channel.send(f"⏰ Timed out. Run `/{cmd_name}` to start again.")
+            return None
+        q["source_question_key"] = sv.selected
+
+        # Lookback window — number of past events to scan.
+        attempts = 3
+        lookback = 4
+        while attempts > 0:
+            raw = await wait_for_msg_simple(
+                channel, bot, user, cancel_event,
+                "**Lookback window** *(💎 Premium)*\n"
+                "How many past captured events should the count cover? "
+                "(e.g. `4` for 'past 4 events'). Default is 4.",
+            )
+            if raw is None:
+                return None
+            raw = raw.strip()
+            if not raw:
+                break
+            try:
+                lookback = max(1, int(raw))
+                break
+            except ValueError:
+                attempts -= 1
+                await channel.send(
+                    f"⚠️ `{raw}` isn't a number. Please re-enter."
+                )
+        q["lookback_events"] = lookback
+
+        # Show-during-log toggle.
+        class _ShowDuringLogView(discord.ui.View):
+            def __init__(self):
+                super().__init__(timeout=120)
+                self.selected: bool | None = None
+                self.cancelled = False
+
+            @discord.ui.button(
+                label="📊 Show counts per member during the log",
+                style=discord.ButtonStyle.primary,
+            )
+            async def yes_btn(self, inter, _btn):
+                self.selected = True
+                for c in self.children:
+                    c.disabled = True
+                await wizard_registry.safe_edit_response(
+                    inter, content="✅ Show during the log: **Yes**", view=self,
+                )
+                self.stop()
+
+            @discord.ui.button(
+                label="🔕 Only show in the Trends Viewer",
+                style=discord.ButtonStyle.secondary,
+            )
+            async def no_btn(self, inter, _btn):
+                self.selected = False
+                for c in self.children:
+                    c.disabled = True
+                await wizard_registry.safe_edit_response(
+                    inter, content="✅ Show during the log: **No**", view=self,
+                )
+                self.stop()
+
+        sd = _ShowDuringLogView()
+        await channel.send(
+            "**Show during participation log?** *(💎 Premium)*\n"
+            "When officers run the log, should this count display per "
+            "member next to their name? Off by default — the count "
+            "still lives in the Trends Viewer either way.",
+            view=sd,
+        )
+        await wait_view_or_cancel(sd, cancel_event)
+        if sd.cancelled or sd.selected is None:
+            await channel.send(f"⏰ Timed out. Run `/{cmd_name}` to start again.")
+            return None
+        q["show_during_log"] = bool(sd.selected)
+
     return q
+
+
+async def wait_for_msg_simple(
+    channel, bot, user, cancel_event, prompt: str,
+    *, timeout: int = 120,
+) -> str | None:
+    """Minimal message-wait helper for inline use inside
+    `_build_participation_question`. Returns the user's reply text
+    or None on cancel/timeout."""
+
+    def check(m):
+        return m.author == user and m.channel == channel
+
+    await channel.send(prompt)
+    try:
+        reply = await bot.wait_for("message", check=check, timeout=timeout)
+        return reply.content
+    except asyncio.TimeoutError:
+        await channel.send("⏰ Timed out.")
+        return None
 
 
 async def run_event_setup(interaction: discord.Interaction, bot):
@@ -5447,7 +7896,7 @@ async def run_event_setup(interaction: discord.Interaction, bot):
             if cancel_event.is_set():
                 await channel.send("❌ Cancelled.")
             else:
-                await channel.send("⏰ Timed out. Run `/setup_events` to start again.")
+                await channel.send("⏰ Timed out. Run `/setup` → 📣 Events to start again.")
             return None
         return reply.content.strip()[:max_chars]
 
@@ -5456,7 +7905,6 @@ async def run_event_setup(interaction: discord.Interaction, bot):
 
     guild_cfg = get_config(guild_id) or get_or_create_config(guild_id)
     timezone  = guild_cfg.timezone if guild_cfg.timezone else "America/New_York"
-    tz_label  = TIMEZONE_LABELS.get(timezone, timezone)
     events    = get_guild_events(guild_id, active_only=True)
 
     draft_channel_id    = guild_cfg.event_draft_channel_id or 0
@@ -5473,9 +7921,12 @@ async def run_event_setup(interaction: discord.Interaction, bot):
         )
         summary_embed.add_field(name="Draft Channel",        value=f"<#{draft_channel_id}>",    inline=False)
         summary_embed.add_field(name="Announcement Channel", value=f"<#{announce_channel_id}>", inline=False)
-        summary_embed.add_field(name="Draft Time",           value=draft_time,                  inline=False)
+        summary_embed.add_field(name="Draft Time",           value=_format_time_with_tz(draft_time, timezone), inline=False)
         summary_embed.add_field(name="5-min Warning",        value="Yes" if five_min_warning else "No", inline=False)
-        ev_list = "\n".join(f"• **{e['name']}** — {e['default_time']} {tz_label}" for e in events)
+        ev_list = "\n".join(
+            f"• **{e['name']}** — {_format_time_with_tz(e['default_time'], e.get('timezone') or timezone)}"
+            for e in events
+        )
         summary_embed.add_field(name="Events", value=ev_list, inline=False)
 
         class EventActionView(discord.ui.View):
@@ -5551,7 +8002,7 @@ async def run_event_setup(interaction: discord.Interaction, bot):
 
     # ── Steps 1-4: Channel/time settings (skipped if coming from action menu) ──
     if not skip_settings:
-        is_premium_flag  = await premium.is_premium(guild_id, interaction=interaction)
+        is_premium_flag  = await premium.is_premium(guild_id, interaction=interaction, bot=interaction.client)
         current_draft_id = guild_cfg.event_draft_channel_id or 0
         draft_ch_view    = ChannelSelectStep(
             "Select the draft channel...",
@@ -5575,7 +8026,7 @@ async def run_event_setup(interaction: discord.Interaction, bot):
         if draft_ch_view.cancelled:
             return
         if not draft_ch_view.confirmed:
-            await channel.send("⏰ Timed out. Run `/setup_events` to start again.")
+            await channel.send("⏰ Timed out. Run `/setup` → 📣 Events to start again.")
             return
         draft_channel_id = draft_ch_view.selected_channel.id
 
@@ -5602,7 +8053,7 @@ async def run_event_setup(interaction: discord.Interaction, bot):
         if ann_ch_view.cancelled:
             return
         if not ann_ch_view.confirmed:
-            await channel.send("⏰ Timed out. Run `/setup_events` to start again.")
+            await channel.send("⏰ Timed out. Run `/setup` → 📣 Events to start again.")
             return
         announce_channel_id = ann_ch_view.selected_channel.id
 
@@ -5638,7 +8089,7 @@ async def run_event_setup(interaction: discord.Interaction, bot):
             if attempts_left <= 0:
                 await channel.send(
                     "⚠️ Could not read that time after a few tries. "
-                    "Run `/setup_events` to start over."
+                    "Run `/setup` → 📣 Events to start over."
                 )
                 return
             await channel.send(
@@ -5657,7 +8108,7 @@ async def run_event_setup(interaction: discord.Interaction, bot):
         if warn_view.cancelled:
             return
         if warn_view.selected is None:
-            await channel.send("⏰ Timed out. Run `/setup_events` to start again.")
+            await channel.send("⏰ Timed out. Run `/setup` → 📣 Events to start again.")
             return
         five_min_warning = 1 if warn_view.selected else 0
 
@@ -5751,7 +8202,7 @@ async def run_event_setup(interaction: discord.Interaction, bot):
                 return
 
             if not list_view.action:
-                await channel.send("⏰ Timed out. Run `/setup_events` to start again.")
+                await channel.send("⏰ Timed out. Run `/setup` → 📣 Events to start again.")
                 return False
 
             if list_view.action == "finish":
@@ -5770,7 +8221,7 @@ async def run_event_setup(interaction: discord.Interaction, bot):
                     existing = get_guild_event(guild_id, list_view.edit_key)
                 elif list_view.action == "add":
                     # Free-tier cap on number of events
-                    cap = await premium.get_limit("events", guild_id, interaction=interaction)
+                    cap = await premium.get_limit("events", guild_id, interaction=interaction, bot=interaction.client)
                     if cap is not None and len(events) >= cap:
                         await channel.send(embed=premium.limit_reached_embed(
                             feature_label="Event Announcements",
@@ -5834,7 +8285,7 @@ async def run_event_setup(interaction: discord.Interaction, bot):
                     if attempts_left <= 0:
                         await channel.send(
                             "⚠️ Could not read that time after a few tries. "
-                            "Run `/setup_events` to start over."
+                            "Run `/setup` → 📣 Events to start over."
                         )
                         return False
                     await channel.send(
@@ -5853,7 +8304,7 @@ async def run_event_setup(interaction: discord.Interaction, bot):
                 if sched_view.cancelled:
                     return
                 if not sched_view.selected:
-                    await channel.send("⏰ Timed out. Run `/setup_events` to start again.")
+                    await channel.send("⏰ Timed out. Run `/setup` → 📣 Events to start again.")
                     return False
                 schedule_type = sched_view.selected
 
@@ -5872,7 +8323,7 @@ async def run_event_setup(interaction: discord.Interaction, bot):
                         return False
                     parsed_anchor = _parse_month_day(anchor_raw)
                     if not parsed_anchor:
-                        await channel.send("⚠️ Could not read that date. Try `March 30`. Run `/setup_events` to try again.")
+                        await channel.send("⚠️ Could not read that date. Try `March 30`. Run `/setup` → 📣 Events to try again.")
                         return False
                     anchor_date = parsed_anchor
 
@@ -5896,7 +8347,7 @@ async def run_event_setup(interaction: discord.Interaction, bot):
                     try:
                         interval_days = int(interval_raw)
                     except ValueError:
-                        await channel.send("⚠️ Please enter a whole number. Run `/setup_events` to try again.")
+                        await channel.send("⚠️ Please enter a whole number. Run `/setup` → 📣 Events to try again.")
                         return False
 
                 # Blurb
@@ -5952,7 +8403,7 @@ async def run_event_setup(interaction: discord.Interaction, bot):
                 if blurb_view.cancelled:
                     return
                 if not blurb_view.choice:
-                    await channel.send("⏰ Timed out. Run `/setup_events` to start again.")
+                    await channel.send("⏰ Timed out. Run `/setup` → 📣 Events to start again.")
                     return False
 
                 if blurb_view.choice == "default":
@@ -5994,18 +8445,20 @@ async def run_event_setup(interaction: discord.Interaction, bot):
         return
 
     # ── Summary ────────────────────────────────────────────────────────────────
-    events   = get_guild_events(guild_id, active_only=True)
-    tz_label = TIMEZONE_LABELS.get(timezone, timezone)
+    events = get_guild_events(guild_id, active_only=True)
 
     embed = discord.Embed(title="✅ Events Configured", color=discord.Color.green())
     embed.add_field(name="Draft Channel",        value=f"<#{draft_channel_id}>",    inline=False)
     embed.add_field(name="Announcement Channel", value=f"<#{announce_channel_id}>", inline=False)
-    embed.add_field(name="Draft Time",           value=draft_time,                  inline=False)
+    embed.add_field(name="Draft Time",           value=_format_time_with_tz(draft_time, timezone), inline=False)
     embed.add_field(name="5-min Warning",        value="Yes" if five_min_warning else "No", inline=False)
     if events:
-        ev_list = "\n".join(f"• **{e['name']}** — {e['default_time']} {tz_label}" for e in events)
+        ev_list = "\n".join(
+            f"• **{e['name']}** — {_format_time_with_tz(e['default_time'], e.get('timezone') or timezone)}"
+            for e in events
+        )
         embed.add_field(name="Events", value=ev_list, inline=False)
-    embed.set_footer(text="Run /setup_events again to add or edit events.")
+    embed.set_footer(text="Run /setup and click 📣 Events to add or edit events.")
     await channel.send(embed=embed)
     wizard_registry.unregister(user.id, cancel_event)
     print(f"[SETUP] Events saved for guild {guild_id}")
@@ -6031,15 +8484,18 @@ async def run_birthday_setup(interaction: discord.Interaction, bot):
             if cancel_event.is_set():
                 await channel.send("❌ Cancelled.")
             else:
-                await channel.send("⏰ Timed out. Run `/setup_birthdays` to start again.")
+                await channel.send("⏰ Timed out. Run `/setup` → 🎂 Birthdays to start again.")
             return None
         return reply.content.strip()[:max_chars]
 
     from config import (
         get_birthday_config, has_birthday_config, clear_birthday_config,
+        get_config,
     )
     current = get_birthday_config(guild_id)
     birthdays_already_configured = has_birthday_config(guild_id)
+    guild_cfg = get_config(guild_id)
+    guild_tz  = guild_cfg.timezone if guild_cfg else "America/New_York"
 
     # ── If already enabled, show summary and offer edit or cancel ─────────────
     if birthdays_already_configured and current.get("enabled"):
@@ -6062,7 +8518,7 @@ async def run_birthday_setup(interaction: discord.Interaction, bot):
         ))
         if current.get("reminders_enabled"):
             fields.append(("Reminder Channel", f"<#{rc}>" if rc else "*not set*"))
-            fields.append(("Reminder Time",    current.get("reminder_time") or "*not set*"))
+            fields.append(("Reminder Time",    _format_time_with_tz(current.get("reminder_time"), guild_tz) or "*not set*"))
         proceed = await ask_proceed_with_existing_config(
             channel,
             title="🎂 Current Birthday Setup",
@@ -6090,7 +8546,7 @@ async def run_birthday_setup(interaction: discord.Interaction, bot):
     if enabled_view.cancelled:
         return
     if enabled_view.selected is None:
-        await channel.send("⏰ Timed out. Run `/setup_birthdays` to start again.")
+        await channel.send("⏰ Timed out. Run `/setup` → 🎂 Birthdays to start again.")
         return
     if not enabled_view.selected:
         from config import save_birthday_config
@@ -6106,7 +8562,7 @@ async def run_birthday_setup(interaction: discord.Interaction, bot):
         await ask_disable_with_clear(
             channel,
             feature_label="Birthday tracking",
-            setup_command="setup_birthdays",
+            setup_command="setup → 🎂 Birthdays",
             had_prior_config=birthdays_already_configured,
             clear_fn=lambda: clear_birthday_config(guild_id),
             cancel_event=cancel_event,
@@ -6154,7 +8610,7 @@ async def run_birthday_setup(interaction: discord.Interaction, bot):
         return
     name_col = _col_letter_to_index(name_col_raw)
     if name_col < 0:
-        await channel.send("⚠️ Please enter a single column letter like `A`. Run `/setup_birthdays` to try again.")
+        await channel.send("⚠️ Please enter a single column letter like `A`. Run `/setup` → 🎂 Birthdays to try again.")
         return
 
     # ── Step 4: Birthday column ────────────────────────────────────────────────
@@ -6182,7 +8638,7 @@ async def run_birthday_setup(interaction: discord.Interaction, bot):
         return
     birthday_col = _col_letter_to_index(bday_col_raw)
     if birthday_col < 0:
-        await channel.send("⚠️ Please enter a single column letter like `B`. Run `/setup_birthdays` to try again.")
+        await channel.send("⚠️ Please enter a single column letter like `B`. Run `/setup` → 🎂 Birthdays to try again.")
         return
 
     # ── Step 5: Train integration ─────────────────────────────────────────────
@@ -6196,7 +8652,7 @@ async def run_birthday_setup(interaction: discord.Interaction, bot):
     if train_view.cancelled:
         return
     if train_view.selected is None:
-        await channel.send("⏰ Timed out. Run `/setup_birthdays` to start again.")
+        await channel.send("⏰ Timed out. Run `/setup` → 🎂 Birthdays to start again.")
         return
     train_integration = 1 if train_view.selected else 0
 
@@ -6212,7 +8668,7 @@ async def run_birthday_setup(interaction: discord.Interaction, bot):
         await channel.send(
             "ℹ️ Heads up: birthdays auto-populate the train schedule **once per day** "
             "(on the bot's first tick after server-time midnight). If you need a "
-            "birthday reflected on the schedule sooner, run `/train_addbirthdays` "
+            "birthday reflected on the schedule sooner, run `/train birthdays` "
             "to trigger the check on demand."
         )
 
@@ -6246,7 +8702,7 @@ async def run_birthday_setup(interaction: discord.Interaction, bot):
         if placement_view.cancelled:
             return
         if placement_view.selected is None:
-            await channel.send("⏰ Timed out. Run `/setup_birthdays` to start again.")
+            await channel.send("⏰ Timed out. Run `/setup` → 🎂 Birthdays to start again.")
             return
         flexible_placement = placement_view.selected
 
@@ -6273,7 +8729,7 @@ async def run_birthday_setup(interaction: discord.Interaction, bot):
             if lookahead_days < 1:
                 raise ValueError
         except ValueError:
-            await channel.send("⚠️ Please enter a number like `14`. Run `/setup_birthdays` to try again.")
+            await channel.send("⚠️ Please enter a number like `14`. Run `/setup` → 🎂 Birthdays to try again.")
             return
 
     # ── Step 8: Birthday reminders ─────────────────────────────────────────────
@@ -6288,7 +8744,7 @@ async def run_birthday_setup(interaction: discord.Interaction, bot):
     if remind_view.cancelled:
         return
     if remind_view.selected is None:
-        await channel.send("⏰ Timed out. Run `/setup_birthdays` to start again.")
+        await channel.send("⏰ Timed out. Run `/setup` → 🎂 Birthdays to start again.")
         return
     reminders_enabled    = 1 if remind_view.selected else 0
     reminder_channel_id  = 0
@@ -6300,7 +8756,7 @@ async def run_birthday_setup(interaction: discord.Interaction, bot):
 
     if reminders_enabled:
         # ── Step 8a: Reminder channel ──────────────────────────────────────────
-        is_premium_flag = await premium.is_premium(guild_id, interaction=interaction)
+        is_premium_flag = await premium.is_premium(guild_id, interaction=interaction, bot=interaction.client)
         saved_remind_ch = current.get("reminder_channel_id", 0) or 0
         remind_ch_view = ChannelSelectStep(
             "Select the birthday announcement channel...",
@@ -6323,7 +8779,7 @@ async def run_birthday_setup(interaction: discord.Interaction, bot):
         if remind_ch_view.cancelled:
             return
         if not remind_ch_view.confirmed:
-            await channel.send("⏰ Timed out. Run `/setup_birthdays` to start again.")
+            await channel.send("⏰ Timed out. Run `/setup` → 🎂 Birthdays to start again.")
             return
         reminder_channel_id = remind_ch_view.selected_channel.id
 
@@ -6365,7 +8821,7 @@ async def run_birthday_setup(interaction: discord.Interaction, bot):
             if attempts_left <= 0:
                 await channel.send(
                     "⚠️ Could not read that time after a few tries. "
-                    "Run `/setup_birthdays` to start over."
+                    "Run `/setup` → 🎂 Birthdays to start over."
                 )
                 return
             await channel.send(
@@ -6376,7 +8832,7 @@ async def run_birthday_setup(interaction: discord.Interaction, bot):
     # ── Step 9: Birthday DM body (💎 Premium) ─────────────────────────────────
     # Customisable body of the per-member birthday DM that fires alongside
     # the channel announcement on Premium guilds. Free guilds can configure
-    # now — it just won't fire until they have Premium + Member Roster Sync
+    # now — it just won't fire until they have Premium + Member Sync
     # AND a Discord ID column wired up in the birthday sheet.
     birthday_dm_message = ""
     if reminders_enabled:
@@ -6387,7 +8843,7 @@ async def run_birthday_setup(interaction: discord.Interaction, bot):
             "**Step 9 of 9 — Birthday DM Body (💎 Premium)**\n"
             "When a birthday fires, the bot also DMs the member directly with a personal "
             "note. Free guilds can configure this now — it just won't fire until you have "
-            "Premium + Member Roster Sync + a Discord ID column in your birthday sheet.\n\n"
+            "Premium + Member Sync + a Discord ID column in your birthday sheet.\n\n"
             "Use `{name}` as a placeholder for the member's name.",
             default=DEFAULT_BIRTHDAY_DM,
             current=saved_birthday_dm,
@@ -6431,8 +8887,8 @@ async def run_birthday_setup(interaction: discord.Interaction, bot):
     embed.add_field(name="Reminders",           value="Enabled" if reminders_enabled else "Disabled", inline=True)
     if reminders_enabled:
         embed.add_field(name="Reminder Channel", value=f"<#{reminder_channel_id}>",       inline=True)
-        embed.add_field(name="Reminder Time",    value=reminder_time,                     inline=True)
-    embed.set_footer(text="Run /setup_birthdays again to update these settings.")
+        embed.add_field(name="Reminder Time",    value=_format_time_with_tz(reminder_time, guild_tz), inline=True)
+    embed.set_footer(text="Run /setup and click 🎂 Birthdays to update these settings.")
     await channel.send(embed=embed)
     wizard_registry.unregister(user.id, cancel_event)
     print(f"[SETUP] Birthday config saved for guild {guild_id}")
@@ -6455,9 +8911,8 @@ async def run_shiny_tasks_setup(interaction: discord.Interaction, bot):
 
     current  = get_shiny_tasks_config(guild_id)
     cfg      = get_config(guild_id)
-    tz_label = TIMEZONE_LABELS.get(
-        cfg.timezone if cfg else "America/New_York", "ET",
-    )
+    guild_tz = cfg.timezone if cfg else "America/New_York"
+    tz_label = TIMEZONE_LABELS.get(guild_tz, "ET")
     shiny_already_configured = has_shiny_tasks_config(guild_id)
 
     # ── If already enabled, show summary and offer edit or cancel ─────────────
@@ -6471,7 +8926,7 @@ async def run_shiny_tasks_setup(interaction: discord.Interaction, bot):
             ),
             (
                 "Post Time",
-                f"{current.get('post_time') or '*not set*'}  *({tz_label})*",
+                _format_time_with_tz(current.get("post_time"), guild_tz) or "*not set*",
             ),
             (
                 "Message",
@@ -6508,12 +8963,12 @@ async def run_shiny_tasks_setup(interaction: discord.Interaction, bot):
         wizard_registry.unregister(user.id, cancel_event)
         return
     if enabled_view.selected is None:
-        await channel.send("⏰ Timed out. Run `/setup_shiny_tasks` to start again.")
+        await channel.send("⏰ Timed out. Run `/setup` → 🌟 Shiny Tasks to start again.")
         wizard_registry.unregister(user.id, cancel_event)
         return
     if not enabled_view.selected:
         # Disable + persist the previously-saved range/channel/etc. so the
-        # next /setup_shiny_tasks run can offer them back as "current".
+        # next Shiny Tasks setup wizard run can offer them back as "current".
         save_shiny_tasks_config(
             guild_id,
             enabled=0,
@@ -6526,7 +8981,7 @@ async def run_shiny_tasks_setup(interaction: discord.Interaction, bot):
         await ask_disable_with_clear(
             channel,
             feature_label="Shiny tasks announcement",
-            setup_command="setup_shiny_tasks",
+            setup_command="setup → 🌟 Shiny Tasks",
             had_prior_config=shiny_already_configured,
             clear_fn=lambda: clear_shiny_tasks_config(guild_id),
             cancel_event=cancel_event,
@@ -6535,7 +8990,7 @@ async def run_shiny_tasks_setup(interaction: discord.Interaction, bot):
         return
 
     # ── Step 2: Channel ───────────────────────────────────────────────────────
-    is_premium_flag = await premium.is_premium(guild_id, interaction=interaction)
+    is_premium_flag = await premium.is_premium(guild_id, interaction=interaction, bot=interaction.client)
     await channel.send(
         "**Step 2 of 6 — Announcement Channel**\n"
         "Pick the channel where the daily shiny tasks post should be posted."
@@ -6559,7 +9014,7 @@ async def run_shiny_tasks_setup(interaction: discord.Interaction, bot):
         wizard_registry.unregister(user.id, cancel_event)
         return
     if not ch_view.confirmed:
-        await channel.send("⏰ Timed out. Run `/setup_shiny_tasks` to start again.")
+        await channel.send("⏰ Timed out. Run `/setup` → 🌟 Shiny Tasks to start again.")
         wizard_registry.unregister(user.id, cancel_event)
         return
     channel_id = ch_view.selected_channel.id
@@ -6653,7 +9108,7 @@ async def run_shiny_tasks_setup(interaction: discord.Interaction, bot):
             wizard_registry.unregister(user.id, cancel_event)
             return
         if not range_launcher.confirmed:
-            await channel.send("⏰ Timed out. Run `/setup_shiny_tasks` to start again.")
+            await channel.send("⏰ Timed out. Run `/setup` → 🌟 Shiny Tasks to start again.")
             wizard_registry.unregister(user.id, cancel_event)
             return
 
@@ -6675,7 +9130,7 @@ async def run_shiny_tasks_setup(interaction: discord.Interaction, bot):
         if range_attempts_left <= 0:
             await channel.send(
                 "⚠️ Could not read those server numbers after a few tries. "
-                "Run `/setup_shiny_tasks` to start over."
+                "Run `/setup` → 🌟 Shiny Tasks to start over."
             )
             wizard_registry.unregister(user.id, cancel_event)
             return
@@ -6730,7 +9185,7 @@ async def run_shiny_tasks_setup(interaction: discord.Interaction, bot):
         if attempts_left <= 0:
             await channel.send(
                 "⚠️ Could not read that time after a few tries. "
-                "Run `/setup_shiny_tasks` to start over."
+                "Run `/setup` → 🌟 Shiny Tasks to start over."
             )
             wizard_registry.unregister(user.id, cancel_event)
             return
@@ -6773,7 +9228,7 @@ async def run_shiny_tasks_setup(interaction: discord.Interaction, bot):
     embed.add_field(name="Status",         value="✅ Enabled",                       inline=True)
     embed.add_field(name="Channel",        value=f"<#{channel_id}>",                inline=True)
     embed.add_field(name="Server Range",   value=f"{server_min} – {server_max}",    inline=True)
-    embed.add_field(name="Post Time",      value=f"{post_time}  *({tz_label})*",    inline=True)
+    embed.add_field(name="Post Time",      value=_format_time_with_tz(post_time, guild_tz), inline=True)
     embed.add_field(
         name="Message",
         value=(message_template or DEFAULT_SHINY_TASKS_MESSAGE)[:1024],
@@ -6786,7 +9241,7 @@ async def run_shiny_tasks_setup(interaction: discord.Interaction, bot):
         wizard_registry.unregister(user.id, cancel_event)
         return
     if not confirm_view.confirmed:
-        await channel.send("❌ Setup cancelled. Run `/setup_shiny_tasks` to start again.")
+        await channel.send("❌ Setup cancelled. Run `/setup` → 🌟 Shiny Tasks to start again.")
         wizard_registry.unregister(user.id, cancel_event)
         return
 
@@ -6800,19 +9255,7 @@ async def run_shiny_tasks_setup(interaction: discord.Interaction, bot):
         message_template=message_template,
     )
 
-    # Render the post time with the events-style `5:00pm EDT` suffix
-    # rather than a bare `09:00` — anchored on today's date so DST
-    # gives the right tz abbreviation (EDT vs EST).
-    from datetime import datetime as _dt
-    from zoneinfo import ZoneInfo as _ZI
-    from scheduler import format_et as _format_et
-    try:
-        _hh, _mm = (int(p) for p in post_time.split(":"))
-        _tz      = _ZI(cfg.timezone if cfg else "America/New_York")
-        _today   = _dt.now(tz=_tz).date()
-        _human   = _format_et(_dt(_today.year, _today.month, _today.day, _hh, _mm, tzinfo=_tz))
-    except Exception:
-        _human = post_time  # never block the success path on a format hiccup
+    _human = _format_time_with_tz(post_time, guild_tz) or post_time
 
     await channel.send(
         f"✅ Shiny-tasks announcement saved! The first post will fire at {_human}."

@@ -25,6 +25,7 @@ venv/
 # Claude Code
 .claude/settings.local.json
 .claude/worktrees/
+.claude/scheduled_tasks*
 
 # Local working docs (cross-session planning, design parks, audit
 # scratchpads, recruiter prep, ad-hoc test plans). See the "Parked work"

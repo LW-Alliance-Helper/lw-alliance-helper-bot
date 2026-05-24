@@ -75,6 +75,119 @@ def parse_custom_id(custom_id: str) -> dict | None:
     }
 
 
+# Distinct custom_id prefix for the "View sign-ups" leadership button
+# (#258). Kept separate from the vote-button schema so `parse_custom_id`
+# doesn't have to special-case a non-vote action.
+_VIEW_SIGNUPS_PREFIX = "signup_view"
+
+
+def make_view_signups_custom_id(
+    guild_id: int, event_type: str, event_date: str,
+) -> str:
+    return f"{_VIEW_SIGNUPS_PREFIX}:{int(guild_id)}:{event_type.lower()}:{event_date}"
+
+
+def parse_view_signups_custom_id(custom_id: str) -> dict | None:
+    parts = (custom_id or "").split(":")
+    if len(parts) != 4 or parts[0] != _VIEW_SIGNUPS_PREFIX:
+        return None
+    try:
+        guild_id = int(parts[1])
+    except ValueError:
+        return None
+    event_type = parts[2].lower()
+    event_date = parts[3]
+    if event_type not in ("ds", "cs"):
+        return None
+    return {
+        "guild_id":   guild_id,
+        "event_type": event_type,
+        "event_date": event_date,
+    }
+
+
+# Poll-style ack embed labels (#258). Short labels chosen so the bars
+# render the same width regardless of which bucket is the longest text.
+_POLL_BUCKET_LABELS = {
+    "a":      "Team A",
+    "b":      "Team B",
+    "either": "Either",
+    "cannot": "Can't",
+}
+
+# Bar width in block characters. Calibrated so the longest bar fits
+# inside a mobile Discord embed without wrapping.
+_POLL_BAR_WIDTH = 12
+
+
+def _render_vote_poll_embed(
+    guild_id: int,
+    event_type: str,
+    event_date: str,
+    *,
+    voter_vote: str,
+    voter_vote_label: str,
+    teams_setting: str = "both",
+) -> discord.Embed:
+    """Build the ephemeral poll-style ack shown after a vote click (#258).
+
+    Mirrors the in-game LW poll: members already understand the bars as
+    an availability snapshot, not a guarantee they're on the team. The
+    voter's own bucket is marked with `✓`.
+
+    `voter_vote_label` is the slot-aware label (e.g. `Team A: 9pm ET
+    (18:00 server time)`) so the title matches the button that was
+    clicked.
+    """
+    import config
+
+    rows = config.get_storm_signups(guild_id, event_type, event_date)
+    counts = {"a": 0, "b": 0, "either": 0, "cannot": 0}
+    for r in rows:
+        v = r.get("vote")
+        if v in counts:
+            counts[v] += 1
+
+    teams_norm = teams_setting if teams_setting in ("both", "A", "B") else "both"
+    if teams_norm == "A":
+        ordered = ("a", "cannot")
+    elif teams_norm == "B":
+        ordered = ("b", "cannot")
+    else:
+        ordered = ("a", "b", "either", "cannot")
+
+    max_count = max((counts[k] for k in ordered), default=0)
+
+    bar_lines = []
+    for k in ordered:
+        c = counts[k]
+        if max_count > 0:
+            blocks = round((c / max_count) * _POLL_BAR_WIDTH)
+        else:
+            blocks = 0
+        bar = "█" * blocks
+        marker = "  ✓" if voter_vote == k else ""
+        bar_lines.append(
+            f"{_POLL_BUCKET_LABELS[k]:<7}{bar:<{_POLL_BAR_WIDTH}}  {c}{marker}"
+        )
+
+    total = sum(counts[k] for k in ordered)
+
+    description = (
+        "```\n"
+        + "\n".join(bar_lines)
+        + "\n```"
+        + f"\n**Total votes:** {total}"
+    )
+
+    color = discord.Color.gold() if event_type == "DS" else discord.Color.orange()
+    return discord.Embed(
+        title=f"✅ Your vote: {voter_vote_label}",
+        description=description,
+        color=color,
+    )
+
+
 class SignupView(discord.ui.View):
     """Persistent View for one storm registration post. Lives forever
     (`timeout=None`); buttons have stable custom_ids so the bot can
@@ -137,6 +250,12 @@ class SignupView(discord.ui.View):
                 "either", "🔄 Either time works", discord.ButtonStyle.success,
             )
         self._add_vote_button("cannot", "❌ Cannot participate", discord.ButtonStyle.danger)
+        # Leadership-only sign-up breakdown button (#258). Always shown
+        # to every viewer (Discord doesn't support per-user button
+        # visibility); the click handler enforces the Leadership-role
+        # check and politely rejects non-officers with an ephemeral.
+        # Rendered on row=1 so it doesn't crowd the vote buttons.
+        self._add_view_signups_button()
 
     def _add_vote_button(self, vote_code: str, label: str, style: discord.ButtonStyle):
         btn = discord.ui.Button(
@@ -147,10 +266,27 @@ class SignupView(discord.ui.View):
         btn.callback = self._make_callback(vote_code)
         self.add_item(btn)
 
+    def _add_view_signups_button(self):
+        btn = discord.ui.Button(
+            label="👁️ View sign-ups",
+            style=discord.ButtonStyle.secondary,
+            custom_id=make_view_signups_custom_id(
+                self.guild_id, self.event_type, self.event_date,
+            ),
+            row=1,
+        )
+        btn.callback = self._view_signups_callback
+        self.add_item(btn)
+
     def _make_callback(self, vote_code: str):
         async def _cb(interaction: discord.Interaction):
             await _handle_signup_click(interaction, vote_code)
         return _cb
+
+    async def _view_signups_callback(self, interaction: discord.Interaction):
+        await _handle_view_signups_click(
+            interaction, self.guild_id, self.event_type, self.event_date,
+        )
 
 
 async def _handle_signup_click(interaction: discord.Interaction, vote_code: str):
@@ -310,10 +446,13 @@ async def _handle_signup_click(interaction: discord.Interaction, vote_code: str)
         if slot_label:
             label = f"{label}: {slot_label}"
     try:
-        await interaction.followup.send(
-            f"✅ Vote recorded: {label}. You can change your vote any time before the event.",
-            ephemeral=True,
+        embed = _render_vote_poll_embed(
+            guild_id, event_type, event_date,
+            voter_vote=vote,
+            voter_vote_label=label,
+            teams_setting=teams_setting,
         )
+        await interaction.followup.send(embed=embed, ephemeral=True)
     except discord.HTTPException as e:
         logger.warning(
             "[STORM SIGNUP] Failed to send vote ack to user %s in guild %s: %s",
@@ -486,9 +625,16 @@ async def _maybe_send_power_refresh_dm(
             guild_id, event_type, e,
         )
         header = ""
+    # Lead with the vote-recorded confirmation (#259) so members never
+    # mistake the power-DM for a "your vote failed" error. The DM lands
+    # alongside (and visually competes with) the ephemeral poll ack;
+    # leading with ✅ kills the ambiguity even if the ephemeral got
+    # missed. Applies to every nudge variant — missing power (#138) and
+    # stale power (#255) alike.
     if nudge_reason == "stale":
         if header:
             body = (
+                f"✅ Your vote was recorded.\n\n"
                 f"Heads up, your **{header}** on the alliance roster Sheet "
                 f"was last updated **{days_stale}** days ago. Please refresh "
                 f"it before the next storm so leadership has accurate "
@@ -496,6 +642,7 @@ async def _maybe_send_power_refresh_dm(
             )
         else:
             body = (
+                f"✅ Your vote was recorded.\n\n"
                 f"Heads up: your power value on the alliance roster Sheet "
                 f"was last updated **{days_stale}** days ago. Could you "
                 f"refresh it before the next storm so leadership has "
@@ -503,12 +650,14 @@ async def _maybe_send_power_refresh_dm(
             )
     elif header:
         body = (
+            f"✅ Your vote was recorded.\n\n"
             f"Heads up, your **{header}** on the alliance roster Sheet "
             f"isn't readable. Please update it before the next storm "
             f"so leadership has accurate numbers for zone assignments."
         )
     else:
         body = (
+            "✅ Your vote was recorded.\n\n"
             "Heads up: your power value on the alliance roster Sheet "
             "isn't readable. Could you update it before the next storm "
             "so leadership has accurate numbers for zone assignments?"
@@ -547,6 +696,109 @@ async def _maybe_send_power_refresh_dm(
                 "guild=%s: %s",
                 voter_id, guild_id, clear_err,
             )
+
+
+async def _handle_view_signups_click(
+    interaction: discord.Interaction,
+    guild_id: int,
+    event_type: str,
+    event_date: str,
+) -> None:
+    """Leadership-only click handler for the `👁️ View sign-ups` button
+    on the public sign-up post (#258).
+
+    Reuses the breakdown embed from the officer view (`/desertstorm` →
+    'View sign-ups + set up teams') so leadership gets the same
+    grouped-by-vote rendering without leaving the post. Non-officers
+    get a polite ephemeral rejection — Discord can't hide a button per-
+    user on a public message, so the role check is enforced on click
+    instead of at render time.
+    """
+    from storm_permissions import is_leader_or_admin
+
+    if not is_leader_or_admin(interaction):
+        try:
+            await interaction.response.send_message(
+                "🔒 Leadership only. This shows the full sign-up "
+                "breakdown.",
+                ephemeral=True,
+            )
+        except discord.HTTPException:
+            pass
+        return
+
+    try:
+        await interaction.response.defer(ephemeral=True, thinking=True)
+    except discord.HTTPException as e:
+        logger.warning(
+            "[STORM SIGNUP] view-signups defer failed (guild=%s): %s",
+            guild_id, e,
+        )
+
+    # Ensure the guild member cache is loaded — the bucket builder
+    # iterates `guild.members` for the not-voted bucket and matches
+    # on-behalf rows back to live Discord members. A cold cache would
+    # leak voters into the not-on-discord phantom path.
+    if interaction.guild is not None:
+        try:
+            import member_roster
+            await member_roster._ensure_member_cache(interaction.guild)
+        except Exception as e:
+            logger.warning(
+                "[STORM SIGNUP] view-signups member-cache pre-pass "
+                "failed for guild=%s: %s",
+                guild_id, e,
+            )
+
+    try:
+        from storm_officer_view import _build_bucket_map, _render_embed
+    except ImportError as e:
+        logger.warning(
+            "[STORM SIGNUP] view-signups import failed (guild=%s): %s",
+            guild_id, e,
+        )
+        try:
+            await interaction.followup.send(
+                "⚠️ Couldn't load the breakdown view. Try "
+                f"`/{'desertstorm' if event_type.upper() == 'DS' else 'canyonstorm'}` "
+                "from the storm hub instead.",
+                ephemeral=True,
+            )
+        except discord.HTTPException:
+            pass
+        return
+
+    try:
+        buckets, _errs = await asyncio.to_thread(
+            _build_bucket_map,
+            interaction.guild, event_type.upper(), event_date,
+        )
+        embed = _render_embed(
+            interaction.guild, event_type.upper(), event_date, buckets,
+        )
+    except Exception as e:
+        logger.warning(
+            "[STORM SIGNUP] view-signups build failed "
+            "(guild=%s event=%s/%s): %s",
+            guild_id, event_type, event_date, e,
+        )
+        try:
+            await interaction.followup.send(
+                f"⚠️ Couldn't build the breakdown: {e}",
+                ephemeral=True,
+            )
+        except discord.HTTPException:
+            pass
+        return
+
+    try:
+        await interaction.followup.send(embed=embed, ephemeral=True)
+    except discord.HTTPException as e:
+        logger.warning(
+            "[STORM SIGNUP] view-signups followup send failed "
+            "(guild=%s): %s",
+            guild_id, e,
+        )
 
 
 def _mirror_vote_to_sheet(

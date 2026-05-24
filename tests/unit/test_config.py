@@ -755,7 +755,13 @@ class TestStormSignups:
         assert len(ds) == 1 and ds[0]["vote"] == "a"
         assert len(cs) == 1 and cs[0]["vote"] == "b"
 
-    def test_record_registration_post_idempotent(self, temp_db):
+    def test_record_registration_post_allows_multiple_per_event(self, temp_db):
+        """#265: multiple posts per event are supported so leadership can
+        re-post when the original gets lost in channel chatter. Both
+        inserts succeed; `has_registration_post` still reports True after
+        either (used by the auto-scheduler's idempotency guard); the
+        recent-posts list surfaces both rows so persistent-View
+        re-registration can attach to every live message_id on startup."""
         import config
         first = config.record_storm_registration_post(
             TEST_GUILD_ID, "DS", "2026-05-18",
@@ -767,8 +773,13 @@ class TestStormSignups:
             channel_id=200, message_id=9999,
         )
         assert first is True
-        assert second is False
+        assert second is True
         assert config.has_registration_post(TEST_GUILD_ID, "DS", "2026-05-18") is True
+        # Both message_ids land in the recent-posts list so persistent-
+        # View re-registration attaches handlers to every live message.
+        recents = config.get_recent_storm_registration_posts(within_days=365)
+        msg_ids = {r["message_id"] for r in recents}
+        assert msg_ids == {4001, 9999}
 
     def test_recent_posts_window(self, temp_db):
         import config
@@ -1487,3 +1498,30 @@ class TestStormRegistrationPostIndices:
         )
         assert post["team_a_slot_index"] == 0
         assert post["team_b_slot_index"] == 0
+
+    def test_get_returns_latest_when_multiple_posts(self, seeded_db):
+        """#265: with multiple posts per event, `get_storm_registration_post`
+        returns the LATEST by posted_at. Slot mapping is expected to be
+        identical across reposts (same guild config / override), but
+        the freshest channel_id / message_id is the safest pick for any
+        future caller."""
+        import config
+        import time
+        config.record_storm_registration_post(
+            TEST_GUILD_ID, "DS", "2026-05-29",
+            channel_id=111, message_id=4001,
+            team_a_slot_index=1, team_b_slot_index=2,
+        )
+        # Tiny sleep so the ISO-second-precision `posted_at` differs.
+        time.sleep(1.1)
+        config.record_storm_registration_post(
+            TEST_GUILD_ID, "DS", "2026-05-29",
+            channel_id=222, message_id=9999,
+            team_a_slot_index=1, team_b_slot_index=2,
+        )
+        post = config.get_storm_registration_post(
+            TEST_GUILD_ID, "DS", "2026-05-29",
+        )
+        assert post is not None
+        assert post["message_id"] == 9999
+        assert post["channel_id"] == 222

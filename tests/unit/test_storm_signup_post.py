@@ -218,3 +218,84 @@ class TestRegistrationEmbedTeamsGate:
         assert "10am ET" not in body
         assert "9pm ET" not in body
         assert "Select your availability for Canyon Storm" in embed.description
+
+
+class TestPostRegistrationForceFlag:
+    """#265: `force=True` lets leadership re-post a sign-up message even
+    when one already exists for the event. `force=False` (default) keeps
+    the auto-scheduler tick idempotent so the daily fire doesn't drop a
+    duplicate post on top of one it already created."""
+
+    def _guild_with_channel(self, gid=TEST_GUILD_ID, channel_id=555):
+        """Stub guild that owns a stub channel — enough for
+        `post_registration` to reach the `has_registration_post` guard."""
+        from unittest.mock import AsyncMock
+        channel = MagicMock()
+        channel.send = AsyncMock(return_value=MagicMock(id=999_000))
+        guild = MagicMock()
+        guild.id = gid
+        guild.get_channel = MagicMock(return_value=channel)
+        return guild, channel
+
+    @pytest.mark.asyncio
+    async def test_default_returns_already_posted_when_one_exists(self, seeded_db):
+        """Scheduler-style call (no `force=`) skips when a row exists."""
+        import config
+        # Configure storm + Team A/B slots so we'd otherwise get past
+        # `missing_slot_labels`. The `has_registration_post` check fires
+        # before slot resolution though, so we don't strictly need it —
+        # but seeding makes the test resilient if the guard moves later.
+        config.save_storm_team_slots(TEST_GUILD_ID, "DS", 1, 2)
+        config.save_structured_storm_config(
+            TEST_GUILD_ID, "DS",
+            structured_flow_enabled=True,
+            signup_channel_id=555,
+        )
+        config.record_storm_registration_post(
+            TEST_GUILD_ID, "DS", "2026-05-29",
+            channel_id=555, message_id=4001,
+        )
+        guild, channel = self._guild_with_channel()
+        result = await ssp.post_registration(
+            bot=MagicMock(), guild=guild,
+            event_type="DS", event_date="2026-05-29",
+        )
+        assert result["status"] == "already_posted"
+        # No new message went out — channel.send was never called.
+        channel.send.assert_not_awaited()
+
+    @pytest.mark.asyncio
+    async def test_force_true_bypasses_guard_and_posts_again(self, seeded_db):
+        """Leadership-triggered repost (force=True) sends a fresh
+        message and records a second row — votes still aggregate on
+        the same (guild, event_type, event_date) on storm_signups."""
+        import config
+        config.save_storm_team_slots(TEST_GUILD_ID, "DS", 1, 2)
+        config.save_structured_storm_config(
+            TEST_GUILD_ID, "DS",
+            structured_flow_enabled=True,
+            signup_channel_id=555,
+        )
+        config.record_storm_registration_post(
+            TEST_GUILD_ID, "DS", "2026-05-29",
+            channel_id=555, message_id=4001,
+        )
+        guild, channel = self._guild_with_channel()
+        # Stub the sent-message id so the recorder writes a second row.
+        sent_message = MagicMock()
+        sent_message.id = 7777
+        from unittest.mock import AsyncMock
+        channel.send = AsyncMock(return_value=sent_message)
+        result = await ssp.post_registration(
+            bot=MagicMock(), guild=guild,
+            event_type="DS", event_date="2026-05-29",
+            force=True,
+        )
+        assert result["status"] == "ok"
+        channel.send.assert_awaited_once()
+        # Both message_ids land in the recent-posts list — the
+        # persistent-View re-registration path will re-attach handlers
+        # to every live message on startup.
+        recents = config.get_recent_storm_registration_posts(within_days=365)
+        msg_ids = {r["message_id"] for r in recents if r["event_date"] == "2026-05-29"}
+        assert msg_ids == {4001, 7777}

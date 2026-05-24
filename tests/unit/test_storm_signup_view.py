@@ -16,6 +16,20 @@ import storm_signup_view as sv
 from tests.unit.test_config import TEST_GUILD_ID
 
 
+def _vote_buttons(view):
+    """Return only the vote buttons on a SignupView (filters out the
+    leadership 'View sign-ups' button added in #258)."""
+    return [
+        c for c in view.children
+        if (c.custom_id or "").startswith("signup:")
+    ]
+
+
+def _vote_codes(view):
+    """Parse vote codes off every vote button on a SignupView."""
+    return [sv.parse_custom_id(c.custom_id)["vote"] for c in _vote_buttons(view)]
+
+
 class TestCustomIdEncoding:
     def test_round_trip(self):
         cid = sv.make_custom_id(12345, "DS", "2026-05-18", "a")
@@ -61,11 +75,15 @@ class TestSignupViewConstruction:
     def test_four_buttons_with_stable_custom_ids(self):
         view = sv.SignupView(12345, "DS", "2026-05-18",
                              time_a_label="9pm ET", time_b_label="4pm ET")
-        # Four buttons total
-        assert len(view.children) == 4
-        # Each button has a parseable custom_id
+        # 4 vote buttons + 1 leadership "View sign-ups" button (#258)
+        assert len(view.children) == 5
+        # Each vote button has a parseable custom_id
+        vote_buttons = [
+            c for c in view.children
+            if (c.custom_id or "").startswith("signup:")
+        ]
         votes_found = set()
-        for btn in view.children:
+        for btn in vote_buttons:
             parsed = sv.parse_custom_id(btn.custom_id)
             assert parsed is not None
             assert parsed["guild_id"]   == 12345
@@ -98,12 +116,10 @@ class TestSignupViewConstruction:
 
     def test_cs_default_renders_four_buttons(self):
         """Rule A / #166: CS supports teams=both/A/B just like DS. With
-        the default teams="both" CS renders all 4 buttons (a, b,
-        either, cannot)."""
+        the default teams="both" CS renders all 4 vote buttons (a, b,
+        either, cannot) plus the leadership view button."""
         view = sv.SignupView(12345, "CS", "2026-05-18")
-        codes = sorted(
-            sv.parse_custom_id(c.custom_id)["vote"] for c in view.children
-        )
+        codes = sorted(_vote_codes(view))
         assert codes == ["a", "b", "cannot", "either"]
 
     def test_cs_force_all_buttons_renders_four(self):
@@ -113,68 +129,55 @@ class TestSignupViewConstruction:
         restart — discord.py routes by custom_id matching."""
         view = sv.SignupView(12345, "CS", "2026-05-18",
                              _force_all_buttons=True)
-        codes = sorted(
-            sv.parse_custom_id(c.custom_id)["vote"] for c in view.children
-        )
+        codes = sorted(_vote_codes(view))
         assert codes == ["a", "b", "cannot", "either"]
 
     def test_force_all_buttons_noop_for_ds(self):
-        """DS always has all 4 buttons regardless of the flag."""
+        """DS always has all 4 vote buttons regardless of the flag."""
         view_default = sv.SignupView(1, "DS", "2026-05-18")
         view_forced = sv.SignupView(1, "DS", "2026-05-18",
                                     _force_all_buttons=True)
-        assert len(view_default.children) == len(view_forced.children) == 4
+        assert len(_vote_buttons(view_default)) == 4
+        assert len(_vote_buttons(view_forced)) == 4
 
     def test_ds_teams_a_renders_a_plus_cannot(self):
         """#148 single-team DS: alliance opted into Team A only.
-        SignupView renders A + Cannot (no B / Either)."""
+        SignupView renders A + Cannot vote buttons (no B / Either)."""
         view = sv.SignupView(1, "DS", "2026-05-18", teams="A")
-        codes = sorted(
-            sv.parse_custom_id(c.custom_id)["vote"] for c in view.children
-        )
-        assert codes == ["a", "cannot"]
+        assert sorted(_vote_codes(view)) == ["a", "cannot"]
 
     def test_ds_teams_b_renders_b_plus_cannot(self):
         view = sv.SignupView(1, "DS", "2026-05-18", teams="B")
-        codes = sorted(
-            sv.parse_custom_id(c.custom_id)["vote"] for c in view.children
-        )
-        assert codes == ["b", "cannot"]
+        assert sorted(_vote_codes(view)) == ["b", "cannot"]
 
     def test_ds_teams_both_renders_all_four(self):
         """`teams="both"` is the default and matches the current behaviour."""
         view = sv.SignupView(1, "DS", "2026-05-18", teams="both")
-        assert len(view.children) == 4
+        assert len(_vote_buttons(view)) == 4
 
     def test_force_all_buttons_overrides_single_team_setting(self):
-        """Re-registration always reattaches all 4 button handlers
+        """Re-registration always reattaches all 4 vote-button handlers
         regardless of the current `teams` setting — a pre-config-change
         post may have all 4 buttons rendered, and the View needs
         routes for every persisted custom_id."""
         view = sv.SignupView(1, "DS", "2026-05-18",
                              teams="A", _force_all_buttons=True)
-        assert len(view.children) == 4
+        assert len(_vote_buttons(view)) == 4
 
     def test_cs_respects_teams_setting(self):
         """Rule A / #166: CS reads `teams` like DS. teams=A gates the
         view to a + cannot only; teams=B gates to b + cannot."""
         view = sv.SignupView(1, "CS", "2026-05-18", teams="A")
-        codes = sorted(
-            sv.parse_custom_id(c.custom_id)["vote"] for c in view.children
-        )
-        assert codes == ["a", "cannot"]
+        assert sorted(_vote_codes(view)) == ["a", "cannot"]
         view = sv.SignupView(1, "CS", "2026-05-18", teams="B")
-        codes = sorted(
-            sv.parse_custom_id(c.custom_id)["vote"] for c in view.children
-        )
-        assert codes == ["b", "cannot"]
+        assert sorted(_vote_codes(view)) == ["b", "cannot"]
 
     def test_garbage_teams_value_falls_back_to_both(self):
         """A schema-drift sentinel: if `teams` reads as something other
         than the three valid values, the View falls back to the
-        permissive default rather than rendering zero buttons."""
+        permissive default rather than rendering zero vote buttons."""
         view = sv.SignupView(1, "DS", "2026-05-18", teams="garbage")
-        assert len(view.children) == 4
+        assert len(_vote_buttons(view)) == 4
 
     def test_empty_time_label_renders_bare_team_name(self):
         """The doubled-label bug: when `time_a_label=""`, the button
@@ -938,3 +941,343 @@ class TestClearPowerRefreshDmSent:
         assert not config.clear_power_refresh_dm_sent(
             TEST_GUILD_ID, "DS", "2026-05-18", 999,
         )
+
+
+# ── #258 + #259 — poll-style ack, leadership view button, DM ack ─────────────
+
+
+class TestViewSignupsCustomId:
+    """The 'View sign-ups' button (#258) uses a distinct custom_id
+    prefix so the existing vote-button parser doesn't have to special-
+    case a non-vote action."""
+
+    def test_round_trip(self):
+        cid = sv.make_view_signups_custom_id(12345, "DS", "2026-05-18")
+        parsed = sv.parse_view_signups_custom_id(cid)
+        assert parsed == {
+            "guild_id":   12345,
+            "event_type": "ds",
+            "event_date": "2026-05-18",
+        }
+
+    def test_distinct_prefix_from_vote_custom_id(self):
+        view_cid = sv.make_view_signups_custom_id(1, "DS", "2026-05-18")
+        vote_cid = sv.make_custom_id(1, "DS", "2026-05-18", "a")
+        # Cross-parsing must fail in both directions so the click
+        # dispatcher can't accidentally route one as the other.
+        assert sv.parse_custom_id(view_cid) is None
+        assert sv.parse_view_signups_custom_id(vote_cid) is None
+
+    def test_unknown_event_type_rejected(self):
+        assert sv.parse_view_signups_custom_id("signup_view:1:xx:2026-01-01") is None
+
+    def test_malformed_returns_none(self):
+        for bad in ("", "signup_view", "signup_view:not_int:ds:2026-01-01",
+                    "other:1:ds:2026-01-01", "signup_view:1:ds:2026-01-01:extra"):
+            assert sv.parse_view_signups_custom_id(bad) is None
+
+    def test_under_discord_limit(self):
+        # Snowflake ceiling (19-digit guild_id) + longest event_type + ISO date.
+        cid = sv.make_view_signups_custom_id(9999999999999999999, "DS", "2026-12-31")
+        assert len(cid) <= 100
+
+
+class TestSignupViewLeadershipButton:
+    """The 'View sign-ups' button must always appear on every SignupView
+    regardless of single-team / `_force_all_buttons` configuration, so
+    leadership can pull the breakdown from any sign-up post without
+    leaving the channel."""
+
+    def test_view_signups_button_present_on_default_view(self):
+        view = sv.SignupView(1, "DS", "2026-05-18")
+        view_buttons = [
+            c for c in view.children
+            if (c.custom_id or "").startswith("signup_view:")
+        ]
+        assert len(view_buttons) == 1
+        btn = view_buttons[0]
+        assert "View sign-ups" in btn.label
+        # Renders on row=1 so it doesn't crowd the vote buttons.
+        assert btn.row == 1
+
+    def test_view_signups_button_present_on_single_team(self):
+        # teams=A renders 2 vote buttons + the leadership button.
+        view = sv.SignupView(1, "DS", "2026-05-18", teams="A")
+        assert len(_vote_buttons(view)) == 2
+        leadership = [
+            c for c in view.children
+            if (c.custom_id or "").startswith("signup_view:")
+        ]
+        assert len(leadership) == 1
+
+    def test_view_signups_button_custom_id_encodes_post_identity(self):
+        view = sv.SignupView(12345, "CS", "2026-05-18")
+        leadership = next(
+            c for c in view.children
+            if (c.custom_id or "").startswith("signup_view:")
+        )
+        parsed = sv.parse_view_signups_custom_id(leadership.custom_id)
+        assert parsed == {
+            "guild_id":   12345,
+            "event_type": "cs",
+            "event_date": "2026-05-18",
+        }
+
+
+class TestPollStyleAck:
+    """#258 — vote click sends an ephemeral poll-style embed showing
+    total votes per bucket with the voter's bucket marked ✓."""
+
+    def _record(self, gid, vote, voter_id, *, et="DS", date="2026-05-18"):
+        import config
+        config.record_storm_vote(
+            gid, et, date,
+            voter_user_id=voter_id,
+            target_member_id=str(voter_id),
+            vote=vote,
+            is_on_behalf=False,
+            channel_id=0,
+            message_id=0,
+        )
+
+    def test_first_vote_shows_solo_count(self, seeded_db):
+        gid = TEST_GUILD_ID
+        self._record(gid, "a", 100)
+        embed = sv._render_vote_poll_embed(
+            gid, "DS", "2026-05-18",
+            voter_vote="a", voter_vote_label="Team A",
+        )
+        assert "Team A" in embed.title
+        assert "✅" in embed.title
+        assert "**Total votes:** 1" in embed.description
+
+    def test_marks_voter_bucket_with_checkmark(self, seeded_db):
+        gid = TEST_GUILD_ID
+        self._record(gid, "a", 100)
+        self._record(gid, "b", 101)
+        embed = sv._render_vote_poll_embed(
+            gid, "DS", "2026-05-18",
+            voter_vote="a", voter_vote_label="Team A: 9pm ET",
+        )
+        # The ✓ marker sits on the voter's row inside the code block.
+        # Strip the code-block fences and find the Team A line.
+        body = embed.description
+        team_a_lines = [
+            line for line in body.split("\n")
+            if line.startswith("Team A")
+        ]
+        assert team_a_lines, body
+        assert "✓" in team_a_lines[0]
+        team_b_lines = [
+            line for line in body.split("\n")
+            if line.startswith("Team B")
+        ]
+        assert team_b_lines, body
+        assert "✓" not in team_b_lines[0]
+
+    def test_total_sums_every_bucket(self, seeded_db):
+        gid = TEST_GUILD_ID
+        for i, vote in enumerate(("a", "a", "b", "either", "cannot")):
+            self._record(gid, vote, 100 + i)
+        embed = sv._render_vote_poll_embed(
+            gid, "DS", "2026-05-18",
+            voter_vote="cannot", voter_vote_label="Cannot participate",
+        )
+        assert "**Total votes:** 5" in embed.description
+
+    def test_single_team_a_excludes_b_and_either(self, seeded_db):
+        """teams=A renders only Team A + Can't in the embed bars — Team B
+        / Either don't apply on single-team alliances and would confuse
+        members otherwise."""
+        gid = TEST_GUILD_ID
+        self._record(gid, "a", 100)
+        embed = sv._render_vote_poll_embed(
+            gid, "DS", "2026-05-18",
+            voter_vote="a", voter_vote_label="Team A",
+            teams_setting="A",
+        )
+        body = embed.description
+        assert "Team A" in body
+        assert "Can't"  in body
+        assert "Team B" not in body
+        assert "Either" not in body
+
+    def test_single_team_b_excludes_a_and_either(self, seeded_db):
+        gid = TEST_GUILD_ID
+        self._record(gid, "b", 100)
+        embed = sv._render_vote_poll_embed(
+            gid, "DS", "2026-05-18",
+            voter_vote="b", voter_vote_label="Team B",
+            teams_setting="B",
+        )
+        body = embed.description
+        assert "Team B" in body
+        assert "Can't"  in body
+        assert "Team A" not in body
+        assert "Either" not in body
+
+    def test_zero_count_bucket_renders_without_blocks(self, seeded_db):
+        """A bucket with no votes renders as a label + count `0` (no
+        bar blocks). Keeps the layout consistent regardless of which
+        buckets have activity."""
+        gid = TEST_GUILD_ID
+        self._record(gid, "a", 100)
+        embed = sv._render_vote_poll_embed(
+            gid, "DS", "2026-05-18",
+            voter_vote="a", voter_vote_label="Team A",
+        )
+        body = embed.description
+        team_b_lines = [
+            line for line in body.split("\n")
+            if line.startswith("Team B")
+        ]
+        assert team_b_lines
+        # 0 count rendered with no bar blocks.
+        assert "█" not in team_b_lines[0]
+        assert "0" in team_b_lines[0]
+
+    def test_cs_uses_orange_color(self, seeded_db):
+        """Color matches the event type so members on multi-event
+        alliances can distinguish DS ack (gold) from CS ack (orange)."""
+        gid = TEST_GUILD_ID
+        self._record(gid, "a", 100, et="CS")
+        embed = sv._render_vote_poll_embed(
+            gid, "CS", "2026-05-18",
+            voter_vote="a", voter_vote_label="Team A",
+        )
+        import discord
+        assert embed.color == discord.Color.orange()
+
+
+class TestHandleViewSignupsClick:
+    """#258 — leadership-only click handler for the View sign-ups
+    button. Non-leadership gets a polite ephemeral rejection (the
+    button is visible to everyone because Discord can't hide per-user)."""
+
+    def _interaction(self, *, is_leader: bool):
+        from unittest.mock import AsyncMock
+        inter = MagicMock()
+        inter.guild_id = TEST_GUILD_ID
+        inter.guild = MagicMock()
+        inter.guild.id = TEST_GUILD_ID
+        member = MagicMock()
+        member.guild_permissions.administrator = is_leader
+        # Cast as Member instance so storm_permissions.is_leader_or_admin
+        # doesn't bail on the DMs path.
+        import discord
+        member.__class__ = discord.Member
+        inter.user = member
+        inter.response.is_done.return_value = False
+        inter.response.send_message = AsyncMock()
+        inter.response.defer = AsyncMock()
+        inter.followup.send = AsyncMock()
+        return inter
+
+    @pytest.mark.asyncio
+    async def test_non_leader_gets_rejection_ephemeral(self, seeded_db):
+        inter = self._interaction(is_leader=False)
+        await sv._handle_view_signups_click(
+            inter, TEST_GUILD_ID, "ds", "2026-05-18",
+        )
+        inter.response.send_message.assert_awaited_once()
+        body = inter.response.send_message.await_args.args[0]
+        assert "Leadership only" in body
+        # The leadership-only short-circuit MUST NOT defer or call
+        # `followup.send`. Reserving the interaction with `defer` would
+        # leave the user staring at a `thinking...` chip even though
+        # we already know we're going to reject the click.
+        inter.response.defer.assert_not_called()
+        inter.followup.send.assert_not_called()
+
+    @pytest.mark.asyncio
+    async def test_leader_gets_breakdown_embed(self, seeded_db):
+        from unittest.mock import patch
+        inter = self._interaction(is_leader=True)
+        fake_embed = MagicMock()
+        # Patch the two officer-view helpers — we don't need to drive
+        # the full bucket-build pipeline here, just confirm the handler
+        # delegates to them and sends the resulting embed.
+        with patch("storm_officer_view._build_bucket_map",
+                   return_value=({"a": []}, [])), \
+             patch("storm_officer_view._render_embed",
+                   return_value=fake_embed):
+            await sv._handle_view_signups_click(
+                inter, TEST_GUILD_ID, "ds", "2026-05-18",
+            )
+        inter.response.defer.assert_awaited_once()
+        inter.followup.send.assert_awaited_once()
+        kwargs = inter.followup.send.await_args.kwargs
+        assert kwargs.get("embed") is fake_embed
+        assert kwargs.get("ephemeral") is True
+
+
+class TestPowerDmAckPrefix:
+    """#259 — the power-refresh DM (and any other error DM in the
+    signup flow) leads with '✅ Your vote was recorded.' so members
+    don't mistake the error for a failed vote."""
+
+    def _env(self):
+        import config
+        config.save_storm_config(
+            TEST_GUILD_ID, "DS",
+            tab_name="DS Tab", mail_template="",
+            timezone="America/New_York", log_channel_id=0,
+        )
+        config.save_structured_storm_config(
+            TEST_GUILD_ID, "DS",
+            structured_flow_enabled=True,
+            power_metric_column="B",
+            power_refresh_dm_enabled=True,
+        )
+        return TEST_GUILD_ID
+
+    def _interaction(self):
+        from unittest.mock import AsyncMock
+        inter = MagicMock()
+        inter.guild = MagicMock()
+        inter.guild.id = TEST_GUILD_ID
+        inter.user = MagicMock()
+        inter.user.id = 42
+        inter.user.send = AsyncMock()
+        return inter
+
+    def _patch_roster(self, voter_power):
+        from unittest.mock import patch
+        return patch(
+            "storm_roster_builder._read_roster_powers",
+            return_value=(
+                {"42": {"key": "42", "name": "Alice",
+                        "discord_id": "42", "power": voter_power,
+                        "not_on_discord": False}},
+                [],
+            ),
+        )
+
+    @pytest.mark.asyncio
+    async def test_dm_body_leads_with_vote_recorded(self, seeded_db):
+        gid = self._env()
+        inter = self._interaction()
+        with self._patch_roster(voter_power=None):
+            await sv._maybe_send_power_refresh_dm(
+                inter, gid, "DS", "2026-05-18", 42,
+            )
+        inter.user.send.assert_awaited_once()
+        body = inter.user.send.await_args.args[0]
+        # The first non-blank line acknowledges the vote.
+        assert body.startswith("✅ Your vote was recorded."), body
+
+    @pytest.mark.asyncio
+    async def test_header_variant_also_leads_with_vote_recorded(self, seeded_db):
+        from unittest.mock import patch
+        gid = self._env()
+        inter = self._interaction()
+        with self._patch_roster(voter_power=None), \
+             patch("storm_roster_builder._read_power_column_header",
+                   return_value="Squad Power"):
+            await sv._maybe_send_power_refresh_dm(
+                inter, gid, "DS", "2026-05-18", 42,
+            )
+        body = inter.user.send.await_args.args[0]
+        assert body.startswith("✅ Your vote was recorded."), body
+        # Header still surfaces so the member knows which column to fix.
+        assert "Squad Power" in body

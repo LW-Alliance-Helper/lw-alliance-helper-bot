@@ -1324,6 +1324,17 @@ async def run_member_roster_setup(interaction: discord.Interaction, bot):
     )
     embed.add_field(name="Auto-Sync",    value="Enabled" if auto_sync else "Disabled", inline=True)
     embed.add_field(name="Initial sync", value=f"**{count}** members written", inline=False)
+    embed.add_field(
+        name="👤 Alliance members not on Discord",
+        value=(
+            "Add them by typing a row directly into the sheet with the "
+            "**Is this user in Discord?** column set to **No**. Sync will "
+            "preserve those rows, and storm sign-up views will surface "
+            "them under 'Not voted yet' so leadership can cast "
+            "on-behalf votes for them."
+        ),
+        inline=False,
+    )
     embed.set_footer(text="Run /members sync to re-sync manually any time.")
     await channel.send(embed=embed)
     wizard_registry.unregister(user.id, cancel_event)

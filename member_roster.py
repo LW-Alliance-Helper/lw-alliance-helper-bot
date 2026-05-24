@@ -1023,6 +1023,36 @@ async def run_member_roster_setup(interaction: discord.Interaction, bot):
                 f"• **{label_text}** → column **{_col_letter(idx)}**  "
                 f"_({status})_"
             )
+        # Surface the bot-maintained presence column too so the
+        # preview accounts for every column the bot will touch — a
+        # tester saw column H in the "preserved" list and assumed it
+        # was their data, when it was the bot's "Is this user in
+        # Discord?" column from a prior sync.
+        existing_header = _existing_rows[0]
+        flag_header_lc = DISCORD_FLAG_COLUMN_HEADER.strip().lower()
+        presence_idx: int | None = None
+        for i, cell in enumerate(existing_header):
+            if str(cell or "").strip().lower() == flag_header_lc:
+                presence_idx = i
+                break
+        if presence_idx is not None:
+            layout_lines.append(
+                f"• **Is this user in Discord?** → column "
+                f"**{_col_letter(presence_idx)}**  "
+                f"_(matched existing header — bot refreshes Yes/No each sync)_"
+            )
+        else:
+            # New presence column will append at the right edge AFTER
+            # the 5 bot fields + alliance columns. Compute the
+            # eventual landing index for the preview.
+            future_presence_idx = max(
+                list(layout.values()) + [len(existing_header) - 1],
+            ) + 1
+            layout_lines.append(
+                f"• **Is this user in Discord?** → column "
+                f"**{_col_letter(future_presence_idx)}**  "
+                f"_(appending — bot-maintained Yes/No column)_"
+            )
 
         match_lines = [
             f"• **{len(name_match_dry_run['matched_by_id'])}** rows "
@@ -1045,10 +1075,20 @@ async def run_member_roster_setup(interaction: discord.Interaction, bot):
                 f"have no live Discord match — Discord ID left blank"
             )
 
+        # `bot_claimed` covers the 5 fields in `_bot_managed_cols`
+        # PLUS the presence column when it exists on the sheet — that
+        # column is bot-maintained (refreshed by
+        # `_ensure_discord_flag_column` after every merge), so it
+        # mustn't appear in the "Custom data preserved" list. Tester
+        # report: "the bot said custom data for F, G, H were
+        # preserved but H was the presence column." `presence_idx`
+        # was computed above when building the layout preview lines.
         bot_claimed = set(layout.values())
+        if presence_idx is not None:
+            bot_claimed.add(presence_idx)
         preserved_letters = [
             _col_letter(i)
-            for i in range(len(_existing_rows[0]))
+            for i in range(len(existing_header))
             if i not in bot_claimed
         ]
         preserved_blurb = (

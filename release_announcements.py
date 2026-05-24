@@ -46,7 +46,28 @@ class ReleaseAnnouncement:
 # the workflow. Missing entries are a noop (the boot-time check skips
 # silently), so it's safe to ship a release without one if there's no
 # user-visible content worth announcing.
-RELEASE_ANNOUNCEMENTS: dict[str, ReleaseAnnouncement] = {}
+RELEASE_ANNOUNCEMENTS: dict[str, ReleaseAnnouncement] = {
+    "1.4.0": ReleaseAnnouncement(
+        description=(
+            "We're excited to share that 1.4.0 is here, our biggest release "
+            "since launch. Here are some highlights of what your alliance "
+            "can do starting now:"
+        ),
+        bullets=[
+            "A roster builder for Desert Storm and Canyon Storm with auto-fill (💎 Premium)",
+            "A visual roster you can share with your team (💎 Premium)",
+            "DM each rostered member their personal assignment (💎 Premium)",
+            "Participation logs where you decide what data to collect (💎 Premium)",
+            "All your storm tools under `/desertstorm` and `/canyonstorm`",
+            "All your bot settings under `/setup` with a button for each feature",
+        ],
+        # Links to the support server's #announcements channel rather than a
+        # specific message, so the URL stays valid as new announcements get
+        # posted there over time.
+        support_post_url="https://discord.com/channels/1497432945827516639/1502745629217263746",
+        github_release_url="https://github.com/LW-Alliance-Helper/lw-alliance-helper-bot/releases/tag/v1.4.0",
+    ),
+}
 
 
 def _major_minor(version: str) -> str:

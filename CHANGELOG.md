@@ -15,6 +15,7 @@ and PR description.
 - Premium Storm Overhaul: structured sign-up → roster builder → PNG mail with auto-fill, per-event team plan, per-team time slots, and per-member assignment DMs ([#233](https://github.com/LW-Alliance-Helper/lw-alliance-helper-bot/issues/233)).
 - Participation Tracking 2.0 (Premium): per-member question types written to a Per-Member Log tab, parameterized Trends Viewer, and preset question templates ([#243](https://github.com/LW-Alliance-Helper/lw-alliance-helper-bot/issues/243)).
 - `/desertstorm` and `/canyonstorm` event hubs consolidate every storm action under one command per event type.
+- 📢 Release announcements toggle on the `/setup` hub controls whether new major/minor releases post a summary to your leadership channel ([#253](https://github.com/LW-Alliance-Helper/lw-alliance-helper-bot/issues/253)).
 
 ### Changed
 - Member Sync renamed with Power Data Source flexibility, collision protection, and presence column in the sync preview.

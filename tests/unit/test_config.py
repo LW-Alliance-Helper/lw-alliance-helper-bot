@@ -191,6 +191,60 @@ class TestStormConfig:
         assert ds["mail_template"] != cs["mail_template"]
 
 
+class TestRosterDmTemplates:
+    """#226 follow-up — three per-(guild, event_type) DM templates for
+    the Approve & Post DM-the-roster flow. Empty saved value falls
+    back to the hardcoded default in defaults.py at send time."""
+
+    def test_unset_returns_empty_strings(self, temp_db):
+        import config
+        # An unconfigured guild reads as all-empty so the DM composer
+        # falls through to the hardcoded defaults.
+        tpls = config.get_roster_dm_templates(TEST_GUILD_ID, "DS")
+        assert tpls == {"starter": "", "paired_sub": "", "pool_sub": ""}
+
+    def test_save_and_reload_roundtrip(self, temp_db):
+        import config
+        # Save_storm_config first so the row exists for the UPDATE.
+        config.save_storm_config(
+            TEST_GUILD_ID, "DS",
+            tab_name="DS Tab", mail_template="",
+            timezone="America/New_York", log_channel_id=0,
+        )
+        config.save_roster_dm_templates(
+            TEST_GUILD_ID, "DS",
+            starter="Hi {name}, you're a Starter.",
+            paired_sub="Hi {name}, you're a Sub for {assignments}.",
+            pool_sub="Hi {name}, standby pool.",
+        )
+        tpls = config.get_roster_dm_templates(TEST_GUILD_ID, "DS")
+        assert tpls["starter"]    == "Hi {name}, you're a Starter."
+        assert tpls["paired_sub"] == "Hi {name}, you're a Sub for {assignments}."
+        assert tpls["pool_sub"]   == "Hi {name}, standby pool."
+
+    def test_ds_and_cs_isolated(self, temp_db):
+        import config
+        config.save_storm_config(
+            TEST_GUILD_ID, "DS",
+            tab_name="DS", mail_template="",
+            timezone="America/New_York", log_channel_id=0,
+        )
+        config.save_storm_config(
+            TEST_GUILD_ID, "CS",
+            tab_name="CS", mail_template="",
+            timezone="America/New_York", log_channel_id=0,
+        )
+        config.save_roster_dm_templates(
+            TEST_GUILD_ID, "DS",
+            starter="DS-only Starter",
+            paired_sub="", pool_sub="",
+        )
+        ds = config.get_roster_dm_templates(TEST_GUILD_ID, "DS")
+        cs = config.get_roster_dm_templates(TEST_GUILD_ID, "CS")
+        assert ds["starter"] == "DS-only Starter"
+        assert cs["starter"] == ""  # untouched CS row stays empty
+
+
 class TestStructuredStormConfig:
     """Test the #38 + #54 structured storm flow config layer."""
 

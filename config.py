@@ -302,6 +302,13 @@ def init_db():
                 poll_day_of_week         INTEGER DEFAULT -1,
                 signup_time              TEXT    DEFAULT '',
                 power_refresh_dm_enabled INTEGER DEFAULT 0,
+                -- Roster DM templates (#226 follow-up). Empty string =
+                -- fall back to defaults.py's DEFAULT_ROSTER_DM_*
+                -- constants. Three slots because each role (Starter,
+                -- Paired Sub, Pool Sub) gets its own message shape.
+                roster_dm_starter_template    TEXT DEFAULT '',
+                roster_dm_paired_sub_template TEXT DEFAULT '',
+                roster_dm_pool_sub_template   TEXT DEFAULT '',
                 -- Per-team time-slot mapping (#251). 1 or 2, indexing into
                 -- DS_SERVER_TIMES / CS_SERVER_TIMES. NULL until leadership
                 -- picks the mapping in /setup_storm_<DS|CS>. The signup
@@ -701,6 +708,13 @@ def init_db():
             # or unparseable. Once per (guild, event_type, event_date,
             # voter) — see storm_power_refresh_dms_sent below.
             ("power_refresh_dm_enabled", "INTEGER DEFAULT 0"),
+            # Roster DM templates (#226 follow-up). One per role
+            # (Starter / Paired Sub / Pool Sub) so each can carry
+            # role-specific framing. Empty = fall back to
+            # defaults.py's DEFAULT_ROSTER_DM_* constants at send time.
+            ("roster_dm_starter_template",    "TEXT DEFAULT ''"),
+            ("roster_dm_paired_sub_template", "TEXT DEFAULT ''"),
+            ("roster_dm_pool_sub_template",   "TEXT DEFAULT ''"),
             # Per-team time-slot mapping (#251) — see CREATE TABLE comment.
             # No SQL default: NULL signals "leadership hasn't picked yet."
             ("team_a_slot_index",        "INTEGER"),
@@ -2753,6 +2767,51 @@ def get_storm_template_names(guild_id: int, event_type: str) -> list[str]:
     """List of saved template names for a guild's storm config."""
     cfg = get_storm_config(guild_id, event_type)
     return [t.get("name", "") for t in (cfg.get("templates") or []) if t.get("name")]
+
+
+def get_roster_dm_templates(guild_id: int, event_type: str) -> dict:
+    """Return the per-role DM templates for the Approve & Post
+    DM-the-roster flow (#226 follow-up).
+
+    Returns a `{"starter": str, "paired_sub": str, "pool_sub": str}`
+    dict; each value is the alliance's saved template body, or an
+    empty string when the slot has never been customised. The DM
+    composer falls back to `defaults.DEFAULT_ROSTER_DM_*` on empty
+    so a guild that hasn't run the wizard's DM template step still
+    gets sensible copy.
+    """
+    cfg = get_storm_config(guild_id, event_type)
+    return {
+        "starter":    (cfg.get("roster_dm_starter_template")    or ""),
+        "paired_sub": (cfg.get("roster_dm_paired_sub_template") or ""),
+        "pool_sub":   (cfg.get("roster_dm_pool_sub_template")   or ""),
+    }
+
+
+def save_roster_dm_templates(
+    guild_id: int, event_type: str, *,
+    starter: str = "",
+    paired_sub: str = "",
+    pool_sub: str = "",
+) -> bool:
+    """UPDATE the three roster DM templates on an existing
+    (guild_id, event_type) row. Empty strings persist as "fall back
+    to the hardcoded default" — the wizard's Use-default branch
+    passes empty deliberately so the alliance can revert to a
+    bot-updated default later without re-pasting.
+    """
+    with _get_conn() as conn:
+        cur = conn.execute(
+            "UPDATE guild_storm_config SET "
+            "  roster_dm_starter_template    = ?, "
+            "  roster_dm_paired_sub_template = ?, "
+            "  roster_dm_pool_sub_template   = ?  "
+            "WHERE guild_id = ? AND event_type = ?",
+            (starter or "", paired_sub or "", pool_sub or "",
+             guild_id, event_type),
+        )
+        conn.commit()
+        return cur.rowcount > 0
 
 
 # ── Participation log config (#20) ────────────────────────────────────────────

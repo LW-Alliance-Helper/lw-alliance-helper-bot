@@ -5243,7 +5243,7 @@ class TestDmRosterBody:
         return {"time_label": "4pm EDT (18:00 server time)",
                 "date_label": "Thursday, May 28, 2026"}
 
-    def test_primary_body_lists_zone(self):
+    def test_primary_body_uses_starter_template(self):
         members = {
             "1": {"key": "1", "name": "Alice", "discord_id": "1001",
                   "power": 500_000_000, "not_on_discord": False},
@@ -5257,13 +5257,15 @@ class TestDmRosterBody:
               "phase": 1, "pair_with": None}],
             **self._ctx_labels(),
         )
-        assert "Alice" in body
-        assert "Desert Storm" in body
-        assert "Team A" in body
+        # New default copy: alliance voice + Starter role label,
+        # placeholders substituted in their natural places.
+        assert "Hey Alice" in body
+        assert "Starter" in body
+        assert "Desert Storm Team A" in body
         assert "Power Tower" in body
-        assert "(primary)" in body
         assert "May 28, 2026" in body
         assert "4pm EDT" in body
+        assert "let us know" in body  # closing nudge
 
     def test_flat_preset_drops_stage_prefix(self):
         members = {
@@ -5277,8 +5279,9 @@ class TestDmRosterBody:
               "phase": 1, "pair_with": None}],
             **self._ctx_labels(),
         )
-        # Flat preset → no "Stage 1" prefix in the bullet line.
-        assert "Stage 1 —" not in body
+        # Flat preset → no "Stage 1:" prefix in the bullet line.
+        assert "Stage 1:" not in body
+        assert "• Power Tower" in body
 
     def test_phase_aware_keeps_stage_prefix(self):
         s = _make_phase_aware_session()
@@ -5289,7 +5292,7 @@ class TestDmRosterBody:
               "phase": 1, "pair_with": None}],
             **self._ctx_labels(),
         )
-        assert "Stage 1 —" in body
+        assert "Stage 1: Info Center" in body
 
     def test_paired_sub_body_names_primary(self):
         members = {
@@ -5304,11 +5307,15 @@ class TestDmRosterBody:
               "phase": 1, "pair_with": "Alice"}],
             **self._ctx_labels(),
         )
-        assert "Bob" in body
-        assert "Power Tower" in body
-        assert "sub for Alice" in body
+        assert "Hey Bob" in body
+        assert "Sub" in body
+        # Per the default copy, paired-sub assignments list reads as
+        # "Sub for Alice" — no zone (flat preset case) and no
+        # "(primary)" suffix anywhere in the body.
+        assert "Sub for Alice" in body
+        assert "(primary)" not in body
 
-    def test_pool_sub_only_uses_standby_copy(self):
+    def test_pool_sub_only_uses_pool_template(self):
         members = {
             "9": {"key": "9", "name": "Carol", "discord_id": "1009",
                   "power": 100_000_000, "not_on_discord": False},
@@ -5320,10 +5327,66 @@ class TestDmRosterBody:
               "phase": None, "pair_with": None}],
             **self._ctx_labels(),
         )
-        assert "standby pool" in body
-        # Pool-only standby skips the assignments bullet list.
-        assert "(primary)" not in body
+        # Default pool-sub template uses "Sub" framing and skips the
+        # assignments bullet list entirely.
+        assert "Hey Carol" in body
+        assert "Sub" in body
         assert "Your assignments" not in body
+        assert "(primary)" not in body
+
+    def test_custom_template_substituted_via_safedict(self):
+        """A guild that's customised the Starter template via the
+        wizard should see their copy in the DM. SafeDict tolerates
+        unknown placeholders — a typo renders literally rather than
+        crashing the fan-out."""
+        members = {
+            "1": {"key": "1", "name": "Alice", "discord_id": "1001",
+                  "power": 500_000_000, "not_on_discord": False},
+        }
+        session = _make_session(team="A", members=members)
+        session.event_date = "2026-05-28"
+        with patch("config.get_roster_dm_templates", return_value={
+            "starter": (
+                "Yo {name}, you're on {event_label}{team_blurb}. "
+                "Zones:\n{assignments}\n— Leadership"
+            ),
+            "paired_sub": "",
+            "pool_sub": "",
+        }):
+            body = srb._build_dm_body(
+                session, members["1"],
+                [{"role": "primary", "zone": "Power Tower",
+                  "phase": 1, "pair_with": None}],
+                **self._ctx_labels(),
+            )
+        assert body.startswith("Yo Alice")
+        assert "Desert Storm Team A" in body
+        assert "• Power Tower" in body
+        assert body.endswith("— Leadership")
+
+    def test_typo_placeholder_renders_literally(self):
+        """A typo placeholder in a saved template (`{nme}`) must not
+        crash the DM build. Renders literally so the alliance sees
+        their typo in the next DM and can fix it via the wizard."""
+        members = {
+            "1": {"key": "1", "name": "Alice", "discord_id": "1001",
+                  "power": 500_000_000, "not_on_discord": False},
+        }
+        session = _make_session(team="A", members=members)
+        with patch("config.get_roster_dm_templates", return_value={
+            "starter": "Hi {nme}, see {assignments}.",
+            "paired_sub": "",
+            "pool_sub": "",
+        }):
+            body = srb._build_dm_body(
+                session, members["1"],
+                [{"role": "primary", "zone": "Power Tower",
+                  "phase": 1, "pair_with": None}],
+                **self._ctx_labels(),
+            )
+        # Typo placeholder renders literally; the rest substitutes.
+        assert "{nme}" in body
+        assert "• Power Tower" in body
 
 
 class TestDmRosterSendFlow:

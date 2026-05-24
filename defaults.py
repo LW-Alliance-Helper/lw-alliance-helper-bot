@@ -99,6 +99,59 @@ DEFAULT_CS_TEMPLATE = """\
 **Time:** {time}"""
 
 
+# ── Storm roster DM templates (Premium — fired from Approve & Post) ────────
+#
+# Custom-able per (guild, event_type) via the storm setup wizard.
+# Placeholders are SafeDict-substituted at send time — a typo in a
+# saved template renders literally in the DM instead of crashing the
+# fan-out loop and leaving the rest of the roster un-DM'd.
+#
+# Placeholders:
+#   {name}        — member's display name (alias when configured, else
+#                   the Discord display name)
+#   {event_label} — "Desert Storm" or "Canyon Storm"
+#   {team_blurb}  — " Team A" / " Team B" / "" (leading space included
+#                   when present, so `{event_label}{team_blurb}` reads
+#                   naturally for both team-bound DS and team-less CS)
+#   {date}        — formatted event date (e.g. "Thursday, May 28, 2026")
+#   {time}        — team time-slot label (e.g. "4pm EDT (18:00 server time)")
+#   {assignments} — bullet / line list of zones+stages (Starter) or
+#                   "Sub for X" lines (Paired Sub); empty for Pool Sub
+#
+# These templates intentionally use the alliance's voice ("we have
+# you as a Starter", "our roster") — distinct from the mail templates
+# which post to a public channel. The DMs are alliance-to-member
+# nudges that read better in first-person plural; alliances can
+# customise the wording via the setup wizard if they prefer otherwise.
+
+DEFAULT_ROSTER_DM_STARTER = """\
+👋 Hey {name},
+
+We have you as a Starter for our {event_label}{team_blurb} roster for {date} at {time}.
+
+Your assignments:
+{assignments}
+
+Please let us know if you aren't able to participate!"""
+
+DEFAULT_ROSTER_DM_PAIRED_SUB = """\
+👋 Hey {name},
+
+We have you as a Sub for our {event_label}{team_blurb} roster for {date} at {time}.
+
+Your assignment(s):
+{assignments}
+
+Please let us know if you aren't able to participate!"""
+
+DEFAULT_ROSTER_DM_POOL_SUB = """\
+👋 Hey {name},
+
+We have you as a Sub for our {event_label}{team_blurb} roster for {date} at {time}.
+
+Please let us know if you aren't able to participate!"""
+
+
 # ── Shiny Tasks daily announcement (free tier) ──────────────────────────────
 #
 # `{servers}` renders as a comma-separated list with an "and" before the

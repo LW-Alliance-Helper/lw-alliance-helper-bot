@@ -5305,6 +5305,19 @@ async def run_storm_setup(interaction: discord.Interaction, bot, event_type: str
     # Persist the structured-flow config (#38 + #54) against the (guild,
     # event_type) row save_storm_config just created/updated above. The
     # registration-post schedule is set in #124; left blank here.
+    # Roster DM templates (#226 follow-up) — stored on the same
+    # guild_storm_config row but written via a separate helper so
+    # save_structured_storm_config's signature stays focused. Empty
+    # strings persist as "fall back to the hardcoded default at send
+    # time."
+    from config import save_roster_dm_templates
+    save_roster_dm_templates(
+        guild_id, event_type,
+        starter   =structured_cfg.get("roster_dm_starter_template", ""),
+        paired_sub=structured_cfg.get("roster_dm_paired_sub_template", ""),
+        pool_sub  =structured_cfg.get("roster_dm_pool_sub_template", ""),
+    )
+
     save_structured_storm_config(
         guild_id, event_type,
         structured_flow_enabled=structured_cfg["structured_flow_enabled"],
@@ -6586,6 +6599,14 @@ async def _run_structured_flow_setup_step(
     result.setdefault("poll_day_of_week", -1)
     result.setdefault("signup_time", "")
     result.setdefault("power_refresh_dm_enabled", False)
+    # Roster DM templates (#226 follow-up). Persisted via
+    # `save_roster_dm_templates`, distinct from
+    # `save_structured_storm_config`, but stashed in the same result
+    # dict so the wizard's re-entry surface and the save call site
+    # can hand them off together.
+    result.setdefault("roster_dm_starter_template", "")
+    result.setdefault("roster_dm_paired_sub_template", "")
+    result.setdefault("roster_dm_pool_sub_template", "")
 
     # Internal slug for channel-name suggestion (e.g. `desertstorm-signups`).
     # Derived from event_type directly so it stays a clean slug even
@@ -6887,6 +6908,224 @@ async def _run_structured_flow_setup_step(
                 await channel.send(f"⏰ Timed out. Run `/{cmd_name}` to start again.")
                 return None
             result["power_refresh_dm_enabled"] = bool(nudge_view.selected)
+
+        # ── Roster DM templates (#226 follow-up) ─────────────────────────
+        #
+        # The Approve & Post flow's `📨 DM rostered members` button
+        # fans out per-member DMs using these three templates. We walk
+        # each role (Starter / Paired Sub / Pool Sub) through the same
+        # Use default / Keep current / Edit picker the mail template
+        # step uses, so officers learn one idiom across the wizard.
+        # Empty saved value = fall back to the hardcoded default at
+        # send time, so a guild that never customises still gets sane
+        # copy.
+        from defaults import (
+            DEFAULT_ROSTER_DM_STARTER,
+            DEFAULT_ROSTER_DM_PAIRED_SUB,
+            DEFAULT_ROSTER_DM_POOL_SUB,
+        )
+        from config import get_roster_dm_templates
+
+        saved_dm_templates = (
+            get_roster_dm_templates(guild_id, event_type)
+            if guild_id else
+            {"starter": "", "paired_sub": "", "pool_sub": ""}
+        )
+
+        dm_placeholder_info = (
+            "• `{name}`: member's display name\n"
+            "• `{event_label}`: `Desert Storm` / `Canyon Storm`\n"
+            "• `{team_blurb}`: ` Team A` / ` Team B` / `` (leading "
+            "space included for you)\n"
+            "• `{date}`: event date (e.g. `Thursday, May 28, 2026`)\n"
+            "• `{time}`: team time slot (e.g. `4pm EDT (18:00 server "
+            "time)`)\n"
+            "• `{assignments}`: per-stage assignments block (Starter "
+            "+ Paired Sub only)"
+        )
+
+        async def _get_dm_template(
+            role_label: str, default_template: str,
+            saved_template: str,
+        ) -> str | None:
+            """Walk one DM template through the Use default / Keep
+            current / Edit picker. Returns the chosen template body,
+            empty string for "use default" (so the DB stays clean
+            when the bot ships an updated default later), or None
+            on cancel / timeout."""
+            saved_is_custom = (
+                bool(saved_template)
+                and saved_template != default_template
+            )
+
+            class _DmTemplateChoiceView(discord.ui.View):
+                def __init__(self):
+                    super().__init__(timeout=300)
+                    self.outcome: str | None = None
+
+                @discord.ui.button(
+                    label="✅ Keep current custom template",
+                    style=discord.ButtonStyle.success,
+                )
+                async def keep(
+                    self, inter: discord.Interaction,
+                    _btn: discord.ui.Button,
+                ):
+                    self.outcome = "keep"
+                    for item in self.children:
+                        item.disabled = True
+                    await wizard_registry.safe_edit_response(
+                        inter,
+                        content=(
+                            f"✅ Keeping your saved {role_label} DM "
+                            f"template."
+                        ),
+                        view=self,
+                    )
+                    self.stop()
+
+                @discord.ui.button(
+                    label="↩️ Use default template",
+                    style=discord.ButtonStyle.secondary,
+                )
+                async def use_def(
+                    self, inter: discord.Interaction,
+                    _btn: discord.ui.Button,
+                ):
+                    self.outcome = "default"
+                    for item in self.children:
+                        item.disabled = True
+                    msg = (
+                        f"✅ Reverted to default {role_label} DM "
+                        f"template."
+                        if saved_is_custom else
+                        f"✅ Using default {role_label} DM template."
+                    )
+                    await wizard_registry.safe_edit_response(
+                        inter, content=msg, view=self,
+                    )
+                    self.stop()
+
+                @discord.ui.button(
+                    label="✏️ Edit template",
+                    style=discord.ButtonStyle.secondary,
+                )
+                async def edit(
+                    self, inter: discord.Interaction,
+                    _btn: discord.ui.Button,
+                ):
+                    self.outcome = "edit"
+                    for item in self.children:
+                        item.disabled = True
+                    await wizard_registry.safe_edit_response(
+                        inter, view=self,
+                    )
+                    self.stop()
+
+            choice_view = _DmTemplateChoiceView()
+            if not saved_is_custom:
+                # First-time / saved-equals-default: drop the Keep
+                # current button and promote Use default to the
+                # success-style primary action.
+                choice_view.remove_item(choice_view.keep)
+                choice_view.use_def.style = discord.ButtonStyle.success
+
+            custom_block = (
+                f"\n\nHere is your saved custom template:\n```\n"
+                f"{saved_template}\n```"
+                if saved_is_custom else ""
+            )
+            question = (
+                "Would you like to keep your custom template, revert "
+                "to the default, or edit it?"
+                if saved_is_custom else
+                "Would you like to use this default or write your own?"
+            )
+            await channel.send(
+                f"**Roster DM Template: {role_label}**\n"
+                f"Sent when leadership clicks 📨 DM rostered members "
+                f"after Approve & Post for {label}.\n\n"
+                f"Here is the default template:\n"
+                f"```\n{default_template}\n```"
+                f"{custom_block}\n\n"
+                f"{question}",
+                view=choice_view,
+            )
+            await wait_view_or_cancel(choice_view, cancel_event)
+            if getattr(choice_view, "cancelled", False):
+                return None
+            if choice_view.outcome is None:
+                await channel.send(
+                    f"⏰ Timed out. Run `/{cmd_name}` to start again."
+                )
+                return None
+            if choice_view.outcome == "keep":
+                return saved_template
+            if choice_view.outcome == "default":
+                # Persist empty string so the bot's future default
+                # updates land for this alliance automatically.
+                return ""
+
+            # Edit branch — pasted as a chat message so multi-line
+            # templates work without fighting a 200-char modal.
+            reference_label = (
+                "current custom" if saved_is_custom else "default"
+            )
+            await channel.send(
+                f"Paste your custom {role_label} DM template. "
+                f"You can copy the {reference_label} above and modify "
+                f"it, or write your own.\n\n"
+                f"**Available placeholders:**\n{dm_placeholder_info}\n\n"
+                f"*This form will time out in 5 minutes. "
+                f"You can run `/{cmd_name}` again if it times out.*"
+            )
+            try:
+                reply = await bot.wait_for(
+                    "message", check=check, timeout=300,
+                )
+                fallback = (
+                    saved_template if saved_is_custom
+                    else default_template
+                )
+                return reply.content.strip() or fallback
+            except asyncio.TimeoutError:
+                await channel.send(
+                    f"⏰ Timed out. Run `/{cmd_name}` to start again."
+                )
+                return None
+
+        await channel.send(
+            f"📨 **Roster DM Templates** _(3 templates, one per role)_"
+            f"\nNext we'll set up the three DMs the bot sends after "
+            f"Approve & Post when leadership clicks 📨 DM rostered "
+            f"members. Each role (Starter, Paired Sub, Pool Sub) gets "
+            f"its own message. You can use the defaults or customise "
+            f"each one."
+        )
+
+        starter_template = await _get_dm_template(
+            "Starter", DEFAULT_ROSTER_DM_STARTER,
+            saved_dm_templates.get("starter", ""),
+        )
+        if starter_template is None:
+            return None
+        result["roster_dm_starter_template"] = starter_template
+
+        paired_template = await _get_dm_template(
+            "Paired Sub", DEFAULT_ROSTER_DM_PAIRED_SUB,
+            saved_dm_templates.get("paired_sub", ""),
+        )
+        if paired_template is None:
+            return None
+        result["roster_dm_paired_sub_template"] = paired_template
+
+        pool_template = await _get_dm_template(
+            "Pool Sub", DEFAULT_ROSTER_DM_POOL_SUB,
+            saved_dm_templates.get("pool_sub", ""),
+        )
+        if pool_template is None:
+            return None
+        result["roster_dm_pool_sub_template"] = pool_template
 
     # ── Always-ask: preset library + member rules tab names (free + Premium) ──
     #

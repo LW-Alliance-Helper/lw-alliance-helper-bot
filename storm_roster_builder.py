@@ -4813,6 +4813,91 @@ def _collect_dm_assignments(
     return list(by_member.items())
 
 
+class _DmSafeDict(dict):
+    """SafeDict for `_build_dm_body` template substitution. A typo
+    placeholder in a saved alliance template (`{nme}` instead of
+    `{name}`) renders literally instead of crashing the fan-out
+    loop and leaving the rest of the roster un-DM'd. Matches the
+    pattern used by every other configurable DM template in the
+    bot (storm_log, train_cog, shiny_tasks)."""
+
+    def __missing__(self, key):
+        return "{" + key + "}"
+
+
+def _safe_dm_format(template: str, **fields) -> str:
+    """Apply `template.format_map(_DmSafeDict(...))`. Falls back to
+    a substring replace on each known placeholder if the alliance's
+    template carries an odd format spec (e.g. `{name:weird}`) — the
+    DM still goes out, the typo just renders inside the body."""
+    try:
+        return template.format_map(_DmSafeDict(fields))
+    except Exception:
+        rendered = template
+        for k, v in fields.items():
+            rendered = rendered.replace("{" + k + "}", str(v))
+        return rendered
+
+
+def _format_starter_assignments(
+    assignments: "list[dict]", *, is_phase_aware: bool,
+) -> str:
+    """Bullet list for Starter `{assignments}`. Each line is:
+        `• Stage 1: Power Tower` (phase-aware)
+        `• Power Tower`          (flat)
+    Mixed-role recipients (rare: primary in one phase + standby pool
+    membership) get an explicit standby footnote so they see both
+    halves of their commitment.
+    """
+    lines: list[str] = []
+    has_pool = any(a["role"] == "pool_sub" for a in assignments)
+    for a in assignments:
+        if a["role"] == "pool_sub":
+            continue
+        stage_prefix = (
+            f"Stage {a['phase']}: " if is_phase_aware else ""
+        )
+        if a["role"] == "primary":
+            lines.append(f"• {stage_prefix}{a['zone']}")
+        else:  # paired_sub mixed into a starter DM (member plays as
+               # a primary in one phase + as a sub in another)
+            partner = a.get("pair_with") or "a primary"
+            lines.append(f"• {stage_prefix}Sub for {partner}")
+    if has_pool:
+        lines.append(
+            "• Plus standby pool — leadership may call you in if "
+            "another primary can't make it."
+        )
+    return "\n".join(lines)
+
+
+def _format_paired_sub_assignments(
+    assignments: "list[dict]", *, is_phase_aware: bool,
+) -> str:
+    """Line list for Paired Sub `{assignments}`. Format mirrors the
+    user's spec: `Sub for {Primary}` per pairing, with a stage prefix
+    when the preset is phase-aware. A sub paired to the same primary
+    across multiple stages collapses to one line so the DM doesn't
+    repeat `Sub for Alice` three times."""
+    by_partner: dict[str, list[int]] = {}
+    for a in assignments:
+        if a["role"] != "paired_sub":
+            continue
+        partner = a.get("pair_with") or "a primary"
+        by_partner.setdefault(partner, []).append(int(a["phase"]))
+
+    lines: list[str] = []
+    for partner, phases in by_partner.items():
+        if is_phase_aware and phases:
+            phase_str = ", ".join(
+                f"Stage {p}" for p in sorted(set(phases))
+            )
+            lines.append(f"{phase_str}: Sub for {partner}")
+        else:
+            lines.append(f"Sub for {partner}")
+    return "\n".join(lines)
+
+
 def _build_dm_body(
     session: "RosterBuilderSession",
     member: dict,
@@ -4823,61 +4908,66 @@ def _build_dm_body(
 ) -> str:
     """Compose the personalised DM body for one rostered member.
 
-    Skips the per-stage prefix on flat presets so the message reads
-    cleanly for single-stage events. Pool-sub-only recipients get the
-    standby copy.
+    Resolves the alliance's saved template for the member's role
+    (Starter / Paired Sub / Pool Sub) and substitutes
+    `{name}`, `{event_label}`, `{team_blurb}`, `{date}`, `{time}`,
+    `{assignments}` via `_safe_dm_format`. Empty saved template →
+    fall back to the hardcoded default in defaults.py so a guild
+    that skipped the wizard step still gets sensible copy.
     """
-    label = "Desert Storm" if session.event_type == "DS" else "Canyon Storm"
-    icon = "⚔️" if session.event_type == "DS" else "🏜️"
-    team_blurb = f" — Team {session.team}" if session.team else ""
+    import config
+    from defaults import (
+        DEFAULT_ROSTER_DM_STARTER,
+        DEFAULT_ROSTER_DM_PAIRED_SUB,
+        DEFAULT_ROSTER_DM_POOL_SUB,
+    )
 
+    label = "Desert Storm" if session.event_type == "DS" else "Canyon Storm"
+    team_blurb = f" Team {session.team}" if session.team else ""
     name = (member.get("name") or "").strip() or "there"
     is_phase_aware = session.is_phase_aware
 
-    # Pool-sub-only: short standby message. The standby DM uses the
-    # same date + time line so the recipient can plan around it.
-    if assignments and all(a["role"] == "pool_sub" for a in assignments):
-        return (
-            f"👋 Hey **{name}**,\n\n"
-            f"You're on the **standby pool** for the **{label}**"
-            f"{team_blurb} roster on **{date_label}** at **{time_label}**.\n\n"
-            f"Stay reachable — if a primary can't make it, leadership "
-            f"may call you in to cover. {icon}"
+    # Role classification — the template selection mirrors what the
+    # member's actual assignments look like:
+    #   * any primary role  → Starter template (covers pure-primary
+    #                          AND primary+sub mixed recipients;
+    #                          paired_sub lines blend into the
+    #                          Starter bullet list with the same
+    #                          stage-prefix shape)
+    #   * paired_sub only   → Paired Sub template
+    #   * pool_sub only     → Pool Sub template
+    has_primary = any(a["role"] == "primary" for a in assignments)
+    only_pool = (
+        bool(assignments)
+        and all(a["role"] == "pool_sub" for a in assignments)
+    )
+
+    templates = config.get_roster_dm_templates(
+        session.guild_id, session.event_type,
+    ) if session.guild_id else {"starter": "", "paired_sub": "", "pool_sub": ""}
+
+    if only_pool:
+        template = templates.get("pool_sub") or DEFAULT_ROSTER_DM_POOL_SUB
+        assignments_block = ""
+    elif has_primary:
+        template = templates.get("starter") or DEFAULT_ROSTER_DM_STARTER
+        assignments_block = _format_starter_assignments(
+            assignments, is_phase_aware=is_phase_aware,
+        )
+    else:  # paired_sub-only
+        template = templates.get("paired_sub") or DEFAULT_ROSTER_DM_PAIRED_SUB
+        assignments_block = _format_paired_sub_assignments(
+            assignments, is_phase_aware=is_phase_aware,
         )
 
-    # Build a per-stage / per-zone bullet list. Each line is:
-    #   `• Stage 1 — Power Tower (primary)` (phase-aware)
-    #   `• Power Tower (primary)`           (flat)
-    bullets: list[str] = []
-    for a in assignments:
-        if a["role"] == "pool_sub":
-            # Mixed case (a few primaries + standby in the pool) —
-            # surface the standby line so the recipient sees BOTH
-            # their pinned roles and the pool standby.
-            bullets.append(
-                "• Standby pool — leadership may call you in if a "
-                "primary can't make it."
-            )
-            continue
-        stage_prefix = (
-            f"Stage {a['phase']} — " if is_phase_aware else ""
-        )
-        if a["role"] == "primary":
-            bullets.append(f"• {stage_prefix}**{a['zone']}** (primary)")
-        else:  # paired_sub
-            partner = a.get("pair_with") or "a primary"
-            bullets.append(
-                f"• {stage_prefix}**{a['zone']}** "
-                f"(sub for {partner})"
-            )
-
-    return (
-        f"👋 Hey **{name}**,\n\n"
-        f"You're on the **{label}**{team_blurb} roster for "
-        f"**{date_label}** at **{time_label}**.\n\n"
-        f"**Your assignments:**\n"
-        + "\n".join(bullets)
-        + f"\n\nBe ready! {icon}"
+    return _safe_dm_format(
+        template,
+        name=name,
+        event_label=label,
+        team_blurb=team_blurb,
+        date=date_label,
+        time=time_label,
+        assignments=assignments_block,
     )
 
 

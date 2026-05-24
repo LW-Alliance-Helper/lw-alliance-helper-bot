@@ -240,6 +240,13 @@ async def on_ready():
     # try to recover `installer_user_id` from the audit log here: it
     # would mean an API call per guild on every reconnect, and the audit
     # log only retains 45 days anyway.
+    #
+    # `current_version` is passed so that *first-ever* sightings stamp
+    # the row with the running version — that way a fresh install never
+    # triggers a "Welcome to vX.Y.Z" announcement on its very next boot.
+    # Existing rows ignore the parameter and their `last_seen_version`
+    # is preserved (the release-announce handler below owns updates).
+    from release_announcements import maybe_post_release_announcement
     for g in bot.guilds:
         try:
             upsert_guild_install_metadata(
@@ -247,11 +254,20 @@ async def on_ready():
                 guild_name=g.name,
                 owner_id=g.owner_id or 0,
                 installer_user_id=None,
+                current_version=__version__,
             )
         except Exception as e:
             print(f"[GUILD] Could not backfill metadata for {g.name} ({g.id}): {e}")
             sentry_sdk.capture_exception(e)
     print(f"[GUILD] Refreshed install metadata for {len(bot.guilds)} guild(s)")
+
+    # Release-announcement check (#253). Runs after the metadata refresh
+    # above so every guild has a `last_seen_version` to compare against.
+    # The helper is self-contained per-guild — a single guild's failure
+    # never aborts the rest. See `release_announcements.py` for the
+    # major/minor comparison + opt-out gating.
+    for g in bot.guilds:
+        await maybe_post_release_announcement(g, bot, __version__)
 
     # Re-register persistent storm sign-up Views so their buttons keep
     # working after a restart. Fed from `storm_registration_posts`; safely
@@ -330,6 +346,7 @@ async def on_guild_join(guild: discord.Guild):
             guild_name=guild.name,
             owner_id=guild.owner_id or 0,
             installer_user_id=inviter.id if inviter else None,
+            current_version=__version__,
         )
     except Exception as e:
         print(f"[GUILD] Could not persist install metadata for {guild.name}: {e}")

@@ -25,7 +25,14 @@ and PR description.
 
 ### Fixed
 - Storm setup Steps 5 and 9 point at the storm-hub buttons instead of removed `/desertstorm_*` slash commands ([#242](https://github.com/LW-Alliance-Helper/lw-alliance-helper-bot/issues/242)).
-- Changelog-slim hook resolves absolute hook paths so historical bullets stop flagging as new violations ([#250](https://github.com/LW-Alliance-Helper/lw-alliance-helper-bot/issues/250)).
+
+## [1.3.4] — 2026-05-24
+
+### Added
+- Release-announcement infrastructure: when a new major/minor version deploys, the bot posts a short embed to each alliance's leadership channel ([#253](https://github.com/LW-Alliance-Helper/lw-alliance-helper-bot/issues/253)).
+
+### Fixed
+- Changelog-slim hook resolves absolute hook paths to repo-relative, stopping historical bullets from being flagged as new violations ([#250](https://github.com/LW-Alliance-Helper/lw-alliance-helper-bot/issues/250)).
 
 ## [1.3.3] — 2026-05-18
 

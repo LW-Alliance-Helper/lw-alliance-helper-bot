@@ -191,6 +191,76 @@ class TestStormConfig:
         assert ds["mail_template"] != cs["mail_template"]
 
 
+class TestPowerDataSourceFields:
+    """#226 follow-up — `power_metric_tab` + `power_match_column` are
+    new fields on `guild_storm_config` that flex where storm reads
+    power from. Empty values preserve the pre-flexibility default
+    (read from Member Roster keyed by discord_id_col)."""
+
+    def test_default_values_are_empty_strings(self, temp_db):
+        import config
+        cfg = config.get_structured_storm_config(TEST_GUILD_ID, "DS")
+        assert cfg["power_metric_tab"] == ""
+        assert cfg["power_match_column"] == ""
+
+    def test_round_trip_preserves_tab_and_match_column(self, temp_db):
+        import config
+        config.save_storm_config(
+            TEST_GUILD_ID, "DS",
+            tab_name="DS Tab", mail_template="",
+            timezone="America/New_York", log_channel_id=0,
+        )
+        config.save_structured_storm_config(
+            TEST_GUILD_ID, "DS",
+            structured_flow_enabled=True,
+            power_metric_column="B",
+            power_metric_tab="Squad Powers",
+            power_match_column="A",
+        )
+        cfg = config.get_structured_storm_config(TEST_GUILD_ID, "DS")
+        assert cfg["power_metric_tab"] == "Squad Powers"
+        assert cfg["power_match_column"] == "A"
+
+    def test_invalid_match_letter_normalised_to_empty(self, temp_db):
+        """Bad input (`"AB"`, `"7"`, etc.) coerces to empty string so
+        the read path falls back to the safe default instead of
+        saving garbage."""
+        import config
+        config.save_storm_config(
+            TEST_GUILD_ID, "DS",
+            tab_name="DS Tab", mail_template="",
+            timezone="America/New_York", log_channel_id=0,
+        )
+        config.save_structured_storm_config(
+            TEST_GUILD_ID, "DS",
+            structured_flow_enabled=True,
+            power_match_column="7",
+        )
+        cfg = config.get_structured_storm_config(TEST_GUILD_ID, "DS")
+        assert cfg["power_match_column"] == ""
+
+    def test_existing_alliance_power_metric_column_preserved(self, temp_db):
+        """Migration safety: a pre-flexibility alliance that saved
+        `power_metric_column="F"` still reads "F" correctly after the
+        new fields land."""
+        import config
+        config.save_storm_config(
+            TEST_GUILD_ID, "DS",
+            tab_name="DS Tab", mail_template="",
+            timezone="America/New_York", log_channel_id=0,
+        )
+        config.save_structured_storm_config(
+            TEST_GUILD_ID, "DS",
+            structured_flow_enabled=True,
+            power_metric_column="F",
+            # tab + match_column not passed → empty defaults
+        )
+        cfg = config.get_structured_storm_config(TEST_GUILD_ID, "DS")
+        assert cfg["power_metric_column"] == "F"
+        assert cfg["power_metric_tab"] == ""
+        assert cfg["power_match_column"] == ""
+
+
 class TestRosterDmTemplates:
     """#226 follow-up — three per-(guild, event_type) DM templates for
     the Approve & Post DM-the-roster flow. Empty saved value falls

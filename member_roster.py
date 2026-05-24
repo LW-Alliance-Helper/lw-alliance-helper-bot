@@ -82,6 +82,100 @@ def _bot_managed_cols(cfg: dict) -> dict[int, tuple[str, callable]]:
     }
 
 
+# ── Layout detection (#226 follow-up) ──────────────────────────────────────
+#
+# Member Sync writes its 5 bot-managed columns + the "Is this user in
+# Discord?" presence column to the configured roster tab. The original
+# implementation hardcoded the bot columns to indices 0-4 (A-E). When
+# an alliance had already organised their roster sheet — with power,
+# alias, or notes columns living in A-E — the first sync would
+# overwrite that alliance data with Discord username + display name.
+#
+# `detect_column_layout` reads the sheet's existing headers and tries
+# to claim columns by matching header text. Anything that doesn't
+# match (the common case for a brand-new sheet OR a sheet where the
+# alliance organised columns differently) gets appended at the right
+# edge, leaving every existing column untouched.
+
+# Bot field → (normalised) header aliases. The Sheets writer uses
+# the FIRST alias as the canonical label when appending a new column.
+_FIELD_HEADER_ALIASES: dict[str, tuple[str, ...]] = {
+    "discord_id_col": ("discord id", "discordid", "id"),
+    "name_col":       ("name", "username", "discord name"),
+    "display_col":    ("display name", "displayname", "alias"),
+    "joined_col":     ("joined", "join date", "joined at"),
+    "roles_col":      ("roles", "role"),
+}
+
+
+def _normalise_header(value: str) -> str:
+    """Strip the header down to a comparable key — lowercase, drop
+    non-alphanumerics. `"Discord_ID"`, `"DiscordID"`, and `"discord id"`
+    all collapse to `"discordid"`."""
+    out = []
+    for ch in (value or "").strip().lower():
+        if ch.isalnum():
+            out.append(ch)
+    return "".join(out)
+
+
+def detect_column_layout(headers: list[str]) -> dict:
+    """Detect where each bot-managed field should land on the roster
+    tab, given the existing header row.
+
+    Returns:
+        {
+            "layout":          {field_name: column_index},
+            "pending_appends": [field_name, ...]  # bot fields that
+                                                  # didn't match an
+                                                  # existing header
+                                                  # and need a new
+                                                  # column appended
+                                                  # at the right edge.
+        }
+
+    Matching rules:
+        * Each existing header is normalised (`_normalise_header`).
+        * A bot field claims the first column whose normalised header
+          matches one of the field's alias-set entries.
+        * A column is claimed by AT MOST one field; ties resolve in
+          `_FIELD_HEADER_ALIASES` declaration order.
+        * Bot fields with no matched header land in `pending_appends`
+          and get column indices at the right edge of the sheet, in
+          declaration order.
+
+    Pure function — no Sheets I/O, no config reads. Safe to unit
+    test directly with a list of header strings.
+    """
+    normalised = [_normalise_header(h) for h in headers]
+    width = len(headers)
+    layout: dict[str, int] = {}
+    claimed: set[int] = set()
+
+    for field, aliases in _FIELD_HEADER_ALIASES.items():
+        alias_keys = {_normalise_header(a) for a in aliases}
+        for idx, key in enumerate(normalised):
+            if idx in claimed:
+                continue
+            if not key:
+                continue
+            if key in alias_keys:
+                layout[field] = idx
+                claimed.add(idx)
+                break
+
+    pending: list[str] = []
+    next_col = width
+    for field in _FIELD_HEADER_ALIASES:
+        if field in layout:
+            continue
+        layout[field] = next_col
+        pending.append(field)
+        next_col += 1
+
+    return {"layout": layout, "pending_appends": pending}
+
+
 def _build_roster_rows(guild: discord.Guild, cfg: dict) -> list[list[str]]:
     """
     Build the rows that will be written to the sheet, including a header row.
@@ -112,9 +206,19 @@ def _build_roster_rows(guild: discord.Guild, cfg: dict) -> list[list[str]]:
 
 def _merge_with_existing(
     new_rows: list[list[str]], existing: list[list[str]], cfg: dict,
-) -> list[list[str]]:
+    guild: discord.Guild | None = None,
+) -> tuple[list[list[str]], dict]:
     """Merge bot-managed columns from `new_rows` with alliance-owned
     columns preserved from `existing`.
+
+    Returns `(merged_rows, name_match_report)`. The report is:
+
+        {
+            "matched_by_id":   [<discord_id>, ...],
+            "matched_by_name": [<name>, ...],
+            "ambiguous":       [<name>, ...],
+            "no_match":        [<name>, ...],
+        }
 
     Strategy:
       * The bot writes the columns named in `_bot_managed_cols`. Every
@@ -129,12 +233,37 @@ def _merge_with_existing(
         is gone.
       * New members joining get blank cells in custom columns; the
         alliance can fill them in.
+
+    Name-fallback row matching (#226 follow-up):
+      * Existing rows keyed by Discord ID merge by ID (the original
+        path). These count in `matched_by_id`.
+      * Existing rows with a blank Discord ID try a name match: the
+        row's `name_col` cell is looked up against a live-guild
+        index built from member.name + member.display_name. A single
+        unambiguous live match populates the Discord ID into the
+        existing row before the merge, so the alliance's custom-
+        column data threads through to the synced row. These count
+        in `matched_by_name`. Multi-match (`ambiguous`) and no-match
+        (`no_match`) rows stay as-is so the bot never silently writes
+        the wrong member's Discord ID. The caller can surface the
+        report in the setup-time preview.
+      * `guild=None` skips the name-fallback entirely (preserves the
+        pre-#226 behaviour for callers that don't have a guild handle).
     """
+    report = {
+        "matched_by_id":   [],
+        "matched_by_name": [],
+        "ambiguous":       [],
+        "no_match":        [],
+    }
+
     if not new_rows:
-        return new_rows
+        return new_rows, report
 
     bot_cols = set(_bot_managed_cols(cfg).keys())
     id_col   = cfg["discord_id_col"]
+    name_col = cfg["name_col"]
+    display_col = cfg["display_col"]
 
     new_header = new_rows[0]
     existing_header = existing[0] if existing else []
@@ -148,14 +277,71 @@ def _merge_with_existing(
         if i < len(existing_header) and existing_header[i]:
             header[i] = existing_header[i]
 
-    # Index existing rows by Discord ID so we can copy per-member custom
-    # columns over to the new data.
+    # Build a live-member name index for the name-fallback pass. Maps
+    # lowercased Discord username + lowercased display_name → list of
+    # member ids (single-element list = unambiguous, multi-element =
+    # ambiguous and the bot declines to guess).
+    name_to_ids: dict[str, list[int]] = {}
+    if guild is not None:
+        for m in getattr(guild, "members", []) or []:
+            if getattr(m, "bot", False):
+                continue
+            for candidate in (getattr(m, "name", ""), getattr(m, "display_name", "")):
+                key = (candidate or "").strip().lower()
+                if not key:
+                    continue
+                bucket = name_to_ids.setdefault(key, [])
+                if m.id not in bucket:
+                    bucket.append(m.id)
+
+    # Walk existing rows: ID-match path first, then name-fallback for
+    # rows with blank Discord ID. Populate the row's ID column when
+    # a name-fallback match succeeds so the downstream ID-keyed merge
+    # picks it up like any other matched row.
+    existing_processed: list[list[str]] = []
     existing_by_id: dict[str, list[str]] = {}
-    for row in existing[1:] if existing else []:
-        did = row[id_col] if id_col < len(row) else ""
-        did = did.strip()
+    for raw_row in (existing[1:] if existing else []):
+        row = list(raw_row)
+        did = (row[id_col] if id_col < len(row) else "").strip()
         if did:
+            report["matched_by_id"].append(did)
             existing_by_id[did] = row
+            existing_processed.append(row)
+            continue
+        # No Discord ID — try name fallback against the row's name
+        # column first, then display-name column.
+        name_cell = (
+            row[name_col].strip().lower()
+            if name_col < len(row) else ""
+        )
+        display_cell = (
+            row[display_col].strip().lower()
+            if display_col < len(row) else ""
+        )
+        candidate_name = name_cell or display_cell
+        if not candidate_name:
+            # Empty row with no name — nothing to match. Skip.
+            existing_processed.append(row)
+            continue
+        matches = name_to_ids.get(candidate_name, [])
+        # If the row had a name in `name_cell` AND that didn't match,
+        # try `display_cell` too — alliances often store in-game names
+        # in the display slot.
+        if not matches and name_cell and display_cell and display_cell != name_cell:
+            matches = name_to_ids.get(display_cell, [])
+        if len(matches) == 1:
+            new_id = str(matches[0])
+            # Extend the row if it's too short to address id_col.
+            while len(row) <= id_col:
+                row.append("")
+            row[id_col] = new_id
+            existing_by_id[new_id] = row
+            report["matched_by_name"].append(candidate_name)
+        elif len(matches) > 1:
+            report["ambiguous"].append(candidate_name)
+        else:
+            report["no_match"].append(candidate_name)
+        existing_processed.append(row)
 
     merged_rows = [header]
     for new_row in new_rows[1:]:
@@ -172,16 +358,24 @@ def _merge_with_existing(
                     merged[i] = old[i]
         merged_rows.append(merged)
 
-    return merged_rows
+    return merged_rows, report
 
 
-def write_roster(guild: discord.Guild, cfg: dict) -> int:
+def write_roster(guild: discord.Guild, cfg: dict) -> tuple[int, dict]:
     """
     Rebuild the configured tab with a fresh roster while preserving
     alliance-owned columns (custom Power column, `not_on_discord`,
-    etc.) per Discord-ID match.
+    etc.) per Discord-ID match — with a name-fallback pass for
+    existing rows that don't yet have a Discord ID populated.
 
-    Returns the number of member rows written (excluding header).
+    Returns `(member_count, name_match_report)`:
+      * `member_count` — number of member rows written (excluding
+        header), the same int the pre-#226 version returned.
+      * `name_match_report` — `{"matched_by_id": [...],
+        "matched_by_name": [...], "ambiguous": [...], "no_match":
+        [...]}` from `_merge_with_existing`. Callers that don't care
+        can ignore it; the setup-time preview surfaces it so the
+        alliance sees how many rows were threaded through by name.
 
     The caller is responsible for ensuring the guild's member cache is
     populated (via `await guild.chunk()`) before invoking this function;
@@ -198,7 +392,9 @@ def write_roster(guild: discord.Guild, cfg: dict) -> int:
         existing = ws.get_all_values()
     except Exception:
         existing = []
-    merged = _merge_with_existing(new_rows, existing, cfg)
+    merged, name_match_report = _merge_with_existing(
+        new_rows, existing, cfg, guild=guild,
+    )
     # Ensure the "Is this user in Discord?" column exists on the
     # sheet and is filled with bot-derived Yes/No values. Returns the
     # final column index so the data-validation request can target it.
@@ -220,7 +416,7 @@ def write_roster(guild: discord.Guild, cfg: dict) -> int:
                 guild.id, e,
             )
     update_roster_last_synced(guild.id, datetime.now(timezone.utc).isoformat())
-    return max(0, len(merged) - 1)
+    return max(0, len(merged) - 1), name_match_report
 
 
 def _ensure_discord_flag_column(
@@ -575,7 +771,7 @@ class MemberRosterCog(commands.Cog):
         guild = interaction.guild
         await _ensure_member_cache(guild)
         try:
-            count = await asyncio.get_event_loop().run_in_executor(
+            count, _report = await asyncio.get_event_loop().run_in_executor(
                 None, write_roster, guild, cfg,
             )
         except Exception as e:
@@ -746,18 +942,267 @@ async def run_member_roster_setup(interaction: discord.Interaction, bot):
         return
     auto_sync = 1 if auto_view.selected else 0
 
+    # ── Step 4 (conditional): Layout detection + preview ─────────────────────
+    # When the configured tab already has data, run the header-aware
+    # detector against the existing layout. If any bot-managed column
+    # would land on top of alliance data (because the alliance kept
+    # custom values in A-E and the bot's default layout would overwrite
+    # them), the alliance gets a confirm-or-remap preview before we
+    # write. On a brand-new sheet (no headers), skip this step entirely
+    # — there's nothing to collide with.
+    detected_layout = None
+    name_match_dry_run = None
+    try:
+        guild = interaction.guild
+        await _ensure_member_cache(guild)
+        from config import get_member_roster_sheet
+        _preview_ws = await asyncio.get_event_loop().run_in_executor(
+            None, get_member_roster_sheet, guild_id, tab_name,
+        )
+        _existing_rows = await asyncio.get_event_loop().run_in_executor(
+            None, _preview_ws.get_all_values,
+        )
+    except Exception as e:
+        # If we can't read the tab (perms, network, missing tab), fall
+        # through to the legacy hardcoded-layout flow. The initial sync
+        # below will surface the error with a clearer diagnosis.
+        logger.warning(
+            "[ROSTER SETUP] layout preview read failed for guild=%s: %s",
+            guild_id, e,
+        )
+        _existing_rows = []
+
+    # Layout detection is meaningful only when there's a header row.
+    if _existing_rows and _existing_rows[0]:
+        detected_layout = detect_column_layout(_existing_rows[0])
+
+    if detected_layout is not None:
+        # Dry-run name match to surface counts in the preview without
+        # writing anything yet. Builds an effective cfg from the
+        # proposed layout so `_merge_with_existing` has the right
+        # column indices.
+        _trial_cfg = {
+            **detected_layout["layout"],
+            "tab_name":       tab_name,
+            "role_filter_id": role_filter_id,
+            "auto_sync":      auto_sync,
+        }
+        # Skip the merge — we only want the report, not the merged
+        # rows. _merge_with_existing also runs the name fallback.
+        _new_rows = _build_roster_rows(guild, _trial_cfg)
+        _merged, name_match_dry_run = _merge_with_existing(
+            _new_rows, _existing_rows, _trial_cfg, guild=guild,
+        )
+
+        layout = detected_layout["layout"]
+        pending = set(detected_layout["pending_appends"])
+
+        def _col_letter(idx: int) -> str:
+            letters = ""
+            n = idx + 1
+            while n > 0:
+                n, rem = divmod(n - 1, 26)
+                letters = chr(ord("A") + rem) + letters
+            return letters
+
+        field_label = {
+            "discord_id_col": "Discord ID",
+            "name_col":       "Name",
+            "display_col":    "Display Name",
+            "joined_col":     "Joined",
+            "roles_col":      "Roles",
+        }
+        layout_lines = []
+        for field, label_text in field_label.items():
+            idx = layout[field]
+            status = (
+                "appending — no existing match"
+                if field in pending else "matched existing header"
+            )
+            layout_lines.append(
+                f"• **{label_text}** → column **{_col_letter(idx)}**  "
+                f"_({status})_"
+            )
+
+        match_lines = [
+            f"• **{len(name_match_dry_run['matched_by_id'])}** rows "
+            f"matched by Discord ID",
+        ]
+        if name_match_dry_run["matched_by_name"]:
+            match_lines.append(
+                f"• **{len(name_match_dry_run['matched_by_name'])}** rows "
+                f"matched by name — Discord ID will be auto-populated"
+            )
+        if name_match_dry_run["ambiguous"]:
+            match_lines.append(
+                f"• **{len(name_match_dry_run['ambiguous'])}** rows "
+                f"have ambiguous names (multiple live members match) "
+                f"— left as-is"
+            )
+        if name_match_dry_run["no_match"]:
+            match_lines.append(
+                f"• **{len(name_match_dry_run['no_match'])}** rows "
+                f"have no live Discord match — Discord ID left blank"
+            )
+
+        bot_claimed = set(layout.values())
+        preserved_letters = [
+            _col_letter(i)
+            for i in range(len(_existing_rows[0]))
+            if i not in bot_claimed
+        ]
+        preserved_blurb = (
+            f"Custom data in columns "
+            f"{', '.join(preserved_letters)} is preserved."
+            if preserved_letters else
+            "No custom alliance columns detected — every column is "
+            "claimed by the bot."
+        )
+
+        class _LayoutRemapModal(discord.ui.Modal):
+            def __init__(self, current_layout: dict):
+                super().__init__(title="Remap bot-managed columns")
+                self.confirmed = False
+                self.current_layout = current_layout
+                self.inputs: dict[str, discord.ui.TextInput] = {}
+                for field, label_text in field_label.items():
+                    txt = discord.ui.TextInput(
+                        label=f"{label_text} column letter",
+                        placeholder="e.g. A",
+                        default=_col_letter(current_layout[field]),
+                        required=True,
+                        max_length=2,
+                    )
+                    self.inputs[field] = txt
+                    self.add_item(txt)
+
+            async def on_submit(self, inter: discord.Interaction):
+                self.confirmed = True
+                await inter.response.defer()
+                self.stop()
+
+        class _LayoutConfirmView(discord.ui.View):
+            def __init__(self):
+                super().__init__(timeout=300)
+                self.outcome: str | None = None
+                self.modal: _LayoutRemapModal | None = None
+                self.cancelled = False
+
+            @discord.ui.button(
+                label="✅ Looks good — sync now",
+                style=discord.ButtonStyle.success,
+            )
+            async def confirm(
+                self, inter: discord.Interaction, _btn: discord.ui.Button,
+            ):
+                self.outcome = "confirm"
+                for item in self.children:
+                    item.disabled = True
+                await wizard_registry.safe_edit_response(
+                    inter,
+                    content="✅ Layout confirmed — syncing now.",
+                    view=self,
+                )
+                self.stop()
+
+            @discord.ui.button(
+                label="🔧 Remap manually",
+                style=discord.ButtonStyle.secondary,
+            )
+            async def remap(
+                self, inter: discord.Interaction, _btn: discord.ui.Button,
+            ):
+                self.modal = _LayoutRemapModal(layout)
+                await inter.response.send_modal(self.modal)
+                await self.modal.wait()
+                if self.modal.confirmed:
+                    self.outcome = "remap"
+                else:
+                    # Modal cancelled — leave the picker active so the
+                    # alliance can retry.
+                    return
+                for item in self.children:
+                    item.disabled = True
+                try:
+                    if inter.message:
+                        await inter.message.edit(view=self)
+                except discord.HTTPException:
+                    pass
+                self.stop()
+
+            @discord.ui.button(
+                label="↩️ Cancel",
+                style=discord.ButtonStyle.danger,
+            )
+            async def cancel(
+                self, inter: discord.Interaction, _btn: discord.ui.Button,
+            ):
+                self.outcome = "cancel"
+                self.cancelled = True
+                for item in self.children:
+                    item.disabled = True
+                await wizard_registry.safe_edit_response(
+                    inter,
+                    content="↩️ Member Sync setup cancelled.",
+                    view=self,
+                )
+                self.stop()
+
+        preview = _LayoutConfirmView()
+        await channel.send(
+            f"🔍 **Existing data detected in tab `{tab_name}`.**\n\n"
+            f"**Bot-managed columns will land at:**\n"
+            + "\n".join(layout_lines) + "\n\n"
+            f"**Row matching:**\n"
+            + "\n".join(match_lines) + "\n\n"
+            f"_{preserved_blurb}_",
+            view=preview,
+        )
+        await wait_view_or_cancel(preview, cancel_event)
+        if preview.cancelled or preview.outcome == "cancel":
+            wizard_registry.unregister(user.id, cancel_event)
+            return
+        if preview.outcome is None:
+            await channel.send(
+                "⏰ Timed out. Run `/setup` → 👥 Members to start again."
+            )
+            wizard_registry.unregister(user.id, cancel_event)
+            return
+
+        # If the officer remapped, parse the modal letters and overwrite
+        # `layout` so the column indices saved below come from their
+        # picks. Bad input falls back to the auto-detected layout for
+        # that field — better than refusing to save.
+        if preview.outcome == "remap" and preview.modal is not None:
+            for field, txt in preview.modal.inputs.items():
+                raw = (txt.value or "").strip().upper()
+                if len(raw) == 1 and "A" <= raw <= "Z":
+                    layout[field] = ord(raw) - ord("A")
+                # else leave the auto-detected index in place.
+    else:
+        # No header row → blank sheet (or unreachable). Use the hardcoded
+        # default layout.
+        layout = {
+            "discord_id_col": 0, "name_col": 1, "display_col": 2,
+            "joined_col": 3, "roles_col": 4,
+        }
+
     save_member_roster_config(
         guild_id,
         enabled=1, tab_name=tab_name,
         role_filter_id=role_filter_id, auto_sync=auto_sync,
+        discord_id_col=layout["discord_id_col"],
+        name_col=layout["name_col"],
+        display_col=layout["display_col"],
+        joined_col=layout["joined_col"],
+        roles_col=layout["roles_col"],
     )
 
     # ── Initial sync ──────────────────────────────────────────────────────────
     cfg   = get_member_roster_config(guild_id)
-    guild = interaction.guild
     await _ensure_member_cache(guild)
     try:
-        count = await asyncio.get_event_loop().run_in_executor(
+        count, _report = await asyncio.get_event_loop().run_in_executor(
             None, write_roster, guild, cfg,
         )
     except Exception as e:

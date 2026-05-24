@@ -5322,6 +5322,8 @@ async def run_storm_setup(interaction: discord.Interaction, bot, event_type: str
         guild_id, event_type,
         structured_flow_enabled=structured_cfg["structured_flow_enabled"],
         power_metric_column    =structured_cfg.get("power_metric_column", "B"),
+        power_metric_tab       =structured_cfg.get("power_metric_tab", ""),
+        power_match_column     =structured_cfg.get("power_match_column", ""),
         sub_mode               =structured_cfg["sub_mode"],
         signup_channel_id      =structured_cfg["signup_channel_id"],
         signup_schedule_cron   =structured_cfg.get("signup_schedule_cron", ""),
@@ -5369,15 +5371,26 @@ async def run_storm_setup(interaction: discord.Interaction, bot, event_type: str
     else:
         embed.add_field(name="Participation Tracking", value="❌ Disabled", inline=False)
     if structured_cfg["structured_flow_enabled"]:
+        _pwr_letter = structured_cfg.get("power_metric_column", "B")
+        _pwr_tab = structured_cfg.get("power_metric_tab", "") or ""
+        _pwr_match = structured_cfg.get("power_match_column", "") or ""
+        if _pwr_tab:
+            power_blurb = (
+                f"Power source: `{_pwr_tab}` · column `{_pwr_letter}`"
+                + (f" · matched by `{_pwr_match}`" if _pwr_match else "")
+            )
+        else:
+            power_blurb = f"Power column: `{_pwr_letter}`"
+        signup_blurb = (
+            f" · Sign-up channel: <#{structured_cfg['signup_channel_id']}>"
+            if structured_cfg["signup_channel_id"] else ""
+        )
         embed.add_field(
             name="Structured Roster Flow",
             value=(
-                f"✅ Enabled · Power column: `{structured_cfg.get('power_metric_column', 'B')}` · "
-                f"Sub mode: `{structured_cfg['sub_mode']}` · "
-                f"Sign-up channel: <#{structured_cfg['signup_channel_id']}>"
-                if structured_cfg["signup_channel_id"] else
-                f"✅ Enabled · Power column: `{structured_cfg.get('power_metric_column', 'B')}` · "
+                f"✅ Enabled · {power_blurb} · "
                 f"Sub mode: `{structured_cfg['sub_mode']}`"
+                f"{signup_blurb}"
             ),
             inline=False,
         )
@@ -5868,12 +5881,23 @@ async def _run_storm_participation_step(
     roster_alias_col = -1
     if alias_selected:
         saved_alias = cur_part.get("roster_alias_col")
-        # Hardcoded default = column right after the name column (a sensible
-        # convention). Saved value (if any) is shown as "current".
+        # Default the alias column to Member Sync's `display_col` slot
+        # when sync is enabled — that's where the bot writes the
+        # Discord display name (the closest thing to an alias the bot
+        # maintains). Otherwise fall back to the historic
+        # "column right after the name column" convention.
+        from config import get_member_roster_config as _gmrc_alias
+        _sync_cfg_alias = _gmrc_alias(guild_id) if guild_id else {}
+        if _sync_cfg_alias.get("enabled"):
+            _alias_default_letter = _col_index_to_letter(
+                int(_sync_cfg_alias.get("display_col", 2))
+            )
+        else:
+            _alias_default_letter = _col_index_to_letter(roster_name_col + 1)
         raw_alias = await ask_keep_or_change(
             channel,
             "**Alias Column**\nWhich column letter has the alias / nickname?",
-            default=_col_index_to_letter(roster_name_col + 1),
+            default=_alias_default_letter,
             current=(
                 _col_index_to_letter(saved_alias)
                 if isinstance(saved_alias, int) and saved_alias >= 0
@@ -6590,6 +6614,8 @@ async def _run_structured_flow_setup_step(
     # Force-coerce to the keys save_structured_storm_config expects.
     result.setdefault("structured_flow_enabled", False)
     result.setdefault("power_metric_column", "B")
+    result.setdefault("power_metric_tab", "")
+    result.setdefault("power_match_column", "")
     result.setdefault("sub_mode", "pool")
     result.setdefault("signup_channel_id", 0)
     result.setdefault("signup_schedule_cron", "")
@@ -6667,36 +6693,233 @@ async def _run_structured_flow_setup_step(
 
     # ── Premium + opted-in: full config ────────────────────────────────────
     if structured_opted_in:
-        # Power metric column — single letter A-Z (Rule C / #165). The
-        # bot reads the column at that letter on the roster Sheet at
-        # render time, so officers don't need to keep the header string
-        # in sync between Sheet and config.
-        current_letter = (
+        # Power Data Source step. Replaces the old single-letter
+        # "Power Metric Column" prompt with a tab + column + match-column
+        # triple. The alliance can point storm at any tab: the Member
+        # Roster (default), the bot's own Squad Powers tab if they use
+        # the Survey, or a custom external tab. The match column
+        # identifies each row — at read time the bot tries Discord ID
+        # first when the cell looks like one, otherwise it falls back
+        # to case-insensitive name match.
+        from config import get_member_roster_config
+        _roster_cfg_for_defaults = get_member_roster_config(guild_id)
+        _sync_enabled = bool(_roster_cfg_for_defaults.get("enabled"))
+        default_tab = (
+            (_roster_cfg_for_defaults.get("tab_name") or "Member Roster")
+            if _sync_enabled else "Member Roster"
+        )
+        if _sync_enabled:
+            default_match_letter = _col_index_to_letter(
+                int(_roster_cfg_for_defaults.get("discord_id_col", 0))
+            )
+        else:
+            default_match_letter = "A"
+
+        saved_tab = (result.get("power_metric_tab") or "").strip()
+        saved_letter = (
             result.get("power_metric_column") or "B"
         ).strip().upper()
-        if not (len(current_letter) == 1 and "A" <= current_letter <= "Z"):
-            current_letter = "B"
-        picked_letter = await ask_keep_or_change(
-            channel,
-            f"**Power Metric Column**\n"
-            f"Which column on your roster Sheet stores the power value "
-            f"the bot should use to gate {label} zone eligibility? Enter "
-            f"a single column letter (A–Z); the bot reads that column at "
-            f"render time, so renaming the Sheet header later won't break "
-            f"anything.",
-            default="B",
-            current=current_letter if current_letter != "B" else "",
-            modal_title="Power Metric Column",
-            modal_label="Column letter (A–Z)",
-            timeout_cmd=cmd_name,
-            cancel_event=cancel_event,
+        if not (len(saved_letter) == 1 and "A" <= saved_letter <= "Z"):
+            saved_letter = "B"
+        saved_match = (result.get("power_match_column") or "").strip().upper()
+        if not (len(saved_match) == 1 and "A" <= saved_match <= "Z"):
+            saved_match = ""
+
+        # `has_custom` = the alliance has saved values that differ from
+        # the defaults. Drives the 2-button vs 3-button picker layout
+        # below (same idiom `ask_keep_or_change` uses).
+        effective_tab = saved_tab or default_tab
+        effective_match = saved_match or default_match_letter
+        has_custom = (
+            saved_tab != ""
+            or saved_letter != "B"
+            or saved_match != ""
         )
-        if picked_letter is None:
+
+        class _PowerDataSourceModal(discord.ui.Modal):
+            def __init__(self):
+                super().__init__(title="Power Data Source")
+                self.confirmed = False
+                self.tab_input = discord.ui.TextInput(
+                    label="Power source tab",
+                    placeholder="e.g. Member Roster, Squad Powers",
+                    default=effective_tab,
+                    required=True,
+                    max_length=100,
+                )
+                self.col_input = discord.ui.TextInput(
+                    label="Power column letter (A-Z)",
+                    placeholder="e.g. B",
+                    default=saved_letter,
+                    required=True,
+                    max_length=2,
+                )
+                self.match_input = discord.ui.TextInput(
+                    label="Name-match column letter (A-Z)",
+                    placeholder="e.g. A — column with Discord ID or name",
+                    default=effective_match,
+                    required=True,
+                    max_length=2,
+                )
+                self.add_item(self.tab_input)
+                self.add_item(self.col_input)
+                self.add_item(self.match_input)
+
+            async def on_submit(self, inter: discord.Interaction):
+                self.confirmed = True
+                await inter.response.defer()
+                self.stop()
+
+        class _PowerDataSourcePickerView(discord.ui.View):
+            def __init__(self):
+                super().__init__(timeout=300)
+                self.outcome: str | None = None  # "default" | "keep" | "edit"
+                self.modal: _PowerDataSourceModal | None = None
+
+            @discord.ui.button(
+                label="✅ Use defaults",
+                style=discord.ButtonStyle.success,
+            )
+            async def use_default(
+                self, inter: discord.Interaction, _btn: discord.ui.Button,
+            ):
+                self.outcome = "default"
+                for item in self.children:
+                    item.disabled = True
+                await wizard_registry.safe_edit_response(
+                    inter,
+                    content=(
+                        f"✅ Using defaults: tab `{default_tab}`, "
+                        f"power column `B`, matched by `{default_match_letter}`."
+                    ),
+                    view=self,
+                )
+                self.stop()
+
+            @discord.ui.button(
+                label="✅ Keep current",
+                style=discord.ButtonStyle.success,
+            )
+            async def keep_current(
+                self, inter: discord.Interaction, _btn: discord.ui.Button,
+            ):
+                self.outcome = "keep"
+                for item in self.children:
+                    item.disabled = True
+                await wizard_registry.safe_edit_response(
+                    inter,
+                    content=(
+                        f"✅ Keeping current: tab `{effective_tab}`, "
+                        f"power column `{saved_letter}`, matched by "
+                        f"`{effective_match}`."
+                    ),
+                    view=self,
+                )
+                self.stop()
+
+            @discord.ui.button(
+                label="✏️ Define my own",
+                style=discord.ButtonStyle.secondary,
+            )
+            async def define(
+                self, inter: discord.Interaction, _btn: discord.ui.Button,
+            ):
+                self.modal = _PowerDataSourceModal()
+                await inter.response.send_modal(self.modal)
+                await self.modal.wait()
+                self.outcome = "edit" if self.modal.confirmed else None
+                for item in self.children:
+                    item.disabled = True
+                try:
+                    if inter.message:
+                        await inter.message.edit(view=self)
+                except discord.HTTPException:
+                    pass
+                self.stop()
+
+        picker = _PowerDataSourcePickerView()
+        # Drop the Keep current button when the alliance hasn't
+        # customised yet — promotes Use defaults to the only success
+        # action. Drop Use defaults when the alliance HAS customised
+        # so they don't accidentally wipe their saved values.
+        if has_custom:
+            picker.remove_item(picker.use_default)
+            picker.keep_current.label = (
+                f"✅ Keep current: {effective_tab} · {saved_letter} · "
+                f"matched by {effective_match}"[:80]
+            )
+        else:
+            picker.remove_item(picker.keep_current)
+            picker.use_default.label = (
+                f"✅ Use defaults: {default_tab} · B · matched by "
+                f"{default_match_letter}"[:80]
+            )
+
+        sync_blurb = (
+            f"\n\n_Member Sync is enabled, so we're suggesting tab "
+            f"`{default_tab}` matched by column `{default_match_letter}` "
+            f"(the bot's Discord ID slot)._"
+            if _sync_enabled else
+            "\n\n_Member Sync isn't enabled yet — the default tab "
+            "name is just a placeholder; pick whichever tab actually "
+            "has your power data._"
+        )
+        await channel.send(
+            f"**Power Data Source**\n"
+            f"Tell the bot which Google Sheet tab + column has each "
+            f"member's power value. Storm uses this to gate zone "
+            f"eligibility by power. You can keep power in the Member "
+            f"Roster, a Survey tab, or any custom tab.\n\n"
+            f"• **Tab**: the Sheet tab where power lives.\n"
+            f"• **Power column**: the column with the actual power "
+            f"value (e.g. `B`).\n"
+            f"• **Name-match column**: the column the bot uses to "
+            f"match rows to your alliance members. Cells that look "
+            f"like Discord IDs match by ID; otherwise the bot matches "
+            f"by name (case-insensitive)."
+            f"{sync_blurb}",
+            view=picker,
+        )
+        await wait_view_or_cancel(picker, cancel_event)
+        if getattr(picker, "cancelled", False):
             return None
-        cleaned = str(picked_letter).strip().upper()
-        if not (len(cleaned) == 1 and "A" <= cleaned <= "Z"):
-            cleaned = "B"
-        result["power_metric_column"] = cleaned
+        if picker.outcome is None:
+            await channel.send(
+                f"⏰ Timed out. Run `/{cmd_name}` to start again."
+            )
+            return None
+
+        if picker.outcome == "default":
+            # Persist empty tab + match so a future default change
+            # propagates without re-running the wizard.
+            result["power_metric_tab"] = ""
+            result["power_metric_column"] = "B"
+            result["power_match_column"] = ""
+        elif picker.outcome == "keep":
+            # Saved values already in `result` from the initial
+            # current_structured spread — leave as-is.
+            pass
+        else:  # edit
+            modal = picker.modal
+            assert modal is not None
+            tab_val = (modal.tab_input.value or "").strip()
+            col_val = (modal.col_input.value or "B").strip().upper()
+            match_val = (modal.match_input.value or "").strip().upper()
+            if not (len(col_val) == 1 and "A" <= col_val <= "Z"):
+                col_val = "B"
+            if not (len(match_val) == 1 and "A" <= match_val <= "Z"):
+                match_val = ""  # empty → fall back to discord_id_col
+            # Store tab verbatim only when it differs from the Member
+            # Roster tab; otherwise persist empty so the read path
+            # falls through to the canonical default.
+            member_roster_tab = (
+                _roster_cfg_for_defaults.get("tab_name") or "Member Roster"
+            )
+            result["power_metric_tab"] = (
+                tab_val if tab_val and tab_val != member_roster_tab else ""
+            )
+            result["power_metric_column"] = col_val
+            result["power_match_column"] = match_val
 
         # Sub mode — Kevin's first-sweep _edited convention: the
         # green/default button reads `Use Default: <X>` on first run

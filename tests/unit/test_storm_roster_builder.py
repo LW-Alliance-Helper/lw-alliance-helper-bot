@@ -200,6 +200,129 @@ class TestReadRosterPowers:
         assert all(m["power"] is None for m in members.values())
 
 
+class TestPowerDataSourceFlexibility:
+    """#226 follow-up — power can live on a tab other than the Member
+    Roster. The structured config carries a tab name + a match column
+    letter; `_read_roster_powers` overlays power onto each member by
+    matching Discord ID first, then case-insensitive name."""
+
+    def test_empty_power_tab_falls_back_to_member_roster(self, fake_env):
+        """Backwards-compat: existing alliances saved
+        `power_metric_column = "F"` and nothing else. Their config
+        still works — empty `power_metric_tab` means "read power from
+        the Member Roster row" (the pre-flexibility behaviour)."""
+        fake, gid = fake_env
+        import config
+        config.save_structured_storm_config(
+            gid, "DS",
+            structured_flow_enabled=True,
+            power_metric_column="F",
+            power_metric_tab="",     # empty → Member Roster
+            power_match_column="",   # empty → discord_id_col
+        )
+        members, errs = srb._read_roster_powers(gid, "DS")
+        assert errs == []
+        assert members["1001"]["power"] == 412_000_000
+
+    def test_cross_tab_reads_power_from_configured_tab(self, fake_env):
+        """Alliance points storm at a Squad Powers tab. The Member
+        Roster still supplies the member directory; power comes from
+        the other tab, matched by Discord ID in column A."""
+        fake, gid = fake_env
+        import config
+        # Add a Squad Powers tab with one row per member, power in
+        # column B, Discord IDs in column A.
+        sp = fake.add_worksheet("Squad Powers")
+        sp._rows = [
+            ["Discord ID", "1st Squad Power"],
+            ["1001",       "500M"],
+            ["1002",       "350M"],
+        ]
+        config.save_structured_storm_config(
+            gid, "DS",
+            structured_flow_enabled=True,
+            power_metric_column="B",
+            power_metric_tab="Squad Powers",
+            power_match_column="A",
+        )
+        members, errs = srb._read_roster_powers(gid, "DS")
+        assert errs == []
+        # Cross-tab values override whatever the Member Roster row
+        # said — alliance pointed storm AT this tab.
+        assert members["1001"]["power"] == 500_000_000
+        assert members["1002"]["power"] == 350_000_000
+        # Member with no entry in the power tab gets power=None.
+        assert members["1003"]["power"] is None
+
+    def test_cross_tab_matches_by_name_when_id_blank(self, fake_env):
+        """Match column carries names, not Discord IDs. The bot tries
+        the digit path first, falls back to case-insensitive name
+        match."""
+        fake, gid = fake_env
+        import config
+        sp = fake.add_worksheet("Squad Powers")
+        sp._rows = [
+            ["Member",  "1st Squad Power"],
+            ["Alice",   "411M"],
+            ["bob",     "229M"],
+            ["dave",    "189M"],  # the non-Discord member
+        ]
+        config.save_structured_storm_config(
+            gid, "DS",
+            structured_flow_enabled=True,
+            power_metric_column="B",
+            power_metric_tab="Squad Powers",
+            power_match_column="A",
+        )
+        members, _errs = srb._read_roster_powers(gid, "DS")
+        # Case-insensitive: "Alice" → matches member.name "Alice".
+        assert members["1001"]["power"] == 411_000_000
+        # Lowercased "bob" → member.name "Bob".
+        assert members["1002"]["power"] == 229_000_000
+        # Non-Discord Dave matched by name too.
+        assert members["Dave"]["power"] == 189_000_000
+
+    def test_cross_tab_missing_tab_surfaces_soft_error(self, fake_env):
+        """Power tab doesn't exist on the spreadsheet. The bot surfaces
+        a soft error and falls through with power=None for everyone."""
+        fake, gid = fake_env
+        import config
+        config.save_structured_storm_config(
+            gid, "DS",
+            structured_flow_enabled=True,
+            power_metric_column="B",
+            power_metric_tab="Nonexistent Tab",
+            power_match_column="A",
+        )
+        members, errs = srb._read_roster_powers(gid, "DS")
+        # Errors flagged; members still surface with power=None so
+        # the builder can show them under "power unknown".
+        assert any("Nonexistent Tab" in e for e in errs)
+        assert all(m["power"] is None for m in members.values())
+
+    def test_cross_tab_unparseable_power_skipped(self, fake_env):
+        """Garbage in the power column (e.g. \"tbd\") doesn't crash —
+        that row just doesn't contribute to the index."""
+        fake, gid = fake_env
+        import config
+        sp = fake.add_worksheet("Squad Powers")
+        sp._rows = [
+            ["Discord ID", "1st Squad Power"],
+            ["1001",       "tbd"],
+            ["1002",       "260M"],
+        ]
+        config.save_structured_storm_config(
+            gid, "DS",
+            structured_flow_enabled=True,
+            power_metric_column="B",
+            power_metric_tab="Squad Powers",
+            power_match_column="A",
+        )
+        members, _errs = srb._read_roster_powers(gid, "DS")
+        assert members["1001"]["power"] is None
+        assert members["1002"]["power"] == 260_000_000
+
+
 # ── Session + eligibility ────────────────────────────────────────────────────
 
 

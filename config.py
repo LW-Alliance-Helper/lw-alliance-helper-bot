@@ -291,6 +291,21 @@ def init_db():
                 -- Structured storm flow (#38 + #54)
                 structured_flow_enabled  INTEGER DEFAULT 0,
                 power_metric_column      TEXT    DEFAULT 'B',
+                -- Power Data Source flexibility: alliances maintain
+                -- power data in different places — the bot's own
+                -- Squad Power Survey writes to "Squad Powers", some
+                -- alliances paste into the Member Roster, some keep
+                -- a custom tab. `power_metric_tab` is the tab the
+                -- structured roster builder reads at builder time
+                -- (empty = Member Roster, preserving the pre-existing
+                -- single-tab default). `power_match_column` is the
+                -- column on that tab that identifies each row;
+                -- the read path matches by Discord ID when the cell
+                -- looks like one, otherwise by case-insensitive name.
+                -- Empty `power_match_column` = use Member Roster's
+                -- discord_id_col (existing behaviour).
+                power_metric_tab         TEXT    DEFAULT '',
+                power_match_column       TEXT    DEFAULT '',
                 sub_mode                 TEXT    DEFAULT 'pool',
                 signup_channel_id        INTEGER DEFAULT 0,
                 signup_schedule_cron     TEXT    DEFAULT '',
@@ -688,6 +703,13 @@ def init_db():
             # event-type-aware defaults at read time.
             ("structured_flow_enabled", "INTEGER DEFAULT 0"),
             ("power_metric_column",     "TEXT    DEFAULT 'B'"),
+            # Power Data Source flexibility — see CREATE TABLE comment.
+            # Empty values preserve the pre-flexibility default of
+            # reading power from the Member Roster tab keyed by its
+            # discord_id_col, so existing alliances see zero behaviour
+            # change until they reconfigure via the wizard.
+            ("power_metric_tab",        "TEXT    DEFAULT ''"),
+            ("power_match_column",      "TEXT    DEFAULT ''"),
             ("sub_mode",                "TEXT    DEFAULT 'pool'"),
             ("signup_channel_id",       "INTEGER DEFAULT 0"),
             ("signup_schedule_cron",    "TEXT    DEFAULT ''"),
@@ -1657,6 +1679,8 @@ def get_storm_config(guild_id: int, event_type: str) -> dict:
         # default_structured_tab() / get_structured_storm_config().
         "structured_flow_enabled": 0,
         "power_metric_column":     "B",
+        "power_metric_tab":        "",
+        "power_match_column":      "",
         "sub_mode":                "pool",
         "signup_channel_id":       0,
         "signup_schedule_cron":    "",
@@ -1831,6 +1855,11 @@ def get_structured_storm_config(guild_id: int, event_type: str) -> dict:
     return {
         "structured_flow_enabled": bool(cfg.get("structured_flow_enabled")),
         "power_metric_column":     (cfg.get("power_metric_column") or "B").upper(),
+        # Power Data Source flexibility — empty values are the canonical
+        # "use Member Roster + discord_id_col" signal; the read path in
+        # storm_roster_builder._read_roster_powers interprets them.
+        "power_metric_tab":        (cfg.get("power_metric_tab") or ""),
+        "power_match_column":      (cfg.get("power_match_column") or "").upper(),
         "sub_mode":                cfg.get("sub_mode") or "pool",
         "signup_channel_id":       int(cfg.get("signup_channel_id") or 0),
         "signup_schedule_cron":    cfg.get("signup_schedule_cron") or "",
@@ -1909,6 +1938,8 @@ def save_structured_storm_config(
     guild_id: int, event_type: str, *,
     structured_flow_enabled: bool = False,
     power_metric_column: str        = "B",
+    power_metric_tab: str           = "",
+    power_match_column: str         = "",
     sub_mode: str                   = "pool",
     signup_channel_id: int          = 0,
     signup_schedule_cron: str       = "",
@@ -1947,11 +1978,22 @@ def save_structured_storm_config(
         dow = -1
     if not (-1 <= dow <= 6):
         dow = -1
+    # Normalise the Power Data Source fields. Empty tab persists as
+    # "use Member Roster"; empty match column persists as "use Member
+    # Roster discord_id_col". Anything not A-Z gets coerced to empty
+    # so a bad input falls back to the safe default instead of being
+    # saved verbatim.
+    pm_tab = (power_metric_tab or "").strip()
+    pm_match = (power_match_column or "").strip().upper()
+    if not (len(pm_match) == 1 and "A" <= pm_match <= "Z"):
+        pm_match = ""
     with _get_conn() as conn:
         cur = conn.execute(
             "UPDATE guild_storm_config SET "
             "  structured_flow_enabled = ?, "
             "  power_metric_column = ?, "
+            "  power_metric_tab = ?, "
+            "  power_match_column = ?, "
             "  sub_mode = ?, "
             "  signup_channel_id = ?, "
             "  signup_schedule_cron = ?, "
@@ -1966,7 +2008,10 @@ def save_structured_storm_config(
             "WHERE guild_id = ? AND event_type = ?",
             (
                 1 if structured_flow_enabled else 0,
-                (power_metric_column or "B").strip().upper()[:1] or "B", sub_mode,
+                (power_metric_column or "B").strip().upper()[:1] or "B",
+                pm_tab,
+                pm_match,
+                sub_mode,
                 int(signup_channel_id or 0), signup_schedule_cron,
                 signups_tab, rosters_tab, attendance_tab,
                 strategies_tab, member_rules_tab,

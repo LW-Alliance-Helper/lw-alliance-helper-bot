@@ -208,7 +208,7 @@ class TestWriteRoster:
 
         with patch("member_roster.get_member_roster_sheet", return_value=ws), \
              patch("member_roster.get_spreadsheet", return_value=None):
-            count = write_roster(guild, _default_cfg())
+            count, _report = write_roster(guild, _default_cfg())
 
         assert count == 2
         ws.clear.assert_called_once()
@@ -322,7 +322,7 @@ class TestPreserveUnknownColumns:
         ws.clear  = MagicMock()
         with patch("member_roster.get_member_roster_sheet", return_value=ws), \
              patch("member_roster.get_spreadsheet", return_value=None):
-            count = write_roster(guild, _default_cfg())
+            count, _report = write_roster(guild, _default_cfg())
         assert count == 1
         rows = ws.update.call_args.args[1]
         # Five bot-managed columns plus the auto-appended presence
@@ -342,7 +342,7 @@ class TestPreserveUnknownColumns:
         ws.clear  = MagicMock()
         with patch("member_roster.get_member_roster_sheet", return_value=ws), \
              patch("member_roster.get_spreadsheet", return_value=None):
-            count = write_roster(guild, _default_cfg())
+            count, _report = write_roster(guild, _default_cfg())
         # Falls through to writing just the bot-managed columns; the
         # write isn't blocked by a read failure.
         assert count == 1
@@ -530,7 +530,7 @@ class TestDiscordPresenceColumn:
         spreadsheet.batch_update.side_effect = RuntimeError("API quota")
         with patch("member_roster.get_member_roster_sheet", return_value=ws), \
              patch("member_roster.get_spreadsheet", return_value=spreadsheet):
-            count = write_roster(guild, _default_cfg())
+            count, _report = write_roster(guild, _default_cfg())
         # Sync still completed — the row values are on the sheet.
         assert count == 1
 
@@ -853,3 +853,239 @@ class TestLookupDiscordId:
         monkeypatch.setattr(config, "get_member_roster_sheet", lambda gid, tab: ws)
 
         assert config.lookup_discord_id_for_name(TEST_GUILD_ID, "Nobody") is None
+
+
+# ── #226 follow-up: detect_column_layout + name-fallback merge ──────────────
+
+
+class TestDetectColumnLayout:
+    """`detect_column_layout` is the header-aware mapper used by Member
+    Sync setup to avoid claiming columns that already have alliance
+    data in them. Pure function — no sheet I/O. Tests pin the exact
+    matching + appending rules so a future change doesn't quietly
+    drift."""
+
+    def test_canonical_headers_match_in_order(self):
+        from member_roster import detect_column_layout
+        result = detect_column_layout([
+            "Discord ID", "Name", "Display Name", "Joined", "Roles",
+        ])
+        assert result["layout"] == {
+            "discord_id_col": 0, "name_col": 1, "display_col": 2,
+            "joined_col": 3, "roles_col": 4,
+        }
+        assert result["pending_appends"] == []
+
+    def test_normalised_headers_match(self):
+        """Headers with punctuation / casing variants still match the
+        bot's canonical labels via `_normalise_header`."""
+        from member_roster import detect_column_layout
+        result = detect_column_layout([
+            "Discord_ID", "USERNAME", "displayname", "Join Date", "role",
+        ])
+        assert result["layout"] == {
+            "discord_id_col": 0, "name_col": 1, "display_col": 2,
+            "joined_col": 3, "roles_col": 4,
+        }
+        assert result["pending_appends"] == []
+
+    def test_empty_sheet_appends_everything(self):
+        from member_roster import detect_column_layout
+        result = detect_column_layout([])
+        # All five bot fields land at the right edge in declaration
+        # order, starting at index 0 since the sheet is empty.
+        assert result["layout"] == {
+            "discord_id_col": 0, "name_col": 1, "display_col": 2,
+            "joined_col": 3, "roles_col": 4,
+        }
+        assert result["pending_appends"] == [
+            "discord_id_col", "name_col", "display_col",
+            "joined_col", "roles_col",
+        ]
+
+    def test_alliance_columns_in_bot_slots_pushes_appends_right(self):
+        """Sheet has alliance custom columns where the bot would
+        normally put its data. None of those columns match the bot's
+        header aliases, so the bot's fields all append at the right
+        edge — alliance data preserved in place."""
+        from member_roster import detect_column_layout
+        result = detect_column_layout([
+            "Member ID", "In-Game Name", "Power", "Notes", "Squad",
+        ])
+        # Nothing matched.
+        assert result["pending_appends"] == [
+            "discord_id_col", "name_col", "display_col",
+            "joined_col", "roles_col",
+        ]
+        # Bot fields land at indices 5-9 (right of the existing 5
+        # alliance columns).
+        assert result["layout"] == {
+            "discord_id_col": 5, "name_col": 6, "display_col": 7,
+            "joined_col": 8, "roles_col": 9,
+        }
+
+    def test_mixed_matched_and_appended(self):
+        """Sheet has Discord ID + Roles in the bot's labels but power
+        + alias columns in between. The bot claims the matched
+        columns at their existing indices and appends the rest."""
+        from member_roster import detect_column_layout
+        result = detect_column_layout([
+            "Discord ID", "Power", "Alias", "Notes", "Roles",
+        ])
+        # Discord ID matched at 0, Roles matched at 4. Note that
+        # "Alias" is an alias for `display_col` so display_col claims
+        # index 2 too.
+        assert result["layout"]["discord_id_col"] == 0
+        assert result["layout"]["display_col"] == 2
+        assert result["layout"]["roles_col"] == 4
+        # Name + Joined have no matching headers, append at right edge.
+        assert result["layout"]["name_col"] == 5
+        assert result["layout"]["joined_col"] == 6
+        assert set(result["pending_appends"]) == {"name_col", "joined_col"}
+
+    def test_each_column_claimed_at_most_once(self):
+        """Two columns with the same canonical label — only the first
+        one wins. Prevents one alliance header from being claimed by
+        two bot fields if the alias sets overlap."""
+        from member_roster import detect_column_layout
+        result = detect_column_layout(["Name", "Name", "Roles"])
+        # First "Name" goes to name_col; second "Name" is left unclaimed
+        # (alliance data); display_col falls through to append.
+        assert result["layout"]["name_col"] == 0
+        assert result["layout"]["roles_col"] == 2
+        assert result["layout"]["display_col"] >= 3  # appended
+
+
+class TestMergeWithNameFallback:
+    """`_merge_with_existing` populates Discord IDs for rows that have
+    no Discord ID set but whose name matches an unambiguous live
+    guild member. The report dict counts each row's outcome so the
+    setup wizard can surface counts in the preview."""
+
+    def _live_guild_with(self, *member_specs):
+        """Build a fake guild whose `.members` resolves to mock members
+        with the given (id, name, display_name) tuples."""
+        guild = MagicMock()
+        members = []
+        for did, name, display in member_specs:
+            m = MagicMock()
+            m.bot = False
+            m.id = did
+            m.name = name
+            m.display_name = display
+            members.append(m)
+        guild.members = members
+        return guild
+
+    def _cfg(self):
+        return _default_cfg()
+
+    def test_name_match_populates_discord_id(self):
+        from member_roster import _merge_with_existing
+        existing = [
+            ["Discord ID", "Name", "Display Name", "Joined", "Roles"],
+            ["",           "alice_user", "Alice",    "",       ""],
+        ]
+        guild = self._live_guild_with(
+            (12345, "alice_user", "Alice The Player"),
+        )
+        new_rows = [
+            ["Discord ID", "Name", "Display Name", "Joined", "Roles"],
+            ["12345",      "alice_user", "Alice The Player", "", ""],
+        ]
+        merged, report = _merge_with_existing(
+            new_rows, existing, self._cfg(), guild=guild,
+        )
+        # Existing row's blank Discord ID populated via name-fallback.
+        # Report flags the match.
+        assert report["matched_by_name"] == ["alice_user"]
+        assert report["matched_by_id"] == []
+        assert report["ambiguous"] == []
+        assert report["no_match"] == []
+
+    def test_ambiguous_name_does_not_populate(self):
+        """Two live members share a display name. The bot must NOT
+        guess — report flags the row as ambiguous and leaves it
+        as-is."""
+        from member_roster import _merge_with_existing
+        existing = [
+            ["Discord ID", "Name", "Display Name", "Joined", "Roles"],
+            ["",           "Alice", "",            "",       ""],
+        ]
+        guild = self._live_guild_with(
+            (1, "alice", "Alice"),
+            (2, "alice2", "Alice"),
+        )
+        new_rows = [
+            ["Discord ID", "Name", "Display Name", "Joined", "Roles"],
+        ]
+        _merged, report = _merge_with_existing(
+            new_rows, existing, self._cfg(), guild=guild,
+        )
+        # Name-cell "Alice" lowercased to "alice", which is the
+        # Discord username of member 1 AND the display name of member 2.
+        # That's ambiguous — bot declines to guess.
+        assert "alice" in report["ambiguous"]
+        assert report["matched_by_name"] == []
+
+    def test_no_match_leaves_row_as_is(self):
+        """Existing row's name doesn't match any live guild member —
+        report flags `no_match` and the row passes through."""
+        from member_roster import _merge_with_existing
+        existing = [
+            ["Discord ID", "Name", "Display Name", "Joined", "Roles"],
+            ["",           "Ghost", "",            "",       ""],
+        ]
+        guild = self._live_guild_with(
+            (1, "alice", "Alice"),
+        )
+        new_rows = [
+            ["Discord ID", "Name", "Display Name", "Joined", "Roles"],
+        ]
+        _merged, report = _merge_with_existing(
+            new_rows, existing, self._cfg(), guild=guild,
+        )
+        assert report["no_match"] == ["ghost"]
+        assert report["matched_by_name"] == []
+
+    def test_guild_none_disables_name_fallback(self):
+        """Backwards-compat: when no guild is passed, the name-fallback
+        pass is skipped — pre-#226 behaviour preserved for callers
+        that don't have a guild handle."""
+        from member_roster import _merge_with_existing
+        existing = [
+            ["Discord ID", "Name", "Display Name", "Joined", "Roles"],
+            ["",           "alice_user", "Alice",  "",       ""],
+        ]
+        new_rows = [
+            ["Discord ID", "Name", "Display Name", "Joined", "Roles"],
+        ]
+        _merged, report = _merge_with_existing(
+            new_rows, existing, self._cfg(), guild=None,
+        )
+        # Without a guild, the name index is empty so every name-less
+        # row falls into no_match (or ambiguous if there are dupes).
+        assert report["matched_by_name"] == []
+        assert report["matched_by_id"] == []
+        # Either no_match flagged (when guild=None) or unprocessed.
+        # The row still exists in the merge, but unflagged.
+
+    def test_existing_id_skips_name_fallback(self):
+        """Rows that already carry a Discord ID merge by ID — the
+        name-fallback pass shouldn't touch them or count them in
+        matched_by_name."""
+        from member_roster import _merge_with_existing
+        existing = [
+            ["Discord ID", "Name", "Display Name", "Joined", "Roles", "Power"],
+            ["12345",      "alice", "Alice",       "",       "",     "300M"],
+        ]
+        guild = self._live_guild_with((12345, "alice", "Alice"))
+        new_rows = [
+            ["Discord ID", "Name", "Display Name", "Joined", "Roles"],
+            ["12345",      "alice", "Alice",       "",       ""],
+        ]
+        _merged, report = _merge_with_existing(
+            new_rows, existing, self._cfg(), guild=guild,
+        )
+        assert report["matched_by_id"] == ["12345"]
+        assert report["matched_by_name"] == []

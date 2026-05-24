@@ -103,6 +103,100 @@ def _read_power_column_header(guild_id: int, event_type: str) -> str:
     return raw
 
 
+def _build_cross_tab_power_index(
+    guild_id: int, tab_name: str, power_col: int, match_col: int,
+) -> tuple[dict[str, int], dict[str, list[int]], list[str]]:
+    """Read a power source tab and build two parallel lookup indexes.
+
+    Returns `(power_by_id, power_by_name, errors)`:
+      * `power_by_id` keys on the digit value found in `match_col`
+        (so alliances who match by Discord ID get an O(1) lookup).
+      * `power_by_name` keys on the lowercased text value in
+        `match_col`. Stored as a list so the lookup can flag
+        multi-match rows as ambiguous and decline to guess.
+
+    Used by `_read_roster_powers` when the alliance pointed storm at
+    a power tab that's distinct from the Member Roster.
+    """
+    import config
+    from storm_strategy import parse_power
+
+    power_by_id: dict[str, int] = {}
+    power_by_name: dict[str, list[int]] = {}
+    errors: list[str] = []
+
+    try:
+        ws = config.get_member_roster_sheet(guild_id, tab_name)
+    except Exception as e:
+        errors.append(
+            f"power-source tab {tab_name!r} open failed: {e}"
+        )
+        return {}, {}, errors
+
+    try:
+        values = ws.get_all_values()
+    except Exception as e:
+        errors.append(
+            f"power-source tab {tab_name!r} read failed: {e}"
+        )
+        return {}, {}, errors
+
+    if not values:
+        return {}, {}, errors
+
+    # Skip the header row when building the index — header cells in
+    # the match column shouldn't match a Discord ID or a name.
+    for row in values[1:]:
+        match_cell = (
+            row[match_col].strip()
+            if 0 <= match_col < len(row) else ""
+        )
+        power_cell = (
+            row[power_col].strip()
+            if 0 <= power_col < len(row) else ""
+        )
+        if not (match_cell and power_cell):
+            continue
+        parsed = parse_power(power_cell)
+        if parsed is None:
+            continue
+        power_val = int(parsed)
+        if match_cell.isdigit():
+            # Last-writer-wins for duplicate Discord IDs; in practice
+            # no alliance has two rows for the same Discord ID, but
+            # if they do the last row's number wins (matches the
+            # Member-Roster-keyed-by-ID behaviour).
+            power_by_id[match_cell] = power_val
+        else:
+            power_by_name.setdefault(match_cell.lower(), []).append(power_val)
+
+    return power_by_id, power_by_name, errors
+
+
+def _lookup_power_in_index(
+    member: dict,
+    power_by_id: dict[str, int],
+    power_by_name: dict[str, list[int]],
+) -> Optional[int]:
+    """Resolve this member's power from the cross-tab indexes.
+
+    Discord ID match wins when both halves (member + index entry)
+    are digit strings. Falls back to case-insensitive name match
+    against the member's display name. Multi-match names return
+    None — ambiguous matches must not silently pick the wrong
+    member's power, especially for a floor-gated builder.
+    """
+    discord_id = (member.get("discord_id") or "").strip()
+    if discord_id and discord_id.isdigit() and discord_id in power_by_id:
+        return power_by_id[discord_id]
+    name = (member.get("name") or "").strip().lower()
+    if name:
+        matches = power_by_name.get(name, [])
+        if len(matches) == 1:
+            return matches[0]
+    return None
+
+
 def _read_roster_powers(
     guild_id: int, event_type: str, *, guild=None,
 ) -> tuple[dict[str, dict], list[str]]:
@@ -124,6 +218,13 @@ def _read_roster_powers(
     member with a "power unknown" label and only the explicit override
     toggle assigns them.
 
+    The Power Data Source is configurable per (guild, event_type)
+    via `power_metric_tab` + `power_match_column` on the structured
+    storm config. Empty `power_metric_tab` falls back to the Member
+    Roster tab (preserving the pre-flexibility default).
+    Cross-tab reads build a Discord-ID-keyed and a name-keyed index,
+    matched by `_lookup_power_in_index` for each member.
+
     Errors are returned soft so the slash command can surface a one-line
     warning without aborting the builder entirely.
     """
@@ -144,6 +245,38 @@ def _read_roster_powers(
 
     power_letter = (structured.get("power_metric_column") or "B").strip().upper()
     power_col = config.power_column_letter_to_index(power_letter)
+
+    # Power Data Source resolution. `same_power_tab` is True when the
+    # alliance is reading power from the Member Roster (default), False
+    # when they pointed storm at a different tab (e.g., the Survey's
+    # "Squad Powers" tab or a custom external tab). Same-tab keeps the
+    # existing inline power-parse in the member loop below. Cross-tab
+    # skips inline parsing and runs `_build_cross_tab_power_index` +
+    # `_lookup_power_in_index` after the loop.
+    member_roster_tab = roster_cfg.get("tab_name") or "Member Roster"
+    configured_power_tab = (structured.get("power_metric_tab") or "").strip()
+    if configured_power_tab and configured_power_tab != member_roster_tab:
+        same_power_tab = False
+        power_tab_for_logging = configured_power_tab
+    else:
+        same_power_tab = True
+        power_tab_for_logging = member_roster_tab
+
+    # Match column for cross-tab lookups. Empty `power_match_column`
+    # falls back to the Member Roster's discord_id_col (existing
+    # behaviour). Letter on the configured power tab when set.
+    configured_match_letter = (
+        structured.get("power_match_column") or ""
+    ).strip().upper()
+    if (
+        len(configured_match_letter) == 1
+        and "A" <= configured_match_letter <= "Z"
+    ):
+        cross_tab_match_col = config.power_column_letter_to_index(
+            configured_match_letter,
+        )
+    else:
+        cross_tab_match_col = int(roster_cfg.get("discord_id_col", 0))
 
     if not roster_cfg.get("enabled"):
         errors.append(
@@ -196,26 +329,31 @@ def _read_roster_powers(
         name_col = part_alias_col
     else:
         name_col = int(roster_cfg.get("display_col", roster_cfg.get("name_col", 1)))
-    # Power column is a configured letter (Rule C / #165) — A=0, B=1, etc.
-    # If the configured letter sits past the end of the header row,
-    # surface a soft warning + treat power as unreadable for every row.
-    power_col_header = (
-        header[power_col].strip()
-        if 0 <= power_col < len(header) else ""
-    )
-    if not power_col_header:
-        errors.append(
-            f"power column {power_letter} doesn't exist in your roster "
-            f"Sheet header (or is blank). Re-run the setup wizard's Power "
-            f"Metric Column step to pick a different column."
+    # Power column is a configured letter (Rule C / #165) — A=0, B=1,
+    # etc. Validate only when the power data lives on the Member
+    # Roster tab (same_power_tab=True); for cross-tab reads the
+    # column lives on a different sheet and is validated inside
+    # `_build_cross_tab_power_index`.
+    if same_power_tab:
+        power_col_header = (
+            header[power_col].strip()
+            if 0 <= power_col < len(header) else ""
         )
-        logger.warning(
-            "[STORM ROSTER] power column letter %r resolves to index %d, "
-            "which is past the header row (len=%d) for guild=%s event=%s. "
-            "Header: %s",
-            power_letter, power_col, len(header),
-            guild_id, event_type, header,
-        )
+        if not power_col_header:
+            errors.append(
+                f"power column {power_letter} doesn't exist in your roster "
+                f"Sheet header (or is blank). Re-run the setup wizard's Power "
+                f"Data Source step to pick a different column."
+            )
+            logger.warning(
+                "[STORM ROSTER] power column letter %r resolves to index %d, "
+                "which is past the header row (len=%d) for guild=%s event=%s. "
+                "Header: %s",
+                power_letter, power_col, len(header),
+                guild_id, event_type, header,
+            )
+    else:
+        power_col_header = ""  # logged later as N/A
     # Prefer the bot-maintained presence column when present. Falls
     # back to the legacy `not_on_discord` column for back-compat with
     # alliances that haven't synced under the new bot version yet.
@@ -228,18 +366,21 @@ def _read_roster_powers(
     # not Discord ID" and "power not reading even when in the sheet."
     # Surface the exact column resolution so a single log line answers
     # which column the bot is looking at. `part_alias_col < 0` means
-    # the bot fell back to member_roster_config.display_col.
+    # the bot fell back to member_roster_config.display_col;
+    # same_power_tab=False means the alliance pointed storm at a
+    # different power tab and the inline power-parse is skipped.
     logger.info(
         "[STORM ROSTER] guild=%s event=%s column resolution: "
         "id_col=%d (cfg discord_id_col=%d), name_col=%d "
         "(participation roster_alias_col=%d, display_col=%d), "
-        "power_col=%d (letter %s, header %r), "
+        "power_col=%d (letter %s, header %r, tab %r same=%s match_col=%d), "
         "presence_col=%d, not_disc_col=%d, header=%s",
         guild_id, event_type,
         id_col, int(roster_cfg.get("discord_id_col", 0)),
         name_col, part_alias_col,
         int(roster_cfg.get("display_col", roster_cfg.get("name_col", 1))),
         power_col, power_letter, power_col_header,
+        power_tab_for_logging, same_power_tab, cross_tab_match_col,
         presence_col, not_disc_col, header,
     )
 
@@ -259,11 +400,14 @@ def _read_roster_powers(
         if not (discord_id or name):
             continue
 
-        # Parse the power cell. Blank → None (not zero). Garbage → None
-        # plus a single log warning; we don't surface every row as an
-        # error to leadership.
+        # Parse the power cell only when the power data lives on the
+        # Member Roster (same_power_tab). Cross-tab reads skip this
+        # branch and get their power values overlaid after the loop
+        # via `_lookup_power_in_index`. Blank → None (not zero).
+        # Garbage → None plus a single log warning; we don't surface
+        # every row as an error to leadership.
         power_val: Optional[int] = None
-        if power_col >= 0:
+        if same_power_tab and power_col >= 0:
             raw_power = _cell(power_col)
             if raw_power:
                 parsed = parse_power(raw_power)
@@ -353,6 +497,31 @@ def _read_roster_powers(
         logger.warning(
             "[STORM ROSTER] stale roster Discord IDs for guild=%s event=%s: %s",
             guild_id, event_type, "; ".join(stale_ids),
+        )
+
+    # Cross-tab power overlay. When the alliance pointed storm at a
+    # power tab other than the Member Roster, we deferred all power
+    # parsing — every member.power is None at this point. Build the
+    # ID + name indexes from the configured tab, then resolve each
+    # member.
+    if not same_power_tab and members:
+        power_by_id, power_by_name, p_errors = _build_cross_tab_power_index(
+            guild_id, configured_power_tab,
+            power_col, cross_tab_match_col,
+        )
+        errors.extend(p_errors)
+        matched_count = 0
+        for m in members.values():
+            resolved = _lookup_power_in_index(m, power_by_id, power_by_name)
+            if resolved is not None:
+                m["power"] = resolved
+                matched_count += 1
+        logger.info(
+            "[STORM ROSTER] cross-tab power overlay: tab=%r matched=%d/%d "
+            "(by_id=%d, by_name=%d) guild=%s event=%s",
+            configured_power_tab, matched_count, len(members),
+            len(power_by_id), len(power_by_name),
+            guild_id, event_type,
         )
 
     return members, errors

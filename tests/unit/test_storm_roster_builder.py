@@ -3795,6 +3795,16 @@ class TestSessionThreePhase:
 
 
 class TestMailBodyPhaseAware:
+    # `_build_mail_body` calls `config.get_storm_template` /
+    # `format_storm_slot` / `get_storm_slot_for_key` whenever
+    # `session.guild_id` is truthy (which `_make_session` always sets),
+    # so the path through SQLite is unavoidable here. The fallback copy
+    # already handles an unseeded DB gracefully — we just need
+    # `_get_conn()` to succeed, not a populated config.
+    @pytest.fixture(autouse=True)
+    def _db(self, temp_db):
+        pass
+
     def test_flat_mail_has_no_phase_headers(self):
         s = _make_session(team="A", members={
             "1": {"key": "1", "name": "Alice", "discord_id": "1",
@@ -5362,6 +5372,15 @@ class TestDmRosterBody:
     """The composed per-member DM body honors flat vs phase-aware,
     pool-only vs pinned, and team / event-date / time placeholders."""
 
+    # `_build_dm_body` reads role-keyed templates via
+    # `config.get_roster_dm_templates`, which goes through
+    # `get_storm_config` → `_get_conn()`. The fallback copy in
+    # `defaults.py` already handles an unseeded DB — just need
+    # `_get_conn()` to succeed.
+    @pytest.fixture(autouse=True)
+    def _db(self, temp_db):
+        pass
+
     def _ctx_labels(self):
         return {"time_label": "4pm EDT (18:00 server time)",
                 "date_label": "Thursday, May 28, 2026"}
@@ -5515,6 +5534,13 @@ class TestDmRosterBody:
 class TestDmRosterSendFlow:
     """End-to-end DM send flow with mocked Discord — verifies success
     counting, failure-reason capture, and the not_on_discord shortcut."""
+
+    # `_dm_rostered_members` routes through `_build_dm_body` →
+    # `config.get_roster_dm_templates` → `_get_conn()`; same gotcha as
+    # the `TestDmRosterBody` class above.
+    @pytest.fixture(autouse=True)
+    def _db(self, temp_db):
+        pass
 
     @pytest.mark.asyncio
     async def test_dm_send_groups_successes_and_failures(self):

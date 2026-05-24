@@ -41,8 +41,21 @@ repo `../lw-alliance-helper.github.io` (the website) has its own
   - **Versioning still happens on the release branch.** Don't bump
     `__version__` or write CHANGELOG entries on `dev`.
 - **Backlog lives in [GitHub Project #2](https://github.com/orgs/LW-Alliance-Helper/projects/2).**
-  Auto-add fires for both repos. Apply a label at issue-creation time
-  (`bug` / `feature` / `documentation` / `hotfix`).
+  Auto-add fires for both repos. Apply a label at issue-creation time:
+  - `feature` — large work warranting a minor/major version bump. Multiple
+    sub-tickets, days of design discussion, real user testing. Examples:
+    [#16](https://github.com/LW-Alliance-Helper/lw-alliance-helper-bot/issues/16),
+    [#55](https://github.com/LW-Alliance-Helper/lw-alliance-helper-bot/issues/55),
+    [#56](https://github.com/LW-Alliance-Helper/lw-alliance-helper-bot/issues/56).
+  - `enhancement` — smaller-than-feature improvements that land in a patch
+    bump. Single-PR scope, mirrors existing functionality, or polish of a
+    shipped surface. Examples:
+    [#249](https://github.com/LW-Alliance-Helper/lw-alliance-helper-bot/issues/249),
+    [#258](https://github.com/LW-Alliance-Helper/lw-alliance-helper-bot/issues/258).
+  - `bug` — broken behavior or UX-clarity fixes (e.g. a confusing DM, a
+    silent failure).
+  - `documentation` — README / CLAUDE.md / docs/ / website copy changes.
+  - `hotfix` — urgent direct-to-main fix per the hotfix exception below.
 - **Project status updates automatically** via
   `.github/workflows/project-status-sync.yml`. An issue's Status field
   walks `Up Next → In progress → In review → Ready for Release →

@@ -261,6 +261,128 @@ class TestPowerDataSourceFields:
         assert cfg["power_match_column"] == ""
 
 
+class TestStalePowerConfig:
+    """#255 — four new structured-storm-config fields drive the
+    stale-power DM nudge: tab + column + match column + days threshold.
+    All four default to off (empty / 0). The read path treats any
+    half-configured combination as "stale check off"."""
+
+    def test_default_values_are_off(self, temp_db):
+        import config
+        cfg = config.get_structured_storm_config(TEST_GUILD_ID, "DS")
+        assert cfg["power_last_updated_tab"] == ""
+        assert cfg["power_last_updated_column"] == ""
+        assert cfg["power_last_updated_match_column"] == ""
+        assert cfg["power_refresh_stale_days"] == 0
+
+    def test_round_trip_preserves_all_four_fields(self, temp_db):
+        import config
+        config.save_storm_config(
+            TEST_GUILD_ID, "DS",
+            tab_name="DS Tab", mail_template="",
+            timezone="America/New_York", log_channel_id=0,
+        )
+        config.save_structured_storm_config(
+            TEST_GUILD_ID, "DS",
+            structured_flow_enabled=True,
+            power_refresh_dm_enabled=True,
+            power_last_updated_tab="Audit Log",
+            power_last_updated_column="N",
+            power_last_updated_match_column="A",
+            power_refresh_stale_days=14,
+        )
+        cfg = config.get_structured_storm_config(TEST_GUILD_ID, "DS")
+        assert cfg["power_last_updated_tab"] == "Audit Log"
+        assert cfg["power_last_updated_column"] == "N"
+        assert cfg["power_last_updated_match_column"] == "A"
+        assert cfg["power_refresh_stale_days"] == 14
+
+    def test_invalid_letter_normalises_to_empty(self, temp_db):
+        """Bad input on the column letters coerces to empty so the
+        read path falls back to the safe default ('skip stale check')
+        rather than saving garbage."""
+        import config
+        config.save_storm_config(
+            TEST_GUILD_ID, "DS",
+            tab_name="DS Tab", mail_template="",
+            timezone="America/New_York", log_channel_id=0,
+        )
+        config.save_structured_storm_config(
+            TEST_GUILD_ID, "DS",
+            structured_flow_enabled=True,
+            power_last_updated_column="AB",   # too long
+            power_last_updated_match_column="7",  # not a letter
+            power_refresh_stale_days=7,
+        )
+        cfg = config.get_structured_storm_config(TEST_GUILD_ID, "DS")
+        assert cfg["power_last_updated_column"] == ""
+        assert cfg["power_last_updated_match_column"] == ""
+
+    def test_negative_days_clamped_to_zero(self, temp_db):
+        """A negative days threshold makes no sense; persist as 0 (off)."""
+        import config
+        config.save_storm_config(
+            TEST_GUILD_ID, "DS",
+            tab_name="DS Tab", mail_template="",
+            timezone="America/New_York", log_channel_id=0,
+        )
+        config.save_structured_storm_config(
+            TEST_GUILD_ID, "DS",
+            structured_flow_enabled=True,
+            power_refresh_stale_days=-5,
+        )
+        cfg = config.get_structured_storm_config(TEST_GUILD_ID, "DS")
+        assert cfg["power_refresh_stale_days"] == 0
+
+    def test_excessive_days_clamped_to_365(self, temp_db):
+        """Hard cap at 365 days so a typo doesn't push the threshold
+        into territory where the nudge effectively never fires."""
+        import config
+        config.save_storm_config(
+            TEST_GUILD_ID, "DS",
+            tab_name="DS Tab", mail_template="",
+            timezone="America/New_York", log_channel_id=0,
+        )
+        config.save_structured_storm_config(
+            TEST_GUILD_ID, "DS",
+            structured_flow_enabled=True,
+            power_refresh_stale_days=9999,
+        )
+        cfg = config.get_structured_storm_config(TEST_GUILD_ID, "DS")
+        assert cfg["power_refresh_stale_days"] == 365
+
+    def test_ds_and_cs_stale_config_isolated(self, temp_db):
+        """Per-event-type rows persist independently — DS staleness
+        config shouldn't bleed into CS."""
+        import config
+        for event_type in ("DS", "CS"):
+            config.save_storm_config(
+                TEST_GUILD_ID, event_type,
+                tab_name=f"{event_type} Tab", mail_template="",
+                timezone="America/New_York", log_channel_id=0,
+            )
+        config.save_structured_storm_config(
+            TEST_GUILD_ID, "DS",
+            structured_flow_enabled=True,
+            power_last_updated_tab="DS Audit",
+            power_last_updated_column="N",
+            power_refresh_stale_days=7,
+        )
+        config.save_structured_storm_config(
+            TEST_GUILD_ID, "CS",
+            structured_flow_enabled=True,
+            power_last_updated_tab="CS Audit",
+            power_last_updated_column="M",
+            power_refresh_stale_days=14,
+        )
+        ds = config.get_structured_storm_config(TEST_GUILD_ID, "DS")
+        cs = config.get_structured_storm_config(TEST_GUILD_ID, "CS")
+        assert ds["power_last_updated_tab"] == "DS Audit"
+        assert ds["power_refresh_stale_days"] == 7
+        assert cs["power_last_updated_tab"] == "CS Audit"
+        assert cs["power_refresh_stale_days"] == 14
+
+
 class TestRosterDmTemplates:
     """#226 follow-up — three per-(guild, event_type) DM templates for
     the Approve & Post DM-the-roster flow. Empty saved value falls

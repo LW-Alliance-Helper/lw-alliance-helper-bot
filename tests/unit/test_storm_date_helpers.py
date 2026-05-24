@@ -269,3 +269,161 @@ class TestMostRecentEventDate:
         )
         iso = sdh.most_recent_event_date(777, "DS", today=self.TODAY)
         assert iso is None
+
+
+# ── parse_last_updated / detect_last_updated_dmy_first (#255) ───────────────
+
+
+class TestParseLastUpdated:
+    """The Last-Updated parser is intentionally permissive — it has to
+    accept whatever the alliance's chosen source writes (our survey,
+    a manual column, or another bot)."""
+
+    def test_us_style_mdy(self):
+        assert sdh.parse_last_updated("5/24/2026") == _dt.date(2026, 5, 24)
+
+    def test_eu_style_dmy_when_flag_set(self):
+        # With the column flagged DMY, the same numeric components
+        # land on the EU interpretation.
+        assert sdh.parse_last_updated(
+            "24/5/2026", dmy_first=True,
+        ) == _dt.date(2026, 5, 24)
+
+    def test_iso_date_bypasses_dmy_flag(self):
+        # ISO 8601 is unambiguous — the flag must not flip it.
+        assert sdh.parse_last_updated(
+            "2026-05-24", dmy_first=True,
+        ) == _dt.date(2026, 5, 24)
+        assert sdh.parse_last_updated(
+            "2026-05-24", dmy_first=False,
+        ) == _dt.date(2026, 5, 24)
+
+    def test_iso_datetime_with_tz_suffix(self):
+        assert sdh.parse_last_updated(
+            "2026-05-24T14:30:00Z",
+        ) == _dt.date(2026, 5, 24)
+        assert sdh.parse_last_updated(
+            "2026-05-24T14:30:00",
+        ) == _dt.date(2026, 5, 24)
+
+    def test_iso_datetime_space_separator(self):
+        # Some bots write ISO with a space instead of `T`.
+        assert sdh.parse_last_updated(
+            "2026-05-24 14:30:00",
+        ) == _dt.date(2026, 5, 24)
+
+    def test_long_month_with_comma(self):
+        # Long-month names bypass the dmy flag (unambiguous).
+        assert sdh.parse_last_updated(
+            "May 24, 2026",
+        ) == _dt.date(2026, 5, 24)
+        assert sdh.parse_last_updated(
+            "May 24, 2026", dmy_first=True,
+        ) == _dt.date(2026, 5, 24)
+
+    def test_long_month_no_comma_day_first(self):
+        assert sdh.parse_last_updated(
+            "24 May 2026",
+        ) == _dt.date(2026, 5, 24)
+
+    def test_mdy_with_time_and_utc_suffix(self):
+        # Survey writes m/d/yyyy and may append a time + UTC.
+        # `survey.append_survey_history` writes `m/d/yyyy HH:MM UTC`.
+        assert sdh.parse_last_updated(
+            "5/24/2026 14:30 UTC",
+        ) == _dt.date(2026, 5, 24)
+
+    def test_dash_separated_mdy(self):
+        assert sdh.parse_last_updated(
+            "5-24-2026",
+        ) == _dt.date(2026, 5, 24)
+
+    def test_dot_separated_mdy(self):
+        assert sdh.parse_last_updated(
+            "5.24.2026",
+        ) == _dt.date(2026, 5, 24)
+
+    def test_two_digit_year(self):
+        # Python's strptime maps yy < 69 to 2000s, else 1900s. Either
+        # branch should at least parse rather than failing entirely.
+        result = sdh.parse_last_updated("5/24/26")
+        assert result is not None
+        assert result.month == 5 and result.day == 24
+
+    def test_unparseable_returns_none(self):
+        assert sdh.parse_last_updated("garbage") is None
+        assert sdh.parse_last_updated("two weeks ago") is None
+        assert sdh.parse_last_updated("nope") is None
+
+    def test_empty_input_returns_none(self):
+        assert sdh.parse_last_updated("") is None
+        assert sdh.parse_last_updated("   ") is None
+        assert sdh.parse_last_updated(None) is None
+
+    def test_ambiguous_value_defaults_mdy(self):
+        # `5/3/2026` could be MDY (May 3) or DMY (March 5). With
+        # the default flag we lock to MDY.
+        assert sdh.parse_last_updated(
+            "5/3/2026",
+        ) == _dt.date(2026, 5, 3)
+
+    def test_invalid_mdy_falls_back_to_dmy(self):
+        # `13/12/2026` can't be MDY (month 13). The parser tries the
+        # secondary format so a single mis-keyed row in an otherwise
+        # consistent column still parses.
+        assert sdh.parse_last_updated(
+            "13/12/2026",
+        ) == _dt.date(2026, 12, 13)
+
+    def test_strips_gmt_suffix(self):
+        assert sdh.parse_last_updated(
+            "2026-05-24 14:30:00 GMT",
+        ) == _dt.date(2026, 5, 24)
+
+    def test_strips_offset_suffix(self):
+        # `+0000` and `+00:00` both seen in the wild.
+        assert sdh.parse_last_updated(
+            "2026-05-24T14:30:00+00:00",
+        ) == _dt.date(2026, 5, 24)
+        assert sdh.parse_last_updated(
+            "2026-05-24T14:30:00+0000",
+        ) == _dt.date(2026, 5, 24)
+
+
+class TestDetectLastUpdatedDmyFirst:
+    """Column-level format detection. If any value's first slash
+    component is > 12, the whole column locks to DMY."""
+
+    def test_all_mdy_safe_values_return_false(self):
+        assert sdh.detect_last_updated_dmy_first([
+            "5/24/2026", "6/15/2026", "11/30/2025",
+        ]) is False
+
+    def test_one_value_with_first_component_over_12_locks_dmy(self):
+        assert sdh.detect_last_updated_dmy_first([
+            "5/24/2026", "24/5/2026",
+        ]) is True
+
+    def test_iso_values_dont_contribute(self):
+        # ISO is unambiguous; should not vote either way. All-ISO
+        # columns return False (default MDY) so non-ISO rows can be
+        # parsed against the same flag.
+        assert sdh.detect_last_updated_dmy_first([
+            "2026-05-24", "2026-13-05",
+        ]) is False
+
+    def test_empty_column_returns_false(self):
+        assert sdh.detect_last_updated_dmy_first(["", ""]) is False
+        assert sdh.detect_last_updated_dmy_first([]) is False
+
+    def test_dash_separated_values_also_detected(self):
+        # `-` separator works too — both M-D-Y and D-M-Y see it.
+        assert sdh.detect_last_updated_dmy_first([
+            "5-24-2026", "31-12-2025",
+        ]) is True
+
+    def test_mixed_blank_and_data_uses_data_only(self):
+        # Blank cells should be ignored cleanly.
+        assert sdh.detect_last_updated_dmy_first([
+            "", "5/24/2026", "", "25/12/2025",
+        ]) is True

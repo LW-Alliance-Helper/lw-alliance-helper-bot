@@ -29,6 +29,7 @@ Deferred to follow-ups:
 from __future__ import annotations
 
 import asyncio
+import datetime as _dt
 import io
 import logging
 import re
@@ -179,6 +180,109 @@ def _build_cross_tab_power_index(
             power_by_name.setdefault(match_cell.lower(), []).append(power_val)
 
     return power_by_id, power_by_name, errors
+
+
+def _build_last_updated_index(
+    guild_id: int, tab_name: str, last_updated_col: int, match_col: int,
+) -> tuple[dict[str, "_dt.date"], dict[str, list["_dt.date"]], list[str]]:
+    """Read a last-updated source tab and build two parallel lookup
+    indexes mirroring `_build_cross_tab_power_index` but storing
+    `datetime.date` values instead of ints.
+
+    DD/MM vs MM/DD ambiguity is resolved per-column: we scan every
+    non-blank value first to detect the column-wide format (if any
+    value has its first slash component > 12 the column locks to
+    DMY), then parse every value with that flag. Per-row format
+    detection would be wrong — a column of MDY values where today's
+    date happens to be 5/3/2026 has no `> 12` first component but
+    is still MDY for the whole column.
+
+    Used by `_read_roster_powers` when the stale-power DM nudge
+    (#255) is configured with a non-empty `power_last_updated_tab`.
+    Same-tab and cross-tab cases both go through this helper —
+    skipping the small saving of reusing the power read's `values`
+    in same-tab case keeps the read path one branch.
+    """
+    import datetime as _dt
+    import config
+    from storm_date_helpers import (
+        parse_last_updated,
+        detect_last_updated_dmy_first,
+    )
+
+    by_id: dict[str, _dt.date] = {}
+    by_name: dict[str, list[_dt.date]] = {}
+    errors: list[str] = []
+
+    try:
+        ws = config.get_member_roster_sheet(guild_id, tab_name)
+    except Exception as e:
+        errors.append(
+            f"last-updated source tab {tab_name!r} open failed: {e}"
+        )
+        return {}, {}, errors
+
+    try:
+        values = ws.get_all_values()
+    except Exception as e:
+        errors.append(
+            f"last-updated source tab {tab_name!r} read failed: {e}"
+        )
+        return {}, {}, errors
+
+    if not values:
+        return {}, {}, errors
+
+    # Format detection pass — collect every non-blank cell in the
+    # configured column, then run the column-wide heuristic.
+    raw_cells: list[str] = []
+    for row in values[1:]:
+        if 0 <= last_updated_col < len(row):
+            cell = row[last_updated_col].strip()
+            if cell:
+                raw_cells.append(cell)
+    dmy_first = detect_last_updated_dmy_first(raw_cells)
+
+    # Parse pass. Match column same convention as power: header skipped.
+    for row in values[1:]:
+        match_cell = (
+            row[match_col].strip()
+            if 0 <= match_col < len(row) else ""
+        )
+        ts_cell = (
+            row[last_updated_col].strip()
+            if 0 <= last_updated_col < len(row) else ""
+        )
+        if not (match_cell and ts_cell):
+            continue
+        parsed = parse_last_updated(ts_cell, dmy_first=dmy_first)
+        if parsed is None:
+            continue
+        if match_cell.isdigit():
+            by_id[match_cell] = parsed
+        else:
+            by_name.setdefault(match_cell.lower(), []).append(parsed)
+
+    return by_id, by_name, errors
+
+
+def _lookup_last_updated_in_index(
+    member: dict,
+    by_id: dict[str, "_dt.date"],
+    by_name: dict[str, list["_dt.date"]],
+) -> "Optional[_dt.date]":
+    """Resolve this member's last-updated date from the cross-tab
+    indexes. Mirrors `_lookup_power_in_index` — ID match wins, name
+    falls back, multi-match names return None (ambiguous)."""
+    discord_id = (member.get("discord_id") or "").strip()
+    if discord_id and discord_id.isdigit() and discord_id in by_id:
+        return by_id[discord_id]
+    name = (member.get("name") or "").strip().lower()
+    if name and name in by_name:
+        hits = by_name[name]
+        if len(hits) == 1:
+            return hits[0]
+    return None
 
 
 def _lookup_power_in_index(
@@ -529,6 +633,46 @@ def _read_roster_powers(
             "(by_id=%d, by_name=%d) guild=%s event=%s",
             configured_power_tab, matched_count, len(members),
             len(power_by_id), len(power_by_name),
+            guild_id, event_type,
+        )
+
+    # Last-updated overlay (#255). Stale-power DM nudge needs each
+    # member's most-recent "Date Modified" / equivalent timestamp.
+    # Source is configurable: empty `power_last_updated_tab` skips
+    # the overlay entirely (alliances who haven't enabled the stale
+    # check pay nothing). Empty match column falls back to the same
+    # `cross_tab_match_col` resolved above for power. Members not
+    # found in the index keep `last_updated: None`, which the
+    # click-handler treats as "skip the stale check for this row."
+    lu_tab = (structured.get("power_last_updated_tab") or "").strip()
+    lu_col_letter = (structured.get("power_last_updated_column") or "").strip().upper()
+    if lu_tab and len(lu_col_letter) == 1 and "A" <= lu_col_letter <= "Z" and members:
+        lu_col = config.power_column_letter_to_index(lu_col_letter)
+        lu_match_letter = (
+            structured.get("power_last_updated_match_column") or ""
+        ).strip().upper()
+        if len(lu_match_letter) == 1 and "A" <= lu_match_letter <= "Z":
+            lu_match_col = config.power_column_letter_to_index(lu_match_letter)
+        else:
+            # Empty match column falls back to whatever match column
+            # the power source uses — that's the convention every
+            # alliance already configured for power lookups.
+            lu_match_col = cross_tab_match_col
+        lu_by_id, lu_by_name, lu_errors = _build_last_updated_index(
+            guild_id, lu_tab, lu_col, lu_match_col,
+        )
+        errors.extend(lu_errors)
+        lu_matched = 0
+        for m in members.values():
+            ts = _lookup_last_updated_in_index(m, lu_by_id, lu_by_name)
+            m["last_updated"] = ts
+            if ts is not None:
+                lu_matched += 1
+        logger.info(
+            "[STORM ROSTER] last-updated overlay: tab=%r col=%s matched=%d/%d "
+            "(by_id=%d, by_name=%d) guild=%s event=%s",
+            lu_tab, lu_col_letter, lu_matched, len(members),
+            len(lu_by_id), len(lu_by_name),
             guild_id, event_type,
         )
 

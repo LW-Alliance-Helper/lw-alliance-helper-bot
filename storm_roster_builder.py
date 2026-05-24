@@ -179,18 +179,21 @@ def _read_roster_powers(
         return -1
 
     id_col      = int(roster_cfg.get("discord_id_col", 0))
-    # The alliance can pin the structured roster's display-name column
-    # to any letter on their roster Sheet via the storm setup wizard's
-    # Alias Column step. Empty (default) falls back to the bot-managed
-    # `display_col` from member_roster_config — that's column C by
-    # default, which collides with alliances that overwrote C with a
-    # custom power column (resulting in the builder rendering power
-    # values as member names). The override lets them point the builder
-    # at their actual alias column without breaking the rest of the
-    # bot's roster-sync behaviour.
-    alias_letter = (structured.get("alias_metric_column") or "").strip().upper()
-    if len(alias_letter) == 1 and "A" <= alias_letter <= "Z":
-        name_col = config.power_column_letter_to_index(alias_letter)
+    # Display-name column resolution. Alliances that overwrote the
+    # bot-managed Display Name column (default C) with their own data
+    # — typically the power column — would otherwise have the
+    # structured roster builder render power values where members'
+    # names should appear. Honour the participation tracking flow's
+    # Alias Column step (Step 6.4) when it's been configured: that
+    # picker already asks officers which column has the alias, so
+    # plumbing it through here avoids forcing them to re-answer the
+    # same question elsewhere in setup. Falls back to the member
+    # roster sync's `display_col` for alliances who haven't enabled
+    # participation tracking or who left the alias picker disabled.
+    participation_cfg = config.get_participation_config(guild_id, event_type)
+    part_alias_col = participation_cfg.get("roster_alias_col", -1)
+    if isinstance(part_alias_col, int) and part_alias_col >= 0:
+        name_col = part_alias_col
     else:
         name_col = int(roster_cfg.get("display_col", roster_cfg.get("name_col", 1)))
     # Power column is a configured letter (Rule C / #165) — A=0, B=1, etc.
@@ -224,17 +227,17 @@ def _read_roster_powers(
     # Diagnostic logging — team-test feedback flagged "matching by name
     # not Discord ID" and "power not reading even when in the sheet."
     # Surface the exact column resolution so a single log line answers
-    # which column the bot is looking at. `alias_letter` empty means the
-    # bot fell back to member_roster_config.display_col.
+    # which column the bot is looking at. `part_alias_col < 0` means
+    # the bot fell back to member_roster_config.display_col.
     logger.info(
         "[STORM ROSTER] guild=%s event=%s column resolution: "
         "id_col=%d (cfg discord_id_col=%d), name_col=%d "
-        "(alias_metric_column=%r, display_col=%d), "
+        "(participation roster_alias_col=%d, display_col=%d), "
         "power_col=%d (letter %s, header %r), "
         "presence_col=%d, not_disc_col=%d, header=%s",
         guild_id, event_type,
         id_col, int(roster_cfg.get("discord_id_col", 0)),
-        name_col, alias_letter,
+        name_col, part_alias_col,
         int(roster_cfg.get("display_col", roster_cfg.get("name_col", 1))),
         power_col, power_letter, power_col_header,
         presence_col, not_disc_col, header,

@@ -5309,7 +5309,6 @@ async def run_storm_setup(interaction: discord.Interaction, bot, event_type: str
         guild_id, event_type,
         structured_flow_enabled=structured_cfg["structured_flow_enabled"],
         power_metric_column    =structured_cfg.get("power_metric_column", "B"),
-        alias_metric_column    =structured_cfg.get("alias_metric_column", ""),
         sub_mode               =structured_cfg["sub_mode"],
         signup_channel_id      =structured_cfg["signup_channel_id"],
         signup_schedule_cron   =structured_cfg.get("signup_schedule_cron", ""),
@@ -5357,24 +5356,15 @@ async def run_storm_setup(interaction: discord.Interaction, bot, event_type: str
     else:
         embed.add_field(name="Participation Tracking", value="❌ Disabled", inline=False)
     if structured_cfg["structured_flow_enabled"]:
-        _alias_letter = (structured_cfg.get("alias_metric_column") or "").strip().upper()
-        alias_blurb = (
-            f" · Alias column: `{_alias_letter}`"
-            if _alias_letter else
-            " · Alias column: *default (Display Name)*"
-        )
-        signup_blurb = (
-            f" · Sign-up channel: <#{structured_cfg['signup_channel_id']}>"
-            if structured_cfg["signup_channel_id"] else ""
-        )
         embed.add_field(
             name="Structured Roster Flow",
             value=(
-                f"✅ Enabled · Power column: "
-                f"`{structured_cfg.get('power_metric_column', 'B')}`"
-                f"{alias_blurb} · "
+                f"✅ Enabled · Power column: `{structured_cfg.get('power_metric_column', 'B')}` · "
+                f"Sub mode: `{structured_cfg['sub_mode']}` · "
+                f"Sign-up channel: <#{structured_cfg['signup_channel_id']}>"
+                if structured_cfg["signup_channel_id"] else
+                f"✅ Enabled · Power column: `{structured_cfg.get('power_metric_column', 'B')}` · "
                 f"Sub mode: `{structured_cfg['sub_mode']}`"
-                f"{signup_blurb}"
             ),
             inline=False,
         )
@@ -6686,45 +6676,6 @@ async def _run_structured_flow_setup_step(
         if not (len(cleaned) == 1 and "A" <= cleaned <= "Z"):
             cleaned = "B"
         result["power_metric_column"] = cleaned
-
-        # Alias / display-name column — independent of the Member
-        # Roster sync's display_col, which defaults to column C and
-        # silently collides with alliances that overwrote C with their
-        # own power column. Asking for the alias letter explicitly here
-        # lets officers point the structured roster builder at the
-        # column on their roster Sheet that actually holds the name
-        # they want shown next to each assignment. Empty (default)
-        # falls back to display_col so alliances using the bot-managed
-        # roster shape don't need to touch this step.
-        current_alias = (
-            result.get("alias_metric_column") or ""
-        ).strip().upper()
-        if not (len(current_alias) == 1 and "A" <= current_alias <= "Z"):
-            current_alias = ""
-        picked_alias = await ask_keep_or_change(
-            channel,
-            f"**Alias / Display Name Column** _(optional)_\n"
-            f"Which column on your roster Sheet stores the member name "
-            f"or alias you want shown next to each {label} assignment? "
-            f"Enter a single column letter (A–Z), or leave blank to use "
-            f"the bot's default Display Name column. If your alliance "
-            f"overwrote column C with custom data (a power column, an "
-            f"officer note, etc.), set this to the column that actually "
-            f"holds the alias or the roster builder will read the wrong "
-            f"cell as the member name.",
-            default="",
-            current=current_alias,
-            modal_title="Alias / Display Name Column",
-            modal_label="Column letter (A–Z, blank for default)",
-            timeout_cmd=cmd_name,
-            cancel_event=cancel_event,
-        )
-        if picked_alias is None:
-            return None
-        alias_cleaned = str(picked_alias).strip().upper()
-        if not (len(alias_cleaned) == 1 and "A" <= alias_cleaned <= "Z"):
-            alias_cleaned = ""
-        result["alias_metric_column"] = alias_cleaned
 
         # Sub mode — Kevin's first-sweep _edited convention: the
         # green/default button reads `Use Default: <X>` on first run

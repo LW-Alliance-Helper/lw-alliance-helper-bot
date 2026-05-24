@@ -1406,7 +1406,7 @@ async def _run_send_now(interaction: discord.Interaction, bot, is_premium_flag: 
     roster_cfg = get_member_roster_config(interaction.guild_id)
     if not roster_cfg.get("enabled"):
         await interaction.followup.send(
-            "⚙️ DM reminders need Member Roster Sync. Run `/setup` → 👥 Members first.",
+            "⚙️ DM reminders need Member Sync. Run `/setup` → 👥 Member Sync first.",
             ephemeral=True,
         )
         return

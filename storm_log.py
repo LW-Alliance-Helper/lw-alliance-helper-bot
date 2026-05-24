@@ -641,7 +641,7 @@ def _prefill_from_discord_poll(
          the canonical name here).
       2. Lowercase alias match via `alias_map` (alliance aliases).
       3. Member Roster sheet lookup by Discord ID (self-vote path —
-         only resolvable when `/setup → 👥 Members` is configured).
+         only resolvable when `/setup → 👥 Member Sync` is configured).
 
     Unresolvable signups are silently dropped — the prefill is a
     convenience, not the source of truth. The officer can toggle any
@@ -1722,7 +1722,7 @@ async def _send_storm_reminder(bot, interaction: discord.Interaction, event_type
                 feature_label="Storm participation DMs",
                 description=(
                     "Storm participation reminders are part of Alliance Helper "
-                    "Premium and require Member Roster Sync (`/setup` → 👥 Members). "
+                    "Premium and require Member Roster Sync (`/setup` → 👥 Member Sync). "
                     "Run `/upgrade` to unlock."
                 ),
             ),
@@ -1734,7 +1734,7 @@ async def _send_storm_reminder(bot, interaction: discord.Interaction, event_type
     roster_cfg = get_member_roster_config(interaction.guild_id)
     if not roster_cfg.get("enabled"):
         await interaction.response.send_message(
-            "⚙️ Member Roster Sync isn't configured yet. Run `/setup` → 👥 Members first.",
+            "⚙️ Member Roster Sync isn't configured yet. Run `/setup` → 👥 Member Sync first.",
             ephemeral=True,
         )
         return

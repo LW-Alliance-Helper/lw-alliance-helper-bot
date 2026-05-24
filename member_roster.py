@@ -17,7 +17,7 @@ members manually for the storm flow's officer-view bucketing to be
 accurate.
 
 Commands:
-  /setup → 👥 Members — admin wizard to configure tab/columns/role filter
+  /setup → 👥 Member Sync — admin wizard to configure tab/columns/role filter
   /members overview — roster source + sync state at a glance
   /members sync     — manually run a full sync now
 """
@@ -711,7 +711,7 @@ class MemberRosterCog(commands.Cog):
             embed.add_field(
                 name="Not yet configured",
                 value=(
-                    "Run `/setup` → 👥 Members to pick the destination tab and "
+                    "Run `/setup` → 👥 Member Sync to pick the destination tab and "
                     "(optionally) filter to a specific role."
                 ),
                 inline=False,
@@ -721,7 +721,7 @@ class MemberRosterCog(commands.Cog):
             name="Sub-commands",
             value=(
                 "• `/members sync` — Rebuild the roster sheet now\n"
-                "• `/setup` → 👥 Members — Configure or change the roster destination"
+                "• `/setup` → 👥 Member Sync — Configure or change the roster destination"
             ),
             inline=False,
         )
@@ -762,7 +762,7 @@ class MemberRosterCog(commands.Cog):
         cfg = get_member_roster_config(interaction.guild_id)
         if not cfg.get("enabled"):
             await interaction.response.send_message(
-                "⚙️ Member Roster Sync isn't configured yet. Run `/setup` → 👥 Members first.",
+                "⚙️ Member Roster Sync isn't configured yet. Run `/setup` → 👥 Member Sync first.",
                 ephemeral=True,
             )
             return
@@ -796,8 +796,8 @@ class MemberRosterCog(commands.Cog):
 
 # ── Setup-hub button launcher ────────────────────────────────────────────────
 #
-# `/setup` → 👥 Members collapsed into the `/setup` hub in #201. The button
-# `👥 Members` on the hub dispatches into this helper, which preserves
+# `/setup` → 👥 Member Sync collapsed into the `/setup` hub in #201. The button
+# `👥 Member Sync` on the hub dispatches into this helper, which preserves
 # the leadership-or-admin + Premium + channel-perms gating that used to
 # live in the slash command.
 
@@ -922,7 +922,7 @@ async def run_member_roster_setup(interaction: discord.Interaction, bot):
     if filter_view.cancelled:
         return
     if filter_view.selected is None:
-        await channel.send("⏰ Timed out. Run `/setup` → 👥 Members to start again.")
+        await channel.send("⏰ Timed out. Run `/setup` → 👥 Member Sync to start again.")
         return
     role_filter_id = member_role_id if filter_view.selected else 0
 
@@ -938,7 +938,7 @@ async def run_member_roster_setup(interaction: discord.Interaction, bot):
     if auto_view.cancelled:
         return
     if auto_view.selected is None:
-        await channel.send("⏰ Timed out. Run `/setup` → 👥 Members to start again.")
+        await channel.send("⏰ Timed out. Run `/setup` → 👥 Member Sync to start again.")
         return
     auto_sync = 1 if auto_view.selected else 0
 
@@ -1164,7 +1164,7 @@ async def run_member_roster_setup(interaction: discord.Interaction, bot):
             return
         if preview.outcome is None:
             await channel.send(
-                "⏰ Timed out. Run `/setup` → 👥 Members to start again."
+                "⏰ Timed out. Run `/setup` → 👥 Member Sync to start again."
             )
             wizard_registry.unregister(user.id, cancel_event)
             return

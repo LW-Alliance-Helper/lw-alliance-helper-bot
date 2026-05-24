@@ -727,7 +727,7 @@ class TestSyncMembersGate:
         call    = interaction.response.send_message.call_args
         content = call.args[0] if call.args else call.kwargs.get("content")
         assert "/setup" in (content or "")
-        assert "Members" in (content or "")
+        assert "Member Sync" in (content or "")
 
 
 # ── /members sync error-message clarity (regression: opaque <Response [404]>) ─

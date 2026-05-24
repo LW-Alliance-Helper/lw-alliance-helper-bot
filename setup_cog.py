@@ -2151,7 +2151,7 @@ async def run_setup(interaction: discord.Interaction, bot):
         "📋 **Survey** — Squad powers survey\n"
         "📈 **Growth** — Growth tracking (snapshot your members' stats over time)\n"
         "🌟 **Shiny Tasks** — Daily announcement of today's shiny task servers for your Alliance\n\n"
-        "Premium features (👥 Members, 📋 Survey, 📊 Growth Breakdown) show as 💎-locked "
+        "Premium features (👥 Member Sync, 📋 Survey, 📊 Growth Breakdown) show as 💎-locked "
         "until you upgrade. Use `/help` any time to see every command."
     )
     wizard_registry.unregister(user.id, cancel_event)
@@ -3590,7 +3590,7 @@ async def run_train_setup(interaction: discord.Interaction, bot):
             "**Step 8 of 8 — Train DM Body (💎 Premium)**\n"
             "When the train reminder fires, the bot also DMs the assigned member directly. "
             "Free guilds can configure it now — it just won't fire until you have Premium "
-            "+ Member Roster Sync.\n\n"
+            "+ Member Sync.\n\n"
             "Use `{name}` as a placeholder for the member's name (optional).",
             default=DEFAULT_TRAIN_DM,
             current=saved_train_dm,
@@ -4696,10 +4696,21 @@ async def run_storm_setup(interaction: discord.Interaction, bot, event_type: str
     is_premium_flag = await premium.is_premium(guild_id, interaction=interaction, bot=interaction.client)
 
     # ── Step 1: Sheet tab ──────────────────────────────────────────────────────
-    hardcoded_tab = "DS Assignments" if event_type == "DS" else "CS Assignments"
+    # When Member Sync is enabled, default to the alliance's Member
+    # Sync tab name (typically "Member Roster") — that's the canonical
+    # roster location for everything else in the bot, so suggesting the
+    # same tab here keeps the alliance's mental model coherent. Falls
+    # back to the legacy `DS Assignments` / `CS Assignments` default
+    # when Member Sync isn't configured yet.
+    from config import get_member_roster_config as _gmrc_step1
+    _sync_cfg_step1 = _gmrc_step1(guild_id) if guild_id else {}
+    if _sync_cfg_step1.get("enabled"):
+        hardcoded_tab = _sync_cfg_step1.get("tab_name") or "Member Roster"
+    else:
+        hardcoded_tab = "DS Assignments" if event_type == "DS" else "CS Assignments"
     tab_name = await ask_keep_or_change(
         channel,
-        f"**Step 1 of 8: Sheet Tab**\n"
+        f"**Step 1 of 9: Sheet Tab**\n"
         f"Which tab in your Google Sheet stores the {label} zone assignments?\n"
         f"⚠️ *Make sure this tab exists in your sheet before continuing.*\n"
         f"ℹ️ *The bot will manage the data structure of this tab automatically. "
@@ -4728,7 +4739,7 @@ async def run_storm_setup(interaction: discord.Interaction, bot, event_type: str
     # button is clicked and officers scrolling back to review what they
     # answered see only the bare confirmation line.
     team_prompt = (
-        f"**Step 2 of 8: Which teams do you run for {label}?**"
+        f"**Step 2 of 9: Which teams do you run for {label}?**"
         + (
             f"\nCurrent: **{_team_blurb[saved_teams]}**"
             if storm_already_configured else ""
@@ -4908,7 +4919,7 @@ async def run_storm_setup(interaction: discord.Interaction, bot, event_type: str
         return view.selected
 
     await channel.send(
-        f"**Step 3 of 8: Team Time Slots**\n"
+        f"**Step 3 of 9: Team Time Slots**\n"
         f"Select the time when you typically run each {label} team. "
         f"You can override these for a single week when you send out the "
         f"sign up, if needed."
@@ -4941,7 +4952,7 @@ async def run_storm_setup(interaction: discord.Interaction, bot, event_type: str
             "Pick a new one below."
         )
     await channel.send(
-        f"**Step 4 of 8: Storm Log Channel**\n"
+        f"**Step 4 of 9: Storm Log Channel**\n"
         f"Select the channel where {label} participation/log summaries will be posted:",
         view=log_ch_view,
     )
@@ -4968,7 +4979,7 @@ async def run_storm_setup(interaction: discord.Interaction, bot, event_type: str
         )
     parent_cmd = "desertstorm" if event_type == "DS" else "canyonstorm"
     await channel.send(
-        f"**Step 5 of 8: Mail Post Channel**\n"
+        f"**Step 5 of 9: Mail Post Channel**\n"
         f"When leadership clicks **Post & Copy** at the end of "
         f"`/{parent_cmd}` → **📄 Generate mail**, the finished mail "
         f"will be posted to this channel:",
@@ -5149,7 +5160,7 @@ async def run_storm_setup(interaction: discord.Interaction, bot, event_type: str
                 "✅ Keep current: Separate templates"
             )
         prompt_lines = [
-            "**Step 6 of 8: Mail Template**",
+            "**Step 6 of 9: Mail Template**",
             "Do you want one template that applies to both teams, or separate templates per team?",
         ]
         if saved_share_mode is not None:
@@ -5189,7 +5200,7 @@ async def run_storm_setup(interaction: discord.Interaction, bot, event_type: str
         # Single-team mode — only the saved row for the picked team is
         # relevant; the other side stays empty.
         saved_for_team = saved_template_a if teams == "A" else saved_template_b
-        await channel.send("**Step 6 of 8: Mail Template**")
+        await channel.send("**Step 6 of 9: Mail Template**")
         template = await get_template(team_label, saved_template=saved_for_team)
         if template is None:
             return
@@ -5228,11 +5239,11 @@ async def run_storm_setup(interaction: discord.Interaction, bot, event_type: str
     parent_cmd = "desertstorm" if event_type == "DS" else "canyonstorm"
     remind_dm = await ask_keep_or_change(
         channel,
-        f"**Step 8 of 8: {label} Reminder DM (💎 Premium)**\n"
+        f"**Step 9 of 9: {label} Reminder DM (💎 Premium)**\n"
         f"When leadership clicks **🔔 Send DM reminder to roster** on "
         f"`/{parent_cmd}`, the bot DMs every roster member this message. "
         f"Free guilds can configure it now; it just won't fire until "
-        f"you have Premium + Member Roster Sync.\n\n"
+        f"you have Premium + Member Sync.\n\n"
         f"Use `{{name}}` as a placeholder for the member's roster name (optional).",
         default=default_remind_dm,
         current=saved_remind_dm,
@@ -5618,7 +5629,7 @@ async def _run_participation_preset_picker_step(
 
     view = _PresetPickerView()
     await channel.send(
-        f"**Step 6.6: Use any preset questions?**\n"
+        f"**Step 7.6: Use any preset questions?**\n"
         f"Pre-configured templates for the common participation "
         f"questions. Pick any you want and they'll land in your "
         f"question list ready to use. You can still customise them "
@@ -5730,7 +5741,7 @@ async def _run_storm_participation_step(
     # ── 6.1 Enable? ────────────────────────────────────────────────────────────
     parent_cmd = "desertstorm" if event_type == "DS" else "canyonstorm"
     enable_prompt = (
-        f"**Step 7 of 8: Participation Tracking**\n"
+        f"**Step 7 of 9: Participation Tracking**\n"
         f"Do you want to track {label} participation? Leadership clicks "
         f"**📊 Fill out participation questions** on `/{parent_cmd}` "
         f"after each event to log who showed up, who sat out, etc.\n"
@@ -5774,7 +5785,7 @@ async def _run_storm_participation_step(
     hardcoded_tab = "DS Participation Log" if event_type == "DS" else "CS Participation Log"
     tab_name = await ask_keep_or_change(
         channel,
-        f"**Step 6.1: Participation Sheet Tab**\n"
+        f"**Step 7.1: Participation Sheet Tab**\n"
         f"Which tab should the bot write {label} participation rows to?\n"
         f"ℹ️ *The bot will create this tab automatically if it doesn't exist "
         f"and will manage the column structure based on the questions you define.*",
@@ -5803,7 +5814,7 @@ async def _run_storm_participation_step(
     )
     roster_tab = await ask_keep_or_change(
         channel,
-        f"**Step 6.2: Roster Source: Sheet Tab**\n"
+        f"**Step 7.2: Roster Source: Sheet Tab**\n"
         f"Which tab in your sheet has the list of members? The bot reads "
         f"member names from here when you use a `Roster names` question.\n"
         f"*Tip: this is often the same tab you use for `/setup` → 📋 Survey or "
@@ -5821,7 +5832,7 @@ async def _run_storm_participation_step(
     saved_name_col_idx = cur_part.get("roster_name_col")
     raw_name_col = await ask_keep_or_change(
         channel,
-        f"**Step 6.3: Roster Source: Name Column**\n"
+        f"**Step 7.3: Roster Source: Name Column**\n"
         f"Which column letter has the member name? (e.g. `A`, `B`, `E`)",
         default="A",
         current=(
@@ -5850,7 +5861,7 @@ async def _run_storm_participation_step(
         and isinstance(saved_alias_idx, int)
     )
     alias_prompt = (
-        "**Step 6.4: Roster Source: Alias Column?**\n"
+        "**Step 7.4: Roster Source: Alias Column?**\n"
         "If you have other names or nicknames that you call your members in these "
         "mails, this helps resolve to their full name in your sheet automatically. "
         "Do you have an alias column?"
@@ -5917,7 +5928,7 @@ async def _run_storm_participation_step(
 
     raw_start = await ask_keep_or_change(
         channel,
-        "**Step 6.5: Roster Source: First Data Row**\n"
+        "**Step 7.5: Roster Source: First Data Row**\n"
         "In your existing roster tab above, which row does the member data start on? "
         "Usually `2` if your sheet has a header row in row 1.",
         default="2",
@@ -6024,7 +6035,7 @@ async def _run_storm_participation_step(
         )
         view = _BuilderView(len(questions))
         await channel.send(
-            f"**Step 6.7: Participation Questions**\n"
+            f"**Step 7.7: Participation Questions**\n"
             f"Each question becomes a column on your sheet and a step in "
             f"the **📊 Fill out participation questions** flow on "
             f"`/{parent_cmd}`.\n"
@@ -6644,7 +6655,7 @@ async def _run_structured_flow_setup_step(
     structured_opted_in = False
     if is_premium_flag:
         await channel.send(
-            f"**Structured Roster Flow (💎 Premium)**\n"
+            f"**Step 8 of 9: Structured Roster Flow (💎 Premium)**\n"
             f"The structured flow auto-posts a Discord sign-up poll, captures "
             f"votes per member, and gives leadership a roster builder that "
             f"filters members by power for each zone. Replaces the text-template "
@@ -8820,7 +8831,7 @@ async def run_birthday_setup(interaction: discord.Interaction, bot):
     # ── Step 9: Birthday DM body (💎 Premium) ─────────────────────────────────
     # Customisable body of the per-member birthday DM that fires alongside
     # the channel announcement on Premium guilds. Free guilds can configure
-    # now — it just won't fire until they have Premium + Member Roster Sync
+    # now — it just won't fire until they have Premium + Member Sync
     # AND a Discord ID column wired up in the birthday sheet.
     birthday_dm_message = ""
     if reminders_enabled:
@@ -8831,7 +8842,7 @@ async def run_birthday_setup(interaction: discord.Interaction, bot):
             "**Step 9 of 9 — Birthday DM Body (💎 Premium)**\n"
             "When a birthday fires, the bot also DMs the member directly with a personal "
             "note. Free guilds can configure this now — it just won't fire until you have "
-            "Premium + Member Roster Sync + a Discord ID column in your birthday sheet.\n\n"
+            "Premium + Member Sync + a Discord ID column in your birthday sheet.\n\n"
             "Use `{name}` as a placeholder for the member's name.",
             default=DEFAULT_BIRTHDAY_DM,
             current=saved_birthday_dm,

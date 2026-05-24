@@ -143,7 +143,7 @@ def _build_setup_hub_embed(
         f"{_free(cs_on)} Canyon Storm",
         f"{_free(shiny_on)} Shiny Tasks",
         f"{_premium(survey_on)} Survey",
-        f"{_premium(members_on)} Member Roster Sync",
+        f"{_premium(members_on)} Member Sync",
     ]
     if not setup_done:
         description_lines.insert(
@@ -185,7 +185,7 @@ class _SetupHubView(discord.ui.View):
         Row 2 (Premium event flow):
           ⚔️ Desert Storm | 🏜️ Canyon Storm | 🌟 Shiny Tasks
         Row 3 (Premium roster + survey + growth breakdown):
-          👥 Members 💎 | 📋 Survey 💎 | 📊 Growth Breakdown 💎
+          👥 Member Sync 💎 | 📋 Survey 💎 | 📊 Growth Breakdown 💎
 
     Discord caps the View at 25 components; 13 fits comfortably.
     """
@@ -296,9 +296,9 @@ class _SetupHubView(discord.ui.View):
         from setup_cog import _launch_shiny_tasks_setup
         await _launch_shiny_tasks_setup(inter, self.bot)
 
-    # ── Row 3: Premium-gated (Members + Survey + Growth Breakdown) ───────────
+    # ── Row 3: Premium-gated (Member Sync + Survey + Growth Breakdown) ──────
 
-    @discord.ui.button(label="👥 Members", style=discord.ButtonStyle.secondary, row=3)
+    @discord.ui.button(label="👥 Member Sync", style=discord.ButtonStyle.secondary, row=3)
     async def btn_members(self, inter: discord.Interaction, _b: discord.ui.Button):
         from member_roster import _launch_member_roster_setup
         await _launch_member_roster_setup(inter, self.bot)

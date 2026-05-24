@@ -239,8 +239,8 @@ HELP_CATEGORIES: dict[str, dict] = {
             "Unlock with `/upgrade`."
         ),
         "commands": [
-            ("/setup → 👥 Members",
-             "Configure Member Roster Sync. Writes Discord IDs to your "
+            ("/setup → 👥 Member Sync",
+             "Configure Member Sync. Writes Discord IDs to your "
              "sheet so other features find members by name."),
             ("/members overview",
              "Roster source, last-sync time, and current state at a glance."),

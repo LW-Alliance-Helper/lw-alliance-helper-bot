@@ -425,8 +425,37 @@ async def _maybe_send_power_refresh_dm(
         # Voter isn't on the roster Sheet at all — that's a separate
         # alliance-side cleanup item, not a power-refresh case.
         return
-    if voter_row.get("power") is not None:
-        # Power is readable; no nudge needed.
+
+    # Two trigger branches: missing/unparseable power (the original
+    # #138 behaviour) and stale power (#255). They're mutually
+    # exclusive — a row can't be both missing and stale — and feed
+    # different DM copy below via `nudge_reason`. The stale branch
+    # is gated on `power_refresh_stale_days > 0` and a parseable
+    # last_updated; without both we don't know there's anything
+    # stale to nudge about and silently skip.
+    nudge_reason = None  # "missing" | "stale" | None
+    days_stale = 0
+    if voter_row.get("power") is None:
+        nudge_reason = "missing"
+    else:
+        stale_days = int(structured.get("power_refresh_stale_days") or 0)
+        last_updated = voter_row.get("last_updated")
+        if stale_days > 0 and last_updated is not None:
+            try:
+                import datetime as _dt
+                today = _dt.date.today()
+                age_days = (today - last_updated).days
+                if age_days >= stale_days:
+                    nudge_reason = "stale"
+                    days_stale = age_days
+            except (TypeError, AttributeError):
+                # last_updated isn't a date — defensive only; the
+                # overlay path normalises to date|None, but a
+                # hand-edited DB row or a future schema change
+                # shouldn't crash the click handler.
+                pass
+
+    if nudge_reason is None:
         return
 
     # Claim the cooldown FIRST. If another concurrent click already
@@ -457,7 +486,22 @@ async def _maybe_send_power_refresh_dm(
             guild_id, event_type, e,
         )
         header = ""
-    if header:
+    if nudge_reason == "stale":
+        if header:
+            body = (
+                f"Heads up, your **{header}** on the alliance roster Sheet "
+                f"was last updated **{days_stale}** days ago. Please refresh "
+                f"it before the next storm so leadership has accurate "
+                f"numbers for zone assignments."
+            )
+        else:
+            body = (
+                f"Heads up: your power value on the alliance roster Sheet "
+                f"was last updated **{days_stale}** days ago. Could you "
+                f"refresh it before the next storm so leadership has "
+                f"accurate numbers for zone assignments?"
+            )
+    elif header:
         body = (
             f"Heads up, your **{header}** on the alliance roster Sheet "
             f"isn't readable. Please update it before the next storm "

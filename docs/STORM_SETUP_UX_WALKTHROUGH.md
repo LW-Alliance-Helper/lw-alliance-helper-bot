@@ -996,6 +996,67 @@ label and the default.)
 
 (`currently off` / `Keep current: No` if previously disabled.)
 
+### 9.10.1 Stale-power DM (Premium, follow-up to 9.10)
+
+Surfaced only when 9.10 came back **Yes**. Three sub-steps:
+
+#### Yes/No prompt
+
+```
+┌──────────────────────────────────────────────────────────────────────┐
+│ Stale-Power DM (💎 Premium)                                          │
+│ On top of the missing-power nudge for Desert Storm, should the bot   │
+│ also DM when a member's power value is older than a configured       │
+│ number of days? Currently off. At most one DM per member per event   │
+│ date (shared with the missing-power nudge).                          │
+└──────────────────────────────────────────────────────────────────────┘
+[Yes]  [No]
+```
+
+(Re-entry shows the saved threshold via the `_KeepOrFlipYesNoGate`
+idiom, e.g. `Currently on at 7 days.`)
+
+#### Days threshold
+
+```
+┌──────────────────────────────────────────────────────────────────────┐
+│ Stale-Power Threshold (💎 Premium)                                   │
+│ How many days old must a member's power value be before the bot DMs  │
+│ them? Recommended: 7. Range: 1–365.                                  │
+└──────────────────────────────────────────────────────────────────────┘
+[✅ Keep current: 7 days]  [✏️ Set days]
+```
+
+First-time setup drops the Keep button and shows `✏️ Set days (default: 7)`.
+Re-prompts up to 3 times on garbage input.
+
+#### Last-Updated Source
+
+```
+┌──────────────────────────────────────────────────────────────────────┐
+│ Last-Updated Source (💎 Premium)                                     │
+│ Where on the Sheet does the bot find each member's last-updated      │
+│ timestamp? We support the bot's own Squad Power Survey, a manually-  │
+│ maintained column, or an export from a different bot.                │
+│                                                                      │
+│ • Tab: the Sheet tab with the timestamp.                             │
+│ • Last-updated column: the column with the timestamp values          │
+│   (e.g. N).                                                          │
+│ • Name-match column: blank reuses the Power Data Source's match      │
+│   column. Same row-matching rules: Discord ID first, name fallback.  │
+│                                                                      │
+│ Date formats are auto-detected. MM/DD/YYYY, DD/MM/YYYY, ISO 8601,    │
+│ and `May 5, 2026`-style long-month all work. Rows whose timestamp    │
+│ doesn't parse are silently skipped.                                  │
+└──────────────────────────────────────────────────────────────────────┘
+[✅ Keep current]  [✏️ Define source]
+```
+
+**Survey shortcut.** When the Power Data Source is already the Survey's
+`Squad Powers` tab, the wizard skips this entire picker and auto-uses
+the survey's `Date Modified` column. The officer sees a one-line
+confirmation: `✅ Auto-detected the survey's Date Modified column (N)`.
+
 ---
 
 ## 10. Strategy Presets tab + inline-create offer

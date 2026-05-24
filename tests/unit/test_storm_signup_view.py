@@ -743,6 +743,175 @@ class TestPowerRefreshDmNudge:
         assert inter_b.user.send.await_count == 0
 
 
+class TestStalePowerDmNudge:
+    """#255 — when `power_refresh_stale_days > 0` and the source is
+    configured, the nudge fires when the voter's power value is still
+    parseable but older than the threshold. Cooldown is shared with
+    the existing missing-power nudge."""
+
+    @pytest.fixture
+    def env(self, seeded_db):
+        """Premium-flag-on guild with both the master toggle and stale
+        check on, threshold 7 days, source configured."""
+        import config
+        config.save_storm_config(
+            TEST_GUILD_ID, "DS",
+            tab_name="DS Tab", mail_template="",
+            timezone="America/New_York", log_channel_id=0,
+        )
+        config.save_structured_storm_config(
+            TEST_GUILD_ID, "DS",
+            structured_flow_enabled=True,
+            power_metric_column="B",
+            power_refresh_dm_enabled=True,
+            power_last_updated_tab="Squad Powers",
+            power_last_updated_column="C",
+            power_refresh_stale_days=7,
+        )
+        return TEST_GUILD_ID
+
+    def _fake_interaction(self, *, send_raises=None, user_id=42):
+        from unittest.mock import AsyncMock
+        inter = MagicMock()
+        inter.guild = MagicMock()
+        inter.guild.id = TEST_GUILD_ID
+        inter.user = MagicMock()
+        inter.user.id = user_id
+        if send_raises is None:
+            inter.user.send = AsyncMock()
+        else:
+            inter.user.send = AsyncMock(side_effect=send_raises)
+        return inter
+
+    def _patch_roster(self, *, voter_power, voter_last_updated):
+        """Patch the roster reader to return a single member whose
+        power is parseable but whose `last_updated` lets us drive the
+        stale check."""
+        from unittest.mock import patch
+        return patch(
+            "storm_roster_builder._read_roster_powers",
+            return_value=(
+                {"42": {"key": "42", "name": "Alice",
+                        "discord_id": "42", "power": voter_power,
+                        "not_on_discord": False,
+                        "last_updated": voter_last_updated}},
+                [],
+            ),
+        )
+
+    @pytest.mark.asyncio
+    async def test_stale_power_sends_dm(self, env):
+        """Power is parseable but the timestamp is older than 7 days
+        → DM fires. Body names the days-stale figure."""
+        import datetime as _dt
+        import config
+        inter = self._fake_interaction()
+        old = _dt.date.today() - _dt.timedelta(days=30)
+        with self._patch_roster(
+            voter_power=412_000_000, voter_last_updated=old,
+        ):
+            await sv._maybe_send_power_refresh_dm(
+                inter, env, "DS", "2026-05-18", 42,
+            )
+        inter.user.send.assert_awaited_once()
+        body = inter.user.send.await_args.args[0]
+        assert "30" in body
+        assert "days ago" in body.lower()
+        # Cooldown shared with the missing-power path.
+        assert config.has_power_refresh_dm_been_sent(
+            env, "DS", "2026-05-18", 42,
+        )
+
+    @pytest.mark.asyncio
+    async def test_fresh_power_no_dm(self, env):
+        """Power present + timestamp inside the threshold → no DM."""
+        import datetime as _dt
+        inter = self._fake_interaction()
+        fresh = _dt.date.today() - _dt.timedelta(days=2)
+        with self._patch_roster(
+            voter_power=412_000_000, voter_last_updated=fresh,
+        ):
+            await sv._maybe_send_power_refresh_dm(
+                inter, env, "DS", "2026-05-18", 42,
+            )
+        inter.user.send.assert_not_called()
+
+    @pytest.mark.asyncio
+    async def test_exactly_at_threshold_sends_dm(self, env):
+        """Boundary: a value that's exactly `stale_days` old should
+        DM. The comparison is inclusive (>=)."""
+        import datetime as _dt
+        inter = self._fake_interaction()
+        edge = _dt.date.today() - _dt.timedelta(days=7)
+        with self._patch_roster(
+            voter_power=412_000_000, voter_last_updated=edge,
+        ):
+            await sv._maybe_send_power_refresh_dm(
+                inter, env, "DS", "2026-05-18", 42,
+            )
+        inter.user.send.assert_awaited_once()
+
+    @pytest.mark.asyncio
+    async def test_no_last_updated_skipped_silently(self, env):
+        """Power is present, source configured, but this member's
+        row didn't have a parseable timestamp → silent skip. We do
+        NOT punish members for an alliance-side data-quality issue."""
+        inter = self._fake_interaction()
+        with self._patch_roster(
+            voter_power=412_000_000, voter_last_updated=None,
+        ):
+            await sv._maybe_send_power_refresh_dm(
+                inter, env, "DS", "2026-05-18", 42,
+            )
+        inter.user.send.assert_not_called()
+
+    @pytest.mark.asyncio
+    async def test_stale_check_disabled_when_days_zero(self, env, seeded_db):
+        """`power_refresh_stale_days = 0` disables the stale branch
+        regardless of last_updated. The missing-power branch still
+        runs as before (covered in TestPowerRefreshDmNudge)."""
+        import config
+        import datetime as _dt
+        config.save_structured_storm_config(
+            TEST_GUILD_ID, "DS",
+            structured_flow_enabled=True,
+            power_metric_column="B",
+            power_refresh_dm_enabled=True,
+            power_last_updated_tab="Squad Powers",
+            power_last_updated_column="C",
+            power_refresh_stale_days=0,  # disabled
+        )
+        inter = self._fake_interaction()
+        old = _dt.date.today() - _dt.timedelta(days=30)
+        with self._patch_roster(
+            voter_power=412_000_000, voter_last_updated=old,
+        ):
+            await sv._maybe_send_power_refresh_dm(
+                inter, env, "DS", "2026-05-18", 42,
+            )
+        inter.user.send.assert_not_called()
+
+    @pytest.mark.asyncio
+    async def test_missing_power_takes_priority_over_stale_check(self, env):
+        """When power is None AND a last_updated is set, the missing
+        branch fires (not the stale branch). DM copy should match the
+        missing-power wording, not the stale-days wording."""
+        import datetime as _dt
+        inter = self._fake_interaction()
+        old = _dt.date.today() - _dt.timedelta(days=30)
+        with self._patch_roster(
+            voter_power=None, voter_last_updated=old,
+        ):
+            await sv._maybe_send_power_refresh_dm(
+                inter, env, "DS", "2026-05-18", 42,
+            )
+        inter.user.send.assert_awaited_once()
+        body = inter.user.send.await_args.args[0]
+        # The "days ago" phrasing belongs to the stale branch — must
+        # not appear when the trigger reason is missing power.
+        assert "days ago" not in body.lower()
+
+
 class TestClearPowerRefreshDmSent:
     """The new `clear_power_refresh_dm_sent` helper backs out a row
     after a transient HTTPException."""

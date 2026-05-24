@@ -5347,6 +5347,10 @@ async def run_storm_setup(interaction: discord.Interaction, bot, event_type: str
         poll_day_of_week       =structured_cfg.get("poll_day_of_week", -1),
         signup_time            =structured_cfg.get("signup_time", ""),
         power_refresh_dm_enabled=bool(structured_cfg.get("power_refresh_dm_enabled", False)),
+        power_last_updated_tab          =structured_cfg.get("power_last_updated_tab", ""),
+        power_last_updated_column       =structured_cfg.get("power_last_updated_column", ""),
+        power_last_updated_match_column =structured_cfg.get("power_last_updated_match_column", ""),
+        power_refresh_stale_days        =int(structured_cfg.get("power_refresh_stale_days", 0)),
     )
 
     embed = discord.Embed(title=f"✅ {label} Configured", color=discord.Color.green())
@@ -6637,6 +6641,13 @@ async def _run_structured_flow_setup_step(
     result.setdefault("poll_day_of_week", -1)
     result.setdefault("signup_time", "")
     result.setdefault("power_refresh_dm_enabled", False)
+    # Stale-power DM nudge (#255). All four fields default to off;
+    # the wizard surfaces them as a follow-up step only when the
+    # primary power-refresh DM toggle is on.
+    result.setdefault("power_last_updated_tab", "")
+    result.setdefault("power_last_updated_column", "")
+    result.setdefault("power_last_updated_match_column", "")
+    result.setdefault("power_refresh_stale_days", 0)
     # Roster DM templates (#226 follow-up). Persisted via
     # `save_roster_dm_templates`, distinct from
     # `save_structured_storm_config`, but stashed in the same result
@@ -7143,6 +7154,464 @@ async def _run_structured_flow_setup_step(
                 await channel.send(f"⏰ Timed out. Run `/{cmd_name}` to start again.")
                 return None
             result["power_refresh_dm_enabled"] = bool(nudge_view.selected)
+
+        # ── Stale-power follow-up (#255) ─────────────────────────────────
+        #
+        # Only relevant when the master power-refresh toggle is on. Asks
+        # whether the bot should also DM when the voter's power value is
+        # older than N days, then captures the days threshold and the
+        # source for the "last updated" timestamp (tab + column + match
+        # column). When the Power Data Source is already pointed at the
+        # bot's Squad Powers tab, we look up the `Date Modified` column
+        # automatically and skip the source picker entirely — that's the
+        # common case for survey-using alliances.
+        if result.get("power_refresh_dm_enabled"):
+            saved_stale_days = int(result.get("power_refresh_stale_days") or 0)
+            saved_stale_on  = saved_stale_days > 0
+
+            prior_stale = prior_enabled and saved_stale_on
+            if prior_stale:
+                gate = _KeepOrFlipYesNoGate(
+                    current_value=True,
+                    keep_label_yes="✅ Keep current: Yes",
+                    keep_label_no="✅ Keep current: No",
+                    flip_label_yes="↩️ Switch to: Yes",
+                    flip_label_no="↩️ Switch to: No",
+                )
+                await channel.send(
+                    f"**Stale-Power DM (💎 Premium)**\n"
+                    f"On top of the missing-power nudge, should the bot "
+                    f"also DM when a member's power value is older than "
+                    f"a configured number of days? Currently **on** at "
+                    f"**{saved_stale_days}** days.",
+                    view=gate,
+                )
+                await wait_view_or_cancel(gate, cancel_event)
+                if getattr(gate, "cancelled", False):
+                    return None
+                if gate.value is None:
+                    await channel.send(
+                        f"⏰ Timed out. Run `/{cmd_name}` to start again."
+                    )
+                    return None
+                stale_on = bool(gate.value)
+            else:
+                stale_view = YesNoView()
+                blurb = (
+                    f"Currently **off**."
+                    if prior_enabled and not saved_stale_on
+                    else "Currently **off**."
+                )
+                await channel.send(
+                    f"**Stale-Power DM (💎 Premium)**\n"
+                    f"On top of the missing-power nudge for **{label}**, "
+                    f"should the bot also DM when a member's power value "
+                    f"is older than a configured number of days? "
+                    f"{blurb} At most one DM per member per event date "
+                    f"(shared with the missing-power nudge).",
+                    view=stale_view,
+                )
+                await wait_view_or_cancel(stale_view, cancel_event)
+                if getattr(stale_view, "cancelled", False):
+                    return None
+                if stale_view.selected is None:
+                    await channel.send(
+                        f"⏰ Timed out. Run `/{cmd_name}` to start again."
+                    )
+                    return None
+                stale_on = bool(stale_view.selected)
+
+            if not stale_on:
+                # Persist as off — wipe any saved days + source fields
+                # so re-enabling later starts from defaults rather than
+                # a half-configured row.
+                result["power_refresh_stale_days"] = 0
+                result["power_last_updated_tab"] = ""
+                result["power_last_updated_column"] = ""
+                result["power_last_updated_match_column"] = ""
+            else:
+                # Days threshold modal. Re-prompt up to 3 times on
+                # garbage input rather than silently defaulting — a
+                # stale-days picker that quietly went back to 7 when
+                # the officer typed "two weeks" would be confusing.
+                effective_days = saved_stale_days if saved_stale_days > 0 else 7
+
+                class _StaleDaysModal(discord.ui.Modal):
+                    def __init__(self):
+                        super().__init__(title="Stale-Power Days")
+                        self.confirmed = False
+                        self.days_input = discord.ui.TextInput(
+                            label="Days before a power value is 'stale'",
+                            placeholder="e.g. 7",
+                            default=str(effective_days),
+                            required=True,
+                            max_length=4,
+                        )
+                        self.add_item(self.days_input)
+
+                    async def on_submit(self, inter: discord.Interaction):
+                        self.confirmed = True
+                        await inter.response.defer()
+                        self.stop()
+
+                class _StaleDaysPickerView(discord.ui.View):
+                    def __init__(self):
+                        super().__init__(timeout=300)
+                        self.outcome: str | None = None
+                        self.modal: _StaleDaysModal | None = None
+
+                    @discord.ui.button(
+                        label=f"✅ Keep current: {effective_days} days",
+                        style=discord.ButtonStyle.success,
+                    )
+                    async def keep(
+                        self, inter: discord.Interaction,
+                        _btn: discord.ui.Button,
+                    ):
+                        self.outcome = "keep"
+                        for item in self.children:
+                            item.disabled = True
+                        await wizard_registry.safe_edit_response(
+                            inter,
+                            content=f"✅ Threshold: **{effective_days}** days.",
+                            view=self,
+                        )
+                        self.stop()
+
+                    @discord.ui.button(
+                        label="✏️ Set days",
+                        style=discord.ButtonStyle.secondary,
+                    )
+                    async def define(
+                        self, inter: discord.Interaction,
+                        _btn: discord.ui.Button,
+                    ):
+                        self.modal = _StaleDaysModal()
+                        await inter.response.send_modal(self.modal)
+                        await self.modal.wait()
+                        self.outcome = "edit" if self.modal.confirmed else None
+                        for item in self.children:
+                            item.disabled = True
+                        try:
+                            if inter.message:
+                                await inter.message.edit(view=self)
+                        except discord.HTTPException:
+                            pass
+                        self.stop()
+
+                attempts = 0
+                while True:
+                    days_picker = _StaleDaysPickerView()
+                    if not saved_stale_on:
+                        # No prior value — drop the Keep button and
+                        # promote Set days. (Mirrors the Power Data
+                        # Source picker's first-time-vs-re-entry idiom.)
+                        days_picker.remove_item(days_picker.keep)
+                        days_picker.define.label = (
+                            f"✏️ Set days (default: 7)"
+                        )
+                    if attempts == 0:
+                        await channel.send(
+                            f"**Stale-Power Threshold (💎 Premium)**\n"
+                            f"How many days old must a member's power value "
+                            f"be before the bot DMs them? Recommended: **7**. "
+                            f"Range: 1–365.",
+                            view=days_picker,
+                        )
+                    else:
+                        await channel.send(
+                            f"⚠️ Couldn't parse that — try a whole number "
+                            f"between 1 and 365.",
+                            view=days_picker,
+                        )
+                    await wait_view_or_cancel(days_picker, cancel_event)
+                    if getattr(days_picker, "cancelled", False):
+                        return None
+                    if days_picker.outcome is None:
+                        await channel.send(
+                            f"⏰ Timed out. Run `/{cmd_name}` to start again."
+                        )
+                        return None
+
+                    if days_picker.outcome == "keep":
+                        result["power_refresh_stale_days"] = effective_days
+                        break
+
+                    # edit: parse the modal value.
+                    modal = days_picker.modal
+                    assert modal is not None
+                    raw_days = (modal.days_input.value or "").strip()
+                    try:
+                        parsed_days = int(raw_days)
+                    except ValueError:
+                        parsed_days = -1
+                    if 1 <= parsed_days <= 365:
+                        result["power_refresh_stale_days"] = parsed_days
+                        break
+                    attempts += 1
+                    if attempts >= 3:
+                        await channel.send(
+                            f"⚠️ Couldn't parse a stale-days threshold "
+                            f"after 3 tries. Run `/{cmd_name}` to start "
+                            f"again."
+                        )
+                        return None
+
+                # Last-Updated Source. Survey shortcut: if the alliance
+                # already pointed Power Data Source at the bot's Squad
+                # Powers tab, the survey writes a `Date Modified` column
+                # we can locate by header — skip the picker entirely.
+                from config import get_survey_config, get_spreadsheet
+                survey_cfg = get_survey_config(guild_id) if guild_id else {}
+                survey_tab = (
+                    survey_cfg.get("tab_squad_powers") or "Squad Powers"
+                )
+                # `power_metric_tab` is stored empty when it matches
+                # Member Roster (read path falls back to default).
+                # Treat the wizard-side `effective_tab` value the
+                # officer just saw as the resolved tab name.
+                pmt = (result.get("power_metric_tab") or "").strip()
+                resolved_power_tab = pmt or default_tab
+                survey_shortcut_applied = False
+                if resolved_power_tab == survey_tab:
+                    # Try to locate the `Date Modified` column by
+                    # header. Off the event loop in case the sheet is
+                    # slow / rate-limited.
+                    try:
+                        sh = get_spreadsheet(guild_id)
+                        ws = sh.worksheet(survey_tab) if sh else None
+                        header_row = (
+                            await asyncio.to_thread(ws.row_values, 1)
+                            if ws else []
+                        )
+                    except Exception as e:
+                        print(
+                            f"[SETUP] survey Date-Modified header lookup "
+                            f"failed for guild={guild_id} tab={survey_tab!r}: "
+                            f"{e}"
+                        )
+                        header_row = []
+                    date_col_idx = -1
+                    for i, cell in enumerate(header_row):
+                        if cell.strip().lower() == "date modified":
+                            date_col_idx = i
+                            break
+                    if date_col_idx >= 0:
+                        date_col_letter = _col_index_to_letter(date_col_idx)
+                        result["power_last_updated_tab"] = survey_tab
+                        result["power_last_updated_column"] = date_col_letter
+                        # Empty match column reuses power_match_column
+                        # at read time (which itself falls back to the
+                        # power tab's match column).
+                        result["power_last_updated_match_column"] = ""
+                        survey_shortcut_applied = True
+                        await channel.send(
+                            f"✅ Auto-detected the survey's **Date Modified** "
+                            f"column (`{date_col_letter}`) on tab "
+                            f"`{survey_tab}` — using that as the "
+                            f"last-updated source."
+                        )
+
+                if not survey_shortcut_applied:
+                    # Full picker — mirrors the Power Data Source idiom.
+                    saved_lu_tab = (
+                        result.get("power_last_updated_tab") or ""
+                    ).strip()
+                    saved_lu_col = (
+                        result.get("power_last_updated_column") or ""
+                    ).strip().upper()
+                    if not (
+                        len(saved_lu_col) == 1
+                        and "A" <= saved_lu_col <= "Z"
+                    ):
+                        saved_lu_col = ""
+                    saved_lu_match = (
+                        result.get("power_last_updated_match_column") or ""
+                    ).strip().upper()
+                    if not (
+                        len(saved_lu_match) == 1
+                        and "A" <= saved_lu_match <= "Z"
+                    ):
+                        saved_lu_match = ""
+
+                    # Pre-fill defaults from the Power Data Source so
+                    # alliances whose power + timestamp live on the same
+                    # tab can one-click accept. The match column
+                    # defaults to the power's match column (which
+                    # itself defaults to Member Roster's discord_id_col).
+                    pdef_tab = resolved_power_tab
+                    pdef_match = (
+                        result.get("power_match_column")
+                        or default_match_letter
+                    )
+
+                    lu_effective_tab = saved_lu_tab or pdef_tab
+                    lu_effective_col = saved_lu_col or ""
+                    lu_effective_match = saved_lu_match or pdef_match
+                    lu_has_custom = bool(saved_lu_tab) or bool(saved_lu_col)
+
+                    class _LastUpdatedSourceModal(discord.ui.Modal):
+                        def __init__(self):
+                            super().__init__(title="Last-Updated Source")
+                            self.confirmed = False
+                            self.tab_input = discord.ui.TextInput(
+                                label="Last-updated tab",
+                                placeholder="e.g. Squad Powers, Member Roster",
+                                default=lu_effective_tab,
+                                required=True,
+                                max_length=100,
+                            )
+                            self.col_input = discord.ui.TextInput(
+                                label="Last-updated column letter (A-Z)",
+                                placeholder="e.g. N",
+                                default=lu_effective_col,
+                                required=True,
+                                max_length=2,
+                            )
+                            self.match_input = discord.ui.TextInput(
+                                label="Name-match column letter (A-Z, optional)",
+                                placeholder=(
+                                    "Leave blank to reuse Power match column"
+                                ),
+                                default=lu_effective_match,
+                                required=False,
+                                max_length=2,
+                            )
+                            self.add_item(self.tab_input)
+                            self.add_item(self.col_input)
+                            self.add_item(self.match_input)
+
+                        async def on_submit(
+                            self, inter: discord.Interaction,
+                        ):
+                            self.confirmed = True
+                            await inter.response.defer()
+                            self.stop()
+
+                    class _LastUpdatedPickerView(discord.ui.View):
+                        def __init__(self):
+                            super().__init__(timeout=300)
+                            self.outcome: str | None = None
+                            self.modal: _LastUpdatedSourceModal | None = None
+
+                        @discord.ui.button(
+                            label="✅ Keep current",
+                            style=discord.ButtonStyle.success,
+                        )
+                        async def keep(
+                            self, inter: discord.Interaction,
+                            _btn: discord.ui.Button,
+                        ):
+                            self.outcome = "keep"
+                            for item in self.children:
+                                item.disabled = True
+                            await wizard_registry.safe_edit_response(
+                                inter,
+                                content=(
+                                    f"✅ Keeping current: tab "
+                                    f"`{lu_effective_tab}`, column "
+                                    f"`{lu_effective_col or '?'}`."
+                                ),
+                                view=self,
+                            )
+                            self.stop()
+
+                        @discord.ui.button(
+                            label="✏️ Define source",
+                            style=discord.ButtonStyle.secondary,
+                        )
+                        async def define(
+                            self, inter: discord.Interaction,
+                            _btn: discord.ui.Button,
+                        ):
+                            self.modal = _LastUpdatedSourceModal()
+                            await inter.response.send_modal(self.modal)
+                            await self.modal.wait()
+                            self.outcome = (
+                                "edit" if self.modal.confirmed else None
+                            )
+                            for item in self.children:
+                                item.disabled = True
+                            try:
+                                if inter.message:
+                                    await inter.message.edit(view=self)
+                            except discord.HTTPException:
+                                pass
+                            self.stop()
+
+                    lu_picker = _LastUpdatedPickerView()
+                    if not lu_has_custom:
+                        # First-time setup — drop Keep, promote Define.
+                        lu_picker.remove_item(lu_picker.keep)
+                        lu_picker.define.label = (
+                            f"✏️ Set source: {pdef_tab[:30]}…"
+                            if len(pdef_tab) > 30 else
+                            f"✏️ Set source: {pdef_tab}"
+                        )
+                    else:
+                        lu_picker.keep.label = (
+                            f"✅ Keep: {lu_effective_tab} · "
+                            f"{lu_effective_col}"[:80]
+                        )
+
+                    await channel.send(
+                        f"**Last-Updated Source (💎 Premium)**\n"
+                        f"Where on the Sheet does the bot find each "
+                        f"member's last-updated timestamp? We support "
+                        f"the bot's own Squad Power Survey, a manually-"
+                        f"maintained column, or an export from a "
+                        f"different bot.\n\n"
+                        f"• **Tab**: the Sheet tab with the timestamp.\n"
+                        f"• **Last-updated column**: the column with the "
+                        f"timestamp values (e.g. `N`).\n"
+                        f"• **Name-match column**: blank reuses the Power "
+                        f"Data Source's match column. Same row-matching "
+                        f"rules: Discord ID first, name fallback.\n\n"
+                        f"_Date formats are auto-detected. MM/DD/YYYY, "
+                        f"DD/MM/YYYY, ISO 8601, and `May 5, 2026`-style "
+                        f"long-month all work. Rows whose timestamp "
+                        f"doesn't parse are silently skipped._",
+                        view=lu_picker,
+                    )
+                    await wait_view_or_cancel(lu_picker, cancel_event)
+                    if getattr(lu_picker, "cancelled", False):
+                        return None
+                    if lu_picker.outcome is None:
+                        await channel.send(
+                            f"⏰ Timed out. Run `/{cmd_name}` to start again."
+                        )
+                        return None
+
+                    if lu_picker.outcome == "keep":
+                        pass  # saved values already in result
+                    else:  # edit
+                        modal = lu_picker.modal
+                        assert modal is not None
+                        tab_val = (modal.tab_input.value or "").strip()
+                        col_val = (modal.col_input.value or "").strip().upper()
+                        match_val = (
+                            modal.match_input.value or ""
+                        ).strip().upper()
+                        if not (len(col_val) == 1 and "A" <= col_val <= "Z"):
+                            col_val = ""
+                        if not (
+                            len(match_val) == 1
+                            and "A" <= match_val <= "Z"
+                        ):
+                            match_val = ""  # blank → reuse power match
+                        result["power_last_updated_tab"] = tab_val
+                        result["power_last_updated_column"] = col_val
+                        result["power_last_updated_match_column"] = match_val
+                        if not (tab_val and col_val):
+                            # Officer cleared the source mid-edit — disable
+                            # the stale check instead of leaving a half-
+                            # configured row that silently fails at read.
+                            await channel.send(
+                                "⚠️ Tab + column are both required for the "
+                                "stale check. Disabling for now — re-run "
+                                f"`/{cmd_name}` to set them later."
+                            )
+                            result["power_refresh_stale_days"] = 0
 
         # ── Roster DM templates (#226 follow-up) ─────────────────────────
         #

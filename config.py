@@ -323,6 +323,22 @@ def init_db():
                 poll_day_of_week         INTEGER DEFAULT -1,
                 signup_time              TEXT    DEFAULT '',
                 power_refresh_dm_enabled INTEGER DEFAULT 0,
+                -- Stale-power DM nudge (#255). Generalises #138's
+                -- blank/unparseable nudge to also fire when the
+                -- voter's power value is older than N days. The
+                -- timestamp source is configurable (tab + column +
+                -- match column) so it works with the bot's own
+                -- Squad Power Survey "Date Modified" column, a
+                -- manually-maintained column, or an export from a
+                -- different bot. Empty tab OR `power_refresh_stale_days = 0`
+                -- = stale check off (master toggle stays
+                -- `power_refresh_dm_enabled`). Empty match column =
+                -- reuse `power_match_column` (which itself falls
+                -- back to Member Roster's discord_id_col when empty).
+                power_last_updated_tab           TEXT    DEFAULT '',
+                power_last_updated_column        TEXT    DEFAULT '',
+                power_last_updated_match_column  TEXT    DEFAULT '',
+                power_refresh_stale_days         INTEGER DEFAULT 0,
                 -- Roster DM templates (#226 follow-up). Empty string =
                 -- fall back to defaults.py's DEFAULT_ROSTER_DM_*
                 -- constants. Three slots because each role (Starter,
@@ -749,6 +765,11 @@ def init_db():
             # No SQL default: NULL signals "leadership hasn't picked yet."
             ("team_a_slot_index",        "INTEGER"),
             ("team_b_slot_index",        "INTEGER"),
+            # Stale-power DM nudge (#255) — see CREATE TABLE comment.
+            ("power_last_updated_tab",          "TEXT    DEFAULT ''"),
+            ("power_last_updated_column",       "TEXT    DEFAULT ''"),
+            ("power_last_updated_match_column", "TEXT    DEFAULT ''"),
+            ("power_refresh_stale_days",        "INTEGER DEFAULT 0"),
         ]:
             try:
                 conn.execute(f"ALTER TABLE guild_storm_config ADD COLUMN {col} {definition}")
@@ -1744,6 +1765,12 @@ def get_storm_config(guild_id: int, event_type: str) -> dict:
         "poll_day_of_week":        -1,
         "signup_time":             "",
         "power_refresh_dm_enabled": 0,
+        # Stale-power DM nudge (#255) — never-configured guilds get
+        # all-off, mirroring the rest of the structured-flow defaults.
+        "power_last_updated_tab":           "",
+        "power_last_updated_column":        "",
+        "power_last_updated_match_column":  "",
+        "power_refresh_stale_days":         0,
         # Per-team time-slot mapping (#251) — NULL until setup-touched.
         "team_a_slot_index":       None,
         "team_b_slot_index":       None,
@@ -1923,6 +1950,15 @@ def get_structured_storm_config(guild_id: int, event_type: str) -> dict:
         "poll_day_of_week":        int(raw_dow),
         "signup_time":             cfg.get("signup_time") or "",
         "power_refresh_dm_enabled": bool(cfg.get("power_refresh_dm_enabled")),
+        # Stale-power DM nudge (#255). Empty tab / empty column /
+        # 0 days each independently disable the stale branch (the
+        # click-handler treats any of those as "skip the staleness
+        # check"). Match column falls back to `power_match_column`
+        # at read time when empty.
+        "power_last_updated_tab":          (cfg.get("power_last_updated_tab") or ""),
+        "power_last_updated_column":       (cfg.get("power_last_updated_column") or "").upper(),
+        "power_last_updated_match_column": (cfg.get("power_last_updated_match_column") or "").upper(),
+        "power_refresh_stale_days":        int(cfg.get("power_refresh_stale_days") or 0),
     }
 
 
@@ -2003,6 +2039,10 @@ def save_structured_storm_config(
     poll_day_of_week: int           = -1,
     signup_time: str                = "",
     power_refresh_dm_enabled: bool  = False,
+    power_last_updated_tab: str           = "",
+    power_last_updated_column: str        = "",
+    power_last_updated_match_column: str  = "",
+    power_refresh_stale_days: int         = 0,
 ) -> bool:
     """UPDATE the structured-flow fields on an existing (guild_id, event_type)
     row. The row must already exist (created by save_storm_config); this does
@@ -2039,6 +2079,22 @@ def save_structured_storm_config(
     pm_match = (power_match_column or "").strip().upper()
     if not (len(pm_match) == 1 and "A" <= pm_match <= "Z"):
         pm_match = ""
+    # Stale-power DM nudge (#255). Same letter-validation as power.
+    lu_tab = (power_last_updated_tab or "").strip()
+    lu_col = (power_last_updated_column or "").strip().upper()
+    if not (len(lu_col) == 1 and "A" <= lu_col <= "Z"):
+        lu_col = ""
+    lu_match = (power_last_updated_match_column or "").strip().upper()
+    if not (len(lu_match) == 1 and "A" <= lu_match <= "Z"):
+        lu_match = ""
+    try:
+        stale_days = int(power_refresh_stale_days)
+    except (TypeError, ValueError):
+        stale_days = 0
+    if stale_days < 0:
+        stale_days = 0
+    if stale_days > 365:
+        stale_days = 365
     with _get_conn() as conn:
         cur = conn.execute(
             "UPDATE guild_storm_config SET "
@@ -2056,7 +2112,11 @@ def save_structured_storm_config(
             "  member_rules_tab = ?, "
             "  poll_day_of_week = ?, "
             "  signup_time = ?, "
-            "  power_refresh_dm_enabled = ? "
+            "  power_refresh_dm_enabled = ?, "
+            "  power_last_updated_tab = ?, "
+            "  power_last_updated_column = ?, "
+            "  power_last_updated_match_column = ?, "
+            "  power_refresh_stale_days = ? "
             "WHERE guild_id = ? AND event_type = ?",
             (
                 1 if structured_flow_enabled else 0,
@@ -2069,6 +2129,7 @@ def save_structured_storm_config(
                 strategies_tab, member_rules_tab,
                 dow, signup_time,
                 1 if power_refresh_dm_enabled else 0,
+                lu_tab, lu_col, lu_match, stale_days,
                 guild_id, event_type,
             ),
         )

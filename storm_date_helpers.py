@@ -231,6 +231,177 @@ def next_event_date(
     return _next_weekday(today, dow, same_day_rolls=True).isoformat()
 
 
+# ── Last-updated timestamp parser (#255) ────────────────────────────────────
+#
+# Parses the `Date Modified` / `Last Updated` column on whatever sheet
+# the alliance configured for the stale-power DM nudge. Tolerant by
+# design because the column could be written by:
+#   * our own survey (`survey.update_squad_powers` writes m/d/yyyy UTC)
+#   * a manually-maintained column (any format the officer types)
+#   * a different bot (ISO 8601 likely; could be anything)
+#
+# US/EU date ambiguity is resolved per-column, not per-cell: we scan
+# the column once and if any value has its first slash component > 12
+# the whole column locks to DD/MM. Otherwise we default to MM/DD
+# (matching our survey's output). A column with mixed formats falls
+# back to MM/DD silently — that's an alliance-side data-quality
+# problem we don't surface here.
+#
+# Unparseable cells return None. The click-handler treats None as
+# "don't DM" — punishing members for an alliance-side formatting
+# mismatch would be worse than missing a few stale-power nudges.
+
+# Formats with explicit year. ISO first because it's unambiguous.
+_LU_FORMATS_ISO = (
+    "%Y-%m-%d",
+    "%Y-%m-%dT%H:%M:%S",
+    "%Y-%m-%dT%H:%M:%S.%f",
+    "%Y-%m-%d %H:%M:%S",
+    "%Y-%m-%d %H:%M",
+    "%Y/%m/%d",
+    "%Y/%m/%d %H:%M:%S",
+    "%Y/%m/%d %H:%M",
+    "%Y.%m.%d",
+)
+
+_LU_FORMATS_MDY = (
+    "%m/%d/%Y",
+    "%m/%d/%Y %H:%M:%S",
+    "%m/%d/%Y %H:%M",
+    "%m-%d-%Y",
+    "%m.%d.%Y",
+)
+
+_LU_FORMATS_DMY = (
+    "%d/%m/%Y",
+    "%d/%m/%Y %H:%M:%S",
+    "%d/%m/%Y %H:%M",
+    "%d-%m-%Y",
+    "%d.%m.%Y",
+)
+
+_LU_FORMATS_LONG_MONTH = (
+    "%B %d, %Y",
+    "%b %d, %Y",
+    "%B %d %Y",
+    "%b %d %Y",
+    "%d %B %Y",
+    "%d %b %Y",
+)
+
+# Two-digit-year variants. Year < 70 → 2000s, else 1900s (Python's
+# default strptime behaviour). Alliances using 2-digit years for
+# storm data is rare but a 3rd-party bot might.
+_LU_FORMATS_MDY_SHORT = ("%m/%d/%y", "%m-%d-%y", "%m.%d.%y")
+_LU_FORMATS_DMY_SHORT = ("%d/%m/%y", "%d-%m-%y", "%d.%m.%y")
+
+
+def _strip_tz_suffix(raw: str) -> str:
+    """Strip trailing 'UTC', 'GMT', or 'Z' so strptime can parse the
+    bare datetime. We don't try to honour the tz — last_updated is
+    rendered against today's local date with day-granular comparison,
+    so tz drift is at worst one day off, which is well inside the
+    stale-days threshold's noise floor."""
+    s = raw.strip()
+    s = re.sub(r"\s*\bUTC\b\s*$", "", s, flags=re.IGNORECASE)
+    s = re.sub(r"\s*\bGMT\b\s*$", "", s, flags=re.IGNORECASE)
+    s = re.sub(r"\s*\+\d{2}:?\d{2}$", "", s)
+    s = re.sub(r"Z$", "", s)
+    return s.strip()
+
+
+def _looks_iso(raw: str) -> bool:
+    """ISO 8601 starts with `YYYY-` — four digits then a dash."""
+    return bool(re.match(r"^\d{4}-\d{1,2}-\d{1,2}", raw.strip()))
+
+
+def detect_last_updated_dmy_first(cells: list[str]) -> bool:
+    """Return True if the column appears to be DD/MM/YYYY, False otherwise.
+
+    Heuristic: if any slash/dash/dot-separated value has its first
+    component > 12, the column can only be DD/MM. Otherwise we
+    default to MM/DD (matches our survey's output). ISO 8601 values
+    (`YYYY-MM-DD`) are skipped — they're unambiguous and don't
+    contribute to the M-vs-D vote either way.
+    """
+    sep_re = re.compile(r"^\s*(\d{1,4})[/\-.](\d{1,4})[/\-.]")
+    for cell in cells:
+        if not cell:
+            continue
+        s = cell.strip()
+        if _looks_iso(s):
+            continue
+        m = sep_re.match(s)
+        if not m:
+            continue
+        try:
+            first = int(m.group(1))
+        except ValueError:
+            continue
+        if first > 12:
+            return True
+    return False
+
+
+def parse_last_updated(
+    raw: str, *, dmy_first: bool = False,
+) -> Optional[_dt.date]:
+    """Parse a single Last-Updated cell into a date, or return None.
+
+    `dmy_first` is the column-level format flag returned by
+    `detect_last_updated_dmy_first`. ISO 8601 values bypass the flag
+    (they're unambiguous). Long-month formats bypass the flag too.
+
+    Returns a `datetime.date` — time-of-day and timezone are discarded
+    on purpose; staleness comparison is day-granular.
+    """
+    if raw is None:
+        return None
+    s = str(raw).strip()
+    if not s:
+        return None
+    s = _strip_tz_suffix(s)
+    if not s:
+        return None
+
+    # ISO 8601 first (unambiguous, most-likely-to-succeed for 3rd-party
+    # bot exports). `date.fromisoformat` handles plain YYYY-MM-DD;
+    # strptime handles the datetime variants.
+    if _looks_iso(s):
+        try:
+            return _dt.date.fromisoformat(s[:10])
+        except ValueError:
+            pass
+        for fmt in _LU_FORMATS_ISO:
+            try:
+                return _dt.datetime.strptime(s, fmt).date()
+            except ValueError:
+                continue
+
+    # Long-month formats (`May 24 2026`) — unambiguous regardless of
+    # locale, so we try them before the M/D vs D/M branch.
+    for fmt in _LU_FORMATS_LONG_MONTH:
+        try:
+            return _dt.datetime.strptime(s, fmt).date()
+        except ValueError:
+            continue
+
+    # Numeric M/D vs D/M branch. Try the preferred order first, fall
+    # back to the other so a single mis-keyed row in an otherwise
+    # consistent column still parses if it happens to be unambiguous.
+    primary = _LU_FORMATS_DMY if dmy_first else _LU_FORMATS_MDY
+    primary_short = _LU_FORMATS_DMY_SHORT if dmy_first else _LU_FORMATS_MDY_SHORT
+    secondary = _LU_FORMATS_MDY if dmy_first else _LU_FORMATS_DMY
+    secondary_short = _LU_FORMATS_MDY_SHORT if dmy_first else _LU_FORMATS_DMY_SHORT
+    for fmt in primary + primary_short + secondary + secondary_short:
+        try:
+            return _dt.datetime.strptime(s, fmt).date()
+        except ValueError:
+            continue
+
+    return None
+
+
 def most_recent_event_date(
     guild_id: int, event_type: str, *,
     today: Optional[_dt.date] = None,

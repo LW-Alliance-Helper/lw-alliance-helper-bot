@@ -122,7 +122,7 @@ repo `../lw-alliance-helper.github.io` (the website) has its own
 | `stats_publisher.py` | Daily alliance-count publisher to website. | ~155 |
 | `shiny_tasks.py` | Daily Shiny Tasks announcement (cpt-hedge fetch + 3-day cycle math + render). Per-minute post loop and weekly refresh loop live in `bot.py`. Free for all tiers. See `docs/hedge_data_source.md`. | ~250 |
 
-Tests: `tests/unit/` and `tests/integration/`. 851 collected, 18 skip
+Tests: `tests/unit/` and `tests/integration/`. 1958 collected, 18 skip
 (intentional — `free_tier_only` markers under the `FORCE_PREMIUM=1` CI
 lane).
 
@@ -234,6 +234,7 @@ the long form on each.
 
 | Version | What |
 |---|---|
+| `1.4.0` | Premium Storm Overhaul ([#233](https://github.com/LW-Alliance-Helper/lw-alliance-helper-bot/issues/233)): structured sign-up → roster builder → PNG mail flow with auto-fill, per-event team plan picker, per-team time-slot mapping with weekly override, per-member assignment DMs with role-keyed templates, unified DS + CS mail body, and `/desertstorm` / `/canyonstorm` event hubs that consolidate every storm action under one command per event type. Participation Tracking 2.0 (Premium, [#243](https://github.com/LW-Alliance-Helper/lw-alliance-helper-bot/issues/243)): per-member question types written to a Per-Member Log tab, parameterized Trends Viewer for cross-event queries, and preset question templates during setup. Member Sync renamed with Power Data Source flexibility, collision protection, and a presence column surfaced in the sync preview; storm + participation now share one Alias Column instead of duplicating it. Setup wizard re-entry covers mail template choices ([#231](https://github.com/LW-Alliance-Helper/lw-alliance-helper-bot/issues/231)) and the shared/separate picker without clobbering saved bodies; officers with the Leadership role can run `/setup` ([#229](https://github.com/LW-Alliance-Helper/lw-alliance-helper-bot/issues/229)) without server-admin permission. Stale post-consolidation slash refs in Steps 5 and 9 of the storm wizard fixed ([#242](https://github.com/LW-Alliance-Helper/lw-alliance-helper-bot/issues/242)); changelog-slim hook resolves absolute hook paths so historical bullets stop flagging as new violations ([#250](https://github.com/LW-Alliance-Helper/lw-alliance-helper-bot/issues/250)). |
 | `1.3.0` | Setup wizard re-entry UX overhaul ([#80](https://github.com/LW-Alliance-Helper/lw-alliance-helper-bot/issues/80)): every `/setup_*` command (plus `/setup_members`) opens with a saved-config summary on re-entry; Keep current buttons across every channel, role, timezone, sheet ID, time, default tone, intro message, and `ask_keep_or_change` step; enable-toggle wizards (`/setup_birthdays`, `/setup_growth`, `/setup_shiny_tasks`) preserve config on disable with an optional 🗑️ Clear my saved configuration button. Shiny-tasks weekly refresh no longer thrashes cpt-hedge on every Railway redeploy — gated on the last-seen timestamp in `shiny_task_servers` ([#109](https://github.com/LW-Alliance-Helper/lw-alliance-helper-bot/issues/109)). |
 | `1.2.0` | Growth Breakdown classifies snapshot deltas into Increased / Steady / Low / None / Decline buckets, with optional Premium auto-post + bucket filter + custom thresholds/labels ([#34](https://github.com/LW-Alliance-Helper/lw-alliance-helper-bot/issues/34)). Daily Shiny Tasks free-tier announcement posts every LW server in the alliance's transfer range that has shiny tasks today, refreshed weekly from cpt-hedge ([#72](https://github.com/LW-Alliance-Helper/lw-alliance-helper-bot/issues/72)). `/export_config` + `/import_config` move config across guilds via JSON with a channel/role remap wizard ([#42](https://github.com/LW-Alliance-Helper/lw-alliance-helper-bot/issues/42)). DS/CS zones lock to canonical game-defined names ([#35](https://github.com/LW-Alliance-Helper/lw-alliance-helper-bot/issues/35)); DS/CS subs flatten to plain name lists ([#37](https://github.com/LW-Alliance-Helper/lw-alliance-helper-bot/issues/37)). Multiple breakdown auto-post fixes ([#84](https://github.com/LW-Alliance-Helper/lw-alliance-helper-bot/issues/84), [#85](https://github.com/LW-Alliance-Helper/lw-alliance-helper-bot/issues/85), [#87](https://github.com/LW-Alliance-Helper/lw-alliance-helper-bot/issues/87)) and birthday→train conflict spam consolidated with restart-survival via persisted dedup ([#89](https://github.com/LW-Alliance-Helper/lw-alliance-helper-bot/issues/89)). |
 | `1.1.7` | Hotfix: `/train` Add Entry and Update Entry modals now defer the interaction before their Google Sheets round-trip, so a slow gspread call no longer expires the 3-second initial-response token and crashes the submit with `NotFound 10062 Unknown interaction` ([#76](https://github.com/LW-Alliance-Helper/lw-alliance-helper-bot/issues/76)). Direct-to-main per the hotfix exception. |
@@ -265,8 +266,8 @@ the long form on each.
 | `1.0.1` | Audit Round 1 — fixed `survey._run_schedule_wizard` broken import + dead `train_ui` line, deleted `sheets.py` and ~250 LOC of dead code (12 items) |
 | `1.0.0` | Initial public release (2026-04-28) |
 
-Test suite: **851 collected**, 18 skipped on the free-tier lane and
-35 skipped under `FORCE_PREMIUM=1`. Total LOC: ~24K.
+Test suite: **1958 collected**, 18 skipped on the free-tier lane and
+35 skipped under `FORCE_PREMIUM=1`. Total LOC: ~50K.
 
 ---
 
@@ -318,12 +319,17 @@ These have been thought through. Reopening them needs a real reason:
 
 ## Status snapshot
 
-- 1.0.0 launched 2026-04-28. Currently on `1.3.0` — setup wizard
-  re-entry UX overhaul ([#80](https://github.com/LW-Alliance-Helper/lw-alliance-helper-bot/issues/80))
-  plus a shiny-tasks weekly-refresh persistence fix
-  ([#109](https://github.com/LW-Alliance-Helper/lw-alliance-helper-bot/issues/109)).
+- 1.0.0 launched 2026-04-28. Currently on `1.4.0` — Premium Storm
+  Overhaul ([#233](https://github.com/LW-Alliance-Helper/lw-alliance-helper-bot/issues/233)):
+  structured sign-up → roster builder → PNG mail with auto-fill,
+  per-event team plan picker, per-team time slots, per-member
+  assignment DMs, and `/desertstorm` / `/canyonstorm` event hubs.
+  Participation Tracking 2.0 ([#243](https://github.com/LW-Alliance-Helper/lw-alliance-helper-bot/issues/243))
+  adds per-member question types, a Per-Member Log tab, parameterized
+  Trends Viewer, and preset templates. Member Sync renamed with
+  Power Data Source flexibility and a shared Alias Column.
   See `CHANGELOG.md` for per-version detail.
-- 851 tests collected; 18 skipped on the free-tier lane.
+- 1958 tests collected; 18 skipped on the free-tier lane.
 - Pre-launch audit fully shipped (Rounds 1–4 → 1.0.1–1.0.4; schema
   drops → 1.0.5 + 1.0.8). No outstanding cleanup from that audit.
 - Transfer management feature designed, not built (see

@@ -323,6 +323,22 @@ def init_db():
                 poll_day_of_week         INTEGER DEFAULT -1,
                 signup_time              TEXT    DEFAULT '',
                 power_refresh_dm_enabled INTEGER DEFAULT 0,
+                -- Stale-power DM nudge (#255). Generalises #138's
+                -- blank/unparseable nudge to also fire when the
+                -- voter's power value is older than N days. The
+                -- timestamp source is configurable (tab + column +
+                -- match column) so it works with the bot's own
+                -- Squad Power Survey "Date Modified" column, a
+                -- manually-maintained column, or an export from a
+                -- different bot. Empty tab OR `power_refresh_stale_days = 0`
+                -- = stale check off (master toggle stays
+                -- `power_refresh_dm_enabled`). Empty match column =
+                -- reuse `power_match_column` (which itself falls
+                -- back to Member Roster's discord_id_col when empty).
+                power_last_updated_tab           TEXT    DEFAULT '',
+                power_last_updated_column        TEXT    DEFAULT '',
+                power_last_updated_match_column  TEXT    DEFAULT '',
+                power_refresh_stale_days         INTEGER DEFAULT 0,
                 -- Roster DM templates (#226 follow-up). Empty string =
                 -- fall back to defaults.py's DEFAULT_ROSTER_DM_*
                 -- constants. Three slots because each role (Starter,
@@ -444,6 +460,14 @@ def init_db():
         # double-post.
         conn.execute("""
             CREATE TABLE IF NOT EXISTS storm_registration_posts (
+                -- Surrogate PK (#265) so multiple posts can coexist for
+                -- the same (guild, event_type, event_date). Leadership
+                -- re-posts a fresh sign-up when the original gets lost
+                -- in channel chatter; all rows feed into the same vote
+                -- aggregate keyed on (guild, event_type, event_date),
+                -- and persistent-View re-registration attaches to every
+                -- live message_id on startup.
+                id                 INTEGER PRIMARY KEY AUTOINCREMENT,
                 guild_id           INTEGER NOT NULL,
                 event_type         TEXT    NOT NULL,
                 event_date         TEXT    NOT NULL,
@@ -458,9 +482,12 @@ def init_db():
                 -- 0 = legacy / unknown.
                 team_a_slot_index  INTEGER DEFAULT 0,
                 team_b_slot_index  INTEGER DEFAULT 0,
-                posted_at          TEXT    NOT NULL,
-                PRIMARY KEY (guild_id, event_type, event_date)
+                posted_at          TEXT    NOT NULL
             )
+        """)
+        conn.execute("""
+            CREATE INDEX IF NOT EXISTS idx_storm_reg_posts_event
+            ON storm_registration_posts (guild_id, event_type, event_date)
         """)
 
         # walkthrough_dismissals — per-officer-per-guild record of which
@@ -749,6 +776,11 @@ def init_db():
             # No SQL default: NULL signals "leadership hasn't picked yet."
             ("team_a_slot_index",        "INTEGER"),
             ("team_b_slot_index",        "INTEGER"),
+            # Stale-power DM nudge (#255) — see CREATE TABLE comment.
+            ("power_last_updated_tab",          "TEXT    DEFAULT ''"),
+            ("power_last_updated_column",       "TEXT    DEFAULT ''"),
+            ("power_last_updated_match_column", "TEXT    DEFAULT ''"),
+            ("power_refresh_stale_days",        "INTEGER DEFAULT 0"),
         ]:
             try:
                 conn.execute(f"ALTER TABLE guild_storm_config ADD COLUMN {col} {definition}")
@@ -990,6 +1022,55 @@ def init_db():
                 print(f"[CONFIG] Added {col} to storm_registration_posts")
             except Exception:
                 pass
+
+        # ── storm_registration_posts → multi-post-per-event (#265) ────────────
+        # Drop the composite PRIMARY KEY (guild_id, event_type, event_date)
+        # and replace with a surrogate `id` so leadership can post a fresh
+        # sign-up when the original gets lost in channel chatter. Detection:
+        # the new schema has an `id` column. Old DBs don't. SQLite can't
+        # ALTER an existing PRIMARY KEY, so the migration recreates the
+        # table, copies rows over, then renames.
+        try:
+            cols = [r[1] for r in conn.execute(
+                "PRAGMA table_info(storm_registration_posts)"
+            ).fetchall()]
+            if "id" not in cols:
+                conn.execute("""
+                    CREATE TABLE storm_registration_posts_v265 (
+                        id                 INTEGER PRIMARY KEY AUTOINCREMENT,
+                        guild_id           INTEGER NOT NULL,
+                        event_type         TEXT    NOT NULL,
+                        event_date         TEXT    NOT NULL,
+                        channel_id         INTEGER NOT NULL,
+                        message_id         INTEGER NOT NULL,
+                        time_a_label       TEXT    DEFAULT '',
+                        time_b_label       TEXT    DEFAULT '',
+                        team_a_slot_index  INTEGER DEFAULT 0,
+                        team_b_slot_index  INTEGER DEFAULT 0,
+                        posted_at          TEXT    NOT NULL
+                    )
+                """)
+                conn.execute("""
+                    INSERT INTO storm_registration_posts_v265
+                    (guild_id, event_type, event_date, channel_id, message_id,
+                     time_a_label, time_b_label, team_a_slot_index, team_b_slot_index, posted_at)
+                    SELECT guild_id, event_type, event_date, channel_id, message_id,
+                           time_a_label, time_b_label, team_a_slot_index, team_b_slot_index, posted_at
+                    FROM storm_registration_posts
+                """)
+                conn.execute("DROP TABLE storm_registration_posts")
+                conn.execute(
+                    "ALTER TABLE storm_registration_posts_v265 "
+                    "RENAME TO storm_registration_posts"
+                )
+                conn.execute("""
+                    CREATE INDEX IF NOT EXISTS idx_storm_reg_posts_event
+                    ON storm_registration_posts (guild_id, event_type, event_date)
+                """)
+                conn.commit()
+                print("[CONFIG] Migrated storm_registration_posts to surrogate-id schema (#265)")
+        except Exception as e:
+            print(f"[CONFIG] storm_registration_posts #265 migration skipped: {e}")
 
         # ── 1.1.4: backfill numeric+magnitude on default LW survey keys ────────
         # The pre-rework hardcoded survey normalised shorthand like `301` to
@@ -1744,6 +1825,12 @@ def get_storm_config(guild_id: int, event_type: str) -> dict:
         "poll_day_of_week":        -1,
         "signup_time":             "",
         "power_refresh_dm_enabled": 0,
+        # Stale-power DM nudge (#255) — never-configured guilds get
+        # all-off, mirroring the rest of the structured-flow defaults.
+        "power_last_updated_tab":           "",
+        "power_last_updated_column":        "",
+        "power_last_updated_match_column":  "",
+        "power_refresh_stale_days":         0,
         # Per-team time-slot mapping (#251) — NULL until setup-touched.
         "team_a_slot_index":       None,
         "team_b_slot_index":       None,
@@ -1923,6 +2010,15 @@ def get_structured_storm_config(guild_id: int, event_type: str) -> dict:
         "poll_day_of_week":        int(raw_dow),
         "signup_time":             cfg.get("signup_time") or "",
         "power_refresh_dm_enabled": bool(cfg.get("power_refresh_dm_enabled")),
+        # Stale-power DM nudge (#255). Empty tab / empty column /
+        # 0 days each independently disable the stale branch (the
+        # click-handler treats any of those as "skip the staleness
+        # check"). Match column falls back to `power_match_column`
+        # at read time when empty.
+        "power_last_updated_tab":          (cfg.get("power_last_updated_tab") or ""),
+        "power_last_updated_column":       (cfg.get("power_last_updated_column") or "").upper(),
+        "power_last_updated_match_column": (cfg.get("power_last_updated_match_column") or "").upper(),
+        "power_refresh_stale_days":        int(cfg.get("power_refresh_stale_days") or 0),
     }
 
 
@@ -2003,6 +2099,10 @@ def save_structured_storm_config(
     poll_day_of_week: int           = -1,
     signup_time: str                = "",
     power_refresh_dm_enabled: bool  = False,
+    power_last_updated_tab: str           = "",
+    power_last_updated_column: str        = "",
+    power_last_updated_match_column: str  = "",
+    power_refresh_stale_days: int         = 0,
 ) -> bool:
     """UPDATE the structured-flow fields on an existing (guild_id, event_type)
     row. The row must already exist (created by save_storm_config); this does
@@ -2039,6 +2139,22 @@ def save_structured_storm_config(
     pm_match = (power_match_column or "").strip().upper()
     if not (len(pm_match) == 1 and "A" <= pm_match <= "Z"):
         pm_match = ""
+    # Stale-power DM nudge (#255). Same letter-validation as power.
+    lu_tab = (power_last_updated_tab or "").strip()
+    lu_col = (power_last_updated_column or "").strip().upper()
+    if not (len(lu_col) == 1 and "A" <= lu_col <= "Z"):
+        lu_col = ""
+    lu_match = (power_last_updated_match_column or "").strip().upper()
+    if not (len(lu_match) == 1 and "A" <= lu_match <= "Z"):
+        lu_match = ""
+    try:
+        stale_days = int(power_refresh_stale_days)
+    except (TypeError, ValueError):
+        stale_days = 0
+    if stale_days < 0:
+        stale_days = 0
+    if stale_days > 365:
+        stale_days = 365
     with _get_conn() as conn:
         cur = conn.execute(
             "UPDATE guild_storm_config SET "
@@ -2056,7 +2172,11 @@ def save_structured_storm_config(
             "  member_rules_tab = ?, "
             "  poll_day_of_week = ?, "
             "  signup_time = ?, "
-            "  power_refresh_dm_enabled = ? "
+            "  power_refresh_dm_enabled = ?, "
+            "  power_last_updated_tab = ?, "
+            "  power_last_updated_column = ?, "
+            "  power_last_updated_match_column = ?, "
+            "  power_refresh_stale_days = ? "
             "WHERE guild_id = ? AND event_type = ?",
             (
                 1 if structured_flow_enabled else 0,
@@ -2069,6 +2189,7 @@ def save_structured_storm_config(
                 strategies_tab, member_rules_tab,
                 dow, signup_time,
                 1 if power_refresh_dm_enabled else 0,
+                lu_tab, lu_col, lu_match, stale_days,
                 guild_id, event_type,
             ),
         )
@@ -2523,10 +2644,15 @@ def record_storm_registration_post(
     team_a_slot_index: int = 0,
     team_b_slot_index: int = 0,
 ) -> bool:
-    """Record a freshly-posted sign-up message. Idempotent on
-    (guild_id, event_type, event_date) — re-running for the same event
-    is a no-op. Returns True if a new row was inserted, False if the
-    event date already has a post.
+    """Record a freshly-posted sign-up message. Always inserts a new row
+    (#265) — multiple posts per event are supported so leadership can
+    re-post a fresh sign-up when the original gets lost in channel
+    chatter. Votes still aggregate to the same event via the
+    (guild_id, event_type, event_date) key on storm_signups.
+
+    Returns True on successful insert. (Errors raise; the bool return is
+    preserved for callers that previously branched on the idempotent
+    no-op.)
 
     `team_a_slot_index` / `team_b_slot_index` capture the team→slot
     mapping (#251) in effect when this specific post went out — either
@@ -2536,7 +2662,7 @@ def record_storm_registration_post(
     posted_at = _utcnow_iso()
     with _get_conn() as conn:
         cur = conn.execute(
-            "INSERT OR IGNORE INTO storm_registration_posts "
+            "INSERT INTO storm_registration_posts "
             "(guild_id, event_type, event_date, channel_id, message_id, "
             " time_a_label, time_b_label, team_a_slot_index, team_b_slot_index, posted_at) "
             "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
@@ -2589,8 +2715,15 @@ def get_recent_storm_registration_posts(within_days: int = 14) -> list[dict]:
 def get_storm_registration_post(
     guild_id: int, event_type: str, event_date: str,
 ) -> dict | None:
-    """Return the storm_registration_posts row for (guild, event_type,
-    event_date), or None if no post has been recorded.
+    """Return the LATEST storm_registration_posts row for (guild,
+    event_type, event_date), or None if no post has been recorded.
+
+    Post-#265 multiple rows can exist for the same event when leadership
+    re-posts. The latest by `posted_at` wins because slot mapping should
+    be identical across reposts of the same event (resolved from the
+    same guild config / override), so any row's mapping is correct —
+    picking the newest is the safest default for any future caller that
+    might also want the freshest channel_id / message_id.
 
     Used by attendance / mail-rendering paths that need to know the
     team→slot mapping (#251) that was actually in effect when the
@@ -2601,7 +2734,8 @@ def get_storm_registration_post(
     with _get_conn() as conn:
         row = conn.execute(
             "SELECT * FROM storm_registration_posts "
-            "WHERE guild_id = ? AND event_type = ? AND event_date = ?",
+            "WHERE guild_id = ? AND event_type = ? AND event_date = ? "
+            "ORDER BY posted_at DESC LIMIT 1",
             (int(guild_id), event_type, event_date),
         ).fetchone()
     return dict(row) if row else None

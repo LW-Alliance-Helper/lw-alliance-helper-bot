@@ -261,6 +261,128 @@ class TestPowerDataSourceFields:
         assert cfg["power_match_column"] == ""
 
 
+class TestStalePowerConfig:
+    """#255 — four new structured-storm-config fields drive the
+    stale-power DM nudge: tab + column + match column + days threshold.
+    All four default to off (empty / 0). The read path treats any
+    half-configured combination as "stale check off"."""
+
+    def test_default_values_are_off(self, temp_db):
+        import config
+        cfg = config.get_structured_storm_config(TEST_GUILD_ID, "DS")
+        assert cfg["power_last_updated_tab"] == ""
+        assert cfg["power_last_updated_column"] == ""
+        assert cfg["power_last_updated_match_column"] == ""
+        assert cfg["power_refresh_stale_days"] == 0
+
+    def test_round_trip_preserves_all_four_fields(self, temp_db):
+        import config
+        config.save_storm_config(
+            TEST_GUILD_ID, "DS",
+            tab_name="DS Tab", mail_template="",
+            timezone="America/New_York", log_channel_id=0,
+        )
+        config.save_structured_storm_config(
+            TEST_GUILD_ID, "DS",
+            structured_flow_enabled=True,
+            power_refresh_dm_enabled=True,
+            power_last_updated_tab="Audit Log",
+            power_last_updated_column="N",
+            power_last_updated_match_column="A",
+            power_refresh_stale_days=14,
+        )
+        cfg = config.get_structured_storm_config(TEST_GUILD_ID, "DS")
+        assert cfg["power_last_updated_tab"] == "Audit Log"
+        assert cfg["power_last_updated_column"] == "N"
+        assert cfg["power_last_updated_match_column"] == "A"
+        assert cfg["power_refresh_stale_days"] == 14
+
+    def test_invalid_letter_normalises_to_empty(self, temp_db):
+        """Bad input on the column letters coerces to empty so the
+        read path falls back to the safe default ('skip stale check')
+        rather than saving garbage."""
+        import config
+        config.save_storm_config(
+            TEST_GUILD_ID, "DS",
+            tab_name="DS Tab", mail_template="",
+            timezone="America/New_York", log_channel_id=0,
+        )
+        config.save_structured_storm_config(
+            TEST_GUILD_ID, "DS",
+            structured_flow_enabled=True,
+            power_last_updated_column="AB",   # too long
+            power_last_updated_match_column="7",  # not a letter
+            power_refresh_stale_days=7,
+        )
+        cfg = config.get_structured_storm_config(TEST_GUILD_ID, "DS")
+        assert cfg["power_last_updated_column"] == ""
+        assert cfg["power_last_updated_match_column"] == ""
+
+    def test_negative_days_clamped_to_zero(self, temp_db):
+        """A negative days threshold makes no sense; persist as 0 (off)."""
+        import config
+        config.save_storm_config(
+            TEST_GUILD_ID, "DS",
+            tab_name="DS Tab", mail_template="",
+            timezone="America/New_York", log_channel_id=0,
+        )
+        config.save_structured_storm_config(
+            TEST_GUILD_ID, "DS",
+            structured_flow_enabled=True,
+            power_refresh_stale_days=-5,
+        )
+        cfg = config.get_structured_storm_config(TEST_GUILD_ID, "DS")
+        assert cfg["power_refresh_stale_days"] == 0
+
+    def test_excessive_days_clamped_to_365(self, temp_db):
+        """Hard cap at 365 days so a typo doesn't push the threshold
+        into territory where the nudge effectively never fires."""
+        import config
+        config.save_storm_config(
+            TEST_GUILD_ID, "DS",
+            tab_name="DS Tab", mail_template="",
+            timezone="America/New_York", log_channel_id=0,
+        )
+        config.save_structured_storm_config(
+            TEST_GUILD_ID, "DS",
+            structured_flow_enabled=True,
+            power_refresh_stale_days=9999,
+        )
+        cfg = config.get_structured_storm_config(TEST_GUILD_ID, "DS")
+        assert cfg["power_refresh_stale_days"] == 365
+
+    def test_ds_and_cs_stale_config_isolated(self, temp_db):
+        """Per-event-type rows persist independently — DS staleness
+        config shouldn't bleed into CS."""
+        import config
+        for event_type in ("DS", "CS"):
+            config.save_storm_config(
+                TEST_GUILD_ID, event_type,
+                tab_name=f"{event_type} Tab", mail_template="",
+                timezone="America/New_York", log_channel_id=0,
+            )
+        config.save_structured_storm_config(
+            TEST_GUILD_ID, "DS",
+            structured_flow_enabled=True,
+            power_last_updated_tab="DS Audit",
+            power_last_updated_column="N",
+            power_refresh_stale_days=7,
+        )
+        config.save_structured_storm_config(
+            TEST_GUILD_ID, "CS",
+            structured_flow_enabled=True,
+            power_last_updated_tab="CS Audit",
+            power_last_updated_column="M",
+            power_refresh_stale_days=14,
+        )
+        ds = config.get_structured_storm_config(TEST_GUILD_ID, "DS")
+        cs = config.get_structured_storm_config(TEST_GUILD_ID, "CS")
+        assert ds["power_last_updated_tab"] == "DS Audit"
+        assert ds["power_refresh_stale_days"] == 7
+        assert cs["power_last_updated_tab"] == "CS Audit"
+        assert cs["power_refresh_stale_days"] == 14
+
+
 class TestRosterDmTemplates:
     """#226 follow-up — three per-(guild, event_type) DM templates for
     the Approve & Post DM-the-roster flow. Empty saved value falls
@@ -633,7 +755,13 @@ class TestStormSignups:
         assert len(ds) == 1 and ds[0]["vote"] == "a"
         assert len(cs) == 1 and cs[0]["vote"] == "b"
 
-    def test_record_registration_post_idempotent(self, temp_db):
+    def test_record_registration_post_allows_multiple_per_event(self, temp_db):
+        """#265: multiple posts per event are supported so leadership can
+        re-post when the original gets lost in channel chatter. Both
+        inserts succeed; `has_registration_post` still reports True after
+        either (used by the auto-scheduler's idempotency guard); the
+        recent-posts list surfaces both rows so persistent-View
+        re-registration can attach to every live message_id on startup."""
         import config
         first = config.record_storm_registration_post(
             TEST_GUILD_ID, "DS", "2026-05-18",
@@ -645,8 +773,13 @@ class TestStormSignups:
             channel_id=200, message_id=9999,
         )
         assert first is True
-        assert second is False
+        assert second is True
         assert config.has_registration_post(TEST_GUILD_ID, "DS", "2026-05-18") is True
+        # Both message_ids land in the recent-posts list so persistent-
+        # View re-registration attaches handlers to every live message.
+        recents = config.get_recent_storm_registration_posts(within_days=365)
+        msg_ids = {r["message_id"] for r in recents}
+        assert msg_ids == {4001, 9999}
 
     def test_recent_posts_window(self, temp_db):
         import config
@@ -1365,3 +1498,30 @@ class TestStormRegistrationPostIndices:
         )
         assert post["team_a_slot_index"] == 0
         assert post["team_b_slot_index"] == 0
+
+    def test_get_returns_latest_when_multiple_posts(self, seeded_db):
+        """#265: with multiple posts per event, `get_storm_registration_post`
+        returns the LATEST by posted_at. Slot mapping is expected to be
+        identical across reposts (same guild config / override), but
+        the freshest channel_id / message_id is the safest pick for any
+        future caller."""
+        import config
+        import time
+        config.record_storm_registration_post(
+            TEST_GUILD_ID, "DS", "2026-05-29",
+            channel_id=111, message_id=4001,
+            team_a_slot_index=1, team_b_slot_index=2,
+        )
+        # Tiny sleep so the ISO-second-precision `posted_at` differs.
+        time.sleep(1.1)
+        config.record_storm_registration_post(
+            TEST_GUILD_ID, "DS", "2026-05-29",
+            channel_id=222, message_id=9999,
+            team_a_slot_index=1, team_b_slot_index=2,
+        )
+        post = config.get_storm_registration_post(
+            TEST_GUILD_ID, "DS", "2026-05-29",
+        )
+        assert post is not None
+        assert post["message_id"] == 9999
+        assert post["channel_id"] == 222

@@ -138,14 +138,24 @@ async def post_registration(
     structured: dict | None = None,
     override_a_idx: int | None = None,
     override_b_idx: int | None = None,
+    force: bool = False,
 ) -> dict:
     """Build and post a structured-flow sign-up message for one event.
 
-    Idempotent on `(guild_id, event_type, event_date)` — if a post
-    already exists, returns status `already_posted` without sending
-    again. Used by both the leadership-triggered `📣 Post sign-up poll`
-    hub button (which shapes the response into user-facing copy) and
-    the auto-scheduler loop (#131) (which logs status).
+    Used by both the leadership-triggered `📣 Post sign-up poll` hub
+    button (which shapes the response into user-facing copy) and the
+    auto-scheduler loop (#131) (which logs status).
+
+    `force` (#265) controls the once-per-event guard:
+      * `force=False` (default, auto-scheduler) — returns
+        `already_posted` without sending if a registration post already
+        exists for this event. Prevents the daily scheduler tick from
+        re-posting after a successful tick earlier in the day.
+      * `force=True` (manual leadership clicks) — skips the guard and
+        always posts. Votes still aggregate to the same event in
+        SQLite, so multiple live posts collect into one tally.
+        Persistent-View re-registration attaches to every recorded
+        message_id on startup, so old posts stay clickable.
 
     `override_a_idx` / `override_b_idx`, when set (1 or 2), pin the
     team→slot mapping for this single event, recorded on the
@@ -160,7 +170,8 @@ async def post_registration(
       * `ok`               — message sent + recorded; `message_id` and
                              `channel_id` populated.
       * `already_posted`   — registration post for this event already
-                             exists; `channel_id` populated.
+                             exists; `channel_id` populated. Only
+                             returned when `force=False`.
       * `no_channel`       — `signup_channel_id` isn't configured.
       * `channel_gone`     — channel_id set but the channel was deleted
                              or the bot can't see it.
@@ -184,7 +195,7 @@ async def post_registration(
     if channel is None:
         return {"status": "channel_gone", "channel_id": channel_id}
 
-    if config.has_registration_post(guild.id, event_type, event_date):
+    if not force and config.has_registration_post(guild.id, event_type, event_date):
         return {"status": "already_posted", "channel_id": channel_id}
 
     # Read the per-alliance team gate (#148 + Rule A / #166). Applies
@@ -377,6 +388,10 @@ async def handle_post_signup(
         structured=structured,
         override_a_idx=final_a_idx,
         override_b_idx=final_b_idx,
+        # Leadership-triggered repost (#265): bypass the once-per-event
+        # guard so a fresh post can land even if an earlier one is
+        # still on the channel. Votes aggregate into the same event.
+        force=True,
     )
     await interaction.followup.send(
         _format_post_result_message(et, date_clean, result),

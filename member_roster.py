@@ -231,6 +231,14 @@ def _merge_with_existing(
         out of `new_rows` — also lose their custom-column data. That's
         the correct behaviour: leaving the alliance means their row
         is gone.
+      * Non-Discord alliance members (alliance plays the game but
+        doesn't use Discord) live in hand-typed rows the bot would
+        otherwise drop because they aren't in `new_rows`. Rows
+        explicitly flagged via the bot-maintained "Is this user in
+        Discord?" column (= "No") or the legacy `not_on_discord`
+        column (truthy) are carried forward verbatim after the main
+        merge so the storm officer view can still surface them in the
+        "Not voted yet" bucket and accept on-behalf votes.
       * New members joining get blank cells in custom columns; the
         alliance can fill them in.
 
@@ -294,6 +302,34 @@ def _merge_with_existing(
                 if m.id not in bucket:
                     bucket.append(m.id)
 
+    # Locate the non-Discord flag columns on the existing header so we
+    # can both (a) skip name-fallback for rows the alliance explicitly
+    # marked as non-Discord — a hand-typed name colliding with a real
+    # Discord user must NOT silently bind that user's ID into the
+    # alliance row — and (b) carry those rows forward after the merge
+    # loop instead of dropping them. Both lookups are case-insensitive.
+    def _find_existing_col(header_label: str) -> int:
+        target = header_label.strip().lower()
+        for idx, cell in enumerate(existing_header):
+            if str(cell or "").strip().lower() == target:
+                return idx
+        return -1
+
+    presence_idx = _find_existing_col(DISCORD_FLAG_COLUMN_HEADER)
+    legacy_idx = _find_existing_col("not_on_discord")
+    if legacy_idx < 0:
+        legacy_idx = _find_existing_col("not on discord")
+    _NON_DISCORD_TRUTHY = {"1", "true", "yes", "y", "x", "t"}
+
+    def _row_is_non_discord(row: list[str]) -> bool:
+        if presence_idx >= 0 and presence_idx < len(row):
+            if (row[presence_idx] or "").strip().lower() == "no":
+                return True
+        if legacy_idx >= 0 and legacy_idx < len(row):
+            if (row[legacy_idx] or "").strip().lower() in _NON_DISCORD_TRUTHY:
+                return True
+        return False
+
     # Walk existing rows: ID-match path first, then name-fallback for
     # rows with blank Discord ID. Populate the row's ID column when
     # a name-fallback match succeeds so the downstream ID-keyed merge
@@ -302,6 +338,10 @@ def _merge_with_existing(
     existing_by_id: dict[str, list[str]] = {}
     for raw_row in (existing[1:] if existing else []):
         row = list(raw_row)
+        if _row_is_non_discord(row):
+            # Explicit non-Discord flag — skip the ID-match and
+            # name-fallback paths. Carried forward after the merge loop.
+            continue
         did = (row[id_col] if id_col < len(row) else "").strip()
         if did:
             report["matched_by_id"].append(did)
@@ -357,6 +397,19 @@ def _merge_with_existing(
                 if i < len(old):
                     merged[i] = old[i]
         merged_rows.append(merged)
+
+    # Carry forward explicitly-flagged non-Discord rows. The merge loop
+    # above only iterates rows pulled from Discord, so without this pass
+    # any hand-typed alliance member who doesn't use Discord disappears
+    # on every sync — breaking the storm officer view's non-Discord
+    # on-behalf voting path.
+    for raw_row in (existing[1:] if existing else []):
+        if not _row_is_non_discord(raw_row):
+            continue
+        preserved = list(raw_row)
+        if len(preserved) < width:
+            preserved.extend([""] * (width - len(preserved)))
+        merged_rows.append(preserved)
 
     return merged_rows, report
 
@@ -1271,6 +1324,17 @@ async def run_member_roster_setup(interaction: discord.Interaction, bot):
     )
     embed.add_field(name="Auto-Sync",    value="Enabled" if auto_sync else "Disabled", inline=True)
     embed.add_field(name="Initial sync", value=f"**{count}** members written", inline=False)
+    embed.add_field(
+        name="👤 Alliance members not on Discord",
+        value=(
+            "Add them by typing a row directly into the sheet with the "
+            "**Is this user in Discord?** column set to **No**. Sync will "
+            "preserve those rows, and storm sign-up views will surface "
+            "them under 'Not voted yet' so leadership can cast "
+            "on-behalf votes for them."
+        ),
+        inline=False,
+    )
     embed.set_footer(text="Run /members sync to re-sync manually any time.")
     await channel.send(embed=embed)
     wizard_registry.unregister(user.id, cancel_event)

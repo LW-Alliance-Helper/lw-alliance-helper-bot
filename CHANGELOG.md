@@ -9,6 +9,20 @@ Each entry is a slim summary — heavier context (root cause, what we
 tried, design rationale) lives in the corresponding commit message
 and PR description.
 
+## [1.4.2] — 2026-05-24
+
+### Added
+- Vote click shows a poll-style ephemeral with per-option totals and ✓ on your vote; new leadership 👁️ View sign-ups button opens the full breakdown ([#258](https://github.com/LW-Alliance-Helper/lw-alliance-helper-bot/issues/258)).
+- Premium: stale-power DM nudges members whose roster power hasn't been refreshed in N days, configurable in setup ([#255](https://github.com/LW-Alliance-Helper/lw-alliance-helper-bot/issues/255)).
+- Leadership can re-post a sign-up message for an event that already has one; votes from every post aggregate ([#265](https://github.com/LW-Alliance-Helper/lw-alliance-helper-bot/issues/265)).
+
+### Changed
+- Power Data Source picker renamed Name-match column → Member-match column for clarity ([#260](https://github.com/LW-Alliance-Helper/lw-alliance-helper-bot/issues/260)).
+
+### Fixed
+- Member sync preserves hand-typed non-Discord roster rows instead of deleting them on subsequent syncs ([#262](https://github.com/LW-Alliance-Helper/lw-alliance-helper-bot/issues/262)).
+- Power-refresh DM leads with ✅ Your vote was recorded so members don't mistake it for a failed vote ([#259](https://github.com/LW-Alliance-Helper/lw-alliance-helper-bot/issues/259)).
+
 ## [1.4.1] — 2026-05-24
 
 ### Fixed

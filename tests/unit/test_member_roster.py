@@ -258,9 +258,10 @@ class TestPreserveUnknownColumns:
              "1st Squad Power", "not_on_discord"],
             ["100", "Alice", "Alice", "", "", "300M",  ""],
             ["200", "Bob",   "Bob",   "", "", "180M",  ""],
-            # Charlie was on the roster manually with not_on_discord=yes
-            # but isn't in guild.members today — her custom data goes with
-            # her (expected: leaving the alliance drops the row).
+            # Charlie is a non-Discord alliance member typed in by hand
+            # (legacy `not_on_discord=yes`). She MUST survive the sync so
+            # the storm officer view can keep surfacing her under "Not
+            # voted yet" for on-behalf voting (#262).
             ["",    "Charlie", "Charlie", "", "", "120M", "yes"],
         ]
         ws = MagicMock()
@@ -276,12 +277,15 @@ class TestPreserveUnknownColumns:
         header = rows[0]
         assert "1st Squad Power" in header
         assert "not_on_discord" in header
-        # Alice and Bob keep their power values.
+        # Alice, Bob, AND Charlie all keep their power values — Charlie
+        # is carried forward by the non-Discord-row preservation path.
         member_rows = {r[1]: r for r in rows[1:]}
         assert "Alice" in member_rows
         assert "300M"  in member_rows["Alice"]
         assert "Bob"   in member_rows
         assert "180M"  in member_rows["Bob"]
+        assert "Charlie" in member_rows
+        assert "120M"    in member_rows["Charlie"]
 
     def test_new_member_gets_blank_custom_columns(self, seeded_db):
         from member_roster import write_roster
@@ -346,6 +350,92 @@ class TestPreserveUnknownColumns:
         # Falls through to writing just the bot-managed columns; the
         # write isn't blocked by a read failure.
         assert count == 1
+
+
+class TestNonDiscordRowPreservation:
+    """#262 — hand-typed roster rows for alliance members who don't use
+    Discord get carried forward across `/members sync`. Without this,
+    the storm officer view's "Not voted yet" non-Discord bucket can't
+    do its job: every sync wipes the rows it's supposed to render."""
+
+    def test_row_flagged_via_presence_column_preserved(self, seeded_db):
+        from member_roster import write_roster
+        guild = MagicMock()
+        guild.id = TEST_GUILD_ID
+        guild.members = [_make_member(100, "Alice")]
+        # Hand-typed Eve has the bot-maintained presence column set to
+        # "No" — this is the modern non-Discord flag path.
+        existing = [
+            ["Discord ID", "Name", "Display Name", "Joined", "Roles",
+             "Is this user in Discord?"],
+            ["100", "Alice", "Alice", "", "", "Yes"],
+            ["",    "Eve",   "Eve",   "", "", "No"],
+        ]
+        ws = MagicMock()
+        ws.get_all_values.return_value = existing
+        ws.update = MagicMock()
+        ws.clear  = MagicMock()
+        with patch("member_roster.get_member_roster_sheet", return_value=ws), \
+             patch("member_roster.get_spreadsheet", return_value=None):
+            write_roster(guild, _default_cfg())
+        rows = ws.update.call_args.args[1]
+        names = [r[1] for r in rows[1:]]
+        assert "Alice" in names
+        assert "Eve" in names
+
+    def test_row_with_no_flag_and_no_name_match_still_dropped(self, seeded_db):
+        from member_roster import write_roster
+        guild = MagicMock()
+        guild.id = TEST_GUILD_ID
+        guild.members = [_make_member(100, "Alice")]
+        # Mystery row with a blank Discord ID, no presence flag, no
+        # legacy flag, and no live name match — preserves the pre-#262
+        # behaviour of dropping unidentifiable rows so a typo doesn't
+        # live forever in the sheet.
+        existing = [
+            ["Discord ID", "Name", "Display Name", "Joined", "Roles"],
+            ["100", "Alice",   "Alice",   "", ""],
+            ["",    "Mystery", "Mystery", "", ""],
+        ]
+        ws = MagicMock()
+        ws.get_all_values.return_value = existing
+        ws.update = MagicMock()
+        ws.clear  = MagicMock()
+        with patch("member_roster.get_member_roster_sheet", return_value=ws), \
+             patch("member_roster.get_spreadsheet", return_value=None):
+            write_roster(guild, _default_cfg())
+        rows = ws.update.call_args.args[1]
+        names = [r[1] for r in rows[1:]]
+        assert "Mystery" not in names
+
+    def test_non_discord_row_skips_name_fallback(self, seeded_db):
+        from member_roster import write_roster
+        guild = MagicMock()
+        guild.id = TEST_GUILD_ID
+        # Alice is a live Discord member. An alliance happens to have a
+        # non-Discord roster row with the in-game name "Alice" too
+        # (different person). The name-fallback path must NOT bind
+        # Alice's Discord ID into the non-Discord row.
+        guild.members = [_make_member(100, "Alice")]
+        existing = [
+            ["Discord ID", "Name", "Display Name", "Joined", "Roles",
+             "Is this user in Discord?"],
+            ["",    "Alice",   "Alice",   "", "", "No"],
+        ]
+        ws = MagicMock()
+        ws.get_all_values.return_value = existing
+        ws.update = MagicMock()
+        ws.clear  = MagicMock()
+        with patch("member_roster.get_member_roster_sheet", return_value=ws), \
+             patch("member_roster.get_spreadsheet", return_value=None):
+            write_roster(guild, _default_cfg())
+        rows = ws.update.call_args.args[1]
+        # Two rows should land: the live-Discord Alice (id 100), and
+        # the non-Discord Alice (id blank). They are NOT merged.
+        alice_rows = [r for r in rows[1:] if r[1] == "Alice"]
+        assert len(alice_rows) == 2
+        ids = sorted((r[0] or "").strip() for r in alice_rows)
+        assert ids == ["", "100"]
 
 
 class TestDiscordPresenceColumn:

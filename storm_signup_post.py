@@ -23,6 +23,8 @@ from typing import Optional
 
 import discord
 
+from messages import DATE_PARSE_REJECT
+
 logger = logging.getLogger(__name__)
 
 
@@ -318,8 +320,10 @@ async def handle_post_signup(
         parsed = parse_event_date(raw_input, today=today_local)
         if parsed is None:
             await interaction.response.send_message(
-                f"⚠️ `{event_date}` isn't a date I can parse. Try `May 18`, "
-                f"`5/18`, `2026-05-18`, `Sunday`, or `tomorrow`.",
+                DATE_PARSE_REJECT.format(
+                    raw=event_date,
+                    examples="`May 18`, `5/18`, `2026-05-18`, `Sunday`, or `tomorrow`",
+                ),
                 ephemeral=True,
             )
             return

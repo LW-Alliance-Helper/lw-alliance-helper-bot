@@ -47,7 +47,12 @@ from config import (
     STORM_PLAN_MAX_SUBS,
     STORM_PLAN_MAX_TOTAL,
 )
-from messages import CANCEL_BACKPEDAL, CANCEL_BACKPEDAL_DEFAULT, DENY_NOT_OWNER
+from messages import (
+    CANCEL_BACKPEDAL,
+    CANCEL_BACKPEDAL_DEFAULT,
+    DATE_PARSE_REJECT,
+    DENY_NOT_OWNER,
+)
 from storm_event_hub import HUB_COMMAND, HUB_BTN_VIEW_SIGNUPS, HUB_BTN_PRESETS
 
 logger = logging.getLogger(__name__)
@@ -2748,8 +2753,10 @@ async def handle_storm_signups(
         parsed = parse_event_date(raw_input)
         if parsed is None:
             await interaction.response.send_message(
-                f"⚠️ `{event_date}` isn't a date I can parse. Try `May 18`, "
-                f"`5/18`, `2026-05-18`, `Sunday`, or `tomorrow`.",
+                DATE_PARSE_REJECT.format(
+                    raw=event_date,
+                    examples="`May 18`, `5/18`, `2026-05-18`, `Sunday`, or `tomorrow`",
+                ),
                 ephemeral=True,
             )
             return

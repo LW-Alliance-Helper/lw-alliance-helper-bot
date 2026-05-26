@@ -148,8 +148,13 @@ INPUT_INVALID = "⚠️ Please enter a {type} like `{example}`. Run {recovery} t
 # number"). Caller passes {type} and {recovery}.
 INPUT_INVALID_NO_EXAMPLE = "⚠️ Please enter a {type}. Run {recovery} to try again."
 
-# Date didn't parse. Caller passes the user's raw input as {raw}.
-DATE_PARSE_REJECT = "⚠️ `{raw}` isn't a date I can parse. Try `May 18`, `5/18`, or `18-May`."
+# Date didn't parse. Caller passes the user's raw input as {raw} and
+# a flow-tailored example list as {examples} (e.g. "`May 18`, `5/18`,
+# `2026-05-18`, `yesterday`, or `today`" for attendance; "..., `Sunday`,
+# or `tomorrow`" for sign-up; etc.). Examples are caller-defined
+# because past-leaning flows (attendance, history) want past hints and
+# future-leaning flows (sign-up, officer view) want future hints.
+DATE_PARSE_REJECT = "⚠️ `{raw}` isn't a date I can parse. Try {examples}."
 
 
 # ── Footers ──────────────────────────────────────────────────────────────────

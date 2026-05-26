@@ -22,7 +22,7 @@ from typing import Optional
 
 import discord
 
-from messages import DENY_NOT_OWNER
+from messages import DATE_PARSE_REJECT, DENY_NOT_OWNER
 
 logger = logging.getLogger(__name__)
 
@@ -685,8 +685,10 @@ async def open_history(
         parsed = parse_event_date(event_date.strip())
         if parsed is None:
             await interaction.followup.send(
-                f"⚠️ `{event_date}` isn't a date I can parse. Try `May 18`, "
-                f"`5/18`, `2026-05-18`, or `yesterday`.",
+                DATE_PARSE_REJECT.format(
+                    raw=event_date,
+                    examples="`May 18`, `5/18`, `2026-05-18`, or `yesterday`",
+                ),
                 ephemeral=True,
             )
             return

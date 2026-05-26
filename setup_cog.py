@@ -24,7 +24,10 @@ import wizard_registry
 from messages import (
     CANCEL_PLAIN,
     GENERIC_CMD_TIMEOUT,
+    INPUT_INVALID,
     PREV_CHANNEL_GONE,
+    TIME_PARSE_GIVE_UP,
+    TIME_PARSE_RETRY,
     WIZARD_TIMEOUT,
 )
 from setup_hub import (
@@ -2322,7 +2325,10 @@ async def run_growth_setup(interaction: discord.Interaction, bot):
     try:
         data_start_row = int(str(start_raw).strip())
     except ValueError:
-        await channel.send(f"⚠️ Please enter a row number like `2`. Run `/setup` → {HUB_BTN_GROWTH} to try again.")
+        await channel.send(INPUT_INVALID.format(
+            type="row number", example="2",
+            recovery=f"`/setup` → {HUB_BTN_GROWTH}",
+        ))
         return
 
     # ── Step 4: Name column ───────────────────────────────────────────────────
@@ -2341,7 +2347,10 @@ async def run_growth_setup(interaction: discord.Interaction, bot):
         return
     name_col = name_raw.strip().upper()
     if len(name_col) != 1 or not name_col.isalpha():
-        await channel.send(f"⚠️ Please enter a single column letter like `A`. Run `/setup` → {HUB_BTN_GROWTH} to try again.")
+        await channel.send(INPUT_INVALID.format(
+            type="single column letter", example="A",
+            recovery=f"`/setup` → {HUB_BTN_GROWTH}",
+        ))
         return
 
     # ── Step 5: Metrics ───────────────────────────────────────────────────────
@@ -3579,15 +3588,11 @@ async def run_train_setup(interaction: discord.Interaction, bot):
                 break
             attempts_left -= 1
             if attempts_left <= 0:
-                await channel.send(
-                    "⚠️ Could not read that time after a few tries. "
-                    f"Run `/setup` → {HUB_BTN_TRAIN} to start over."
-                )
+                await channel.send(TIME_PARSE_GIVE_UP.format(
+                    recovery=f"`/setup` → {HUB_BTN_TRAIN}",
+                ))
                 return
-            await channel.send(
-                f"⚠️ Could not read **`{time_raw}`** as a time. "
-                f"Try `10:00pm`, `9:00am`, or `22:00`. Let's try once more."
-            )
+            await channel.send(TIME_PARSE_RETRY.format(raw=time_raw))
 
     # ── Step 8: Train DM body (💎 Premium) ────────────────────────────────────
     # Customisable body of the DM that fires alongside the channel
@@ -8476,15 +8481,11 @@ async def run_event_setup(interaction: discord.Interaction, bot):
             break
         attempts_left -= 1
         if attempts_left <= 0:
-            await channel.send(
-                "⚠️ Could not read that time after a few tries. "
-                f"Run `/setup` → {HUB_BTN_EVENTS} to start over."
-            )
+            await channel.send(TIME_PARSE_GIVE_UP.format(
+                recovery=f"`/setup` → {HUB_BTN_EVENTS}",
+            ))
             return
-        await channel.send(
-            f"⚠️ Could not read **`{draft_time_raw}`** as a time. "
-            f"Try `12:00pm`, `9:00am`, or `15:30`. Let's try once more."
-        )
+        await channel.send(TIME_PARSE_RETRY.format(raw=draft_time_raw))
 
     warn_view = YesNoView()
     await channel.send(
@@ -8664,7 +8665,10 @@ async def run_birthday_setup(interaction: discord.Interaction, bot):
         return
     name_col = _col_letter_to_index(name_col_raw)
     if name_col < 0:
-        await channel.send(f"⚠️ Please enter a single column letter like `A`. Run `/setup` → {HUB_BTN_BIRTHDAYS} to try again.")
+        await channel.send(INPUT_INVALID.format(
+            type="single column letter", example="A",
+            recovery=f"`/setup` → {HUB_BTN_BIRTHDAYS}",
+        ))
         return
 
     # ── Step 4: Birthday column ────────────────────────────────────────────────
@@ -8692,7 +8696,10 @@ async def run_birthday_setup(interaction: discord.Interaction, bot):
         return
     birthday_col = _col_letter_to_index(bday_col_raw)
     if birthday_col < 0:
-        await channel.send(f"⚠️ Please enter a single column letter like `B`. Run `/setup` → {HUB_BTN_BIRTHDAYS} to try again.")
+        await channel.send(INPUT_INVALID.format(
+            type="single column letter", example="B",
+            recovery=f"`/setup` → {HUB_BTN_BIRTHDAYS}",
+        ))
         return
 
     # ── Step 5: Train integration ─────────────────────────────────────────────
@@ -8783,7 +8790,10 @@ async def run_birthday_setup(interaction: discord.Interaction, bot):
             if lookahead_days < 1:
                 raise ValueError
         except ValueError:
-            await channel.send(f"⚠️ Please enter a number like `14`. Run `/setup` → {HUB_BTN_BIRTHDAYS} to try again.")
+            await channel.send(INPUT_INVALID.format(
+                type="number", example="14",
+                recovery=f"`/setup` → {HUB_BTN_BIRTHDAYS}",
+            ))
             return
 
     # ── Step 8: Birthday reminders ─────────────────────────────────────────────
@@ -8872,15 +8882,11 @@ async def run_birthday_setup(interaction: discord.Interaction, bot):
                 break
             attempts_left -= 1
             if attempts_left <= 0:
-                await channel.send(
-                    "⚠️ Could not read that time after a few tries. "
-                    f"Run `/setup` → {HUB_BTN_BIRTHDAYS} to start over."
-                )
+                await channel.send(TIME_PARSE_GIVE_UP.format(
+                    recovery=f"`/setup` → {HUB_BTN_BIRTHDAYS}",
+                ))
                 return
-            await channel.send(
-                f"⚠️ Could not read **`{time_raw}`** as a time. "
-                f"Try `8:00am`, `12:00pm`, or `08:00`. Let's try once more."
-            )
+            await channel.send(TIME_PARSE_RETRY.format(raw=time_raw))
 
     # ── Step 9: Birthday DM body (💎 Premium) ─────────────────────────────────
     # Customisable body of the per-member birthday DM that fires alongside
@@ -9235,16 +9241,12 @@ async def run_shiny_tasks_setup(interaction: discord.Interaction, bot):
             break
         attempts_left -= 1
         if attempts_left <= 0:
-            await channel.send(
-                "⚠️ Could not read that time after a few tries. "
-                "Run `/setup` → 🌟 Shiny Tasks to start over."
-            )
+            await channel.send(TIME_PARSE_GIVE_UP.format(
+                recovery=f"`/setup` → {HUB_BTN_SHINY}",
+            ))
             wizard_registry.unregister(user.id, cancel_event)
             return
-        await channel.send(
-            f"⚠️ Could not read **`{time_raw}`** as a time. "
-            f"Try `9:00am`, `10:30am`, or `09:00`. Let's try once more."
-        )
+        await channel.send(TIME_PARSE_RETRY.format(raw=time_raw))
 
     # ── Step 5: Message template ──────────────────────────────────────────────
     saved_template = (current.get("message_template") or "").strip()

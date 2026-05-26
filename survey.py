@@ -29,7 +29,7 @@ import discord
 from discord import app_commands
 from discord.ext import commands, tasks
 from config import get_config
-from messages import GENERIC_CMD_TIMEOUT, NOT_SET_UP
+from messages import GENERIC_CMD_TIMEOUT, NOT_SET_UP, TIME_PARSE_GIVE_UP, TIME_PARSE_RETRY
 import wizard_registry
 
 # ── Config ─────────────────────────────────────────────────────────────────────
@@ -1685,14 +1685,12 @@ async def _ask_time(interaction: discord.Interaction, *, default: str,
         attempts_left -= 1
         if attempts_left <= 0:
             await interaction.followup.send(
-                "⚠️ Could not read that time after a few tries. "
-                "Run `/survey remind` to start over.",
+                TIME_PARSE_GIVE_UP.format(recovery="`/survey remind`"),
                 ephemeral=True,
             )
             return ("", False)
         await interaction.followup.send(
-            f"⚠️ Could not read **`{raw}`** as a time. "
-            f"Try `9:00am`, `22:30`, or `12:00pm`. Let's try once more.",
+            TIME_PARSE_RETRY.format(raw=raw),
             ephemeral=True,
         )
 

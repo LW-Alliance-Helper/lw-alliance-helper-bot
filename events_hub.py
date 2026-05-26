@@ -38,9 +38,12 @@ from messages import (
     CANCEL_PLAIN,
     DENY_NOT_OWNER,
     GENERIC_CMD_TIMEOUT,
+    INPUT_INVALID_NO_EXAMPLE,
     LEADERSHIP_INACCESSIBLE,
     LEADERSHIP_NO_READ_PERM,
     LEADERSHIP_NOT_CONFIGURED,
+    TIME_PARSE_GIVE_UP,
+    TIME_PARSE_RETRY,
 )
 
 logger = logging.getLogger(__name__)
@@ -764,16 +767,12 @@ async def _run_create_event_wizard(
             break
         attempts_left -= 1
         if attempts_left <= 0:
-            await channel.send(
-                f"⚠️ Could not read that time after a few tries. "
-                f"Run `{EVENTS_HUB_CMD}` → **{EVENTS_HUB_BTN_CREATE}** to start over."
-            )
+            await channel.send(TIME_PARSE_GIVE_UP.format(
+                recovery=f"`{EVENTS_HUB_CMD}` → **{EVENTS_HUB_BTN_CREATE}**",
+            ))
             wizard_registry.unregister(user.id, cancel_event)
             return
-        await channel.send(
-            f"⚠️ Could not read **`{time_raw}`** as a time. "
-            f"Try `10:15pm`, `9:00am`, or `21:00`. Let's try once more."
-        )
+        await channel.send(TIME_PARSE_RETRY.format(raw=time_raw))
 
     # ── Schedule: repeating vs manual ────────────────────────────────────────
     class _ScheduleView(discord.ui.View):
@@ -844,7 +843,7 @@ async def _run_create_event_wizard(
                 interval_days = int(interval_raw.strip())
             except ValueError:
                 await channel.send(
-                    f"⚠️ Please enter a whole number. Run `{EVENTS_HUB_CMD}` to try again."
+                    INPUT_INVALID_NO_EXAMPLE.format(type="whole number", recovery=f"`{EVENTS_HUB_CMD}`")
                 )
                 wizard_registry.unregister(user.id, cancel_event)
                 return

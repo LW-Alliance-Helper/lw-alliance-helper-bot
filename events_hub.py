@@ -73,42 +73,42 @@ AE_EVENT_PRESETS: list[dict] = [
     {
         "key":           "ae_plague_marauder",
         "name":          "Alliance Exercise: Plague Marauder",
-        "stage_note":    "S5 Off-season and later",
+        "stage_note":    "S5 Off-season and later · every 3 days",
         "blurb":         _DEFAULT_BLURB,
-        "interval_days": 7,
+        "interval_days": 3,
     },
     {
         "key":           "ae_marshalls_guard",
         "name":          "Alliance Exercise: Marshall's Guard",
-        "stage_note":    "Early seasons (pre-S3)",
+        "stage_note":    "Early seasons (pre-S3) · every 3 days",
         "blurb":         _DEFAULT_BLURB,
-        "interval_days": 7,
+        "interval_days": 3,
     },
     {
         "key":           "ae_sandworm",
         "name":          "Alliance Exercise: Sandworm",
-        "stage_note":    "Seasons 3 and 4",
+        "stage_note":    "Seasons 3 and 4 · every 3 days",
         "blurb":         _DEFAULT_BLURB,
-        "interval_days": 7,
+        "interval_days": 3,
     },
     {
         "key":           "zombie_siege",
         "name":          "Zombie Siege",
-        "stage_note":    "All seasons — alliance defense event",
+        "stage_note":    "Alliance defense · every 3 days",
         "blurb":         _DEFAULT_BLURB,
-        "interval_days": 7,
+        "interval_days": 3,
     },
     {
         "key":           "glacieradon",
         "name":          "Glacieradon",
-        "stage_note":    "Boss-event rotation",
+        "stage_note":    "Pairs with Gold Zombies · every other week if recurring",
         "blurb":         _DEFAULT_BLURB,
         "interval_days": 14,
     },
     {
         "key":           "sky_predator",
         "name":          "Sky Predator",
-        "stage_note":    "Boss-event rotation",
+        "stage_note":    "Pairs with General's Trials · every other week if recurring",
         "blurb":         _DEFAULT_BLURB,
         "interval_days": 14,
     },
@@ -704,7 +704,9 @@ async def _run_create_event_wizard(
     if preset:
         await channel.send(
             f"✅ Using preset: **{preset['name']}** ({preset['stage_note']})\n"
-            "You can still customise the name, blurb, anchor date, and cycle below."
+            "You'll still pick the schedule, anchor date, and time below. "
+            "Pick **📅 Manual** at the schedule step if you run this event "
+            "ad-hoc rather than on a fixed cycle."
         )
         name = preset["name"]
     else:

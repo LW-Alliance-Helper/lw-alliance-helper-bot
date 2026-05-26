@@ -26,6 +26,7 @@ from zoneinfo import ZoneInfo
 import discord
 import discord.ext.commands
 from config import get_config
+from messages import LEADERSHIP_INACCESSIBLE
 import wizard_registry
 
 # ── Channel IDs ────────────────────────────────────────────────────────────────
@@ -675,7 +676,7 @@ class EventEditorView(discord.ui.View):
             )
             view.message = sent
         else:
-            await interaction.followup.send("⚠️ Could not find the leadership channel.", ephemeral=True)
+            await interaction.followup.send(LEADERSHIP_INACCESSIBLE, ephemeral=True)
 
         self.stop()
 

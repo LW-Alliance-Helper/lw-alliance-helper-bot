@@ -38,6 +38,9 @@ from messages import (
     CANCEL_PLAIN,
     DENY_NOT_OWNER,
     GENERIC_CMD_TIMEOUT,
+    LEADERSHIP_INACCESSIBLE,
+    LEADERSHIP_NO_READ_PERM,
+    LEADERSHIP_NOT_CONFIGURED,
 )
 
 logger = logging.getLogger(__name__)
@@ -474,7 +477,7 @@ async def _render_log_followup(bot, interaction: discord.Interaction) -> None:
     cfg = get_config(interaction.guild_id)
     if not cfg or not cfg.leadership_channel_id:
         await interaction.followup.send(
-            "⚠️ Leadership channel isn't configured. Run `/setup` to configure it.",
+            LEADERSHIP_NOT_CONFIGURED,
             ephemeral=True,
         )
         return
@@ -482,7 +485,7 @@ async def _render_log_followup(bot, interaction: discord.Interaction) -> None:
     leadership = bot.get_channel(cfg.leadership_channel_id)
     if leadership is None:
         await interaction.followup.send(
-            "⚠️ Could not access the leadership channel.", ephemeral=True,
+            LEADERSHIP_INACCESSIBLE, ephemeral=True,
         )
         return
 
@@ -498,7 +501,7 @@ async def _render_log_followup(bot, interaction: discord.Interaction) -> None:
                 matches.append(msg)
     except discord.Forbidden:
         await interaction.followup.send(
-            "⚠️ Bot does not have permission to read message history in the leadership channel.",
+            LEADERSHIP_NO_READ_PERM,
             ephemeral=True,
         )
         return

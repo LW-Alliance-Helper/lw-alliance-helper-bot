@@ -24,6 +24,7 @@ import wizard_registry
 from messages import (
     CANCEL_PLAIN,
     GENERIC_CMD_TIMEOUT,
+    PREV_CHANNEL_GONE,
     WIZARD_TIMEOUT,
 )
 from setup_hub import (
@@ -2027,8 +2028,7 @@ async def run_setup(interaction: discord.Interaction, bot):
     )
     if v.is_current_stale:
         await channel.send(
-            "⚠️ Your previously configured leadership channel no longer exists. "
-            "Pick a new one below."
+            PREV_CHANNEL_GONE.format(channel_label="leadership")
         )
     await channel.send("\u200b", view=v)
     await wait_view_or_cancel(v, cancel_event)
@@ -2823,8 +2823,7 @@ async def run_growth_breakdown_setup(interaction: discord.Interaction, bot):
         )
         if post_ch_view.is_current_stale:
             await channel.send(
-                "⚠️ Your previously configured breakdown channel no longer exists. "
-                "Pick a new one below."
+                PREV_CHANNEL_GONE.format(channel_label="breakdown")
             )
         await channel.send(
             "**Auto-Post Channel**\n"
@@ -3528,8 +3527,7 @@ async def run_train_setup(interaction: discord.Interaction, bot):
         )
         if reminder_ch_view.is_current_stale:
             await channel.send(
-                "⚠️ Your previously configured reminder channel no longer exists. "
-                "Pick a new one below."
+                PREV_CHANNEL_GONE.format(channel_label="reminder")
             )
         await channel.send(
             "**Step 7a of 8 — Reminder Channel**\n"
@@ -3934,8 +3932,7 @@ async def run_survey_setup(interaction: discord.Interaction, bot,
     )
     if survey_ch_view.is_current_stale:
         await channel.send(
-            "⚠️ Your previously configured survey channel no longer exists. "
-            "Pick a new one below."
+            PREV_CHANNEL_GONE.format(channel_label="survey")
         )
     await channel.send(
         "**Step 1 of 6 — Survey Channel**\n"
@@ -3960,8 +3957,7 @@ async def run_survey_setup(interaction: discord.Interaction, bot,
     )
     if notify_ch_view.is_current_stale:
         await channel.send(
-            "⚠️ Your previously configured notification channel no longer exists. "
-            "Pick a new one below."
+            PREV_CHANNEL_GONE.format(channel_label="notification")
         )
     await channel.send(
         "**Step 2 of 6 — Survey Notification Channel**\n"
@@ -4963,8 +4959,7 @@ async def run_storm_setup(interaction: discord.Interaction, bot, event_type: str
     )
     if log_ch_view.is_current_stale:
         await channel.send(
-            f"⚠️ Your previously configured {label} log channel no longer exists. "
-            "Pick a new one below."
+            PREV_CHANNEL_GONE.format(channel_label=f"{label} log")
         )
     await channel.send(
         f"**Step 4 of 9: Storm Log Channel**\n"
@@ -4989,8 +4984,7 @@ async def run_storm_setup(interaction: discord.Interaction, bot, event_type: str
     )
     if post_ch_view.is_current_stale:
         await channel.send(
-            f"⚠️ Your previously configured {label} mail post channel no longer exists. "
-            "Pick a new one below."
+            PREV_CHANNEL_GONE.format(channel_label=f"{label} mail post")
         )
     parent_cmd = "desertstorm" if event_type == "DS" else "canyonstorm"
     await channel.send(
@@ -8410,8 +8404,7 @@ async def run_event_setup(interaction: discord.Interaction, bot):
     )
     if draft_ch_view.is_current_stale:
         await channel.send(
-            "⚠️ Your previously configured draft channel no longer exists. "
-            "Pick a new one below."
+            PREV_CHANNEL_GONE.format(channel_label="draft")
         )
     await channel.send(
         "**Step 1 of 4 — Draft Channel**\n"
@@ -8437,8 +8430,7 @@ async def run_event_setup(interaction: discord.Interaction, bot):
     )
     if ann_ch_view.is_current_stale:
         await channel.send(
-            "⚠️ Your previously configured announcement channel no longer exists. "
-            "Pick a new one below."
+            PREV_CHANNEL_GONE.format(channel_label="announcement")
         )
     await channel.send(
         "**Step 2 of 4 — Announcement Channel**\n"
@@ -8829,8 +8821,7 @@ async def run_birthday_setup(interaction: discord.Interaction, bot):
         )
         if remind_ch_view.is_current_stale:
             await channel.send(
-                "⚠️ Your previously configured birthday channel no longer exists. "
-                "Pick a new one below."
+                PREV_CHANNEL_GONE.format(channel_label="birthday")
             )
         await channel.send(
             "**Step 8a of 9 — Birthday Announcement Channel**\n"
@@ -9067,8 +9058,7 @@ async def run_shiny_tasks_setup(interaction: discord.Interaction, bot):
     )
     if ch_view.is_current_stale:
         await channel.send(
-            "⚠️ Your previously configured shiny tasks channel no longer exists. "
-            "Pick a new one below."
+            PREV_CHANNEL_GONE.format(channel_label="shiny tasks")
         )
     await channel.send("​", view=ch_view)
     await wait_view_or_cancel(ch_view, cancel_event)

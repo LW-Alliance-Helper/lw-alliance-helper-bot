@@ -302,7 +302,7 @@ class TestPremiumAssignCommand:
         embed = call.kwargs.get("embed") or call.args[0]
         assert "don't have an active Premium subscription" in embed.title.lower() or \
                "no active" in embed.title.lower() or \
-               "subscribe" in embed.description.lower()
+               "unlock it" in embed.description.lower()
 
     @pytest.mark.asyncio
     async def test_already_assigned_here_short_circuits(self, monkeypatch):

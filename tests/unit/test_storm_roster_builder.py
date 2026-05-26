@@ -5260,7 +5260,7 @@ class TestAssignConfirmView:
         assert "1005" not in session.assignments["Power Tower"]
         inter.response.send_message.assert_called_once()
         args = inter.response.send_message.call_args.args
-        assert "Only the builder's owner" in args[0]
+        assert "Only the user who opened this view" in args[0]
 
     def test_picker_no_longer_renders_toggle_button(self):
         """The 👁️ Show/Hide below-minimum button is retired."""
@@ -5480,7 +5480,7 @@ class TestZoneMemberEditView:
         # No state change; rejection sent.
         assert "1001" in session.assignments["Power Tower"]
         inter.response.send_message.assert_called_once()
-        assert "Only the builder's owner" in (
+        assert "Only the user who opened this view" in (
             inter.response.send_message.call_args.args[0]
         )
 

@@ -504,7 +504,7 @@ class TestTrendsView:
         ok = await view._guard(inter)
         assert ok is False
         inter.response.send_message.assert_called_once()
-        assert "Only the officer" in inter.response.send_message.call_args.args[0]
+        assert "Only the user who opened this view" in inter.response.send_message.call_args.args[0]
 
 
 # ── Builder embed shape ────────────────────────────────────────────────────

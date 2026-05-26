@@ -418,7 +418,7 @@ class TestEventHubViewInteractionCheck:
         inter.response.send_message.assert_awaited_once()
         sent = inter.response.send_message.await_args
         msg = sent.args[0] if sent.args else sent.kwargs.get("content", "")
-        assert "Only the officer who opened this view" in msg
+        assert "Only the user who opened this view" in msg
         assert sent.kwargs.get("ephemeral") is True
 
 

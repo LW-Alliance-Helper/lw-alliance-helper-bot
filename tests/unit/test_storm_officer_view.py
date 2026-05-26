@@ -1366,7 +1366,7 @@ class TestTeamPlanRosterPickerView:
         assert ok is False
         inter.response.send_message.assert_awaited_once()
         msg = inter.response.send_message.await_args.args[0]
-        assert "Only the officer" in msg
+        assert "Only the user who opened this view" in msg
 
 
 class TestTeamPlanSubPickerView:

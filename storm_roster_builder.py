@@ -37,6 +37,7 @@ from typing import Optional
 
 import discord
 
+from messages import CANCEL_BACKPEDAL
 from storm_event_hub import (
     HUB_COMMAND,
     HUB_BTN_VIEW_SIGNUPS,
@@ -3123,9 +3124,8 @@ class _AssignConfirmView(discord.ui.View):
             item.disabled = True
         try:
             await inter.response.edit_message(
-                content=(
-                    f"↩️ Cancelled. **{self.member_label}** was not "
-                    f"added to **{self.zone}**."
+                content=CANCEL_BACKPEDAL.format(
+                    detail=f"**{self.member_label}** was not added to **{self.zone}**.",
                 ),
                 view=None,
             )
@@ -5744,8 +5744,9 @@ async def _finalize_structured_roster(
             view.stop()
             try:
                 await interaction.followup.send(
-                    "↩️ Cancelled. Roster wasn't posted; you can keep "
-                    "editing the builder if you'd like.",
+                    CANCEL_BACKPEDAL.format(
+                        detail="Roster wasn't posted; you can keep editing the builder if you'd like.",
+                    ),
                     ephemeral=True,
                 )
             except discord.HTTPException:

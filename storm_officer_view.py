@@ -47,6 +47,7 @@ from config import (
     STORM_PLAN_MAX_SUBS,
     STORM_PLAN_MAX_TOTAL,
 )
+from messages import CANCEL_BACKPEDAL, CANCEL_BACKPEDAL_DEFAULT
 from storm_event_hub import HUB_COMMAND, HUB_BTN_VIEW_SIGNUPS, HUB_BTN_PRESETS
 
 logger = logging.getLogger(__name__)
@@ -1143,7 +1144,7 @@ class _OnBehalfVoteView(discord.ui.View):
         self.stop()
         try:
             await inter.response.edit_message(
-                content="↩️ Cancelled. No vote recorded.", view=self,
+                content=CANCEL_BACKPEDAL_DEFAULT, view=self,
             )
         except discord.HTTPException:
             pass
@@ -1365,7 +1366,7 @@ class _TeamPlanRosterPickerView(discord.ui.View):
             self.stop()
             try:
                 await inter.response.edit_message(
-                    content="↩️ Cancelled. Plan unchanged.", view=self,
+                    content=CANCEL_BACKPEDAL_DEFAULT, view=self,
                 )
             except discord.HTTPException:
                 pass
@@ -1622,7 +1623,7 @@ class _TeamPlanSubPickerView(discord.ui.View):
             self.stop()
             try:
                 await inter.response.edit_message(
-                    content="↩️ Cancelled. Plan unchanged.", view=self,
+                    content=CANCEL_BACKPEDAL_DEFAULT, view=self,
                 )
             except discord.HTTPException:
                 pass
@@ -2582,7 +2583,7 @@ class _DiscardDraftConfirmView(discord.ui.View):
             item.disabled = True
         try:
             await inter.response.edit_message(
-                content="↩️ Cancelled. Your saved draft is still there.",
+                content=CANCEL_BACKPEDAL.format(detail="Your saved draft is still there."),
                 view=self,
             )
         except discord.HTTPException:

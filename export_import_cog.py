@@ -27,6 +27,7 @@ from discord.ext import commands
 
 import config_export
 import wizard_registry
+from messages import CANCEL_PLAIN
 from setup_cog import _has_leadership_or_admin
 
 
@@ -459,7 +460,7 @@ class ExportImportCog(commands.Cog):
         )
         await view.wait()
         if not view.confirmed:
-            await interaction.followup.send("❌ Cancelled.", ephemeral=True)
+            await interaction.followup.send(CANCEL_PLAIN, ephemeral=True)
             return
 
         export = config_export.build_export(

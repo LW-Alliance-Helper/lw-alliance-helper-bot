@@ -33,7 +33,7 @@ from zoneinfo import ZoneInfo
 
 import discord
 
-from messages import GENERIC_CMD_TIMEOUT
+from messages import CANCEL_BACKPEDAL, CANCEL_PLAIN, GENERIC_CMD_TIMEOUT
 
 logger = logging.getLogger(__name__)
 
@@ -696,7 +696,7 @@ async def _run_create_event_wizard(
         )
         if reply is None:
             if cancel_event.is_set():
-                await channel.send("❌ Cancelled.")
+                await channel.send(CANCEL_PLAIN)
             else:
                 await channel.send(GENERIC_CMD_TIMEOUT.format(cmd="events"))
             return None
@@ -975,7 +975,7 @@ async def _open_delete_picker(interaction: discord.Interaction) -> None:
         async def do_cancel(c_inter: discord.Interaction):
             for item in confirm.children: item.disabled = True
             await c_inter.response.edit_message(
-                content=f"↩️ Cancelled — **{name}** was not deleted.",
+                content=CANCEL_BACKPEDAL.format(detail=f"**{name}** was not deleted."),
                 view=confirm,
             )
             confirm.stop()

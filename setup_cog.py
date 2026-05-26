@@ -22,6 +22,7 @@ from config import (
 import premium
 import wizard_registry
 from messages import (
+    CANCEL_PLAIN,
     GENERIC_CMD_TIMEOUT,
     WIZARD_TIMEOUT,
 )
@@ -2119,7 +2120,7 @@ async def run_setup(interaction: discord.Interaction, bot):
     if done_view.cancelled:
         return
     if not done_view.confirmed:
-        await channel.send("❌ Setup cancelled. Run `/setup` to start again.")
+        await channel.send(f"{CANCEL_PLAIN} Run `/setup` to start again.")
         return
 
     # ── Confirm and save ───────────────────────────────────────────────────────
@@ -2145,7 +2146,7 @@ async def run_setup(interaction: discord.Interaction, bot):
     if confirm_view.cancelled:
         return
     if not confirm_view.confirmed:
-        await channel.send("❌ Setup cancelled. Run `/setup` to start again.")
+        await channel.send(f"{CANCEL_PLAIN} Run `/setup` to start again.")
         return
 
     cfg.setup_complete = True
@@ -2190,7 +2191,7 @@ async def run_growth_setup(interaction: discord.Interaction, bot):
         )
         if reply is None:
             if cancel_event.is_set():
-                await channel.send("❌ Cancelled.")
+                await channel.send(CANCEL_PLAIN)
             else:
                 await channel.send(WIZARD_TIMEOUT.format(wizard=HUB_BTN_GROWTH))
             return None
@@ -3227,7 +3228,7 @@ async def run_train_setup(interaction: discord.Interaction, bot):
         )
         if reply is None:
             if cancel_event.is_set():
-                await channel.send("❌ Cancelled.")
+                await channel.send(CANCEL_PLAIN)
             else:
                 await channel.send(WIZARD_TIMEOUT.format(wizard=HUB_BTN_TRAIN))
             return None
@@ -4080,7 +4081,7 @@ async def run_survey_setup(interaction: discord.Interaction, bot,
         )
         if intro_reply is None:
             if cancel_event.is_set():
-                await channel.send("❌ Cancelled.")
+                await channel.send(CANCEL_PLAIN)
             else:
                 await channel.send(WIZARD_TIMEOUT.format(wizard=HUB_BTN_SURVEY))
             return
@@ -4578,7 +4579,7 @@ async def run_storm_setup(interaction: discord.Interaction, bot, event_type: str
         )
         if reply is None:
             if cancel_event.is_set():
-                await channel.send("❌ Cancelled.")
+                await channel.send(CANCEL_PLAIN)
             else:
                 await channel.send(GENERIC_CMD_TIMEOUT.format(cmd=cmd_name))
             return None
@@ -8543,7 +8544,7 @@ async def run_birthday_setup(interaction: discord.Interaction, bot):
         )
         if reply is None:
             if cancel_event.is_set():
-                await channel.send("❌ Cancelled.")
+                await channel.send(CANCEL_PLAIN)
             else:
                 await channel.send(WIZARD_TIMEOUT.format(wizard=HUB_BTN_BIRTHDAYS))
             return None
@@ -9302,7 +9303,7 @@ async def run_shiny_tasks_setup(interaction: discord.Interaction, bot):
         wizard_registry.unregister(user.id, cancel_event)
         return
     if not confirm_view.confirmed:
-        await channel.send("❌ Setup cancelled. Run `/setup` → 🌟 Shiny Tasks to start again.")
+        await channel.send(f"{CANCEL_PLAIN} Run `/setup` → {HUB_BTN_SHINY} to start again.")
         wizard_registry.unregister(user.id, cancel_event)
         return
 

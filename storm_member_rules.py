@@ -35,6 +35,7 @@ import logging
 
 import discord
 
+from messages import CANCEL_BACKPEDAL_DEFAULT
 from storm_event_hub import HUB_COMMAND, HUB_BTN_RULES
 
 logger = logging.getLogger(__name__)
@@ -647,7 +648,7 @@ class _AddRuleTypePickerView(discord.ui.View):
         self.stop()
         try:
             await inter.response.edit_message(
-                content="↩️ Cancelled. No rule added.", view=self,
+                content=CANCEL_BACKPEDAL_DEFAULT, view=self,
             )
         except discord.HTTPException:
             pass
@@ -927,7 +928,7 @@ class InlinePowerBandView(discord.ui.View):
                 child.disabled = True
             try:
                 await inter.response.edit_message(
-                    content="↩️ Cancelled. No rule saved.", view=self,
+                    content=CANCEL_BACKPEDAL_DEFAULT, view=self,
                 )
             except discord.HTTPException:
                 pass

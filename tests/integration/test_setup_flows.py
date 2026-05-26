@@ -1484,39 +1484,23 @@ class TestRunEventSetup:
 
     @pytest.mark.asyncio
     async def test_existing_config_threads_current_id_through_channel_picks(self, seeded_db):
-        """Re-running /setup_events on a pre-configured guild and
-        picking 'Edit Event Settings' must construct each ChannelSelectStep
-        with the saved channel id so leadership sees Keep-current
-        buttons instead of blank dropdowns."""
+        """Re-running /setup → 📣 Events on a pre-configured guild must
+        construct each ChannelSelectStep with the saved channel id so
+        leadership sees Keep-current buttons instead of blank dropdowns.
+        Post-#249: the wizard always walks the 4 channel/time steps;
+        the EventActionView gate was removed when event-list management
+        moved to the /events hub."""
         import config
         from setup_cog import run_event_setup
 
-        # Pre-seed event config + one event so the EventActionView fires.
         config.update_config_field(TEST_GUILD_ID, "event_draft_channel_id",    700001)
         config.update_config_field(TEST_GUILD_ID, "event_announce_channel_id", 700002)
         config.update_config_field(TEST_GUILD_ID, "event_draft_time",          "12:00")
         config.update_config_field(TEST_GUILD_ID, "event_five_min_warning",    1)
-        config.save_guild_event(TEST_GUILD_ID, {
-            "short_key":               "ev_1",
-            "name":                    "Test Event",
-            "timezone":                "America/New_York",
-            "default_time":            "21:00",
-            "announcement_blurb":      "test",
-            "schedule_type":           "manual",
-            "anchor_date":             "",
-            "interval_days":           0,
-            "draft_channel_id":        700001,
-            "announcement_channel_id": 700002,
-            "draft_time":              "12:00",
-            "five_min_warning":        1,
-            "active":                  1,
-        })
 
         interaction = make_mock_interaction()
         bot         = AsyncMock()
 
-        # Two channels picked through the wizard — same ids so the
-        # "Keep current" path would naturally be taken in production.
         new_draft = MagicMock(name="draft");    new_draft.id = 700001
         new_ann   = MagicMock(name="announce"); new_ann.id   = 700002
         draft_view = MagicMock(
@@ -1530,9 +1514,6 @@ class TestRunEventSetup:
             selected_channel=new_ann, wait=AsyncMock(),
         )
 
-        # YesNoView routes warn=True; ask_keep_or_change feeds the
-        # draft time prompt back as the existing value. EventActionView
-        # gets routed to "settings" via send-handler override.
         warn_view = MagicMock(selected=True, cancelled=False, wait=AsyncMock())
 
         ch_call_kwargs = []
@@ -1545,20 +1526,9 @@ class TestRunEventSetup:
         with patch("setup_cog.ChannelSelectStep", side_effect=_record_ch), \
              patch("setup_cog.YesNoView",         return_value=warn_view), \
              patch_keep_or_change(["12:00"]):
-            make_send_handler(
-                interaction.channel,
-                view_overrides={
-                    # EventActionView routes to "settings" so the wizard
-                    # walks the channel-pick steps. EventListView
-                    # routes to "finish" so we exit cleanly without
-                    # opening the event builder.
-                    "choice": "settings",
-                    "action": "finish",
-                },
-            )
+            make_send_handler(interaction.channel)
             await run_event_setup(interaction, bot)
 
-        # Both channel picks received the saved ids.
         assert len(ch_call_kwargs) == 2
         assert ch_call_kwargs[0]["current_id"] == 700001
         assert ch_call_kwargs[1]["current_id"] == 700002
@@ -1572,17 +1542,16 @@ class TestPremiumCaps:
 
     @pytest.mark.asyncio
     async def test_events_cap_blocks_sixth_event_on_free(self, seeded_db):
-        """Free-tier guild with 5 events sees limit-reached embed and no 6th gets added."""
+        """Free-tier guild with 5 events sees limit-reached embed when
+        the hub's Create flow opens — the cap check fires before the
+        preset picker shows so officers don't pick and then learn the
+        cap is full. Post-#249: the cap lives on
+        events_hub._open_create_picker, not in the setup wizard."""
         import config
-        from setup_cog import run_event_setup
+        from events_hub import _open_create_picker
 
-        # Pre-set the event-related guild config so the wizard takes the
-        # "existing config" branch (which jumps straight to the events list
-        # via EventActionView -> "add").
         config.update_config_field(TEST_GUILD_ID, "event_draft_channel_id",    900001)
         config.update_config_field(TEST_GUILD_ID, "event_announce_channel_id", 900002)
-        config.update_config_field(TEST_GUILD_ID, "event_draft_time",          "12:00")
-        config.update_config_field(TEST_GUILD_ID, "event_five_min_warning",    1)
 
         for i in range(5):
             config.save_guild_event(TEST_GUILD_ID, {
@@ -1604,28 +1573,19 @@ class TestPremiumCaps:
         interaction = make_mock_interaction()
         bot         = AsyncMock()
 
-        list_actions = iter(["add", "finish"])
         sent_embeds  = []
+        sent_views   = []
 
-        async def fake_send(content=None, embed=None, view=None, **kw):
+        async def fake_response_send(content=None, embed=None, view=None, **kw):
             if embed is not None:
                 sent_embeds.append(embed)
             if view is not None:
-                # Route the existing-config EventActionView -> "add"
-                if hasattr(view, "choice") and getattr(view, "choice", None) is None:
-                    view.choice = "add"
-                # Route the EventListView -> "add" then "finish"
-                if hasattr(view, "action"):
-                    try:
-                        view.action = next(list_actions)
-                    except StopIteration:
-                        view.action = "finish"
-                _stop_view(view)
+                sent_views.append(view)
             return MagicMock(id=1)
 
-        interaction.channel.send = AsyncMock(side_effect=fake_send)
+        interaction.response.send_message = AsyncMock(side_effect=fake_response_send)
 
-        await run_event_setup(interaction, bot)
+        await _open_create_picker(bot, interaction)
 
         events = config.get_guild_events(TEST_GUILD_ID, active_only=False)
         assert len(events) == 5
@@ -1634,6 +1594,8 @@ class TestPremiumCaps:
         assert any("Free tier limit" in t for t in titles), (
             f"Expected limit-reached embed; titles seen: {titles}"
         )
+        # The picker view should never render when the cap blocks.
+        assert not sent_views, "Create picker should not open when cap is full"
 
     @pytest.mark.asyncio
     async def test_events_unlimited_for_premium_guild(self, seeded_db, monkeypatch):

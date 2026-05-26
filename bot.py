@@ -17,7 +17,6 @@ from config import (
     upsert_guild_install_metadata, get_guild_install_metadata,
     delete_guild_install_metadata,
 )
-from setup_hub import HUB_BTN_EVENTS
 import wizard_registry
 
 load_dotenv()
@@ -939,349 +938,24 @@ async def growth_breakdown_slash(interaction: discord.Interaction):
     await interaction.followup.send(embed=embed, ephemeral=True)
 
 
-# ── /events command group ─────────────────────────────────────────────────────
+# ── /events hub command ───────────────────────────────────────────────────────
 #
-# Discord groups can't be invoked as bare `/events`, so the date-arg
-# behavior that used to live on bare `/events` is now `/events show
-# [date]`, and a new `/events overview` leaf renders a read-only
-# config snapshot (configured event types + next firing dates) for
-# leadership pre-flight. `/events log` is the renamed `/events_log`.
+# Single top-level command that opens an events hub (embed + button grid)
+# the same way /desertstorm and /canyonstorm do for storms. Replaced the
+# /events overview|show|log subcommand group plus the event-list management
+# step of /setup → 📣 Events (#249). Every event flow now lives behind a
+# hub button.
 
-events_group = app_commands.Group(
+@bot.tree.command(
     name="events",
-    description="View, draft, and audit alliance event announcements",
+    description="Open the event-announcements hub for this alliance",
 )
+@app_commands.guild_only()
+async def events_slash(interaction: discord.Interaction):
+    from events_hub import handle_events_hub
+    await handle_events_hub(bot, interaction)
 
 
-@events_group.command(
-    name="overview",
-    description="Configured event types, next firing dates, and pointers into /events show / log",
-)
-async def events_overview_slash(interaction: discord.Interaction):
-    if not await guard(interaction):
-        return
-
-    from config import get_guild_events, get_config
-    cfg    = get_config(interaction.guild_id)
-    events = get_guild_events(interaction.guild_id, active_only=True)
-    today  = date_cls.today()
-
-    embed = discord.Embed(
-        title="📣 Event Announcements",
-        color=discord.Color.blurple(),
-    )
-
-    if not events:
-        embed.description = (
-            f"No event types configured yet. Run `/setup` and click **{HUB_BTN_EVENTS}** to add "
-            "Marauder, Siege, or custom event types."
-        )
-        await interaction.response.send_message(embed=embed, ephemeral=True)
-        return
-
-    repeating_lines: list[str] = []
-    manual_lines:    list[str] = []
-    for ev in events:
-        name = ev.get("name") or "(unnamed)"
-        if ev["schedule_type"] == "repeating" and ev.get("anchor_date"):
-            try:
-                anchor   = date_cls.fromisoformat(ev["anchor_date"])
-                interval = int(ev["interval_days"] or 0)
-            except (ValueError, TypeError):
-                repeating_lines.append(f"• **{name}** — schedule invalid (re-open via `/setup` → {HUB_BTN_EVENTS})")
-                continue
-            upcoming = next_event_dates(
-                from_date=today, count=1, anchor=anchor, cycle=interval,
-            ) if interval > 0 else []
-            if upcoming:
-                next_date = upcoming[0]
-                days = (next_date - today).days
-                when = (
-                    "today" if days == 0
-                    else "tomorrow" if days == 1
-                    else f"in {days} days"
-                )
-                repeating_lines.append(
-                    f"• **{name}** — every {interval}d, next on "
-                    f"{next_date:%a %b} {next_date.day} ({when})"
-                )
-            else:
-                repeating_lines.append(f"• **{name}** — every {interval}d")
-        else:
-            manual_lines.append(f"• **{name}** — manual entries only")
-
-    if repeating_lines:
-        embed.add_field(
-            name=f"Repeating ({len(repeating_lines)})",
-            value="\n".join(repeating_lines)[:1024],
-            inline=False,
-        )
-    if manual_lines:
-        embed.add_field(
-            name=f"Manual ({len(manual_lines)})",
-            value="\n".join(manual_lines)[:1024],
-            inline=False,
-        )
-
-    embed.add_field(
-        name="Sub-commands",
-        value=(
-            "• `/events show [date]` — Open the editor for today or a specific date\n"
-            "• `/events log` — Recent approved event posts"
-        ),
-        inline=False,
-    )
-    await interaction.response.send_message(embed=embed, ephemeral=True)
-
-
-@events_group.command(
-    name="show",
-    description="Open the event editor for today or a specific date",
-)
-@app_commands.describe(date="Optional date, e.g. 'April 5' or '4/5' (defaults to today)")
-async def events_slash(interaction: discord.Interaction, date: str = None):
-    if not await guard(interaction):
-        return
-
-    await interaction.response.defer(ephemeral=False)
-
-    target_date = None
-    current_year = datetime.now(tz=ET).year
-
-    if date:
-        # Numeric: 4/5 or 4/5/2026
-        numeric = re.match(r"^(\d{1,2})/(\d{1,2})(?:/(\d{4}))?$", date.strip())
-        if numeric:
-            try:
-                target_date = date_cls(
-                    int(numeric.group(3)) if numeric.group(3) else current_year,
-                    int(numeric.group(1)),
-                    int(numeric.group(2)),
-                )
-            except ValueError:
-                pass
-
-        # Month name: April 5
-        if not target_date:
-            named = re.match(r"^([A-Za-z]+)\s+(\d{1,2})$", date.strip(), re.IGNORECASE)
-            if named:
-                month_map = {
-                    "january": 1, "february": 2, "march": 3, "april": 4,
-                    "may": 5, "june": 6, "july": 7, "august": 8,
-                    "september": 9, "october": 10, "november": 11, "december": 12,
-                    "jan": 1, "feb": 2, "mar": 3, "apr": 4, "jun": 6,
-                    "jul": 7, "aug": 8, "sep": 9, "oct": 10, "nov": 11, "dec": 12,
-                }
-                month = month_map.get(named.group(1).lower())
-                if month:
-                    try:
-                        target_date = date_cls(current_year, month, int(named.group(2)))
-                    except ValueError:
-                        pass
-
-        if not target_date:
-            await interaction.followup.send(
-                f"⚠️ Could not parse date `{date}`. Try formats like `April 5` or `4/5`.",
-                ephemeral=True,
-            )
-            return
-    else:
-        target_date = date_cls.today()
-
-    # Per-guild event lookup. Reads `guild_events` rows for the calling
-    # guild, groups them by (anchor_date, interval_days), finds the next
-    # event date for each repeating group on or after `target_date`, and
-    # builds an event_list from every event that fires on the soonest of
-    # those dates.
-    from collections import defaultdict
-    from zoneinfo import ZoneInfo as _ZI
-    from config import get_guild_events, get_config
-
-    cfg    = get_config(interaction.guild_id)
-    events = get_guild_events(interaction.guild_id, active_only=True)
-
-    if not events:
-        await interaction.followup.send(
-            f"ℹ️ No events configured. Run `/setup` and click **{HUB_BTN_EVENTS}** to add some.",
-            ephemeral=True,
-        )
-        return
-
-    # Group repeating events by (anchor, interval); manual events skip the
-    # editor — they have no recurrence to project forward from.
-    groups: dict[tuple[str, int], list[dict]] = defaultdict(list)
-    for ev in events:
-        if ev["schedule_type"] == "repeating" and ev["anchor_date"]:
-            groups[(ev["anchor_date"], ev["interval_days"])].append(ev)
-
-    if not groups:
-        await interaction.followup.send(
-            f"ℹ️ No repeating events configured. The event editor only "
-            f"applies to events with a recurring schedule. Run `/setup` and click **{HUB_BTN_EVENTS}** "
-            "to add one, or add events directly to your manual schedule.",
-            ephemeral=True,
-        )
-        return
-
-    # Find the next occurrence date per group, then pick the soonest.
-    next_per_group: list[tuple[date_cls, tuple[str, int]]] = []
-    for key, _ in groups.items():
-        anchor_str, interval = key
-        try:
-            anchor = date_cls.fromisoformat(anchor_str)
-        except ValueError:
-            continue
-        upcoming = next_event_dates(from_date=target_date, count=1, anchor=anchor, cycle=interval)
-        if upcoming:
-            next_per_group.append((upcoming[0], key))
-
-    if not next_per_group:
-        await interaction.followup.send(
-            f"ℹ️ Couldn't compute the next event date — your repeating events "
-            f"have invalid anchor dates. Run `/setup` and click **{HUB_BTN_EVENTS}** to fix.",
-            ephemeral=True,
-        )
-        return
-
-    next_per_group.sort(key=lambda x: x[0])
-    event_date = next_per_group[0][0]
-    days_diff  = (event_date - target_date).days
-
-    if days_diff > 0:
-        await interaction.followup.send(
-            f"ℹ️ **{target_date:%B} {target_date.day}** is not an event day. "
-            f"Showing the next event date: **{event_date:%A, %B} {event_date.day}**.",
-            ephemeral=True,
-        )
-
-    # Build event_list from every event that fires on `event_date`. A guild
-    # may have multiple cycle groups; each one's next-occurrence-after
-    # event_date might or might not be event_date itself. We test each
-    # group; only those whose next date IS event_date contribute events.
-    event_list: list[dict] = []
-    draft_channel_id     = 0
-    announce_channel_id  = 0
-    five_min_warn        = False
-
-    for (anchor_str, interval), group_events in groups.items():
-        try:
-            anchor = date_cls.fromisoformat(anchor_str)
-        except ValueError:
-            continue
-        upcoming = next_event_dates(from_date=event_date, count=1, anchor=anchor, cycle=interval)
-        if not upcoming or upcoming[0] != event_date:
-            continue
-        for ev in group_events:
-            try:
-                ev_tz       = _ZI(ev["timezone"])
-                t_h, t_m    = (int(p) for p in ev["default_time"].split(":")[:2])
-                ev_dt       = datetime(event_date.year, event_date.month, event_date.day, t_h, t_m, tzinfo=ev_tz)
-                event_list.append({
-                    "key":   ev["short_key"],
-                    "name":  ev["name"],
-                    "dt":    ev_dt,
-                    "blurb": ev["announcement_blurb"],
-                })
-                draft_channel_id    = ev["draft_channel_id"] or draft_channel_id
-                announce_channel_id = ev["announcement_channel_id"] or announce_channel_id
-                if ev["five_min_warning"]:
-                    five_min_warn = True
-            except Exception as e:
-                print(f"[EVENTS] Error processing event {ev.get('short_key', '?')}: {e}")
-
-    if not event_list:
-        await interaction.followup.send(
-            f"⚠️ No events to show on the next event date — likely a bad timezone "
-            f"or default_time on one of your configured events. Run `/setup` and click **{HUB_BTN_EVENTS}** "
-            "to review.",
-            ephemeral=True,
-        )
-        return
-
-    event_list.sort(key=lambda x: x["dt"])
-    event_key = f"event-{interaction.guild_id}-{event_date.isoformat()}-manual"
-
-    await post_editor(
-        bot, event_list, event_key, event_date,
-        cfg=cfg,
-        draft_channel_id=draft_channel_id,
-        announcement_channel_id=announce_channel_id,
-        five_min_warning=five_min_warn,
-    )
-    print(f"[EVENTS] Manual event editor opened for guild {interaction.guild_id} date {event_date} by {interaction.user}")
-
-
-# ── /events log command ───────────────────────────────────────────────────────
-
-@events_group.command(
-    name="log",
-    description="Show recent approved event posts (window depends on your tier)",
-)
-async def events_log_slash(interaction: discord.Interaction):
-    if not await guard(interaction):
-        return
-
-    await interaction.response.defer(ephemeral=True)
-
-    from config import get_config
-    import premium
-    cfg = get_config(interaction.guild_id)
-    if not cfg or not cfg.leadership_channel_id:
-        await interaction.followup.send(
-            "⚠️ Leadership channel isn't configured. Run `/setup` to configure it.",
-            ephemeral=True,
-        )
-        return
-
-    leadership = bot.get_channel(cfg.leadership_channel_id)
-    if leadership is None:
-        await interaction.followup.send(
-            "⚠️ Could not access the leadership channel.", ephemeral=True
-        )
-        return
-
-    days   = await premium.get_limit("events_log_days", interaction.guild_id, interaction=interaction, bot=bot)
-    days   = days or 30  # safety; LIMITS always returns int here
-    cutoff = datetime.now(tz=timezone.utc) - timedelta(days=days)
-    matches = []
-    try:
-        async for msg in leadership.history(after=cutoff, limit=500):
-            if msg.author.id != bot.user.id:
-                continue
-            if msg.content.startswith("✅ **Approved by"):
-                matches.append(msg)
-    except discord.Forbidden:
-        await interaction.followup.send(
-            "⚠️ Bot does not have permission to read message history in the leadership channel.",
-            ephemeral=True,
-        )
-        return
-
-    matches.sort(key=lambda m: m.created_at, reverse=True)
-
-    embed = discord.Embed(
-        title=f"📣 Events Log — Past {days} Days",
-        description=f"*Showing approved event posts from the past {days} days.*",
-        color=discord.Color.blurple(),
-    )
-
-    if not matches:
-        embed.add_field(name="No approvals found", value=f"*No event posts have been approved in the past {days} days.*", inline=False)
-    else:
-        lines = []
-        for msg in matches[:25]:
-            # First line is "✅ **Approved by NAME at H:MMpm et**"
-            header = msg.content.split("\n", 1)[0]
-            _ldt     = msg.created_at.astimezone(ET)
-            _hr12    = _ldt.hour % 12 or 12
-            local_dt = f"{_ldt:%a %b} {_ldt.day}, {_hr12}:{_ldt:%M%p} ET".replace("AM", "am").replace("PM", "pm")
-            lines.append(f"• {header} *— logged {local_dt}*")
-        embed.add_field(name=f"Approvals ({len(matches)})", value="\n".join(lines)[:1024], inline=False)
-
-    if days < 30:
-        embed.set_footer(text="Free tier: 7-day window. Upgrade to Premium for 30 days.")
-    # Premium: no footer — the 30-day window is the full feature.
-    await interaction.followup.send(embed=embed, ephemeral=True)
 
 
 # ── /help command ──────────────────────────────────────────────────────────────
@@ -1617,18 +1291,9 @@ async def admin_forget_guild_slash(interaction: discord.Interaction, guild_id: s
     )
 
 
-# Alias so date_cls doesn't conflict with the `date` parameter name in events_slash
-date_cls = date
-
-
 # Register the /growth Group on the tree once every subcommand has
 # been attached above. Global registration.
 bot.tree.add_command(growth_group)
-
-
-# Register the /events Group on the tree once every subcommand has
-# been attached above. Global registration — every alliance gets it.
-bot.tree.add_command(events_group)
 
 
 # Register the /admin Group on the tree once every subcommand has been

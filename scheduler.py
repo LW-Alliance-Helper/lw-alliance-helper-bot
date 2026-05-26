@@ -348,9 +348,9 @@ class EventEditorView(discord.ui.View):
     async def on_timeout(self):
         """Strip the editor buttons and tell leadership how to re-open it."""
         from wizard_registry import expire_view_message
-        await expire_view_message(self.message, command_hint="/events show")
+        await expire_view_message(self.message, command_hint="/events")
 
-    @discord.ui.button(label="➕ Add Event", style=discord.ButtonStyle.primary, row=0)
+    @discord.ui.button(label="➕ Add to today's draft", style=discord.ButtonStyle.primary, row=0)
     async def add_event(self, interaction: discord.Interaction, button: discord.ui.Button):
         # Only show events not already in the list
         current_keys = {e["key"] for e in self.event_list}
@@ -598,7 +598,7 @@ class EventEditorView(discord.ui.View):
 
         if not self.event_list:
             await interaction.followup.send(
-                "⚠️ No events in the list. Use `/events show` to open a fresh editor.",
+                "⚠️ No events in the list. Use `/events` → **📅 Today's events** to open a fresh editor.",
                 ephemeral=True,
             )
             return
@@ -761,7 +761,7 @@ class ApprovalView(discord.ui.View):
         the draft. Without the message edit, the buttons stayed on screen
         but clicks failed silently with 'Interaction failed'."""
         from wizard_registry import expire_view_message
-        await expire_view_message(self.message, command_hint="/events show")
+        await expire_view_message(self.message, command_hint="/events")
 
 
 # ── Main scheduler loop ────────────────────────────────────────────────────────

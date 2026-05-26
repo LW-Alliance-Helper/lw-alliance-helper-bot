@@ -98,7 +98,6 @@ EXPECTED_STORM_TOP_LEVEL_COMMANDS = {"desertstorm", "canyonstorm"}
 # the production registration — exercised separately in
 # `tests/unit/test_guild_install_metadata.py`.
 EXPECTED_MODULE_COMMANDS = {"growth", "events", "help"}
-EXPECTED_EVENTS_SUBCOMMANDS = {"overview", "show", "log"}
 EXPECTED_GROWTH_SUBCOMMANDS = {"overview", "breakdown"}
 
 
@@ -293,16 +292,16 @@ class TestCogRegistration:
                 f"Registered commands: {sorted(registered)}"
             )
 
-        # /events is a Group — verify its subcommands too.
-        events_grp = registered.get("events")
-        assert events_grp is not None
-        sub_names = _subcommands_on(events_grp)
-        assert sub_names == EXPECTED_EVENTS_SUBCOMMANDS, (
-            f"/events subcommands mismatch: got {sub_names}, "
-            f"expected {EXPECTED_EVENTS_SUBCOMMANDS}"
+        # Post-#249: /events is now a single hub command (no subcommands).
+        # The pre-hub `/events overview|show|log` group was replaced by
+        # the in-hub buttons.
+        events_cmd = registered.get("events")
+        assert events_cmd is not None
+        assert not hasattr(events_cmd, "commands"), (
+            "/events should be a flat command, not a Group"
         )
 
-        # /growth is also a Group post-#200.
+        # /growth is still a Group post-#200.
         growth_grp = registered.get("growth")
         assert growth_grp is not None
         growth_subs = _subcommands_on(growth_grp)

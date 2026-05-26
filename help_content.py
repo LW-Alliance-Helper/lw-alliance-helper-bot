@@ -58,19 +58,22 @@ HELP_CATEGORIES: dict[str, dict] = {
         "label": "Event Announcements",
         "description": (
             "Schedule in-game events (Plague Marauder, Zombie Siege, etc). "
-            "Drafts post to leadership for review, then to your public channel."
+            "Drafts post to leadership for review, then to your public channel. "
+            "Open `/events` to see every action in one place."
         ),
         "commands": [
             (f"/setup → {HUB_BTN_EVENTS}",
-             "Configure events, leadership and public channels, daily draft "
-             "time, and the 5-min warning."),
-            ("/events overview",
-             "Configured event types + next firing dates at a glance."),
-            ("/events show [date]",
-             "Open the event editor for today or a chosen date. Edit, "
-             "approve, and post."),
-            ("/events log",
-             "Show approved event posts (free: 7 days / 💎 Premium: 30 days)."),
+             "Configure the four shared event settings: leadership draft "
+             "channel, public announcement channel, daily draft time, "
+             "and 5-min warning toggle."),
+            ("/events",
+             "**Event hub.** Opens an embed showing the alliance's current "
+             "event config plus a button grid.\n"
+             "**Read row:** 📅 Today's events (open the draft editor), "
+             "📆 Upcoming events (next firing dates), 📜 Event log "
+             "(recent approvals — free: 7 days / 💎 Premium: 30 days).\n"
+             "**Write row:** ➕ Create an event (pick a preset or define "
+             "your own), 🗑️ Delete an event."),
         ],
     },
     "train": {

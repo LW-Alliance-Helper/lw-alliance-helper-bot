@@ -8361,592 +8361,163 @@ async def wait_for_msg_simple(
 
 
 async def run_event_setup(interaction: discord.Interaction, bot):
-    """Walk an admin through configuring event types."""
+    """Walk an admin through configuring the four shared event settings:
+    draft channel, announcement channel, draft time, and 5-minute warning.
+    Individual events (add/edit/delete) live on the /events hub (#249)."""
     import wizard_registry
     guild_id = interaction.guild_id
     channel  = interaction.channel
     user     = interaction.user
     cancel_event = wizard_registry.register(user.id)
 
-    def check(m):
-        return m.author == user and m.channel == channel
-
-    async def ask_text(prompt: str, max_chars: int = 200):
-        await channel.send(prompt)
-        reply = await wizard_registry.wait_or_cancel(
-            bot.wait_for("message", check=check, timeout=120),
-            cancel_event,
-        )
-        if reply is None:
-            if cancel_event.is_set():
-                await channel.send("❌ Cancelled.")
-            else:
-                await channel.send(f"⏰ Timed out. Run `/setup` → {HUB_BTN_EVENTS} to start again.")
-            return None
-        return reply.content.strip()[:max_chars]
-
-    from config import get_config, get_guild_events, save_guild_event, get_or_create_config, update_config_field
-    import re as _re
+    from config import get_config, get_or_create_config, update_config_field
 
     guild_cfg = get_config(guild_id) or get_or_create_config(guild_id)
     timezone  = guild_cfg.timezone if guild_cfg.timezone else "America/New_York"
-    events    = get_guild_events(guild_id, active_only=True)
 
     draft_channel_id    = guild_cfg.event_draft_channel_id or 0
     announce_channel_id = guild_cfg.event_announce_channel_id or 0
     draft_time          = guild_cfg.event_draft_time or "12:00"
     five_min_warning    = guild_cfg.event_five_min_warning if guild_cfg.event_five_min_warning is not None else 1
 
-    # ── If already configured, show summary with action options ───────────────
-    if draft_channel_id and events:
-        summary_embed = discord.Embed(
-            title="📣 Event Setup",
-            description="Your events are already configured. What would you like to do?",
-            color=discord.Color.blurple(),
-        )
-        summary_embed.add_field(name="Draft Channel",        value=f"<#{draft_channel_id}>",    inline=False)
-        summary_embed.add_field(name="Announcement Channel", value=f"<#{announce_channel_id}>", inline=False)
-        summary_embed.add_field(name="Draft Time",           value=_format_time_with_tz(draft_time, timezone), inline=False)
-        summary_embed.add_field(name="5-min Warning",        value="Yes" if five_min_warning else "No", inline=False)
-        ev_list = "\n".join(
-            f"• **{e['name']}** — {_format_time_with_tz(e['default_time'], e.get('timezone') or timezone)}"
-            for e in events
-        )
-        summary_embed.add_field(name="Events", value=ev_list, inline=False)
+    # Post-#249: this wizard owns only the four shared event settings
+    # (channels, draft time, 5-minute warning). Event creation, editing,
+    # and deletion moved to the /events hub, so officers managing
+    # individual events go there instead of crawling through this wizard.
 
-        class EventActionView(discord.ui.View):
-            def __init__(self):
-                super().__init__(timeout=60)
-                self.choice = None
+    await channel.send(
+        "⚙️ **Event Setup**\n"
+        "Configure your alliance event channels and draft cadence. "
+        "All events share these four settings. To add, edit, or remove "
+        f"individual events, run `/events` after this wizard completes."
+    )
 
-            @discord.ui.button(label="⚙️ Edit Event Settings", style=discord.ButtonStyle.primary, row=0)
-            async def edit_settings(self, inter: discord.Interaction, button: discord.ui.Button):
-                self.choice = "settings"
-                for item in self.children: item.disabled = True
-                await wizard_registry.safe_edit_response(inter, view=self)
-                self.stop()
-
-            @discord.ui.button(label="➕ Add Event", style=discord.ButtonStyle.success, row=0)
-            async def add_event(self, inter: discord.Interaction, button: discord.ui.Button):
-                self.choice = "add"
-                for item in self.children: item.disabled = True
-                await wizard_registry.safe_edit_response(inter, view=self)
-                self.stop()
-
-            @discord.ui.button(label="✏️ Edit Event", style=discord.ButtonStyle.secondary, row=1)
-            async def edit_event(self, inter: discord.Interaction, button: discord.ui.Button):
-                self.choice = "edit"
-                for item in self.children: item.disabled = True
-                await wizard_registry.safe_edit_response(inter, view=self)
-                self.stop()
-
-            @discord.ui.button(label="🗑️ Delete Event", style=discord.ButtonStyle.danger, row=1)
-            async def delete_event(self, inter: discord.Interaction, button: discord.ui.Button):
-                self.choice = "delete"
-                for item in self.children: item.disabled = True
-                await wizard_registry.safe_edit_response(inter, view=self)
-                self.stop()
-
-            @discord.ui.button(label="✅ No changes needed", style=discord.ButtonStyle.secondary, row=2)
-            async def done(self, inter: discord.Interaction, button: discord.ui.Button):
-                self.choice = "done"
-                for item in self.children: item.disabled = True
-                await wizard_registry.safe_edit_response(inter, view=self)
-                self.stop()
-
-        action_view = EventActionView()
-        await channel.send(embed=summary_embed, view=action_view)
-        await wait_view_or_cancel(action_view, cancel_event)
-        if action_view.cancelled:
-            return
-
-        if not action_view.choice or action_view.choice == "done":
-            await channel.send("✅ No changes made.")
-            return
-
-        # Jump straight to event list for add/edit/delete
-        # We already have all the settings values — skip the settings wizard
-        # and fall through directly to the event list below
-        if action_view.choice in ("add", "edit", "delete"):
-            pass  # fall through to event list at end of function
-
-        # Fall through to full settings wizard for "settings"
-        elif action_view.choice == "settings":
-            await channel.send("⚙️ Let's update your event settings...")
-
-        skip_settings = action_view.choice in ("add", "edit", "delete")
-    else:
-        skip_settings = False
-
-    if not skip_settings:
+    # ── Steps 1-4: Channel/time settings ──────────────────────────────────────
+    is_premium_flag  = await premium.is_premium(guild_id, interaction=interaction, bot=interaction.client)
+    current_draft_id = guild_cfg.event_draft_channel_id or 0
+    draft_ch_view    = ChannelSelectStep(
+        "Select the draft channel...",
+        suggested_name="event-drafts",
+        include_threads=is_premium_flag,
+        guild=interaction.guild,
+        current_id=current_draft_id,
+    )
+    if draft_ch_view.is_current_stale:
         await channel.send(
-            "⚙️ **Event Setup**\n"
-            "Configure your alliance events. All events share the same draft channel, "
-            "announcement channel, draft time, and 5-minute warning setting."
+            "⚠️ Your previously configured draft channel no longer exists. "
+            "Pick a new one below."
         )
-
-    # ── Steps 1-4: Channel/time settings (skipped if coming from action menu) ──
-    if not skip_settings:
-        is_premium_flag  = await premium.is_premium(guild_id, interaction=interaction, bot=interaction.client)
-        current_draft_id = guild_cfg.event_draft_channel_id or 0
-        draft_ch_view    = ChannelSelectStep(
-            "Select the draft channel...",
-            suggested_name="event-drafts",
-            include_threads=is_premium_flag,
-            guild=interaction.guild,
-            current_id=current_draft_id,
-        )
-        if draft_ch_view.is_current_stale:
-            await channel.send(
-                "⚠️ Your previously configured draft channel no longer exists. "
-                "Pick a new one below."
-            )
-        await channel.send(
-            "**Step 1 of 5 — Draft Channel**\n"
-            "Which channel should the bot post event announcement drafts for leadership to review?\n"
-            "*(This applies to all events)*",
-            view=draft_ch_view,
-        )
-        await wait_view_or_cancel(draft_ch_view, cancel_event)
-        if draft_ch_view.cancelled:
-            return
-        if not draft_ch_view.confirmed:
-            await channel.send(f"⏰ Timed out. Run `/setup` → {HUB_BTN_EVENTS} to start again.")
-            return
-        draft_channel_id = draft_ch_view.selected_channel.id
-
-        current_ann_id = guild_cfg.event_announce_channel_id or 0
-        ann_ch_view    = ChannelSelectStep(
-            "Select the announcement channel...",
-            suggested_name="announcements",
-            include_threads=is_premium_flag,
-            guild=interaction.guild,
-            current_id=current_ann_id,
-        )
-        if ann_ch_view.is_current_stale:
-            await channel.send(
-                "⚠️ Your previously configured announcement channel no longer exists. "
-                "Pick a new one below."
-            )
-        await channel.send(
-            "**Step 2 of 5 — Announcement Channel**\n"
-            "Which channel should approved announcements be posted to?\n"
-            "*(This applies to all events)*",
-            view=ann_ch_view,
-        )
-        await wait_view_or_cancel(ann_ch_view, cancel_event)
-        if ann_ch_view.cancelled:
-            return
-        if not ann_ch_view.confirmed:
-            await channel.send(f"⏰ Timed out. Run `/setup` → {HUB_BTN_EVENTS} to start again.")
-            return
-        announce_channel_id = ann_ch_view.selected_channel.id
-
-        tz_label       = TIMEZONE_LABELS.get(timezone, timezone)
-        # `draft_time` is stored in 24h format ("12:00"); show it as-is in the
-        # default button label, but accept either format from user input.
-        # Re-prompt up to 3 times on unparseable input before bailing out.
-        attempts_left = 3
-        while True:
-            draft_time_raw = await ask_keep_or_change(
-                channel,
-                f"**Step 3 of 5 — Draft Posting Time**\n"
-                f"What time should the bot post the draft each event day? *(in {tz_label})*\n"
-                f"*(e.g. `12:00pm` for noon)*",
-                default="12:00",
-                current=draft_time or "",
-                modal_title="Draft Posting Time",
-                modal_label="Time",
-                timeout_cmd="setup_events",
-                cancel_event=cancel_event,
-            )
-            if not draft_time_raw:
-                return
-            parsed_draft = _parse_12h_time(draft_time_raw)
-            if parsed_draft:
-                draft_time = parsed_draft
-                break
-            if (len(draft_time_raw) == 5 and draft_time_raw[2] == ":"
-                    and draft_time_raw.replace(":", "").isdigit()):
-                draft_time = draft_time_raw   # already 24h
-                break
-            attempts_left -= 1
-            if attempts_left <= 0:
-                await channel.send(
-                    "⚠️ Could not read that time after a few tries. "
-                    f"Run `/setup` → {HUB_BTN_EVENTS} to start over."
-                )
-                return
-            await channel.send(
-                f"⚠️ Could not read **`{draft_time_raw}`** as a time. "
-                f"Try `12:00pm`, `9:00am`, or `15:30`. Let's try once more."
-            )
-
-        warn_view = YesNoView()
-        await channel.send(
-            "**Step 4 of 5 — 5-Minute Warning**\n"
-            "Should the bot automatically post a 5-minute warning before events?\n"
-            "*(This applies to all events)*",
-            view=warn_view,
-        )
-        await wait_view_or_cancel(warn_view, cancel_event)
-        if warn_view.cancelled:
-            return
-        if warn_view.selected is None:
-            await channel.send(f"⏰ Timed out. Run `/setup` → {HUB_BTN_EVENTS} to start again.")
-            return
-        five_min_warning = 1 if warn_view.selected else 0
-
-        update_config_field(guild_id, "event_draft_channel_id",    draft_channel_id)
-        update_config_field(guild_id, "event_announce_channel_id", announce_channel_id)
-        update_config_field(guild_id, "event_draft_time",          draft_time)
-        update_config_field(guild_id, "event_five_min_warning",    five_min_warning)
-
-    # ── Event list ────────────────────────────────────────────────────────────
-    events = get_guild_events(guild_id, active_only=False)
-
-    async def build_event_list():
-        """Show event list with Add/Edit/Delete/Finish controls."""
-        nonlocal events
-
-        while True:
-            events = get_guild_events(guild_id, active_only=False)
-
-            if events:
-                event_display = "\n".join(
-                    f"{i+1}. **{e['name']}** — "
-                    f"{'🔁 ' + str(e['interval_days']) + '-day cycle' if e['schedule_type'] == 'repeating' else '📅 Manual'} "
-                    f"at {e['default_time']}"
-                    + (" *(inactive)*" if not e['active'] else "")
-                    for i, e in enumerate(events)
-                )
-            else:
-                event_display = "*(no events configured yet)*"
-
-            class EventListView(discord.ui.View):
-                def __init__(self, event_list):
-                    super().__init__(timeout=300)
-                    self.action     = None
-                    self.edit_key   = None
-                    self.delete_key = None
-
-                    if event_list:
-                        edit_select = discord.ui.Select(
-                            placeholder="✏️ Edit an event...",
-                            options=[discord.SelectOption(
-                                label=f"Edit: {e['name']}", value=e['short_key']
-                            ) for e in event_list],
-                            row=0,
-                        )
-                        async def _edit_cb(inter: discord.Interaction):
-                            self.action   = "edit"
-                            self.edit_key = edit_select.values[0]
-                            for item in self.children: item.disabled = True
-                            await wizard_registry.safe_edit_response(inter, view=self)
-                            self.stop()
-                        edit_select.callback = _edit_cb
-                        self.add_item(edit_select)
-
-                        del_select = discord.ui.Select(
-                            placeholder="🗑️ Delete an event...",
-                            options=[discord.SelectOption(
-                                label=f"Delete: {e['name']}", value=e['short_key']
-                            ) for e in event_list],
-                            row=1,
-                        )
-                        async def _del_cb(inter: discord.Interaction):
-                            self.action     = "delete"
-                            self.delete_key = del_select.values[0]
-                            for item in self.children: item.disabled = True
-                            await wizard_registry.safe_edit_response(inter, view=self)
-                            self.stop()
-                        del_select.callback = _del_cb
-                        self.add_item(del_select)
-
-                @discord.ui.button(label="➕ Add Event", style=discord.ButtonStyle.primary, row=2)
-                async def add_btn(self, inter: discord.Interaction, button: discord.ui.Button):
-                    self.action = "add"
-                    for item in self.children: item.disabled = True
-                    await wizard_registry.safe_edit_response(inter, view=self)
-                    self.stop()
-
-                @discord.ui.button(label="✅ Finish", style=discord.ButtonStyle.success, row=2)
-                async def finish_btn(self, inter: discord.Interaction, button: discord.ui.Button):
-                    self.action = "finish"
-                    for item in self.children: item.disabled = True
-                    await wizard_registry.safe_edit_response(inter, view=self)
-                    self.stop()
-
-            list_view = EventListView(events)
-            await channel.send(
-                f"**Step 5 of 5 — Your Events:**\n{event_display}",
-                view=list_view,
-            )
-            await wait_view_or_cancel(list_view, cancel_event)
-            if list_view.cancelled:
-                return
-
-            if not list_view.action:
-                await channel.send(f"⏰ Timed out. Run `/setup` → {HUB_BTN_EVENTS} to start again.")
-                return False
-
-            if list_view.action == "finish":
-                return True
-
-            elif list_view.action == "delete":
-                from config import delete_guild_event, get_guild_event
-                ev = get_guild_event(guild_id, list_view.delete_key)
-                delete_guild_event(guild_id, list_view.delete_key)
-                await channel.send(f"🗑️ Removed: **{ev['name'] if ev else list_view.delete_key}**")
-
-            elif list_view.action in ("add", "edit"):
-                existing = None
-                if list_view.action == "edit":
-                    from config import get_guild_event
-                    existing = get_guild_event(guild_id, list_view.edit_key)
-                elif list_view.action == "add":
-                    # Free-tier cap on number of events
-                    cap = await premium.get_limit("events", guild_id, interaction=interaction, bot=interaction.client)
-                    if cap is not None and len(events) >= cap:
-                        await channel.send(embed=premium.limit_reached_embed(
-                            feature_label="Event Announcements",
-                            current=len(events), cap=cap, plural_unit="events",
-                        ))
-                        continue
-
-                # ── Event builder ──────────────────────────────────────────────
-                # Name
-                existing_name_extra = f"\n*Existing name:* `{existing['name']}`" if existing else ""
-                name_raw = await ask_text(
-                    "**Event Name**\n"
-                    "What is this event called? (e.g. `Plague Marauder (AE)`, `Zombie Siege`)"
-                    + existing_name_extra
-                )
-                if not name_raw:
-                    return False
-                name      = name_raw.strip() or (existing['name'] if existing else "")
-                short_key = existing['short_key'] if existing else _re.sub(r"[^a-z0-9]+", "_", name.lower()).strip("_")
-
-                # Time — re-prompt up to 3 times on unparseable input.
-                existing_time = existing['default_time'] if existing else ""
-                attempts_left = 3
-                default_time  = None
-                while True:
-                    if existing_time:
-                        # Editing an event — there's no hardcoded baseline
-                        # for "event time" since it varies per event. Pass
-                        # `current` AND `default` as the same existing
-                        # value; the helper's `current == default` branch
-                        # renders the standard two-button layout.
-                        time_raw = await ask_keep_or_change(
-                            channel,
-                            f"**{name} — Event Time**\n"
-                            f"What time does this event usually start? *(in {tz_label})*\n"
-                            f"*(e.g. `10:15pm`, `9:00am`)*",
-                            default=existing_time,
-                            current=existing_time,
-                            modal_title="Event Time",
-                            modal_label="Time",
-                            timeout_cmd="setup_events",
-                            cancel_event=cancel_event,
-                        )
-                    else:
-                        time_raw = await ask_text(
-                            f"**{name} — Event Time**\n"
-                            f"What time does this event usually start? *(in {tz_label})*\n"
-                            f"*(e.g. `10:15pm`, `9:00am`)*"
-                        )
-                    if not time_raw:
-                        return False
-                    parsed = _parse_12h_time(time_raw)
-                    if parsed:
-                        default_time = parsed
-                        break
-                    if (len(time_raw) == 5 and time_raw[2] == ":"
-                            and time_raw.replace(":", "").isdigit()):
-                        default_time = time_raw   # already 24h
-                        break
-                    attempts_left -= 1
-                    if attempts_left <= 0:
-                        await channel.send(
-                            "⚠️ Could not read that time after a few tries. "
-                            f"Run `/setup` → {HUB_BTN_EVENTS} to start over."
-                        )
-                        return False
-                    await channel.send(
-                        f"⚠️ Could not read **`{time_raw}`** as a time. "
-                        f"Try `10:15pm`, `9:00am`, or `21:00`. Let's try once more."
-                    )
-
-                # Schedule
-                sched_view = ScheduleTypeView()
-                await channel.send(
-                    f"**{name} — Schedule**\n"
-                    "Does this event repeat on a fixed cycle, or do you add it manually each time?",
-                    view=sched_view,
-                )
-                await wait_view_or_cancel(sched_view, cancel_event)
-                if sched_view.cancelled:
-                    return
-                if not sched_view.selected:
-                    await channel.send(f"⏰ Timed out. Run `/setup` → {HUB_BTN_EVENTS} to start again.")
-                    return False
-                schedule_type = sched_view.selected
-
-                anchor_date   = existing.get('anchor_date', '') if existing else ''
-                interval_days = existing.get('interval_days', 3) if existing else 3
-
-                if schedule_type == "repeating":
-                    anchor_extra = f"\n*Existing anchor date:* `{anchor_date}`" if anchor_date else ""
-                    anchor_raw   = await ask_text(
-                        f"**{name} — Anchor Date**\n"
-                        "Enter a recent or upcoming date when this event occurs.\n"
-                        "Type the month and day (e.g. `March 30`, `April 14`)"
-                        + anchor_extra
-                    )
-                    if not anchor_raw:
-                        return False
-                    parsed_anchor = _parse_month_day(anchor_raw)
-                    if not parsed_anchor:
-                        await channel.send(f"⚠️ Could not read that date. Try `March 30`. Run `/setup` → {HUB_BTN_EVENTS} to try again.")
-                        return False
-                    anchor_date = parsed_anchor
-
-                    interval_raw = await ask_keep_or_change(
-                        channel,
-                        f"**{name} — Cycle Interval**\n"
-                        "How many days between each occurrence? (e.g. `3`)",
-                        default="3",
-                        current=(
-                            str(existing['interval_days'])
-                            if existing and existing.get('interval_days')
-                            else ""
-                        ),
-                        modal_title="Cycle Interval",
-                        modal_label="Days between occurrences",
-                        timeout_cmd="setup_events",
-                        cancel_event=cancel_event,
-                    )
-                    if not interval_raw:
-                        return False
-                    try:
-                        interval_days = int(interval_raw)
-                    except ValueError:
-                        await channel.send(f"⚠️ Please enter a whole number. Run `/setup` → {HUB_BTN_EVENTS} to try again.")
-                        return False
-
-                # Blurb
-                cur_blurb    = existing.get('announcement_blurb', '') if existing else ''
-                default_blurb = f"{name} at {{time}} ({{server_time}} Server Time)."
-
-                class BlurbChoiceView(discord.ui.View):
-                    def __init__(self):
-                        super().__init__(timeout=120)
-                        self.choice = None
-
-                    @discord.ui.button(label="✅ Use default blurb", style=discord.ButtonStyle.success)
-                    async def use_default(self, inter: discord.Interaction, button: discord.ui.Button):
-                        self.choice = "default"
-                        for item in self.children: item.disabled = True
-                        await wizard_registry.safe_edit_response(
-                            inter,
-                            content=f"✅ Using default blurb:\n`{default_blurb}`", view=self
-                        )
-                        self.stop()
-
-                    @discord.ui.button(label="✏️ Enter my own", style=discord.ButtonStyle.secondary)
-                    async def enter_own(self, inter: discord.Interaction, button: discord.ui.Button):
-                        self.choice = "custom"
-                        for item in self.children: item.disabled = True
-                        await wizard_registry.safe_edit_response(inter, view=self)
-                        self.stop()
-
-                blurb_view = BlurbChoiceView()
-                if cur_blurb:
-                    keep_btn = discord.ui.Button(
-                        label="⏭️ Keep existing", style=discord.ButtonStyle.secondary, row=1
-                    )
-                    async def _keep_cb(inter: discord.Interaction):
-                        blurb_view.choice = "keep"
-                        for item in blurb_view.children: item.disabled = True
-                        await wizard_registry.safe_edit_response(inter, content="✅ Keeping existing blurb.", view=blurb_view)
-                        blurb_view.stop()
-                    keep_btn.callback = _keep_cb
-                    blurb_view.add_item(keep_btn)
-
-                blurb_msg = (
-                    f"**{name} — Announcement Blurb**\n"
-                    "This message gets posted when this event fires.\n"
-                    "Use `{time}` for the event time in your timezone and `{server_time}` for Server Time.\n\n"
-                    f"**Default:** `{default_blurb}`"
-                )
-                if cur_blurb:
-                    blurb_msg += f"\n**Existing:** `{cur_blurb[:100]}{'...' if len(cur_blurb) > 100 else ''}`"
-
-                await channel.send(blurb_msg, view=blurb_view)
-                await wait_view_or_cancel(blurb_view, cancel_event)
-                if blurb_view.cancelled:
-                    return
-                if not blurb_view.choice:
-                    await channel.send(f"⏰ Timed out. Run `/setup` → {HUB_BTN_EVENTS} to start again.")
-                    return False
-
-                if blurb_view.choice == "default":
-                    blurb = default_blurb
-                elif blurb_view.choice == "keep":
-                    blurb = cur_blurb
-                else:
-                    blurb_raw = await ask_text(
-                        "Enter your announcement blurb:\n"
-                        "*(Use `{time}` and `{server_time}` as placeholders)*",
-                        max_chars=1000,
-                    )
-                    if blurb_raw is None:
-                        return False
-                    blurb = blurb_raw.strip() or default_blurb
-
-                # Save event
-                event = {
-                    "short_key":               short_key,
-                    "name":                    name,
-                    "timezone":                timezone,
-                    "default_time":            default_time,
-                    "announcement_blurb":      blurb,
-                    "schedule_type":           schedule_type,
-                    "anchor_date":             anchor_date,
-                    "interval_days":           interval_days,
-                    "draft_channel_id":        draft_channel_id,
-                    "announcement_channel_id": announce_channel_id,
-                    "draft_time":              draft_time,
-                    "five_min_warning":        five_min_warning,
-                    "active":                  1,
-                }
-                save_guild_event(guild_id, event)
-                action_word = "Updated" if existing else "Added"
-                await channel.send(f"✅ {action_word}: **{name}**")
-
-    result = await build_event_list()
-    if not result:
+    await channel.send(
+        "**Step 1 of 4 — Draft Channel**\n"
+        "Which channel should the bot post event announcement drafts for leadership to review?\n"
+        "*(This applies to all events)*",
+        view=draft_ch_view,
+    )
+    await wait_view_or_cancel(draft_ch_view, cancel_event)
+    if draft_ch_view.cancelled:
         return
+    if not draft_ch_view.confirmed:
+        await channel.send(f"⏰ Timed out. Run `/setup` → {HUB_BTN_EVENTS} to start again.")
+        return
+    draft_channel_id = draft_ch_view.selected_channel.id
+
+    current_ann_id = guild_cfg.event_announce_channel_id or 0
+    ann_ch_view    = ChannelSelectStep(
+        "Select the announcement channel...",
+        suggested_name="announcements",
+        include_threads=is_premium_flag,
+        guild=interaction.guild,
+        current_id=current_ann_id,
+    )
+    if ann_ch_view.is_current_stale:
+        await channel.send(
+            "⚠️ Your previously configured announcement channel no longer exists. "
+            "Pick a new one below."
+        )
+    await channel.send(
+        "**Step 2 of 4 — Announcement Channel**\n"
+        "Which channel should approved announcements be posted to?\n"
+        "*(This applies to all events)*",
+        view=ann_ch_view,
+    )
+    await wait_view_or_cancel(ann_ch_view, cancel_event)
+    if ann_ch_view.cancelled:
+        return
+    if not ann_ch_view.confirmed:
+        await channel.send(f"⏰ Timed out. Run `/setup` → {HUB_BTN_EVENTS} to start again.")
+        return
+    announce_channel_id = ann_ch_view.selected_channel.id
+
+    tz_label       = TIMEZONE_LABELS.get(timezone, timezone)
+    # `draft_time` is stored in 24h format ("12:00"); show it as-is in the
+    # default button label, but accept either format from user input.
+    # Re-prompt up to 3 times on unparseable input before bailing out.
+    attempts_left = 3
+    while True:
+        draft_time_raw = await ask_keep_or_change(
+            channel,
+            f"**Step 3 of 4 — Draft Posting Time**\n"
+            f"What time should the bot post the draft each event day? *(in {tz_label})*\n"
+            f"*(e.g. `12:00pm` for noon)*",
+            default="12:00",
+            current=draft_time or "",
+            modal_title="Draft Posting Time",
+            modal_label="Time",
+            timeout_cmd="setup_events",
+            cancel_event=cancel_event,
+        )
+        if not draft_time_raw:
+            return
+        parsed_draft = _parse_12h_time(draft_time_raw)
+        if parsed_draft:
+            draft_time = parsed_draft
+            break
+        if (len(draft_time_raw) == 5 and draft_time_raw[2] == ":"
+                and draft_time_raw.replace(":", "").isdigit()):
+            draft_time = draft_time_raw   # already 24h
+            break
+        attempts_left -= 1
+        if attempts_left <= 0:
+            await channel.send(
+                "⚠️ Could not read that time after a few tries. "
+                f"Run `/setup` → {HUB_BTN_EVENTS} to start over."
+            )
+            return
+        await channel.send(
+            f"⚠️ Could not read **`{draft_time_raw}`** as a time. "
+            f"Try `12:00pm`, `9:00am`, or `15:30`. Let's try once more."
+        )
+
+    warn_view = YesNoView()
+    await channel.send(
+        "**Step 4 of 4 — 5-Minute Warning**\n"
+        "Should the bot automatically post a 5-minute warning before events?\n"
+        "*(This applies to all events)*",
+        view=warn_view,
+    )
+    await wait_view_or_cancel(warn_view, cancel_event)
+    if warn_view.cancelled:
+        return
+    if warn_view.selected is None:
+        await channel.send(f"⏰ Timed out. Run `/setup` → {HUB_BTN_EVENTS} to start again.")
+        return
+    five_min_warning = 1 if warn_view.selected else 0
+
+    update_config_field(guild_id, "event_draft_channel_id",    draft_channel_id)
+    update_config_field(guild_id, "event_announce_channel_id", announce_channel_id)
+    update_config_field(guild_id, "event_draft_time",          draft_time)
+    update_config_field(guild_id, "event_five_min_warning",    five_min_warning)
 
     # ── Summary ────────────────────────────────────────────────────────────────
-    events = get_guild_events(guild_id, active_only=True)
-
-    embed = discord.Embed(title="✅ Events Configured", color=discord.Color.green())
+    embed = discord.Embed(title="✅ Event Settings Saved", color=discord.Color.green())
     embed.add_field(name="Draft Channel",        value=f"<#{draft_channel_id}>",    inline=False)
     embed.add_field(name="Announcement Channel", value=f"<#{announce_channel_id}>", inline=False)
     embed.add_field(name="Draft Time",           value=_format_time_with_tz(draft_time, timezone), inline=False)
     embed.add_field(name="5-min Warning",        value="Yes" if five_min_warning else "No", inline=False)
-    if events:
-        ev_list = "\n".join(
-            f"• **{e['name']}** — {_format_time_with_tz(e['default_time'], e.get('timezone') or timezone)}"
-            for e in events
-        )
-        embed.add_field(name="Events", value=ev_list, inline=False)
-    embed.set_footer(text=f"Run /setup and click {HUB_BTN_EVENTS} to add or edit events.")
+    embed.set_footer(text="Run /events to add, edit, or remove individual events.")
     await channel.send(embed=embed)
     wizard_registry.unregister(user.id, cancel_event)
-    print(f"[SETUP] Events saved for guild {guild_id}")
+    print(f"[SETUP] Event settings saved for guild {guild_id}")
 
 async def run_birthday_setup(interaction: discord.Interaction, bot):
     """Walk an admin through configuring birthday tracking."""

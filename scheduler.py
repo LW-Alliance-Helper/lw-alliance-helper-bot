@@ -437,8 +437,27 @@ class EventEditorView(discord.ui.View):
             except asyncio.TimeoutError:
                 await channel.send("⏰ Timed out waiting for time input.", delete_after=8)
 
-            # Refresh the editor
-            await interaction.message.edit(content=self._render_editor_content(), view=self)
+            # Refresh the editor. Prefer self.message (the canonical reference
+            # set by post_editor) over interaction.message — the button-click
+            # interaction can be 30-120s stale by the time wait_for completes,
+            # and silent edit failures here were leaving leadership thinking
+            # "Add to today's draft" was broken even when the append worked.
+            target = self.message or interaction.message
+            try:
+                await target.edit(content=self._render_editor_content(), view=self)
+            except Exception as e:
+                logger = __import__("logging").getLogger(__name__)
+                logger.exception(
+                    "[EVENT EDITOR] failed to refresh after Add to today's draft "
+                    "(guild=%s, key=%s): %s",
+                    self.guild_id, chosen_key, e,
+                )
+                await channel.send(
+                    "⚠️ Added to the in-memory event list, but couldn't refresh "
+                    "the editor message. Re-open the editor via `/events` "
+                    "→ **📅 Today's events** to see the updated list.",
+                    delete_after=15,
+                )
 
         select.callback = on_select
         view = discord.ui.View(timeout=60)

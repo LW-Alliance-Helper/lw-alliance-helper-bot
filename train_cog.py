@@ -18,6 +18,7 @@ from discord import app_commands
 from discord.ext import commands, tasks
 
 from config import get_config
+from messages import SETUP_POINTER_FOOTER, TIER_COMPARISON
 from setup_hub import HUB_BTN_BIRTHDAYS
 from train import (
     ET,
@@ -226,7 +227,9 @@ class TrainCog(commands.Cog):
                 lines.append(f"• **{when:%A, %B} {when.day}** — {name} *({label})*")
             embed.description = "\n".join(lines)
 
-        embed.set_footer(text=f"Source: {tab_name} · Run /setup → {HUB_BTN_BIRTHDAYS} to change settings")
+        embed.set_footer(
+            text=f"Source: {tab_name} · " + SETUP_POINTER_FOOTER.format(wizard=HUB_BTN_BIRTHDAYS),
+        )
         await interaction.followup.send(embed=embed, ephemeral=True)
 
     # ── /train log ─────────────────────────────────────────────────────────────
@@ -314,7 +317,9 @@ class TrainCog(commands.Cog):
                     lines.append("• " + " · ".join(bits))
                 embed.description = "\n".join(lines)[:4000]
                 if window_days < 30:
-                    embed.set_footer(text=f"Free tier: {window_days}-day window. Upgrade to Premium for 30 days.")
+                    embed.set_footer(text=TIER_COMPARISON.format(
+                        free_limit=f"{window_days}-day window", premium_limit="30 days",
+                    ))
                 else:
                     embed.set_footer(text=f"Showing the most recent 20 entries within ±{window_days} days. Pass a date to filter.")
 

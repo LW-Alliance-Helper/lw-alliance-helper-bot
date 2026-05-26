@@ -42,6 +42,7 @@ from messages import (
     LEADERSHIP_INACCESSIBLE,
     LEADERSHIP_NO_READ_PERM,
     LEADERSHIP_NOT_CONFIGURED,
+    TIER_COMPARISON,
     TIME_PARSE_GIVE_UP,
     TIME_PARSE_RETRY,
 )
@@ -534,7 +535,7 @@ async def _render_log_followup(bot, interaction: discord.Interaction) -> None:
         embed.add_field(name=f"Approvals ({len(matches)})", value="\n".join(lines)[:1024], inline=False)
 
     if days < 30:
-        embed.set_footer(text="Free tier: 7-day window. Upgrade to Premium for 30 days.")
+        embed.set_footer(text=TIER_COMPARISON.format(free_limit="7-day window", premium_limit="30 days"))
     await interaction.followup.send(embed=embed, ephemeral=True)
 
 

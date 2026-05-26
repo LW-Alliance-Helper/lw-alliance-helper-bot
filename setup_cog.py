@@ -26,6 +26,8 @@ from messages import (
     GENERIC_CMD_TIMEOUT,
     INPUT_INVALID,
     PREV_CHANNEL_GONE,
+    SETUP_POINTER_FOOTER,
+    TIER_COMPARISON,
     TIME_PARSE_GIVE_UP,
     TIME_PARSE_RETRY,
     WIZARD_TIMEOUT,
@@ -2399,7 +2401,9 @@ async def run_growth_setup(interaction: discord.Interaction, bot):
         else:
             embed.add_field(name="No metrics yet", value="Click **Add Metric** to begin.", inline=False)
         if cap is not None:
-            embed.set_footer(text=f"Free tier: {len(metrics)} of {cap} metrics used. Upgrade to Premium for unlimited.")
+            embed.set_footer(text=TIER_COMPARISON.format(
+                free_limit=f"{len(metrics)} of {cap} metrics used", premium_limit="unlimited",
+            ))
         return embed
 
     while True:
@@ -2691,7 +2695,10 @@ async def run_growth_setup(interaction: discord.Interaction, bot):
     embed.add_field(name="Snapshot Schedule", value=freq_desc,            inline=False)
     embed.add_field(name="Next Snapshot",     value=next_value,           inline=False)
     embed.add_field(name="Metrics",           value=metrics_display,      inline=False)
-    embed.set_footer(text=f"Run /setup and click {HUB_BTN_GROWTH} to update. Use /growth overview to take a manual snapshot.")
+    embed.set_footer(
+        text=SETUP_POINTER_FOOTER.format(wizard=HUB_BTN_GROWTH)
+             + " Use /growth overview to take a manual snapshot.",
+    )
     await channel.send(embed=embed)
     wizard_registry.unregister(user.id, cancel_event)
     print(f"[SETUP] Growth config saved for guild {guild_id}")
@@ -3210,7 +3217,7 @@ async def run_growth_breakdown_setup(interaction: discord.Interaction, bot):
     if labels:
         l_text = ", ".join(f"{DEFAULT_BUCKET_LABELS[b]}→{labels[b]}" for b in BUCKET_ORDER if labels.get(b))
         embed.add_field(name="Custom Labels", value=l_text or "—", inline=False)
-    embed.set_footer(text="Run /setup and click 📊 Growth Breakdown to update.")
+    embed.set_footer(text=SETUP_POINTER_FOOTER.format(wizard=HUB_BTN_BREAKDOWN))
     await channel.send(embed=embed)
     wizard_registry.unregister(user.id, cancel_event)
     print(f"[SETUP] Growth Breakdown config saved for guild {guild_id}")
@@ -3663,7 +3670,7 @@ async def run_train_setup(interaction: discord.Interaction, bot):
         if prompt_template:
             preview = prompt_template[:200] + ("..." if len(prompt_template) > 200 else "")
             embed.add_field(name="Default Template Preview", value=f"```{preview}```", inline=False)
-    embed.set_footer(text=f"Run /setup and click {HUB_BTN_TRAIN} to update any of these settings.")
+    embed.set_footer(text=SETUP_POINTER_FOOTER.format(wizard=HUB_BTN_TRAIN))
     await channel.send(embed=embed)
     wizard_registry.unregister(user.id, cancel_event)
     print(f"[SETUP] Train config saved for guild {guild_id}")
@@ -8947,7 +8954,7 @@ async def run_birthday_setup(interaction: discord.Interaction, bot):
     if reminders_enabled:
         embed.add_field(name="Reminder Channel", value=f"<#{reminder_channel_id}>",       inline=True)
         embed.add_field(name="Reminder Time",    value=_format_time_with_tz(reminder_time, guild_tz), inline=True)
-    embed.set_footer(text=f"Run /setup and click {HUB_BTN_BIRTHDAYS} to update these settings.")
+    embed.set_footer(text=SETUP_POINTER_FOOTER.format(wizard=HUB_BTN_BIRTHDAYS))
     await channel.send(embed=embed)
     wizard_registry.unregister(user.id, cancel_event)
     print(f"[SETUP] Birthday config saved for guild {guild_id}")

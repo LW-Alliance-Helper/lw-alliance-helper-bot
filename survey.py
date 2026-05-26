@@ -29,7 +29,14 @@ import discord
 from discord import app_commands
 from discord.ext import commands, tasks
 from config import get_config
-from messages import GENERIC_CMD_TIMEOUT, NOT_SET_UP, TIME_PARSE_GIVE_UP, TIME_PARSE_RETRY
+from messages import (
+    GENERIC_CMD_TIMEOUT,
+    NOT_SET_UP,
+    SETUP_POINTER_FOOTER,
+    TIME_PARSE_GIVE_UP,
+    TIME_PARSE_RETRY,
+)
+from setup_hub import HUB_BTN_SURVEY
 import wizard_registry
 
 # ── Config ─────────────────────────────────────────────────────────────────────
@@ -1146,7 +1153,10 @@ class SurveyCog(commands.Cog):
             value="✅ Configured" if scfg.get("intro_message") else "❌ Not configured",
             inline=False,
         )
-        embed.set_footer(text="Run /setup → 📋 Survey to update. Run /survey post to post the button.")
+        embed.set_footer(
+            text=SETUP_POINTER_FOOTER.format(wizard=HUB_BTN_SURVEY)
+                 + " Run /survey post to post the button.",
+        )
 
         await interaction.response.send_message(embed=embed, ephemeral=True)
 

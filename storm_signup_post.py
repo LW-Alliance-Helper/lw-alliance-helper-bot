@@ -578,7 +578,8 @@ def _format_post_result_message(
 
     status = result.get("status")
     label = "Desert Storm" if event_type == "DS" else "Canyon Storm"
-    setup_cmd = "/setup → ⚔️ Desert Storm" if event_type == "DS" else "/setup → 🏜️ Canyon Storm"
+    from setup_hub import STORM_SETUP_NAV
+    setup_cmd = STORM_SETUP_NAV[event_type]
     date_pretty = format_event_date(event_date)
 
     from storm_event_hub import HUB_COMMAND, HUB_BTN_VIEW_SIGNUPS

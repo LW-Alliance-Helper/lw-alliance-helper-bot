@@ -21,6 +21,7 @@ import os
 from datetime import date
 
 import discord
+from setup_hub import STORM_SETUP_NAV
 from storm_event_hub import HUB_COMMAND, HUB_BTN_PARTICIPATION
 from config import get_config
 import wizard_registry
@@ -1073,7 +1074,7 @@ async def run_log_flow(bot, channel, user, event_type):
     hub_cmd      = HUB_COMMAND["DS"] if is_ds else HUB_COMMAND["CS"]
     log_hint     = f"`{hub_cmd}` → **{HUB_BTN_PARTICIPATION}**"
     # Post-#201: storm setup wizards live behind /setup hub buttons.
-    setup_cmd    = "/setup → ⚔️ Desert Storm" if is_ds else "/setup → 🏜️ Canyon Storm"
+    setup_cmd    = STORM_SETUP_NAV["DS" if is_ds else "CS"]
     guild_id     = channel.guild.id if hasattr(channel, "guild") and channel.guild else None
     cancel_event = asyncio.Event()
     active_logs[user.id] = cancel_event

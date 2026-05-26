@@ -18,6 +18,7 @@ from discord import app_commands
 from discord.ext import commands, tasks
 
 from config import get_config
+from setup_hub import HUB_BTN_BIRTHDAYS
 from train import (
     ET,
     BIRTHDAY_LOOKAHEAD,
@@ -183,7 +184,7 @@ class TrainCog(commands.Cog):
 
         if not members:
             await interaction.followup.send(
-                f"⚠️ No birthdays found in **{tab_name}**. Run `/setup → 🎂 Birthdays` to verify the tab and column settings.",
+                f"⚠️ No birthdays found in **{tab_name}**. Run `/setup → {HUB_BTN_BIRTHDAYS}` to verify the tab and column settings.",
                 ephemeral=True,
             )
             return
@@ -225,7 +226,7 @@ class TrainCog(commands.Cog):
                 lines.append(f"• **{when:%A, %B} {when.day}** — {name} *({label})*")
             embed.description = "\n".join(lines)
 
-        embed.set_footer(text=f"Source: {tab_name} · Run /setup → 🎂 Birthdays to change settings")
+        embed.set_footer(text=f"Source: {tab_name} · Run /setup → {HUB_BTN_BIRTHDAYS} to change settings")
         await interaction.followup.send(embed=embed, ephemeral=True)
 
     # ── /train log ─────────────────────────────────────────────────────────────
@@ -515,7 +516,7 @@ class TrainCog(commands.Cog):
                               f"{bday_channel_id} (#{chan_name}) for guild "
                               f"{guild.id} ({guild.name}) — leadership must "
                               f"grant View Channel + Send Messages or "
-                              f"reconfigure via /setup → 🎂 Birthdays")
+                              f"reconfigure via /setup → {HUB_BTN_BIRTHDAYS}")
                         break
 
                     # 💎 Premium: also DM the member directly with a personal note.

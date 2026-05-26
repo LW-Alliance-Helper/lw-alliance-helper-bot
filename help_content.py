@@ -13,6 +13,18 @@ from typing import Optional
 
 import discord
 
+from setup_hub import (
+    HUB_BTN_BIRTHDAYS,
+    HUB_BTN_BREAKDOWN,
+    HUB_BTN_EVENTS,
+    HUB_BTN_GROWTH,
+    HUB_BTN_MEMBERS,
+    HUB_BTN_SHINY,
+    HUB_BTN_SURVEY,
+    HUB_BTN_TRAIN,
+    STORM_SETUP_NAV,
+)
+
 
 PRIVACY_URL = (
     "https://lw-alliance-helper.github.io/privacy.html#where-your-data-lives"
@@ -46,19 +58,22 @@ HELP_CATEGORIES: dict[str, dict] = {
         "label": "Event Announcements",
         "description": (
             "Schedule in-game events (Plague Marauder, Zombie Siege, etc). "
-            "Drafts post to leadership for review, then to your public channel."
+            "Drafts post to leadership for review, then to your public channel. "
+            "Open `/events` to see every action in one place."
         ),
         "commands": [
-            ("/setup → 📣 Events",
-             "Configure events, leadership and public channels, daily draft "
-             "time, and the 5-min warning."),
-            ("/events overview",
-             "Configured event types + next firing dates at a glance."),
-            ("/events show [date]",
-             "Open the event editor for today or a chosen date. Edit, "
-             "approve, and post."),
-            ("/events log",
-             "Show approved event posts (free: 7 days / 💎 Premium: 30 days)."),
+            (f"/setup → {HUB_BTN_EVENTS}",
+             "Configure the four shared event settings: leadership draft "
+             "channel, public announcement channel, daily draft time, "
+             "and 5-min warning toggle."),
+            ("/events",
+             "**Event hub.** Opens an embed showing the alliance's current "
+             "event config plus a button grid.\n"
+             "**Read row:** 📅 Today's events (open the draft editor), "
+             "📆 Upcoming events (next firing dates), 📜 Event log "
+             "(recent approvals — free: 7 days / 💎 Premium: 30 days).\n"
+             "**Write row:** ➕ Create an event (pick a preset or define "
+             "your own), 🗑️ Delete an event."),
         ],
     },
     "train": {
@@ -69,7 +84,7 @@ HELP_CATEGORIES: dict[str, dict] = {
             "generate a personalised ChatGPT blurb prompt."
         ),
         "commands": [
-            ("/setup → 🚂 Train",
+            (f"/setup → {HUB_BTN_TRAIN}",
              "Configure the train tab, blurb generation, and reminders."),
             ("/train overview",
              "View the schedule with Add / Update / Generate Prompt / Clear "
@@ -88,7 +103,7 @@ HELP_CATEGORIES: dict[str, dict] = {
             "announcements and auto-assign the train."
         ),
         "commands": [
-            ("/setup → 🎂 Birthdays",
+            (f"/setup → {HUB_BTN_BIRTHDAYS}",
              "Configure birthday tracking, train integration, and "
              "announcement template."),
             ("/birthdays",
@@ -106,7 +121,7 @@ HELP_CATEGORIES: dict[str, dict] = {
             "see every action in one place."
         ),
         "commands": [
-            ("/setup → ⚔️ Desert Storm",
+            (STORM_SETUP_NAV["DS"],
              "Configure Team rosters, log channel, public post channel, "
              "mail template, and (💎 Premium) the structured-flow sign-up "
              "channel, schedule, and Sheet tabs."),
@@ -134,7 +149,7 @@ HELP_CATEGORIES: dict[str, dict] = {
             "every action in one place."
         ),
         "commands": [
-            ("/setup → 🏜️ Canyon Storm",
+            (STORM_SETUP_NAV["CS"],
              "Configure Team rosters, log channel, public post channel, "
              "mail template, and (💎 Premium) the structured-flow sign-up "
              "channel, schedule, and Sheet tabs."),
@@ -159,7 +174,7 @@ HELP_CATEGORIES: dict[str, dict] = {
             "land in your sheet; leadership gets a notification per submission."
         ),
         "commands": [
-            ("/setup → 📋 Survey",
+            (f"/setup → {HUB_BTN_SURVEY}",
              "Configure questions, channels, sheet tabs, and the intro."),
             ("/survey overview",
              "View configured surveys. 💎 Premium gets Add / Edit / Remove "
@@ -181,9 +196,9 @@ HELP_CATEGORIES: dict[str, dict] = {
             "who's stalled."
         ),
         "commands": [
-            ("/setup → 📈 Growth",
+            (f"/setup → {HUB_BTN_GROWTH}",
              "Configure source tab, metrics, and snapshot schedule."),
-            ("/setup → 📊 Growth Breakdown",
+            (f"/setup → {HUB_BTN_BREAKDOWN}",
              "💎 Configure the breakdown auto-post, bucket thresholds, "
              "and bucket labels."),
             ("/growth overview",
@@ -202,7 +217,7 @@ HELP_CATEGORIES: dict[str, dict] = {
             "that have shiny tasks today."
         ),
         "commands": [
-            ("/setup → 🌟 Shiny Tasks",
+            (f"/setup → {HUB_BTN_SHINY}",
              "Configure the announcement channel, server range, post "
              "time, and message body."),
         ],
@@ -239,7 +254,7 @@ HELP_CATEGORIES: dict[str, dict] = {
             "Unlock with `/upgrade`."
         ),
         "commands": [
-            ("/setup → 👥 Member Sync",
+            (f"/setup → {HUB_BTN_MEMBERS}",
              "Configure Member Sync. Writes Discord IDs to your "
              "sheet so other features find members by name."),
             ("/members overview",

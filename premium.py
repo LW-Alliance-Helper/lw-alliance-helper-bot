@@ -530,7 +530,7 @@ def limit_reached_embed(
         value=(
             "Premium subscribers get expanded limits, plus features like "
             "member roster sync, birthday DMs, and thread destinations. "
-            "Run `/upgrade` to subscribe."
+            "Run `/upgrade` to unlock it."
         ),
         inline=False,
     )
@@ -544,7 +544,7 @@ def premium_locked_embed(*, feature_label: str, description: str = "") -> discor
         description=(
             description
             or f"This feature is part of {PREMIUM_BRAND}. "
-               "Run `/upgrade` to unlock it for your alliance."
+               "Run `/upgrade` to unlock it."
         ),
         color=discord.Color.purple(),
     )

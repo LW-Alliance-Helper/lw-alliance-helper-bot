@@ -444,7 +444,7 @@ class DonateCog(commands.Cog):
             embed = discord.Embed(
                 title="💎 You don't have an active Premium subscription",
                 description=(
-                    "Run `/upgrade` to subscribe, then `/premium assign` to pin "
+                    "Run `/upgrade` to unlock it, then `/premium assign` to pin "
                     "your subscription to a specific server."
                 ),
                 color=discord.Color.purple(),

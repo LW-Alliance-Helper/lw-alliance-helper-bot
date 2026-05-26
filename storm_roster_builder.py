@@ -37,7 +37,7 @@ from typing import Optional
 
 import discord
 
-from messages import CANCEL_BACKPEDAL
+from messages import CANCEL_BACKPEDAL, PREMIUM_LOCKED_INLINE
 from storm_event_hub import (
     HUB_COMMAND,
     HUB_BTN_VIEW_SIGNUPS,
@@ -5481,8 +5481,7 @@ class _DmRosteredMembersView(discord.ui.View):
             interaction=interaction,
         ):
             await interaction.response.send_message(
-                "💎 DM-the-roster is a Premium feature. Run "
-                "`/upgrade` to enable it.",
+                PREMIUM_LOCKED_INLINE.format(feature="DM-the-roster"),
                 ephemeral=True,
             )
             return

@@ -23,6 +23,8 @@ from typing import Optional
 
 import discord
 
+from messages import PREMIUM_LOCKED_INLINE
+
 
 logger = logging.getLogger(__name__)
 
@@ -662,8 +664,7 @@ async def handle_storm_trends(
         interaction.guild_id, interaction=interaction, bot=bot,
     ):
         await interaction.response.send_message(
-            "🔒 The **Trends Viewer** is a 💎 Premium feature. Run "
-            "`/upgrade` to unlock it.",
+            PREMIUM_LOCKED_INLINE.format(feature="Trends Viewer"),
             ephemeral=True,
         )
         return

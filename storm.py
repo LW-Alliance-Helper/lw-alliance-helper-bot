@@ -28,7 +28,7 @@ import json
 import os
 import discord
 from config import get_config
-from messages import HUB_TIMEOUT
+from messages import HUB_TIMEOUT, NOT_SET_UP
 from storm_event_hub import HUB_COMMAND, HUB_BTN_DRAFT
 import wizard_registry
 
@@ -790,7 +790,7 @@ async def _guard(interaction: discord.Interaction) -> bool:
     cfg = get_config(interaction.guild_id)
     if not cfg or not cfg.setup_complete:
         await interaction.response.send_message(
-            "⚙️ This bot hasn't been set up yet. Run `/setup` to get started.", ephemeral=True
+            NOT_SET_UP, ephemeral=True
         )
         return False
     if cfg.leadership_role_name not in [r.name for r in interaction.user.roles]:

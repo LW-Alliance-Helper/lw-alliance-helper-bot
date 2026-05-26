@@ -35,7 +35,7 @@ from config import (
     get_config, get_member_roster_config, save_member_roster_config,
     update_roster_last_synced, get_member_roster_sheet, get_spreadsheet,
 )
-from messages import WIZARD_TIMEOUT
+from messages import FEATURE_NOT_CONFIGURED, WIZARD_TIMEOUT
 from setup_hub import HUB_BTN_MEMBERS
 
 
@@ -817,7 +817,7 @@ class MemberRosterCog(commands.Cog):
         cfg = get_member_roster_config(interaction.guild_id)
         if not cfg.get("enabled"):
             await interaction.response.send_message(
-                "⚙️ Member Roster Sync isn't configured yet. Run `/setup` → 👥 Member Sync first.",
+                FEATURE_NOT_CONFIGURED.format(feature="Member Roster Sync", wizard_btn=HUB_BTN_MEMBERS),
                 ephemeral=True,
             )
             return

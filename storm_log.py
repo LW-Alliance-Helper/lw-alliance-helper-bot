@@ -21,7 +21,8 @@ import os
 from datetime import date
 
 import discord
-from setup_hub import STORM_SETUP_NAV
+from messages import FEATURE_NOT_CONFIGURED, NOT_SET_UP
+from setup_hub import HUB_BTN_MEMBERS, STORM_SETUP_NAV
 from storm_event_hub import HUB_COMMAND, HUB_BTN_PARTICIPATION
 from config import get_config
 import wizard_registry
@@ -1663,7 +1664,7 @@ async def _guard(interaction: discord.Interaction) -> bool:
     cfg = get_config(interaction.guild_id)
     if not cfg or not cfg.setup_complete:
         await interaction.response.send_message(
-            "⚙️ This bot hasn't been set up yet. Run `/setup` to get started.", ephemeral=True
+            NOT_SET_UP, ephemeral=True
         )
         return False
     if cfg.leadership_role_name not in [r.name for r in interaction.user.roles]:
@@ -1735,7 +1736,7 @@ async def _send_storm_reminder(bot, interaction: discord.Interaction, event_type
     roster_cfg = get_member_roster_config(interaction.guild_id)
     if not roster_cfg.get("enabled"):
         await interaction.response.send_message(
-            "⚙️ Member Roster Sync isn't configured yet. Run `/setup` → 👥 Member Sync first.",
+            FEATURE_NOT_CONFIGURED.format(feature="Member Roster Sync", wizard_btn=HUB_BTN_MEMBERS),
             ephemeral=True,
         )
         return

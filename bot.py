@@ -18,6 +18,7 @@ from config import (
     delete_guild_install_metadata,
 )
 import wizard_registry
+from messages import NOT_SET_UP
 
 load_dotenv()
 
@@ -146,7 +147,7 @@ async def guard(interaction: discord.Interaction) -> bool:
     cfg = get_config(interaction.guild_id)
     if not cfg or not cfg.setup_complete:
         await interaction.response.send_message(
-            "⚙️ This bot hasn't been set up yet. Run `/setup` to get started.", ephemeral=True
+            NOT_SET_UP, ephemeral=True
         )
         return False
     if not is_leadership(interaction):

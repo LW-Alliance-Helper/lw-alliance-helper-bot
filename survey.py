@@ -29,7 +29,7 @@ import discord
 from discord import app_commands
 from discord.ext import commands, tasks
 from config import get_config
-from messages import GENERIC_CMD_TIMEOUT
+from messages import GENERIC_CMD_TIMEOUT, NOT_SET_UP
 import wizard_registry
 
 # ── Config ─────────────────────────────────────────────────────────────────────
@@ -630,7 +630,7 @@ async def _start_survey_answer_flow(interaction: discord.Interaction,
     """Shared handler for both legacy and dynamic survey-answer buttons."""
     cfg = get_config(interaction.guild_id)
     if not cfg or not cfg.setup_complete:
-        await interaction.response.send_message("⚙️ This bot hasn't been set up yet.", ephemeral=True)
+        await interaction.response.send_message(NOT_SET_UP, ephemeral=True)
         return
     if cfg.member_role_name not in [r.name for r in interaction.user.roles]:
         await interaction.response.send_message(
@@ -745,7 +745,7 @@ async def _guard(interaction: discord.Interaction) -> bool:
     cfg = get_config(interaction.guild_id)
     if not cfg or not cfg.setup_complete:
         await interaction.response.send_message(
-            "⚙️ This bot hasn't been set up yet. Run `/setup` to get started.", ephemeral=True
+            NOT_SET_UP, ephemeral=True
         )
         return False
     if cfg.leadership_role_name not in [r.name for r in interaction.user.roles]:

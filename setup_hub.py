@@ -23,6 +23,8 @@ from typing import Optional
 
 import discord
 
+from messages import NOT_SET_UP_HUB
+
 logger = logging.getLogger(__name__)
 
 
@@ -284,7 +286,7 @@ class _SetupHubView(discord.ui.View):
         cfg = get_config(inter.guild_id)
         if not cfg or not cfg.setup_complete:
             await inter.response.send_message(
-                "⚙️ This server hasn't been set up yet. Click **⚙️ Open setup wizard** above to start.",
+                NOT_SET_UP_HUB.format(hub_btn=HUB_BTN_SETUP_WIZARD),
                 ephemeral=True,
             )
             return

@@ -35,7 +35,7 @@ import logging
 
 import discord
 
-from messages import CANCEL_BACKPEDAL_DEFAULT
+from messages import CANCEL_BACKPEDAL_DEFAULT, NOT_SET_UP
 from storm_event_hub import HUB_COMMAND, HUB_BTN_RULES
 
 logger = logging.getLogger(__name__)
@@ -353,7 +353,7 @@ def save_rule(guild_id: int, event_type: str, rule: Rule) -> tuple[bool, str]:
 
     ws = _get_or_create_rules_worksheet(guild_id, event_type)
     if ws is None:
-        return False, "Your Google Sheet isn't configured. Run setup first."
+        return False, NOT_SET_UP
     try:
         ws.append_row(
             [rule.rule_type, rule.subject, rule.sub_type, rule.value, rule.notes],

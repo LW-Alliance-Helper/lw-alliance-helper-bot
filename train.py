@@ -25,6 +25,7 @@ from zoneinfo import ZoneInfo
 import wizard_registry
 
 from config import get_config
+from messages import NOT_SET_UP
 
 # Birthday helpers + member-sheet loader live in train_birthdays.py.
 # Re-export here so existing imports (`from train import load_birthdays`,
@@ -536,7 +537,7 @@ async def _guard(interaction: discord.Interaction) -> bool:
     cfg = get_config(interaction.guild_id)
     if not cfg or not cfg.setup_complete:
         await interaction.response.send_message(
-            "⚙️ This bot hasn't been set up yet. Run `/setup` to get started.", ephemeral=True
+            NOT_SET_UP, ephemeral=True
         )
         return False
     if not _is_leadership(interaction):

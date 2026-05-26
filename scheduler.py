@@ -388,60 +388,73 @@ class EventEditorView(discord.ui.View):
             def check(m):
                 return m.author == interaction.user and m.channel == channel
 
+            parsed = None
+            reply   = None
             try:
                 reply = await self.bot.wait_for("message", check=check, timeout=120)
                 parsed = parse_time_str(reply.content)
-                try:
-                    await time_prompt.delete()
-                    await reply.delete()
-                except discord.HTTPException:
-                    pass
-
-                if parsed:
-                    h, m = parsed
-                    # Resolve the chosen event's configured timezone so
-                    # leadership-entered times stay in that tz. Without
-                    # this, every Add Event silently became ET, which
-                    # rendered the wrong server-time offset for any
-                    # alliance on a non-ET schedule.
-                    ev_tz = ET
-                    if self.guild_id is not None:
-                        try:
-                            from config import get_guild_event
-                            cfg_event = get_guild_event(self.guild_id, chosen_key)
-                            if cfg_event and cfg_event.get("timezone"):
-                                ev_tz = ZoneInfo(cfg_event["timezone"])
-                        except Exception:
-                            pass
-                    dt = make_event_datetime(self.run_date, h, m, tz=ev_tz)
-                    # Include name + blurb from the resolved event info so
-                    # build_announcement can render the configured custom
-                    # message. Without these, the announcement falls through
-                    # to a lowercase-short_key f-string fallback ("glacieradon
-                    # at 10:30am" instead of the user's saved blurb).
-                    self.event_list.append({
-                        "key":   chosen_key,
-                        "name":  chosen_info.get("name", chosen_name),
-                        "dt":    dt,
-                        "blurb": chosen_info.get("blurb", ""),
-                    })
-                    # Keep list sorted by time
-                    self.event_list.sort(key=lambda e: e["dt"])
-                    await channel.send(
-                        f"✅ **{chosen_name}** added at {format_et(dt)}.",
-                        delete_after=5,
-                    )
-                else:
-                    await channel.send("⚠️ Could not parse that time. Try again with Add Event.", delete_after=8)
-
             except asyncio.TimeoutError:
                 await channel.send("⏰ Timed out waiting for time input.", delete_after=8)
 
-            # Refresh the editor. Prefer self.message (the canonical reference
-            # set by post_editor) over interaction.message — the button-click
-            # interaction can be 30-120s stale by the time wait_for completes,
-            # and silent edit failures here were leaving leadership thinking
-            # "Add to today's draft" was broken even when the append worked.
+            # Tear down every intermediate message so the refreshed editor
+            # is the most recent visible thing on the officer's screen:
+            #   - bot's time prompt
+            #   - user's typed reply (needs Manage Messages — skip if denied)
+            #   - ephemeral event picker (the original button-click response)
+            for msg in (time_prompt, reply):
+                if msg is None:
+                    continue
+                try:
+                    await msg.delete()
+                except discord.HTTPException:
+                    pass
+            try:
+                await interaction.delete_original_response()
+            except discord.HTTPException:
+                pass
+
+            if parsed:
+                h, m = parsed
+                # Resolve the chosen event's configured timezone so
+                # leadership-entered times stay in that tz. Without this,
+                # every Add silently became ET, which rendered the wrong
+                # server-time offset for any alliance on a non-ET schedule.
+                ev_tz = ET
+                if self.guild_id is not None:
+                    try:
+                        from config import get_guild_event
+                        cfg_event = get_guild_event(self.guild_id, chosen_key)
+                        if cfg_event and cfg_event.get("timezone"):
+                            ev_tz = ZoneInfo(cfg_event["timezone"])
+                    except Exception:
+                        pass
+                dt = make_event_datetime(self.run_date, h, m, tz=ev_tz)
+                # Include name + blurb from the resolved event info so
+                # build_announcement can render the configured custom
+                # message. Without these, the announcement falls through
+                # to a lowercase-short_key f-string fallback ("glacieradon
+                # at 10:30am" instead of the user's saved blurb).
+                self.event_list.append({
+                    "key":   chosen_key,
+                    "name":  chosen_info.get("name", chosen_name),
+                    "dt":    dt,
+                    "blurb": chosen_info.get("blurb", ""),
+                })
+                self.event_list.sort(key=lambda e: e["dt"])
+            elif reply is not None:
+                # User typed something but parse failed — tell them.
+                await channel.send(
+                    "⚠️ Could not parse that time. Click **➕ Add to today's draft** again.",
+                    delete_after=8,
+                )
+
+            # Refresh the editor in place. Prefer self.message (the canonical
+            # reference set by post_editor) over interaction.message — the
+            # button-click interaction can be 30-120s stale by the time
+            # wait_for completes. The refreshed editor IS the success
+            # indicator now that the standalone "added" ack is gone, so a
+            # silent edit failure would leave officers thinking the action
+            # failed; surface it explicitly via Sentry + a channel message.
             target = self.message or interaction.message
             try:
                 await target.edit(content=self._render_editor_content(), view=self)

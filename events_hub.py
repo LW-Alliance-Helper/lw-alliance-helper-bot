@@ -193,13 +193,13 @@ def _build_events_hub_embed(guild: discord.Guild) -> discord.Embed:
                         nxt  = upcoming[0]
                         days = (nxt - today).days
                         when = "today" if days == 0 else "tomorrow" if days == 1 else f"in {days} days"
-                        lines.append(f"• **{name}** · Next instance: {nxt:%a %b} {nxt.day} ({when}) · every {interval}d")
+                        lines.append(f"**{name}** - Next event instance: {nxt:%a %b} {nxt.day} ({when}) - every {interval} days")
                     else:
-                        lines.append(f"• **{name}** · Recurring every {interval}d (next instance not yet computable)")
+                        lines.append(f"**{name}** - Recurring every {interval} days (next instance not yet computable)")
                 except (ValueError, TypeError):
-                    lines.append(f"• **{name}** · Schedule invalid (re-create the event)")
+                    lines.append(f"**{name}** - Schedule invalid (re-create the event)")
             else:
-                lines.append(f"• **{name}** · Manual (add it to a draft from the editor)")
+                lines.append(f"**{name}** - Manual (add it to a draft from the editor)")
         embed.add_field(
             name=f"Events ({len(events)})",
             value="\n".join(lines)[:1024],

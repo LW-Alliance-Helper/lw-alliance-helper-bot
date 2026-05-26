@@ -3306,6 +3306,23 @@ class _AutoFillStrategyPickerView(discord.ui.View):
                 pass
 
 
+async def _drop_approve_picker(inter: discord.Interaction) -> None:
+    """Drop the Approve & Post picker before the finalize flow takes
+    over. The finalize step posts the mail to channel + sends its own
+    ephemeral result ack, both of which are better as the most-recent
+    visible messages than a disabled picker sitting above them. Defers
+    the interaction first so subsequent followup.send calls inside the
+    finalize step still work."""
+    try:
+        await inter.response.defer()
+    except discord.HTTPException:
+        pass
+    try:
+        await inter.delete_original_response()
+    except discord.HTTPException:
+        pass
+
+
 class _ApprovePostPickerView(discord.ui.View):
     """Phase-aware-only fallback for the Approve & Post choice (#225).
 
@@ -3338,8 +3355,7 @@ class _ApprovePostPickerView(discord.ui.View):
         if self.is_finished():
             return
         self.stop()
-        for item in self.children:
-            item.disabled = True
+        await _drop_approve_picker(inter)
         await _finalize_structured_roster(
             inter, self.parent_view, include_image=True,
         )
@@ -3353,8 +3369,7 @@ class _ApprovePostPickerView(discord.ui.View):
         if self.is_finished():
             return
         self.stop()
-        for item in self.children:
-            item.disabled = True
+        await _drop_approve_picker(inter)
         await _finalize_structured_roster(
             inter, self.parent_view, include_image=False,
         )
@@ -3803,13 +3818,28 @@ class _PairSubsView(discord.ui.View):
     async def _on_done(self, inter: discord.Interaction):
         if not await self._guard_owner(inter):
             return
+        self.stop()
+        # Drop the picker on Done — the builder above already reflects
+        # the final pairings (each Assign/Unpair edits it in-place), so
+        # leaving a disabled picker below the builder just buries the
+        # actionable view. Disable buttons first as a fallback in case
+        # the delete fails (rate limit, expired token, etc.).
         for item in self.children:
             item.disabled = True
-        self.stop()
         try:
-            await inter.response.edit_message(view=self)
+            await inter.response.defer()
         except discord.HTTPException:
             pass
+        if self.message is not None:
+            try:
+                await self.message.delete()
+            except discord.HTTPException:
+                # Fallback: at least disable the buttons so the picker
+                # can't be re-clicked.
+                try:
+                    await self.message.edit(view=self)
+                except discord.HTTPException:
+                    pass
 
     async def on_timeout(self):
         for item in self.children:
@@ -5695,6 +5725,14 @@ async def _finalize_structured_roster(
         if long_mail_choice is None:
             await picker.wait()
             long_mail_choice = picker.choice or "cancel"
+        # Tear down the picker regardless of outcome — either the cancel
+        # ack or the final post-result ack will be the most-recent
+        # visible message instead of a disabled picker hanging above.
+        if getattr(picker, "message", None) is not None:
+            try:
+                await picker.message.delete()
+            except discord.HTTPException:
+                pass
         if long_mail_choice == "cancel":
             # Officer cancelled — release the session lock so they can
             # reopen the builder, then exit without posting / writing

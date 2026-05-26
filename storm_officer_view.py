@@ -1122,9 +1122,12 @@ class _OnBehalfVoteView(discord.ui.View):
         for item in self.children:
             item.disabled = True
         self.stop()
+        # Tear down the picker so the officer's screen is just the
+        # refreshed parent view plus the final ack — no leftover
+        # disabled picker above it.
         try:
             if self.message is not None:
-                await self.message.edit(content=ack, view=self)
+                await self.message.delete()
         except discord.HTTPException:
             pass
         try:
@@ -1843,53 +1846,64 @@ async def _open_team_plan(
             f"{sample}{more}._"
         )
 
-    first_response = True
+    # Track the currently-visible picker so we can tear it down before
+    # opening the next one (step 2 after step 1) or at any exit point.
+    # Without this, every "Back" loop iteration stacked another pair of
+    # disabled pickers above the officer view.
+    prev_picker_msg: Optional[discord.Message] = None
+
+    async def _drop_prev_picker():
+        nonlocal prev_picker_msg
+        if prev_picker_msg is not None:
+            try:
+                await prev_picker_msg.delete()
+            except discord.HTTPException:
+                pass
+            prev_picker_msg = None
+
     while True:
+        # Delete the prior step's picker (step 2 from a "Back" loop, or
+        # a stale step 1 from a re-entry) before showing the next one.
+        await _drop_prev_picker()
+
         step1 = _TeamPlanRosterPickerView(
             officer_view, team, candidates, sorted(other_claimed),
             prior_picks, prior_subs, prior_saved_at,
         )
-        if first_response:
-            # Always use followup.send — we deferred up front so the
-            # initial response slot is already consumed. Followup
-            # messages return a Message object directly, no separate
-            # `original_response()` fetch needed.
-            try:
-                step1.message = await inter.followup.send(
-                    "\n".join(intro_lines), view=step1, ephemeral=True,
-                )
-            except discord.HTTPException as e:
-                # Surface the failure — the prior swallow meant the
-                # picker silently hung on `await step1.wait()` because
-                # no message ever appeared. Re-raise so the outer
-                # `_plan_a` / `_plan_b` wrapper logs + acks.
-                logger.exception(
-                    "[STORM TEAM PLAN] followup.send failed for guild=%s "
-                    "event=%s team=%s: %s",
-                    officer_view.guild_id, officer_view.event_type, team, e,
-                )
-                raise
-            first_response = False
-        else:
-            # Re-entry after step 2 "back" — same followup path.
-            try:
-                step1.message = await inter.followup.send(
-                    "\n".join(intro_lines), view=step1, ephemeral=True,
-                )
-            except discord.HTTPException as e:
-                logger.exception(
-                    "[STORM TEAM PLAN] re-entry followup.send failed for "
-                    "guild=%s event=%s team=%s: %s",
-                    officer_view.guild_id, officer_view.event_type, team, e,
-                )
-                raise
+        # Always use followup.send — we deferred up front so the initial
+        # response slot is already consumed. Followup messages return a
+        # Message object directly, no separate `original_response()` fetch.
+        try:
+            step1.message = await inter.followup.send(
+                "\n".join(intro_lines), view=step1, ephemeral=True,
+            )
+            prev_picker_msg = step1.message
+        except discord.HTTPException as e:
+            # Surface the failure — the prior swallow meant the picker
+            # silently hung on `await step1.wait()` because no message
+            # ever appeared. Re-raise so the outer `_plan_a` / `_plan_b`
+            # wrapper logs + acks.
+            logger.exception(
+                "[STORM TEAM PLAN] followup.send failed for guild=%s "
+                "event=%s team=%s: %s",
+                officer_view.guild_id, officer_view.event_type, team, e,
+            )
+            raise
 
         await step1.wait()
         if step1.cleared:
+            await _drop_prev_picker()
             await _refresh_officer_view_message(officer_view)
             return
         if not step1.advance_to_step2:
-            return  # cancelled / timed out
+            # Cancelled / timed out — drop picker so it doesn't linger
+            # above the officer view.
+            await _drop_prev_picker()
+            return
+
+        # Step 1 done — delete it before opening step 2 so only one
+        # picker is visible at a time.
+        await _drop_prev_picker()
 
         chosen_ids = list(step1.selected_target_ids)
         # Preserve display name from step 1's candidate list so step 2
@@ -1911,19 +1925,27 @@ async def _open_team_plan(
                 f"remaining will be primaries.",
                 view=step2, ephemeral=True,
             )
+            prev_picker_msg = step2.message
         except discord.HTTPException:
             step2.message = None
 
         await step2.wait()
         if step2.saved:
+            await _drop_prev_picker()
             await _refresh_officer_view_message(officer_view)
             return
         if step2.go_back:
             # Update prior_picks/prior_subs so re-entry shows the
-            # tweaked state, then loop back to step 1.
+            # tweaked state, then loop back to step 1. The next loop
+            # iteration calls `_drop_prev_picker()` first, deleting
+            # this step 2 picker before opening a fresh step 1.
             prior_picks = chosen_ids
             prior_subs = list(step2.selected_sub_ids)
             continue
+        # Fell through with no saved/back signal (cancel/timeout) —
+        # drop the picker before returning.
+        await _drop_prev_picker()
+        return
         # Cancel / timeout from step 2 — nothing to do.
         return
 

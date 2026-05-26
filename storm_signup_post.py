@@ -482,10 +482,19 @@ async def _run_post_signup_confirm_flow(
             self.stop()
 
     confirm_view = _ConfirmView()
-    await interaction.followup.send(
+    confirm_msg = await interaction.followup.send(
         "\n".join(summary_lines), view=confirm_view, ephemeral=True,
     )
     timed_out = await confirm_view.wait()
+
+    # Tear down the confirm picker once we have an outcome so it doesn't
+    # sit above whatever ack / picker comes next. The terminal ack ("Posted",
+    # "Cancelled", "Timed out") is then the most-recent visible message.
+    try:
+        await confirm_msg.delete()
+    except discord.HTTPException:
+        pass
+
     if timed_out or confirm_view.outcome in (None, "cancel"):
         if confirm_view.outcome != "cancel":
             await interaction.followup.send(
@@ -536,12 +545,20 @@ async def _run_post_signup_confirm_flow(
                 self.stop()
 
         pick = _SlotPick()
-        await interaction.followup.send(
+        pick_msg = await interaction.followup.send(
             f"Which time slot does **Team {team_letter}** run this week?\n"
             f"Current default: **{_label_for(current_idx)}**",
             view=pick, ephemeral=True,
         )
         timed_out = await pick.wait()
+
+        # Tear down each per-team picker as we finish with it so the
+        # final post-result ack is the only thing the officer sees.
+        try:
+            await pick_msg.delete()
+        except discord.HTTPException:
+            pass
+
         if timed_out or pick.selected is None:
             await interaction.followup.send(
                 "⏰ Override timed out. Nothing was posted.",

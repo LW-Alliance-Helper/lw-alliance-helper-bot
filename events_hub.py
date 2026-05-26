@@ -33,7 +33,12 @@ from zoneinfo import ZoneInfo
 
 import discord
 
-from messages import CANCEL_BACKPEDAL, CANCEL_PLAIN, GENERIC_CMD_TIMEOUT
+from messages import (
+    CANCEL_BACKPEDAL,
+    CANCEL_PLAIN,
+    DENY_NOT_OWNER,
+    GENERIC_CMD_TIMEOUT,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -241,7 +246,7 @@ class _EventsHubView(discord.ui.View):
     async def interaction_check(self, inter: discord.Interaction) -> bool:
         if inter.user.id != self.owner_user_id:
             await inter.response.send_message(
-                "⛔ Only the officer who opened this view can use it.",
+                DENY_NOT_OWNER,
                 ephemeral=True,
             )
             return False
@@ -544,7 +549,7 @@ class _CreatePickerView(discord.ui.View):
     async def interaction_check(self, inter: discord.Interaction) -> bool:
         if inter.user.id != self.owner_user_id:
             await inter.response.send_message(
-                "⛔ Only the officer who opened this view can use it.",
+                DENY_NOT_OWNER,
                 ephemeral=True,
             )
             return False

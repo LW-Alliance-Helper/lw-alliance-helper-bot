@@ -23,6 +23,8 @@ from typing import Optional
 
 import discord
 
+from messages import DENY_NOT_OWNER
+
 logger = logging.getLogger(__name__)
 
 
@@ -230,7 +232,7 @@ class _EventHubView(discord.ui.View):
         pattern every other shared view uses."""
         if inter.user.id != self.owner_user_id:
             await inter.response.send_message(
-                "⛔ Only the officer who opened this view can use it.",
+                DENY_NOT_OWNER,
                 ephemeral=True,
             )
             return False

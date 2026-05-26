@@ -23,7 +23,7 @@ from typing import Optional
 
 import discord
 
-from messages import PREMIUM_LOCKED_INLINE
+from messages import DENY_NOT_OWNER, PREMIUM_LOCKED_INLINE
 
 
 logger = logging.getLogger(__name__)
@@ -511,7 +511,7 @@ class _TrendsView(discord.ui.View):
     async def _guard(self, inter: discord.Interaction) -> bool:
         if inter.user.id != self.state.user_id:
             await inter.response.send_message(
-                "⛔ Only the officer who opened this view can use it.",
+                DENY_NOT_OWNER,
                 ephemeral=True,
             )
             return False

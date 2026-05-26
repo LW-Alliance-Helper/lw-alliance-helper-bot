@@ -22,6 +22,8 @@ from typing import Optional
 
 import discord
 
+from messages import DENY_NOT_OWNER
+
 logger = logging.getLogger(__name__)
 
 
@@ -481,7 +483,7 @@ class _RosterImageLinksView(discord.ui.View):
     async def interaction_check(self, inter: discord.Interaction) -> bool:
         if inter.user.id != self.owner_id:
             await inter.response.send_message(
-                "⛔ Only the officer who opened this view can use these buttons.",
+                DENY_NOT_OWNER,
                 ephemeral=True,
             )
             return False
@@ -587,7 +589,7 @@ class _HistoryListView(discord.ui.View):
         async def _cb(inter: discord.Interaction):
             if inter.user.id != self.user_id:
                 await inter.response.send_message(
-                    "⛔ Only the officer who opened this view can switch dates.",
+                    DENY_NOT_OWNER,
                     ephemeral=True,
                 )
                 return

@@ -35,7 +35,7 @@ import logging
 
 import discord
 
-from messages import CANCEL_BACKPEDAL_DEFAULT, NOT_SET_UP
+from messages import CANCEL_BACKPEDAL_DEFAULT, DENY_NOT_OWNER, NOT_SET_UP
 from storm_event_hub import HUB_COMMAND, HUB_BTN_RULES
 
 logger = logging.getLogger(__name__)
@@ -503,7 +503,7 @@ class _RulesListView(discord.ui.View):
         async def _on_add(inter: discord.Interaction):
             if inter.user.id != self.user_id:
                 await inter.response.send_message(
-                    "⛔ Only the command owner can add rules from this list.",
+                    DENY_NOT_OWNER,
                     ephemeral=True,
                 )
                 return
@@ -534,7 +534,7 @@ class _RulesListView(discord.ui.View):
             async def _prev(inter: discord.Interaction):
                 if inter.user.id != self.user_id:
                     await inter.response.send_message(
-                        "⛔ Only the command owner can paginate.", ephemeral=True,
+                        DENY_NOT_OWNER, ephemeral=True,
                     )
                     return
                 self.page = max(0, self.page - 1)
@@ -544,7 +544,7 @@ class _RulesListView(discord.ui.View):
             async def _next(inter: discord.Interaction):
                 if inter.user.id != self.user_id:
                     await inter.response.send_message(
-                        "⛔ Only the command owner can paginate.", ephemeral=True,
+                        DENY_NOT_OWNER, ephemeral=True,
                     )
                     return
                 self.page = min(self.total_pages - 1, self.page + 1)
@@ -596,7 +596,7 @@ class _AddRuleTypePickerView(discord.ui.View):
     async def _guard_owner(self, inter: discord.Interaction) -> bool:
         if inter.user.id != self.owner_id:
             await inter.response.send_message(
-                "⛔ Only the officer who opened the list can add rules.",
+                DENY_NOT_OWNER,
                 ephemeral=True,
             )
             return False
@@ -670,7 +670,7 @@ def _make_clear_callback(view: "_RulesListView", idx: int):
     async def _cb(inter: discord.Interaction):
         if inter.user.id != view.user_id:
             await inter.response.send_message(
-                "⛔ Only the user who ran the command can clear rules from this list.",
+                DENY_NOT_OWNER,
                 ephemeral=True,
             )
             return
@@ -865,7 +865,7 @@ class InlinePowerBandView(discord.ui.View):
         async def _on_zone(inter: discord.Interaction):
             if inter.user.id != self.owner_id:
                 await inter.response.send_message(
-                    "⛔ Only the user running setup can pick.",
+                    DENY_NOT_OWNER,
                     ephemeral=True,
                 )
                 return
@@ -888,7 +888,7 @@ class InlinePowerBandView(discord.ui.View):
         async def _on_set(inter: discord.Interaction):
             if inter.user.id != self.owner_id:
                 await inter.response.send_message(
-                    "⛔ Only the user running setup can pick.",
+                    DENY_NOT_OWNER,
                     ephemeral=True,
                 )
                 return
@@ -920,7 +920,7 @@ class InlinePowerBandView(discord.ui.View):
         async def _on_cancel(inter: discord.Interaction):
             if inter.user.id != self.owner_id:
                 await inter.response.send_message(
-                    "⛔ Only the user running setup can pick.",
+                    DENY_NOT_OWNER,
                     ephemeral=True,
                 )
                 return

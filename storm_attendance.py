@@ -23,6 +23,7 @@ from typing import Optional
 
 import discord
 
+from messages import DENY_NOT_OWNER
 from storm_event_hub import (
     HUB_COMMAND,
     HUB_BTN_VIEW_SIGNUPS,
@@ -762,10 +763,7 @@ class _AttendanceView(discord.ui.View):
 
     async def _guard_owner(self, inter: discord.Interaction) -> bool:
         if inter.user.id != self.session.user_id:
-            await inter.response.send_message(
-                "⛔ Only the officer who opened this view can record "
-                "attendance.", ephemeral=True,
-            )
+            await inter.response.send_message(DENY_NOT_OWNER, ephemeral=True)
             return False
         return True
 

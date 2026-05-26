@@ -47,7 +47,7 @@ from config import (
     STORM_PLAN_MAX_SUBS,
     STORM_PLAN_MAX_TOTAL,
 )
-from messages import CANCEL_BACKPEDAL, CANCEL_BACKPEDAL_DEFAULT
+from messages import CANCEL_BACKPEDAL, CANCEL_BACKPEDAL_DEFAULT, DENY_NOT_OWNER
 from storm_event_hub import HUB_COMMAND, HUB_BTN_VIEW_SIGNUPS, HUB_BTN_PRESETS
 
 logger = logging.getLogger(__name__)
@@ -1050,7 +1050,7 @@ class _OnBehalfVoteView(discord.ui.View):
     async def _guard_owner(self, inter: discord.Interaction) -> bool:
         if inter.user.id != self.parent_view.owner_user_id:
             await inter.response.send_message(
-                "⛔ Only the officer who opened this view can record on-behalf votes here.",
+                DENY_NOT_OWNER,
                 ephemeral=True,
             )
             return False
@@ -1407,7 +1407,7 @@ class _TeamPlanRosterPickerView(discord.ui.View):
     async def _guard_owner(self, inter: discord.Interaction) -> bool:
         if inter.user.id != self.parent_view.owner_user_id:
             await inter.response.send_message(
-                "⛔ Only the officer who opened this view can edit the team plan.",
+                DENY_NOT_OWNER,
                 ephemeral=True,
             )
             return False
@@ -1634,7 +1634,7 @@ class _TeamPlanSubPickerView(discord.ui.View):
     async def _guard_owner(self, inter: discord.Interaction) -> bool:
         if inter.user.id != self.parent_view.owner_user_id:
             await inter.response.send_message(
-                "⛔ Only the officer who opened this view can edit the team plan.",
+                DENY_NOT_OWNER,
                 ephemeral=True,
             )
             return False
@@ -1711,7 +1711,7 @@ async def _open_team_plan(
     """
     if inter.user.id != officer_view.owner_user_id:
         await inter.response.send_message(
-            "⛔ Only the officer who opened this view can edit the team plan.",
+            DENY_NOT_OWNER,
             ephemeral=True,
         )
         return
@@ -2051,7 +2051,7 @@ class OfficerView(discord.ui.View):
         async def _on_filter(inter: discord.Interaction):
             if inter.user.id != self.owner_user_id:
                 await inter.response.send_message(
-                    "⛔ Only the officer who opened this view can change the filter.",
+                    DENY_NOT_OWNER,
                     ephemeral=True,
                 )
                 return
@@ -2076,7 +2076,7 @@ class OfficerView(discord.ui.View):
         async def _on_behalf(inter: discord.Interaction):
             if inter.user.id != self.owner_user_id:
                 await inter.response.send_message(
-                    "⛔ Only the officer who opened this view can record on-behalf votes here.",
+                    DENY_NOT_OWNER,
                     ephemeral=True,
                 )
                 return
@@ -2141,7 +2141,7 @@ class OfficerView(discord.ui.View):
         async def _refresh(inter: discord.Interaction):
             if inter.user.id != self.owner_user_id:
                 await inter.response.send_message(
-                    "⛔ Only the officer who opened this view can refresh.",
+                    DENY_NOT_OWNER,
                     ephemeral=True,
                 )
                 return
@@ -2358,7 +2358,7 @@ async def _open_team_setup(
     """
     if inter.user.id != officer_view.owner_user_id:
         await inter.response.send_message(
-            "⛔ Only the officer who opened this view can start team setup.",
+            DENY_NOT_OWNER,
             ephemeral=True,
         )
         return
@@ -2482,7 +2482,7 @@ async def _confirm_discard_and_setup(
     view, draft untouched."""
     if inter.user.id != officer_view.owner_user_id:
         await inter.response.send_message(
-            "⛔ Only the officer who opened this view can start team setup.",
+            DENY_NOT_OWNER,
             ephemeral=True,
         )
         return
@@ -2532,7 +2532,7 @@ class _DiscardDraftConfirmView(discord.ui.View):
     async def interaction_check(self, inter: discord.Interaction) -> bool:
         if inter.user.id != self.owner_id:
             await inter.response.send_message(
-                "⛔ Only the officer who opened this can confirm.",
+                DENY_NOT_OWNER,
                 ephemeral=True,
             )
             return False
@@ -2610,7 +2610,7 @@ class _OrphanDraftDiscardView(discord.ui.View):
     async def interaction_check(self, inter: discord.Interaction) -> bool:
         if inter.user.id != self.owner_id:
             await inter.response.send_message(
-                "⛔ Only the officer who opened this can confirm.",
+                DENY_NOT_OWNER,
                 ephemeral=True,
             )
             return False
@@ -2687,7 +2687,7 @@ class _PresetPickerView(discord.ui.View):
         async def _on_pick(inter: discord.Interaction):
             if inter.user.id != self.owner_id:
                 await inter.response.send_message(
-                    "⛔ Only the user who started team setup can pick.",
+                    DENY_NOT_OWNER,
                     ephemeral=True,
                 )
                 return

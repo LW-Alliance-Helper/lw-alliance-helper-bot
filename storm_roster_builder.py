@@ -37,7 +37,7 @@ from typing import Optional
 
 import discord
 
-from messages import CANCEL_BACKPEDAL, PREMIUM_LOCKED_INLINE
+from messages import CANCEL_BACKPEDAL, DENY_NOT_OWNER, PREMIUM_LOCKED_INLINE
 from storm_event_hub import (
     HUB_COMMAND,
     HUB_BTN_VIEW_SIGNUPS,
@@ -2673,7 +2673,7 @@ class RosterBuilderView(discord.ui.View):
     async def _guard_owner(self, inter: discord.Interaction) -> bool:
         if inter.user.id != self.session.user_id:
             await inter.response.send_message(
-                "⛔ Only the officer who opened this builder can use it.",
+                DENY_NOT_OWNER,
                 ephemeral=True,
             )
             return False
@@ -2780,7 +2780,7 @@ class _ZoneMemberEditView(discord.ui.View):
     async def _guard_owner(self, inter: discord.Interaction) -> bool:
         if inter.user.id != self.parent_view.session.user_id:
             await inter.response.send_message(
-                "⛔ Only the builder's owner can edit.", ephemeral=True,
+                DENY_NOT_OWNER, ephemeral=True,
             )
             return False
         return True
@@ -3058,7 +3058,7 @@ class _AssignConfirmView(discord.ui.View):
     async def _guard_owner(self, inter: discord.Interaction) -> bool:
         if inter.user.id != self.parent_view.session.user_id:
             await inter.response.send_message(
-                "⛔ Only the builder's owner can confirm.", ephemeral=True,
+                DENY_NOT_OWNER, ephemeral=True,
             )
             return False
         return True
@@ -3187,7 +3187,7 @@ class _AutoFillStrategyPickerView(discord.ui.View):
     async def _guard_owner(self, inter: discord.Interaction) -> bool:
         if inter.user.id != self.parent_view.session.user_id:
             await inter.response.send_message(
-                "⛔ Only the builder's owner can confirm.", ephemeral=True,
+                DENY_NOT_OWNER, ephemeral=True,
             )
             return False
         return True
@@ -3341,7 +3341,7 @@ class _ApprovePostPickerView(discord.ui.View):
     async def _guard_owner(self, inter: discord.Interaction) -> bool:
         if inter.user.id != self.parent_view.session.user_id:
             await inter.response.send_message(
-                "⛔ Only the builder's owner can confirm.", ephemeral=True,
+                DENY_NOT_OWNER, ephemeral=True,
             )
             return False
         return True
@@ -3712,7 +3712,7 @@ class _PairSubsView(discord.ui.View):
     async def _guard_owner(self, inter: discord.Interaction) -> bool:
         if inter.user.id != self.main_view.session.user_id:
             await inter.response.send_message(
-                "⛔ Only the builder's owner can pair subs.",
+                DENY_NOT_OWNER,
                 ephemeral=True,
             )
             return False
@@ -5039,11 +5039,7 @@ class _LongMailPickerView(discord.ui.View):
 
     async def interaction_check(self, inter: discord.Interaction) -> bool:
         if inter.user.id != self.owner_id:
-            await inter.response.send_message(
-                "⛔ Only the officer who clicked Approve can pick the "
-                "post format.",
-                ephemeral=True,
-            )
+            await inter.response.send_message(DENY_NOT_OWNER, ephemeral=True)
             return False
         return True
 
@@ -5455,11 +5451,7 @@ class _DmRosteredMembersView(discord.ui.View):
         self, interaction: discord.Interaction,
     ) -> bool:
         if interaction.user.id != self.owner_id:
-            await interaction.response.send_message(
-                "⛔ Only the officer who posted the roster can fire "
-                "the DMs.",
-                ephemeral=True,
-            )
+            await interaction.response.send_message(DENY_NOT_OWNER, ephemeral=True)
             return False
         return True
 
@@ -6587,7 +6579,7 @@ class _TeamPickerView(discord.ui.View):
         async def _pick_a(inter: discord.Interaction):
             if inter.user.id != self.owner_id:
                 await inter.response.send_message(
-                    "⛔ Only the officer who started the apply can pick.",
+                    DENY_NOT_OWNER,
                     ephemeral=True,
                 )
                 return
@@ -6601,7 +6593,7 @@ class _TeamPickerView(discord.ui.View):
         async def _pick_b(inter: discord.Interaction):
             if inter.user.id != self.owner_id:
                 await inter.response.send_message(
-                    "⛔ Only the officer who started the apply can pick.",
+                    DENY_NOT_OWNER,
                     ephemeral=True,
                 )
                 return

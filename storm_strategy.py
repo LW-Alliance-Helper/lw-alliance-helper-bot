@@ -35,6 +35,8 @@ import re
 
 import discord
 
+from messages import DENY_NOT_OWNER
+
 logger = logging.getLogger(__name__)
 
 
@@ -1418,7 +1420,7 @@ class _ZoneWizardNextView(discord.ui.View):
         async def _go(inter: discord.Interaction):
             if inter.user.id != editor_view.user_id:
                 await inter.response.send_message(
-                    "⛔ Only the editor's owner can advance the wizard.",
+                    DENY_NOT_OWNER,
                     ephemeral=True,
                 )
                 return
@@ -1480,7 +1482,7 @@ class _ApplyToSimilarView(discord.ui.View):
         async def _on_select(inter: discord.Interaction):
             if inter.user.id != self._editor.user_id:
                 await inter.response.send_message(
-                    "⛔ Only the officer who opened the editor can pick siblings.",
+                    DENY_NOT_OWNER,
                     ephemeral=True,
                 )
                 return
@@ -1502,7 +1504,7 @@ class _ApplyToSimilarView(discord.ui.View):
         async def _apply(inter: discord.Interaction):
             if inter.user.id != self._editor.user_id:
                 await inter.response.send_message(
-                    "⛔ Only the editor's owner can apply changes.",
+                    DENY_NOT_OWNER,
                     ephemeral=True,
                 )
                 return
@@ -1564,7 +1566,7 @@ class _ApplyToSimilarView(discord.ui.View):
         async def _skip(inter: discord.Interaction):
             if inter.user.id != self._editor.user_id:
                 await inter.response.send_message(
-                    "⛔ Only the editor's owner can dismiss this prompt.",
+                    DENY_NOT_OWNER,
                     ephemeral=True,
                 )
                 return
@@ -1669,7 +1671,7 @@ class _PresetEditorView(discord.ui.View):
             async def _on_select(inter: discord.Interaction):
                 if inter.user.id != self.user_id:
                     await inter.response.send_message(
-                        "⛔ Only the editor's owner can change this preset.",
+                        DENY_NOT_OWNER,
                         ephemeral=True,
                     )
                     return
@@ -1723,7 +1725,7 @@ class _PresetEditorView(discord.ui.View):
         async def _on_phase_mode(inter: discord.Interaction):
             if inter.user.id != self.user_id:
                 await inter.response.send_message(
-                    "⛔ Only the editor's owner can change this preset.",
+                    DENY_NOT_OWNER,
                     ephemeral=True,
                 )
                 return
@@ -1811,13 +1813,13 @@ class _PresetEditorView(discord.ui.View):
 
         async def _rename(inter):
             if inter.user.id != self.user_id:
-                await inter.response.send_message("⛔ Only the editor's owner can change this preset.", ephemeral=True); return
+                await inter.response.send_message(DENY_NOT_OWNER, ephemeral=True); return
             await inter.response.send_modal(_RenameModal(self))
         rename_btn.callback = _rename
 
         async def _save(inter):
             if inter.user.id != self.user_id:
-                await inter.response.send_message("⛔ Only the editor's owner can save this preset.", ephemeral=True); return
+                await inter.response.send_message(DENY_NOT_OWNER, ephemeral=True); return
             # Capacity over the team-size hint is normal — alliances
             # build in flex room. The editor embed already shows the
             # capacity vs. 30 line so officers can see at a glance
@@ -1857,7 +1859,7 @@ class _PresetEditorView(discord.ui.View):
 
         async def _cancel(inter):
             if inter.user.id != self.user_id:
-                await inter.response.send_message("⛔ Only the editor's owner can abandon this preset.", ephemeral=True); return
+                await inter.response.send_message(DENY_NOT_OWNER, ephemeral=True); return
             self.cancelled = True
             for item in self.children:
                 item.disabled = True
@@ -2003,7 +2005,7 @@ class _ConfirmDeleteView(discord.ui.View):
     async def yes(self, inter: discord.Interaction, btn: discord.ui.Button):
         if inter.user.id != self.owner_id:
             await inter.response.send_message(
-                "⛔ Only the user who ran the command can confirm.",
+                DENY_NOT_OWNER,
                 ephemeral=True,
             )
             return
@@ -2017,7 +2019,7 @@ class _ConfirmDeleteView(discord.ui.View):
     async def no(self, inter: discord.Interaction, btn: discord.ui.Button):
         if inter.user.id != self.owner_id:
             await inter.response.send_message(
-                "⛔ Only the user who ran the command can cancel.",
+                DENY_NOT_OWNER,
                 ephemeral=True,
             )
             return
@@ -2212,7 +2214,7 @@ class _StrategyListView(discord.ui.View):
     async def _guard_owner(self, inter: discord.Interaction) -> bool:
         if inter.user.id != self.owner_id:
             await inter.response.send_message(
-                "⛔ Only the officer who ran the command can use these buttons.",
+                DENY_NOT_OWNER,
                 ephemeral=True,
             )
             return False
@@ -2300,7 +2302,7 @@ class _PresetPickerView(discord.ui.View):
         async def _cb(inter: discord.Interaction):
             if inter.user.id != self.owner_id:
                 await inter.response.send_message(
-                    "⛔ Only the officer who ran the command can pick.",
+                    DENY_NOT_OWNER,
                     ephemeral=True,
                 )
                 return
@@ -2334,7 +2336,7 @@ class _PresetPickerView(discord.ui.View):
     async def _on_cancel(self, inter: discord.Interaction):
         if inter.user.id != self.owner_id:
             await inter.response.send_message(
-                "⛔ Only the officer who ran the command can cancel.",
+                DENY_NOT_OWNER,
                 ephemeral=True,
             )
             return

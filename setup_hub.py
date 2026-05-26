@@ -23,7 +23,7 @@ from typing import Optional
 
 import discord
 
-from messages import NOT_SET_UP_HUB
+from messages import DENY_ADMIN_OR_ROLE, NOT_SET_UP_HUB
 
 logger = logging.getLogger(__name__)
 
@@ -260,8 +260,7 @@ class _SetupHubView(discord.ui.View):
             cfg = get_config(interaction.guild_id)
             role_name = (cfg.leadership_role_name if cfg else None) or "Leadership"
             await interaction.response.send_message(
-                f"⛔ You need server administrator permission or the "
-                f"**{role_name}** role to use the setup hub.",
+                DENY_ADMIN_OR_ROLE.format(role=role_name, action="use the setup hub"),
                 ephemeral=True,
             )
             return False
@@ -400,8 +399,7 @@ async def handle_setup_hub(bot, interaction: discord.Interaction) -> None:
         cfg = get_config(interaction.guild_id)
         role_name = (cfg.leadership_role_name if cfg else None) or "Leadership"
         await interaction.response.send_message(
-            f"⛔ You need server administrator permission or the "
-            f"**{role_name}** role to run `/setup`.",
+            DENY_ADMIN_OR_ROLE.format(role=role_name, action="run `/setup`"),
             ephemeral=True,
         )
         return

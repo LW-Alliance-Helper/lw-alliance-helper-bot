@@ -655,7 +655,7 @@ class ChannelSelectStep(discord.ui.View):
                 for item in self.children:
                     item.disabled = True
                 await interaction.message.edit(
-                    content=f"✅ Created and selected: **#{new_channel.name}**",
+                    content=f"✅ Created and selected **#{new_channel.name}**.",
                     view=self,
                 )
                 self.stop()
@@ -2506,7 +2506,7 @@ async def run_growth_setup(interaction: discord.Interaction, bot):
 
         if action_view.choice == "delete":
             removed = metrics.pop(pick_view.index)
-            await channel.send(f"🗑️ Removed: **{removed['label']}** (column {removed['col']})")
+            await channel.send(f"🗑️ Removed **{removed['label']}** (column {removed['col']}).")
             continue
 
         # Edit: open a modal pre-filled with the chosen metric
@@ -4244,7 +4244,7 @@ async def run_survey_setup(interaction: discord.Interaction, bot,
                 elif list_view.action == "delete":
                     idx     = list_view.del_index
                     removed = questions.pop(idx)
-                    await channel.send(f"🗑️ Removed: **{removed['label']}**")
+                    await channel.send(f"🗑️ Removed **{removed['label']}**.")
 
                 elif list_view.action in ("add", "edit"):
                     # ── Question builder ───────────────────────────────────────
@@ -4497,10 +4497,10 @@ async def run_survey_setup(interaction: discord.Interaction, bot,
 
                     if list_view.action == "edit":
                         questions[list_view.edit_index] = new_q
-                        await channel.send(f"✅ Updated: **{q_label}**")
+                        await channel.send(f"✅ Updated **{q_label}**.")
                     else:
                         questions.append(new_q)
-                        await channel.send(f"✅ Added: **{q_label}** — {len(questions)} question(s) so far.")
+                        await channel.send(f"✅ Added **{q_label}** ({len(questions)} question(s) so far).")
 
         result = await build_question_list()
         if not result:
@@ -6078,7 +6078,7 @@ async def _run_storm_participation_step(
             break
         if view.action == "delete":
             removed = questions.pop(view.del_idx)
-            await channel.send(f"🗑️ Removed: **{removed.get('label')}**")
+            await channel.send(f"🗑️ Removed **{removed.get('label')}**.")
             continue
         if view.action in ("add", "edit"):
             if view.action == "add" and cap is not None and len(questions) >= cap:
@@ -6099,10 +6099,10 @@ async def _run_storm_participation_step(
                 return None
             if view.action == "edit":
                 questions[view.edit_idx] = new_q
-                await channel.send(f"✅ Updated: **{new_q['label']}**")
+                await channel.send(f"✅ Updated **{new_q['label']}**.")
             else:
                 questions.append(new_q)
-                await channel.send(f"✅ Added: **{new_q['label']}** ({len(questions)} so far)")
+                await channel.send(f"✅ Added **{new_q['label']}** ({len(questions)} so far).")
 
     return {
         "enabled":          1,

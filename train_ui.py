@@ -340,7 +340,7 @@ class UpdateEntryModal(discord.ui.Modal, title="Update Train Entry"):
         schedule[new_iso] = merged
         save_schedule(schedule, self.guild_id)
 
-        msg = f"✅ Updated → **{new_name}** on **{d:%A, %B} {d.day}**."
+        msg = f"✅ Updated **{new_name}** for **{d:%A, %B} {d.day}**."
 
         if self.blurbs_enabled:
             view = RunWizardView(self.bot, self.guild_id, new_iso, new_name)

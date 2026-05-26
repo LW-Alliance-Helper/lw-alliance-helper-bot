@@ -925,7 +925,7 @@ async def _run_create_event_wizard(
     }
     save_guild_event(guild_id, event)
     await channel.send(
-        f"✅ Added: **{name}**\n"
+        f"✅ Added **{name}**.\n"
         f"Open `{EVENTS_HUB_CMD}` again to see it in your event list, "
         "or click **📅 Today's events** to draft today's announcement."
     )
@@ -971,7 +971,7 @@ async def _open_delete_picker(interaction: discord.Interaction) -> None:
             delete_guild_event(interaction.guild_id, chosen_key)
             for item in confirm.children: item.disabled = True
             await c_inter.response.edit_message(
-                content=f"🗑️ Deleted: **{name}**.",
+                content=f"🗑️ Deleted **{name}**.",
                 view=confirm,
             )
             confirm.stop()

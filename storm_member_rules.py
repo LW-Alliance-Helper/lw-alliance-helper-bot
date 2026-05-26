@@ -815,8 +815,8 @@ class _InlinePowerBandPowerModal(discord.ui.Modal):
         )
         if ok:
             await interaction.response.send_message(
-                f"✅ Saved: ≥ {format_power(int(n))} → eligible for "
-                f"**{self.zone}**.\n"
+                f"✅ Saved rule for **{self.zone}**: members ≥ "
+                f"{format_power(int(n))} are eligible.\n"
                 f"Add more rules later via `{hub_cmd}` → **{HUB_BTN_RULES}**.",
                 ephemeral=True,
             )

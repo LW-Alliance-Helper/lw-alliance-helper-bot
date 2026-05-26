@@ -26,6 +26,32 @@ import discord
 logger = logging.getLogger(__name__)
 
 
+# ── Hub button label constants ───────────────────────────────────────────────
+# Extracted so other modules can import these instead of duplicating the
+# literal in error copy, wizard timeout messages, /help text, etc. (#208).
+# Mirrors the HUB_BTN_* pattern already in storm_event_hub.py.
+
+HUB_BTN_SETUP_WIZARD = "⚙️ Open setup wizard"
+HUB_BTN_VIEW_CONFIG  = "🗂️ View configuration"
+HUB_BTN_RESET        = "🗑️ Reset configuration"
+HUB_BTN_RELEASE_ANN  = "📢 Release announcements"  # base; live label suffixed in _refresh_release_announcement_label
+HUB_BTN_TRAIN        = "🚂 Train"
+HUB_BTN_GROWTH       = "📈 Growth"
+HUB_BTN_BIRTHDAYS    = "🎂 Birthdays"
+HUB_BTN_EVENTS       = "📣 Events"
+HUB_BTN_DS           = "⚔️ Desert Storm"
+HUB_BTN_CS           = "🏜️ Canyon Storm"
+HUB_BTN_SHINY        = "🌟 Shiny Tasks"
+HUB_BTN_MEMBERS      = "👥 Member Sync"
+HUB_BTN_SURVEY       = "📋 Survey"
+HUB_BTN_BREAKDOWN    = "📊 Growth Breakdown"
+
+STORM_SETUP_NAV = {
+    "DS": f"/setup → {HUB_BTN_DS}",
+    "CS": f"/setup → {HUB_BTN_CS}",
+}
+
+
 # ── Embed builder ────────────────────────────────────────────────────────────
 
 
@@ -241,7 +267,7 @@ class _SetupHubView(discord.ui.View):
 
     # ── Row 0: foundations + utilities ────────────────────────────────────────
 
-    @discord.ui.button(label="⚙️ Open setup wizard", style=discord.ButtonStyle.primary, row=0)
+    @discord.ui.button(label=HUB_BTN_SETUP_WIZARD, style=discord.ButtonStyle.primary, row=0)
     async def btn_root_wizard(self, inter: discord.Interaction, _b: discord.ui.Button):
         from setup_cog import run_setup, _check_wizard_can_run
         if not await _check_wizard_can_run(inter, "setup"):
@@ -251,7 +277,7 @@ class _SetupHubView(discord.ui.View):
         )
         await run_setup(inter, self.bot)
 
-    @discord.ui.button(label="🗂️ View configuration", style=discord.ButtonStyle.secondary, row=0)
+    @discord.ui.button(label=HUB_BTN_VIEW_CONFIG, style=discord.ButtonStyle.secondary, row=0)
     async def btn_view_config(self, inter: discord.Interaction, _b: discord.ui.Button):
         from setup_cog import _send_view_configuration
         from config import get_config
@@ -264,12 +290,12 @@ class _SetupHubView(discord.ui.View):
             return
         await _send_view_configuration(inter, cfg)
 
-    @discord.ui.button(label="🗑️ Reset configuration", style=discord.ButtonStyle.danger, row=0)
+    @discord.ui.button(label=HUB_BTN_RESET, style=discord.ButtonStyle.danger, row=0)
     async def btn_reset(self, inter: discord.Interaction, _b: discord.ui.Button):
         from setup_cog import _run_reset_flow
         await _run_reset_flow(inter)
 
-    @discord.ui.button(label="📢 Release announcements", style=discord.ButtonStyle.secondary, row=0)
+    @discord.ui.button(label=HUB_BTN_RELEASE_ANN, style=discord.ButtonStyle.secondary, row=0)
     async def btn_release_announcements(self, inter: discord.Interaction, _b: discord.ui.Button):
         """One-click opt-in/opt-out for the leadership-channel release
         notification posted on each new major/minor version (#253). The
@@ -297,56 +323,56 @@ class _SetupHubView(discord.ui.View):
 
     # ── Row 1: free-tier features ────────────────────────────────────────────
 
-    @discord.ui.button(label="🚂 Train", style=discord.ButtonStyle.secondary, row=1)
+    @discord.ui.button(label=HUB_BTN_TRAIN, style=discord.ButtonStyle.secondary, row=1)
     async def btn_train(self, inter: discord.Interaction, _b: discord.ui.Button):
         from setup_cog import _launch_train_setup
         await _launch_train_setup(inter, self.bot)
 
-    @discord.ui.button(label="📈 Growth", style=discord.ButtonStyle.secondary, row=1)
+    @discord.ui.button(label=HUB_BTN_GROWTH, style=discord.ButtonStyle.secondary, row=1)
     async def btn_growth(self, inter: discord.Interaction, _b: discord.ui.Button):
         from setup_cog import _launch_growth_setup
         await _launch_growth_setup(inter, self.bot)
 
-    @discord.ui.button(label="🎂 Birthdays", style=discord.ButtonStyle.secondary, row=1)
+    @discord.ui.button(label=HUB_BTN_BIRTHDAYS, style=discord.ButtonStyle.secondary, row=1)
     async def btn_birthdays(self, inter: discord.Interaction, _b: discord.ui.Button):
         from setup_cog import _launch_birthday_setup
         await _launch_birthday_setup(inter, self.bot)
 
-    @discord.ui.button(label="📣 Events", style=discord.ButtonStyle.secondary, row=1)
+    @discord.ui.button(label=HUB_BTN_EVENTS, style=discord.ButtonStyle.secondary, row=1)
     async def btn_events(self, inter: discord.Interaction, _b: discord.ui.Button):
         from setup_cog import _launch_event_setup
         await _launch_event_setup(inter, self.bot)
 
     # ── Row 2: Premium event flow (Storm + Shiny Tasks) ─────────────────────
 
-    @discord.ui.button(label="⚔️ Desert Storm", style=discord.ButtonStyle.secondary, row=2)
+    @discord.ui.button(label=HUB_BTN_DS, style=discord.ButtonStyle.secondary, row=2)
     async def btn_desertstorm(self, inter: discord.Interaction, _b: discord.ui.Button):
         from setup_cog import _launch_storm_setup
         await _launch_storm_setup(inter, self.bot, "DS")
 
-    @discord.ui.button(label="🏜️ Canyon Storm", style=discord.ButtonStyle.secondary, row=2)
+    @discord.ui.button(label=HUB_BTN_CS, style=discord.ButtonStyle.secondary, row=2)
     async def btn_canyonstorm(self, inter: discord.Interaction, _b: discord.ui.Button):
         from setup_cog import _launch_storm_setup
         await _launch_storm_setup(inter, self.bot, "CS")
 
-    @discord.ui.button(label="🌟 Shiny Tasks", style=discord.ButtonStyle.secondary, row=2)
+    @discord.ui.button(label=HUB_BTN_SHINY, style=discord.ButtonStyle.secondary, row=2)
     async def btn_shiny_tasks(self, inter: discord.Interaction, _b: discord.ui.Button):
         from setup_cog import _launch_shiny_tasks_setup
         await _launch_shiny_tasks_setup(inter, self.bot)
 
     # ── Row 3: Premium-gated (Member Sync + Survey + Growth Breakdown) ──────
 
-    @discord.ui.button(label="👥 Member Sync", style=discord.ButtonStyle.secondary, row=3)
+    @discord.ui.button(label=HUB_BTN_MEMBERS, style=discord.ButtonStyle.secondary, row=3)
     async def btn_members(self, inter: discord.Interaction, _b: discord.ui.Button):
         from member_roster import _launch_member_roster_setup
         await _launch_member_roster_setup(inter, self.bot)
 
-    @discord.ui.button(label="📋 Survey", style=discord.ButtonStyle.secondary, row=3)
+    @discord.ui.button(label=HUB_BTN_SURVEY, style=discord.ButtonStyle.secondary, row=3)
     async def btn_survey(self, inter: discord.Interaction, _b: discord.ui.Button):
         from setup_cog import _launch_survey_setup
         await _launch_survey_setup(inter, self.bot)
 
-    @discord.ui.button(label="📊 Growth Breakdown", style=discord.ButtonStyle.secondary, row=3)
+    @discord.ui.button(label=HUB_BTN_BREAKDOWN, style=discord.ButtonStyle.secondary, row=3)
     async def btn_growth_breakdown(self, inter: discord.Interaction, _b: discord.ui.Button):
         from setup_cog import _launch_growth_breakdown_setup
         await _launch_growth_breakdown_setup(inter, self.bot)

@@ -13,6 +13,18 @@ from typing import Optional
 
 import discord
 
+from setup_hub import (
+    HUB_BTN_BIRTHDAYS,
+    HUB_BTN_BREAKDOWN,
+    HUB_BTN_EVENTS,
+    HUB_BTN_GROWTH,
+    HUB_BTN_MEMBERS,
+    HUB_BTN_SHINY,
+    HUB_BTN_SURVEY,
+    HUB_BTN_TRAIN,
+    STORM_SETUP_NAV,
+)
+
 
 PRIVACY_URL = (
     "https://lw-alliance-helper.github.io/privacy.html#where-your-data-lives"
@@ -49,7 +61,7 @@ HELP_CATEGORIES: dict[str, dict] = {
             "Drafts post to leadership for review, then to your public channel."
         ),
         "commands": [
-            ("/setup → 📣 Events",
+            (f"/setup → {HUB_BTN_EVENTS}",
              "Configure events, leadership and public channels, daily draft "
              "time, and the 5-min warning."),
             ("/events overview",
@@ -69,7 +81,7 @@ HELP_CATEGORIES: dict[str, dict] = {
             "generate a personalised ChatGPT blurb prompt."
         ),
         "commands": [
-            ("/setup → 🚂 Train",
+            (f"/setup → {HUB_BTN_TRAIN}",
              "Configure the train tab, blurb generation, and reminders."),
             ("/train overview",
              "View the schedule with Add / Update / Generate Prompt / Clear "
@@ -88,7 +100,7 @@ HELP_CATEGORIES: dict[str, dict] = {
             "announcements and auto-assign the train."
         ),
         "commands": [
-            ("/setup → 🎂 Birthdays",
+            (f"/setup → {HUB_BTN_BIRTHDAYS}",
              "Configure birthday tracking, train integration, and "
              "announcement template."),
             ("/birthdays",
@@ -106,7 +118,7 @@ HELP_CATEGORIES: dict[str, dict] = {
             "see every action in one place."
         ),
         "commands": [
-            ("/setup → ⚔️ Desert Storm",
+            (STORM_SETUP_NAV["DS"],
              "Configure Team rosters, log channel, public post channel, "
              "mail template, and (💎 Premium) the structured-flow sign-up "
              "channel, schedule, and Sheet tabs."),
@@ -134,7 +146,7 @@ HELP_CATEGORIES: dict[str, dict] = {
             "every action in one place."
         ),
         "commands": [
-            ("/setup → 🏜️ Canyon Storm",
+            (STORM_SETUP_NAV["CS"],
              "Configure Team rosters, log channel, public post channel, "
              "mail template, and (💎 Premium) the structured-flow sign-up "
              "channel, schedule, and Sheet tabs."),
@@ -159,7 +171,7 @@ HELP_CATEGORIES: dict[str, dict] = {
             "land in your sheet; leadership gets a notification per submission."
         ),
         "commands": [
-            ("/setup → 📋 Survey",
+            (f"/setup → {HUB_BTN_SURVEY}",
              "Configure questions, channels, sheet tabs, and the intro."),
             ("/survey overview",
              "View configured surveys. 💎 Premium gets Add / Edit / Remove "
@@ -181,9 +193,9 @@ HELP_CATEGORIES: dict[str, dict] = {
             "who's stalled."
         ),
         "commands": [
-            ("/setup → 📈 Growth",
+            (f"/setup → {HUB_BTN_GROWTH}",
              "Configure source tab, metrics, and snapshot schedule."),
-            ("/setup → 📊 Growth Breakdown",
+            (f"/setup → {HUB_BTN_BREAKDOWN}",
              "💎 Configure the breakdown auto-post, bucket thresholds, "
              "and bucket labels."),
             ("/growth overview",
@@ -202,7 +214,7 @@ HELP_CATEGORIES: dict[str, dict] = {
             "that have shiny tasks today."
         ),
         "commands": [
-            ("/setup → 🌟 Shiny Tasks",
+            (f"/setup → {HUB_BTN_SHINY}",
              "Configure the announcement channel, server range, post "
              "time, and message body."),
         ],
@@ -239,7 +251,7 @@ HELP_CATEGORIES: dict[str, dict] = {
             "Unlock with `/upgrade`."
         ),
         "commands": [
-            ("/setup → 👥 Member Sync",
+            (f"/setup → {HUB_BTN_MEMBERS}",
              "Configure Member Sync. Writes Discord IDs to your "
              "sheet so other features find members by name."),
             ("/members overview",

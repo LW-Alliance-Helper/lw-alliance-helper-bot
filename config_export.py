@@ -35,6 +35,15 @@ from dataclasses import dataclass
 from datetime import datetime, timezone
 from typing import Any, Callable, Iterable
 
+from setup_hub import (
+    HUB_BTN_CS,
+    HUB_BTN_DS,
+    HUB_BTN_EVENTS,
+    HUB_BTN_GROWTH,
+    HUB_BTN_SHINY,
+    HUB_BTN_TRAIN,
+)
+
 
 EXPORT_SCHEMA_VERSION = 1
 
@@ -55,14 +64,14 @@ CATEGORY_ORDER: list[str] = [
 
 CATEGORY_LABELS: dict[str, str] = {
     "core":          "⚙️ Core setup (roles, timezone, sheet ID)",
-    "events":        "📣 Events",
-    "ds":            "⚔️ Desert Storm (templates, channels, participation)",
-    "cs":            "🏜️ Canyon Storm (templates, channels, participation)",
-    "train":         "🚂 Train (templates, reminders)",
+    "events":        HUB_BTN_EVENTS,
+    "ds":            f"{HUB_BTN_DS} (templates, channels, participation)",
+    "cs":            f"{HUB_BTN_CS} (templates, channels, participation)",
+    "train":         f"{HUB_BTN_TRAIN} (templates, reminders)",
     "birthday":      "🎂 Birthday tracking",
-    "growth":        "📈 Growth tracking (incl. breakdown)",
+    "growth":        f"{HUB_BTN_GROWTH} tracking (incl. breakdown)",
     "surveys":       "📋 Surveys (default + Premium named)",
-    "shiny_tasks":   "🌟 Shiny Tasks (daily announcement)",
+    "shiny_tasks":   f"{HUB_BTN_SHINY} (daily announcement)",
     "member_roster": "💎 Member Roster sync (Premium)",
 }
 

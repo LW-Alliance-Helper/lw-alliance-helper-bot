@@ -5819,7 +5819,8 @@ async def _finalize_structured_roster(
         summary_lines = ["✅ Roster posted.",
                          f"📬 Mail sent to {posted_to_mention}."]
     elif post_status == "no_channel":
-        setup_cmd = "/setup → ⚔️ Desert Storm" if s.event_type == "DS" else "/setup → 🏜️ Canyon Storm"
+        from setup_hub import STORM_SETUP_NAV
+        setup_cmd = STORM_SETUP_NAV[s.event_type]
         summary_lines = [
             "✅ Roster recorded.",
             "⚠️ No post channel is configured. Mail was built but not "

@@ -21,6 +21,14 @@ from config import (
 )
 import premium
 import wizard_registry
+from setup_hub import (
+    HUB_BTN_BIRTHDAYS,
+    HUB_BTN_BREAKDOWN,
+    HUB_BTN_EVENTS,
+    HUB_BTN_GROWTH,
+    HUB_BTN_SURVEY,
+    HUB_BTN_TRAIN,
+)
 from storm_event_hub import (
     HUB_COMMAND,
     HUB_BTN_POST_SIGNUP,
@@ -1188,7 +1196,7 @@ async def _manage_train_templates(
             return None, None
 
         if list_view.action is None:
-            await channel.send("⏰ Timed out. Run `/setup` → 🚂 Train to start again.")
+            await channel.send(f"⏰ Timed out. Run `/setup` → {HUB_BTN_TRAIN} to start again.")
             return None, None
 
         if list_view.action == "done":
@@ -1220,7 +1228,7 @@ async def _manage_train_templates(
             if pick.cancelled:
                 return None, None
             if pick.idx is None:
-                await channel.send("⏰ Timed out. Run `/setup` → 🚂 Train to start again.")
+                await channel.send(f"⏰ Timed out. Run `/setup` → {HUB_BTN_TRAIN} to start again.")
                 return None, None
             picked_idx = pick.idx
 
@@ -1259,7 +1267,7 @@ async def _manage_train_templates(
             cancel_event,
         )
         if reply is None:
-            await channel.send("⏰ Timed out. Run `/setup` → 🚂 Train to start again.")
+            await channel.send(f"⏰ Timed out. Run `/setup` → {HUB_BTN_TRAIN} to start again.")
             return None, None
         new_name = reply.content.strip()
         if new_name.lower() == "cancel" or not new_name:
@@ -1288,7 +1296,7 @@ async def _manage_train_templates(
             cancel_event,
         )
         if reply is None:
-            await channel.send("⏰ Timed out. Run `/setup` → 🚂 Train to start again.")
+            await channel.send(f"⏰ Timed out. Run `/setup` → {HUB_BTN_TRAIN} to start again.")
             return None, None
         body_raw = reply.content.strip()
         if body_raw.lower() == "cancel":
@@ -1793,7 +1801,7 @@ async def _send_view_configuration(interaction: discord.Interaction, cfg) -> Non
             )
     else:
         ev_lines.append("**Events:** *none configured*")
-    embed.add_field(name="📣 Events", value="\n".join(ev_lines)[:1024], inline=False)
+    embed.add_field(name=HUB_BTN_EVENTS, value="\n".join(ev_lines)[:1024], inline=False)
 
     train_lines = [
         f"**Schedule Tab:** {train.get('tab_name', '*not set*')}",
@@ -1810,7 +1818,7 @@ async def _send_view_configuration(interaction: discord.Interaction, cfg) -> Non
     if train.get("reminders_enabled"):
         train_lines.append(f"**Reminder Channel:** {_channel(train.get('reminder_channel_id'))}")
         train_lines.append(f"**Reminder Time:** {_format_time_with_tz(train.get('reminder_time'), cfg.timezone) or '*not set*'}")
-    embed.add_field(name="🚂 Train", value="\n".join(train_lines)[:1024], inline=False)
+    embed.add_field(name=HUB_BTN_TRAIN, value="\n".join(train_lines)[:1024], inline=False)
 
     b_lines = [
         f"**Enabled:** {_enabled(birthday.get('enabled'))}",
@@ -1828,7 +1836,7 @@ async def _send_view_configuration(interaction: discord.Interaction, cfg) -> Non
     if birthday.get("reminders_enabled"):
         b_lines.append(f"**Reminder Channel:** {_channel(birthday.get('reminder_channel_id'))}")
         b_lines.append(f"**Reminder Time:** {_format_time_with_tz(birthday.get('reminder_time'), cfg.timezone) or '*not set*'}")
-    embed.add_field(name="🎂 Birthdays", value="\n".join(b_lines)[:1024], inline=False)
+    embed.add_field(name=HUB_BTN_BIRTHDAYS, value="\n".join(b_lines)[:1024], inline=False)
 
     from config import get_storm_slot_labels
     ds_slot_labels = get_storm_slot_labels("DS", interaction.guild_id)
@@ -1890,7 +1898,7 @@ async def _send_view_configuration(interaction: discord.Interaction, cfg) -> Non
             f"**Metrics ({len(metrics)}):** "
             + (", ".join(f"{m['label']} (col {m['col']})" for m in metrics) if metrics else "*none*"),
         ]
-    embed.add_field(name="📈 Growth", value="\n".join(g_lines)[:1024], inline=False)
+    embed.add_field(name=HUB_BTN_GROWTH, value="\n".join(g_lines)[:1024], inline=False)
 
     st_lines = [f"**Enabled:** {_enabled(shiny.get('enabled'))}"]
     if shiny.get("enabled"):
@@ -2179,7 +2187,7 @@ async def run_growth_setup(interaction: discord.Interaction, bot):
             if cancel_event.is_set():
                 await channel.send("❌ Cancelled.")
             else:
-                await channel.send("⏰ Timed out. Run `/setup` → 📈 Growth to start again.")
+                await channel.send(f"⏰ Timed out. Run `/setup` → {HUB_BTN_GROWTH} to start again.")
             return None
         return reply.content.strip()[:max_chars]
 
@@ -2251,7 +2259,7 @@ async def run_growth_setup(interaction: discord.Interaction, bot):
     if enabled_view.cancelled:
         return
     if enabled_view.selected is None:
-        await channel.send("⏰ Timed out. Run `/setup` → 📈 Growth to start again.")
+        await channel.send(f"⏰ Timed out. Run `/setup` → {HUB_BTN_GROWTH} to start again.")
         return
     if not enabled_view.selected:
         save_growth_config(
@@ -2268,7 +2276,7 @@ async def run_growth_setup(interaction: discord.Interaction, bot):
         await ask_disable_with_clear(
             channel,
             feature_label="Growth tracking",
-            setup_command="setup → 📈 Growth",
+            setup_command=f"setup → {HUB_BTN_GROWTH}",
             had_prior_config=growth_already_configured,
             clear_fn=lambda: clear_growth_config(guild_id),
             cancel_event=cancel_event,
@@ -2308,7 +2316,7 @@ async def run_growth_setup(interaction: discord.Interaction, bot):
     try:
         data_start_row = int(str(start_raw).strip())
     except ValueError:
-        await channel.send("⚠️ Please enter a row number like `2`. Run `/setup` → 📈 Growth to try again.")
+        await channel.send(f"⚠️ Please enter a row number like `2`. Run `/setup` → {HUB_BTN_GROWTH} to try again.")
         return
 
     # ── Step 4: Name column ───────────────────────────────────────────────────
@@ -2327,7 +2335,7 @@ async def run_growth_setup(interaction: discord.Interaction, bot):
         return
     name_col = name_raw.strip().upper()
     if len(name_col) != 1 or not name_col.isalpha():
-        await channel.send("⚠️ Please enter a single column letter like `A`. Run `/setup` → 📈 Growth to try again.")
+        await channel.send(f"⚠️ Please enter a single column letter like `A`. Run `/setup` → {HUB_BTN_GROWTH} to try again.")
         return
 
     # ── Step 5: Metrics ───────────────────────────────────────────────────────
@@ -2430,7 +2438,7 @@ async def run_growth_setup(interaction: discord.Interaction, bot):
             return
 
         if action_view.choice is None:
-            await channel.send("⏰ Timed out. Run `/setup` → 📈 Growth to start again.")
+            await channel.send(f"⏰ Timed out. Run `/setup` → {HUB_BTN_GROWTH} to start again.")
             return
         if action_view.choice == "done":
             break
@@ -2474,7 +2482,7 @@ async def run_growth_setup(interaction: discord.Interaction, bot):
         if pick_view.cancelled:
             return
         if pick_view.index is None:
-            await channel.send("⏰ Timed out. Run `/setup` → 📈 Growth to start again.")
+            await channel.send(f"⏰ Timed out. Run `/setup` → {HUB_BTN_GROWTH} to start again.")
             return
 
         if action_view.choice == "delete":
@@ -2515,7 +2523,7 @@ async def run_growth_setup(interaction: discord.Interaction, bot):
             }
 
     if not metrics:
-        await channel.send("⚠️ No metrics defined. Run `/setup` → 📈 Growth to try again.")
+        await channel.send(f"⚠️ No metrics defined. Run `/setup` → {HUB_BTN_GROWTH} to try again.")
         return
 
     # ── Step 6: Growth tracking tab ───────────────────────────────────────────
@@ -2574,7 +2582,7 @@ async def run_growth_setup(interaction: discord.Interaction, bot):
     if freq_view.cancelled:
         return
     if not freq_view.selected:
-        await channel.send("⏰ Timed out. Run `/setup` → 📈 Growth to start again.")
+        await channel.send(f"⏰ Timed out. Run `/setup` → {HUB_BTN_GROWTH} to start again.")
         return
 
     snapshot_frequency = freq_view.selected
@@ -2668,7 +2676,7 @@ async def run_growth_setup(interaction: discord.Interaction, bot):
     embed.add_field(name="Snapshot Schedule", value=freq_desc,            inline=False)
     embed.add_field(name="Next Snapshot",     value=next_value,           inline=False)
     embed.add_field(name="Metrics",           value=metrics_display,      inline=False)
-    embed.set_footer(text="Run /setup and click 📈 Growth to update. Use /growth overview to take a manual snapshot.")
+    embed.set_footer(text=f"Run /setup and click {HUB_BTN_GROWTH} to update. Use /growth overview to take a manual snapshot.")
     await channel.send(embed=embed)
     wizard_registry.unregister(user.id, cancel_event)
     print(f"[SETUP] Growth config saved for guild {guild_id}")
@@ -2707,8 +2715,8 @@ async def run_growth_breakdown_setup(interaction: discord.Interaction, bot):
     current = get_growth_config(guild_id)
     if not current.get("enabled") or not current.get("metrics"):
         await channel.send(
-            "⚙️ Set up growth tracking first — run `/setup` → 📈 Growth and add at "
-            "least one metric, then come back to `/setup` → 📊 Growth Breakdown to "
+            f"⚙️ Set up growth tracking first — run `/setup` → {HUB_BTN_GROWTH} and add at "
+            f"least one metric, then come back to `/setup` → {HUB_BTN_BREAKDOWN} to "
             "configure the breakdown layer."
         )
         wizard_registry.unregister(user.id, cancel_event)
@@ -3158,7 +3166,7 @@ async def run_growth_breakdown_setup(interaction: discord.Interaction, bot):
     )
     if not saved_ok:
         await channel.send(
-            "⚠️ Couldn't save the breakdown config — make sure `/setup` → 📈 Growth "
+            f"⚠️ Couldn't save the breakdown config — make sure `/setup` → {HUB_BTN_GROWTH} "
             "has been run for this server first."
         )
         wizard_registry.unregister(user.id, cancel_event)
@@ -3216,7 +3224,7 @@ async def run_train_setup(interaction: discord.Interaction, bot):
             if cancel_event.is_set():
                 await channel.send("❌ Cancelled.")
             else:
-                await channel.send("⏰ Timed out. Run `/setup` → 🚂 Train to start again.")
+                await channel.send(f"⏰ Timed out. Run `/setup` → {HUB_BTN_TRAIN} to start again.")
             return None
         return reply.content.strip()[:max_chars]
 
@@ -3281,14 +3289,14 @@ async def run_train_setup(interaction: discord.Interaction, bot):
         "**Step 2 of 8 — ChatGPT Blurb Generation**\n"
         "Would you like the bot to help generate a ChatGPT prompt each day when you assign a train?\n"
         "This lets you quickly produce a personalised announcement blurb for the member.\n"
-        "*(You can always set this up later by running `/setup` → 🚂 Train again)*",
+        f"*(You can always set this up later by running `/setup` → {HUB_BTN_TRAIN} again)*",
         view=blurb_view,
     )
     await wait_view_or_cancel(blurb_view, cancel_event)
     if blurb_view.cancelled:
         return
     if blurb_view.selected is None:
-        await channel.send("⏰ Timed out. Run `/setup` → 🚂 Train to start again.")
+        await channel.send(f"⏰ Timed out. Run `/setup` → {HUB_BTN_TRAIN} to start again.")
         return
     blurbs_enabled = 1 if blurb_view.selected else 0
     if not blurbs_enabled:
@@ -3449,7 +3457,7 @@ async def run_train_setup(interaction: discord.Interaction, bot):
         if tone_default_view.cancelled:
             return
         if not tone_default_view.selected:
-            await channel.send("⏰ Timed out. Run `/setup` → 🚂 Train to start again.")
+            await channel.send(f"⏰ Timed out. Run `/setup` → {HUB_BTN_TRAIN} to start again.")
             return
         default_tone = tone_default_view.selected
 
@@ -3485,7 +3493,7 @@ async def run_train_setup(interaction: discord.Interaction, bot):
     if reminder_view.cancelled:
         return
     if reminder_view.selected is None:
-        await channel.send("⏰ Timed out. Run `/setup` → 🚂 Train to start again.")
+        await channel.send(f"⏰ Timed out. Run `/setup` → {HUB_BTN_TRAIN} to start again.")
         return
     reminders_enabled  = 1 if reminder_view.selected else 0
     reminder_channel_id = 0
@@ -3526,7 +3534,7 @@ async def run_train_setup(interaction: discord.Interaction, bot):
         if reminder_ch_view.cancelled:
             return
         if not reminder_ch_view.confirmed:
-            await channel.send("⏰ Timed out. Run `/setup` → 🚂 Train to start again.")
+            await channel.send(f"⏰ Timed out. Run `/setup` → {HUB_BTN_TRAIN} to start again.")
             return
         reminder_channel_id = reminder_ch_view.selected_channel.id
 
@@ -3569,7 +3577,7 @@ async def run_train_setup(interaction: discord.Interaction, bot):
             if attempts_left <= 0:
                 await channel.send(
                     "⚠️ Could not read that time after a few tries. "
-                    "Run `/setup` → 🚂 Train to start over."
+                    f"Run `/setup` → {HUB_BTN_TRAIN} to start over."
                 )
                 return
             await channel.send(
@@ -3646,7 +3654,7 @@ async def run_train_setup(interaction: discord.Interaction, bot):
         if prompt_template:
             preview = prompt_template[:200] + ("..." if len(prompt_template) > 200 else "")
             embed.add_field(name="Default Template Preview", value=f"```{preview}```", inline=False)
-    embed.set_footer(text="Run /setup and click 🚂 Train to update any of these settings.")
+    embed.set_footer(text=f"Run /setup and click {HUB_BTN_TRAIN} to update any of these settings.")
     await channel.send(embed=embed)
     wizard_registry.unregister(user.id, cancel_event)
     print(f"[SETUP] Train config saved for guild {guild_id}")
@@ -5822,8 +5830,8 @@ async def _run_storm_participation_step(
         f"**Step 7.2: Roster Source: Sheet Tab**\n"
         f"Which tab in your sheet has the list of members? The bot reads "
         f"member names from here when you use a `Roster names` question.\n"
-        f"*Tip: this is often the same tab you use for `/setup` → 📋 Survey or "
-        f"`/setup` → 🎂 Birthdays.*",
+        f"*Tip: this is often the same tab you use for `/setup` → {HUB_BTN_SURVEY} or "
+        f"`/setup` → {HUB_BTN_BIRTHDAYS}.*",
         default="Squad Powers",
         current=suggested_tab,
         modal_title="Roster Tab",
@@ -8373,7 +8381,7 @@ async def run_event_setup(interaction: discord.Interaction, bot):
             if cancel_event.is_set():
                 await channel.send("❌ Cancelled.")
             else:
-                await channel.send("⏰ Timed out. Run `/setup` → 📣 Events to start again.")
+                await channel.send(f"⏰ Timed out. Run `/setup` → {HUB_BTN_EVENTS} to start again.")
             return None
         return reply.content.strip()[:max_chars]
 
@@ -8503,7 +8511,7 @@ async def run_event_setup(interaction: discord.Interaction, bot):
         if draft_ch_view.cancelled:
             return
         if not draft_ch_view.confirmed:
-            await channel.send("⏰ Timed out. Run `/setup` → 📣 Events to start again.")
+            await channel.send(f"⏰ Timed out. Run `/setup` → {HUB_BTN_EVENTS} to start again.")
             return
         draft_channel_id = draft_ch_view.selected_channel.id
 
@@ -8530,7 +8538,7 @@ async def run_event_setup(interaction: discord.Interaction, bot):
         if ann_ch_view.cancelled:
             return
         if not ann_ch_view.confirmed:
-            await channel.send("⏰ Timed out. Run `/setup` → 📣 Events to start again.")
+            await channel.send(f"⏰ Timed out. Run `/setup` → {HUB_BTN_EVENTS} to start again.")
             return
         announce_channel_id = ann_ch_view.selected_channel.id
 
@@ -8566,7 +8574,7 @@ async def run_event_setup(interaction: discord.Interaction, bot):
             if attempts_left <= 0:
                 await channel.send(
                     "⚠️ Could not read that time after a few tries. "
-                    "Run `/setup` → 📣 Events to start over."
+                    f"Run `/setup` → {HUB_BTN_EVENTS} to start over."
                 )
                 return
             await channel.send(
@@ -8585,7 +8593,7 @@ async def run_event_setup(interaction: discord.Interaction, bot):
         if warn_view.cancelled:
             return
         if warn_view.selected is None:
-            await channel.send("⏰ Timed out. Run `/setup` → 📣 Events to start again.")
+            await channel.send(f"⏰ Timed out. Run `/setup` → {HUB_BTN_EVENTS} to start again.")
             return
         five_min_warning = 1 if warn_view.selected else 0
 
@@ -8679,7 +8687,7 @@ async def run_event_setup(interaction: discord.Interaction, bot):
                 return
 
             if not list_view.action:
-                await channel.send("⏰ Timed out. Run `/setup` → 📣 Events to start again.")
+                await channel.send(f"⏰ Timed out. Run `/setup` → {HUB_BTN_EVENTS} to start again.")
                 return False
 
             if list_view.action == "finish":
@@ -8762,7 +8770,7 @@ async def run_event_setup(interaction: discord.Interaction, bot):
                     if attempts_left <= 0:
                         await channel.send(
                             "⚠️ Could not read that time after a few tries. "
-                            "Run `/setup` → 📣 Events to start over."
+                            f"Run `/setup` → {HUB_BTN_EVENTS} to start over."
                         )
                         return False
                     await channel.send(
@@ -8781,7 +8789,7 @@ async def run_event_setup(interaction: discord.Interaction, bot):
                 if sched_view.cancelled:
                     return
                 if not sched_view.selected:
-                    await channel.send("⏰ Timed out. Run `/setup` → 📣 Events to start again.")
+                    await channel.send(f"⏰ Timed out. Run `/setup` → {HUB_BTN_EVENTS} to start again.")
                     return False
                 schedule_type = sched_view.selected
 
@@ -8800,7 +8808,7 @@ async def run_event_setup(interaction: discord.Interaction, bot):
                         return False
                     parsed_anchor = _parse_month_day(anchor_raw)
                     if not parsed_anchor:
-                        await channel.send("⚠️ Could not read that date. Try `March 30`. Run `/setup` → 📣 Events to try again.")
+                        await channel.send(f"⚠️ Could not read that date. Try `March 30`. Run `/setup` → {HUB_BTN_EVENTS} to try again.")
                         return False
                     anchor_date = parsed_anchor
 
@@ -8824,7 +8832,7 @@ async def run_event_setup(interaction: discord.Interaction, bot):
                     try:
                         interval_days = int(interval_raw)
                     except ValueError:
-                        await channel.send("⚠️ Please enter a whole number. Run `/setup` → 📣 Events to try again.")
+                        await channel.send(f"⚠️ Please enter a whole number. Run `/setup` → {HUB_BTN_EVENTS} to try again.")
                         return False
 
                 # Blurb
@@ -8880,7 +8888,7 @@ async def run_event_setup(interaction: discord.Interaction, bot):
                 if blurb_view.cancelled:
                     return
                 if not blurb_view.choice:
-                    await channel.send("⏰ Timed out. Run `/setup` → 📣 Events to start again.")
+                    await channel.send(f"⏰ Timed out. Run `/setup` → {HUB_BTN_EVENTS} to start again.")
                     return False
 
                 if blurb_view.choice == "default":
@@ -8935,7 +8943,7 @@ async def run_event_setup(interaction: discord.Interaction, bot):
             for e in events
         )
         embed.add_field(name="Events", value=ev_list, inline=False)
-    embed.set_footer(text="Run /setup and click 📣 Events to add or edit events.")
+    embed.set_footer(text=f"Run /setup and click {HUB_BTN_EVENTS} to add or edit events.")
     await channel.send(embed=embed)
     wizard_registry.unregister(user.id, cancel_event)
     print(f"[SETUP] Events saved for guild {guild_id}")
@@ -8961,7 +8969,7 @@ async def run_birthday_setup(interaction: discord.Interaction, bot):
             if cancel_event.is_set():
                 await channel.send("❌ Cancelled.")
             else:
-                await channel.send("⏰ Timed out. Run `/setup` → 🎂 Birthdays to start again.")
+                await channel.send(f"⏰ Timed out. Run `/setup` → {HUB_BTN_BIRTHDAYS} to start again.")
             return None
         return reply.content.strip()[:max_chars]
 
@@ -9023,7 +9031,7 @@ async def run_birthday_setup(interaction: discord.Interaction, bot):
     if enabled_view.cancelled:
         return
     if enabled_view.selected is None:
-        await channel.send("⏰ Timed out. Run `/setup` → 🎂 Birthdays to start again.")
+        await channel.send(f"⏰ Timed out. Run `/setup` → {HUB_BTN_BIRTHDAYS} to start again.")
         return
     if not enabled_view.selected:
         from config import save_birthday_config
@@ -9039,7 +9047,7 @@ async def run_birthday_setup(interaction: discord.Interaction, bot):
         await ask_disable_with_clear(
             channel,
             feature_label="Birthday tracking",
-            setup_command="setup → 🎂 Birthdays",
+            setup_command=f"setup → {HUB_BTN_BIRTHDAYS}",
             had_prior_config=birthdays_already_configured,
             clear_fn=lambda: clear_birthday_config(guild_id),
             cancel_event=cancel_event,
@@ -9087,7 +9095,7 @@ async def run_birthday_setup(interaction: discord.Interaction, bot):
         return
     name_col = _col_letter_to_index(name_col_raw)
     if name_col < 0:
-        await channel.send("⚠️ Please enter a single column letter like `A`. Run `/setup` → 🎂 Birthdays to try again.")
+        await channel.send(f"⚠️ Please enter a single column letter like `A`. Run `/setup` → {HUB_BTN_BIRTHDAYS} to try again.")
         return
 
     # ── Step 4: Birthday column ────────────────────────────────────────────────
@@ -9115,7 +9123,7 @@ async def run_birthday_setup(interaction: discord.Interaction, bot):
         return
     birthday_col = _col_letter_to_index(bday_col_raw)
     if birthday_col < 0:
-        await channel.send("⚠️ Please enter a single column letter like `B`. Run `/setup` → 🎂 Birthdays to try again.")
+        await channel.send(f"⚠️ Please enter a single column letter like `B`. Run `/setup` → {HUB_BTN_BIRTHDAYS} to try again.")
         return
 
     # ── Step 5: Train integration ─────────────────────────────────────────────
@@ -9129,7 +9137,7 @@ async def run_birthday_setup(interaction: discord.Interaction, bot):
     if train_view.cancelled:
         return
     if train_view.selected is None:
-        await channel.send("⏰ Timed out. Run `/setup` → 🎂 Birthdays to start again.")
+        await channel.send(f"⏰ Timed out. Run `/setup` → {HUB_BTN_BIRTHDAYS} to start again.")
         return
     train_integration = 1 if train_view.selected else 0
 
@@ -9179,7 +9187,7 @@ async def run_birthday_setup(interaction: discord.Interaction, bot):
         if placement_view.cancelled:
             return
         if placement_view.selected is None:
-            await channel.send("⏰ Timed out. Run `/setup` → 🎂 Birthdays to start again.")
+            await channel.send(f"⏰ Timed out. Run `/setup` → {HUB_BTN_BIRTHDAYS} to start again.")
             return
         flexible_placement = placement_view.selected
 
@@ -9206,7 +9214,7 @@ async def run_birthday_setup(interaction: discord.Interaction, bot):
             if lookahead_days < 1:
                 raise ValueError
         except ValueError:
-            await channel.send("⚠️ Please enter a number like `14`. Run `/setup` → 🎂 Birthdays to try again.")
+            await channel.send(f"⚠️ Please enter a number like `14`. Run `/setup` → {HUB_BTN_BIRTHDAYS} to try again.")
             return
 
     # ── Step 8: Birthday reminders ─────────────────────────────────────────────
@@ -9221,7 +9229,7 @@ async def run_birthday_setup(interaction: discord.Interaction, bot):
     if remind_view.cancelled:
         return
     if remind_view.selected is None:
-        await channel.send("⏰ Timed out. Run `/setup` → 🎂 Birthdays to start again.")
+        await channel.send(f"⏰ Timed out. Run `/setup` → {HUB_BTN_BIRTHDAYS} to start again.")
         return
     reminders_enabled    = 1 if remind_view.selected else 0
     reminder_channel_id  = 0
@@ -9256,7 +9264,7 @@ async def run_birthday_setup(interaction: discord.Interaction, bot):
         if remind_ch_view.cancelled:
             return
         if not remind_ch_view.confirmed:
-            await channel.send("⏰ Timed out. Run `/setup` → 🎂 Birthdays to start again.")
+            await channel.send(f"⏰ Timed out. Run `/setup` → {HUB_BTN_BIRTHDAYS} to start again.")
             return
         reminder_channel_id = remind_ch_view.selected_channel.id
 
@@ -9298,7 +9306,7 @@ async def run_birthday_setup(interaction: discord.Interaction, bot):
             if attempts_left <= 0:
                 await channel.send(
                     "⚠️ Could not read that time after a few tries. "
-                    "Run `/setup` → 🎂 Birthdays to start over."
+                    f"Run `/setup` → {HUB_BTN_BIRTHDAYS} to start over."
                 )
                 return
             await channel.send(
@@ -9365,7 +9373,7 @@ async def run_birthday_setup(interaction: discord.Interaction, bot):
     if reminders_enabled:
         embed.add_field(name="Reminder Channel", value=f"<#{reminder_channel_id}>",       inline=True)
         embed.add_field(name="Reminder Time",    value=_format_time_with_tz(reminder_time, guild_tz), inline=True)
-    embed.set_footer(text="Run /setup and click 🎂 Birthdays to update these settings.")
+    embed.set_footer(text=f"Run /setup and click {HUB_BTN_BIRTHDAYS} to update these settings.")
     await channel.send(embed=embed)
     wizard_registry.unregister(user.id, cancel_event)
     print(f"[SETUP] Birthday config saved for guild {guild_id}")

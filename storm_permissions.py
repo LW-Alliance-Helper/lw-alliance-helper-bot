@@ -83,8 +83,9 @@ async def ensure_premium_structured(
     import premium
     from config import get_structured_storm_config
 
+    from setup_hub import STORM_SETUP_NAV
     label = "Desert Storm" if event_type == "DS" else "Canyon Storm"
-    setup_cmd = "/setup → ⚔️ Desert Storm" if event_type == "DS" else "/setup → 🏜️ Canyon Storm"
+    setup_cmd = STORM_SETUP_NAV[event_type]
 
     async def _say(message: str) -> None:
         if interaction.response.is_done():

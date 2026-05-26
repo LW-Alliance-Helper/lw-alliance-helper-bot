@@ -17,6 +17,7 @@ from config import (
     upsert_guild_install_metadata, get_guild_install_metadata,
     delete_guild_install_metadata,
 )
+from setup_hub import HUB_BTN_EVENTS
 import wizard_registry
 
 load_dotenv()
@@ -972,7 +973,7 @@ async def events_overview_slash(interaction: discord.Interaction):
 
     if not events:
         embed.description = (
-            "No event types configured yet. Run `/setup` and click **📣 Events** to add "
+            f"No event types configured yet. Run `/setup` and click **{HUB_BTN_EVENTS}** to add "
             "Marauder, Siege, or custom event types."
         )
         await interaction.response.send_message(embed=embed, ephemeral=True)
@@ -987,7 +988,7 @@ async def events_overview_slash(interaction: discord.Interaction):
                 anchor   = date_cls.fromisoformat(ev["anchor_date"])
                 interval = int(ev["interval_days"] or 0)
             except (ValueError, TypeError):
-                repeating_lines.append(f"• **{name}** — schedule invalid (re-open via `/setup` → 📣 Events)")
+                repeating_lines.append(f"• **{name}** — schedule invalid (re-open via `/setup` → {HUB_BTN_EVENTS})")
                 continue
             upcoming = next_event_dates(
                 from_date=today, count=1, anchor=anchor, cycle=interval,
@@ -1101,7 +1102,7 @@ async def events_slash(interaction: discord.Interaction, date: str = None):
 
     if not events:
         await interaction.followup.send(
-            "ℹ️ No events configured. Run `/setup` and click **📣 Events** to add some.",
+            f"ℹ️ No events configured. Run `/setup` and click **{HUB_BTN_EVENTS}** to add some.",
             ephemeral=True,
         )
         return
@@ -1115,8 +1116,8 @@ async def events_slash(interaction: discord.Interaction, date: str = None):
 
     if not groups:
         await interaction.followup.send(
-            "ℹ️ No repeating events configured. The event editor only "
-            "applies to events with a recurring schedule. Run `/setup` and click **📣 Events** "
+            f"ℹ️ No repeating events configured. The event editor only "
+            f"applies to events with a recurring schedule. Run `/setup` and click **{HUB_BTN_EVENTS}** "
             "to add one, or add events directly to your manual schedule.",
             ephemeral=True,
         )
@@ -1136,8 +1137,8 @@ async def events_slash(interaction: discord.Interaction, date: str = None):
 
     if not next_per_group:
         await interaction.followup.send(
-            "ℹ️ Couldn't compute the next event date — your repeating events "
-            "have invalid anchor dates. Run `/setup` and click **📣 Events** to fix.",
+            f"ℹ️ Couldn't compute the next event date — your repeating events "
+            f"have invalid anchor dates. Run `/setup` and click **{HUB_BTN_EVENTS}** to fix.",
             ephemeral=True,
         )
         return
@@ -1190,8 +1191,8 @@ async def events_slash(interaction: discord.Interaction, date: str = None):
 
     if not event_list:
         await interaction.followup.send(
-            "⚠️ No events to show on the next event date — likely a bad timezone "
-            "or default_time on one of your configured events. Run `/setup` and click **📣 Events** "
+            f"⚠️ No events to show on the next event date — likely a bad timezone "
+            f"or default_time on one of your configured events. Run `/setup` and click **{HUB_BTN_EVENTS}** "
             "to review.",
             ephemeral=True,
         )

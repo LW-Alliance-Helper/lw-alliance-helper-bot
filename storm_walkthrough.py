@@ -25,6 +25,14 @@ import logging
 
 import discord
 
+from storm_event_hub import (
+    HUB_BTN_ATTENDANCE,
+    HUB_BTN_POST_SIGNUP,
+    HUB_BTN_PRESETS,
+    HUB_BTN_RULES,
+    HUB_BTN_VIEW_SIGNUPS,
+)
+
 logger = logging.getLogger(__name__)
 
 
@@ -74,13 +82,13 @@ def _build_storm_hub_tour_steps(
         f"**Step 2 / 5: The weekly cycle**\n"
         f"{label} runs every **{event_day}** in-game. Here's the flow:\n"
         f"\n"
-        f"1. **📣 Post sign-up poll** drops a vote message in your sign-up "
+        f"1. **{HUB_BTN_POST_SIGNUP}** drops a vote message in your sign-up "
         f"channel. Members click a button to register their availability.\n"
-        f"2. After votes come in, click **👁️ View sign-ups + set up "
-        f"teams**. You'll see who voted in each bucket and can click "
+        f"2. After votes come in, click **{HUB_BTN_VIEW_SIGNUPS}**. "
+        f"You'll see who voted in each bucket and can click "
         f"🅰️ Set up Team A or 🅱️ Set up Team B to open the roster "
         f"builder, pre-filtered to members who signed up for that team.\n"
-        f"3. After the event, **📋 Record attendance** lets you mark who "
+        f"3. After the event, **{HUB_BTN_ATTENDANCE}** lets you mark who "
         f"actually showed at each assigned slot.\n"
         f"\n"
         f"Auto-scheduling can fire step 1 for you on a configured day; "
@@ -90,12 +98,12 @@ def _build_storm_hub_tour_steps(
         f"**Step 3 / 5: Strategy presets + member rules**\n"
         f"Two storage surfaces feed the roster builder:\n"
         f"\n"
-        f"**🧮 Manage strategy presets** opens your saved zone layouts. "
+        f"**{HUB_BTN_PRESETS}** opens your saved zone layouts. "
         f"A preset lists which zones the team uses, max players per "
         f"zone, optional minimum power per zone, and priority. When you "
         f"set up a team, you pick which preset to apply.\n"
         f"\n"
-        f"**👤 Manage member rules** opens the eligibility rule list. "
+        f"**{HUB_BTN_RULES}** opens the eligibility rule list. "
         f"Two types: power-band rules ('members ≥ 80M are eligible for "
         f"Power Tower') and per-member overrides ('Alice always plays "
         f"Team A'). Both feed into the auto-fill when you build a "

@@ -35,6 +35,8 @@ from config import (
     get_config, get_member_roster_config, save_member_roster_config,
     update_roster_last_synced, get_member_roster_sheet, get_spreadsheet,
 )
+from messages import WIZARD_TIMEOUT
+from setup_hub import HUB_BTN_MEMBERS
 
 
 logger = logging.getLogger(__name__)
@@ -975,7 +977,7 @@ async def run_member_roster_setup(interaction: discord.Interaction, bot):
     if filter_view.cancelled:
         return
     if filter_view.selected is None:
-        await channel.send("⏰ Timed out. Run `/setup` → 👥 Member Sync to start again.")
+        await channel.send(WIZARD_TIMEOUT.format(wizard=HUB_BTN_MEMBERS))
         return
     role_filter_id = member_role_id if filter_view.selected else 0
 
@@ -991,7 +993,7 @@ async def run_member_roster_setup(interaction: discord.Interaction, bot):
     if auto_view.cancelled:
         return
     if auto_view.selected is None:
-        await channel.send("⏰ Timed out. Run `/setup` → 👥 Member Sync to start again.")
+        await channel.send(WIZARD_TIMEOUT.format(wizard=HUB_BTN_MEMBERS))
         return
     auto_sync = 1 if auto_view.selected else 0
 
@@ -1257,7 +1259,7 @@ async def run_member_roster_setup(interaction: discord.Interaction, bot):
             return
         if preview.outcome is None:
             await channel.send(
-                "⏰ Timed out. Run `/setup` → 👥 Member Sync to start again."
+                WIZARD_TIMEOUT.format(wizard=HUB_BTN_MEMBERS)
             )
             wizard_registry.unregister(user.id, cancel_event)
             return

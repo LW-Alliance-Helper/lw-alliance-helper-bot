@@ -29,6 +29,7 @@ import discord
 from discord import app_commands
 from discord.ext import commands, tasks
 from config import get_config
+from messages import GENERIC_CMD_TIMEOUT
 import wizard_registry
 
 # ── Config ─────────────────────────────────────────────────────────────────────
@@ -1377,7 +1378,7 @@ async def _run_send_now(interaction: discord.Interaction, bot, is_premium_flag: 
     )
     await dest_view.wait()
     if dest_view.choice is None:
-        await interaction.followup.send("⏰ Timed out. Run `/survey remind` again.", ephemeral=True)
+        await interaction.followup.send(GENERIC_CMD_TIMEOUT.format(cmd="survey remind"), ephemeral=True)
         return
 
     if dest_view.choice == "channel":
@@ -1385,7 +1386,7 @@ async def _run_send_now(interaction: discord.Interaction, bot, is_premium_flag: 
         await interaction.followup.send("📢 Pick the channel to post to:", view=ch_view, ephemeral=True)
         await ch_view.wait()
         if ch_view.channel is None:
-            await interaction.followup.send("⏰ Timed out. Run `/survey remind` again.", ephemeral=True)
+            await interaction.followup.send(GENERIC_CMD_TIMEOUT.format(cmd="survey remind"), ephemeral=True)
             return
         ok = await _send_reminder_to_channel(bot, interaction.guild_id, ch_view.channel.id, body)
         if ok:
@@ -1525,7 +1526,7 @@ async def _run_schedule_wizard(interaction: discord.Interaction, bot, is_premium
     )
     await freq_view.wait()
     if freq_view.choice is None:
-        await interaction.followup.send("⏰ Timed out. Run `/survey remind` again.", ephemeral=True)
+        await interaction.followup.send(GENERIC_CMD_TIMEOUT.format(cmd="survey remind"), ephemeral=True)
         return
 
     new_freq = freq_view.choice
@@ -1555,7 +1556,7 @@ async def _run_schedule_wizard(interaction: discord.Interaction, bot, is_premium
         )
         await day_view.wait()
         if day_view.day is None:
-            await interaction.followup.send("⏰ Timed out. Run `/survey remind` again.", ephemeral=True)
+            await interaction.followup.send(GENERIC_CMD_TIMEOUT.format(cmd="survey remind"), ephemeral=True)
             return
         new_day = day_view.day
 
@@ -1577,7 +1578,7 @@ async def _run_schedule_wizard(interaction: discord.Interaction, bot, is_premium
     )
     await dest_view.wait()
     if dest_view.choice is None:
-        await interaction.followup.send("⏰ Timed out. Run `/survey remind` again.", ephemeral=True)
+        await interaction.followup.send(GENERIC_CMD_TIMEOUT.format(cmd="survey remind"), ephemeral=True)
         return
 
     new_use_dm   = 0
@@ -1589,7 +1590,7 @@ async def _run_schedule_wizard(interaction: discord.Interaction, bot, is_premium
         await interaction.followup.send("📢 Pick the channel to post the reminder to:", view=ch_view, ephemeral=True)
         await ch_view.wait()
         if ch_view.channel is None:
-            await interaction.followup.send("⏰ Timed out. Run `/survey remind` again.", ephemeral=True)
+            await interaction.followup.send(GENERIC_CMD_TIMEOUT.format(cmd="survey remind"), ephemeral=True)
             return
         new_channel = ch_view.channel.id
 
@@ -1673,7 +1674,7 @@ async def _ask_time(interaction: discord.Interaction, *, default: str,
         )
         await view.wait()
         if view.modal is None or view.modal.value is None:
-            await interaction.followup.send("⏰ Timed out. Run `/survey remind` again.", ephemeral=True)
+            await interaction.followup.send(GENERIC_CMD_TIMEOUT.format(cmd="survey remind"), ephemeral=True)
             return ("", False)
         raw = view.modal.value
         parsed = _parse_12h_time(raw)
@@ -1753,7 +1754,7 @@ async def _ask_reminder_message(interaction: discord.Interaction, bot,
     )
     await view.wait()
     if view.modal is None or not view.modal.confirmed:
-        await interaction.followup.send("⏰ Timed out. Run `/survey remind` again.", ephemeral=True)
+        await interaction.followup.send(GENERIC_CMD_TIMEOUT.format(cmd="survey remind"), ephemeral=True)
         return ("", False)
     return ((view.modal.value or "").strip(), True)
 

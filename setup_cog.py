@@ -21,11 +21,16 @@ from config import (
 )
 import premium
 import wizard_registry
+from messages import (
+    GENERIC_CMD_TIMEOUT,
+    WIZARD_TIMEOUT,
+)
 from setup_hub import (
     HUB_BTN_BIRTHDAYS,
     HUB_BTN_BREAKDOWN,
     HUB_BTN_EVENTS,
     HUB_BTN_GROWTH,
+    HUB_BTN_SHINY,
     HUB_BTN_SURVEY,
     HUB_BTN_TRAIN,
 )
@@ -928,7 +933,7 @@ async def ask_keep_or_change(
         return None
     if not view.confirmed:
         if timeout_cmd:
-            await channel.send(f"⏰ Timed out. Run `/{timeout_cmd}` to start again.")
+            await channel.send(GENERIC_CMD_TIMEOUT.format(cmd=timeout_cmd))
         return None
     return view.value
 
@@ -1196,7 +1201,7 @@ async def _manage_train_templates(
             return None, None
 
         if list_view.action is None:
-            await channel.send(f"⏰ Timed out. Run `/setup` → {HUB_BTN_TRAIN} to start again.")
+            await channel.send(WIZARD_TIMEOUT.format(wizard=HUB_BTN_TRAIN))
             return None, None
 
         if list_view.action == "done":
@@ -1228,7 +1233,7 @@ async def _manage_train_templates(
             if pick.cancelled:
                 return None, None
             if pick.idx is None:
-                await channel.send(f"⏰ Timed out. Run `/setup` → {HUB_BTN_TRAIN} to start again.")
+                await channel.send(WIZARD_TIMEOUT.format(wizard=HUB_BTN_TRAIN))
                 return None, None
             picked_idx = pick.idx
 
@@ -1267,7 +1272,7 @@ async def _manage_train_templates(
             cancel_event,
         )
         if reply is None:
-            await channel.send(f"⏰ Timed out. Run `/setup` → {HUB_BTN_TRAIN} to start again.")
+            await channel.send(WIZARD_TIMEOUT.format(wizard=HUB_BTN_TRAIN))
             return None, None
         new_name = reply.content.strip()
         if new_name.lower() == "cancel" or not new_name:
@@ -1296,7 +1301,7 @@ async def _manage_train_templates(
             cancel_event,
         )
         if reply is None:
-            await channel.send(f"⏰ Timed out. Run `/setup` → {HUB_BTN_TRAIN} to start again.")
+            await channel.send(WIZARD_TIMEOUT.format(wizard=HUB_BTN_TRAIN))
             return None, None
         body_raw = reply.content.strip()
         if body_raw.lower() == "cancel":
@@ -1976,7 +1981,7 @@ async def run_setup(interaction: discord.Interaction, bot):
     if v.cancelled:
         return
     if not v.confirmed:
-        await channel.send("⏰ Setup timed out. Run `/setup` to start again.")
+        await channel.send(GENERIC_CMD_TIMEOUT.format(cmd="setup"))
         return
     cfg.member_role_name = v.selected_role.name
     cfg.member_role_id   = v.selected_role.id
@@ -1999,7 +2004,7 @@ async def run_setup(interaction: discord.Interaction, bot):
     if v.cancelled:
         return
     if not v.confirmed:
-        await channel.send("⏰ Setup timed out. Run `/setup` to start again.")
+        await channel.send(GENERIC_CMD_TIMEOUT.format(cmd="setup"))
         return
     cfg.leadership_role_name = v.selected_role.name
     cfg.leadership_role_id   = v.selected_role.id
@@ -2029,7 +2034,7 @@ async def run_setup(interaction: discord.Interaction, bot):
     if v.cancelled:
         return
     if not v.confirmed:
-        await channel.send("⏰ Setup timed out. Run `/setup` to start again.")
+        await channel.send(GENERIC_CMD_TIMEOUT.format(cmd="setup"))
         return
     cfg.leadership_channel_id = v.selected_channel.id
 
@@ -2045,7 +2050,7 @@ async def run_setup(interaction: discord.Interaction, bot):
     if tz_view.cancelled:
         return
     if not tz_view.confirmed:
-        await channel.send("⏰ Setup timed out. Run `/setup` to start again.")
+        await channel.send(GENERIC_CMD_TIMEOUT.format(cmd="setup"))
         return
     cfg.timezone = tz_view.selected
 
@@ -2075,7 +2080,7 @@ async def run_setup(interaction: discord.Interaction, bot):
     if modal_v.cancelled:
         return
     if not modal_v.confirmed:
-        await channel.send("⏰ Setup timed out. Run `/setup` to start again.")
+        await channel.send(GENERIC_CMD_TIMEOUT.format(cmd="setup"))
         return
     sheet_id = normalize_spreadsheet_id(modal.value)
 
@@ -2187,7 +2192,7 @@ async def run_growth_setup(interaction: discord.Interaction, bot):
             if cancel_event.is_set():
                 await channel.send("❌ Cancelled.")
             else:
-                await channel.send(f"⏰ Timed out. Run `/setup` → {HUB_BTN_GROWTH} to start again.")
+                await channel.send(WIZARD_TIMEOUT.format(wizard=HUB_BTN_GROWTH))
             return None
         return reply.content.strip()[:max_chars]
 
@@ -2259,7 +2264,7 @@ async def run_growth_setup(interaction: discord.Interaction, bot):
     if enabled_view.cancelled:
         return
     if enabled_view.selected is None:
-        await channel.send(f"⏰ Timed out. Run `/setup` → {HUB_BTN_GROWTH} to start again.")
+        await channel.send(WIZARD_TIMEOUT.format(wizard=HUB_BTN_GROWTH))
         return
     if not enabled_view.selected:
         save_growth_config(
@@ -2438,7 +2443,7 @@ async def run_growth_setup(interaction: discord.Interaction, bot):
             return
 
         if action_view.choice is None:
-            await channel.send(f"⏰ Timed out. Run `/setup` → {HUB_BTN_GROWTH} to start again.")
+            await channel.send(WIZARD_TIMEOUT.format(wizard=HUB_BTN_GROWTH))
             return
         if action_view.choice == "done":
             break
@@ -2482,7 +2487,7 @@ async def run_growth_setup(interaction: discord.Interaction, bot):
         if pick_view.cancelled:
             return
         if pick_view.index is None:
-            await channel.send(f"⏰ Timed out. Run `/setup` → {HUB_BTN_GROWTH} to start again.")
+            await channel.send(WIZARD_TIMEOUT.format(wizard=HUB_BTN_GROWTH))
             return
 
         if action_view.choice == "delete":
@@ -2582,7 +2587,7 @@ async def run_growth_setup(interaction: discord.Interaction, bot):
     if freq_view.cancelled:
         return
     if not freq_view.selected:
-        await channel.send(f"⏰ Timed out. Run `/setup` → {HUB_BTN_GROWTH} to start again.")
+        await channel.send(WIZARD_TIMEOUT.format(wizard=HUB_BTN_GROWTH))
         return
 
     snapshot_frequency = freq_view.selected
@@ -2802,7 +2807,7 @@ async def run_growth_breakdown_setup(interaction: discord.Interaction, bot):
     if autopost_view.cancelled:
         return
     if autopost_view.selected is None:
-        await channel.send("⏰ Timed out. Run `/setup` → 📊 Growth Breakdown to start again.")
+        await channel.send(WIZARD_TIMEOUT.format(wizard=HUB_BTN_BREAKDOWN))
         return
 
     post_channel_id = 0
@@ -2829,7 +2834,7 @@ async def run_growth_breakdown_setup(interaction: discord.Interaction, bot):
         if post_ch_view.cancelled:
             return
         if not post_ch_view.confirmed:
-            await channel.send("⏰ Timed out. Run `/setup` → 📊 Growth Breakdown to start again.")
+            await channel.send(WIZARD_TIMEOUT.format(wizard=HUB_BTN_BREAKDOWN))
             return
         post_channel_id = post_ch_view.selected_channel.id
 
@@ -2929,7 +2934,7 @@ async def run_growth_breakdown_setup(interaction: discord.Interaction, bot):
         if bf_view.cancelled:
             return
         if bf_view.selected is None:
-            await channel.send("⏰ Timed out. Run `/setup` → 📊 Growth Breakdown to start again.")
+            await channel.send(WIZARD_TIMEOUT.format(wizard=HUB_BTN_BREAKDOWN))
             return
         bucket_filter = bf_view.selected
 
@@ -3047,7 +3052,7 @@ async def run_growth_breakdown_setup(interaction: discord.Interaction, bot):
         return
     if t_view.choice is None:
         await channel.send(
-            "⏰ Timed out or invalid thresholds. Run `/setup` → 📊 Growth Breakdown to start again."
+            f"⏰ Timed out or invalid thresholds. Run `/setup` → {HUB_BTN_BREAKDOWN} to start again."
         )
         return
     if t_view.choice == "defaults":
@@ -3144,7 +3149,7 @@ async def run_growth_breakdown_setup(interaction: discord.Interaction, bot):
         return
     if l_view.choice is None:
         await channel.send(
-            "⏰ Timed out. Run `/setup` → 📊 Growth Breakdown to start again."
+            WIZARD_TIMEOUT.format(wizard=HUB_BTN_BREAKDOWN)
         )
         return
     if l_view.choice == "defaults":
@@ -3224,7 +3229,7 @@ async def run_train_setup(interaction: discord.Interaction, bot):
             if cancel_event.is_set():
                 await channel.send("❌ Cancelled.")
             else:
-                await channel.send(f"⏰ Timed out. Run `/setup` → {HUB_BTN_TRAIN} to start again.")
+                await channel.send(WIZARD_TIMEOUT.format(wizard=HUB_BTN_TRAIN))
             return None
         return reply.content.strip()[:max_chars]
 
@@ -3296,7 +3301,7 @@ async def run_train_setup(interaction: discord.Interaction, bot):
     if blurb_view.cancelled:
         return
     if blurb_view.selected is None:
-        await channel.send(f"⏰ Timed out. Run `/setup` → {HUB_BTN_TRAIN} to start again.")
+        await channel.send(WIZARD_TIMEOUT.format(wizard=HUB_BTN_TRAIN))
         return
     blurbs_enabled = 1 if blurb_view.selected else 0
     if not blurbs_enabled:
@@ -3457,7 +3462,7 @@ async def run_train_setup(interaction: discord.Interaction, bot):
         if tone_default_view.cancelled:
             return
         if not tone_default_view.selected:
-            await channel.send(f"⏰ Timed out. Run `/setup` → {HUB_BTN_TRAIN} to start again.")
+            await channel.send(WIZARD_TIMEOUT.format(wizard=HUB_BTN_TRAIN))
             return
         default_tone = tone_default_view.selected
 
@@ -3493,7 +3498,7 @@ async def run_train_setup(interaction: discord.Interaction, bot):
     if reminder_view.cancelled:
         return
     if reminder_view.selected is None:
-        await channel.send(f"⏰ Timed out. Run `/setup` → {HUB_BTN_TRAIN} to start again.")
+        await channel.send(WIZARD_TIMEOUT.format(wizard=HUB_BTN_TRAIN))
         return
     reminders_enabled  = 1 if reminder_view.selected else 0
     reminder_channel_id = 0
@@ -3534,7 +3539,7 @@ async def run_train_setup(interaction: discord.Interaction, bot):
         if reminder_ch_view.cancelled:
             return
         if not reminder_ch_view.confirmed:
-            await channel.send(f"⏰ Timed out. Run `/setup` → {HUB_BTN_TRAIN} to start again.")
+            await channel.send(WIZARD_TIMEOUT.format(wizard=HUB_BTN_TRAIN))
             return
         reminder_channel_id = reminder_ch_view.selected_channel.id
 
@@ -3940,7 +3945,7 @@ async def run_survey_setup(interaction: discord.Interaction, bot,
     if survey_ch_view.cancelled:
         return
     if not survey_ch_view.confirmed:
-        await channel.send("⏰ Timed out. Run `/setup` → 📋 Survey to start again.")
+        await channel.send(WIZARD_TIMEOUT.format(wizard=HUB_BTN_SURVEY))
         return
     survey_channel_id = survey_ch_view.selected_channel.id
 
@@ -3966,7 +3971,7 @@ async def run_survey_setup(interaction: discord.Interaction, bot,
     if notify_ch_view.cancelled:
         return
     if not notify_ch_view.confirmed:
-        await channel.send("⏰ Timed out. Run `/setup` → 📋 Survey to start again.")
+        await channel.send(WIZARD_TIMEOUT.format(wizard=HUB_BTN_SURVEY))
         return
     survey_notify_channel_id = notify_ch_view.selected_channel.id
 
@@ -4056,7 +4061,7 @@ async def run_survey_setup(interaction: discord.Interaction, bot,
                 "the previous step as a guide, or paste in your own."
             )
         else:
-            await channel.send("⏰ Timed out. Run `/setup` → 📋 Survey to start again.")
+            await channel.send(WIZARD_TIMEOUT.format(wizard=HUB_BTN_SURVEY))
             return
 
     if intro_message is None:
@@ -4077,7 +4082,7 @@ async def run_survey_setup(interaction: discord.Interaction, bot,
             if cancel_event.is_set():
                 await channel.send("❌ Cancelled.")
             else:
-                await channel.send("⏰ Timed out. Run `/setup` → 📋 Survey to start again.")
+                await channel.send(WIZARD_TIMEOUT.format(wizard=HUB_BTN_SURVEY))
             return
         intro_message = intro_reply.content.strip()
 
@@ -4130,7 +4135,7 @@ async def run_survey_setup(interaction: discord.Interaction, bot,
     if q_start_view.cancelled:
         return
     if not q_start_view.choice:
-        await channel.send("⏰ Timed out. Run `/setup` → 📋 Survey to start again.")
+        await channel.send(WIZARD_TIMEOUT.format(wizard=HUB_BTN_SURVEY))
         return
 
     if q_start_view.choice == "default":
@@ -4221,7 +4226,7 @@ async def run_survey_setup(interaction: discord.Interaction, bot,
                     return
 
                 if not list_view.action:
-                    await channel.send("⏰ Timed out. Run `/setup` → 📋 Survey to start again.")
+                    await channel.send(WIZARD_TIMEOUT.format(wizard=HUB_BTN_SURVEY))
                     return False
 
                 if list_view.action == "finish":
@@ -4261,7 +4266,7 @@ async def run_survey_setup(interaction: discord.Interaction, bot,
                         label_reply = await bot.wait_for("message", check=check, timeout=120)
                         q_label     = label_reply.content.strip() or existing.get("label", "")
                     except asyncio.TimeoutError:
-                        await channel.send("⏰ Timed out. Run `/setup` → 📋 Survey to start again.")
+                        await channel.send(WIZARD_TIMEOUT.format(wizard=HUB_BTN_SURVEY))
                         return False
 
                     q_key = q_label.lower().replace(" ", "_").replace("(", "").replace(")", "").replace("/", "_")
@@ -4316,7 +4321,7 @@ async def run_survey_setup(interaction: discord.Interaction, bot,
                     if type_view.cancelled:
                         return
                     if not type_view.selected:
-                        await channel.send("⏰ Timed out. Run `/setup` → 📋 Survey to start again.")
+                        await channel.send(WIZARD_TIMEOUT.format(wizard=HUB_BTN_SURVEY))
                         return False
                     q_type = type_view.selected
 
@@ -4338,7 +4343,7 @@ async def run_survey_setup(interaction: discord.Interaction, bot,
                         help_raw    = help_reply.content.strip()
                         placeholder = "" if help_raw.lower() == "none" else help_raw
                     except asyncio.TimeoutError:
-                        await channel.send("⏰ Timed out. Run `/setup` → 📋 Survey to start again.")
+                        await channel.send(WIZARD_TIMEOUT.format(wizard=HUB_BTN_SURVEY))
                         return False
 
                     # Type-specific extras
@@ -4357,7 +4362,7 @@ async def run_survey_setup(interaction: discord.Interaction, bot,
                             opts_reply = await bot.wait_for("message", check=check, timeout=120)
                             options    = [o.strip() for o in opts_reply.content.split(",") if o.strip()][:25]
                         except asyncio.TimeoutError:
-                            await channel.send("⏰ Timed out. Run `/setup` → 📋 Survey to start again.")
+                            await channel.send(WIZARD_TIMEOUT.format(wizard=HUB_BTN_SURVEY))
                             return False
 
                     if q_type == "numeric":
@@ -4419,7 +4424,7 @@ async def run_survey_setup(interaction: discord.Interaction, bot,
                         if mag_view.cancelled:
                             return
                         if not mag_view.selected:
-                            await channel.send("⏰ Timed out. Run `/setup` → 📋 Survey to start again.")
+                            await channel.send(WIZARD_TIMEOUT.format(wizard=HUB_BTN_SURVEY))
                             return False
                         extra_meta["magnitude"] = mag_view.selected
 
@@ -4435,7 +4440,7 @@ async def run_survey_setup(interaction: discord.Interaction, bot,
                             try:
                                 bounds_reply = await bot.wait_for("message", check=check, timeout=120)
                             except asyncio.TimeoutError:
-                                await channel.send("⏰ Timed out. Run `/setup` → 📋 Survey to start again.")
+                                await channel.send(WIZARD_TIMEOUT.format(wizard=HUB_BTN_SURVEY))
                                 return False
                             raw = bounds_reply.content.strip().lower()
                             if raw not in ("", "none"):
@@ -4464,7 +4469,7 @@ async def run_survey_setup(interaction: discord.Interaction, bot,
                         try:
                             fmt_reply = await bot.wait_for("message", check=check, timeout=120)
                         except asyncio.TimeoutError:
-                            await channel.send("⏰ Timed out. Run `/setup` → 📋 Survey to start again.")
+                            await channel.send(WIZARD_TIMEOUT.format(wizard=HUB_BTN_SURVEY))
                             return False
                         raw_fmt = fmt_reply.content.strip()
                         extra_meta["date_format"] = (
@@ -4575,7 +4580,7 @@ async def run_storm_setup(interaction: discord.Interaction, bot, event_type: str
             if cancel_event.is_set():
                 await channel.send("❌ Cancelled.")
             else:
-                await channel.send(f"⏰ Timed out. Run `/{cmd_name}` to start again.")
+                await channel.send(GENERIC_CMD_TIMEOUT.format(cmd=cmd_name))
             return None
         return reply.content.strip()[:max_chars]
 
@@ -4828,7 +4833,7 @@ async def run_storm_setup(interaction: discord.Interaction, bot, event_type: str
     if team_view.cancelled:
         return
     if not team_view.selected:
-        await channel.send(f"⏰ Timed out. Run `/{cmd_name}` to start again.")
+        await channel.send(GENERIC_CMD_TIMEOUT.format(cmd=cmd_name))
         return
     teams = team_view.selected
 
@@ -4923,7 +4928,7 @@ async def run_storm_setup(interaction: discord.Interaction, bot, event_type: str
         if view.cancelled:
             return None
         if not view.selected:
-            await channel.send(f"⏰ Timed out. Run `/{cmd_name}` to start again.")
+            await channel.send(GENERIC_CMD_TIMEOUT.format(cmd=cmd_name))
             return None
         return view.selected
 
@@ -4969,7 +4974,7 @@ async def run_storm_setup(interaction: discord.Interaction, bot, event_type: str
     if log_ch_view.cancelled:
         return
     if not log_ch_view.confirmed:
-        await channel.send(f"⏰ Timed out. Run `/{cmd_name}` to start again.")
+        await channel.send(GENERIC_CMD_TIMEOUT.format(cmd=cmd_name))
         return
     log_channel_id = log_ch_view.selected_channel.id
 
@@ -4998,7 +5003,7 @@ async def run_storm_setup(interaction: discord.Interaction, bot, event_type: str
     if post_ch_view.cancelled:
         return
     if not post_ch_view.confirmed:
-        await channel.send(f"⏰ Timed out. Run `/{cmd_name}` to start again.")
+        await channel.send(GENERIC_CMD_TIMEOUT.format(cmd=cmd_name))
         return
     post_channel_id = post_ch_view.selected_channel.id
 
@@ -5082,7 +5087,7 @@ async def run_storm_setup(interaction: discord.Interaction, bot, event_type: str
         if choice_view.cancelled:
             return
         if choice_view.outcome is None:
-            await channel.send(f"⏰ Timed out. Run `/{cmd_name}` to start again.")
+            await channel.send(GENERIC_CMD_TIMEOUT.format(cmd=cmd_name))
             return None
         if choice_view.outcome == "keep":
             return saved_template
@@ -5105,7 +5110,7 @@ async def run_storm_setup(interaction: discord.Interaction, bot, event_type: str
             fallback = saved_template if saved_is_custom else default_template
             return reply.content.strip() or fallback
         except asyncio.TimeoutError:
-            await channel.send(f"⏰ Timed out. Run `/{cmd_name}` to start again.")
+            await channel.send(GENERIC_CMD_TIMEOUT.format(cmd=cmd_name))
             return None
 
     if teams == "both":
@@ -5183,7 +5188,7 @@ async def run_storm_setup(interaction: discord.Interaction, bot, event_type: str
         if shared_view.cancelled:
             return
         if not shared_view.selected:
-            await channel.send(f"⏰ Timed out. Run `/{cmd_name}` to start again.")
+            await channel.send(GENERIC_CMD_TIMEOUT.format(cmd=cmd_name))
             return
 
         if shared_view.selected == "shared":
@@ -5653,7 +5658,7 @@ async def _run_participation_preset_picker_step(
     if view.cancelled:
         return None
     if view.action is None:
-        await channel.send(f"⏰ Timed out. Run `/{cmd_name}` to start again.")
+        await channel.send(GENERIC_CMD_TIMEOUT.format(cmd=cmd_name))
         return None
     if view.action == "skip" or not view.selected:
         return []
@@ -5768,7 +5773,7 @@ async def _run_storm_participation_step(
         if getattr(gate, "cancelled", False):
             return None
         if gate.value is None:
-            await channel.send(f"⏰ Timed out. Run `/{cmd_name}` to start again.")
+            await channel.send(GENERIC_CMD_TIMEOUT.format(cmd=cmd_name))
             return None
         enable_selected = bool(gate.value)
     else:
@@ -5778,7 +5783,7 @@ async def _run_storm_participation_step(
         if enable_view.cancelled:
             return None
         if enable_view.selected is None:
-            await channel.send(f"⏰ Timed out. Run `/{cmd_name}` to start again.")
+            await channel.send(GENERIC_CMD_TIMEOUT.format(cmd=cmd_name))
             return None
         enable_selected = bool(enable_view.selected)
 
@@ -5888,7 +5893,7 @@ async def _run_storm_participation_step(
         if getattr(alias_gate, "cancelled", False):
             return None
         if alias_gate.value is None:
-            await channel.send(f"⏰ Timed out. Run `/{cmd_name}` to start again.")
+            await channel.send(GENERIC_CMD_TIMEOUT.format(cmd=cmd_name))
             return None
         alias_selected = bool(alias_gate.value)
     else:
@@ -5898,7 +5903,7 @@ async def _run_storm_participation_step(
         if alias_view.cancelled:
             return None
         if alias_view.selected is None:
-            await channel.send(f"⏰ Timed out. Run `/{cmd_name}` to start again.")
+            await channel.send(GENERIC_CMD_TIMEOUT.format(cmd=cmd_name))
             return None
         alias_selected = bool(alias_view.selected)
 
@@ -6060,7 +6065,7 @@ async def _run_storm_participation_step(
         if view.cancelled:
             return
         if view.action is None:
-            await channel.send(f"⏰ Timed out. Run `/{cmd_name}` to start again.")
+            await channel.send(GENERIC_CMD_TIMEOUT.format(cmd=cmd_name))
             return None
         if view.action == "done":
             break
@@ -6256,7 +6261,7 @@ async def _ask_signup_schedule(
     if dow_view.cancelled:
         return None
     if dow_view.selected is None:
-        await channel.send(f"⏰ Timed out. Run `/{cmd_name}` to start again.")
+        await channel.send(GENERIC_CMD_TIMEOUT.format(cmd=cmd_name))
         return None
     if dow_view.selected < 0:
         # Skipped — return cleared schedule.
@@ -6709,7 +6714,7 @@ async def _run_structured_flow_setup_step(
             if getattr(structured_gate, "cancelled", False):
                 return None
             if structured_gate.value is None:
-                await channel.send(f"⏰ Timed out. Run `/{cmd_name}` to start again.")
+                await channel.send(GENERIC_CMD_TIMEOUT.format(cmd=cmd_name))
                 return None
             structured_opted_in = bool(structured_gate.value)
         else:
@@ -6722,7 +6727,7 @@ async def _run_structured_flow_setup_step(
             if getattr(enable_view, "cancelled", False):
                 return None
             if enable_view.selected is None:
-                await channel.send(f"⏰ Timed out. Run `/{cmd_name}` to start again.")
+                await channel.send(GENERIC_CMD_TIMEOUT.format(cmd=cmd_name))
                 return None
             structured_opted_in = bool(enable_view.selected)
     result["structured_flow_enabled"] = structured_opted_in
@@ -6924,7 +6929,7 @@ async def _run_structured_flow_setup_step(
             return None
         if picker.outcome is None:
             await channel.send(
-                f"⏰ Timed out. Run `/{cmd_name}` to start again."
+                GENERIC_CMD_TIMEOUT.format(cmd=cmd_name)
             )
             return None
 
@@ -7025,7 +7030,7 @@ async def _run_structured_flow_setup_step(
         if sub_view.cancelled:
             return None
         if sub_view.selected is None:
-            await channel.send(f"⏰ Timed out. Run `/{cmd_name}` to start again.")
+            await channel.send(GENERIC_CMD_TIMEOUT.format(cmd=cmd_name))
             return None
         result["sub_mode"] = sub_view.selected
 
@@ -7054,7 +7059,7 @@ async def _run_structured_flow_setup_step(
         if signup_ch_view.cancelled:
             return None
         if not signup_ch_view.confirmed:
-            await channel.send(f"⏰ Timed out. Run `/{cmd_name}` to start again.")
+            await channel.send(GENERIC_CMD_TIMEOUT.format(cmd=cmd_name))
             return None
         result["signup_channel_id"] = signup_ch_view.selected_channel.id
 
@@ -7147,7 +7152,7 @@ async def _run_structured_flow_setup_step(
                 return None
             if gate.value is None:
                 await channel.send(
-                    f"⏰ Timed out. Run `/{cmd_name}` to start again."
+                    GENERIC_CMD_TIMEOUT.format(cmd=cmd_name)
                 )
                 return None
             result["power_refresh_dm_enabled"] = bool(gate.value)
@@ -7167,7 +7172,7 @@ async def _run_structured_flow_setup_step(
             if getattr(nudge_view, "cancelled", False):
                 return None
             if nudge_view.selected is None:
-                await channel.send(f"⏰ Timed out. Run `/{cmd_name}` to start again.")
+                await channel.send(GENERIC_CMD_TIMEOUT.format(cmd=cmd_name))
                 return None
             result["power_refresh_dm_enabled"] = bool(nudge_view.selected)
 
@@ -7207,7 +7212,7 @@ async def _run_structured_flow_setup_step(
                     return None
                 if gate.value is None:
                     await channel.send(
-                        f"⏰ Timed out. Run `/{cmd_name}` to start again."
+                        GENERIC_CMD_TIMEOUT.format(cmd=cmd_name)
                     )
                     return None
                 stale_on = bool(gate.value)
@@ -7232,7 +7237,7 @@ async def _run_structured_flow_setup_step(
                     return None
                 if stale_view.selected is None:
                     await channel.send(
-                        f"⏰ Timed out. Run `/{cmd_name}` to start again."
+                        GENERIC_CMD_TIMEOUT.format(cmd=cmd_name)
                     )
                     return None
                 stale_on = bool(stale_view.selected)
@@ -7345,7 +7350,7 @@ async def _run_structured_flow_setup_step(
                         return None
                     if days_picker.outcome is None:
                         await channel.send(
-                            f"⏰ Timed out. Run `/{cmd_name}` to start again."
+                            GENERIC_CMD_TIMEOUT.format(cmd=cmd_name)
                         )
                         return None
 
@@ -7594,7 +7599,7 @@ async def _run_structured_flow_setup_step(
                         return None
                     if lu_picker.outcome is None:
                         await channel.send(
-                            f"⏰ Timed out. Run `/{cmd_name}` to start again."
+                            GENERIC_CMD_TIMEOUT.format(cmd=cmd_name)
                         )
                         return None
 
@@ -7776,7 +7781,7 @@ async def _run_structured_flow_setup_step(
                 return None
             if choice_view.outcome is None:
                 await channel.send(
-                    f"⏰ Timed out. Run `/{cmd_name}` to start again."
+                    GENERIC_CMD_TIMEOUT.format(cmd=cmd_name)
                 )
                 return None
             if choice_view.outcome == "keep":
@@ -7810,7 +7815,7 @@ async def _run_structured_flow_setup_step(
                 return reply.content.strip() or fallback
             except asyncio.TimeoutError:
                 await channel.send(
-                    f"⏰ Timed out. Run `/{cmd_name}` to start again."
+                    GENERIC_CMD_TIMEOUT.format(cmd=cmd_name)
                 )
                 return None
 
@@ -8040,7 +8045,7 @@ async def _build_participation_question(
     try:
         reply = await bot.wait_for("message", check=check, timeout=180)
     except asyncio.TimeoutError:
-        await channel.send(f"⏰ Timed out. Run `/{cmd_name}` to start again.")
+        await channel.send(GENERIC_CMD_TIMEOUT.format(cmd=cmd_name))
         return None
     q_label = reply.content.strip() or (existing.get("label", "") if existing else "")
     if not q_label:
@@ -8084,7 +8089,7 @@ async def _build_participation_question(
     if type_view.cancelled:
         return
     if type_view.selected is None:
-        await channel.send(f"⏰ Timed out. Run `/{cmd_name}` to start again.")
+        await channel.send(GENERIC_CMD_TIMEOUT.format(cmd=cmd_name))
         return None
     q_type = type_view.selected
 
@@ -8099,7 +8104,7 @@ async def _build_participation_question(
         try:
             reply = await bot.wait_for("message", check=check, timeout=120)
         except asyncio.TimeoutError:
-            await channel.send(f"⏰ Timed out. Run `/{cmd_name}` to start again.")
+            await channel.send(GENERIC_CMD_TIMEOUT.format(cmd=cmd_name))
             return None
         bounds_raw = reply.content.strip().lower()
         if bounds_raw not in ("", "none"):
@@ -8120,7 +8125,7 @@ async def _build_participation_question(
         try:
             reply = await bot.wait_for("message", check=check, timeout=180)
         except asyncio.TimeoutError:
-            await channel.send(f"⏰ Timed out. Run `/{cmd_name}` to start again.")
+            await channel.send(GENERIC_CMD_TIMEOUT.format(cmd=cmd_name))
             return None
         opts = [o.strip() for o in reply.content.split(",") if o.strip()]
         if not opts:
@@ -8136,7 +8141,7 @@ async def _build_participation_question(
         try:
             reply = await bot.wait_for("message", check=check, timeout=120)
         except asyncio.TimeoutError:
-            await channel.send(f"⏰ Timed out. Run `/{cmd_name}` to start again.")
+            await channel.send(GENERIC_CMD_TIMEOUT.format(cmd=cmd_name))
             return None
         fmt = reply.content.strip()
         q["date_format"] = "%m/%d/%Y" if fmt.lower() in ("", "default") else fmt
@@ -8198,7 +8203,7 @@ async def _build_participation_question(
             )
             await wait_view_or_cancel(pv, cancel_event)
             if pv.cancelled or pv.selected is None:
-                await channel.send(f"⏰ Timed out. Run `/{cmd_name}` to start again.")
+                await channel.send(GENERIC_CMD_TIMEOUT.format(cmd=cmd_name))
                 return None
             if pv.selected:
                 q["prefill_source"] = pv.selected
@@ -8261,7 +8266,7 @@ async def _build_participation_question(
         )
         await wait_view_or_cancel(sv, cancel_event)
         if sv.cancelled or sv.selected is None:
-            await channel.send(f"⏰ Timed out. Run `/{cmd_name}` to start again.")
+            await channel.send(GENERIC_CMD_TIMEOUT.format(cmd=cmd_name))
             return None
         q["source_question_key"] = sv.selected
 
@@ -8333,7 +8338,7 @@ async def _build_participation_question(
         )
         await wait_view_or_cancel(sd, cancel_event)
         if sd.cancelled or sd.selected is None:
-            await channel.send(f"⏰ Timed out. Run `/{cmd_name}` to start again.")
+            await channel.send(GENERIC_CMD_TIMEOUT.format(cmd=cmd_name))
             return None
         q["show_during_log"] = bool(sd.selected)
 
@@ -8417,7 +8422,7 @@ async def run_event_setup(interaction: discord.Interaction, bot):
     if draft_ch_view.cancelled:
         return
     if not draft_ch_view.confirmed:
-        await channel.send(f"⏰ Timed out. Run `/setup` → {HUB_BTN_EVENTS} to start again.")
+        await channel.send(WIZARD_TIMEOUT.format(wizard=HUB_BTN_EVENTS))
         return
     draft_channel_id = draft_ch_view.selected_channel.id
 
@@ -8444,7 +8449,7 @@ async def run_event_setup(interaction: discord.Interaction, bot):
     if ann_ch_view.cancelled:
         return
     if not ann_ch_view.confirmed:
-        await channel.send(f"⏰ Timed out. Run `/setup` → {HUB_BTN_EVENTS} to start again.")
+        await channel.send(WIZARD_TIMEOUT.format(wizard=HUB_BTN_EVENTS))
         return
     announce_channel_id = ann_ch_view.selected_channel.id
 
@@ -8499,7 +8504,7 @@ async def run_event_setup(interaction: discord.Interaction, bot):
     if warn_view.cancelled:
         return
     if warn_view.selected is None:
-        await channel.send(f"⏰ Timed out. Run `/setup` → {HUB_BTN_EVENTS} to start again.")
+        await channel.send(WIZARD_TIMEOUT.format(wizard=HUB_BTN_EVENTS))
         return
     five_min_warning = 1 if warn_view.selected else 0
 
@@ -8540,7 +8545,7 @@ async def run_birthday_setup(interaction: discord.Interaction, bot):
             if cancel_event.is_set():
                 await channel.send("❌ Cancelled.")
             else:
-                await channel.send(f"⏰ Timed out. Run `/setup` → {HUB_BTN_BIRTHDAYS} to start again.")
+                await channel.send(WIZARD_TIMEOUT.format(wizard=HUB_BTN_BIRTHDAYS))
             return None
         return reply.content.strip()[:max_chars]
 
@@ -8602,7 +8607,7 @@ async def run_birthday_setup(interaction: discord.Interaction, bot):
     if enabled_view.cancelled:
         return
     if enabled_view.selected is None:
-        await channel.send(f"⏰ Timed out. Run `/setup` → {HUB_BTN_BIRTHDAYS} to start again.")
+        await channel.send(WIZARD_TIMEOUT.format(wizard=HUB_BTN_BIRTHDAYS))
         return
     if not enabled_view.selected:
         from config import save_birthday_config
@@ -8708,7 +8713,7 @@ async def run_birthday_setup(interaction: discord.Interaction, bot):
     if train_view.cancelled:
         return
     if train_view.selected is None:
-        await channel.send(f"⏰ Timed out. Run `/setup` → {HUB_BTN_BIRTHDAYS} to start again.")
+        await channel.send(WIZARD_TIMEOUT.format(wizard=HUB_BTN_BIRTHDAYS))
         return
     train_integration = 1 if train_view.selected else 0
 
@@ -8758,7 +8763,7 @@ async def run_birthday_setup(interaction: discord.Interaction, bot):
         if placement_view.cancelled:
             return
         if placement_view.selected is None:
-            await channel.send(f"⏰ Timed out. Run `/setup` → {HUB_BTN_BIRTHDAYS} to start again.")
+            await channel.send(WIZARD_TIMEOUT.format(wizard=HUB_BTN_BIRTHDAYS))
             return
         flexible_placement = placement_view.selected
 
@@ -8800,7 +8805,7 @@ async def run_birthday_setup(interaction: discord.Interaction, bot):
     if remind_view.cancelled:
         return
     if remind_view.selected is None:
-        await channel.send(f"⏰ Timed out. Run `/setup` → {HUB_BTN_BIRTHDAYS} to start again.")
+        await channel.send(WIZARD_TIMEOUT.format(wizard=HUB_BTN_BIRTHDAYS))
         return
     reminders_enabled    = 1 if remind_view.selected else 0
     reminder_channel_id  = 0
@@ -8835,7 +8840,7 @@ async def run_birthday_setup(interaction: discord.Interaction, bot):
         if remind_ch_view.cancelled:
             return
         if not remind_ch_view.confirmed:
-            await channel.send(f"⏰ Timed out. Run `/setup` → {HUB_BTN_BIRTHDAYS} to start again.")
+            await channel.send(WIZARD_TIMEOUT.format(wizard=HUB_BTN_BIRTHDAYS))
             return
         reminder_channel_id = remind_ch_view.selected_channel.id
 
@@ -9019,7 +9024,7 @@ async def run_shiny_tasks_setup(interaction: discord.Interaction, bot):
         wizard_registry.unregister(user.id, cancel_event)
         return
     if enabled_view.selected is None:
-        await channel.send("⏰ Timed out. Run `/setup` → 🌟 Shiny Tasks to start again.")
+        await channel.send(WIZARD_TIMEOUT.format(wizard=HUB_BTN_SHINY))
         wizard_registry.unregister(user.id, cancel_event)
         return
     if not enabled_view.selected:
@@ -9070,7 +9075,7 @@ async def run_shiny_tasks_setup(interaction: discord.Interaction, bot):
         wizard_registry.unregister(user.id, cancel_event)
         return
     if not ch_view.confirmed:
-        await channel.send("⏰ Timed out. Run `/setup` → 🌟 Shiny Tasks to start again.")
+        await channel.send(WIZARD_TIMEOUT.format(wizard=HUB_BTN_SHINY))
         wizard_registry.unregister(user.id, cancel_event)
         return
     channel_id = ch_view.selected_channel.id
@@ -9164,7 +9169,7 @@ async def run_shiny_tasks_setup(interaction: discord.Interaction, bot):
             wizard_registry.unregister(user.id, cancel_event)
             return
         if not range_launcher.confirmed:
-            await channel.send("⏰ Timed out. Run `/setup` → 🌟 Shiny Tasks to start again.")
+            await channel.send(WIZARD_TIMEOUT.format(wizard=HUB_BTN_SHINY))
             wizard_registry.unregister(user.id, cancel_event)
             return
 

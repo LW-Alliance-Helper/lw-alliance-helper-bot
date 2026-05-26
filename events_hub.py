@@ -33,6 +33,8 @@ from zoneinfo import ZoneInfo
 
 import discord
 
+from messages import GENERIC_CMD_TIMEOUT
+
 logger = logging.getLogger(__name__)
 
 
@@ -696,7 +698,7 @@ async def _run_create_event_wizard(
             if cancel_event.is_set():
                 await channel.send("❌ Cancelled.")
             else:
-                await channel.send(f"⏰ Timed out. Run `{EVENTS_HUB_CMD}` to start again.")
+                await channel.send(GENERIC_CMD_TIMEOUT.format(cmd="events"))
             return None
         return reply.content.strip()[:max_chars]
 
@@ -795,7 +797,7 @@ async def _run_create_event_wizard(
     if cancel_event.is_set():
         return
     if not sched_view.selected:
-        await channel.send(f"⏰ Timed out. Run `{EVENTS_HUB_CMD}` to start again.")
+        await channel.send(GENERIC_CMD_TIMEOUT.format(cmd="events"))
         wizard_registry.unregister(user.id, cancel_event)
         return
     schedule_type = sched_view.selected
@@ -881,7 +883,7 @@ async def _run_create_event_wizard(
     if cancel_event.is_set():
         return
     if not blurb_view.choice:
-        await channel.send(f"⏰ Timed out. Run `{EVENTS_HUB_CMD}` to start again.")
+        await channel.send(GENERIC_CMD_TIMEOUT.format(cmd="events"))
         wizard_registry.unregister(user.id, cancel_event)
         return
 

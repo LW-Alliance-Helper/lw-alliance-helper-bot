@@ -28,6 +28,7 @@ import json
 import os
 import discord
 from config import get_config
+from messages import HUB_TIMEOUT
 from storm_event_hub import HUB_COMMAND, HUB_BTN_DRAFT
 import wizard_registry
 
@@ -663,10 +664,9 @@ async def run_ds_draft_flow(bot, channel, user, team: str,
     except discord.HTTPException:
         pass
     if time_view.selected is None:
-        await channel.send(
-            f"⏰ Timed out. Run `{HUB_COMMAND['DS']}` and click "
-            f"**{HUB_BTN_DRAFT}** to start again."
-        )
+        await channel.send(HUB_TIMEOUT.format(
+            cmd=HUB_COMMAND['DS'].lstrip('/'), hub_btn=HUB_BTN_DRAFT,
+        ))
         return
     time_key = time_view.selected
 
@@ -694,8 +694,9 @@ async def run_ds_draft_flow(bot, channel, user, team: str,
     await use_view.wait()
     if use_view.choice is None:
         await channel.send(
-            f"⏰ Timed out. Run `{HUB_COMMAND['DS']}` and click "
-            f"**{HUB_BTN_DRAFT}** to start again."
+            HUB_TIMEOUT.format(
+                cmd=HUB_COMMAND['DS'].lstrip('/'), hub_btn=HUB_BTN_DRAFT,
+            )
         )
         return
 
@@ -713,8 +714,9 @@ async def run_ds_draft_flow(bot, channel, user, team: str,
             reply = await bot.wait_for("message", check=check, timeout=WIZARD_TIMEOUT)
         except asyncio.TimeoutError:
             await channel.send(
-            f"⏰ Timed out. Run `{HUB_COMMAND['DS']}` and click "
-            f"**{HUB_BTN_DRAFT}** to start again."
+            HUB_TIMEOUT.format(
+                cmd=HUB_COMMAND['DS'].lstrip('/'), hub_btn=HUB_BTN_DRAFT,
+            )
         )
             try:
                 await prompt.delete()
@@ -837,8 +839,9 @@ async def handle_storm_draft(bot, interaction: discord.Interaction, event_type: 
     if team_view.selected is None:
         event_type = "DS" if is_ds else "CS"
         await channel.send(
-            f"⏰ Timed out. Run `{HUB_COMMAND[event_type]}` and click "
-            f"**{HUB_BTN_DRAFT}** to start again."
+            HUB_TIMEOUT.format(
+                cmd=HUB_COMMAND[event_type].lstrip('/'), hub_btn=HUB_BTN_DRAFT,
+            )
         )
         await interaction.followup.send("⏰ Timed out.", ephemeral=True)
         return
@@ -1364,8 +1367,9 @@ async def run_cs_draft_flow(bot, channel, user, team: str, current_zones: dict):
         pass
     if time_view.selected is None:
         await channel.send(
-            f"⏰ Timed out. Run `{HUB_COMMAND['CS']}` and click "
-            f"**{HUB_BTN_DRAFT}** to start again."
+            HUB_TIMEOUT.format(
+                cmd=HUB_COMMAND['CS'].lstrip('/'), hub_btn=HUB_BTN_DRAFT,
+            )
         )
         return
     time_key = time_view.selected
@@ -1394,8 +1398,9 @@ async def run_cs_draft_flow(bot, channel, user, team: str, current_zones: dict):
     await use_view.wait()
     if use_view.choice is None:
         await channel.send(
-            f"⏰ Timed out. Run `{HUB_COMMAND['CS']}` and click "
-            f"**{HUB_BTN_DRAFT}** to start again."
+            HUB_TIMEOUT.format(
+                cmd=HUB_COMMAND['CS'].lstrip('/'), hub_btn=HUB_BTN_DRAFT,
+            )
         )
         return
 
@@ -1413,8 +1418,9 @@ async def run_cs_draft_flow(bot, channel, user, team: str, current_zones: dict):
             reply = await bot.wait_for("message", check=check, timeout=WIZARD_TIMEOUT)
         except asyncio.TimeoutError:
             await channel.send(
-            f"⏰ Timed out. Run `{HUB_COMMAND['CS']}` and click "
-            f"**{HUB_BTN_DRAFT}** to start again."
+            HUB_TIMEOUT.format(
+                cmd=HUB_COMMAND['CS'].lstrip('/'), hub_btn=HUB_BTN_DRAFT,
+            )
         )
             try:
                 await prompt.delete()

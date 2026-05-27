@@ -441,6 +441,11 @@ def _read_roster_powers(
         name_col = part_alias_col
     else:
         name_col = int(roster_cfg.get("display_col", roster_cfg.get("name_col", 1)))
+    # Underlying Name column (typically B = Discord username). Used as
+    # the second tier of the name fallback cascade so hand-typed rows
+    # with only column B populated still resolve to a real name instead
+    # of falling straight to the raw Discord ID (#268).
+    username_col = int(roster_cfg.get("name_col", 1))
     # Power column is a configured letter (Rule C / #165) — A=0, B=1,
     # etc. Validate only when the power data lives on the Member
     # Roster tab (same_power_tab=True); for cross-tab reads the
@@ -507,9 +512,26 @@ def _read_roster_powers(
                 return ""
             return str(row[idx]).strip()
 
-        discord_id = _cell(id_col)
-        name       = _cell(name_col)
-        if not (discord_id or name):
+        discord_id     = _cell(id_col)
+        display_value  = _cell(name_col)
+        username_value = _cell(username_col)
+        # Resolve the human-readable name with a fallback cascade:
+        # Display Name → Name → live Discord member → discord_id (#268).
+        # Pre-#268 only checked the primary `name_col` and fell straight
+        # to discord_id, so hand-typed rows that only filled in Name
+        # rendered as the raw Discord ID (or as the alliance's
+        # workaround text typed into the ID column).
+        from storm_officer_view import _resolve_member_name
+        resolved_name = _resolve_member_name(
+            discord_id, display_value, username_value, guild,
+        )
+        # Keep `name` as the legacy variable referenced below — its
+        # semantic is now "resolved display name", not "display_col
+        # cell". Skip condition widens to honour the Name column too,
+        # so a hand-typed row with only column B populated still rides
+        # through.
+        name = resolved_name
+        if not (discord_id or display_value or username_value):
             continue
 
         # Parse the power cell only when the power data lives on the
@@ -545,7 +567,7 @@ def _read_roster_powers(
             if presence_cell == "yes":
                 members[discord_id or name] = {
                     "key":            discord_id or name,
-                    "name":           name or discord_id,
+                    "name":           name,
                     "discord_id":     discord_id,
                     "power":          power_val,
                     "not_on_discord": False,
@@ -555,7 +577,7 @@ def _read_roster_powers(
                 key = discord_id or name
                 members[key] = {
                     "key":            key,
-                    "name":           name or discord_id,
+                    "name":           name,
                     "discord_id":     discord_id,
                     "power":          power_val,
                     "not_on_discord": True,
@@ -593,7 +615,7 @@ def _read_roster_powers(
             continue
         members[key] = {
             "key":            key,
-            "name":           name or discord_id,
+            "name":           name,
             "discord_id":     discord_id,
             "power":          power_val,
             "not_on_discord": not_on_discord,

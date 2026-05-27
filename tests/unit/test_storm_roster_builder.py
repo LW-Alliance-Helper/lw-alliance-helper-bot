@@ -206,6 +206,130 @@ class TestReadRosterPowers:
         assert all(m["power"] is None for m in members.values())
 
 
+class TestNameFallbackCascadeRosterBuilder:
+    """#268 — `_read_roster_powers` must cascade Display Name → Name →
+    live Discord member → discord_id when resolving each member's
+    rendered name. Without this, Team Plan + roster builder render
+    raw Discord IDs (or alliance workaround text typed into the ID
+    column) instead of the alliance's preferred name."""
+
+    def _seed_member_cfg(self, gid: int) -> None:
+        import config
+        config.save_member_roster_config(
+            gid, enabled=1, tab_name="Member Roster",
+            discord_id_col=0, name_col=1, display_col=2,
+        )
+        for et in ("DS", "CS"):
+            config.save_storm_config(
+                gid, et,
+                tab_name=f"{et} Tab", mail_template="",
+                timezone="America/New_York", log_channel_id=0,
+            )
+            config.save_structured_storm_config(
+                gid, et,
+                structured_flow_enabled=True,
+                power_metric_column="F",
+            )
+
+    def _build_fake_env(self, gid: int, rows: list[list[str]]):
+        fake = _FakeSpreadsheet()
+        ws = fake.add_worksheet("Member Roster")
+        ws._rows = rows
+        return fake
+
+    def test_display_blank_falls_back_to_name_column(self, seeded_db):
+        """Hand-typed alliance member: Name column populated, Display
+        Name blank. The structured builder should resolve to the Name
+        column value, not fall straight to discord_id."""
+        import config
+        gid = TEST_GUILD_ID + 91268
+        self._seed_member_cfg(gid)
+        fake = self._build_fake_env(gid, [
+            ["Discord ID", "Name",      "Display Name", "Joined", "Roles", "1st Squad Power"],
+            ["",           "JoeNoDisc", "",             "",       "",      "100M"],
+        ])
+
+        def _fake_ws(_gid: int, tab_name: str):
+            return fake.worksheet(tab_name)
+
+        with patch.object(config, "get_spreadsheet", return_value=fake), \
+             patch.object(config, "get_member_roster_sheet", side_effect=_fake_ws):
+            members, _errs = srb._read_roster_powers(gid, "DS")
+
+        # Keyed by name since discord_id is blank.
+        assert "JoeNoDisc" in members
+        # Resolved name comes from column B, not the empty Display
+        # Name column and not the empty discord_id.
+        assert members["JoeNoDisc"]["name"] == "JoeNoDisc"
+        assert members["JoeNoDisc"]["not_on_discord"] is True
+
+    def test_workaround_id_text_does_not_render_as_name(self, seeded_db):
+        """User reproduced exactly: non-numeric placeholder in ID column
+        ("no-disc-1") with the real name in column B. Pre-fix rendered
+        "no-disc-1" as the member's name everywhere downstream."""
+        import config
+        gid = TEST_GUILD_ID + 92268
+        self._seed_member_cfg(gid)
+        fake = self._build_fake_env(gid, [
+            ["Discord ID", "Name",  "Display Name", "Joined", "Roles", "1st Squad Power"],
+            ["no-disc-1",  "Alice", "",             "",       "",      "150M"],
+        ])
+
+        def _fake_ws(_gid: int, tab_name: str):
+            return fake.worksheet(tab_name)
+
+        with patch.object(config, "get_spreadsheet", return_value=fake), \
+             patch.object(config, "get_member_roster_sheet", side_effect=_fake_ws):
+            members, _errs = srb._read_roster_powers(gid, "DS")
+
+        # Keyed by the placeholder ID (truthy), but the rendered name
+        # picks up the real name from column B.
+        assert "no-disc-1" in members
+        assert members["no-disc-1"]["name"] == "Alice"
+        assert members["no-disc-1"]["not_on_discord"] is True
+
+    def test_live_member_display_name_used_when_both_columns_blank(self, seeded_db):
+        """Real numeric Discord ID, both name columns blank: cascade
+        should consult the live guild member for display_name. Fixes
+        the Team Plan rendering when display_col was blank for a real
+        Discord-on member."""
+        import config
+        gid = TEST_GUILD_ID + 93268
+        self._seed_member_cfg(gid)
+        fake = self._build_fake_env(gid, [
+            ["Discord ID", "Name", "Display Name", "Joined", "Roles", "1st Squad Power"],
+            ["100",        "",     "",             "",       "",      "200M"],
+        ])
+
+        def _fake_ws(_gid: int, tab_name: str):
+            return fake.worksheet(tab_name)
+
+        class _Member:
+            def __init__(self, mid, dn):
+                self.id = mid
+                self.display_name = dn
+                self.bot = False
+
+        class _Guild:
+            def __init__(self, gid):
+                self.id = gid
+                self.members = [_Member(100, "Alice")]
+
+            def get_member(self, mid):
+                for m in self.members:
+                    if m.id == mid:
+                        return m
+                return None
+
+        with patch.object(config, "get_spreadsheet", return_value=fake), \
+             patch.object(config, "get_member_roster_sheet", side_effect=_fake_ws):
+            members, _errs = srb._read_roster_powers(gid, "DS", guild=_Guild(gid))
+
+        assert "100" in members
+        assert members["100"]["name"] == "Alice"
+        assert members["100"]["not_on_discord"] is False
+
+
 class TestPowerDataSourceFlexibility:
     """#226 follow-up — power can live on a tab other than the Member
     Roster. The structured config carries a tab name + a match column

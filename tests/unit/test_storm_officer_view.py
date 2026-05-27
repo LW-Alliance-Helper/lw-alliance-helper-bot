@@ -537,6 +537,194 @@ class TestNonDiscordInferenceNonNumericId(TestNotOnDiscordEnumeration):
         assert by_name["Carol"]["not_on_discord"] is False
 
 
+class TestNameFallbackCascade:
+    """#268 — when Display Name (C) is blank, the reader must cascade
+    through Name (B) and the live Discord member before falling to the
+    raw Discord ID. Pre-fix behaviour rendered the numeric ID (or the
+    alliance's workaround text typed into the ID column) as the member's
+    name in the poll and Team Plan."""
+
+    def _fake_roster_ws(self, rows):
+        ws = MagicMock()
+        ws.get_all_values.return_value = rows
+        return ws
+
+    def test_display_blank_falls_back_to_name_column(self, seeded_db):
+        """Hand-typed row: Name (B) populated, Display Name (C) blank.
+        The resolved name should come from column B, not the empty C
+        and not the discord_id fallback."""
+        import config
+        config.save_member_roster_config(
+            TEST_GUILD_ID, enabled=1, tab_name="Members",
+            discord_id_col=0, name_col=1, display_col=2,
+        )
+        rows = [
+            ["Discord ID", "Name",      "Display Name"],
+            ["",           "JoeNoDisc", ""],  # alliance member, not on Discord
+        ]
+        with patch(
+            "config.get_member_roster_sheet",
+            return_value=self._fake_roster_ws(rows),
+        ):
+            roster, _errs = sov._read_roster_rows(TEST_GUILD_ID)
+        assert len(roster) == 1
+        assert roster[0]["name"] == "JoeNoDisc"
+        assert roster[0]["not_on_discord"] is True
+
+    def test_workaround_id_text_does_not_render_as_name(self, seeded_db):
+        """The user's reported workaround: typed "no-disc-1" into the
+        ID column to force the row to appear. Pre-fix the poll rendered
+        "no-disc-1" as the member's name. The cascade should pick up
+        the actual name from column B instead."""
+        import config
+        config.save_member_roster_config(
+            TEST_GUILD_ID, enabled=1, tab_name="Members",
+            discord_id_col=0, name_col=1, display_col=2,
+        )
+        rows = [
+            ["Discord ID", "Name",  "Display Name"],
+            ["no-disc-1",  "Alice", ""],
+        ]
+        with patch(
+            "config.get_member_roster_sheet",
+            return_value=self._fake_roster_ws(rows),
+        ):
+            roster, _errs = sov._read_roster_rows(TEST_GUILD_ID)
+        assert len(roster) == 1
+        # Name resolves to column B, not the non-numeric ID workaround.
+        assert roster[0]["name"] == "Alice"
+        # Non-numeric ID still infers non-Discord.
+        assert roster[0]["not_on_discord"] is True
+
+    def test_live_member_display_name_used_when_both_columns_blank(self, seeded_db):
+        """Real numeric Discord ID + both name columns blank: cascade
+        should look up the live Discord member's display_name. Covers
+        the Team Plan case where Discord-on members rendered as raw
+        18-digit IDs because Display Name was empty."""
+        import config
+        config.save_member_roster_config(
+            TEST_GUILD_ID, enabled=1, tab_name="Members",
+            discord_id_col=0, name_col=1, display_col=2,
+        )
+        rows = [
+            ["Discord ID", "Name", "Display Name"],
+            ["100",        "",     ""],
+        ]
+        with patch(
+            "config.get_member_roster_sheet",
+            return_value=self._fake_roster_ws(rows),
+        ):
+            guild = _FakeGuild(TEST_GUILD_ID, [_FakeMember(100, "Alice")])
+            roster, _errs = sov._read_roster_rows(TEST_GUILD_ID, guild=guild)
+        assert len(roster) == 1
+        assert roster[0]["name"] == "Alice"  # from live guild lookup
+        assert roster[0]["not_on_discord"] is False
+
+    def test_falls_back_to_discord_id_when_no_other_source(self, seeded_db):
+        """All other sources blank and guild can't resolve — discord_id
+        is the last-resort fallback so the row stays visible."""
+        import config
+        config.save_member_roster_config(
+            TEST_GUILD_ID, enabled=1, tab_name="Members",
+            discord_id_col=0, name_col=1, display_col=2,
+        )
+        rows = [
+            ["Discord ID", "Name", "Display Name"],
+            ["100",        "",     ""],
+        ]
+        with patch(
+            "config.get_member_roster_sheet",
+            return_value=self._fake_roster_ws(rows),
+        ):
+            roster, _errs = sov._read_roster_rows(TEST_GUILD_ID)  # no guild
+        assert len(roster) == 1
+        assert roster[0]["name"] == "100"  # last-resort fallback
+
+    def test_display_name_still_wins_when_populated(self, seeded_db):
+        """Regression guard: when Display Name IS populated, it still
+        wins over the Name column (preserving the alliance's chosen
+        alias)."""
+        import config
+        config.save_member_roster_config(
+            TEST_GUILD_ID, enabled=1, tab_name="Members",
+            discord_id_col=0, name_col=1, display_col=2,
+        )
+        rows = [
+            ["Discord ID", "Name",       "Display Name"],
+            ["100",        "alice_user", "AliceTheAlly"],  # Display wins
+        ]
+        with patch(
+            "config.get_member_roster_sheet",
+            return_value=self._fake_roster_ws(rows),
+        ):
+            roster, _errs = sov._read_roster_rows(TEST_GUILD_ID)
+        assert len(roster) == 1
+        assert roster[0]["name"] == "AliceTheAlly"
+
+    def test_only_name_column_populated_row_not_skipped(self, seeded_db):
+        """Pre-fix row-skip condition was `if not (discord_id or name)`
+        where `name` = display_col. A row with ONLY column B populated
+        was silently dropped. The widened skip condition must keep it."""
+        import config
+        config.save_member_roster_config(
+            TEST_GUILD_ID, enabled=1, tab_name="Members",
+            discord_id_col=0, name_col=1, display_col=2,
+        )
+        rows = [
+            ["Discord ID", "Name",     "Display Name"],
+            ["",           "HandTyped", ""],
+        ]
+        with patch(
+            "config.get_member_roster_sheet",
+            return_value=self._fake_roster_ws(rows),
+        ):
+            roster, _errs = sov._read_roster_rows(TEST_GUILD_ID)
+        assert len(roster) == 1
+        assert roster[0]["name"] == "HandTyped"
+
+
+class TestResolveMemberNameHelper:
+    """Direct unit tests for the `_resolve_member_name` fallback
+    cascade (#268). Shared between officer view + roster builder."""
+
+    def test_prefers_display_value(self):
+        guild = _FakeGuild(TEST_GUILD_ID, [_FakeMember(100, "Alice")])
+        assert sov._resolve_member_name(
+            "100", "DisplayAlias", "name_value", guild,
+        ) == "DisplayAlias"
+
+    def test_falls_back_to_name_value(self):
+        guild = _FakeGuild(TEST_GUILD_ID, [_FakeMember(100, "Alice")])
+        assert sov._resolve_member_name(
+            "100", "", "name_value", guild,
+        ) == "name_value"
+
+    def test_falls_back_to_live_member_display_name(self):
+        guild = _FakeGuild(TEST_GUILD_ID, [_FakeMember(100, "Alice")])
+        assert sov._resolve_member_name(
+            "100", "", "", guild,
+        ) == "Alice"
+
+    def test_bot_member_skipped_for_live_lookup(self):
+        guild = _FakeGuild(TEST_GUILD_ID, [_FakeMember(100, "BotName", bot=True)])
+        # Bot resolves the ID but the helper rejects bots — falls to ID.
+        assert sov._resolve_member_name(
+            "100", "", "", guild,
+        ) == "100"
+
+    def test_non_numeric_id_skips_live_lookup(self):
+        guild = _FakeGuild(TEST_GUILD_ID, [_FakeMember(100, "Alice")])
+        # ID isn't numeric so we don't even try get_member.
+        assert sov._resolve_member_name(
+            "no-disc-1", "", "", guild,
+        ) == "no-disc-1"
+
+    def test_no_guild_falls_to_discord_id(self):
+        assert sov._resolve_member_name(
+            "100", "", "", None,
+        ) == "100"
+
+
 class TestStaleIdLogDedup:
     """Audit Major for #139: the stale-ID warning re-logged on every
     Refresh button click and every on-behalf picker open. Module-level

@@ -92,6 +92,44 @@ def _next_event_date(today: _dt.date | None = None) -> str:
     return (today + _dt.timedelta(days=days_ahead)).isoformat()
 
 
+def _resolve_member_name(
+    discord_id: str,
+    display_value: str,
+    name_value: str,
+    guild: discord.Guild | None,
+) -> str:
+    """Resolve a roster row's human-readable name with a fallback cascade.
+
+    Order:
+      1. Display Name column value (column C by default — server
+         nickname / alliance alias).
+      2. Name column value (column B by default — Discord username,
+         where alliances often hand-type non-Discord member names).
+      3. Live Discord member's `display_name` when discord_id is a
+         real numeric ID and resolves to a non-bot member.
+      4. `discord_id` as last resort — keeps the row visible even if
+         every name source is empty.
+
+    Pre-#268 callers fell straight from (1) to (4), which meant
+    hand-typed rows with names only in column B rendered as the raw
+    Discord ID (or the alliance's workaround text typed into the ID
+    column). The cascade restores the alliance's preferred name in
+    those cases without changing behaviour when Display Name is set.
+    """
+    if display_value:
+        return display_value
+    if name_value:
+        return name_value
+    if guild is not None and discord_id and discord_id.isdigit():
+        try:
+            member = guild.get_member(int(discord_id))
+        except (TypeError, ValueError):
+            member = None
+        if member is not None and not member.bot:
+            return member.display_name
+    return discord_id
+
+
 def _read_roster_rows(
     guild_id: int, *, guild: discord.Guild | None = None,
 ) -> tuple[list[dict], list[str]]:
@@ -154,8 +192,12 @@ def _read_roster_rows(
                 return idx
         return -1
 
-    id_col   = int(cfg.get("discord_id_col", 0))
-    name_col = int(cfg.get("display_col", cfg.get("name_col", 1)))
+    id_col          = int(cfg.get("discord_id_col", 0))
+    display_col_idx = int(cfg.get("display_col", cfg.get("name_col", 1)))
+    # Underlying Name column (typically B = Discord username). Read
+    # separately so hand-typed rows that only filled in the Name column
+    # still resolve to a usable name when Display Name is blank (#268).
+    name_col_idx    = int(cfg.get("name_col", 1))
     # Prefer the bot-maintained presence column when present. Falls
     # back to the legacy `not_on_discord` column for back-compat.
     presence_col = _find_col("is this user in discord?")
@@ -170,9 +212,19 @@ def _read_roster_rows(
     has_presence_col = presence_col >= 0
 
     for row in values[1:]:
-        discord_id = row[id_col].strip() if id_col < len(row) else ""
-        name       = row[name_col].strip() if name_col < len(row) else ""
-        if not (discord_id or name):
+        discord_id    = row[id_col].strip() if id_col < len(row) else ""
+        display_value = row[display_col_idx].strip() if display_col_idx < len(row) else ""
+        name_value    = row[name_col_idx].strip() if name_col_idx < len(row) else ""
+        # Resolve the human-readable name: Display Name → Name →
+        # live Discord member's display_name → discord_id (last resort).
+        # Pre-#268 only checked Display Name and fell straight through
+        # to discord_id, which is why hand-typed members and members
+        # with a blank Display Name surfaced as numeric IDs or as the
+        # alliance's workaround text typed into the ID column.
+        resolved_name = _resolve_member_name(
+            discord_id, display_value, name_value, guild,
+        )
+        if not (discord_id or display_value or name_value):
             continue
 
         # New presence column wins — bot writes this on every sync.
@@ -184,14 +236,14 @@ def _read_roster_rows(
             if presence_cell == "yes":
                 rows.append({
                     "discord_id":     discord_id,
-                    "name":           name or discord_id,
+                    "name":           resolved_name,
                     "not_on_discord": False,
                 })
                 continue
             if presence_cell == "no":
                 rows.append({
                     "discord_id":     discord_id,
-                    "name":           name or discord_id,
+                    "name":           resolved_name,
                     "not_on_discord": True,
                 })
                 continue
@@ -229,11 +281,11 @@ def _read_roster_rows(
                 # cleanup rather than counting the bot as Discord-on.
                 if member is None or member.bot:
                     inferred = True
-                    stale_ids.append(f"{name or '?'} (id {discord_id})")
+                    stale_ids.append(f"{resolved_name or '?'} (id {discord_id})")
 
         rows.append({
             "discord_id":     discord_id,
-            "name":           name or discord_id,
+            "name":           resolved_name,
             "not_on_discord": explicit_set or inferred,
         })
 

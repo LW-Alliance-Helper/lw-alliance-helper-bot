@@ -9,6 +9,13 @@ Each entry is a slim summary — heavier context (root cause, what we
 tried, design rationale) lives in the corresponding commit message
 and PR description.
 
+## [1.4.3] — 2026-05-27
+
+### Fixed
+- Storm roster readers fall back to the Name column (and live Discord member) when Display Name is blank, so the poll and Team Plan render names instead of IDs ([#268](https://github.com/LW-Alliance-Helper/lw-alliance-helper-bot/issues/268)).
+
+Hotfix released direct to main per CLAUDE.md's hotfix exception.
+
 ## [1.4.2] — 2026-05-24
 
 ### Added

@@ -9,6 +9,13 @@ Each entry is a slim summary — heavier context (root cause, what we
 tried, design rationale) lives in the corresponding commit message
 and PR description.
 
+## [1.4.4] — 2026-05-27
+
+### Fixed
+- Team A / Team B plan picker now lists candidate members by name instead of their raw Discord ID ([#270](https://github.com/LW-Alliance-Helper/lw-alliance-helper-bot/issues/270)).
+
+Hotfix released direct to main per CLAUDE.md's hotfix exception.
+
 ## [1.4.3] — 2026-05-27
 
 ### Fixed

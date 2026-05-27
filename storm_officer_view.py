@@ -1755,6 +1755,36 @@ class _TeamPlanSubPickerView(discord.ui.View):
                 pass
 
 
+def _build_team_plan_raw_pool(
+    buckets: dict[str, list[dict]],
+    eligible_keys: tuple[str, ...],
+) -> list[dict]:
+    """Project bucket entries into the `{name, target_id}` shape the
+    team-plan picker expects, deduped by `target_id` in eligible-key
+    order (#270).
+
+    Bucket entries (from `_build_bucket_map`) carry the display string
+    under `label`; pre-#270 this function read `name` directly, which
+    always resolved to the empty string and made the picker fall through
+    to rendering the raw Discord ID as each candidate's label. `label`
+    wins now; `name` is kept as a defensive fallback for any future
+    bucket shape that prefers the older key.
+    """
+    raw_pool: list[dict] = []
+    seen_target_ids: set[str] = set()
+    for k in eligible_keys:
+        for e in buckets.get(k, []):
+            tid = e.get("target_id")
+            if not tid or tid in seen_target_ids:
+                continue
+            seen_target_ids.add(tid)
+            raw_pool.append({
+                "name":      e.get("label") or e.get("name", ""),
+                "target_id": tid,
+            })
+    return raw_pool
+
+
 async def _open_team_plan(
     inter: discord.Interaction, officer_view: "OfficerView", *, team: str,
 ) -> None:
@@ -1818,15 +1848,9 @@ async def _open_team_plan(
         )
         return
 
-    raw_pool: list[dict] = []
-    seen_target_ids: set[str] = set()
-    for k in eligible_buckets:
-        for e in officer_view.buckets.get(k, []):
-            tid = e.get("target_id")
-            if not tid or tid in seen_target_ids:
-                continue
-            seen_target_ids.add(tid)
-            raw_pool.append({"name": e.get("name", ""), "target_id": tid})
+    raw_pool = _build_team_plan_raw_pool(
+        officer_view.buckets, eligible_buckets,
+    )
 
     # Cross-team filter: anyone already on the OTHER team's plan for
     # this event is hidden from this picker. The save-time validator
@@ -1874,7 +1898,11 @@ async def _open_team_plan(
             for k in ("a", "b", "either", "cannot"):
                 for e in officer_view.buckets.get(k, []):
                     if e.get("target_id") == tid:
-                        name = e.get("name") or name
+                        # Bucket entries key the display string as
+                        # `label`. Pre-#270 this read `name` (always
+                        # empty), so "vote changed" carryovers always
+                        # showed the bare target_id.
+                        name = e.get("label") or e.get("name") or name
                         break
             candidates.append({"name": f"{name} (vote changed)", "target_id": tid})
         candidates.sort(key=lambda c: c["name"].lower())

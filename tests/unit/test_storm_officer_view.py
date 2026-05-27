@@ -1455,6 +1455,75 @@ class TestTeamPlanButtons:
         assert any("Team B plan" in lab for lab in labels)
 
 
+class TestBuildTeamPlanRawPool:
+    """#270 — bucket entries store the display string under `label`,
+    not `name`. The pre-fix raw-pool builder read `name` directly,
+    making every picker option fall through to the raw Discord ID."""
+
+    def test_label_used_as_picker_name(self):
+        buckets = {
+            "a": [
+                {"label": "Alice", "target_id": "1001"},
+                {"label": "Bob",   "target_id": "1002"},
+            ],
+            "b":         [],
+            "either":    [{"label": "Carol", "target_id": "1003"}],
+            "cannot":    [],
+            "not_voted": [],
+        }
+        pool = sov._build_team_plan_raw_pool(buckets, ("a", "either"))
+        names = [c["name"] for c in pool]
+        assert names == ["Alice", "Bob", "Carol"]
+        ids = [c["target_id"] for c in pool]
+        assert ids == ["1001", "1002", "1003"]
+
+    def test_dedupes_by_target_id_across_buckets(self):
+        # "either" voters appear in both teams' eligible buckets;
+        # the dedup guarantees the picker doesn't double-list them.
+        buckets = {
+            "a":         [{"label": "Alice", "target_id": "1001"}],
+            "either":    [{"label": "Alice", "target_id": "1001"}],
+            "b":         [], "cannot": [], "not_voted": [],
+        }
+        pool = sov._build_team_plan_raw_pool(buckets, ("a", "either"))
+        assert len(pool) == 1
+        assert pool[0]["name"] == "Alice"
+
+    def test_skips_entries_with_blank_target_id(self):
+        buckets = {
+            "a":         [{"label": "Alice", "target_id": ""}],
+            "either":    [], "b": [], "cannot": [], "not_voted": [],
+        }
+        pool = sov._build_team_plan_raw_pool(buckets, ("a", "either"))
+        assert pool == []
+
+    def test_falls_back_to_name_key_for_defensive_symmetry(self):
+        # A future caller that builds bucket entries with `name`
+        # instead of `label` should still produce usable picker
+        # candidates rather than rendering raw IDs.
+        buckets = {
+            "a":         [{"name": "LegacyName", "target_id": "5000"}],
+            "either":    [], "b": [], "cannot": [], "not_voted": [],
+        }
+        pool = sov._build_team_plan_raw_pool(buckets, ("a", "either"))
+        assert pool == [{"name": "LegacyName", "target_id": "5000"}]
+
+    def test_no_label_or_name_yields_empty_string(self):
+        # If somehow neither key is present, the candidate still goes
+        # through with an empty name — the picker's own fallback then
+        # decides between rendering the empty string and the target_id.
+        buckets = {
+            "a":         [{"target_id": "7777"}],
+            "either":    [], "b": [], "cannot": [], "not_voted": [],
+        }
+        pool = sov._build_team_plan_raw_pool(buckets, ("a", "either"))
+        assert pool == [{"name": "", "target_id": "7777"}]
+
+    def test_empty_buckets_yield_empty_pool(self):
+        buckets = {k: [] for k in ("a", "b", "either", "cannot", "not_voted")}
+        assert sov._build_team_plan_raw_pool(buckets, ("a", "either")) == []
+
+
 class TestTeamPlanRosterPickerView:
     """Step 1 of the team-plan picker — pick up to 30 from the yes-pool."""
 

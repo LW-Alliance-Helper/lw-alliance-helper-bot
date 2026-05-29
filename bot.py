@@ -8,13 +8,18 @@ import os
 from datetime import datetime, date, timedelta, timezone
 from dotenv import load_dotenv
 from scheduler import (
-    run_scheduler, post_editor, next_event_dates, is_friday,
+    run_scheduler,
+    post_editor,
+    next_event_dates,
+    is_friday,
 )
 from stats_publisher import publish_alliance_count
 from zoneinfo import ZoneInfo
 from config import (
-    init_db, get_config,
-    upsert_guild_install_metadata, get_guild_install_metadata,
+    init_db,
+    get_config,
+    upsert_guild_install_metadata,
+    get_guild_install_metadata,
     delete_guild_install_metadata,
 )
 import wizard_registry
@@ -48,9 +53,11 @@ if _sentry_dsn:
         traces_sample_rate=0.0,
         send_default_pii=False,
     )
-    print(f"[INFO] Sentry initialised (env={os.getenv('ENV', 'production')}, release={__version__})")
+    print(
+        f"[INFO] Sentry initialised (env={os.getenv('ENV', 'production')}, release={__version__})"
+    )
 else:
-    print(f"[INFO] SENTRY_DSN not set — error reporting disabled")
+    print("[INFO] SENTRY_DSN not set — error reporting disabled")
 
 ET = ZoneInfo("America/New_York")
 
@@ -80,6 +87,7 @@ bot = commands.Bot(command_prefix="!", intents=intents)
 # live in a third module that's only ever imported, hence
 # `bot_state.py`. See #87.
 import bot_state
+
 bot_state.bot = bot
 
 
@@ -116,7 +124,7 @@ async def _update_presence():
     on_guild_join, and on_guild_remove so the count stays current.
     """
     count = len(bot.guilds)
-    name  = f"Helping {count} LW Alliance{'s' if count != 1 else ''}"
+    name = f"Helping {count} LW Alliance{'s' if count != 1 else ''}"
     try:
         # CustomActivity renders the name as-is (no "Playing" / "Watching"
         # prefix). Falls back to a Watching activity if Discord rejects
@@ -125,15 +133,19 @@ async def _update_presence():
             activity = discord.CustomActivity(name=name)
             await bot.change_presence(activity=activity)
         except Exception:
-            await bot.change_presence(activity=discord.Activity(
-                type=discord.ActivityType.watching, name=name,
-            ))
+            await bot.change_presence(
+                activity=discord.Activity(
+                    type=discord.ActivityType.watching,
+                    name=name,
+                )
+            )
     except Exception as e:
         print(f"[PRESENCE] Could not update status: {e}")
         sentry_sdk.capture_exception(e)
 
 
 # ── Guards ─────────────────────────────────────────────────────────────────────
+
 
 def is_leadership(interaction: discord.Interaction) -> bool:
     cfg = get_config(interaction.guild_id)
@@ -146,19 +158,19 @@ async def guard(interaction: discord.Interaction) -> bool:
     """Check setup-complete and leadership role. Respond with an error and return False if either fails."""
     cfg = get_config(interaction.guild_id)
     if not cfg or not cfg.setup_complete:
-        await interaction.response.send_message(
-            NOT_SET_UP, ephemeral=True
-        )
+        await interaction.response.send_message(NOT_SET_UP, ephemeral=True)
         return False
     if not is_leadership(interaction):
         await interaction.response.send_message(
-            f"⛔ You need the **{cfg.leadership_role_name}** role to use this command.", ephemeral=True
+            f"⛔ You need the **{cfg.leadership_role_name}** role to use this command.",
+            ephemeral=True,
         )
         return False
     return True
 
 
 # ── Bot events ─────────────────────────────────────────────────────────────────
+
 
 @bot.event
 async def on_ready():
@@ -182,6 +194,7 @@ async def on_ready():
     if os.getenv("SEED_DEMO_ON_BOOT") == "1":
         try:
             from scripts.seed_demo import seed_demo_guild_from_env
+
             seed_demo_guild_from_env()
         except Exception as e:
             print(f"[SEED] Demo seed crashed: {type(e).__name__}: {e}")
@@ -189,28 +202,28 @@ async def on_ready():
     # Load cogs — skip if already loaded (happens on reconnect)
     if "train" not in bot.extensions:
         await bot.load_extension("train")
-        print(f"[INFO] Train cog loaded")
+        print("[INFO] Train cog loaded")
     if "survey" not in bot.extensions:
         await bot.load_extension("survey")
-        print(f"[INFO] Survey cog loaded")
+        print("[INFO] Survey cog loaded")
     if "setup_cog" not in bot.extensions:
         await bot.load_extension("setup_cog")
-        print(f"[INFO] Setup cog loaded")
+        print("[INFO] Setup cog loaded")
     if "donate" not in bot.extensions:
         await bot.load_extension("donate")
-        print(f"[INFO] Donate cog loaded")
+        print("[INFO] Donate cog loaded")
     if "member_roster" not in bot.extensions:
         await bot.load_extension("member_roster")
-        print(f"[INFO] Member Roster cog loaded")
+        print("[INFO] Member Roster cog loaded")
     if "export_import_cog" not in bot.extensions:
         await bot.load_extension("export_import_cog")
-        print(f"[INFO] Export/Import cog loaded")
+        print("[INFO] Export/Import cog loaded")
     # Storm commands all live under `/desertstorm` and `/canyonstorm`
     # — one root cog registers both parent groups and dispatches into
     # the per-feature handler modules (storm.py, storm_log.py, etc.).
     if "storm_commands_root" not in bot.extensions:
         await bot.load_extension("storm_commands_root")
-        print(f"[INFO] Storm commands root cog loaded")
+        print("[INFO] Storm commands root cog loaded")
 
     # Sync slash commands globally so they work in any server. Commands
     # decorated with `guilds=[...]` are excluded from the global sync;
@@ -248,6 +261,7 @@ async def on_ready():
     # Existing rows ignore the parameter and their `last_seen_version`
     # is preserved (the release-announce handler below owns updates).
     from release_announcements import maybe_post_release_announcement
+
     for g in bot.guilds:
         try:
             upsert_guild_install_metadata(
@@ -275,6 +289,7 @@ async def on_ready():
     # a no-op until #124 starts writing to that table. See storm_signup_view.
     try:
         from storm_signup_view import register_persistent_signup_views
+
         register_persistent_signup_views(bot)
     except Exception as e:
         print(f"[STORM SIGNUP] Failed to re-register sign-up views: {e}")
@@ -289,6 +304,7 @@ async def on_ready():
     # names — never blocks startup.
     try:
         from storm_icons import refresh_zone_emoji_ids
+
         count = await refresh_zone_emoji_ids(bot)
         print(f"[STORM ICONS] Loaded {count} application emoji ID(s)")
     except Exception as e:
@@ -299,19 +315,20 @@ async def on_ready():
     if not hasattr(bot, "_tasks_started"):
         bot._tasks_started = True
         bot.loop.create_task(run_scheduler(bot))
-        print(f"[INFO] Event scheduler started")
+        print("[INFO] Event scheduler started")
         growth_task.start()
-        print(f"[INFO] Growth tracker started")
+        print("[INFO] Growth tracker started")
         stats_publish_task.start()
-        print(f"[INFO] Stats publisher started")
+        print("[INFO] Stats publisher started")
         shiny_tasks_refresh_task.start()
-        print(f"[INFO] Shiny tasks weekly refresh started")
+        print("[INFO] Shiny tasks weekly refresh started")
         shiny_tasks_post_task.start()
-        print(f"[INFO] Shiny tasks per-minute post loop started")
+        print("[INFO] Shiny tasks per-minute post loop started")
         try:
             from storm_signup_scheduler import start_storm_signup_scheduler
+
             start_storm_signup_scheduler(bot)
-            print(f"[INFO] Storm sign-up scheduler started")
+            print("[INFO] Storm sign-up scheduler started")
         except Exception as e:
             print(f"[STORM SCHEDULER] Failed to start: {e}")
             sentry_sdk.capture_exception(e)
@@ -495,6 +512,7 @@ async def growth_task():
     """Check every hour — run snapshots for guilds whose schedule is due."""
     from config import DB_PATH, get_growth_config
     import sqlite3
+
     now = datetime.now(tz=ET)
 
     try:
@@ -524,8 +542,9 @@ async def growth_task():
             # Use a simple check: run at 10pm ET if today is a multiple of interval days
             # from a fixed epoch (Jan 1 2026)
             from datetime import date as _date
-            epoch   = _date(2026, 1, 1)
-            delta   = (_date.today() - epoch).days
+
+            epoch = _date(2026, 1, 1)
+            delta = (_date.today() - epoch).days
             interval = gcfg.get("snapshot_interval", 30)
             if delta % interval == 0 and now.hour == 22:
                 should_run = True
@@ -534,6 +553,7 @@ async def growth_task():
             try:
                 print(f"[GROWTH] Scheduled snapshot triggered for guild {gid}")
                 from growth import _run_growth_snapshot_inner
+
                 await asyncio.get_event_loop().run_in_executor(
                     None, _run_growth_snapshot_inner, gid
                 )
@@ -553,6 +573,7 @@ async def before_growth_task():
 # assets/stats.json so the home-page badge stays current. The publisher
 # itself decides whether to make a commit (skip if unchanged), and
 # silently no-ops if STATS_GITHUB_TOKEN isn't set.
+
 
 @tasks.loop(hours=24)
 async def stats_publish_task():
@@ -587,6 +608,7 @@ async def before_stats_publish_task():
 # Hedge outage or one misconfigured guild must not abort the loop for
 # everyone else.
 
+
 @tasks.loop(hours=24 * 7)
 async def shiny_tasks_refresh_task():
     """Weekly: refresh `shiny_task_servers` from cpt-hedge.
@@ -607,10 +629,7 @@ async def shiny_tasks_refresh_task():
             age = datetime.now(tz=timezone.utc) - last
             if age < timedelta(days=7):
                 hours = int(age.total_seconds() // 3600)
-                print(
-                    f"[SHINY] Weekly refresh skipped — last run "
-                    f"{age.days}d{hours % 24}h ago"
-                )
+                print(f"[SHINY] Weekly refresh skipped — last run {age.days}d{hours % 24}h ago")
                 return
         n = await refresh_servers()
         print(f"[SHINY] Weekly refresh upserted {n} server rows")
@@ -629,6 +648,7 @@ async def before_shiny_tasks_refresh_task():
     try:
         from config import count_shiny_task_servers
         from shiny_tasks import refresh_servers
+
         if count_shiny_task_servers() == 0:
             n = await refresh_servers()
             print(f"[SHINY] Initial seed upserted {n} server rows")
@@ -642,7 +662,8 @@ async def shiny_tasks_post_task():
     """Per-minute: walk enabled guilds, post if their configured
     post_time matches wall-clock now in their timezone."""
     from config import (
-        get_config, get_shiny_tasks_config,
+        get_config,
+        get_shiny_tasks_config,
         get_shiny_task_servers_in_range,
         list_shiny_enabled_guild_ids,
         mark_shiny_tasks_posted,
@@ -658,16 +679,16 @@ async def shiny_tasks_post_task():
 
     for gid in enabled_ids:
         try:
-            cfg  = get_config(gid)
+            cfg = get_config(gid)
             scfg = get_shiny_tasks_config(gid)
             if not cfg or not scfg.get("enabled"):
                 continue
 
             # Time match: HH:MM in the guild's configured timezone.
             try:
-                guild_tz  = ZoneInfo(cfg.timezone or "America/New_York")
+                guild_tz = ZoneInfo(cfg.timezone or "America/New_York")
             except Exception:
-                guild_tz  = ET
+                guild_tz = ET
             guild_now = datetime.now(tz=guild_tz)
             try:
                 hh, mm = scfg["post_time"].split(":")
@@ -775,12 +796,13 @@ async def growth_slash(interaction: discord.Interaction):
     if not await guard(interaction):
         return
     from config import get_growth_config
+
     guild_id = interaction.guild_id
     gcfg = get_growth_config(guild_id)
 
     metrics = gcfg.get("metrics") or []
-    freq    = gcfg.get("snapshot_frequency", "monthly")
-    sched   = (
+    freq = gcfg.get("snapshot_frequency", "monthly")
+    sched = (
         f"Monthly on day {gcfg.get('snapshot_day', 1)}"
         if freq == "monthly"
         else f"Every {gcfg.get('snapshot_interval', 30)} days"
@@ -791,13 +813,14 @@ async def growth_slash(interaction: discord.Interaction):
         title="📈 Growth Tracking",
         color=discord.Color.green() if enabled else discord.Color.greyple(),
     )
-    embed.add_field(name="Status",         value="✅ Enabled" if enabled else "❌ Disabled",      inline=False)
-    embed.add_field(name="Source Tab",     value=gcfg.get("tab_source", "*not set*"),            inline=False)
-    embed.add_field(name="Growth Tab",     value=gcfg.get("tab_growth", "*not set*"),            inline=False)
-    embed.add_field(name="Snapshot",       value=sched,                                          inline=False)
+    embed.add_field(name="Status", value="✅ Enabled" if enabled else "❌ Disabled", inline=False)
+    embed.add_field(name="Source Tab", value=gcfg.get("tab_source", "*not set*"), inline=False)
+    embed.add_field(name="Growth Tab", value=gcfg.get("tab_growth", "*not set*"), inline=False)
+    embed.add_field(name="Snapshot", value=sched, inline=False)
 
     if enabled:
         from growth import compute_next_snapshot
+
         next_dt = compute_next_snapshot(gcfg)
         if next_dt is not None:
             ts = int(next_dt.timestamp())
@@ -809,7 +832,10 @@ async def growth_slash(interaction: discord.Interaction):
 
     embed.add_field(
         name=f"Metrics ({len(metrics)})",
-        value=("\n".join(f"• **{m['label']}** — column {m['col']}" for m in metrics) or "*none configured*")[:1024],
+        value=(
+            "\n".join(f"• **{m['label']}** — column {m['col']}" for m in metrics)
+            or "*none configured*"
+        )[:1024],
         inline=False,
     )
 
@@ -822,10 +848,12 @@ async def growth_slash(interaction: discord.Interaction):
 
         @discord.ui.button(label="📸 Run Snapshot Now", style=discord.ButtonStyle.success)
         async def run_now(self, inter: discord.Interaction, button: discord.ui.Button):
-            for item in self.children: item.disabled = True
+            for item in self.children:
+                item.disabled = True
             await wizard_registry.safe_edit_response(inter, view=self)
             try:
                 from growth import _run_growth_snapshot_inner
+
                 _run_growth_snapshot_inner(guild_id)
                 await inter.followup.send(
                     f"✅ Growth snapshot complete — check the **{gcfg.get('tab_growth', 'Growth Tracking')}** tab.",
@@ -835,7 +863,9 @@ async def growth_slash(interaction: discord.Interaction):
                 await inter.followup.send(f"⚠️ Growth snapshot failed: {e}", ephemeral=True)
             self.stop()
 
-        @discord.ui.button(label="📊 See most recent Breakdown", style=discord.ButtonStyle.secondary)
+        @discord.ui.button(
+            label="📊 See most recent Breakdown", style=discord.ButtonStyle.secondary
+        )
         async def breakdown(self, inter: discord.Interaction, button: discord.ui.Button):
             # Read-only render. Don't disable sibling buttons and don't
             # `self.stop()` — leadership might want to follow the no-data
@@ -844,6 +874,7 @@ async def growth_slash(interaction: discord.Interaction):
             await inter.response.defer(ephemeral=True)
             try:
                 from growth import read_latest_breakdown, format_breakdown_embed
+
                 data = await asyncio.to_thread(read_latest_breakdown, guild_id)
             except Exception as e:
                 await inter.followup.send(f"⚠️ Could not load breakdown: {e}", ephemeral=True)
@@ -869,13 +900,15 @@ async def growth_slash(interaction: discord.Interaction):
 
         @discord.ui.button(label="⚙️ Edit Config", style=discord.ButtonStyle.primary)
         async def edit_config(self, inter: discord.Interaction, button: discord.ui.Button):
-            for item in self.children: item.disabled = True
+            for item in self.children:
+                item.disabled = True
             await wizard_registry.safe_edit_response(inter, view=self)
             from setup_cog import (
                 _has_leadership_or_admin,
                 _check_wizard_can_run,
                 run_growth_setup,
             )
+
             if not _has_leadership_or_admin(inter):
                 await inter.followup.send(
                     "⛔ You need the leadership role (or admin) to edit growth tracking config.",
@@ -914,7 +947,8 @@ async def growth_breakdown_slash(interaction: discord.Interaction):
         data = await asyncio.to_thread(read_latest_breakdown, guild_id)
     except Exception as e:
         await interaction.followup.send(
-            f"⚠️ Could not load breakdown: {e}", ephemeral=True,
+            f"⚠️ Could not load breakdown: {e}",
+            ephemeral=True,
         )
         return
 
@@ -947,6 +981,7 @@ async def growth_breakdown_slash(interaction: discord.Interaction):
 # step of /setup → 📣 Events (#249). Every event flow now lives behind a
 # hub button.
 
+
 @bot.tree.command(
     name="events",
     description="Open the event-announcements hub for this alliance",
@@ -954,12 +989,12 @@ async def growth_breakdown_slash(interaction: discord.Interaction):
 @app_commands.guild_only()
 async def events_slash(interaction: discord.Interaction):
     from events_hub import handle_events_hub
+
     await handle_events_hub(bot, interaction)
 
 
-
-
 # ── /help command ──────────────────────────────────────────────────────────────
+
 
 @bot.tree.command(
     name="help",
@@ -970,12 +1005,16 @@ async def help_slash(interaction: discord.Interaction):
     from help_content import build_overview_embed, HelpView
 
     is_premium_flag = await premium.is_premium(
-        interaction.guild_id, interaction=interaction, bot=bot,
+        interaction.guild_id,
+        interaction=interaction,
+        bot=bot,
     )
     embed = build_overview_embed(is_premium_flag)
     view = HelpView(is_premium_flag, origin=interaction)
     await interaction.response.send_message(
-        embed=embed, view=view, ephemeral=True,
+        embed=embed,
+        view=view,
+        ephemeral=True,
     )
 
 
@@ -1017,9 +1056,7 @@ def _admin_guild_ids() -> tuple[int, ...]:
 
 _ADMIN_GUILD_IDS = _admin_guild_ids()
 _admin_command_kwargs: dict = (
-    {"guilds": [discord.Object(id=gid) for gid in _ADMIN_GUILD_IDS]}
-    if _ADMIN_GUILD_IDS
-    else {}
+    {"guilds": [discord.Object(id=gid) for gid in _ADMIN_GUILD_IDS]} if _ADMIN_GUILD_IDS else {}
 )
 if not _ADMIN_GUILD_IDS:
     print(
@@ -1069,16 +1106,13 @@ async def admin_overview_slash(interaction: discord.Interaction):
         return
 
     from config import _get_conn  # noqa: PLC0415 — module-level imports already loaded
+
     with _get_conn() as conn:
-        total_guilds = conn.execute(
-            "SELECT COUNT(*) FROM guild_install_metadata"
-        ).fetchone()[0]
+        total_guilds = conn.execute("SELECT COUNT(*) FROM guild_install_metadata").fetchone()[0]
         with_setup_complete = conn.execute(
             "SELECT COUNT(*) FROM guild_configs WHERE setup_complete = 1"
         ).fetchone()[0]
-        premium_assignments = conn.execute(
-            "SELECT COUNT(*) FROM premium_assignments"
-        ).fetchone()[0]
+        premium_assignments = conn.execute("SELECT COUNT(*) FROM premium_assignments").fetchone()[0]
         # Recent installs: last 7 days. Use ISO timestamp comparison
         # (TEXT-sorted, ISO-8601 is lexicographically ordered).
         cutoff_recent = (datetime.now(timezone.utc) - timedelta(days=7)).isoformat()
@@ -1136,7 +1170,7 @@ async def admin_overview_slash(interaction: discord.Interaction):
         )
     embed.set_footer(
         text="Use /admin guild_info <id> to drill into one guild, "
-             "or /admin forget_guild <id> to remove install metadata for a data-removal request."
+        "or /admin forget_guild <id> to remove install metadata for a data-removal request."
     )
     await interaction.response.send_message(embed=embed, ephemeral=True)
 
@@ -1158,7 +1192,7 @@ async def admin_guild_info_slash(interaction: discord.Interaction, guild_id: str
         return
 
     meta = get_guild_install_metadata(gid)
-    cfg  = get_config(gid)
+    cfg = get_config(gid)
 
     if meta is None and cfg is None:
         await interaction.response.send_message(
@@ -1173,7 +1207,9 @@ async def admin_guild_info_slash(interaction: discord.Interaction, guild_id: str
     embed.add_field(name="Guild ID", value=f"`{gid}`", inline=False)
 
     if meta is not None:
-        owner_line = f"<@{meta['owner_id']}> (`{meta['owner_id']}`)" if meta["owner_id"] else "*unknown*"
+        owner_line = (
+            f"<@{meta['owner_id']}> (`{meta['owner_id']}`)" if meta["owner_id"] else "*unknown*"
+        )
         embed.add_field(name="Owner", value=owner_line, inline=False)
         if meta["installer_user_id"]:
             embed.add_field(
@@ -1188,7 +1224,7 @@ async def admin_guild_info_slash(interaction: discord.Interaction, guild_id: str
                 inline=False,
             )
         embed.add_field(name="First seen", value=meta["installed_at"], inline=True)
-        embed.add_field(name="Last seen",  value=meta["last_seen_at"], inline=True)
+        embed.add_field(name="Last seen", value=meta["last_seen_at"], inline=True)
     else:
         embed.add_field(
             name="Install metadata",
@@ -1197,9 +1233,13 @@ async def admin_guild_info_slash(interaction: discord.Interaction, guild_id: str
         )
 
     if cfg is not None:
-        embed.add_field(name="Setup complete", value="✅" if cfg.setup_complete else "❌", inline=True)
-        embed.add_field(name="Timezone",       value=cfg.timezone or "*not set*", inline=True)
-        embed.add_field(name="Leadership role", value=cfg.leadership_role_name or "*not set*", inline=False)
+        embed.add_field(
+            name="Setup complete", value="✅" if cfg.setup_complete else "❌", inline=True
+        )
+        embed.add_field(name="Timezone", value=cfg.timezone or "*not set*", inline=True)
+        embed.add_field(
+            name="Leadership role", value=cfg.leadership_role_name or "*not set*", inline=False
+        )
         sheet_id = (cfg.spreadsheet_id or "").strip()
         if sheet_id:
             sheet_link = f"[`{sheet_id}`](https://docs.google.com/spreadsheets/d/{sheet_id})"
@@ -1253,7 +1293,8 @@ class _ForgetGuildConfirm(discord.ui.View):
         for item in self.children:
             item.disabled = True
         await inter.response.edit_message(
-            content=f"❌ Cancelled — `{self._guild_id}` metadata left intact.", view=self,
+            content=f"❌ Cancelled — `{self._guild_id}` metadata left intact.",
+            view=self,
         )
         self.stop()
 

@@ -12,6 +12,7 @@ Inline view classes (TeamChoiceView, PlacementView, etc.) are unblocked by
 a generic channel.send interceptor that auto-completes them with sensible
 defaults so the wizard advances past them.
 """
+
 import asyncio
 from unittest.mock import patch, MagicMock, AsyncMock
 import sys, os
@@ -24,6 +25,7 @@ from tests.conftest import TEST_GUILD_ID, make_mock_interaction
 
 
 # ── Test harness ──────────────────────────────────────────────────────────────
+
 
 def _stop_view(view):
     """Best-effort stop on any discord.ui.View-like mock or real view."""
@@ -51,13 +53,16 @@ def _resolve_view(view, overrides: dict = None):
     Always calls view.stop() to unblock view.wait().
     """
     import discord
-    overrides    = overrides or {}
+
+    overrides = overrides or {}
     is_real_view = isinstance(view, discord.ui.View)
     for k, v in overrides.items():
         cur = getattr(view, k, None)
         if is_real_view or cur is None or isinstance(cur, MagicMock):
-            try: setattr(view, k, v)
-            except Exception: pass
+            try:
+                setattr(view, k, v)
+            except Exception:
+                pass
     _stop_view(view)
 
 
@@ -69,7 +74,7 @@ def make_send_handler(channel, *, view_overrides=None):
     the attributes they care about, so extra ones are harmless.
     """
     overrides = dict(view_overrides or {})
-    sent      = []
+    sent = []
 
     async def fake_send(content=None, embed=None, view=None, **kw):
         sent.append({"content": content, "embed": embed, "view": view})
@@ -100,6 +105,7 @@ def patch_keep_or_change(values):
 
 # ── /setup wizard ─────────────────────────────────────────────────────────────
 
+
 class TestRunSetup:
     """Test the base /setup wizard saves config correctly."""
 
@@ -113,38 +119,46 @@ class TestRunSetup:
         config.save_config(cfg)
 
         interaction = make_mock_interaction()
-        bot         = AsyncMock()
+        bot = AsyncMock()
 
-        member_role  = MagicMock(); member_role.name = "Member";  member_role.id = 111
-        lead_role    = MagicMock(); lead_role.name   = "R4/R5";   lead_role.id   = 222
-        lead_channel = MagicMock(); lead_channel.id  = 333; lead_channel.category_id = None
+        member_role = MagicMock()
+        member_role.name = "Member"
+        member_role.id = 111
+        lead_role = MagicMock()
+        lead_role.name = "R4/R5"
+        lead_role.id = 222
+        lead_channel = MagicMock()
+        lead_channel.id = 333
+        lead_channel.category_id = None
 
         role_step_1 = MagicMock(confirmed=True, selected_role=member_role, wait=AsyncMock())
-        role_step_2 = MagicMock(confirmed=True, selected_role=lead_role,   wait=AsyncMock())
-        ch_step     = MagicMock(confirmed=True, selected_channel=lead_channel, wait=AsyncMock())
-        tz_view     = MagicMock(confirmed=True, selected="America/New_York",   wait=AsyncMock())
+        role_step_2 = MagicMock(confirmed=True, selected_role=lead_role, wait=AsyncMock())
+        ch_step = MagicMock(confirmed=True, selected_channel=lead_channel, wait=AsyncMock())
+        tz_view = MagicMock(confirmed=True, selected="America/New_York", wait=AsyncMock())
         sheet_modal = MagicMock(value="test_sheet_id_abc")
-        modal_view  = MagicMock(confirmed=True, wait=AsyncMock())
-        share_done  = MagicMock(confirmed=True, wait=AsyncMock())
-        confirm     = MagicMock(confirmed=True, wait=AsyncMock())
+        modal_view = MagicMock(confirmed=True, wait=AsyncMock())
+        share_done = MagicMock(confirmed=True, wait=AsyncMock())
+        confirm = MagicMock(confirmed=True, wait=AsyncMock())
 
         role_iter = iter([role_step_1, role_step_2])
 
-        with patch("setup_cog.RoleSelectStep",     side_effect=lambda *a, **kw: next(role_iter)), \
-             patch("setup_cog.ChannelSelectStep",  return_value=ch_step), \
-             patch("setup_cog.TimezoneSelectView", return_value=tz_view), \
-             patch("setup_cog.TextInputModal",     return_value=sheet_modal), \
-             patch("setup_cog.ModalLaunchView",    return_value=modal_view), \
-             patch("setup_cog.ConfirmView",        side_effect=[share_done, confirm]):
+        with (
+            patch("setup_cog.RoleSelectStep", side_effect=lambda *a, **kw: next(role_iter)),
+            patch("setup_cog.ChannelSelectStep", return_value=ch_step),
+            patch("setup_cog.TimezoneSelectView", return_value=tz_view),
+            patch("setup_cog.TextInputModal", return_value=sheet_modal),
+            patch("setup_cog.ModalLaunchView", return_value=modal_view),
+            patch("setup_cog.ConfirmView", side_effect=[share_done, confirm]),
+        ):
             make_send_handler(interaction.channel)
             await run_setup(interaction, bot)
 
         cfg = config.get_config(TEST_GUILD_ID)
-        assert cfg.member_role_name     == "Member"
+        assert cfg.member_role_name == "Member"
         assert cfg.leadership_role_name == "R4/R5"
-        assert cfg.timezone             == "America/New_York"
-        assert cfg.spreadsheet_id       == "test_sheet_id_abc"
-        assert cfg.setup_complete       == 1
+        assert cfg.timezone == "America/New_York"
+        assert cfg.spreadsheet_id == "test_sheet_id_abc"
+        assert cfg.setup_complete == 1
 
     @pytest.mark.asyncio
     async def test_existing_config_shows_summary_and_cancel(self, seeded_db):
@@ -153,12 +167,12 @@ class TestRunSetup:
         from setup_cog import run_setup
 
         cfg = config.get_config(TEST_GUILD_ID)
-        original_tz        = cfg.timezone
+        original_tz = cfg.timezone
         cfg.setup_complete = True
         config.save_config(cfg)
 
         interaction = make_mock_interaction()
-        bot         = AsyncMock()
+        bot = AsyncMock()
 
         # EditOrCancelView is inline; resolve via send-handler.
         make_send_handler(
@@ -179,48 +193,54 @@ class TestRunSetup:
         from setup_cog import run_setup
 
         cfg = config.get_config(TEST_GUILD_ID)
-        cfg.setup_complete       = True
-        cfg.member_role_id       = 4001
-        cfg.member_role_name     = "Member"
-        cfg.leadership_role_id   = 4002
+        cfg.setup_complete = True
+        cfg.member_role_id = 4001
+        cfg.member_role_name = "Member"
+        cfg.leadership_role_id = 4002
         cfg.leadership_role_name = "R4/R5"
         cfg.leadership_channel_id = 4003
         config.save_config(cfg)
 
         interaction = make_mock_interaction()
-        bot         = AsyncMock()
+        bot = AsyncMock()
 
-        new_member  = MagicMock(name="member_role",  id=4001)
+        new_member = MagicMock(name="member_role", id=4001)
         new_member.name = "Member"
-        new_lead    = MagicMock(name="lead_role",    id=4002)
-        new_lead.name   = "R4/R5"
+        new_lead = MagicMock(name="lead_role", id=4002)
+        new_lead.name = "R4/R5"
         new_channel = MagicMock(name="lead_channel", id=4003)
         new_channel.category_id = None
 
         role_step_1 = MagicMock(
-            confirmed=True, selected_role=new_member,
-            is_current_stale=False, cancelled=False,
+            confirmed=True,
+            selected_role=new_member,
+            is_current_stale=False,
+            cancelled=False,
             wait=AsyncMock(),
         )
         role_step_2 = MagicMock(
-            confirmed=True, selected_role=new_lead,
-            is_current_stale=False, cancelled=False,
+            confirmed=True,
+            selected_role=new_lead,
+            is_current_stale=False,
+            cancelled=False,
             wait=AsyncMock(),
         )
-        ch_step     = MagicMock(
-            confirmed=True, selected_channel=new_channel,
-            is_current_stale=False, cancelled=False,
+        ch_step = MagicMock(
+            confirmed=True,
+            selected_channel=new_channel,
+            is_current_stale=False,
+            cancelled=False,
             wait=AsyncMock(),
         )
-        tz_view     = MagicMock(confirmed=True, selected="America/New_York", wait=AsyncMock())
+        tz_view = MagicMock(confirmed=True, selected="America/New_York", wait=AsyncMock())
         sheet_modal = MagicMock(value="sheet_xyz")
-        modal_view  = MagicMock(confirmed=True, wait=AsyncMock())
-        share_done  = MagicMock(confirmed=True, wait=AsyncMock())
-        confirm     = MagicMock(confirmed=True, wait=AsyncMock())
+        modal_view = MagicMock(confirmed=True, wait=AsyncMock())
+        share_done = MagicMock(confirmed=True, wait=AsyncMock())
+        confirm = MagicMock(confirmed=True, wait=AsyncMock())
 
-        role_iter         = iter([role_step_1, role_step_2])
-        role_call_kwargs  = []
-        ch_call_kwargs    = []
+        role_iter = iter([role_step_1, role_step_2])
+        role_call_kwargs = []
+        ch_call_kwargs = []
 
         def _record_role(*a, **kw):
             role_call_kwargs.append(kw)
@@ -230,12 +250,14 @@ class TestRunSetup:
             ch_call_kwargs.append(kw)
             return ch_step
 
-        with patch("setup_cog.RoleSelectStep",     side_effect=_record_role), \
-             patch("setup_cog.ChannelSelectStep",  side_effect=_record_ch), \
-             patch("setup_cog.TimezoneSelectView", return_value=tz_view), \
-             patch("setup_cog.TextInputModal",     return_value=sheet_modal), \
-             patch("setup_cog.ModalLaunchView",    return_value=modal_view), \
-             patch("setup_cog.ConfirmView",        side_effect=[share_done, confirm]):
+        with (
+            patch("setup_cog.RoleSelectStep", side_effect=_record_role),
+            patch("setup_cog.ChannelSelectStep", side_effect=_record_ch),
+            patch("setup_cog.TimezoneSelectView", return_value=tz_view),
+            patch("setup_cog.TextInputModal", return_value=sheet_modal),
+            patch("setup_cog.ModalLaunchView", return_value=modal_view),
+            patch("setup_cog.ConfirmView", side_effect=[share_done, confirm]),
+        ):
             # The pre-wizard summary's EditOrCancelView (inline inside
             # ask_proceed_with_existing_config) is the first view through
             # send; route it to proceed=True so we enter the steps.
@@ -246,15 +268,16 @@ class TestRunSetup:
             await run_setup(interaction, bot)
 
         # Both role picks received the saved ids/names.
-        assert role_call_kwargs[0]["current_id"]   == 4001
+        assert role_call_kwargs[0]["current_id"] == 4001
         assert role_call_kwargs[0]["current_name"] == "Member"
-        assert role_call_kwargs[1]["current_id"]   == 4002
+        assert role_call_kwargs[1]["current_id"] == 4002
         assert role_call_kwargs[1]["current_name"] == "R4/R5"
         # Channel pick received the saved id.
         assert ch_call_kwargs[0]["current_id"] == 4003
 
 
 # ── /setup_train ──────────────────────────────────────────────────────────────
+
 
 class TestRunTrainSetup:
     """Test /setup_train saves train config correctly."""
@@ -265,18 +288,20 @@ class TestRunTrainSetup:
         from setup_cog import run_train_setup
 
         interaction = make_mock_interaction()
-        bot         = AsyncMock()
+        bot = AsyncMock()
 
-        blurb_view  = MagicMock(selected=False, wait=AsyncMock())
+        blurb_view = MagicMock(selected=False, wait=AsyncMock())
         remind_view = MagicMock(selected=False, wait=AsyncMock())
 
-        with patch("setup_cog.YesNoView", side_effect=[blurb_view, remind_view]), \
-             patch_keep_or_change(["My Train Tab"]):
+        with (
+            patch("setup_cog.YesNoView", side_effect=[blurb_view, remind_view]),
+            patch_keep_or_change(["My Train Tab"]),
+        ):
             make_send_handler(interaction.channel)
             await run_train_setup(interaction, bot)
 
         cfg = config.get_train_config(TEST_GUILD_ID)
-        assert cfg["tab_name"]       == "My Train Tab"
+        assert cfg["tab_name"] == "My Train Tab"
         assert cfg["blurbs_enabled"] == 0
 
     @pytest.mark.asyncio
@@ -285,24 +310,26 @@ class TestRunTrainSetup:
         from setup_cog import run_train_setup
 
         interaction = make_mock_interaction()
-        bot         = AsyncMock()
+        bot = AsyncMock()
 
         reminder_channel = MagicMock(id=777777777)
 
-        blurb_view  = MagicMock(selected=False, wait=AsyncMock())
-        remind_view = MagicMock(selected=True,  wait=AsyncMock())
-        ch_view     = MagicMock(confirmed=True, selected_channel=reminder_channel, wait=AsyncMock())
+        blurb_view = MagicMock(selected=False, wait=AsyncMock())
+        remind_view = MagicMock(selected=True, wait=AsyncMock())
+        ch_view = MagicMock(confirmed=True, selected_channel=reminder_channel, wait=AsyncMock())
 
-        with patch("setup_cog.YesNoView",         side_effect=[blurb_view, remind_view]), \
-             patch("setup_cog.ChannelSelectStep", return_value=ch_view), \
-             patch_keep_or_change(["Train Schedule", "10:00pm"]):
+        with (
+            patch("setup_cog.YesNoView", side_effect=[blurb_view, remind_view]),
+            patch("setup_cog.ChannelSelectStep", return_value=ch_view),
+            patch_keep_or_change(["Train Schedule", "10:00pm"]),
+        ):
             make_send_handler(interaction.channel)
             await run_train_setup(interaction, bot)
 
         cfg = config.get_train_config(TEST_GUILD_ID)
-        assert cfg["reminders_enabled"]   == 1
+        assert cfg["reminders_enabled"] == 1
         assert cfg["reminder_channel_id"] == 777777777
-        assert cfg["reminder_time"]       == "22:00"
+        assert cfg["reminder_time"] == "22:00"
 
     @pytest.mark.asyncio
     async def test_existing_config_shows_summary_and_cancel(self, seeded_db):
@@ -326,7 +353,7 @@ class TestRunTrainSetup:
         )
 
         interaction = make_mock_interaction()
-        bot         = AsyncMock()
+        bot = AsyncMock()
 
         # Send-handler routes the inline EditOrCancelView -> proceed=False.
         # No other views should ever fire because the helper returns
@@ -339,7 +366,7 @@ class TestRunTrainSetup:
 
         # Saved values unchanged.
         cfg = config.get_train_config(TEST_GUILD_ID)
-        assert cfg["tab_name"]            == "My Tab"
+        assert cfg["tab_name"] == "My Tab"
         assert cfg["reminder_channel_id"] == 600600
 
     @pytest.mark.asyncio
@@ -356,24 +383,27 @@ class TestRunTrainSetup:
             tones=["Serious"],
             prompt_template="prompt",
             default_tone="Serious",
-            blurbs_enabled=0,             # skip Steps 3-6
+            blurbs_enabled=0,  # skip Steps 3-6
             reminders_enabled=1,
             reminder_channel_id=600700,
             reminder_time="22:00",
         )
 
         interaction = make_mock_interaction()
-        bot         = AsyncMock()
+        bot = AsyncMock()
 
         new_channel = MagicMock(id=600700)
         ch_view = MagicMock(
-            confirmed=True, cancelled=False, is_current_stale=False,
-            selected_channel=new_channel, wait=AsyncMock(),
+            confirmed=True,
+            cancelled=False,
+            is_current_stale=False,
+            selected_channel=new_channel,
+            wait=AsyncMock(),
         )
 
         # Wizard step views: blurbs=No, reminders=Yes.
-        blurb_view  = MagicMock(selected=False, cancelled=False, wait=AsyncMock())
-        remind_view = MagicMock(selected=True,  cancelled=False, wait=AsyncMock())
+        blurb_view = MagicMock(selected=False, cancelled=False, wait=AsyncMock())
+        remind_view = MagicMock(selected=True, cancelled=False, wait=AsyncMock())
 
         ch_call_kwargs = []
 
@@ -381,9 +411,11 @@ class TestRunTrainSetup:
             ch_call_kwargs.append(kw)
             return ch_view
 
-        with patch("setup_cog.YesNoView",         side_effect=[blurb_view, remind_view]), \
-             patch("setup_cog.ChannelSelectStep", side_effect=_record_ch), \
-             patch_keep_or_change(["My Tab", "10:00pm", ""]):
+        with (
+            patch("setup_cog.YesNoView", side_effect=[blurb_view, remind_view]),
+            patch("setup_cog.ChannelSelectStep", side_effect=_record_ch),
+            patch_keep_or_change(["My Tab", "10:00pm", ""]),
+        ):
             # `view_overrides` covers the summary EditOrCancelView ->
             # proceed=True so the wizard walks the steps.
             make_send_handler(
@@ -399,6 +431,7 @@ class TestRunTrainSetup:
 
 # ── /setup_birthdays ──────────────────────────────────────────────────────────
 
+
 class TestRunBirthdaySetup:
     """Test /setup_birthdays saves birthday config correctly."""
 
@@ -408,7 +441,7 @@ class TestRunBirthdaySetup:
         from setup_cog import run_birthday_setup
 
         interaction = make_mock_interaction()
-        bot         = AsyncMock()
+        bot = AsyncMock()
 
         enabled_view = MagicMock(selected=False, wait=AsyncMock())
 
@@ -425,26 +458,28 @@ class TestRunBirthdaySetup:
         from setup_cog import run_birthday_setup
 
         interaction = make_mock_interaction()
-        bot         = AsyncMock()
+        bot = AsyncMock()
 
         # YesNo views, in order: enabled, train_integration, reminders
         yn_views = [
-            MagicMock(selected=True,  wait=AsyncMock()),  # enabled
+            MagicMock(selected=True, wait=AsyncMock()),  # enabled
             MagicMock(selected=False, wait=AsyncMock()),  # train_integration off
             MagicMock(selected=False, wait=AsyncMock()),  # reminders off
         ]
 
         # Tab → "Members", name col → "A", bday col → "B"
-        with patch("setup_cog.YesNoView", side_effect=yn_views), \
-             patch_keep_or_change(["Members", "A", "B"]):
+        with (
+            patch("setup_cog.YesNoView", side_effect=yn_views),
+            patch_keep_or_change(["Members", "A", "B"]),
+        ):
             make_send_handler(interaction.channel)
             await run_birthday_setup(interaction, bot)
 
         cfg = config.get_birthday_config(TEST_GUILD_ID)
-        assert cfg["enabled"]      == 1
-        assert cfg["tab_name"]     == "Members"
-        assert cfg["name_col"]     == 0   # "A"
-        assert cfg["birthday_col"] == 1   # "B"
+        assert cfg["enabled"] == 1
+        assert cfg["tab_name"] == "Members"
+        assert cfg["name_col"] == 0  # "A"
+        assert cfg["birthday_col"] == 1  # "B"
 
     @pytest.mark.asyncio
     async def test_existing_enabled_config_shows_summary_and_keeps_unchanged(self, seeded_db):
@@ -457,15 +492,22 @@ class TestRunBirthdaySetup:
         config.save_birthday_config(
             TEST_GUILD_ID,
             tab_name="Members",
-            name_col=0, birthday_col=1, discord_id_col=-1, data_start_row=2,
+            name_col=0,
+            birthday_col=1,
+            discord_id_col=-1,
+            data_start_row=2,
             enabled=1,
-            train_integration=0, flexible_placement=0, lookahead_days=14,
-            reminders_enabled=1, reminder_channel_id=550550, reminder_time="08:00",
+            train_integration=0,
+            flexible_placement=0,
+            lookahead_days=14,
+            reminders_enabled=1,
+            reminder_channel_id=550550,
+            reminder_time="08:00",
             dm_message="",
         )
 
         interaction = make_mock_interaction()
-        bot         = AsyncMock()
+        bot = AsyncMock()
 
         # Summary EditOrCancelView -> proceed=False. Nothing else should run.
         make_send_handler(
@@ -475,7 +517,7 @@ class TestRunBirthdaySetup:
         await run_birthday_setup(interaction, bot)
 
         cfg = config.get_birthday_config(TEST_GUILD_ID)
-        assert cfg["enabled"]             == 1
+        assert cfg["enabled"] == 1
         assert cfg["reminder_channel_id"] == 550550
 
     @pytest.mark.asyncio
@@ -488,27 +530,37 @@ class TestRunBirthdaySetup:
         config.save_birthday_config(
             TEST_GUILD_ID,
             tab_name="Members",
-            name_col=0, birthday_col=1, discord_id_col=-1, data_start_row=2,
+            name_col=0,
+            birthday_col=1,
+            discord_id_col=-1,
+            data_start_row=2,
             enabled=1,
-            train_integration=0, flexible_placement=0, lookahead_days=14,
-            reminders_enabled=1, reminder_channel_id=550600, reminder_time="08:00",
+            train_integration=0,
+            flexible_placement=0,
+            lookahead_days=14,
+            reminders_enabled=1,
+            reminder_channel_id=550600,
+            reminder_time="08:00",
             dm_message="",
         )
 
         interaction = make_mock_interaction()
-        bot         = AsyncMock()
+        bot = AsyncMock()
 
         new_channel = MagicMock(id=550600)
         ch_view = MagicMock(
-            confirmed=True, cancelled=False, is_current_stale=False,
-            selected_channel=new_channel, wait=AsyncMock(),
+            confirmed=True,
+            cancelled=False,
+            is_current_stale=False,
+            selected_channel=new_channel,
+            wait=AsyncMock(),
         )
 
         # YesNoView order: enable=Yes, train_integration=No, reminders=Yes.
         yn_views = [
-            MagicMock(selected=True,  cancelled=False, wait=AsyncMock()),
+            MagicMock(selected=True, cancelled=False, wait=AsyncMock()),
             MagicMock(selected=False, cancelled=False, wait=AsyncMock()),
-            MagicMock(selected=True,  cancelled=False, wait=AsyncMock()),
+            MagicMock(selected=True, cancelled=False, wait=AsyncMock()),
         ]
 
         ch_call_kwargs = []
@@ -517,9 +569,11 @@ class TestRunBirthdaySetup:
             ch_call_kwargs.append(kw)
             return ch_view
 
-        with patch("setup_cog.YesNoView",         side_effect=yn_views), \
-             patch("setup_cog.ChannelSelectStep", side_effect=_record_ch), \
-             patch_keep_or_change(["Members", "A", "B", "8:00am", ""]):
+        with (
+            patch("setup_cog.YesNoView", side_effect=yn_views),
+            patch("setup_cog.ChannelSelectStep", side_effect=_record_ch),
+            patch_keep_or_change(["Members", "A", "B", "8:00am", ""]),
+        ):
             make_send_handler(
                 interaction.channel,
                 view_overrides={"proceed": True, "cancelled": False},
@@ -542,33 +596,42 @@ class TestRunBirthdaySetup:
         config.save_birthday_config(
             TEST_GUILD_ID,
             tab_name="Members",
-            name_col=0, birthday_col=1, discord_id_col=-1, data_start_row=2,
+            name_col=0,
+            birthday_col=1,
+            discord_id_col=-1,
+            data_start_row=2,
             enabled=1,
-            train_integration=0, flexible_placement=0, lookahead_days=14,
-            reminders_enabled=0, reminder_channel_id=0, reminder_time="08:00",
+            train_integration=0,
+            flexible_placement=0,
+            lookahead_days=14,
+            reminders_enabled=0,
+            reminder_channel_id=0,
+            reminder_time="08:00",
             dm_message="",
         )
 
         interaction = make_mock_interaction()
-        bot         = AsyncMock()
+        bot = AsyncMock()
 
         # Step 1 -> No.
         enabled_no = MagicMock(selected=False, cancelled=False, wait=AsyncMock())
-        captured   = {}
+        captured = {}
 
         async def fake_disable(channel, **kwargs):
             captured.update(kwargs)
 
-        with patch("setup_cog.YesNoView",                return_value=enabled_no), \
-             patch("setup_cog.ask_disable_with_clear",   side_effect=fake_disable):
+        with (
+            patch("setup_cog.YesNoView", return_value=enabled_no),
+            patch("setup_cog.ask_disable_with_clear", side_effect=fake_disable),
+        ):
             make_send_handler(
                 interaction.channel,
                 view_overrides={"proceed": True, "cancelled": False},
             )
             await run_birthday_setup(interaction, bot)
 
-        assert captured["feature_label"]   == "Birthday tracking"
-        assert captured["setup_command"]   == "setup → 🎂 Birthdays"
+        assert captured["feature_label"] == "Birthday tracking"
+        assert captured["setup_command"] == "setup → 🎂 Birthdays"
         assert captured["had_prior_config"] is True
         # clear_fn should wipe the DB row when invoked.
         captured["clear_fn"]()
@@ -586,15 +649,17 @@ class TestRunBirthdaySetup:
         config.clear_birthday_config(TEST_GUILD_ID)
 
         interaction = make_mock_interaction()
-        bot         = AsyncMock()
-        enabled_no  = MagicMock(selected=False, cancelled=False, wait=AsyncMock())
-        captured    = {}
+        bot = AsyncMock()
+        enabled_no = MagicMock(selected=False, cancelled=False, wait=AsyncMock())
+        captured = {}
 
         async def fake_disable(channel, **kwargs):
             captured.update(kwargs)
 
-        with patch("setup_cog.YesNoView",              return_value=enabled_no), \
-             patch("setup_cog.ask_disable_with_clear", side_effect=fake_disable):
+        with (
+            patch("setup_cog.YesNoView", return_value=enabled_no),
+            patch("setup_cog.ask_disable_with_clear", side_effect=fake_disable),
+        ):
             make_send_handler(interaction.channel)
             await run_birthday_setup(interaction, bot)
 
@@ -602,6 +667,7 @@ class TestRunBirthdaySetup:
 
 
 # ── /setup_survey ─────────────────────────────────────────────────────────────
+
 
 class TestRunSurveySetup:
     """Test /setup_survey saves survey config correctly."""
@@ -612,7 +678,7 @@ class TestRunSurveySetup:
         from setup_cog import run_survey_setup
 
         interaction = make_mock_interaction()
-        bot         = AsyncMock()
+        bot = AsyncMock()
 
         survey_channel = MagicMock(id=111111)
         notify_channel = MagicMock(id=222222)
@@ -626,9 +692,12 @@ class TestRunSurveySetup:
         # Step 5 intro message arrives via bot.wait_for
         bot.wait_for = AsyncMock(return_value=MagicMock(content="Please submit weekly!"))
 
-        with patch("setup_cog.ChannelSelectStep", side_effect=ch_views), \
-             patch("setup_cog.QuestionStartView", return_value=q_view) if False else \
-             patch_keep_or_change(["Squad Powers", "Survey History"]):
+        with (
+            patch("setup_cog.ChannelSelectStep", side_effect=ch_views),
+            patch("setup_cog.QuestionStartView", return_value=q_view)
+            if False
+            else patch_keep_or_change(["Squad Powers", "Survey History"]),
+        ):
             # Two patches — survey wizard creates QuestionStartView inline,
             # which we resolve via the send handler below.
             make_send_handler(
@@ -638,13 +707,13 @@ class TestRunSurveySetup:
             await run_survey_setup(interaction, bot)
 
         guild_cfg = config.get_config(TEST_GUILD_ID)
-        assert guild_cfg.survey_channel_id        == 111111
+        assert guild_cfg.survey_channel_id == 111111
         assert guild_cfg.survey_notify_channel_id == 222222
 
         survey_cfg = config.get_survey_config(TEST_GUILD_ID)
         assert survey_cfg["tab_squad_powers"] == "Squad Powers"
-        assert survey_cfg["tab_history"]      == "Survey History"
-        assert len(survey_cfg["questions"])   > 0   # defaults loaded
+        assert survey_cfg["tab_history"] == "Survey History"
+        assert len(survey_cfg["questions"]) > 0  # defaults loaded
 
     @pytest.mark.asyncio
     async def test_existing_config_shows_summary_and_keeps_unchanged(self, seeded_db):
@@ -654,18 +723,20 @@ class TestRunSurveySetup:
         from setup_cog import run_survey_setup
 
         # Pre-seed channel ids on guild_configs + survey config row.
-        config.update_config_field(TEST_GUILD_ID, "survey_channel_id",        300100)
+        config.update_config_field(TEST_GUILD_ID, "survey_channel_id", 300100)
         config.update_config_field(TEST_GUILD_ID, "survey_notify_channel_id", 300200)
         config.save_survey_config(
             TEST_GUILD_ID,
             tab_squad_powers="Squad Powers",
             tab_history="Survey History",
-            questions=[{"key": "q1", "label": "Q1", "type": "text", "help_text": "", "options": []}],
+            questions=[
+                {"key": "q1", "label": "Q1", "type": "text", "help_text": "", "options": []}
+            ],
             intro_message="Take the survey!",
         )
 
         interaction = make_mock_interaction()
-        bot         = AsyncMock()
+        bot = AsyncMock()
 
         make_send_handler(
             interaction.channel,
@@ -674,7 +745,7 @@ class TestRunSurveySetup:
         await run_survey_setup(interaction, bot)
 
         cfg = config.get_config(TEST_GUILD_ID)
-        assert cfg.survey_channel_id        == 300100
+        assert cfg.survey_channel_id == 300100
         assert cfg.survey_notify_channel_id == 300200
 
     @pytest.mark.asyncio
@@ -685,29 +756,37 @@ class TestRunSurveySetup:
         import config
         from setup_cog import run_survey_setup
 
-        config.update_config_field(TEST_GUILD_ID, "survey_channel_id",        300300)
+        config.update_config_field(TEST_GUILD_ID, "survey_channel_id", 300300)
         config.update_config_field(TEST_GUILD_ID, "survey_notify_channel_id", 300400)
         config.save_survey_config(
             TEST_GUILD_ID,
             tab_squad_powers="Squad Powers",
             tab_history="Survey History",
-            questions=[{"key": "q1", "label": "Q1", "type": "text", "help_text": "", "options": []}],
+            questions=[
+                {"key": "q1", "label": "Q1", "type": "text", "help_text": "", "options": []}
+            ],
             intro_message="Take the survey!",
         )
 
         interaction = make_mock_interaction()
-        bot         = AsyncMock()
+        bot = AsyncMock()
 
         new_survey_ch = MagicMock(id=300300)
         new_notify_ch = MagicMock(id=300400)
         ch_views = [
             MagicMock(
-                confirmed=True, cancelled=False, is_current_stale=False,
-                selected_channel=new_survey_ch, wait=AsyncMock(),
+                confirmed=True,
+                cancelled=False,
+                is_current_stale=False,
+                selected_channel=new_survey_ch,
+                wait=AsyncMock(),
             ),
             MagicMock(
-                confirmed=True, cancelled=False, is_current_stale=False,
-                selected_channel=new_notify_ch, wait=AsyncMock(),
+                confirmed=True,
+                cancelled=False,
+                is_current_stale=False,
+                selected_channel=new_notify_ch,
+                wait=AsyncMock(),
             ),
         ]
         ch_iter = iter(ch_views)
@@ -721,15 +800,17 @@ class TestRunSurveySetup:
             ch_call_kwargs.append(kw)
             return next(ch_iter)
 
-        with patch("setup_cog.ChannelSelectStep", side_effect=_record_ch), \
-             patch_keep_or_change(["Squad Powers", "Survey History"]):
+        with (
+            patch("setup_cog.ChannelSelectStep", side_effect=_record_ch),
+            patch_keep_or_change(["Squad Powers", "Survey History"]),
+        ):
             make_send_handler(
                 interaction.channel,
                 view_overrides={
-                    "proceed":      True,
-                    "intro_choice": "keep",     # IntroChoiceView
-                    "choice":       "default",  # QuestionStartView
-                    "cancelled":    False,
+                    "proceed": True,
+                    "intro_choice": "keep",  # IntroChoiceView
+                    "choice": "default",  # QuestionStartView
+                    "cancelled": False,
                 },
             )
             await run_survey_setup(interaction, bot)
@@ -740,6 +821,7 @@ class TestRunSurveySetup:
 
 
 # ── /setup_desertstorm and /setup_canyonstorm ─────────────────────────────────
+
 
 class TestRunStormSetup:
     """Test /setup_desertstorm and /setup_canyonstorm save config correctly."""
@@ -752,24 +834,24 @@ class TestRunStormSetup:
     # sub-flow out with an opted-out config dict so these tests stay
     # focused on the log/post channel save path.
     _STRUCTURED_OPTED_OUT = {
-        "structured_flow_enabled":         False,
-        "power_metric_column":             "B",
-        "power_metric_tab":                "",
-        "power_match_column":              "",
-        "sub_mode":                        "pool",
-        "signup_channel_id":               0,
-        "signup_schedule_cron":            "",
-        "signups_tab":                     "",
-        "rosters_tab":                     "",
-        "attendance_tab":                  "",
-        "strategies_tab":                  "",
-        "member_rules_tab":                "",
-        "poll_day_of_week":                -1,
-        "signup_time":                     "",
-        "power_refresh_dm_enabled":        False,
-        "roster_dm_starter_template":      "",
-        "roster_dm_paired_sub_template":   "",
-        "roster_dm_pool_sub_template":     "",
+        "structured_flow_enabled": False,
+        "power_metric_column": "B",
+        "power_metric_tab": "",
+        "power_match_column": "",
+        "sub_mode": "pool",
+        "signup_channel_id": 0,
+        "signup_schedule_cron": "",
+        "signups_tab": "",
+        "rosters_tab": "",
+        "attendance_tab": "",
+        "strategies_tab": "",
+        "member_rules_tab": "",
+        "poll_day_of_week": -1,
+        "signup_time": "",
+        "power_refresh_dm_enabled": False,
+        "roster_dm_starter_template": "",
+        "roster_dm_paired_sub_template": "",
+        "roster_dm_pool_sub_template": "",
     }
 
     @staticmethod
@@ -782,22 +864,32 @@ class TestRunStormSetup:
         from setup_cog import run_storm_setup
 
         interaction = make_mock_interaction()
-        bot         = AsyncMock()
+        bot = AsyncMock()
 
-        log_ch   = MagicMock(id=555555)
+        log_ch = MagicMock(id=555555)
         log_view = MagicMock(confirmed=True, selected_channel=log_ch, wait=AsyncMock())
 
         async def _skip_participation(*args, **kwargs):
-            return {"enabled": 0, "tab_name": "", "questions": [],
-                    "roster_tab": "", "roster_name_col": 0,
-                    "roster_alias_col": -1, "roster_start_row": 2}
+            return {
+                "enabled": 0,
+                "tab_name": "",
+                "questions": [],
+                "roster_tab": "",
+                "roster_name_col": 0,
+                "roster_alias_col": -1,
+                "roster_start_row": 2,
+            }
 
         # TeamChoiceView (inline) → selected="A", TemplateChoiceView → outcome="default"
-        with patch("setup_cog.ChannelSelectStep", return_value=log_view), \
-             patch("setup_cog._run_storm_participation_step", side_effect=_skip_participation), \
-             patch("setup_cog._run_structured_flow_setup_step",
-                    side_effect=self._fake_structured_optout), \
-             patch_keep_or_change(["DS Assignments"]):
+        with (
+            patch("setup_cog.ChannelSelectStep", return_value=log_view),
+            patch("setup_cog._run_storm_participation_step", side_effect=_skip_participation),
+            patch(
+                "setup_cog._run_structured_flow_setup_step",
+                side_effect=self._fake_structured_optout,
+            ),
+            patch_keep_or_change(["DS Assignments"]),
+        ):
             make_send_handler(
                 interaction.channel,
                 view_overrides={"selected": "A", "outcome": "default"},
@@ -814,21 +906,31 @@ class TestRunStormSetup:
         from setup_cog import run_storm_setup
 
         interaction = make_mock_interaction()
-        bot         = AsyncMock()
+        bot = AsyncMock()
 
-        log_ch   = MagicMock(id=666666)
+        log_ch = MagicMock(id=666666)
         log_view = MagicMock(confirmed=True, selected_channel=log_ch, wait=AsyncMock())
 
         async def _skip_participation(*args, **kwargs):
-            return {"enabled": 0, "tab_name": "", "questions": [],
-                    "roster_tab": "", "roster_name_col": 0,
-                    "roster_alias_col": -1, "roster_start_row": 2}
+            return {
+                "enabled": 0,
+                "tab_name": "",
+                "questions": [],
+                "roster_tab": "",
+                "roster_name_col": 0,
+                "roster_alias_col": -1,
+                "roster_start_row": 2,
+            }
 
-        with patch("setup_cog.ChannelSelectStep", return_value=log_view), \
-             patch("setup_cog._run_storm_participation_step", side_effect=_skip_participation), \
-             patch("setup_cog._run_structured_flow_setup_step",
-                    side_effect=self._fake_structured_optout), \
-             patch_keep_or_change(["CS Assignments"]):
+        with (
+            patch("setup_cog.ChannelSelectStep", return_value=log_view),
+            patch("setup_cog._run_storm_participation_step", side_effect=_skip_participation),
+            patch(
+                "setup_cog._run_structured_flow_setup_step",
+                side_effect=self._fake_structured_optout,
+            ),
+            patch_keep_or_change(["CS Assignments"]),
+        ):
             make_send_handler(
                 interaction.channel,
                 view_overrides={"selected": "A", "outcome": "default"},
@@ -847,7 +949,8 @@ class TestRunStormSetup:
         from setup_cog import run_storm_setup
 
         config.save_storm_config(
-            TEST_GUILD_ID, "DS",
+            TEST_GUILD_ID,
+            "DS",
             tab_name="DS Assignments",
             mail_template="template body",
             timezone="America/New_York",
@@ -857,7 +960,7 @@ class TestRunStormSetup:
         config.update_config_field(TEST_GUILD_ID, "ds_log_channel_id", 555700)
 
         interaction = make_mock_interaction()
-        bot         = AsyncMock()
+        bot = AsyncMock()
 
         make_send_handler(
             interaction.channel,
@@ -867,7 +970,7 @@ class TestRunStormSetup:
 
         # No changes were applied.
         cfg = config.get_storm_config(TEST_GUILD_ID, "DS")
-        assert cfg["log_channel_id"]  == 555700
+        assert cfg["log_channel_id"] == 555700
         assert cfg["post_channel_id"] == 555800
 
     @pytest.mark.asyncio
@@ -879,7 +982,8 @@ class TestRunStormSetup:
         from setup_cog import run_storm_setup
 
         config.save_storm_config(
-            TEST_GUILD_ID, "DS",
+            TEST_GUILD_ID,
+            "DS",
             tab_name="DS Assignments",
             mail_template="template",
             timezone="America/New_York",
@@ -889,18 +993,24 @@ class TestRunStormSetup:
         config.update_config_field(TEST_GUILD_ID, "ds_log_channel_id", 555900)
 
         interaction = make_mock_interaction()
-        bot         = AsyncMock()
+        bot = AsyncMock()
 
-        new_log_ch  = MagicMock(id=555900)
+        new_log_ch = MagicMock(id=555900)
         new_post_ch = MagicMock(id=555950)
         ch_views = [
             MagicMock(
-                confirmed=True, cancelled=False, is_current_stale=False,
-                selected_channel=new_log_ch, wait=AsyncMock(),
+                confirmed=True,
+                cancelled=False,
+                is_current_stale=False,
+                selected_channel=new_log_ch,
+                wait=AsyncMock(),
             ),
             MagicMock(
-                confirmed=True, cancelled=False, is_current_stale=False,
-                selected_channel=new_post_ch, wait=AsyncMock(),
+                confirmed=True,
+                cancelled=False,
+                is_current_stale=False,
+                selected_channel=new_post_ch,
+                wait=AsyncMock(),
             ),
         ]
         ch_iter = iter(ch_views)
@@ -911,21 +1021,29 @@ class TestRunStormSetup:
             return next(ch_iter)
 
         async def _skip_participation(*args, **kwargs):
-            return {"enabled": 0, "tab_name": "", "questions": [],
-                    "roster_tab": "", "roster_name_col": 0,
-                    "roster_alias_col": -1, "roster_start_row": 2}
+            return {
+                "enabled": 0,
+                "tab_name": "",
+                "questions": [],
+                "roster_tab": "",
+                "roster_name_col": 0,
+                "roster_alias_col": -1,
+                "roster_start_row": 2,
+            }
 
-        with patch("setup_cog.ChannelSelectStep", side_effect=_record_ch), \
-             patch("setup_cog._run_storm_participation_step", side_effect=_skip_participation), \
-             patch_keep_or_change(["DS Assignments", ""]):
+        with (
+            patch("setup_cog.ChannelSelectStep", side_effect=_record_ch),
+            patch("setup_cog._run_storm_participation_step", side_effect=_skip_participation),
+            patch_keep_or_change(["DS Assignments", ""]),
+        ):
             make_send_handler(
                 interaction.channel,
                 view_overrides={
                     # Summary -> Edit; team -> A; template -> use default.
-                    "proceed":     True,
-                    "selected":    "A",
-                    "outcome":     "default",
-                    "cancelled":   False,
+                    "proceed": True,
+                    "selected": "A",
+                    "outcome": "default",
+                    "cancelled": False,
                 },
             )
             await run_storm_setup(interaction, bot, "DS")
@@ -949,46 +1067,72 @@ class TestRunStormSetup:
         assert custom_body != DEFAULT_DS_TEMPLATE
 
         config.save_storm_config(
-            TEST_GUILD_ID, "DS",
-            tab_name="DS Assignments", mail_template=custom_body,
+            TEST_GUILD_ID,
+            "DS",
+            tab_name="DS Assignments",
+            mail_template=custom_body,
             timezone="America/New_York",
-            log_channel_id=555700, post_channel_id=555800,
+            log_channel_id=555700,
+            post_channel_id=555800,
         )
         config.save_storm_config(
-            TEST_GUILD_ID, "DS_A",
-            tab_name="DS Assignments", mail_template=custom_body,
+            TEST_GUILD_ID,
+            "DS_A",
+            tab_name="DS Assignments",
+            mail_template=custom_body,
             timezone="America/New_York",
-            log_channel_id=555700, post_channel_id=555800,
+            log_channel_id=555700,
+            post_channel_id=555800,
         )
         config.update_config_field(TEST_GUILD_ID, "ds_log_channel_id", 555700)
 
         interaction = make_mock_interaction()
-        bot         = AsyncMock()
+        bot = AsyncMock()
 
-        log_ch  = MagicMock(id=555700)
+        log_ch = MagicMock(id=555700)
         post_ch = MagicMock(id=555800)
-        ch_iter = iter([
-            MagicMock(confirmed=True, cancelled=False, is_current_stale=False,
-                      selected_channel=log_ch,  wait=AsyncMock()),
-            MagicMock(confirmed=True, cancelled=False, is_current_stale=False,
-                      selected_channel=post_ch, wait=AsyncMock()),
-        ])
+        ch_iter = iter(
+            [
+                MagicMock(
+                    confirmed=True,
+                    cancelled=False,
+                    is_current_stale=False,
+                    selected_channel=log_ch,
+                    wait=AsyncMock(),
+                ),
+                MagicMock(
+                    confirmed=True,
+                    cancelled=False,
+                    is_current_stale=False,
+                    selected_channel=post_ch,
+                    wait=AsyncMock(),
+                ),
+            ]
+        )
 
         async def _skip_participation(*args, **kwargs):
-            return {"enabled": 0, "tab_name": "", "questions": [],
-                    "roster_tab": "", "roster_name_col": 0,
-                    "roster_alias_col": -1, "roster_start_row": 2}
+            return {
+                "enabled": 0,
+                "tab_name": "",
+                "questions": [],
+                "roster_tab": "",
+                "roster_name_col": 0,
+                "roster_alias_col": -1,
+                "roster_start_row": 2,
+            }
 
-        with patch("setup_cog.ChannelSelectStep", side_effect=lambda *a, **kw: next(ch_iter)), \
-             patch("setup_cog._run_storm_participation_step", side_effect=_skip_participation), \
-             patch_keep_or_change(["DS Assignments", ""]):
+        with (
+            patch("setup_cog.ChannelSelectStep", side_effect=lambda *a, **kw: next(ch_iter)),
+            patch("setup_cog._run_storm_participation_step", side_effect=_skip_participation),
+            patch_keep_or_change(["DS Assignments", ""]),
+        ):
             make_send_handler(
                 interaction.channel,
                 view_overrides={
                     # Summary -> Edit; team -> A; template -> keep current.
-                    "proceed":  True,
+                    "proceed": True,
                     "selected": "A",
-                    "outcome":  "keep",
+                    "outcome": "keep",
                     "cancelled": False,
                 },
             )
@@ -1006,6 +1150,7 @@ class TestRunStormSetup:
 
 # ── /setup_growth ─────────────────────────────────────────────────────────────
 
+
 class TestRunGrowthSetup:
     """Test /setup_growth saves growth config correctly."""
 
@@ -1015,7 +1160,7 @@ class TestRunGrowthSetup:
         from setup_cog import run_growth_setup
 
         interaction = make_mock_interaction()
-        bot         = AsyncMock()
+        bot = AsyncMock()
 
         yn = MagicMock(selected=False, wait=AsyncMock())
 
@@ -1034,16 +1179,20 @@ class TestRunGrowthSetup:
         # Pre-seed at least one metric so the MetricsActionView's "Done"
         # button isn't disabled when the wizard reaches it.
         config.save_growth_config(
-            TEST_GUILD_ID, enabled=0,
-            tab_source="Squad Powers", name_col="A",
+            TEST_GUILD_ID,
+            enabled=0,
+            tab_source="Squad Powers",
+            name_col="A",
             metrics=[{"label": "1st Squad Power", "col": "E"}],
             tab_growth="Growth Tracking",
-            snapshot_frequency="monthly", snapshot_day=1, snapshot_interval=30,
+            snapshot_frequency="monthly",
+            snapshot_day=1,
+            snapshot_interval=30,
             data_start_row=2,
         )
 
         interaction = make_mock_interaction()
-        bot         = AsyncMock()
+        bot = AsyncMock()
 
         yn = MagicMock(selected=True, wait=AsyncMock())
 
@@ -1055,21 +1204,20 @@ class TestRunGrowthSetup:
         # 5. Snapshot Day   → "1"
         keep_values = ["Squad Powers", "2", "A", "Growth Tracking", "1"]
 
-        with patch("setup_cog.YesNoView", return_value=yn), \
-             patch_keep_or_change(keep_values):
+        with patch("setup_cog.YesNoView", return_value=yn), patch_keep_or_change(keep_values):
             # MetricsActionView and FrequencyView are inline; resolve via
             # send-handler with their respective attribute overrides.
             make_send_handler(
                 interaction.channel,
                 view_overrides={
-                    "choice":   "done",      # MetricsActionView
-                    "selected": "monthly",   # FrequencyView
+                    "choice": "done",  # MetricsActionView
+                    "selected": "monthly",  # FrequencyView
                 },
             )
             await run_growth_setup(interaction, bot)
 
         cfg = config.get_growth_config(TEST_GUILD_ID)
-        assert cfg["enabled"]            == 1
+        assert cfg["enabled"] == 1
         assert cfg["snapshot_frequency"] == "monthly"
 
     @pytest.mark.asyncio
@@ -1081,16 +1229,20 @@ class TestRunGrowthSetup:
         from setup_cog import run_growth_setup
 
         config.save_growth_config(
-            TEST_GUILD_ID, enabled=1,
-            tab_source="Squad Powers", name_col="A",
+            TEST_GUILD_ID,
+            enabled=1,
+            tab_source="Squad Powers",
+            name_col="A",
             metrics=[{"label": "1st Squad Power", "col": "E"}],
             tab_growth="Growth Tracking",
-            snapshot_frequency="monthly", snapshot_day=15, snapshot_interval=30,
+            snapshot_frequency="monthly",
+            snapshot_day=15,
+            snapshot_interval=30,
             data_start_row=2,
         )
 
         interaction = make_mock_interaction()
-        bot         = AsyncMock()
+        bot = AsyncMock()
 
         make_send_handler(
             interaction.channel,
@@ -1100,7 +1252,7 @@ class TestRunGrowthSetup:
 
         # Saved values unchanged.
         cfg = config.get_growth_config(TEST_GUILD_ID)
-        assert cfg["enabled"]      == 1
+        assert cfg["enabled"] == 1
         assert cfg["snapshot_day"] == 15
 
     @pytest.mark.asyncio
@@ -1112,24 +1264,30 @@ class TestRunGrowthSetup:
         from setup_cog import run_growth_setup
 
         config.save_growth_config(
-            TEST_GUILD_ID, enabled=1,
-            tab_source="Squad Powers", name_col="A",
+            TEST_GUILD_ID,
+            enabled=1,
+            tab_source="Squad Powers",
+            name_col="A",
             metrics=[{"label": "1st Squad Power", "col": "E"}],
             tab_growth="Growth Tracking",
-            snapshot_frequency="monthly", snapshot_day=1, snapshot_interval=30,
+            snapshot_frequency="monthly",
+            snapshot_day=1,
+            snapshot_interval=30,
             data_start_row=2,
         )
 
         interaction = make_mock_interaction()
-        bot         = AsyncMock()
-        enabled_no  = MagicMock(selected=False, cancelled=False, wait=AsyncMock())
-        captured    = {}
+        bot = AsyncMock()
+        enabled_no = MagicMock(selected=False, cancelled=False, wait=AsyncMock())
+        captured = {}
 
         async def fake_disable(channel, **kwargs):
             captured.update(kwargs)
 
-        with patch("setup_cog.YesNoView",              return_value=enabled_no), \
-             patch("setup_cog.ask_disable_with_clear", side_effect=fake_disable):
+        with (
+            patch("setup_cog.YesNoView", return_value=enabled_no),
+            patch("setup_cog.ask_disable_with_clear", side_effect=fake_disable),
+        ):
             make_send_handler(
                 interaction.channel,
                 # Summary -> proceed=True so we hit Step 1.
@@ -1137,8 +1295,8 @@ class TestRunGrowthSetup:
             )
             await run_growth_setup(interaction, bot)
 
-        assert captured["feature_label"]   == "Growth tracking"
-        assert captured["setup_command"]   == "setup → 📈 Growth"
+        assert captured["feature_label"] == "Growth tracking"
+        assert captured["setup_command"] == "setup → 📈 Growth"
         assert captured["had_prior_config"] is True
         # clear_fn wipes the DB row when invoked.
         captured["clear_fn"]()
@@ -1153,15 +1311,17 @@ class TestRunGrowthSetup:
         config.clear_growth_config(TEST_GUILD_ID)
 
         interaction = make_mock_interaction()
-        bot         = AsyncMock()
-        enabled_no  = MagicMock(selected=False, cancelled=False, wait=AsyncMock())
-        captured    = {}
+        bot = AsyncMock()
+        enabled_no = MagicMock(selected=False, cancelled=False, wait=AsyncMock())
+        captured = {}
 
         async def fake_disable(channel, **kwargs):
             captured.update(kwargs)
 
-        with patch("setup_cog.YesNoView",              return_value=enabled_no), \
-             patch("setup_cog.ask_disable_with_clear", side_effect=fake_disable):
+        with (
+            patch("setup_cog.YesNoView", return_value=enabled_no),
+            patch("setup_cog.ask_disable_with_clear", side_effect=fake_disable),
+        ):
             make_send_handler(interaction.channel)
             await run_growth_setup(interaction, bot)
 
@@ -1169,6 +1329,7 @@ class TestRunGrowthSetup:
 
 
 # ── /setup_shiny_tasks ────────────────────────────────────────────────────────
+
 
 class TestRunShinyTasksSetup:
     """Test /setup_shiny_tasks re-entry: summary embed, current_id
@@ -1188,12 +1349,13 @@ class TestRunShinyTasksSetup:
             enabled=1,
             channel_id=900000,
             post_time="09:00",
-            server_min=677, server_max=804,
+            server_min=677,
+            server_max=804,
             message_template="",
         )
 
         interaction = make_mock_interaction()
-        bot         = AsyncMock()
+        bot = AsyncMock()
 
         make_send_handler(
             interaction.channel,
@@ -1202,7 +1364,7 @@ class TestRunShinyTasksSetup:
         await run_shiny_tasks_setup(interaction, bot)
 
         cfg = config.get_shiny_tasks_config(TEST_GUILD_ID)
-        assert cfg["enabled"]    == 1
+        assert cfg["enabled"] == 1
         assert cfg["channel_id"] == 900000
 
     @pytest.mark.asyncio
@@ -1217,40 +1379,49 @@ class TestRunShinyTasksSetup:
             enabled=1,
             channel_id=900100,
             post_time="09:00",
-            server_min=677, server_max=804,
+            server_min=677,
+            server_max=804,
             message_template="",
         )
 
         interaction = make_mock_interaction()
-        bot         = AsyncMock()
+        bot = AsyncMock()
 
         new_channel = MagicMock(id=900100)
         ch_view = MagicMock(
-            confirmed=True, cancelled=False, is_current_stale=False,
-            selected_channel=new_channel, wait=AsyncMock(),
+            confirmed=True,
+            cancelled=False,
+            is_current_stale=False,
+            selected_channel=new_channel,
+            wait=AsyncMock(),
         )
         # Step 1 -> Yes; final ConfirmView -> Yes.
         enable_yes = MagicMock(selected=True, cancelled=False, wait=AsyncMock())
-        confirm    = MagicMock(confirmed=True, cancelled=False, wait=AsyncMock())
+        confirm = MagicMock(confirmed=True, cancelled=False, wait=AsyncMock())
         # ModalLaunchView (Step 3 server-range) auto-confirmed; its modal
         # has min_value / max_value pre-filled.
         range_modal = MagicMock(min_value="677", max_value="804", value="677 – 804")
         range_launcher = MagicMock(
-            confirmed=True, cancelled=False, wait=AsyncMock(),
+            confirmed=True,
+            cancelled=False,
+            wait=AsyncMock(),
             modal=range_modal,
             children=[MagicMock()],  # touched by `range_launcher.children[0].label = ...`
         )
 
         ch_call_kwargs = []
+
         def _record_ch(*a, **kw):
             ch_call_kwargs.append(kw)
             return ch_view
 
-        with patch("setup_cog.ChannelSelectStep", side_effect=_record_ch), \
-             patch("setup_cog.YesNoView",         return_value=enable_yes), \
-             patch("setup_cog.ConfirmView",       return_value=confirm), \
-             patch("setup_cog.ModalLaunchView",   return_value=range_launcher), \
-             patch_keep_or_change(["9:00am", ""]):  # Step 4 time + Step 5 template
+        with (
+            patch("setup_cog.ChannelSelectStep", side_effect=_record_ch),
+            patch("setup_cog.YesNoView", return_value=enable_yes),
+            patch("setup_cog.ConfirmView", return_value=confirm),
+            patch("setup_cog.ModalLaunchView", return_value=range_launcher),
+            patch_keep_or_change(["9:00am", ""]),
+        ):  # Step 4 time + Step 5 template
             make_send_handler(
                 interaction.channel,
                 view_overrides={"proceed": True, "cancelled": False},
@@ -1273,28 +1444,31 @@ class TestRunShinyTasksSetup:
             enabled=1,
             channel_id=900200,
             post_time="09:00",
-            server_min=1, server_max=1000,
+            server_min=1,
+            server_max=1000,
             message_template="",
         )
 
         interaction = make_mock_interaction()
-        bot         = AsyncMock()
-        enabled_no  = MagicMock(selected=False, cancelled=False, wait=AsyncMock())
-        captured    = {}
+        bot = AsyncMock()
+        enabled_no = MagicMock(selected=False, cancelled=False, wait=AsyncMock())
+        captured = {}
 
         async def fake_disable(channel, **kwargs):
             captured.update(kwargs)
 
-        with patch("setup_cog.YesNoView",              return_value=enabled_no), \
-             patch("setup_cog.ask_disable_with_clear", side_effect=fake_disable):
+        with (
+            patch("setup_cog.YesNoView", return_value=enabled_no),
+            patch("setup_cog.ask_disable_with_clear", side_effect=fake_disable),
+        ):
             make_send_handler(
                 interaction.channel,
                 view_overrides={"proceed": True, "cancelled": False},
             )
             await run_shiny_tasks_setup(interaction, bot)
 
-        assert captured["feature_label"]    == "Shiny tasks announcement"
-        assert captured["setup_command"]    == "setup → 🌟 Shiny Tasks"
+        assert captured["feature_label"] == "Shiny tasks announcement"
+        assert captured["setup_command"] == "setup → 🌟 Shiny Tasks"
         assert captured["had_prior_config"] is True
         captured["clear_fn"]()
         assert config.has_shiny_tasks_config(TEST_GUILD_ID) is False
@@ -1308,15 +1482,17 @@ class TestRunShinyTasksSetup:
         config.clear_shiny_tasks_config(TEST_GUILD_ID)
 
         interaction = make_mock_interaction()
-        bot         = AsyncMock()
-        enabled_no  = MagicMock(selected=False, cancelled=False, wait=AsyncMock())
-        captured    = {}
+        bot = AsyncMock()
+        enabled_no = MagicMock(selected=False, cancelled=False, wait=AsyncMock())
+        captured = {}
 
         async def fake_disable(channel, **kwargs):
             captured.update(kwargs)
 
-        with patch("setup_cog.YesNoView",              return_value=enabled_no), \
-             patch("setup_cog.ask_disable_with_clear", side_effect=fake_disable):
+        with (
+            patch("setup_cog.YesNoView", return_value=enabled_no),
+            patch("setup_cog.ask_disable_with_clear", side_effect=fake_disable),
+        ):
             make_send_handler(interaction.channel)
             await run_shiny_tasks_setup(interaction, bot)
 
@@ -1324,6 +1500,7 @@ class TestRunShinyTasksSetup:
 
 
 # ── /setup_growth_breakdown ───────────────────────────────────────────────────
+
 
 class TestRunGrowthBreakdownSetup:
     """Test /setup_growth_breakdown threads current_id through the
@@ -1340,11 +1517,15 @@ class TestRunGrowthBreakdownSetup:
         # Prereq: growth must be enabled with metrics for the breakdown
         # wizard to proceed past its guard.
         config.save_growth_config(
-            TEST_GUILD_ID, enabled=1,
-            tab_source="Squad Powers", name_col="A",
+            TEST_GUILD_ID,
+            enabled=1,
+            tab_source="Squad Powers",
+            name_col="A",
             metrics=[{"label": "1st Squad Power", "col": "E"}],
             tab_growth="Growth Tracking",
-            snapshot_frequency="monthly", snapshot_day=1, snapshot_interval=30,
+            snapshot_frequency="monthly",
+            snapshot_day=1,
+            snapshot_interval=30,
             data_start_row=2,
         )
         config.save_growth_breakdown_config(
@@ -1357,7 +1538,7 @@ class TestRunGrowthBreakdownSetup:
         )
 
         interaction = make_mock_interaction()
-        bot         = AsyncMock()
+        bot = AsyncMock()
 
         make_send_handler(
             interaction.channel,
@@ -1367,7 +1548,7 @@ class TestRunGrowthBreakdownSetup:
 
         cfg = config.get_growth_config(TEST_GUILD_ID)
         assert cfg["breakdown_post_channel_id"] == 800800
-        assert cfg["tab_breakdown"]             == "My Breakdown"
+        assert cfg["tab_breakdown"] == "My Breakdown"
 
     @pytest.mark.asyncio
     async def test_existing_config_threads_post_channel_current_id(self, seeded_db):
@@ -1378,11 +1559,15 @@ class TestRunGrowthBreakdownSetup:
         from setup_cog import run_growth_breakdown_setup
 
         config.save_growth_config(
-            TEST_GUILD_ID, enabled=1,
-            tab_source="Squad Powers", name_col="A",
+            TEST_GUILD_ID,
+            enabled=1,
+            tab_source="Squad Powers",
+            name_col="A",
             metrics=[{"label": "1st Squad Power", "col": "E"}],
             tab_growth="Growth Tracking",
-            snapshot_frequency="monthly", snapshot_day=1, snapshot_interval=30,
+            snapshot_frequency="monthly",
+            snapshot_day=1,
+            snapshot_interval=30,
             data_start_row=2,
         )
         config.save_growth_breakdown_config(
@@ -1395,13 +1580,16 @@ class TestRunGrowthBreakdownSetup:
         )
 
         interaction = make_mock_interaction()
-        bot         = AsyncMock()
+        bot = AsyncMock()
 
         # ChannelSelectStep capture + auto-confirm.
         new_channel = MagicMock(id=800900)
         ch_view = MagicMock(
-            confirmed=True, cancelled=False, is_current_stale=False,
-            selected_channel=new_channel, wait=AsyncMock(),
+            confirmed=True,
+            cancelled=False,
+            is_current_stale=False,
+            selected_channel=new_channel,
+            wait=AsyncMock(),
         )
         ch_call_kwargs = []
 
@@ -1412,17 +1600,19 @@ class TestRunGrowthBreakdownSetup:
         # AutoPost YesNoView -> Yes.
         autopost_yes = MagicMock(selected=True, cancelled=False, wait=AsyncMock())
 
-        with patch("setup_cog.YesNoView",         return_value=autopost_yes), \
-             patch("setup_cog.ChannelSelectStep", side_effect=_record_ch), \
-             patch_keep_or_change(["Growth Breakdown"]):  # Step 1 tab name
+        with (
+            patch("setup_cog.YesNoView", return_value=autopost_yes),
+            patch("setup_cog.ChannelSelectStep", side_effect=_record_ch),
+            patch_keep_or_change(["Growth Breakdown"]),
+        ):  # Step 1 tab name
             # Summary proceed=True; inline bucket-filter / thresholds /
             # labels views auto-resolve via send-handler overrides.
             make_send_handler(
                 interaction.channel,
                 view_overrides={
-                    "proceed":  True,
-                    "selected": [],          # BucketFilterView -> "use all"
-                    "choice":   "defaults",  # ThresholdsChoiceView + LabelsChoiceView
+                    "proceed": True,
+                    "selected": [],  # BucketFilterView -> "use all"
+                    "choice": "defaults",  # ThresholdsChoiceView + LabelsChoiceView
                     "cancelled": False,
                 },
             )
@@ -1440,22 +1630,28 @@ class TestRunGrowthBreakdownSetup:
         from setup_cog import run_growth_breakdown_setup
 
         config.save_growth_config(
-            TEST_GUILD_ID, enabled=1,
-            tab_source="Squad Powers", name_col="A",
+            TEST_GUILD_ID,
+            enabled=1,
+            tab_source="Squad Powers",
+            name_col="A",
             metrics=[{"label": "1st Squad Power", "col": "E"}],
             tab_growth="Growth Tracking",
-            snapshot_frequency="monthly", snapshot_day=1, snapshot_interval=30,
+            snapshot_frequency="monthly",
+            snapshot_day=1,
+            snapshot_interval=30,
             data_start_row=2,
         )
         # No save_growth_breakdown_config — defaults all the way.
 
         interaction = make_mock_interaction()
-        bot         = AsyncMock()
+        bot = AsyncMock()
         # AutoPost -> No so we skip the channel/filter steps.
         autopost_no = MagicMock(selected=False, cancelled=False, wait=AsyncMock())
 
-        with patch("setup_cog.YesNoView", return_value=autopost_no), \
-             patch_keep_or_change(["Growth Breakdown"]):
+        with (
+            patch("setup_cog.YesNoView", return_value=autopost_no),
+            patch_keep_or_change(["Growth Breakdown"]),
+        ):
             make_send_handler(
                 interaction.channel,
                 view_overrides={
@@ -1463,7 +1659,7 @@ class TestRunGrowthBreakdownSetup:
                     # circuit and we'd never reach the auto-post toggle.
                     # We assert it didn't fire by checking the breakdown
                     # config actually got saved.
-                    "choice":   "defaults",
+                    "choice": "defaults",
                     "cancelled": False,
                 },
             )
@@ -1473,10 +1669,11 @@ class TestRunGrowthBreakdownSetup:
         # wizard walked all the way through.
         cfg = config.get_growth_config(TEST_GUILD_ID)
         assert cfg["breakdown_post_channel_id"] == 0
-        assert cfg["tab_breakdown"]             == "Growth Breakdown"
+        assert cfg["tab_breakdown"] == "Growth Breakdown"
 
 
 # ── /setup_events ─────────────────────────────────────────────────────────────
+
 
 class TestRunEventSetup:
     """Test /setup_events threads the saved channel ids through to the
@@ -1493,25 +1690,31 @@ class TestRunEventSetup:
         import config
         from setup_cog import run_event_setup
 
-        config.update_config_field(TEST_GUILD_ID, "event_draft_channel_id",    700001)
+        config.update_config_field(TEST_GUILD_ID, "event_draft_channel_id", 700001)
         config.update_config_field(TEST_GUILD_ID, "event_announce_channel_id", 700002)
-        config.update_config_field(TEST_GUILD_ID, "event_draft_time",          "12:00")
-        config.update_config_field(TEST_GUILD_ID, "event_five_min_warning",    1)
+        config.update_config_field(TEST_GUILD_ID, "event_draft_time", "12:00")
+        config.update_config_field(TEST_GUILD_ID, "event_five_min_warning", 1)
 
         interaction = make_mock_interaction()
-        bot         = AsyncMock()
+        bot = AsyncMock()
 
-        new_draft = MagicMock(name="draft");    new_draft.id = 700001
-        new_ann   = MagicMock(name="announce"); new_ann.id   = 700002
+        new_draft = MagicMock(name="draft")
+        new_draft.id = 700001
+        new_ann = MagicMock(name="announce")
+        new_ann.id = 700002
         draft_view = MagicMock(
-            confirmed=True, cancelled=False,
+            confirmed=True,
+            cancelled=False,
             is_current_stale=False,
-            selected_channel=new_draft, wait=AsyncMock(),
+            selected_channel=new_draft,
+            wait=AsyncMock(),
         )
         ann_view = MagicMock(
-            confirmed=True, cancelled=False,
+            confirmed=True,
+            cancelled=False,
             is_current_stale=False,
-            selected_channel=new_ann, wait=AsyncMock(),
+            selected_channel=new_ann,
+            wait=AsyncMock(),
         )
 
         warn_view = MagicMock(selected=True, cancelled=False, wait=AsyncMock())
@@ -1523,9 +1726,11 @@ class TestRunEventSetup:
             ch_call_kwargs.append(kw)
             return next(ch_iter)
 
-        with patch("setup_cog.ChannelSelectStep", side_effect=_record_ch), \
-             patch("setup_cog.YesNoView",         return_value=warn_view), \
-             patch_keep_or_change(["12:00"]):
+        with (
+            patch("setup_cog.ChannelSelectStep", side_effect=_record_ch),
+            patch("setup_cog.YesNoView", return_value=warn_view),
+            patch_keep_or_change(["12:00"]),
+        ):
             make_send_handler(interaction.channel)
             await run_event_setup(interaction, bot)
 
@@ -1535,6 +1740,7 @@ class TestRunEventSetup:
 
 
 # ── Premium tier caps (Phase 1) ───────────────────────────────────────────────
+
 
 @pytest.mark.free_tier_only
 class TestPremiumCaps:
@@ -1550,31 +1756,34 @@ class TestPremiumCaps:
         import config
         from events_hub import _open_create_picker
 
-        config.update_config_field(TEST_GUILD_ID, "event_draft_channel_id",    900001)
+        config.update_config_field(TEST_GUILD_ID, "event_draft_channel_id", 900001)
         config.update_config_field(TEST_GUILD_ID, "event_announce_channel_id", 900002)
 
         for i in range(5):
-            config.save_guild_event(TEST_GUILD_ID, {
-                "short_key":               f"event_{i}",
-                "name":                    f"Event {i}",
-                "timezone":                "America/New_York",
-                "default_time":            "12:00",
-                "announcement_blurb":      "test",
-                "schedule_type":           "manual",
-                "anchor_date":             "",
-                "interval_days":           0,
-                "draft_channel_id":        900001,
-                "announcement_channel_id": 900002,
-                "draft_time":              "12:00",
-                "five_min_warning":        1,
-                "active":                  1,
-            })
+            config.save_guild_event(
+                TEST_GUILD_ID,
+                {
+                    "short_key": f"event_{i}",
+                    "name": f"Event {i}",
+                    "timezone": "America/New_York",
+                    "default_time": "12:00",
+                    "announcement_blurb": "test",
+                    "schedule_type": "manual",
+                    "anchor_date": "",
+                    "interval_days": 0,
+                    "draft_channel_id": 900001,
+                    "announcement_channel_id": 900002,
+                    "draft_time": "12:00",
+                    "five_min_warning": 1,
+                    "active": 1,
+                },
+            )
 
         interaction = make_mock_interaction()
-        bot         = AsyncMock()
+        bot = AsyncMock()
 
-        sent_embeds  = []
-        sent_views   = []
+        sent_embeds = []
+        sent_views = []
 
         async def fake_response_send(content=None, embed=None, view=None, **kw):
             if embed is not None:
@@ -1602,8 +1811,10 @@ class TestPremiumCaps:
         """A premium-bypass guild has no event-count cap."""
         from tests.constants import PREMIUM_TEST_GUILD_ID
         import importlib
+
         monkeypatch.setenv("PREMIUM_BYPASS_GUILD_IDS", str(PREMIUM_TEST_GUILD_ID))
         import premium
+
         importlib.reload(premium)
         try:
             cap = await premium.get_limit("events", PREMIUM_TEST_GUILD_ID)
@@ -1618,36 +1829,40 @@ class TestPremiumCaps:
         from setup_cog import run_train_setup
 
         interaction = make_mock_interaction()
-        bot         = AsyncMock()
+        bot = AsyncMock()
 
         yn_views = [
-            MagicMock(selected=True,  wait=AsyncMock()),
+            MagicMock(selected=True, wait=AsyncMock()),
             MagicMock(selected=False, wait=AsyncMock()),
         ]
 
         # Themes/tones now flow through ask_keep_or_change (Define my own
         # path returns the user's typed string). The first response feeds
         # the tab-name step; the next two feed themes and tones.
-        with patch("setup_cog.YesNoView", side_effect=yn_views), \
-             patch_keep_or_change([
-                 "Train Schedule",
-                 "T1, T2, T3, T4, T5, T6",
-                 "tn1, tn2, tn3, tn4",
-             ]):
+        with (
+            patch("setup_cog.YesNoView", side_effect=yn_views),
+            patch_keep_or_change(
+                [
+                    "Train Schedule",
+                    "T1, T2, T3, T4, T5, T6",
+                    "tn1, tn2, tn3, tn4",
+                ]
+            ),
+        ):
             make_send_handler(
                 interaction.channel,
                 view_overrides={
-                    "selected":      "tn1",
-                    "skipped":       True,
+                    "selected": "tn1",
+                    "skipped": True,
                     # New template manager exits via Done button
-                    "action":        "done",
+                    "action": "done",
                 },
             )
             await run_train_setup(interaction, bot)
 
         cfg = config.get_train_config(TEST_GUILD_ID)
         assert cfg["themes"] == ["T1", "T2", "T3"], f"Got {cfg['themes']!r}"
-        assert cfg["tones"]  == ["tn1", "tn2", "tn3"], f"Got {cfg['tones']!r}"
+        assert cfg["tones"] == ["tn1", "tn2", "tn3"], f"Got {cfg['tones']!r}"
 
     @pytest.mark.asyncio
     async def test_growth_custom_interval_disabled_for_free(self, seeded_db):
@@ -1656,16 +1871,20 @@ class TestPremiumCaps:
         from setup_cog import run_growth_setup
 
         config.save_growth_config(
-            TEST_GUILD_ID, enabled=0,
-            tab_source="Squad Powers", name_col="A",
+            TEST_GUILD_ID,
+            enabled=0,
+            tab_source="Squad Powers",
+            name_col="A",
             metrics=[{"label": "1st Squad Power", "col": "E"}],
             tab_growth="Growth Tracking",
-            snapshot_frequency="monthly", snapshot_day=1, snapshot_interval=30,
+            snapshot_frequency="monthly",
+            snapshot_day=1,
+            snapshot_interval=30,
             data_start_row=2,
         )
 
         interaction = make_mock_interaction()
-        bot         = AsyncMock()
+        bot = AsyncMock()
 
         captured_freq_view = {"view": None}
 
@@ -1673,17 +1892,22 @@ class TestPremiumCaps:
             if view is not None and hasattr(view, "monthly") and hasattr(view, "custom"):
                 captured_freq_view["view"] = view
             if view is not None:
-                _resolve_view(view, {
-                    "selected": "monthly",
-                    "choice":   "done",
-                })
+                _resolve_view(
+                    view,
+                    {
+                        "selected": "monthly",
+                        "choice": "done",
+                    },
+                )
             return MagicMock(id=1)
 
         interaction.channel.send = AsyncMock(side_effect=fake_send)
 
         yn = MagicMock(selected=True, wait=AsyncMock())
-        with patch("setup_cog.YesNoView", return_value=yn), \
-             patch_keep_or_change(["Squad Powers", "2", "A", "Growth Tracking", "1"]):
+        with (
+            patch("setup_cog.YesNoView", return_value=yn),
+            patch_keep_or_change(["Squad Powers", "2", "A", "Growth Tracking", "1"]),
+        ):
             await run_growth_setup(interaction, bot)
 
         freq_view = captured_freq_view["view"]

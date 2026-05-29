@@ -10,6 +10,7 @@ from unittest.mock import AsyncMock, MagicMock
 import pytest
 
 import sys
+
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__)))))
 
 from tests.conftest import TEST_GUILD_ID
@@ -17,6 +18,7 @@ from tests.constants import PREMIUM_TEST_GUILD_ID
 
 
 # ── Fixtures ──────────────────────────────────────────────────────────────────
+
 
 @pytest.fixture
 def fresh_premium(monkeypatch, temp_db):
@@ -29,6 +31,7 @@ def fresh_premium(monkeypatch, temp_db):
     for var in ("PREMIUM_SKU_ID", "FORCE_PREMIUM", "PREMIUM_BYPASS_GUILD_IDS"):
         monkeypatch.delenv(var, raising=False)
     import premium as _premium
+
     importlib.reload(_premium)
     _premium.clear_cache()
     yield _premium
@@ -51,6 +54,7 @@ def fresh_premium_with_bypass(monkeypatch, temp_db):
         monkeypatch.delenv(var, raising=False)
     monkeypatch.setenv("PREMIUM_BYPASS_GUILD_IDS", str(PREMIUM_TEST_GUILD_ID))
     import premium as _premium
+
     importlib.reload(_premium)
     _premium.clear_cache()
     yield _premium
@@ -74,6 +78,7 @@ def _isolate_premium_env(monkeypatch, temp_db):
     for var in ("PREMIUM_SKU_ID", "FORCE_PREMIUM", "PREMIUM_BYPASS_GUILD_IDS"):
         monkeypatch.delenv(var, raising=False)
     import premium as _premium
+
     importlib.reload(_premium)
     _premium.clear_cache()
     yield
@@ -85,7 +90,7 @@ def _isolate_premium_env(monkeypatch, temp_db):
 
 def _make_entitlement(sku_id: int, deleted: bool = False, ends_at=None):
     ent = MagicMock()
-    ent.sku_id  = sku_id
+    ent.sku_id = sku_id
     ent.deleted = deleted
     ent.ends_at = ends_at
     return ent
@@ -93,8 +98,8 @@ def _make_entitlement(sku_id: int, deleted: bool = False, ends_at=None):
 
 # ── Always-premium short-circuits ─────────────────────────────────────────────
 
-class TestAlwaysPremiumShortCircuits:
 
+class TestAlwaysPremiumShortCircuits:
     @pytest.mark.asyncio
     async def test_no_env_var_no_premium(self, fresh_premium):
         """With no env vars set, no guild is premium by default.
@@ -111,6 +116,7 @@ class TestAlwaysPremiumShortCircuits:
         premium in production without a Discord subscription."""
         monkeypatch.setenv("PREMIUM_BYPASS_GUILD_IDS", str(PREMIUM_TEST_GUILD_ID))
         import premium as _premium
+
         importlib.reload(_premium)
         try:
             assert await _premium.is_premium(PREMIUM_TEST_GUILD_ID) is True
@@ -122,6 +128,7 @@ class TestAlwaysPremiumShortCircuits:
     async def test_force_premium_env_var(self, monkeypatch):
         monkeypatch.setenv("FORCE_PREMIUM", "1")
         import premium as _premium
+
         importlib.reload(_premium)
         try:
             assert await _premium.is_premium(TEST_GUILD_ID) is True
@@ -133,6 +140,7 @@ class TestAlwaysPremiumShortCircuits:
     async def test_bypass_guild_ids_env_var(self, monkeypatch):
         monkeypatch.setenv("PREMIUM_BYPASS_GUILD_IDS", "111,222,333")
         import premium as _premium
+
         importlib.reload(_premium)
         try:
             assert await _premium.is_premium(111) is True
@@ -146,6 +154,7 @@ class TestAlwaysPremiumShortCircuits:
     async def test_bypass_guild_ids_ignores_blank_and_garbage(self, monkeypatch):
         monkeypatch.setenv("PREMIUM_BYPASS_GUILD_IDS", "111, ,not-a-number,222")
         import premium as _premium
+
         importlib.reload(_premium)
         try:
             assert await _premium.is_premium(111) is True
@@ -162,8 +171,8 @@ class TestAlwaysPremiumShortCircuits:
 #   else → look up assigned user → user_has_active_subscription(...)
 # Interaction-level entitlements no longer participate as a cheap path.
 
-class TestAssignmentLayeredIsPremium:
 
+class TestAssignmentLayeredIsPremium:
     @pytest.mark.asyncio
     async def test_no_assignment_means_not_premium(self, fresh_premium):
         """Empty assignment table → no guild is premium even with SKU set."""
@@ -173,6 +182,7 @@ class TestAssignmentLayeredIsPremium:
     async def test_assigned_user_with_active_sub_grants_premium(self, monkeypatch):
         monkeypatch.setenv("PREMIUM_SKU_ID", "12345")
         import premium as _premium
+
         importlib.reload(_premium)
         try:
             user_id = 555000111
@@ -194,6 +204,7 @@ class TestAssignmentLayeredIsPremium:
             # discord.py signature guard — bind kwargs against real signature.
             import inspect
             import discord
+
             sig = inspect.signature(discord.Client.entitlements)
             sig.bind_partial(bot, **call_kwargs)
         finally:
@@ -205,6 +216,7 @@ class TestAssignmentLayeredIsPremium:
         sub) → guild reverts to free."""
         monkeypatch.setenv("PREMIUM_SKU_ID", "12345")
         import premium as _premium
+
         importlib.reload(_premium)
         try:
             _premium.assign(555000111, TEST_GUILD_ID)
@@ -229,6 +241,7 @@ class TestAssignmentLayeredIsPremium:
         assignment layer + bot-side lookup count."""
         monkeypatch.setenv("PREMIUM_SKU_ID", "12345")
         import premium as _premium
+
         importlib.reload(_premium)
         try:
             interaction = MagicMock()
@@ -253,12 +266,13 @@ class TestAssignmentLayeredIsPremium:
 
 # ── Caching of is_premium / user-subscription ────────────────────────────────
 
-class TestPremiumCaching:
 
+class TestPremiumCaching:
     @pytest.mark.asyncio
     async def test_repeated_is_premium_only_calls_discord_once(self, monkeypatch):
         monkeypatch.setenv("PREMIUM_SKU_ID", "12345")
         import premium as _premium
+
         importlib.reload(_premium)
         try:
             _premium.assign(555000111, TEST_GUILD_ID)
@@ -283,6 +297,7 @@ class TestPremiumCaching:
     async def test_negative_result_also_cached(self, monkeypatch):
         monkeypatch.setenv("PREMIUM_SKU_ID", "12345")
         import premium as _premium
+
         importlib.reload(_premium)
         try:
             _premium.assign(555000111, TEST_GUILD_ID)
@@ -307,6 +322,7 @@ class TestPremiumCaching:
     async def test_api_errors_are_swallowed_and_not_cached(self, monkeypatch):
         monkeypatch.setenv("PREMIUM_SKU_ID", "12345")
         import premium as _premium
+
         importlib.reload(_premium)
         try:
             _premium.assign(555000111, TEST_GUILD_ID)
@@ -336,6 +352,7 @@ class TestPremiumCaching:
         """
         monkeypatch.setenv("PREMIUM_SKU_ID", "12345")
         import premium as _premium
+
         importlib.reload(_premium)
         try:
             _premium.assign(555000111, TEST_GUILD_ID)
@@ -366,6 +383,7 @@ class TestPremiumCaching:
         """
         monkeypatch.setenv("PREMIUM_SKU_ID", "12345")
         import premium as _premium
+
         importlib.reload(_premium)
         try:
             _premium.assign(555000111, TEST_GUILD_ID)
@@ -388,6 +406,7 @@ class TestPremiumCaching:
 
 # ── Silent-fallback counters ──────────────────────────────────────────────────
 
+
 class TestSilentFallbackCounts:
     """Each silent-fallback path (no SKU, no bot, no assignment table)
     logs once per process and increments a counter on every subsequent
@@ -397,13 +416,16 @@ class TestSilentFallbackCounts:
 
     @pytest.mark.asyncio
     async def test_no_bot_increments_counter_silently_after_first_log(
-        self, monkeypatch, capsys,
+        self,
+        monkeypatch,
+        capsys,
     ):
         """The first hit prints a [PREMIUM] line; subsequent hits
         increment the counter silently."""
         # SKU set so the no_bot branch is the one we actually hit.
         monkeypatch.setenv("PREMIUM_SKU_ID", "12345")
         import premium as _premium
+
         importlib.reload(_premium)
         try:
             _premium.assign(555000111, TEST_GUILD_ID)
@@ -446,6 +468,7 @@ class TestSilentFallbackCounts:
 
 # ── _entitlement_matches (ends_at defense-in-depth) ───────────────────────────
 
+
 class TestEntitlementEndsAt:
     """bot.entitlements(exclude_ended=True) is supposed to filter ended
     subscriptions server-side, but if Discord or discord.py ever stops
@@ -455,8 +478,10 @@ class TestEntitlementEndsAt:
     @pytest.mark.asyncio
     async def test_past_ends_at_treated_as_ended(self, monkeypatch):
         from datetime import datetime, timezone, timedelta
+
         monkeypatch.setenv("PREMIUM_SKU_ID", "12345")
         import premium as _premium
+
         importlib.reload(_premium)
         try:
             _premium.assign(555000111, TEST_GUILD_ID)
@@ -476,8 +501,10 @@ class TestEntitlementEndsAt:
     @pytest.mark.asyncio
     async def test_future_ends_at_still_active(self, monkeypatch):
         from datetime import datetime, timezone, timedelta
+
         monkeypatch.setenv("PREMIUM_SKU_ID", "12345")
         import premium as _premium
+
         importlib.reload(_premium)
         try:
             _premium.assign(555000111, TEST_GUILD_ID)
@@ -500,6 +527,7 @@ class TestEntitlementEndsAt:
         should only reject when ends_at is set AND in the past."""
         monkeypatch.setenv("PREMIUM_SKU_ID", "12345")
         import premium as _premium
+
         importlib.reload(_premium)
         try:
             _premium.assign(555000111, TEST_GUILD_ID)
@@ -517,24 +545,24 @@ class TestEntitlementEndsAt:
 
 # ── get_limit ─────────────────────────────────────────────────────────────────
 
-class TestGetLimit:
 
+class TestGetLimit:
     @pytest.mark.asyncio
     async def test_free_returns_free_cap(self, fresh_premium):
-        assert await fresh_premium.get_limit("events",            TEST_GUILD_ID) == 5
-        assert await fresh_premium.get_limit("themes",            TEST_GUILD_ID) == 3
-        assert await fresh_premium.get_limit("survey_questions",  TEST_GUILD_ID) == 5
-        assert await fresh_premium.get_limit("growth_metrics",    TEST_GUILD_ID) == 5
-        assert await fresh_premium.get_limit("train_templates",   TEST_GUILD_ID) == 1
+        assert await fresh_premium.get_limit("events", TEST_GUILD_ID) == 5
+        assert await fresh_premium.get_limit("themes", TEST_GUILD_ID) == 3
+        assert await fresh_premium.get_limit("survey_questions", TEST_GUILD_ID) == 5
+        assert await fresh_premium.get_limit("growth_metrics", TEST_GUILD_ID) == 5
+        assert await fresh_premium.get_limit("train_templates", TEST_GUILD_ID) == 1
 
     @pytest.mark.asyncio
     async def test_premium_returns_premium_cap(self, fresh_premium_with_bypass):
         # PREMIUM_TEST_GUILD_ID in the bypass list → resolves premium → premium-row limits.
         fresh_premium = fresh_premium_with_bypass
-        assert await fresh_premium.get_limit("events",            PREMIUM_TEST_GUILD_ID) is None
-        assert await fresh_premium.get_limit("train_templates",   PREMIUM_TEST_GUILD_ID) == 10
-        assert await fresh_premium.get_limit("storm_templates",   PREMIUM_TEST_GUILD_ID) == 10
-        assert await fresh_premium.get_limit("events_log_days",   PREMIUM_TEST_GUILD_ID) == 30
+        assert await fresh_premium.get_limit("events", PREMIUM_TEST_GUILD_ID) is None
+        assert await fresh_premium.get_limit("train_templates", PREMIUM_TEST_GUILD_ID) == 10
+        assert await fresh_premium.get_limit("storm_templates", PREMIUM_TEST_GUILD_ID) == 10
+        assert await fresh_premium.get_limit("events_log_days", PREMIUM_TEST_GUILD_ID) == 30
 
     @pytest.mark.asyncio
     async def test_unknown_feature_raises(self, fresh_premium):
@@ -544,17 +572,17 @@ class TestGetLimit:
 
 # ── is_premium_feature ────────────────────────────────────────────────────────
 
-class TestIsPremiumFeature:
 
+class TestIsPremiumFeature:
     def test_known_premium_features(self, fresh_premium):
-        assert fresh_premium.is_premium_feature("member_sync")             is True
-        assert fresh_premium.is_premium_feature("birthday_dm")             is True
-        assert fresh_premium.is_premium_feature("thread_destinations")     is True
-        assert fresh_premium.is_premium_feature("growth_custom_interval")  is True
+        assert fresh_premium.is_premium_feature("member_sync") is True
+        assert fresh_premium.is_premium_feature("birthday_dm") is True
+        assert fresh_premium.is_premium_feature("thread_destinations") is True
+        assert fresh_premium.is_premium_feature("growth_custom_interval") is True
 
     def test_unknown_feature_is_false(self, fresh_premium):
         assert fresh_premium.is_premium_feature("not_a_feature") is False
-        assert fresh_premium.is_premium_feature("")              is False
+        assert fresh_premium.is_premium_feature("") is False
 
     def test_survey_numeric_is_not_premium_anymore(self, fresh_premium):
         """1.1.5 promoted numeric survey questions to free tier. The
@@ -568,6 +596,7 @@ class TestIsPremiumFeature:
 
 # ── feature_gate ──────────────────────────────────────────────────────────────
 
+
 class TestFeatureGate:
     """feature_gate is the canonical premium check for named features.
     It validates the name against PREMIUM_FEATURES (KeyError on unknown)
@@ -576,21 +605,31 @@ class TestFeatureGate:
 
     @pytest.mark.asyncio
     async def test_known_feature_returns_true_for_premium_guild(
-        self, fresh_premium_with_bypass,
+        self,
+        fresh_premium_with_bypass,
     ):
         # Bypass guild → is_premium True → feature_gate True.
-        assert await fresh_premium_with_bypass.feature_gate(
-            "member_sync", PREMIUM_TEST_GUILD_ID,
-        ) is True
+        assert (
+            await fresh_premium_with_bypass.feature_gate(
+                "member_sync",
+                PREMIUM_TEST_GUILD_ID,
+            )
+            is True
+        )
 
     @pytest.mark.asyncio
     async def test_known_feature_returns_false_for_free_guild(
-        self, fresh_premium_with_bypass,
+        self,
+        fresh_premium_with_bypass,
     ):
         # Non-bypass guild with no assignment → is_premium False.
-        assert await fresh_premium_with_bypass.feature_gate(
-            "storm_participation_dm", TEST_GUILD_ID,
-        ) is False
+        assert (
+            await fresh_premium_with_bypass.feature_gate(
+                "storm_participation_dm",
+                TEST_GUILD_ID,
+            )
+            is False
+        )
 
     @pytest.mark.asyncio
     async def test_unknown_feature_raises_keyerror(self, fresh_premium):
@@ -612,13 +651,16 @@ class TestFeatureGate:
 
     @pytest.mark.asyncio
     async def test_delegates_to_is_premium_with_bot(
-        self, fresh_premium, monkeypatch,
+        self,
+        fresh_premium,
+        monkeypatch,
     ):
         """feature_gate must thread bot= through so the per-guild
         entitlement check sees the real subscription state — same
         contract as is_premium itself."""
         monkeypatch.setenv("PREMIUM_SKU_ID", "12345")
         import premium as _premium
+
         importlib.reload(_premium)
         try:
             _premium.assign(555000111, TEST_GUILD_ID)
@@ -629,20 +671,28 @@ class TestFeatureGate:
             bot = MagicMock()
             bot.entitlements = MagicMock(side_effect=lambda **kw: fake_iter(**kw))
 
-            assert await _premium.feature_gate(
-                "member_sync", TEST_GUILD_ID, bot=bot,
-            ) is True
+            assert (
+                await _premium.feature_gate(
+                    "member_sync",
+                    TEST_GUILD_ID,
+                    bot=bot,
+                )
+                is True
+            )
         finally:
             _premium.clear_cache()
 
 
 # ── Messaging helpers ─────────────────────────────────────────────────────────
 
-class TestMessagingHelpers:
 
+class TestMessagingHelpers:
     def test_limit_reached_embed_includes_counts(self, fresh_premium):
         e = fresh_premium.limit_reached_embed(
-            feature_label="events", current=5, cap=5, plural_unit="events",
+            feature_label="events",
+            current=5,
+            cap=5,
+            plural_unit="events",
         )
         assert "5 of 5" in e.description
         assert "events" in e.fields[0].name
@@ -665,6 +715,7 @@ class TestMessagingHelpers:
     def test_upgrade_view_returns_view_with_sku(self, monkeypatch):
         monkeypatch.setenv("PREMIUM_SKU_ID", "12345")
         import premium as _premium
+
         importlib.reload(_premium)
         try:
             view = _premium.upgrade_view()
@@ -677,6 +728,7 @@ class TestMessagingHelpers:
 
 # ── ChannelSelectStep thread-destination gating (Phase 1.5) ───────────────────
 
+
 class TestChannelSelectStepThreadGating:
     """Verify the include_threads kwarg controls which channel types appear."""
 
@@ -684,23 +736,23 @@ class TestChannelSelectStepThreadGating:
         import discord
         from setup_cog import ChannelSelectStep
 
-        view  = ChannelSelectStep("Pick a channel...")
+        view = ChannelSelectStep("Pick a channel...")
         # The first child is the ChannelSelect with channel_types attribute.
         select = view.children[0]
         assert discord.ChannelType.text in select.channel_types
-        assert discord.ChannelType.public_thread  not in select.channel_types
+        assert discord.ChannelType.public_thread not in select.channel_types
         assert discord.ChannelType.private_thread not in select.channel_types
 
     def test_include_threads_adds_three_thread_types(self, fresh_premium):
         import discord
         from setup_cog import ChannelSelectStep
 
-        view   = ChannelSelectStep("Pick a channel...", include_threads=True)
+        view = ChannelSelectStep("Pick a channel...", include_threads=True)
         select = view.children[0]
-        assert discord.ChannelType.text            in select.channel_types
-        assert discord.ChannelType.public_thread   in select.channel_types
-        assert discord.ChannelType.private_thread  in select.channel_types
-        assert discord.ChannelType.news_thread     in select.channel_types
+        assert discord.ChannelType.text in select.channel_types
+        assert discord.ChannelType.public_thread in select.channel_types
+        assert discord.ChannelType.private_thread in select.channel_types
+        assert discord.ChannelType.news_thread in select.channel_types
 
     def test_create_button_visible_when_threads_included(self, fresh_premium):
         """The create button should appear in every channel-select state —
@@ -730,6 +782,7 @@ class TestChannelSelectStepThreadGating:
 
 # ── Log day-window resolution (Phase 6) ───────────────────────────────────────
 
+
 class TestLogWindowLimits:
     """Verify get_limit returns the correct day window per feature/tier."""
 
@@ -739,7 +792,10 @@ class TestLogWindowLimits:
 
     @pytest.mark.asyncio
     async def test_events_log_days_premium_is_thirty(self, fresh_premium_with_bypass):
-        assert await fresh_premium_with_bypass.get_limit("events_log_days", PREMIUM_TEST_GUILD_ID) == 30
+        assert (
+            await fresh_premium_with_bypass.get_limit("events_log_days", PREMIUM_TEST_GUILD_ID)
+            == 30
+        )
 
     @pytest.mark.asyncio
     async def test_train_log_days_free_is_seven(self, fresh_premium):
@@ -747,7 +803,9 @@ class TestLogWindowLimits:
 
     @pytest.mark.asyncio
     async def test_train_log_days_premium_is_thirty(self, fresh_premium_with_bypass):
-        assert await fresh_premium_with_bypass.get_limit("train_log_days", PREMIUM_TEST_GUILD_ID) == 30
+        assert (
+            await fresh_premium_with_bypass.get_limit("train_log_days", PREMIUM_TEST_GUILD_ID) == 30
+        )
 
     @pytest.mark.asyncio
     async def test_storm_log_recent_free_is_four(self, fresh_premium):
@@ -755,10 +813,14 @@ class TestLogWindowLimits:
 
     @pytest.mark.asyncio
     async def test_storm_log_recent_premium_is_unlimited(self, fresh_premium_with_bypass):
-        assert await fresh_premium_with_bypass.get_limit("storm_log_recent", PREMIUM_TEST_GUILD_ID) is None
+        assert (
+            await fresh_premium_with_bypass.get_limit("storm_log_recent", PREMIUM_TEST_GUILD_ID)
+            is None
+        )
 
 
 # ── Storm log recent-date helper (Phase 6) ────────────────────────────────────
+
 
 class TestStormLogRecentDates:
     """Verify list_recent_log_dates parses, dedupes, sorts, and trims."""
@@ -769,12 +831,12 @@ class TestStormLogRecentDates:
 
         rows = [
             ["Date", "Event", "VoteCount", "RTFNoVote", "SittingOut", "Prior"],
-            ["1/5/2026",  "DS", "10", "", "", ""],
+            ["1/5/2026", "DS", "10", "", "", ""],
             ["1/12/2026", "DS", "11", "", "", ""],
             ["1/19/2026", "DS", "12", "", "", ""],
             ["1/26/2026", "DS", "13", "", "", ""],
-            ["2/2/2026",  "DS", "14", "", "", ""],   # 5th
-            ["1/12/2026", "CS", "20", "", "", ""],   # CS — should be filtered out
+            ["2/2/2026", "DS", "14", "", "", ""],  # 5th
+            ["1/12/2026", "CS", "20", "", "", ""],  # CS — should be filtered out
         ]
 
         class FakeWS:
@@ -796,6 +858,7 @@ class TestStormLogRecentDates:
 
         def boom(guild_id, event_type=None):
             raise RuntimeError("Sheet unavailable")
+
         monkeypatch.setattr(storm_log, "_get_log_sheet", boom)
 
         result = storm_log.list_recent_log_dates("DS", n=4, guild_id=999)
@@ -808,7 +871,7 @@ class TestStormLogRecentDates:
         rows = [
             ["Date", "Event", "VoteCount", "", "", ""],
             ["1/5/2026", "DS", "10", "", "", ""],
-            ["1/5/2026", "DS", "10", "", "", ""],   # duplicate
+            ["1/5/2026", "DS", "10", "", "", ""],  # duplicate
             ["1/12/2026", "DS", "11", "", "", ""],
         ]
 
@@ -823,6 +886,7 @@ class TestStormLogRecentDates:
 
 
 # ── /upgrade command behavior (Phase 7) ───────────────────────────────────────
+
 
 class TestUpgradeCommand:
     """Verify /upgrade renders correctly for free vs premium and with/without SKU."""
@@ -860,9 +924,9 @@ class TestUpgradeCommand:
 
         await cog.upgrade.callback(cog, interaction)
 
-        call  = interaction.response.send_message.call_args
+        call = interaction.response.send_message.call_args
         embed = call.kwargs.get("embed") or (call.args[0] if call.args else None)
-        view  = call.kwargs.get("view")
+        view = call.kwargs.get("view")
         assert embed is not None
         assert "Premium" in embed.title
         # No SKU configured → no upgrade view, but a notice field is added.
@@ -874,11 +938,13 @@ class TestUpgradeCommand:
     async def test_free_user_with_sku_gets_upgrade_view(self, monkeypatch):
         monkeypatch.setenv("PREMIUM_SKU_ID", "12345")
         import premium as _premium
+
         importlib.reload(_premium)
         try:
             # donate.py imports premium at module load — reload it so the upgrade
             # view function references the freshly-reloaded premium module.
             import donate
+
             importlib.reload(donate)
             from donate import DonateCog
 
@@ -886,14 +952,14 @@ class TestUpgradeCommand:
             cog = DonateCog(bot)
 
             interaction = AsyncMock()
-            interaction.guild_id     = TEST_GUILD_ID
+            interaction.guild_id = TEST_GUILD_ID
             interaction.entitlements = []
             interaction.response.send_message = AsyncMock()
 
             await cog.upgrade.callback(cog, interaction)
 
-            call  = interaction.response.send_message.call_args
-            view  = call.kwargs.get("view")
+            call = interaction.response.send_message.call_args
+            view = call.kwargs.get("view")
             assert view is not None
             assert len(view.children) == 1
             assert view.children[0].sku_id == 12345

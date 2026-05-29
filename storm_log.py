@@ -29,7 +29,7 @@ import wizard_registry
 
 # ── Config ─────────────────────────────────────────────────────────────────────
 
-WIZARD_TIMEOUT      = 600  # 10 minutes
+WIZARD_TIMEOUT = 600  # 10 minutes
 
 # Active log sessions — user_id → asyncio.Event (cancel signal)
 # Checked by /cancel in train.py so one command covers everything
@@ -37,8 +37,10 @@ active_logs: dict = {}
 
 # ── Sheets helpers ─────────────────────────────────────────────────────────────
 
+
 def _get_spreadsheet(guild_id: int = None):
     from config import get_spreadsheet
+
     return get_spreadsheet(guild_id)
 
 
@@ -50,6 +52,7 @@ def _get_log_sheet(guild_id: int = None, event_type: str | None = None):
     under the pre-rework schema keeps loading via /[event]_log.
     """
     from config import get_config, get_participation_config
+
     sh = _get_spreadsheet(guild_id)
     if event_type and guild_id:
         pcfg = get_participation_config(guild_id, event_type)
@@ -57,6 +60,7 @@ def _get_log_sheet(guild_id: int = None, event_type: str | None = None):
         if tab:
             try:
                 import gspread
+
                 return sh.worksheet(tab)
             except gspread.WorksheetNotFound:
                 # Configured tab doesn't exist — legitimate fall-through
@@ -68,8 +72,10 @@ def _get_log_sheet(guild_id: int = None, event_type: str | None = None):
                 # expiry — *not* the same as a missing tab. Falling back
                 # to the legacy tab silently could write data to the
                 # wrong sheet. Log so the symptom is recoverable.
-                print(f"[STORM-LOG] Worksheet({tab!r}) lookup failed for "
-                      f"guild {guild_id} ({event_type}): {e}")
+                print(
+                    f"[STORM-LOG] Worksheet({tab!r}) lookup failed for "
+                    f"guild {guild_id} ({event_type}): {e}"
+                )
     cfg = get_config(guild_id)
     tab = cfg.tab_sitouts if cfg else "DS-CS Sit-outs"
     return sh.worksheet(tab)
@@ -77,18 +83,20 @@ def _get_log_sheet(guild_id: int = None, event_type: str | None = None):
 
 # ── Name entry modal ──────────────────────────────────────────────────────────
 
+
 class NameEntryModal(discord.ui.Modal):
     """
     Popup text box where the user types names comma-separated or one per line.
     Matches against the known roster by exact name or alias (col F in member tab).
     """
+
     def __init__(self, all_names: list, label: str, alias_map: dict = None):
         super().__init__(title=label[:45])
-        self.all_names  = all_names
-        self.name_map   = {n.lower(): n for n in all_names}  # lower → original
-        self.alias_map  = alias_map or {}                     # alias.lower() → original name
-        self.confirmed  = False
-        self.selected   = []
+        self.all_names = all_names
+        self.name_map = {n.lower(): n for n in all_names}  # lower → original
+        self.alias_map = alias_map or {}  # alias.lower() → original name
+        self.confirmed = False
+        self.selected = []
         self.unrecognized = []
 
         self.text_input = discord.ui.TextInput(
@@ -103,17 +111,18 @@ class NameEntryModal(discord.ui.Modal):
     async def on_submit(self, interaction: discord.Interaction):
         raw = self.text_input.value.strip()
         if not raw:
-            self.selected     = []
+            self.selected = []
             self.unrecognized = []
-            self.confirmed    = True
+            self.confirmed = True
             await interaction.response.defer()
             self.stop()
             return
 
         import re
+
         parts = [p.strip() for p in re.split(r"[,\n]+", raw) if p.strip()]
 
-        recognized   = []
+        recognized = []
         unrecognized = []
         for part in parts:
             lower = part.lower()
@@ -126,9 +135,9 @@ class NameEntryModal(discord.ui.Modal):
             else:
                 unrecognized.append(part)
 
-        self.selected     = recognized
+        self.selected = recognized
         self.unrecognized = unrecognized
-        self.confirmed    = True
+        self.confirmed = True
         await interaction.response.defer()
         self.stop()
 
@@ -138,11 +147,12 @@ class UnrecognizedView(discord.ui.View):
     Shown when unrecognized names are submitted. Lets the user save as-is
     (visitor) or go back and re-enter.
     """
+
     def __init__(self, unrecognized: list):
         super().__init__(timeout=WIZARD_TIMEOUT)
         self.unrecognized = unrecognized
-        self.save_as_is   = False
-        self.redo         = False
+        self.save_as_is = False
+        self.redo = False
 
     @discord.ui.button(label="Save as Visitor", style=discord.ButtonStyle.secondary, row=0)
     async def save(self, interaction: discord.Interaction, button: discord.ui.Button):
@@ -167,13 +177,14 @@ class NameEntryView(discord.ui.View):
     If unrecognized names are submitted, asks the user to save as visitor or re-enter.
     Loops until the user is satisfied or skips.
     """
+
     def __init__(self, all_names: list, label: str, alias_map: dict = None):
         super().__init__(timeout=WIZARD_TIMEOUT)
-        self.all_names    = all_names
-        self.label        = label
-        self.alias_map    = alias_map or {}
-        self.confirmed    = False
-        self.selected     = []
+        self.all_names = all_names
+        self.label = label
+        self.alias_map = alias_map or {}
+        self.confirmed = False
+        self.selected = []
         self.unrecognized = []
 
     @discord.ui.button(label="✏️ Enter Names", style=discord.ButtonStyle.primary, row=0)
@@ -185,17 +196,21 @@ class NameEntryView(discord.ui.View):
             if timed_out or not modal.confirmed:
                 return  # Let outer timeout handler deal with it
 
-            recognized   = modal.selected
+            recognized = modal.selected
             unrecognized = modal.unrecognized
 
             if not unrecognized:
                 # All names recognized — done
-                self.selected     = recognized
+                self.selected = recognized
                 self.unrecognized = []
-                self.confirmed    = True
+                self.confirmed = True
                 for item in self.children:
                     item.disabled = True
-                result = f"**Entered ({len(recognized)}):** {', '.join(recognized)}" if recognized else "*None entered.*"
+                result = (
+                    f"**Entered ({len(recognized)}):** {', '.join(recognized)}"
+                    if recognized
+                    else "*None entered.*"
+                )
                 try:
                     await interaction.message.edit(content=result, view=self)
                 except discord.HTTPException:
@@ -204,7 +219,7 @@ class NameEntryView(discord.ui.View):
                 return
 
             # Some unrecognized — ask what to do
-            unrecog_str  = ", ".join(unrecognized)
+            unrecog_str = ", ".join(unrecognized)
             unrecog_view = UnrecognizedView(unrecognized)
             try:
                 await interaction.message.edit(
@@ -221,9 +236,9 @@ class NameEntryView(discord.ui.View):
 
             if unrecog_view.save_as_is:
                 # Save recognized + unrecognized (visitors)
-                self.selected     = recognized
+                self.selected = recognized
                 self.unrecognized = unrecognized
-                self.confirmed    = True
+                self.confirmed = True
                 for item in self.children:
                     item.disabled = True
                 lines = []
@@ -255,23 +270,22 @@ class NameEntryView(discord.ui.View):
 
     @discord.ui.button(label="Skip (none)", style=discord.ButtonStyle.secondary, row=0)
     async def skip(self, interaction: discord.Interaction, button: discord.ui.Button):
-        self.confirmed    = True
-        self.selected     = []
+        self.confirmed = True
+        self.selected = []
         self.unrecognized = []
         for item in self.children:
             item.disabled = True
-        await wizard_registry.safe_edit_response(
-            interaction, content="*Skipped: none.*", view=self
-        )
+        await wizard_registry.safe_edit_response(interaction, content="*Skipped: none.*", view=self)
         self.stop()
 
 
 class ShortSelectView(discord.ui.View):
     """Simple single-page select for short lists (e.g. prior sit-outs, always < 25)."""
+
     def __init__(self, names: list, label: str):
         super().__init__(timeout=WIZARD_TIMEOUT)
         self.confirmed = False
-        self.selected  = set()
+        self.selected = set()
 
         select = discord.ui.Select(
             placeholder=label,
@@ -280,9 +294,11 @@ class ShortSelectView(discord.ui.View):
             max_values=len(names),
             row=0,
         )
+
         async def _cb(interaction: discord.Interaction):
             self.selected = set(select.values)
             await interaction.response.defer()
+
         select.callback = _cb
         self.add_item(select)
 
@@ -297,7 +313,7 @@ class ShortSelectView(discord.ui.View):
     @discord.ui.button(label="Skip (none)", style=discord.ButtonStyle.secondary, row=1)
     async def skip(self, interaction: discord.Interaction, button: discord.ui.Button):
         self.confirmed = True
-        self.selected  = set()
+        self.selected = set()
         for item in self.children:
             item.disabled = True
         await wizard_registry.safe_edit_response(interaction, view=self)
@@ -305,7 +321,10 @@ class ShortSelectView(discord.ui.View):
 
 
 def _collect_recent_event_dates(
-    guild_id: int, event_type: str, *, limit: int = 6,
+    guild_id: int,
+    event_type: str,
+    *,
+    limit: int = 6,
 ) -> list[str]:
     """Return up to `limit` recent event dates (ISO `YYYY-MM-DD`,
     newest first) the officer is likely logging participation for.
@@ -321,11 +340,13 @@ def _collect_recent_event_dates(
     your-own affordances).
     """
     import datetime as _dt
+
     candidates: set[str] = set()
 
     # storm_signups via SQLite. Cheap query (events posted with polls).
     try:
         import config
+
         with config._get_conn() as conn:
             rows = conn.execute(
                 "SELECT DISTINCT event_date FROM storm_signups "
@@ -343,19 +364,20 @@ def _collect_recent_event_dates(
                 continue
             candidates.add(d)
     except Exception as e:
-        print(f"[LOG] _collect_recent_event_dates signups read failed "
-              f"(guild {guild_id}): {e}")
+        print(f"[LOG] _collect_recent_event_dates signups read failed (guild {guild_id}): {e}")
 
     # Structured-flow rosters (Premium).
     try:
         from storm_history import list_event_dates
+
         rdates, _errs = list_event_dates(
-            guild_id, event_type, limit=limit * 2,
+            guild_id,
+            event_type,
+            limit=limit * 2,
         )
         candidates.update(d for d in rdates if d)
     except Exception as e:
-        print(f"[LOG] _collect_recent_event_dates rosters read failed "
-              f"(guild {guild_id}): {e}")
+        print(f"[LOG] _collect_recent_event_dates rosters read failed (guild {guild_id}): {e}")
 
     return sorted(candidates, reverse=True)[:limit]
 
@@ -388,22 +410,27 @@ class _LogDatePickerView(discord.ui.View):
 
     def _build(self, recent_dates: list[str]):
         import datetime as _dt
+
         today = _dt.date.today()
         yesterday = today - _dt.timedelta(days=1)
 
         options: list[discord.SelectOption] = []
         # Always-present quick picks. Use `today` / `yesterday` as the
         # value so the callback can resolve to a date without re-parsing.
-        options.append(discord.SelectOption(
-            label=f"Today ({today.strftime('%a %b %d')})",
-            value="__today__",
-            description=today.isoformat(),
-        ))
-        options.append(discord.SelectOption(
-            label=f"Yesterday ({yesterday.strftime('%a %b %d')})",
-            value="__yesterday__",
-            description=yesterday.isoformat(),
-        ))
+        options.append(
+            discord.SelectOption(
+                label=f"Today ({today.strftime('%a %b %d')})",
+                value="__today__",
+                description=today.isoformat(),
+            )
+        )
+        options.append(
+            discord.SelectOption(
+                label=f"Yesterday ({yesterday.strftime('%a %b %d')})",
+                value="__yesterday__",
+                description=yesterday.isoformat(),
+            )
+        )
 
         # Recent saved event dates. Skip today/yesterday if they're
         # already in the saved list (avoid duplicates).
@@ -416,23 +443,31 @@ class _LogDatePickerView(discord.ui.View):
             except ValueError:
                 continue
             label = dt.strftime("%a %b %d, %Y")
-            options.append(discord.SelectOption(
-                label=label[:100], value=d, description=d,
-            ))
+            options.append(
+                discord.SelectOption(
+                    label=label[:100],
+                    value=d,
+                    description=d,
+                )
+            )
             if len(options) >= 24:  # 24 dates + 1 "type my own" = 25 cap
                 break
 
         # Type-your-own fallback.
-        options.append(discord.SelectOption(
-            label="✏️ Type a different date…",
-            value="__manual__",
-            description="Free-form date entry",
-        ))
+        options.append(
+            discord.SelectOption(
+                label="✏️ Type a different date…",
+                value="__manual__",
+                description="Free-form date entry",
+            )
+        )
 
         select = discord.ui.Select(
             placeholder="Pick the event date…",
-            min_values=1, max_values=1,
-            options=options, row=0,
+            min_values=1,
+            max_values=1,
+            options=options,
+            row=0,
         )
 
         async def _on_pick(inter: discord.Interaction):
@@ -463,7 +498,8 @@ class _LogDatePickerView(discord.ui.View):
 
     @discord.ui.button(
         label="↩️ Cancel",
-        style=discord.ButtonStyle.secondary, row=1,
+        style=discord.ButtonStyle.secondary,
+        row=1,
     )
     async def cancel(self, inter: discord.Interaction, _btn):
         self.cancelled = True
@@ -510,14 +546,15 @@ class _PaginatedRosterMultiSelectView(discord.ui.View):
         self.selected_set: set[str] = set(preselected or [])
         self.page = 0
         self.page_count = max(
-            1, (len(self.names_sorted) + self.PAGE_SIZE - 1) // self.PAGE_SIZE,
+            1,
+            (len(self.names_sorted) + self.PAGE_SIZE - 1) // self.PAGE_SIZE,
         )
         self._build_components()
 
     # ── Page helpers ────────────────────────────────────────────────────
     def _page_slice(self) -> list[str]:
         start = self.page * self.PAGE_SIZE
-        return self.names_sorted[start:start + self.PAGE_SIZE]
+        return self.names_sorted[start : start + self.PAGE_SIZE]
 
     def _build_components(self) -> None:
         """Rebuild the view from scratch — needed when the user flips
@@ -529,12 +566,12 @@ class _PaginatedRosterMultiSelectView(discord.ui.View):
             return
         select = discord.ui.Select(
             placeholder=(
-                f"{self.label} — page {self.page + 1}/{self.page_count} "
-                f"({len(page_names)} names)"
+                f"{self.label} — page {self.page + 1}/{self.page_count} ({len(page_names)} names)"
             ),
             options=[
                 discord.SelectOption(
-                    label=n[:100], value=n,
+                    label=n[:100],
+                    value=n,
                     default=(n in self.selected_set),
                 )
                 for n in page_names
@@ -624,6 +661,7 @@ class _PaginatedRosterMultiSelectView(discord.ui.View):
 
 # ── Discord-poll prefill helper (#244, Premium) ──────────────────────────────
 
+
 def _prefill_from_discord_poll(
     guild_id: int,
     event_type: str,
@@ -650,13 +688,12 @@ def _prefill_from_discord_poll(
     missed member by hand in the multi-select view.
     """
     import config
+
     rows = config.get_storm_signups(guild_id, event_type, event_date)
     if not rows:
         return set()
     attending_ids = [
-        r["target_member_id"]
-        for r in rows
-        if (r.get("vote") or "").lower() in ("a", "b", "either")
+        r["target_member_id"] for r in rows if (r.get("vote") or "").lower() in ("a", "b", "either")
     ]
     if not attending_ids:
         return set()
@@ -684,14 +721,14 @@ def _prefill_from_discord_poll(
     # the unresolved IDs — prefill is best-effort.
     try:
         from config import get_member_roster_config, get_member_roster_sheet
+
         rcfg = get_member_roster_config(guild_id)
         if not rcfg or not rcfg.get("enabled"):
             return resolved
         ws = get_member_roster_sheet(guild_id, rcfg.get("tab_name") or "")
         rows_mr = ws.get_all_values()
     except Exception as e:
-        print(f"[LOG] Discord-poll prefill: member roster lookup failed "
-              f"(guild {guild_id}): {e}")
+        print(f"[LOG] Discord-poll prefill: member roster lookup failed (guild {guild_id}): {e}")
         return resolved
 
     did_col = int(rcfg.get("discord_id_col", 0))
@@ -714,6 +751,7 @@ def _prefill_from_discord_poll(
 
 # ── Roster + sheet helpers (new configurable participation flow) ──────────────
 
+
 def load_roster_from_config(guild_id: int, event_type: str) -> tuple[list[str], dict[str, str]]:
     """
     Read the configured roster source for the given (guild, event_type) and
@@ -721,10 +759,13 @@ def load_roster_from_config(guild_id: int, event_type: str) -> tuple[list[str], 
     tab + name column + optional alias column via the storm setup wizard.
     """
     from config import get_participation_config
+
     pcfg = get_participation_config(guild_id, event_type)
-    tab       = pcfg.get("roster_tab") or ""
-    name_col  = int(pcfg.get("roster_name_col") or 0)
-    alias_col = int(pcfg.get("roster_alias_col") if pcfg.get("roster_alias_col") is not None else -1)
+    tab = pcfg.get("roster_tab") or ""
+    name_col = int(pcfg.get("roster_name_col") or 0)
+    alias_col = int(
+        pcfg.get("roster_alias_col") if pcfg.get("roster_alias_col") is not None else -1
+    )
     start_row = int(pcfg.get("roster_start_row") or 2)
 
     names: list[str] = []
@@ -733,13 +774,13 @@ def load_roster_from_config(guild_id: int, event_type: str) -> tuple[list[str], 
         return names, alias_map
 
     try:
-        ws   = _get_spreadsheet(guild_id).worksheet(tab)
+        ws = _get_spreadsheet(guild_id).worksheet(tab)
         rows = ws.get_all_values()
     except Exception as e:
         print(f"[LOG] Could not read roster tab `{tab}` for guild {guild_id}: {e}")
         return names, alias_map
 
-    for row in rows[start_row - 1:]:  # start_row is 1-indexed
+    for row in rows[start_row - 1 :]:  # start_row is 1-indexed
         if name_col >= len(row):
             continue
         name = row[name_col].strip()
@@ -751,8 +792,10 @@ def load_roster_from_config(guild_id: int, event_type: str) -> tuple[list[str], 
             if alias:
                 alias_map[alias.lower()] = name
 
-    print(f"[LOG] Loaded {len(names)} roster names ({len(alias_map)} aliases) "
-          f"from `{tab}` (guild {guild_id}, {event_type})")
+    print(
+        f"[LOG] Loaded {len(names)} roster names ({len(alias_map)} aliases) "
+        f"from `{tab}` (guild {guild_id}, {event_type})"
+    )
     return names, alias_map
 
 
@@ -778,7 +821,9 @@ def _format_member_log_date(log_date) -> str:
 
 
 def upsert_member_log_rows(
-    guild_id: int, event_type: str, log_date,
+    guild_id: int,
+    event_type: str,
+    log_date,
     per_member_data: dict[str, dict[str, str]],
     question_keys: list[str],
 ) -> None:
@@ -814,7 +859,9 @@ def upsert_member_log_rows(
         ws = sh.worksheet(tab)
     except Exception:
         ws = sh.add_worksheet(
-            title=tab, rows=200, cols=max(8, len(question_keys) + 4),
+            title=tab,
+            rows=200,
+            cols=max(8, len(question_keys) + 4),
         )
 
     # Header reconciliation: existing tabs may have more columns than
@@ -838,8 +885,7 @@ def upsert_member_log_rows(
         # tabs may have started with a different shape. Defensive:
         # if the first two cols don't match, rebuild the header.
         if header[:2] != base_cols:
-            header = base_cols + ([h for h in header[2:]]
-                                  if len(header) >= 2 else [])
+            header = base_cols + ([h for h in header[2:]] if len(header) >= 2 else [])
         for qk in question_keys:
             if qk not in header:
                 header.append(qk)
@@ -885,12 +931,10 @@ def upsert_member_log_rows(
     # collapsed). Soft error — the live data is correct.
     if new_row_count < old_row_count:
         try:
-            blanks = [
-                [""] * len(header)
-                for _ in range(old_row_count - new_row_count)
-            ]
+            blanks = [[""] * len(header) for _ in range(old_row_count - new_row_count)]
             ws.update(
-                f"A{new_row_count + 1}", blanks,
+                f"A{new_row_count + 1}",
+                blanks,
                 value_input_option="USER_ENTERED",
             )
         except Exception as e:
@@ -910,7 +954,9 @@ ATTENDANCE_QUESTION_KEY = "showed_up"
 
 
 def read_member_log_window(
-    guild_id: int, event_type: str, lookback_events: int,
+    guild_id: int,
+    event_type: str,
+    lookback_events: int,
     question_key: str | None = None,
 ) -> tuple[list[str], dict[str, dict[str, str]]]:
     """Read the past `lookback_events` distinct event dates from the
@@ -995,7 +1041,9 @@ def read_member_log_window(
 
 
 def count_member_flags_in_window(
-    guild_id: int, event_type: str, lookback_events: int,
+    guild_id: int,
+    event_type: str,
+    lookback_events: int,
     question_key: str,
 ) -> dict[str, int]:
     """For each member, count how many of the last `lookback_events`
@@ -1009,7 +1057,10 @@ def count_member_flags_in_window(
     the Trends Viewer (#246).
     """
     _dates, rows_by_member = read_member_log_window(
-        guild_id, event_type, lookback_events, question_key,
+        guild_id,
+        event_type,
+        lookback_events,
+        question_key,
     )
     counts: dict[str, int] = {}
     for member, by_date in rows_by_member.items():
@@ -1022,15 +1073,17 @@ def count_member_flags_in_window(
     return counts
 
 
-def append_participation_row(guild_id: int, event_type: str,
-                              log_date, answers: dict[str, str]) -> None:
+def append_participation_row(
+    guild_id: int, event_type: str, log_date, answers: dict[str, str]
+) -> None:
     """
     Append a row to the configured participation tab. Header columns are:
     Date | Event | <one column per configured question, in order>.
     """
     from config import get_participation_config
+
     pcfg = get_participation_config(guild_id, event_type)
-    tab  = pcfg.get("tab_name") or (
+    tab = pcfg.get("tab_name") or (
         "DS Participation Log" if event_type.upper() == "DS" else "CS Participation Log"
     )
     questions = pcfg.get("questions") or []
@@ -1057,11 +1110,14 @@ def append_participation_row(guild_id: int, event_type: str,
             val = ", ".join(str(v) for v in val)
         row.append(str(val) if val is not None else "")
     ws.append_row(row, value_input_option="USER_ENTERED")
-    print(f"[LOG] Participation row appended for guild={guild_id} "
-          f"event={event_type} date={log_date.isoformat()}")
+    print(
+        f"[LOG] Participation row appended for guild={guild_id} "
+        f"event={event_type} date={log_date.isoformat()}"
+    )
 
 
 # ── Shared log flow (new configurable version) ───────────────────────────────
+
 
 async def run_log_flow(bot, channel, user, event_type):
     """
@@ -1070,17 +1126,18 @@ async def run_log_flow(bot, channel, user, event_type):
     the storm setup wizard (`/setup → ⚔️ Desert Storm` or `/setup → 🏜️ Canyon Storm`). The date is always asked
     first (mandatory, never configurable).
     """
-    is_ds        = event_type.upper() == "DS"
-    event_label  = "Desert Storm" if is_ds else "Canyon Storm"
-    hub_cmd      = HUB_COMMAND["DS"] if is_ds else HUB_COMMAND["CS"]
-    log_hint     = f"`{hub_cmd}` → **{HUB_BTN_PARTICIPATION}**"
+    is_ds = event_type.upper() == "DS"
+    event_label = "Desert Storm" if is_ds else "Canyon Storm"
+    hub_cmd = HUB_COMMAND["DS"] if is_ds else HUB_COMMAND["CS"]
+    log_hint = f"`{hub_cmd}` → **{HUB_BTN_PARTICIPATION}**"
     # Post-#201: storm setup wizards live behind /setup hub buttons.
-    setup_cmd    = STORM_SETUP_NAV["DS" if is_ds else "CS"]
-    guild_id     = channel.guild.id if hasattr(channel, "guild") and channel.guild else None
+    setup_cmd = STORM_SETUP_NAV["DS" if is_ds else "CS"]
+    guild_id = channel.guild.id if hasattr(channel, "guild") and channel.guild else None
     cancel_event = asyncio.Event()
     active_logs[user.id] = cancel_event
 
     from config import get_participation_config
+
     pcfg = get_participation_config(guild_id, event_type) if guild_id else {}
 
     if not pcfg.get("enabled"):
@@ -1106,9 +1163,13 @@ async def run_log_flow(bot, channel, user, event_type):
     async def wait_for_msg(prompt_text):
         prompt_msg = await channel.send(prompt_text)
         try:
-            reply_task  = asyncio.ensure_future(bot.wait_for("message", check=check, timeout=WIZARD_TIMEOUT))
+            reply_task = asyncio.ensure_future(
+                bot.wait_for("message", check=check, timeout=WIZARD_TIMEOUT)
+            )
             cancel_task = asyncio.ensure_future(cancel_event.wait())
-            done, pending = await asyncio.wait([reply_task, cancel_task], return_when=asyncio.FIRST_COMPLETED)
+            done, pending = await asyncio.wait(
+                [reply_task, cancel_task], return_when=asyncio.FIRST_COMPLETED
+            )
             for t in pending:
                 t.cancel()
             if cancel_event.is_set():
@@ -1130,9 +1191,11 @@ async def run_log_flow(bot, channel, user, event_type):
 
     async def wait_for_view(view, prompt_msg):
         """Wait for any view (NameEntryView, YesNoLogView, etc). Returns False if cancelled/timed out."""
-        view_task   = asyncio.ensure_future(view.wait())
+        view_task = asyncio.ensure_future(view.wait())
         cancel_task = asyncio.ensure_future(cancel_event.wait())
-        done, pending = await asyncio.wait([view_task, cancel_task], return_when=asyncio.FIRST_COMPLETED)
+        done, pending = await asyncio.wait(
+            [view_task, cancel_task], return_when=asyncio.FIRST_COMPLETED
+        )
         for t in pending:
             t.cancel()
         if cancel_event.is_set():
@@ -1165,7 +1228,10 @@ async def run_log_flow(bot, channel, user, event_type):
         # was a tester pain point. Free-text remains an option for
         # backfilling old events that pre-date the saved data.
         recent_dates = await asyncio.get_event_loop().run_in_executor(
-            None, _collect_recent_event_dates, guild_id, event_type,
+            None,
+            _collect_recent_event_dates,
+            guild_id,
+            event_type,
         )
         picker = _LogDatePickerView(recent_dates)
         picker_msg = await channel.send(
@@ -1184,8 +1250,7 @@ async def run_log_flow(bot, channel, user, event_type):
         else:
             # Free-text fallback — officer chose "Type a different date".
             raw_date = await wait_for_msg(
-                "Type the date (e.g. `April 14`, `4/14`) or type "
-                "`today`:"
+                "Type the date (e.g. `April 14`, `4/14`) or type `today`:"
             )
             if raw_date is None:
                 if cancel_event.is_set():
@@ -1195,13 +1260,13 @@ async def run_log_flow(bot, channel, user, event_type):
                 log_date = date.today()
             else:
                 from train import parse_date_and_name
+
                 parsed_d, _, _ = parse_date_and_name(
                     f"{raw_date} - placeholder",
                 )
                 if not parsed_d:
                     await channel.send(
-                        f"⚠️ Could not parse `{raw_date}` as a date. "
-                        f"Run {log_hint} to start again."
+                        f"⚠️ Could not parse `{raw_date}` as a date. Run {log_hint} to start again."
                     )
                     return
                 log_date = parsed_d
@@ -1217,7 +1282,10 @@ async def run_log_flow(bot, channel, user, event_type):
                 return
             loading_msg = await channel.send("⏳ Loading roster from your configured tab…")
             names, alias_map = await asyncio.get_event_loop().run_in_executor(
-                None, load_roster_from_config, guild_id, event_type,
+                None,
+                load_roster_from_config,
+                guild_id,
+                event_type,
             )
             try:
                 await loading_msg.delete()
@@ -1234,9 +1302,9 @@ async def run_log_flow(bot, channel, user, event_type):
         per_member_data: dict[str, dict[str, str]] = {}
         per_member_question_keys: list[str] = []
         for idx, q in enumerate(questions, start=2):
-            qkey   = q.get("key", f"q{idx}")
+            qkey = q.get("key", f"q{idx}")
             qlabel = q.get("label", qkey)
-            qtype  = q.get("type", "text")
+            qtype = q.get("type", "text")
 
             header = f"**Step {idx} of {total_steps}: {qlabel}**"
 
@@ -1255,8 +1323,10 @@ async def run_log_flow(bot, channel, user, event_type):
                 bound_hint = ""
                 if lo is not None or hi is not None:
                     bits = []
-                    if lo is not None: bits.append(f"min `{lo}`")
-                    if hi is not None: bits.append(f"max `{hi}`")
+                    if lo is not None:
+                        bits.append(f"min `{lo}`")
+                    if hi is not None:
+                        bits.append(f"max `{hi}`")
                     bound_hint = f" *({', '.join(bits)})*"
                 attempts = 5
                 value: str | None = None
@@ -1355,18 +1425,15 @@ async def run_log_flow(bot, channel, user, event_type):
                         return
                     try:
                         from datetime import datetime as _dt
+
                         d = _dt.strptime(raw, fmt).date()
                         value = d.isoformat()
                         break
                     except ValueError:
                         attempts -= 1
-                        await channel.send(
-                            f"⚠️ `{raw}` doesn't match `{fmt}`. Please re-enter."
-                        )
+                        await channel.send(f"⚠️ `{raw}` doesn't match `{fmt}`. Please re-enter.")
                 if value is None:
-                    await channel.send(
-                        "⚠️ Too many invalid attempts. Cancelling the log."
-                    )
+                    await channel.send("⚠️ Too many invalid attempts. Cancelling the log.")
                     return
                 answers[qkey] = value
 
@@ -1388,18 +1455,26 @@ async def run_log_flow(bot, channel, user, event_type):
                 prefill_source = q.get("prefill_source") or ""
                 if prefill_source == "discord_poll":
                     preselected = _prefill_from_discord_poll(
-                        guild_id, event_type,
-                        log_date.isoformat(), names, alias_map,
+                        guild_id,
+                        event_type,
+                        log_date.isoformat(),
+                        names,
+                        alias_map,
                     )
                 view = _PaginatedRosterMultiSelectView(
-                    names, qlabel, preselected=preselected,
+                    names,
+                    qlabel,
+                    preselected=preselected,
                     prefill_used=bool(prefill_source),
                 )
                 preview = (
-                    ", ".join(sorted(preselected)[:5])
-                    + (f" (+{len(preselected) - 5} more)"
-                       if len(preselected) > 5 else "")
-                ) if preselected else ""
+                    (
+                        ", ".join(sorted(preselected)[:5])
+                        + (f" (+{len(preselected) - 5} more)" if len(preselected) > 5 else "")
+                    )
+                    if preselected
+                    else ""
+                )
                 prompt_lines = [header]
                 if prefill_source == "discord_poll":
                     prompt_lines.append(
@@ -1410,11 +1485,11 @@ async def run_log_flow(bot, channel, user, event_type):
                     if preview:
                         prompt_lines.append(f"*Pre-checked:* {preview}")
                 prompt_lines.append(
-                    "Use the dropdown(s) to pick the members who match. "
-                    "Click ✅ Save when done."
+                    "Use the dropdown(s) to pick the members who match. Click ✅ Save when done."
                 )
                 prompt = await channel.send(
-                    "\n".join(prompt_lines), view=view,
+                    "\n".join(prompt_lines),
+                    view=view,
                 )
                 if not await wait_for_view(view, prompt):
                     if cancel_event.is_set():
@@ -1442,46 +1517,43 @@ async def run_log_flow(bot, channel, user, event_type):
                 lookback = int(q.get("lookback_events", 4))
                 if not source_key:
                     await channel.send(
-                        f"⚠️ Derived count `{qlabel}` has no source "
-                        "question configured. Skipping."
+                        f"⚠️ Derived count `{qlabel}` has no source question configured. Skipping."
                     )
                     continue
                 await _ensure_roster()
                 counts = await asyncio.get_event_loop().run_in_executor(
                     None,
                     count_member_flags_in_window,
-                    guild_id, event_type, lookback, source_key,
+                    guild_id,
+                    event_type,
+                    lookback,
+                    source_key,
                 )
                 # Make sure every roster member has a row (count = 0
                 # for those who never appeared in the source data).
                 for member_name in names:
-                    per_member_data.setdefault(member_name, {})[qkey] = (
-                        str(counts.get(member_name, 0))
+                    per_member_data.setdefault(member_name, {})[qkey] = str(
+                        counts.get(member_name, 0)
                     )
                 per_member_question_keys.append(qkey)
                 if q.get("show_during_log"):
                     # Surface the top-5 by count so officers see at a
                     # glance who's flagged most often.
                     ordered = sorted(
-                        counts.items(), key=lambda kv: (-kv[1], kv[0]),
+                        counts.items(),
+                        key=lambda kv: (-kv[1], kv[0]),
                     )
-                    top = [
-                        f"{n} ({c})" for n, c in ordered[:5] if c > 0
-                    ]
+                    top = [f"{n} ({c})" for n, c in ordered[:5] if c > 0]
                     if top:
                         await channel.send(
-                            f"{header}\n📊 Top by count in past "
-                            f"{lookback} events: {', '.join(top)}"
+                            f"{header}\n📊 Top by count in past {lookback} events: {', '.join(top)}"
                         )
                 answers[qkey] = (
-                    f"max {max(counts.values()) if counts else 0} "
-                    f"(past {lookback} events)"
+                    f"max {max(counts.values()) if counts else 0} (past {lookback} events)"
                 )
 
             else:  # "text" or unknown — fall back to free text
-                raw = await wait_for_msg(
-                    f"{header}\nType your answer (or `skip` for none)."
-                )
+                raw = await wait_for_msg(f"{header}\nType your answer (or `skip` for none).")
                 if raw is None:
                     if cancel_event.is_set():
                         await channel.send("❌ Log cancelled.")
@@ -1492,8 +1564,12 @@ async def run_log_flow(bot, channel, user, event_type):
         await channel.send("💾 Saving log…")
         try:
             await asyncio.get_event_loop().run_in_executor(
-                None, append_participation_row,
-                guild_id, event_type, log_date, answers,
+                None,
+                append_participation_row,
+                guild_id,
+                event_type,
+                log_date,
+                answers,
             )
         except Exception as e:
             await channel.send(f"⚠️ Error saving to sheet: {e}")
@@ -1507,22 +1583,24 @@ async def run_log_flow(bot, channel, user, event_type):
         if per_member_question_keys and per_member_data:
             try:
                 await asyncio.get_event_loop().run_in_executor(
-                    None, upsert_member_log_rows,
-                    guild_id, event_type, log_date,
-                    per_member_data, per_member_question_keys,
+                    None,
+                    upsert_member_log_rows,
+                    guild_id,
+                    event_type,
+                    log_date,
+                    per_member_data,
+                    per_member_question_keys,
                 )
             except Exception as e:
-                await channel.send(
-                    f"⚠️ Saved event row, but per-member log failed: {e}"
-                )
+                await channel.send(f"⚠️ Saved event row, but per-member log failed: {e}")
 
         # ── Summary ──────────────────────────────────────────────────────────
         date_str = f"{log_date:%A, %B} {log_date.day}, {log_date.year}"
         lines = [f"📋 **{event_label} Log: {date_str}**"]
         for q in questions:
-            qkey   = q.get("key", "")
+            qkey = q.get("key", "")
             qlabel = q.get("label", qkey)
-            v      = answers.get(qkey, "")
+            v = answers.get(qkey, "")
             lines.append(f"**{qlabel}:** {v if v not in ('', None) else 'None'}")
         summary = "\n".join(lines)
 
@@ -1552,22 +1630,25 @@ class _YesNoLogView(discord.ui.View):
 
     @discord.ui.button(label="Yes", style=discord.ButtonStyle.success)
     async def yes(self, inter: discord.Interaction, button: discord.ui.Button):
-        self.value     = True
+        self.value = True
         self.confirmed = True
-        for c in self.children: c.disabled = True
+        for c in self.children:
+            c.disabled = True
         await wizard_registry.safe_edit_response(inter, view=self)
         self.stop()
 
     @discord.ui.button(label="No", style=discord.ButtonStyle.danger)
     async def no(self, inter: discord.Interaction, button: discord.ui.Button):
-        self.value     = False
+        self.value = False
         self.confirmed = True
-        for c in self.children: c.disabled = True
+        for c in self.children:
+            c.disabled = True
         await wizard_registry.safe_edit_response(inter, view=self)
         self.stop()
 
 
 # ── Log lookup ─────────────────────────────────────────────────────────────────
+
 
 def list_recent_log_dates(event_type: str, n: int, guild_id=None) -> list[date]:
     """
@@ -1576,11 +1657,12 @@ def list_recent_log_dates(event_type: str, n: int, guild_id=None) -> list[date]:
     """
     out: list[date] = []
     try:
-        ws   = _get_log_sheet(guild_id, event_type=event_type)
+        ws = _get_log_sheet(guild_id, event_type=event_type)
         rows = ws.get_all_values()
         if len(rows) <= 1:
             return out
         from datetime import datetime
+
         seen: set[date] = set()
         parsed: list[date] = []
         for row in rows[1:]:
@@ -1615,7 +1697,7 @@ def lookup_log_entry(event_type: str, log_date: date, guild_id=None):
     when a guild is still on the old "DS-CS Sit-outs" tab.
     """
     try:
-        ws   = _get_log_sheet(guild_id, event_type=event_type)
+        ws = _get_log_sheet(guild_id, event_type=event_type)
         rows = ws.get_all_values()
         if len(rows) <= 1:
             return None
@@ -1623,9 +1705,10 @@ def lookup_log_entry(event_type: str, log_date: date, guild_id=None):
         # Resolve column labels: skip Date and Event, use the remaining
         # header cells as the field labels. Empty header cells fall back
         # to a generic name so we don't crash on malformed sheets.
-        field_labels = [(h.strip() or f"Column {i+1}") for i, h in enumerate(header_row[2:])]
+        field_labels = [(h.strip() or f"Column {i + 1}") for i, h in enumerate(header_row[2:])]
 
         from datetime import datetime
+
         for row in reversed(rows[1:]):
             if len(row) < 2:
                 continue
@@ -1643,13 +1726,13 @@ def lookup_log_entry(event_type: str, log_date: date, guild_id=None):
                 for i, label in enumerate(field_labels):
                     fields.append((label, row[i + 2] if len(row) > i + 2 else ""))
                 return {
-                    "date":   row[0] if len(row) > 0 else "",
-                    "event":  row[1] if len(row) > 1 else "",
+                    "date": row[0] if len(row) > 0 else "",
+                    "event": row[1] if len(row) > 1 else "",
                     "fields": fields,
                     # Legacy aliases for callers that haven't migrated yet:
-                    "vote_count":       row[2] if len(row) > 2 else "",
-                    "rtf_no_vote":      row[3] if len(row) > 3 else "",
-                    "sitting_out":      row[4] if len(row) > 4 else "",
+                    "vote_count": row[2] if len(row) > 2 else "",
+                    "rtf_no_vote": row[3] if len(row) > 3 else "",
+                    "sitting_out": row[4] if len(row) > 4 else "",
                     "prior_no_request": row[5] if len(row) > 5 else "",
                 }
         return None
@@ -1660,16 +1743,16 @@ def lookup_log_entry(event_type: str, log_date: date, guild_id=None):
 
 # ── Guard ──────────────────────────────────────────────────────────────────────
 
+
 async def _guard(interaction: discord.Interaction) -> bool:
     cfg = get_config(interaction.guild_id)
     if not cfg or not cfg.setup_complete:
-        await interaction.response.send_message(
-            NOT_SET_UP, ephemeral=True
-        )
+        await interaction.response.send_message(NOT_SET_UP, ephemeral=True)
         return False
     if cfg.leadership_role_name not in [r.name for r in interaction.user.roles]:
         await interaction.response.send_message(
-            f"⛔ You need the **{cfg.leadership_role_name}** role to use this command.", ephemeral=True
+            f"⛔ You need the **{cfg.leadership_role_name}** role to use this command.",
+            ephemeral=True,
         )
         return False
     return True
@@ -1682,7 +1765,9 @@ async def _guard(interaction: discord.Interaction) -> bool:
 # is a thin dispatcher.
 
 
-async def handle_storm_participation(bot, interaction: discord.Interaction, event_type: str) -> None:
+async def handle_storm_participation(
+    bot, interaction: discord.Interaction, event_type: str
+) -> None:
     if not await _guard(interaction):
         return
     if interaction.user.id in active_logs:
@@ -1696,7 +1781,9 @@ async def handle_storm_participation(bot, interaction: discord.Interaction, even
     await run_log_flow(bot, interaction.channel, interaction.user, event_type)
 
 
-async def handle_storm_log(bot, interaction: discord.Interaction, event_type: str, date: str | None = None) -> None:
+async def handle_storm_log(
+    bot, interaction: discord.Interaction, event_type: str, date: str | None = None
+) -> None:
     await _show_storm_log(interaction, event_type, date)
 
 
@@ -1712,12 +1799,16 @@ async def _send_storm_reminder(bot, interaction: discord.Interaction, event_type
     import premium
     import dm
     from config import (
-        get_member_roster_config, get_member_roster_sheet, get_storm_config,
+        get_member_roster_config,
+        get_member_roster_sheet,
+        get_storm_config,
     )
 
     if not await premium.feature_gate(
-        "storm_participation_dm", interaction.guild_id,
-        interaction=interaction, bot=bot,
+        "storm_participation_dm",
+        interaction.guild_id,
+        interaction=interaction,
+        bot=bot,
     ):
         await interaction.response.send_message(
             embed=premium.premium_locked_embed(
@@ -1745,13 +1836,15 @@ async def _send_storm_reminder(bot, interaction: discord.Interaction, event_type
 
     label = "Desert Storm" if event_type == "DS" else "Canyon Storm"
     try:
-        ws   = get_member_roster_sheet(interaction.guild_id, roster_cfg["tab_name"])
+        ws = get_member_roster_sheet(interaction.guild_id, roster_cfg["tab_name"])
         rows = await asyncio.get_event_loop().run_in_executor(
-            None, ws.get_all_values,
+            None,
+            ws.get_all_values,
         )
     except Exception as e:
         await interaction.followup.send(
-            f"⚠️ Could not read the roster sheet: {e}", ephemeral=True,
+            f"⚠️ Could not read the roster sheet: {e}",
+            ephemeral=True,
         )
         return
 
@@ -1759,14 +1852,15 @@ async def _send_storm_reminder(bot, interaction: discord.Interaction, event_type
     # fall back to the bot's default. `{name}` is the only supported
     # placeholder; the per-event-type config separates DS from CS so we
     # don't need a {label} placeholder.
-    storm_cfg    = get_storm_config(interaction.guild_id, event_type) or {}
-    dm_body_tmpl = (storm_cfg.get("dm_reminder_message") or "").strip() \
-                   or DEFAULT_STORM_REMINDER_DM.format(label=label)
+    storm_cfg = get_storm_config(interaction.guild_id, event_type) or {}
+    dm_body_tmpl = (
+        storm_cfg.get("dm_reminder_message") or ""
+    ).strip() or DEFAULT_STORM_REMINDER_DM.format(label=label)
 
     name_col = roster_cfg.get("name_col", 1)
-    did_col  = roster_cfg["discord_id_col"]
-    sent     = 0
-    skipped  = 0
+    did_col = roster_cfg["discord_id_col"]
+    sent = 0
+    skipped = 0
     for row in rows[1:]:
         if did_col >= len(row):
             continue
@@ -1776,7 +1870,9 @@ async def _send_storm_reminder(bot, interaction: discord.Interaction, event_type
             continue
         member_name = row[name_col].strip() if name_col < len(row) else ""
         ok = await dm.send_dm_to_id(
-            bot, interaction.guild_id, did,
+            bot,
+            interaction.guild_id,
+            did,
             content=_render_dm_body(dm_body_tmpl, name=member_name),
         )
         if ok:
@@ -1785,8 +1881,7 @@ async def _send_storm_reminder(bot, interaction: discord.Interaction, event_type
             skipped += 1
 
     await interaction.followup.send(
-        f"✅ Sent {sent} **{label}** reminder DM{'s' if sent != 1 else ''}. "
-        f"{skipped} skipped.",
+        f"✅ Sent {sent} **{label}** reminder DM{'s' if sent != 1 else ''}. {skipped} skipped.",
         ephemeral=True,
     )
 
@@ -1809,9 +1904,11 @@ def _render_dm_body(template: str, *, name: str = "") -> str:
     missing or unknown placeholders so a typo in the configured template
     doesn't crash the entire reminder loop — the typo just renders as
     literal text in the DM."""
+
     class _SafeDict(dict):
         def __missing__(self, key):
             return "{" + key + "}"
+
     try:
         return template.format_map(_SafeDict(name=name or ""))
     except Exception:
@@ -1829,6 +1926,7 @@ async def _show_storm_log(interaction: discord.Interaction, event: str, date: st
 
     if date:
         from train import parse_date_and_name
+
         parsed_d, _, _ = parse_date_and_name(f"{date} - placeholder")
         if not parsed_d:
             await interaction.followup.send(
@@ -1838,19 +1936,27 @@ async def _show_storm_log(interaction: discord.Interaction, event: str, date: st
             return
     else:
         from datetime import date as date_cls
+
         parsed_d = date_cls.today()
 
     event_label = "Desert Storm" if event == "DS" else "Canyon Storm"
 
     # Free tier sees only the most recent N storm participation log entries.
     import premium
+
     recent_cap = await premium.get_limit(
-        "storm_log_recent", interaction.guild_id,
-        interaction=interaction, bot=interaction.client,
+        "storm_log_recent",
+        interaction.guild_id,
+        interaction=interaction,
+        bot=interaction.client,
     )
     if recent_cap is not None:
         recent_dates = await asyncio.get_event_loop().run_in_executor(
-            None, list_recent_log_dates, event, recent_cap, interaction.guild_id,
+            None,
+            list_recent_log_dates,
+            event,
+            recent_cap,
+            interaction.guild_id,
         )
         if recent_dates and parsed_d not in recent_dates:
             embed = discord.Embed(
@@ -1863,12 +1969,18 @@ async def _show_storm_log(interaction: discord.Interaction, event: str, date: st
                 color=discord.Color.orange(),
             )
             await interaction.followup.send(
-                embed=embed, view=premium.upgrade_view(), ephemeral=True,
+                embed=embed,
+                view=premium.upgrade_view(),
+                ephemeral=True,
             )
             return
 
     entry = await asyncio.get_event_loop().run_in_executor(
-        None, lookup_log_entry, event, parsed_d, interaction.guild_id,
+        None,
+        lookup_log_entry,
+        event,
+        parsed_d,
+        interaction.guild_id,
     )
 
     if entry is None:
@@ -1879,7 +1991,7 @@ async def _show_storm_log(interaction: discord.Interaction, event: str, date: st
         return
 
     date_str = f"{parsed_d:%A, %B} {parsed_d.day}, {parsed_d.year}"
-    lines    = [f"📋 **{event_label} Log: {date_str}**"]
+    lines = [f"📋 **{event_label} Log: {date_str}**"]
     # Prefer the generic `fields` list (set by the new participation flow);
     # fall back to the legacy DS/CS column shape so pre-rework data still
     # renders nicely.
@@ -1893,6 +2005,8 @@ async def _show_storm_log(interaction: discord.Interaction, event: str, date: st
             lines.append(f"**Votes:** {entry.get('vote_count') or 'Not recorded'}")
             lines.append(f"**RTF No Vote:** {entry.get('rtf_no_vote') or 'None'}")
         lines.append(f"**Sitting Out:** {entry.get('sitting_out') or 'None'}")
-        lines.append(f"**Prior Sit-Out No {action_label}:** {entry.get('prior_no_request') or 'None'}")
+        lines.append(
+            f"**Prior Sit-Out No {action_label}:** {entry.get('prior_no_request') or 'None'}"
+        )
 
     await interaction.followup.send("\n".join(lines))

@@ -15,6 +15,7 @@ Covers:
   * SurveyCog.check_scheduled_reminders fires when frequency/day/time
     line up, and skips when reminder_last_fired matches today
 """
+
 from __future__ import annotations
 
 import asyncio
@@ -31,9 +32,10 @@ from tests.conftest import TEST_GUILD_ID, PREMIUM_TEST_GUILD_ID, make_mock_inter
 
 # ── Helpers ───────────────────────────────────────────────────────────────────
 
+
 def _make_message():
-    msg        = MagicMock(id=999)
-    msg.edit   = AsyncMock(return_value=msg)
+    msg = MagicMock(id=999)
+    msg.edit = AsyncMock(return_value=msg)
     msg.delete = AsyncMock()
     return msg
 
@@ -42,6 +44,7 @@ def _make_followup_interaction(guild_id=TEST_GUILD_ID, is_admin=True):
     """Interaction that the survey flow uses — needs working response and
     followup, plus user.roles matching the guild's saved leadership role."""
     import config as _config
+
     interaction = make_mock_interaction(guild_id=guild_id, is_admin=is_admin)
 
     cfg = _config.get_config(guild_id)
@@ -49,9 +52,10 @@ def _make_followup_interaction(guild_id=TEST_GUILD_ID, is_admin=True):
         cfg.leadership_role_name if cfg and cfg.leadership_role_name else "Leadership"
     )
 
-    role = MagicMock(); role.name = leadership_role_name
+    role = MagicMock()
+    role.name = leadership_role_name
     interaction.user.roles = [role]
-    interaction.followup.send         = AsyncMock(return_value=_make_message())
+    interaction.followup.send = AsyncMock(return_value=_make_message())
     interaction.response.send_message = AsyncMock(return_value=_make_message())
     return interaction
 
@@ -68,6 +72,7 @@ def _captured_followups(interaction):
 
 # ── /survey command ──────────────────────────────────────────────────────────
 
+
 class TestSurveyCommandRendering:
     """`/survey` switches between single-detail and manage-view based on
     Premium status."""
@@ -76,9 +81,11 @@ class TestSurveyCommandRendering:
     @pytest.mark.free_tier_only
     async def test_free_tier_shows_single_detail_view(self, seeded_db):
         import premium
+
         premium.clear_cache()
 
         from survey import SurveyCog
+
         bot = MagicMock()
         bot.add_view = MagicMock()
         bot.add_dynamic_items = MagicMock()
@@ -95,8 +102,10 @@ class TestSurveyCommandRendering:
             assert embed is not None
             assert "Survey Configuration" in (embed.title or "")
         finally:
-            try: cog.check_scheduled_reminders.cancel()
-            except Exception: pass
+            try:
+                cog.check_scheduled_reminders.cancel()
+            except Exception:
+                pass
 
     @pytest.mark.asyncio
     async def test_premium_shows_manage_view_with_buttons(self, seeded_db, monkeypatch):
@@ -105,19 +114,23 @@ class TestSurveyCommandRendering:
         # The leadership guard inside /survey also needs the guild's guild_configs
         # row to exist with setup_complete = 1, which we create explicitly.
         import importlib
+
         monkeypatch.setenv("PREMIUM_BYPASS_GUILD_IDS", str(PREMIUM_TEST_GUILD_ID))
         import premium as _premium
+
         importlib.reload(_premium)
         _premium.clear_cache()
 
         import config as _config
+
         cfg = _config.get_or_create_config(PREMIUM_TEST_GUILD_ID)
-        cfg.leadership_role_name  = "Leadership"
+        cfg.leadership_role_name = "Leadership"
         cfg.leadership_channel_id = 111111111111111112
-        cfg.setup_complete        = 1
+        cfg.setup_complete = 1
         _config.save_config(cfg)
 
         from survey import SurveyCog
+
         bot = MagicMock()
         bot.add_view = MagicMock()
         bot.add_dynamic_items = MagicMock()
@@ -134,7 +147,7 @@ class TestSurveyCommandRendering:
             sent = interaction.followup.send.call_args
             assert sent is not None
             # Either the view is in args/kwargs; Discord SDK accepts both.
-            view  = sent.kwargs.get("view")
+            view = sent.kwargs.get("view")
             embed = sent.kwargs.get("embed")
             assert view is not None, "Premium /survey should include a manage view"
             assert embed is not None
@@ -146,11 +159,14 @@ class TestSurveyCommandRendering:
             assert any("Edit" in l for l in labels)
             assert any("Remove" in l for l in labels)
         finally:
-            try: cog.check_scheduled_reminders.cancel()
-            except Exception: pass
+            try:
+                cog.check_scheduled_reminders.cancel()
+            except Exception:
+                pass
 
 
 # ── /survey_remind hub ────────────────────────────────────────────────────────
+
 
 class TestSurveyRemindHubCancel:
     """Cancelling the hub immediately exits without any further flow."""
@@ -172,9 +188,12 @@ class TestSurveyRemindHubCancel:
             async def _send(content=None, view=None, **kw):
                 if view is not None and isinstance(view, _ReminderHubView):
                     view.choice = None
-                    try: view.stop()
-                    except Exception: pass
+                    try:
+                        view.stop()
+                    except Exception:
+                        pass
                 return _make_message()
+
             interaction.response.send_message = AsyncMock(side_effect=_send)
 
             await cog.survey_remind.callback(cog, interaction)
@@ -186,11 +205,14 @@ class TestSurveyRemindHubCancel:
                 assert "destination" not in (content or "").lower()
                 assert "frequency" not in (content or "").lower()
         finally:
-            try: cog.check_scheduled_reminders.cancel()
-            except Exception: pass
+            try:
+                cog.check_scheduled_reminders.cancel()
+            except Exception:
+                pass
 
 
 # ── Send-now path: channel post (free tier) ───────────────────────────────────
+
 
 class TestSurveyRemindSendNowChannel:
     """Free tier picks Send now → channel post → reminder fires to the
@@ -200,6 +222,7 @@ class TestSurveyRemindSendNowChannel:
     @pytest.mark.free_tier_only
     async def test_send_now_channel_post_fires(self, seeded_db):
         import premium
+
         premium.clear_cache()
 
         from survey import SurveyCog, _ReminderHubView, _DestinationPickView, _ChannelPickView
@@ -216,7 +239,7 @@ class TestSurveyRemindSendNowChannel:
         try:
             interaction = _make_followup_interaction(is_admin=True)
             interaction.entitlements = []
-            interaction.client = bot   # used by _pick_survey
+            interaction.client = bot  # used by _pick_survey
 
             view_log = []
 
@@ -224,9 +247,12 @@ class TestSurveyRemindSendNowChannel:
                 """Hub picker — pick `send`."""
                 if view is not None and isinstance(view, _ReminderHubView):
                     view.choice = "send"
-                    try: view.stop()
-                    except Exception: pass
+                    try:
+                        view.stop()
+                    except Exception:
+                        pass
                 return _make_message()
+
             interaction.response.send_message = AsyncMock(side_effect=_drive_response_send)
 
             async def _drive_followup_send(content=None, view=None, **kw):
@@ -234,15 +260,20 @@ class TestSurveyRemindSendNowChannel:
                 view_log.append((content, view))
                 if isinstance(view, _DestinationPickView):
                     view.choice = "channel"
-                    try: view.stop()
-                    except Exception: pass
+                    try:
+                        view.stop()
+                    except Exception:
+                        pass
                 elif isinstance(view, _ChannelPickView):
                     pseudo_ch = MagicMock(id=999_888)
                     pseudo_ch.mention = "<#999888>"
                     view.channel = pseudo_ch
-                    try: view.stop()
-                    except Exception: pass
+                    try:
+                        view.stop()
+                    except Exception:
+                        pass
                 return _make_message()
+
             interaction.followup.send = AsyncMock(side_effect=_drive_followup_send)
 
             await cog.survey_remind.callback(cog, interaction)
@@ -254,11 +285,14 @@ class TestSurveyRemindSendNowChannel:
                 "Reminder body should have been posted to the chosen channel"
             )
         finally:
-            try: cog.check_scheduled_reminders.cancel()
-            except Exception: pass
+            try:
+                cog.check_scheduled_reminders.cancel()
+            except Exception:
+                pass
 
 
 # ── Helper layer: _send_reminder_to_channel + _send_reminder_via_dm ──────────
+
 
 class TestReminderHelpers:
     """Smoke-test the reminder dispatch helpers in isolation."""
@@ -279,6 +313,7 @@ class TestReminderHelpers:
     @pytest.mark.asyncio
     async def test_send_to_channel_returns_false_when_channel_missing(self, seeded_db):
         from survey import _send_reminder_to_channel
+
         bot = MagicMock()
         bot.get_channel = MagicMock(return_value=None)
 
@@ -298,6 +333,7 @@ class TestReminderHelpers:
 
 # ── Scheduled-reminder tick ───────────────────────────────────────────────────
 
+
 class TestScheduledReminderTick:
     """SurveyCog.check_scheduled_reminders fires when the time matches
     the configured schedule and idempotency stops re-fires."""
@@ -309,42 +345,52 @@ class TestScheduledReminderTick:
 
         # Enable a daily channel-post reminder for the default survey.
         config.save_survey_config(
-            TEST_GUILD_ID, "Squad Powers", "Survey History", [], "intro",
+            TEST_GUILD_ID,
+            "Squad Powers",
+            "Survey History",
+            [],
+            "intro",
         )
         # Compute the guild's "now" so we can match the schedule on it.
         from zoneinfo import ZoneInfo
+
         guild_now = datetime.now(tz=ZoneInfo("America/New_York"))
         target_time = f"{guild_now.hour:02d}:{guild_now.minute:02d}"
 
         config.save_survey_reminder(
-            TEST_GUILD_ID, "default",
-            enabled=1, frequency="daily",
-            day_of_week=0, time_str=target_time,
-            channel_id=44_001, use_dm=0,
+            TEST_GUILD_ID,
+            "default",
+            enabled=1,
+            frequency="daily",
+            day_of_week=0,
+            time_str=target_time,
+            channel_id=44_001,
+            use_dm=0,
             message="Time to fill out the survey!",
         )
 
         bot = MagicMock()
         bot.add_view = MagicMock()
         bot.add_dynamic_items = MagicMock()
-        target = AsyncMock(); target.send = AsyncMock()
+        target = AsyncMock()
+        target.send = AsyncMock()
         bot.get_channel = MagicMock(return_value=target)
 
         cog = SurveyCog(bot)
         try:
             await cog.check_scheduled_reminders()
         finally:
-            try: cog.check_scheduled_reminders.cancel()
-            except Exception: pass
+            try:
+                cog.check_scheduled_reminders.cancel()
+            except Exception:
+                pass
 
         target.send.assert_called_once_with("Time to fill out the survey!")
 
         # Idempotency: running the tick again the same minute should NOT
         # fire a second time (reminder_last_fired now matches today).
         await cog.check_scheduled_reminders()
-        assert target.send.call_count == 1, (
-            "Tick re-fire on the same day should be a no-op"
-        )
+        assert target.send.call_count == 1, "Tick re-fire on the same day should be a no-op"
 
     @pytest.mark.asyncio
     async def test_tick_skips_off_frequency(self, seeded_db):
@@ -354,24 +400,33 @@ class TestScheduledReminderTick:
         from survey import SurveyCog
 
         config.save_survey_config(
-            TEST_GUILD_ID, "Squad Powers", "Survey History", [], "intro",
+            TEST_GUILD_ID,
+            "Squad Powers",
+            "Survey History",
+            [],
+            "intro",
         )
         config.save_survey_reminder(
-            TEST_GUILD_ID, "default",
-            enabled=1, frequency="off",
+            TEST_GUILD_ID,
+            "default",
+            enabled=1,
+            frequency="off",
         )
 
         bot = MagicMock()
         bot.add_view = MagicMock()
         bot.add_dynamic_items = MagicMock()
-        target = AsyncMock(); target.send = AsyncMock()
+        target = AsyncMock()
+        target.send = AsyncMock()
         bot.get_channel = MagicMock(return_value=target)
 
         cog = SurveyCog(bot)
         try:
             await cog.check_scheduled_reminders()
         finally:
-            try: cog.check_scheduled_reminders.cancel()
-            except Exception: pass
+            try:
+                cog.check_scheduled_reminders.cancel()
+            except Exception:
+                pass
 
         assert not target.send.called

@@ -15,6 +15,7 @@ object directly.
 Companion to tests/unit/test_messages_constants.py and the style-rule
 comment in messages.py.
 """
+
 import pathlib
 import re
 
@@ -32,7 +33,9 @@ import re
 # We restrict to single-word verbs in the antipattern set; multi-word
 # verb+object phrases that legitimately use colon to introduce
 # details are not caught.
-_VERBS = "Saved|Added|Updated|Created|Removed|Deleted|Moved|Posted|Sent|Synced|Cleared|Recorded|Paired"
+_VERBS = (
+    "Saved|Added|Updated|Created|Removed|Deleted|Moved|Posted|Sent|Synced|Cleared|Recorded|Paired"
+)
 ANTIPATTERN = re.compile(
     r"[✅🗑️↔️💾📬]\s+(?:" + _VERBS + r"):\s+\*\*",
 )

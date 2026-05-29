@@ -33,16 +33,16 @@ logger = logging.getLogger(__name__)
 
 _OPERATOR_LABELS: list[tuple[str, str]] = [
     (">=", "Greater than or equal to"),
-    (">",  "Greater than"),
+    (">", "Greater than"),
     ("==", "Equal to"),
     ("<=", "Less than or equal to"),
-    ("<",  "Less than"),
+    ("<", "Less than"),
 ]
 
 _OPERATOR_FUNCS = {
-    ">":  lambda c, t: c > t,
+    ">": lambda c, t: c > t,
     ">=": lambda c, t: c >= t,
-    "<":  lambda c, t: c < t,
+    "<": lambda c, t: c < t,
     "<=": lambda c, t: c <= t,
     "==": lambda c, t: c == t,
 }
@@ -56,8 +56,8 @@ _LOOKBACK_PRESETS = [2, 4, 6, 8, 10, 12, 16, 20]
 _TEAM_FILTER_CYCLE = ["both", "A", "B"]
 _TEAM_FILTER_LABEL = {
     "both": "👥 Teams: both",
-    "A":    "👥 Teams: A only",
-    "B":    "👥 Teams: B only",
+    "A": "👥 Teams: A only",
+    "B": "👥 Teams: B only",
 }
 
 # Defaults when the view first opens. Officer iterates from here.
@@ -100,26 +100,32 @@ def query_member_log(
     import storm_log
 
     distinct_dates, by_member = storm_log.read_member_log_window(
-        guild_id, event_type, lookback_events, question_key,
+        guild_id,
+        event_type,
+        lookback_events,
+        question_key,
     )
     counts = storm_log.count_member_flags_in_window(
-        guild_id, event_type, lookback_events, question_key,
+        guild_id,
+        event_type,
+        lookback_events,
+        question_key,
     )
 
     op = _OPERATOR_FUNCS.get(operator_sym)
     if op is None:
         return {"results": [], "total_events_captured": 0, "truncated": False}
 
-    filtered: list[tuple[str, int]] = [
-        (m, c) for m, c in counts.items() if op(c, threshold)
-    ]
+    filtered: list[tuple[str, int]] = [(m, c) for m, c in counts.items() if op(c, threshold)]
 
     # Team filter: optional. Reads the most recent saved team plan for
     # this event_type and intersects members. When no plan exists,
     # the filter no-ops (every match shown).
     if team_filter in ("A", "B"):
         plan_members = _team_plan_member_set(
-            guild_id, event_type, team_filter,
+            guild_id,
+            event_type,
+            team_filter,
         )
         if plan_members is not None:
             filtered = [(m, c) for m, c in filtered if m in plan_members]
@@ -134,11 +140,13 @@ def query_member_log(
             if normalized and normalized not in ("no", "false", "0"):
                 last_flagged = d
                 break
-        results.append({
-            "member":       member,
-            "count":        count,
-            "last_flagged": last_flagged,
-        })
+        results.append(
+            {
+                "member": member,
+                "count": count,
+                "last_flagged": last_flagged,
+            }
+        )
     _ = truthy_set
 
     results.sort(key=lambda r: (-r["count"], r["member"]))
@@ -153,7 +161,9 @@ def query_member_log(
 
 
 def _team_plan_member_set(
-    guild_id: int, event_type: str, team: str,
+    guild_id: int,
+    event_type: str,
+    team: str,
 ) -> Optional[set[str]]:
     """Return the set of member names committed to the given team on
     the most recent saved team plan. None when no plan exists for the
@@ -175,7 +185,8 @@ def _team_plan_member_set(
 
 
 def list_trendable_questions(
-    guild_id: int, event_type: str,
+    guild_id: int,
+    event_type: str,
 ) -> list[dict]:
     """Return the question options the Trends Viewer can query.
 
@@ -187,11 +198,13 @@ def list_trendable_questions(
     import storm_log
     from config import get_participation_config
 
-    items: list[dict] = [{
-        "key":    storm_log.ATTENDANCE_QUESTION_KEY,
-        "label":  "Did this member show up? (attendance)",
-        "source": "attendance",
-    }]
+    items: list[dict] = [
+        {
+            "key": storm_log.ATTENDANCE_QUESTION_KEY,
+            "label": "Did this member show up? (attendance)",
+            "source": "attendance",
+        }
+    ]
 
     pcfg = get_participation_config(guild_id, event_type)
     for q in pcfg.get("questions") or []:
@@ -259,8 +272,7 @@ def render_results_text(
             lines.append(f"  {r['member']}: {r['count']} (last: {last})")
         if query_out.get("truncated"):
             lines.append(
-                f"  (+ more not shown, capped at {_MAX_RESULT_ROWS}, "
-                "narrow your search to see all)"
+                f"  (+ more not shown, capped at {_MAX_RESULT_ROWS}, narrow your search to see all)"
             )
     return "\n".join(lines)
 
@@ -303,8 +315,7 @@ def _render_builder_embed(state: _TrendsState) -> discord.Embed:
     label = "Desert Storm" if state.event_type == "DS" else "Canyon Storm"
     embed = discord.Embed(
         title=f"🔍 {label} Trends Viewer",
-        color=(discord.Color.gold() if state.event_type == "DS"
-               else discord.Color.orange()),
+        color=(discord.Color.gold() if state.event_type == "DS" else discord.Color.orange()),
     )
     if not state.questions:
         embed.description = (
@@ -339,8 +350,7 @@ def _render_results_embed(state: _TrendsState) -> discord.Embed:
     label = "Desert Storm" if state.event_type == "DS" else "Canyon Storm"
     embed = discord.Embed(
         title=f"🔍 {label} Trends",
-        color=(discord.Color.gold() if state.event_type == "DS"
-               else discord.Color.orange()),
+        color=(discord.Color.gold() if state.event_type == "DS" else discord.Color.orange()),
     )
     q = state.last_query or {}
     results = q.get("results") or []
@@ -384,8 +394,7 @@ def _render_results_embed(state: _TrendsState) -> discord.Embed:
         return embed
 
     # Plain text table — Discord renders monospace inside code blocks.
-    table_lines = ["```",
-                   f"{'Member':<24} {'Count':>5}  {'Last flagged':<12}"]
+    table_lines = ["```", f"{'Member':<24} {'Count':>5}  {'Last flagged':<12}"]
     for r in results:
         member = r["member"][:23]
         count = r["count"]
@@ -427,14 +436,18 @@ class _TrendsView(discord.ui.View):
         # Row 0 — question Select. Cap at 25 options (Discord limit).
         q_opts = [
             discord.SelectOption(
-                label=q["label"][:100], value=q["key"][:100],
+                label=q["label"][:100],
+                value=q["key"][:100],
                 default=(q["key"] == s.question_key),
             )
             for q in s.questions[:25]
         ]
         q_select = discord.ui.Select(
             placeholder=f"Question: {s.question_label()[:90]}",
-            options=q_opts, min_values=1, max_values=1, row=0,
+            options=q_opts,
+            min_values=1,
+            max_values=1,
+            row=0,
         )
         q_select.callback = self._on_question
         self.add_item(q_select)
@@ -442,14 +455,18 @@ class _TrendsView(discord.ui.View):
         # Row 1 — operator Select.
         op_opts = [
             discord.SelectOption(
-                label=label, value=sym,
+                label=label,
+                value=sym,
                 default=(sym == s.operator),
             )
             for sym, label in _OPERATOR_LABELS
         ]
         op_select = discord.ui.Select(
             placeholder=f"Show members with: {_operator_word(s.operator)}",
-            options=op_opts, min_values=1, max_values=1, row=1,
+            options=op_opts,
+            min_values=1,
+            max_values=1,
+            row=1,
         )
         op_select.callback = self._on_operator
         self.add_item(op_select)
@@ -457,14 +474,18 @@ class _TrendsView(discord.ui.View):
         # Row 2 — threshold Select.
         th_opts = [
             discord.SelectOption(
-                label=str(n), value=str(n),
+                label=str(n),
+                value=str(n),
                 default=(n == s.threshold),
             )
             for n in _THRESHOLD_PRESETS
         ]
         th_select = discord.ui.Select(
             placeholder=f"Threshold: {s.threshold} flagged events",
-            options=th_opts, min_values=1, max_values=1, row=2,
+            options=th_opts,
+            min_values=1,
+            max_values=1,
+            row=2,
         )
         th_select.callback = self._on_threshold
         self.add_item(th_select)
@@ -472,14 +493,18 @@ class _TrendsView(discord.ui.View):
         # Row 3 — lookback Select.
         lb_opts = [
             discord.SelectOption(
-                label=str(n), value=str(n),
+                label=str(n),
+                value=str(n),
                 default=(n == s.lookback),
             )
             for n in _LOOKBACK_PRESETS
         ]
         lb_select = discord.ui.Select(
             placeholder=f"Lookback: past {s.lookback} captured events",
-            options=lb_opts, min_values=1, max_values=1, row=3,
+            options=lb_opts,
+            min_values=1,
+            max_values=1,
+            row=3,
         )
         lb_select.callback = self._on_lookback
         self.add_item(lb_select)
@@ -487,21 +512,24 @@ class _TrendsView(discord.ui.View):
         # Row 4 — team toggle + run + copy.
         team_btn = discord.ui.Button(
             label=_TEAM_FILTER_LABEL[s.team_filter],
-            style=discord.ButtonStyle.secondary, row=4,
+            style=discord.ButtonStyle.secondary,
+            row=4,
         )
         team_btn.callback = self._on_team_cycle
         self.add_item(team_btn)
 
         run_btn = discord.ui.Button(
             label="🔍 View trends",
-            style=discord.ButtonStyle.primary, row=4,
+            style=discord.ButtonStyle.primary,
+            row=4,
         )
         run_btn.callback = self._on_run
         self.add_item(run_btn)
 
         copy_btn = discord.ui.Button(
             label="📋 Copy as text",
-            style=discord.ButtonStyle.secondary, row=4,
+            style=discord.ButtonStyle.secondary,
+            row=4,
             disabled=(s.last_query is None),
         )
         copy_btn.callback = self._on_copy
@@ -520,8 +548,7 @@ class _TrendsView(discord.ui.View):
     # ── Callbacks ───────────────────────────────────────────────────────
     async def _redraw(self, inter: discord.Interaction, *, results: bool = False):
         self._build()
-        embed = (_render_results_embed(self.state)
-                 if results else _render_builder_embed(self.state))
+        embed = _render_results_embed(self.state) if results else _render_builder_embed(self.state)
         await inter.response.edit_message(embed=embed, view=self)
 
     async def _on_question(self, inter: discord.Interaction):
@@ -570,9 +597,7 @@ class _TrendsView(discord.ui.View):
             idx = _TEAM_FILTER_CYCLE.index(cur)
         except ValueError:
             idx = 0
-        self.state.team_filter = _TEAM_FILTER_CYCLE[
-            (idx + 1) % len(_TEAM_FILTER_CYCLE)
-        ]
+        self.state.team_filter = _TEAM_FILTER_CYCLE[(idx + 1) % len(_TEAM_FILTER_CYCLE)]
         await self._redraw(inter)
 
     async def _on_run(self, inter: discord.Interaction):
@@ -583,7 +608,8 @@ class _TrendsView(discord.ui.View):
         try:
             out = await asyncio.to_thread(
                 query_member_log,
-                self.state.guild_id, self.state.event_type,
+                self.state.guild_id,
+                self.state.event_type,
                 question_key=self.state.question_key,
                 operator_sym=self.state.operator,
                 threshold=self.state.threshold,
@@ -593,18 +619,19 @@ class _TrendsView(discord.ui.View):
         except Exception as e:
             logger.warning(
                 "[STORM TRENDS] query failed for guild=%s: %s",
-                self.state.guild_id, e,
+                self.state.guild_id,
+                e,
             )
             await inter.followup.send(
-                f"⚠️ Couldn't read the Member Log: {e}\n"
-                "Try again in a moment.",
+                f"⚠️ Couldn't read the Member Log: {e}\nTry again in a moment.",
                 ephemeral=True,
             )
             return
         self.state.last_query = out
         self._build()
         await inter.edit_original_response(
-            embed=_render_results_embed(self.state), view=self,
+            embed=_render_results_embed(self.state),
+            view=self,
         )
 
     async def _on_copy(self, inter: discord.Interaction):
@@ -645,7 +672,8 @@ async def handle_storm_trends(
     `/desertstorm` and `/canyonstorm` event hubs (storm_event_hub.py).
     Premium-gated, leadership-only."""
     from storm_permissions import (
-        is_leader_or_admin, deny_non_leader,
+        is_leader_or_admin,
+        deny_non_leader,
     )
     import premium
 
@@ -661,7 +689,9 @@ async def handle_storm_trends(
         return
 
     if not await premium.is_premium(
-        interaction.guild_id, interaction=interaction, bot=bot,
+        interaction.guild_id,
+        interaction=interaction,
+        bot=bot,
     ):
         await interaction.response.send_message(
             PREMIUM_LOCKED_INLINE.format(feature="Trends Viewer"),
@@ -672,7 +702,8 @@ async def handle_storm_trends(
     await interaction.response.defer(ephemeral=True, thinking=True)
     questions = await asyncio.to_thread(
         list_trendable_questions,
-        interaction.guild_id, event_type,
+        interaction.guild_id,
+        event_type,
     )
     state = _TrendsState(
         guild_id=interaction.guild_id,

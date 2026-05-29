@@ -46,15 +46,15 @@ STATS_BRANCH = "main"
 # GitHub's recommended UA + accept headers for Contents API.
 _GITHUB_API = "https://api.github.com"
 _HEADERS_BASE = {
-    "Accept":               "application/vnd.github+json",
+    "Accept": "application/vnd.github+json",
     "X-GitHub-Api-Version": "2022-11-28",
-    "User-Agent":           "lw-alliance-helper-bot/1.0",
+    "User-Agent": "lw-alliance-helper-bot/1.0",
 }
 
 # The committer GitHub will attribute the commit to. Anything is fine
 # here — just a label in the website repo's history.
 _COMMITTER = {
-    "name":  "LW Alliance Helper Bot",
+    "name": "LW Alliance Helper Bot",
     "email": "bot@lw-alliance-helper.invalid",
 }
 
@@ -67,14 +67,18 @@ def _auth_headers(token: str) -> dict:
     return {**_HEADERS_BASE, "Authorization": f"Bearer {token}"}
 
 
-async def _fetch_current(session: aiohttp.ClientSession, token: str) -> tuple[Optional[dict], Optional[str]]:
+async def _fetch_current(
+    session: aiohttp.ClientSession, token: str
+) -> tuple[Optional[dict], Optional[str]]:
     """Return (parsed_json, sha) for the existing file, or (None, None)
     if it doesn't exist yet. Anything else (HTTP error, malformed body)
     is treated as 'we don't know what's there' — caller will overwrite.
     """
     url = f"{_GITHUB_API}/repos/{STATS_REPO}/contents/{STATS_PATH}?ref={STATS_BRANCH}"
     try:
-        async with session.get(url, headers=_auth_headers(token), timeout=aiohttp.ClientTimeout(total=15)) as resp:
+        async with session.get(
+            url, headers=_auth_headers(token), timeout=aiohttp.ClientTimeout(total=15)
+        ) as resp:
             if resp.status == 404:
                 return (None, None)
             if resp.status != 200:
@@ -98,24 +102,28 @@ async def _fetch_current(session: aiohttp.ClientSession, token: str) -> tuple[Op
 
 async def _put_new(
     session: aiohttp.ClientSession,
-    token:   str,
+    token: str,
     content: dict,
-    sha:     Optional[str],
+    sha: Optional[str],
     message: str,
 ) -> bool:
     """PUT the new content. Returns True on success, False otherwise."""
-    url     = f"{_GITHUB_API}/repos/{STATS_REPO}/contents/{STATS_PATH}"
+    url = f"{_GITHUB_API}/repos/{STATS_REPO}/contents/{STATS_PATH}"
     payload = {
-        "message":   message,
-        "content":   base64.b64encode(json.dumps(content, indent=2).encode("utf-8") + b"\n").decode("ascii"),
-        "branch":    STATS_BRANCH,
+        "message": message,
+        "content": base64.b64encode(json.dumps(content, indent=2).encode("utf-8") + b"\n").decode(
+            "ascii"
+        ),
+        "branch": STATS_BRANCH,
         "committer": _COMMITTER,
     }
     if sha:
         payload["sha"] = sha
 
     try:
-        async with session.put(url, headers=_auth_headers(token), json=payload, timeout=aiohttp.ClientTimeout(total=20)) as resp:
+        async with session.put(
+            url, headers=_auth_headers(token), json=payload, timeout=aiohttp.ClientTimeout(total=20)
+        ) as resp:
             if resp.status in (200, 201):
                 return True
             body = await resp.text()
@@ -127,9 +135,9 @@ async def _put_new(
             if resp.status in (401, 403, 404) or resp.status >= 500:
                 try:
                     import sentry_sdk
+
                     sentry_sdk.capture_message(
-                        f"[STATS] PUT stats.json returned {resp.status}: "
-                        f"{body[:300]}",
+                        f"[STATS] PUT stats.json returned {resp.status}: {body[:300]}",
                         level="error",
                     )
                 except Exception:
@@ -153,7 +161,7 @@ async def publish_alliance_count(count: int) -> None:
         return
 
     new_payload = {
-        "alliances":   int(count),
+        "alliances": int(count),
         "updated_utc": datetime.now(tz=timezone.utc).isoformat(timespec="seconds"),
     }
 
@@ -168,4 +176,4 @@ async def publish_alliance_count(count: int) -> None:
         if ok:
             print(f"[STATS] Published alliance count = {count} to {STATS_REPO}/{STATS_PATH}")
         else:
-            print(f"[STATS] Failed to publish alliance count.")
+            print("[STATS] Failed to publish alliance count.")

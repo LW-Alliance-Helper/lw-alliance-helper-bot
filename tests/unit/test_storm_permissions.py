@@ -16,10 +16,13 @@ import storm_permissions
 from tests.unit.test_config import TEST_GUILD_ID
 
 
-def _fake_admin_interaction(guild_id: int = TEST_GUILD_ID,
-                            *, admin: bool = False,
-                            role_names: list[str] | None = None,
-                            in_guild: bool = True) -> MagicMock:
+def _fake_admin_interaction(
+    guild_id: int = TEST_GUILD_ID,
+    *,
+    admin: bool = False,
+    role_names: list[str] | None = None,
+    in_guild: bool = True,
+) -> MagicMock:
     """Build an `interaction.user` shaped object suitable for the helpers.
 
     `role_names` is the list of role names the member carries — matched
@@ -49,6 +52,7 @@ class TestIsLeaderOrAdmin:
     def test_no_leadership_role_configured_blocks_non_admin(self, seeded_db):
         # `seeded_db` includes a leadership_role_name; null it out.
         import config
+
         cfg = config.get_config(TEST_GUILD_ID)
         cfg.leadership_role_name = ""
         config.save_config(cfg)
@@ -58,6 +62,7 @@ class TestIsLeaderOrAdmin:
 
     def test_matching_leadership_role_name_passes(self, seeded_db):
         import config
+
         cfg = config.get_config(TEST_GUILD_ID)
         cfg.leadership_role_name = "Officer"
         config.save_config(cfg)
@@ -80,7 +85,8 @@ class TestEnsurePremiumStructured:
         inter.response.send_message = AsyncMock()
         with patch("premium.is_premium", new=AsyncMock(return_value=False)):
             ok, structured = await storm_permissions.ensure_premium_structured(
-                inter, "DS",
+                inter,
+                "DS",
             )
         assert ok is False
         assert structured is None
@@ -94,13 +100,16 @@ class TestEnsurePremiumStructured:
         inter.response = MagicMock()
         inter.response.is_done.return_value = False
         inter.response.send_message = AsyncMock()
-        with patch("premium.is_premium", new=AsyncMock(return_value=True)), \
-             patch(
-                 "config.get_structured_storm_config",
-                 return_value={"structured_flow_enabled": False},
-             ):
+        with (
+            patch("premium.is_premium", new=AsyncMock(return_value=True)),
+            patch(
+                "config.get_structured_storm_config",
+                return_value={"structured_flow_enabled": False},
+            ),
+        ):
             ok, structured = await storm_permissions.ensure_premium_structured(
-                inter, "DS",
+                inter,
+                "DS",
             )
         assert ok is False
         assert structured is None
@@ -115,13 +124,16 @@ class TestEnsurePremiumStructured:
         inter.response = MagicMock()
         inter.response.is_done.return_value = False
         inter.response.send_message = AsyncMock()
-        with patch("premium.is_premium", new=AsyncMock(return_value=True)), \
-             patch(
-                 "config.get_structured_storm_config",
-                 return_value={"structured_flow_enabled": True, "signups_tab": "DS Signups"},
-             ):
+        with (
+            patch("premium.is_premium", new=AsyncMock(return_value=True)),
+            patch(
+                "config.get_structured_storm_config",
+                return_value={"structured_flow_enabled": True, "signups_tab": "DS Signups"},
+            ),
+        ):
             ok, structured = await storm_permissions.ensure_premium_structured(
-                inter, "DS",
+                inter,
+                "DS",
             )
         assert ok is True
         assert structured == {"structured_flow_enabled": True, "signups_tab": "DS Signups"}
@@ -138,7 +150,8 @@ class TestEnsurePremiumStructured:
         inter.followup.send = AsyncMock()
         with patch("premium.is_premium", new=AsyncMock(return_value=False)):
             ok, _ = await storm_permissions.ensure_premium_structured(
-                inter, "CS",
+                inter,
+                "CS",
             )
         assert ok is False
         inter.followup.send.assert_awaited_once()

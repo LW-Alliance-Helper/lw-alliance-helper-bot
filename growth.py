@@ -44,23 +44,22 @@ BUCKET_ORDER: list[str] = ["increased", "steady", "low", "none", "decline"]
 #   None       0–5%
 #   Decline   <0%
 DEFAULT_THRESHOLDS: dict[str, float] = {
-    "none":       0.0,
-    "low":        5.0,
-    "steady":    10.0,
+    "none": 0.0,
+    "low": 5.0,
+    "steady": 10.0,
     "increased": 20.0,
 }
 
 DEFAULT_BUCKET_LABELS: dict[str, str] = {
     "increased": "Increased",
-    "steady":    "Steady",
-    "low":       "Low",
-    "none":      "None",
-    "decline":   "Decline",
+    "steady": "Steady",
+    "low": "Low",
+    "none": "None",
+    "decline": "Decline",
 }
 
 
-def classify_bucket(prev: float, curr: float,
-                    thresholds: dict | None = None) -> str | None:
+def classify_bucket(prev: float, curr: float, thresholds: dict | None = None) -> str | None:
     """Classify a period-over-period change into a canonical bucket key.
 
     Returns one of ``BUCKET_ORDER`` (``increased`` / ``steady`` / ``low`` /
@@ -123,7 +122,7 @@ def _extract_period_labels(header_row: list[str], metric_labels: list[str]) -> l
         for m in metric_labels:
             prefix = f"{m} ("
             if h.startswith(prefix) and h.endswith(")"):
-                period = h[len(prefix):-1]
+                period = h[len(prefix) : -1]
                 if period not in seen:
                     seen.append(period)
                 break
@@ -155,46 +154,51 @@ def compute_next_snapshot(gcfg: dict, now: datetime | None = None) -> datetime |
         now = now.astimezone(ET)
 
     today = now.date()
-    freq  = gcfg.get("snapshot_frequency", "monthly")
+    freq = gcfg.get("snapshot_frequency", "monthly")
 
     if freq == "monthly":
         # Stored value is always clamped to 1..28 by the wizard, so we can
         # rely on the date being valid in every month.
         day = max(1, min(28, int(gcfg.get("snapshot_day", 1))))
         candidate = today.replace(day=day)
-        if candidate < today or (
-            candidate == today and now.hour >= SNAPSHOT_FIRE_HOUR_ET
-        ):
+        if candidate < today or (candidate == today and now.hour >= SNAPSHOT_FIRE_HOUR_ET):
             year, month = today.year, today.month + 1
             if month > 12:
                 year, month = year + 1, 1
             candidate = date(year, month, day)
         return datetime(
-            candidate.year, candidate.month, candidate.day,
-            SNAPSHOT_FIRE_HOUR_ET, 0, tzinfo=ET,
+            candidate.year,
+            candidate.month,
+            candidate.day,
+            SNAPSHOT_FIRE_HOUR_ET,
+            0,
+            tzinfo=ET,
         )
 
     if freq == "interval":
         interval = max(1, int(gcfg.get("snapshot_interval", 30)))
-        delta    = (today - INTERVAL_EPOCH).days
+        delta = (today - INTERVAL_EPOCH).days
         remainder = delta % interval
         if remainder == 0 and now.hour < SNAPSHOT_FIRE_HOUR_ET:
             candidate = today
         else:
             candidate = today + timedelta(days=interval - remainder)
         return datetime(
-            candidate.year, candidate.month, candidate.day,
-            SNAPSHOT_FIRE_HOUR_ET, 0, tzinfo=ET,
+            candidate.year,
+            candidate.month,
+            candidate.day,
+            SNAPSHOT_FIRE_HOUR_ET,
+            0,
+            tzinfo=ET,
         )
 
     return None
 
 
-
-
 def _get_spreadsheet(guild_id: int = None):
     """Return an authenticated gspread Spreadsheet object."""
     from config import get_spreadsheet
+
     return get_spreadsheet(guild_id)
 
 
@@ -213,26 +217,27 @@ def load_member_data(guild_id: int = None) -> list[dict]:
     using the column configuration from guild_growth_config.
     """
     from config import get_growth_config
-    gcfg       = get_growth_config(guild_id)
+
+    gcfg = get_growth_config(guild_id)
     tab_source = gcfg.get("tab_source", "")
-    name_col   = gcfg.get("name_col", "A")
-    metrics    = gcfg.get("metrics", [])
-    start_row  = gcfg.get("data_start_row", 2)
+    name_col = gcfg.get("name_col", "A")
+    metrics = gcfg.get("metrics", [])
+    start_row = gcfg.get("data_start_row", 2)
 
     if not tab_source or not metrics:
         print(f"[GROWTH] No source tab or metrics configured for guild {guild_id}")
         return []
 
     try:
-        sh   = _get_spreadsheet(guild_id)
-        ws   = sh.worksheet(tab_source)
+        sh = _get_spreadsheet(guild_id)
+        ws = sh.worksheet(tab_source)
         rows = ws.get_all_values()
 
-        name_idx    = ord(name_col.upper()) - ord('A')
-        metric_idxs = {m["label"]: ord(m["col"].upper()) - ord('A') for m in metrics}
+        name_idx = ord(name_col.upper()) - ord("A")
+        metric_idxs = {m["label"]: ord(m["col"].upper()) - ord("A") for m in metrics}
 
         members = []
-        for i, row in enumerate(rows[start_row - 1:], start=start_row):
+        for i, row in enumerate(rows[start_row - 1 :], start=start_row):
             if len(row) <= name_idx or not row[name_idx].strip():
                 continue
             entry = {"name": row[name_idx].strip(), "row_index": i}
@@ -253,6 +258,7 @@ def run_growth_snapshot():
     """
     import traceback, sqlite3
     from config import DB_PATH
+
     try:
         with sqlite3.connect(DB_PATH) as conn:
             rows = conn.execute(
@@ -269,7 +275,9 @@ def run_growth_snapshot():
         except Exception as e:
             err_str = str(e)
             if "WorksheetNotFound" in type(e).__name__ or "WorksheetNotFound" in err_str:
-                print(f"[GROWTH] Skipping guild {gid} — sheet tab not found. Configure via the growth setup wizard.")
+                print(
+                    f"[GROWTH] Skipping guild {gid} — sheet tab not found. Configure via the growth setup wizard."
+                )
             else:
                 print(f"[GROWTH] Snapshot failed for guild {gid}: {e}")
                 print(f"[GROWTH] Traceback:\n{traceback.format_exc()}")
@@ -277,8 +285,9 @@ def run_growth_snapshot():
 
 def _run_growth_snapshot_inner(guild_id: int = None):
     from config import get_config, get_growth_config
-    cfg   = get_config(guild_id)
-    gcfg  = get_growth_config(guild_id)
+
+    cfg = get_config(guild_id)
+    gcfg = get_growth_config(guild_id)
 
     # Skip if growth tracking not enabled or configured
     if not gcfg.get("enabled"):
@@ -287,14 +296,17 @@ def _run_growth_snapshot_inner(guild_id: int = None):
         print(f"[GROWTH] Skipping guild {guild_id} — no sheet configured")
         return
     if not gcfg.get("tab_source") or not gcfg.get("tab_growth") or not gcfg.get("metrics"):
-        print(f"[GROWTH] Skipping guild {guild_id} — growth tracking not fully configured. Run the growth setup wizard.")
+        print(
+            f"[GROWTH] Skipping guild {guild_id} — growth tracking not fully configured. Run the growth setup wizard."
+        )
         return
 
     import gspread
-    now         = datetime.now(tz=ET)
+
+    now = datetime.now(tz=ET)
     month_label = now.strftime("%b %Y")
 
-    sh  = _get_spreadsheet(guild_id)
+    sh = _get_spreadsheet(guild_id)
     tab_growth = gcfg["tab_growth"]
     try:
         ws = sh.worksheet(tab_growth)
@@ -303,7 +315,7 @@ def _run_growth_snapshot_inner(guild_id: int = None):
         print(f"[GROWTH] Created growth tracking tab '{tab_growth}' for guild {guild_id}")
 
     existing_headers = ws.row_values(1) if ws.row_count > 0 else []
-    metric_labels    = [m["label"] for m in gcfg["metrics"]]
+    metric_labels = [m["label"] for m in gcfg["metrics"]]
 
     # `period_already_exists` only short-circuits the *metric column* write
     # below — the breakdown writer at the bottom still fires either way so
@@ -354,8 +366,8 @@ def _run_growth_snapshot_inner(guild_id: int = None):
         updates = []
         new_member_rows = []
         for member in members:
-            name     = member["name"]
-            row_idx  = name_to_row.get(name.lower())
+            name = member["name"]
+            row_idx = name_to_row.get(name.lower())
 
             if row_idx is None:
                 # Reserve a row for this new member; the actual sheet append is
@@ -372,13 +384,15 @@ def _run_growth_snapshot_inner(guild_id: int = None):
             for label in metric_labels:
                 col_name = f"{label} ({month_label})"
                 if col_name in header_row:
-                    col_idx   = header_row.index(col_name)
-                    col_letter = chr(ord('A') + col_idx)
-                    val        = member.get(label, "")
-                    updates.append({
-                        "range": f"{col_letter}{row_idx}",
-                        "values": [[val]],
-                    })
+                    col_idx = header_row.index(col_name)
+                    col_letter = chr(ord("A") + col_idx)
+                    val = member.get(label, "")
+                    updates.append(
+                        {
+                            "range": f"{col_letter}{row_idx}",
+                            "values": [[val]],
+                        }
+                    )
 
         if new_member_rows:
             ws.append_rows(new_member_rows, value_input_option="USER_ENTERED")
@@ -386,7 +400,9 @@ def _run_growth_snapshot_inner(guild_id: int = None):
         if updates:
             ws.batch_update(updates, value_input_option="USER_ENTERED")
 
-        print(f"[GROWTH] Snapshot complete for {month_label} — {len(members)} members (guild {guild_id})")
+        print(
+            f"[GROWTH] Snapshot complete for {month_label} — {len(members)} members (guild {guild_id})"
+        )
 
     # ── Growth Breakdown: classify period-over-period change per member ──
     # Forward-only: skip when no previous period exists. Idempotent: skip
@@ -398,20 +414,34 @@ def _run_growth_snapshot_inner(guild_id: int = None):
     # `breakdown_post_channel_id` is set.
     try:
         _write_breakdown_for_snapshot(
-            sh, gcfg, members, metric_labels, all_values, header_row,
-            curr_period_label=month_label, guild_id=guild_id,
+            sh,
+            gcfg,
+            members,
+            metric_labels,
+            all_values,
+            header_row,
+            curr_period_label=month_label,
+            guild_id=guild_id,
         )
     except Exception as e:
         # Breakdown is a soft addition — never let it abort the snapshot
         # itself if something goes wrong.
         import traceback
+
         print(f"[GROWTH] Breakdown write failed for guild {guild_id}: {e}")
         print(f"[GROWTH] Breakdown traceback:\n{traceback.format_exc()}")
 
 
-def _write_breakdown_for_snapshot(sh, gcfg: dict, members: list, metric_labels: list[str],
-                                  all_values: list, header_row: list[str],
-                                  curr_period_label: str, guild_id: int | None) -> None:
+def _write_breakdown_for_snapshot(
+    sh,
+    gcfg: dict,
+    members: list,
+    metric_labels: list[str],
+    all_values: list,
+    header_row: list[str],
+    curr_period_label: str,
+    guild_id: int | None,
+) -> None:
     """Compute the period-over-period breakdown for the snapshot that just
     landed and append it to the configured breakdown tab.
 
@@ -489,7 +519,7 @@ def _write_breakdown_for_snapshot(sh, gcfg: dict, members: list, metric_labels: 
 
     # Render labels (Premium override → fallback to defaults).
     label_overrides = gcfg.get("breakdown_labels") or {}
-    thresholds      = gcfg.get("breakdown_thresholds") or {}
+    thresholds = gcfg.get("breakdown_thresholds") or {}
 
     def _label_for(bucket: str) -> str:
         return str(label_overrides.get(bucket) or DEFAULT_BUCKET_LABELS[bucket])
@@ -522,7 +552,7 @@ def _write_breakdown_for_snapshot(sh, gcfg: dict, members: list, metric_labels: 
             bd_name_to_row[name.lower()] = bd_row_idx
 
         for m in metric_labels:
-            pct_col_name    = f"{transition_prefix} {m} %"
+            pct_col_name = f"{transition_prefix} {m} %"
             bucket_col_name = f"{transition_prefix} {m} Bucket"
 
             curr_val = member.get(m, 0.0)
@@ -536,20 +566,18 @@ def _write_breakdown_for_snapshot(sh, gcfg: dict, members: list, metric_labels: 
                         prev_val = 0.0
 
             pct_val = compute_pct_change(prev_val, curr_val)
-            bucket  = classify_bucket(prev_val, curr_val, thresholds=thresholds)
+            bucket = classify_bucket(prev_val, curr_val, thresholds=thresholds)
 
-            pct_cell    = "" if pct_val is None else f"{pct_val:.2f}%"
+            pct_cell = "" if pct_val is None else f"{pct_val:.2f}%"
             bucket_cell = "" if bucket is None else _label_for(bucket)
 
-            pct_col_idx    = col_index[pct_col_name]
+            pct_col_idx = col_index[pct_col_name]
             bucket_col_idx = col_index[bucket_col_name]
-            pct_col_letter    = _col_letter(pct_col_idx)
+            pct_col_letter = _col_letter(pct_col_idx)
             bucket_col_letter = _col_letter(bucket_col_idx)
 
-            updates.append({"range": f"{pct_col_letter}{bd_row_idx}",
-                            "values": [[pct_cell]]})
-            updates.append({"range": f"{bucket_col_letter}{bd_row_idx}",
-                            "values": [[bucket_cell]]})
+            updates.append({"range": f"{pct_col_letter}{bd_row_idx}", "values": [[pct_cell]]})
+            updates.append({"range": f"{bucket_col_letter}{bd_row_idx}", "values": [[bucket_cell]]})
 
             if bucket is not None:
                 breakdown_summary[m][bucket].append(name)
@@ -572,11 +600,17 @@ def _write_breakdown_for_snapshot(sh, gcfg: dict, members: list, metric_labels: 
     if post_channel_id:
         try:
             _maybe_post_breakdown(
-                guild_id, post_channel_id, prev_period_label, curr_period_label,
-                metric_labels, breakdown_summary, gcfg,
+                guild_id,
+                post_channel_id,
+                prev_period_label,
+                curr_period_label,
+                metric_labels,
+                breakdown_summary,
+                gcfg,
             )
         except Exception as e:
             import traceback
+
             print(f"[GROWTH] Breakdown auto-post failed for guild {guild_id}: {e}")
             print(f"[GROWTH] Auto-post traceback:\n{traceback.format_exc()}")
 
@@ -587,16 +621,22 @@ def _col_letter(idx0: int) -> str:
     letters = ""
     n = idx0
     while True:
-        letters = chr(ord('A') + (n % 26)) + letters
+        letters = chr(ord("A") + (n % 26)) + letters
         n = n // 26 - 1
         if n < 0:
             break
     return letters
 
 
-def _maybe_post_breakdown(guild_id, post_channel_id, prev_period_label,
-                          curr_period_label, metric_labels, breakdown_summary,
-                          gcfg) -> None:
+def _maybe_post_breakdown(
+    guild_id,
+    post_channel_id,
+    prev_period_label,
+    curr_period_label,
+    metric_labels,
+    breakdown_summary,
+    gcfg,
+) -> None:
     """Fire the Premium breakdown auto-post. No-op when the guild isn't
     premium at the moment of posting. The bot / channel resolution and
     the actual send happen on the bot's event loop, scheduled via
@@ -611,20 +651,21 @@ def _maybe_post_breakdown(guild_id, post_channel_id, prev_period_label,
     if not guild_id:
         return
     import asyncio
+
     try:
         import bot_state
     except Exception as e:
         print(f"[GROWTH] Cannot resolve bot_state for auto-post: {e}")
         return
-    bot  = getattr(bot_state, "bot", None)
+    bot = getattr(bot_state, "bot", None)
     loop = getattr(bot_state, "event_loop", None)
     if bot is None or loop is None or not loop.is_running():
-        print(f"[GROWTH] Bot loop not ready — skipping auto-post "
-              f"(guild {guild_id})")
+        print(f"[GROWTH] Bot loop not ready — skipping auto-post (guild {guild_id})")
         return
 
     async def _post():
         import premium
+
         if not await premium.is_premium(guild_id, bot=bot):
             print(f"[GROWTH] Guild {guild_id} not premium — skipping auto-post")
             return
@@ -645,11 +686,9 @@ def _maybe_post_breakdown(guild_id, post_channel_id, prev_period_label,
         )
         try:
             await channel.send(embed=embed)
-            print(f"[GROWTH] Auto-posted breakdown to channel {post_channel_id} "
-                  f"(guild {guild_id})")
+            print(f"[GROWTH] Auto-posted breakdown to channel {post_channel_id} (guild {guild_id})")
         except Exception as e:
-            print(f"[GROWTH] Failed to send breakdown to channel "
-                  f"{post_channel_id}: {e}")
+            print(f"[GROWTH] Failed to send breakdown to channel {post_channel_id}: {e}")
 
     # `run_coroutine_threadsafe` is safe to call from the loop's own
     # thread (manual /growth button path) and from a worker thread
@@ -675,11 +714,11 @@ def read_latest_breakdown(guild_id: int) -> dict:
     from config import get_growth_config
 
     empty = {
-        "has_data":          False,
+        "has_data": False,
         "prev_period_label": "",
         "curr_period_label": "",
-        "metric_labels":     [],
-        "summary":           {},
+        "metric_labels": [],
+        "summary": {},
     }
 
     gcfg = get_growth_config(guild_id)
@@ -757,7 +796,9 @@ def read_latest_breakdown(guild_id: int) -> dict:
     # Preserve the configured metric order rather than column-discovery order.
     configured_order = [m["label"] for m in (gcfg.get("metrics") or [])]
     metric_entries.sort(
-        key=lambda t: (configured_order.index(t[0]) if t[0] in configured_order else len(configured_order))
+        key=lambda t: (
+            configured_order.index(t[0]) if t[0] in configured_order else len(configured_order)
+        )
     )
     metric_labels = [t[0] for t in metric_entries]
 
@@ -777,20 +818,23 @@ def read_latest_breakdown(guild_id: int) -> dict:
                 summary[metric][bucket_key].append(name)
 
     return {
-        "has_data":          True,
+        "has_data": True,
         "prev_period_label": prev_period_label,
         "curr_period_label": curr_period_label,
-        "metric_labels":     metric_labels,
-        "summary":           summary,
+        "metric_labels": metric_labels,
+        "summary": summary,
     }
 
 
-def format_breakdown_embed(*, metric_labels: list[str],
-                           breakdown_summary: dict,
-                           prev_period_label: str,
-                           curr_period_label: str,
-                           label_overrides: dict | None = None,
-                           bucket_filter: list[str] | None = None):
+def format_breakdown_embed(
+    *,
+    metric_labels: list[str],
+    breakdown_summary: dict,
+    prev_period_label: str,
+    curr_period_label: str,
+    label_overrides: dict | None = None,
+    bucket_filter: list[str] | None = None,
+):
     """Render the breakdown summary as a Discord embed. Shared by the
     Premium auto-post, the `/growth overview` "📊 See most recent Breakdown"
     button, and the standalone `/growth breakdown` leaf so all three views
@@ -798,8 +842,9 @@ def format_breakdown_embed(*, metric_labels: list[str],
     include; empty list = include every bucket (the typical case).
     """
     import discord
+
     label_overrides = label_overrides or {}
-    bucket_filter   = bucket_filter or []
+    bucket_filter = bucket_filter or []
 
     def _label(bucket: str) -> str:
         return str(label_overrides.get(bucket) or DEFAULT_BUCKET_LABELS[bucket])
@@ -827,4 +872,3 @@ def format_breakdown_embed(*, metric_labels: list[str],
         embed.add_field(name=metric, value=value, inline=False)
 
     return embed
-

@@ -35,8 +35,7 @@ from tests.unit.test_config import TEST_GUILD_ID
 # ── Factories ────────────────────────────────────────────────────────────────
 
 
-def _make_guild(guild_id: int = TEST_GUILD_ID,
-                name: str = "Test Alliance") -> MagicMock:
+def _make_guild(guild_id: int = TEST_GUILD_ID, name: str = "Test Alliance") -> MagicMock:
     g = MagicMock(spec=discord.Guild)
     g.id = guild_id
     g.name = name
@@ -44,7 +43,8 @@ def _make_guild(guild_id: int = TEST_GUILD_ID,
 
 
 def _make_interaction(
-    *, user_id: int = 42,
+    *,
+    user_id: int = 42,
     guild_id: int = TEST_GUILD_ID,
     in_guild: bool = True,
     response_done: bool = False,
@@ -75,7 +75,9 @@ class TestBuildEventHubEmbedColdPath:
 
     def test_ds_cold_path_renders_without_crash(self, seeded_db):
         embed = seh._build_event_hub_embed(
-            _make_guild(), "DS", is_premium=False,
+            _make_guild(),
+            "DS",
+            is_premium=False,
         )
         assert "Desert Storm" in embed.title
         assert "Test Alliance" in embed.title
@@ -84,33 +86,43 @@ class TestBuildEventHubEmbedColdPath:
 
     def test_cs_cold_path_uses_orange(self, seeded_db):
         embed = seh._build_event_hub_embed(
-            _make_guild(), "CS", is_premium=False,
+            _make_guild(),
+            "CS",
+            is_premium=False,
         )
         assert "Canyon Storm" in embed.title
         assert embed.color == discord.Color.orange()
 
     def test_cold_path_signup_channel_says_not_configured(self, seeded_db):
         embed = seh._build_event_hub_embed(
-            _make_guild(), "DS", is_premium=False,
+            _make_guild(),
+            "DS",
+            is_premium=False,
         )
         assert "_not configured_" in embed.description
 
     def test_cold_path_structured_flow_says_not_enabled(self, seeded_db):
         embed = seh._build_event_hub_embed(
-            _make_guild(), "DS", is_premium=False,
+            _make_guild(),
+            "DS",
+            is_premium=False,
         )
         assert "Not enabled (free-tier flow only)" in embed.description
 
     def test_cold_path_preset_count_zero(self, seeded_db):
         embed = seh._build_event_hub_embed(
-            _make_guild(), "DS", is_premium=False,
+            _make_guild(),
+            "DS",
+            is_premium=False,
         )
         # `📋 **Presets saved:** 0` appears verbatim.
         assert "Presets saved:** 0" in embed.description
 
     def test_cold_path_default_teams_a_and_b(self, seeded_db):
         embed = seh._build_event_hub_embed(
-            _make_guild(), "DS", is_premium=False,
+            _make_guild(),
+            "DS",
+            is_premium=False,
         )
         assert "A & B" in embed.description
 
@@ -119,23 +131,31 @@ class TestBuildEventHubEmbedColdPath:
         helper raises), the description falls back to the
         game-defined event day."""
         embed = seh._build_event_hub_embed(
-            _make_guild(), "DS", is_premium=False,
+            _make_guild(),
+            "DS",
+            is_premium=False,
         )
         # DS is Friday game-side.
         assert "Friday" in embed.description
 
     def test_cold_path_cs_falls_back_to_thursday(self, seeded_db):
         embed = seh._build_event_hub_embed(
-            _make_guild(), "CS", is_premium=False,
+            _make_guild(),
+            "CS",
+            is_premium=False,
         )
         assert "Thursday" in embed.description
 
     def test_footer_points_back_at_hub_command(self, seeded_db):
         ds = seh._build_event_hub_embed(
-            _make_guild(), "DS", is_premium=False,
+            _make_guild(),
+            "DS",
+            is_premium=False,
         )
         cs = seh._build_event_hub_embed(
-            _make_guild(), "CS", is_premium=False,
+            _make_guild(),
+            "CS",
+            is_premium=False,
         )
         assert "/desertstorm" in (ds.footer.text or "")
         assert "/canyonstorm" in (cs.footer.text or "")
@@ -147,14 +167,18 @@ class TestBuildEventHubEmbedPremiumTierCopy:
 
     def test_free_tier_adds_upgrade_hint(self, seeded_db):
         embed = seh._build_event_hub_embed(
-            _make_guild(), "DS", is_premium=False,
+            _make_guild(),
+            "DS",
+            is_premium=False,
         )
         assert "/upgrade" in embed.description
         assert "Premium-only buttons below are disabled" in embed.description
 
     def test_premium_tier_omits_upgrade_hint(self, seeded_db):
         embed = seh._build_event_hub_embed(
-            _make_guild(), "DS", is_premium=True,
+            _make_guild(),
+            "DS",
+            is_premium=True,
         )
         assert "/upgrade" not in embed.description
 
@@ -164,7 +188,8 @@ class TestBuildEventHubEmbedPopulated:
     surfaces that state instead of the cold-path placeholders."""
 
     def test_signup_channel_renders_as_mention_when_configured(
-        self, seeded_db,
+        self,
+        seeded_db,
     ):
         with patch(
             "config.get_structured_storm_config",
@@ -174,7 +199,9 @@ class TestBuildEventHubEmbedPopulated:
             },
         ):
             embed = seh._build_event_hub_embed(
-                _make_guild(), "DS", is_premium=True,
+                _make_guild(),
+                "DS",
+                is_premium=True,
             )
         assert "<#555000000000000001>" in embed.description
         assert "_not configured_" not in embed.description
@@ -184,13 +211,15 @@ class TestBuildEventHubEmbedPopulated:
             "config.get_structured_storm_config",
             return_value={
                 "signup_channel_id": 555000000000000001,
-                "poll_day_of_week": 4,   # Friday
+                "poll_day_of_week": 4,  # Friday
                 "signup_time": "20:00",
                 "structured_flow_enabled": False,
             },
         ):
             embed = seh._build_event_hub_embed(
-                _make_guild(), "DS", is_premium=True,
+                _make_guild(),
+                "DS",
+                is_premium=True,
             )
         # `auto-posted Friday at 20:00 server time` rides below the
         # channel mention.
@@ -207,13 +236,15 @@ class TestBuildEventHubEmbedPopulated:
             "config.get_structured_storm_config",
             return_value={
                 "signup_channel_id": 555000000000000001,
-                "poll_day_of_week": 0,   # Monday — falsy on purpose
+                "poll_day_of_week": 0,  # Monday — falsy on purpose
                 "signup_time": "12:00",
                 "structured_flow_enabled": False,
             },
         ):
             embed = seh._build_event_hub_embed(
-                _make_guild(), "DS", is_premium=True,
+                _make_guild(),
+                "DS",
+                is_premium=True,
             )
         assert "auto-posted Monday at 12:00 server time" in embed.description
 
@@ -231,7 +262,9 @@ class TestBuildEventHubEmbedPopulated:
             },
         ):
             embed = seh._build_event_hub_embed(
-                _make_guild(), "DS", is_premium=True,
+                _make_guild(),
+                "DS",
+                is_premium=True,
             )
         assert "auto-posted" not in embed.description
 
@@ -244,13 +277,16 @@ class TestBuildEventHubEmbedPopulated:
             },
         ):
             embed = seh._build_event_hub_embed(
-                _make_guild(), "DS", is_premium=True,
+                _make_guild(),
+                "DS",
+                is_premium=True,
             )
         # Power column normalised to upper-case display.
         assert "power column **G**" in embed.description
 
     def test_structured_flow_enabled_without_power_column_shows_enabled(
-        self, seeded_db,
+        self,
+        seeded_db,
     ):
         with patch(
             "config.get_structured_storm_config",
@@ -260,7 +296,9 @@ class TestBuildEventHubEmbedPopulated:
             },
         ):
             embed = seh._build_event_hub_embed(
-                _make_guild(), "DS", is_premium=True,
+                _make_guild(),
+                "DS",
+                is_premium=True,
             )
         assert "Enabled" in embed.description
         assert "power column" not in embed.description
@@ -271,7 +309,9 @@ class TestBuildEventHubEmbedPopulated:
             return_value={"teams": "A"},
         ):
             embed = seh._build_event_hub_embed(
-                _make_guild(), "DS", is_premium=True,
+                _make_guild(),
+                "DS",
+                is_premium=True,
             )
         assert "Team A only" in embed.description
 
@@ -281,7 +321,9 @@ class TestBuildEventHubEmbedPopulated:
             return_value=["Standard", "Backup", "Big Hits"],
         ):
             embed = seh._build_event_hub_embed(
-                _make_guild(), "DS", is_premium=True,
+                _make_guild(),
+                "DS",
+                is_premium=True,
             )
         assert "Presets saved:** 3" in embed.description
 
@@ -309,7 +351,8 @@ _FREE_TIER_LABELS = {
 
 
 def _make_view(
-    *, event_type: str = "DS",
+    *,
+    event_type: str = "DS",
     is_premium: bool = True,
     owner_user_id: int = 42,
 ) -> seh._EventHubView:
@@ -341,20 +384,14 @@ class TestEventHubViewPremiumGating:
             label = child.label
             unlocked_form = label.split(" ", 1)[-1] if label.startswith("💎 ") else label
             # Locked variants only apply to the premium-gated buttons.
-            is_premium_label = any(
-                unlocked_form in active for active in _PREMIUM_GATED_LABELS
-            )
+            is_premium_label = any(unlocked_form in active for active in _PREMIUM_GATED_LABELS)
             if label.startswith("💎 "):
-                assert child.disabled is True, (
-                    f"Locked-label button should be disabled: {label}"
-                )
+                assert child.disabled is True, f"Locked-label button should be disabled: {label}"
                 assert is_premium_label, (
                     f"Free-tier button rendered with locked-label prefix: {label}"
                 )
             else:
-                assert child.disabled is False, (
-                    f"Free-tier button should be enabled: {label}"
-                )
+                assert child.disabled is False, f"Free-tier button should be enabled: {label}"
 
     @pytest.mark.free_tier_only
     def test_free_tier_locked_labels_strip_original_emoji(self):
@@ -563,10 +600,15 @@ class TestSetupButtonWiring:
     async def test_ds_setup_button_launches_ds_setup_wizard(self):
         view = _make_view(event_type="DS", is_premium=True)
         inter = _make_interaction()
-        with patch(
-            "setup_cog._launch_storm_setup", new=AsyncMock(),
-        ) as launcher, patch(
-            "wizard_registry.safe_edit_response", new=AsyncMock(),
+        with (
+            patch(
+                "setup_cog._launch_storm_setup",
+                new=AsyncMock(),
+            ) as launcher,
+            patch(
+                "wizard_registry.safe_edit_response",
+                new=AsyncMock(),
+            ),
         ):
             await _click(view, seh.HUB_BTN_SETUP, inter)
         launcher.assert_awaited_once_with(inter, view.bot, "DS")
@@ -575,10 +617,15 @@ class TestSetupButtonWiring:
     async def test_cs_setup_button_launches_cs_setup_wizard(self):
         view = _make_view(event_type="CS", is_premium=True)
         inter = _make_interaction()
-        with patch(
-            "setup_cog._launch_storm_setup", new=AsyncMock(),
-        ) as launcher, patch(
-            "wizard_registry.safe_edit_response", new=AsyncMock(),
+        with (
+            patch(
+                "setup_cog._launch_storm_setup",
+                new=AsyncMock(),
+            ) as launcher,
+            patch(
+                "wizard_registry.safe_edit_response",
+                new=AsyncMock(),
+            ),
         ):
             await _click(view, seh.HUB_BTN_SETUP, inter)
         launcher.assert_awaited_once_with(inter, view.bot, "CS")
@@ -591,10 +638,15 @@ class TestSetupButtonWiring:
         view = _make_view(event_type="DS", is_premium=True)
         inter = _make_interaction()
         launch = AsyncMock()
-        with patch(
-            "setup_cog._launch_storm_setup", new=launch,
-        ), patch(
-            "wizard_registry.safe_edit_response", new=AsyncMock(),
+        with (
+            patch(
+                "setup_cog._launch_storm_setup",
+                new=launch,
+            ),
+            patch(
+                "wizard_registry.safe_edit_response",
+                new=AsyncMock(),
+            ),
         ):
             await _click(view, seh.HUB_BTN_SETUP, inter)
         assert all(c.disabled for c in view.children)
@@ -608,11 +660,15 @@ class TestSetupButtonWiring:
         view = _make_view(event_type="DS", is_premium=True)
         inter = _make_interaction()
         launch = AsyncMock()
-        with patch(
-            "setup_cog._launch_storm_setup", new=launch,
-        ), patch(
-            "wizard_registry.safe_edit_response",
-            new=AsyncMock(side_effect=RuntimeError("expired token")),
+        with (
+            patch(
+                "setup_cog._launch_storm_setup",
+                new=launch,
+            ),
+            patch(
+                "wizard_registry.safe_edit_response",
+                new=AsyncMock(side_effect=RuntimeError("expired token")),
+            ),
         ):
             await _click(view, seh.HUB_BTN_SETUP, inter)
         launch.assert_awaited_once_with(inter, view.bot, "DS")
@@ -626,11 +682,16 @@ class TestHandleEventHubGates:
     async def test_non_leadership_caller_rejected(self, seeded_db):
         bot = MagicMock()
         inter = _make_interaction()
-        with patch(
-            "storm_permissions.is_leader_or_admin", return_value=False,
-        ), patch(
-            "storm_permissions.deny_non_leader", new=AsyncMock(),
-        ) as denier:
+        with (
+            patch(
+                "storm_permissions.is_leader_or_admin",
+                return_value=False,
+            ),
+            patch(
+                "storm_permissions.deny_non_leader",
+                new=AsyncMock(),
+            ) as denier,
+        ):
             await seh.handle_event_hub(bot, inter, "DS")
         denier.assert_awaited_once_with(inter)
         # No hub embed sent.
@@ -643,10 +704,15 @@ class TestHandleEventHubGates:
         interaction) is rejected with the standard server-only copy."""
         bot = MagicMock()
         inter = _make_interaction(in_guild=False)
-        with patch(
-            "storm_permissions.is_leader_or_admin", return_value=True,
-        ), patch(
-            "storm_permissions.deny_non_leader", new=AsyncMock(),
+        with (
+            patch(
+                "storm_permissions.is_leader_or_admin",
+                return_value=True,
+            ),
+            patch(
+                "storm_permissions.deny_non_leader",
+                new=AsyncMock(),
+            ),
         ):
             await seh.handle_event_hub(bot, inter, "DS")
         inter.response.send_message.assert_awaited_once()
@@ -660,12 +726,19 @@ class TestHandleEventHubRender:
     async def test_render_sends_ephemeral_embed_with_view(self, seeded_db):
         bot = MagicMock()
         inter = _make_interaction()
-        with patch(
-            "storm_permissions.is_leader_or_admin", return_value=True,
-        ), patch(
-            "premium.is_premium", new=AsyncMock(return_value=True),
-        ), patch(
-            "storm_walkthrough.maybe_offer_storm_hub_tour", new=AsyncMock(),
+        with (
+            patch(
+                "storm_permissions.is_leader_or_admin",
+                return_value=True,
+            ),
+            patch(
+                "premium.is_premium",
+                new=AsyncMock(return_value=True),
+            ),
+            patch(
+                "storm_walkthrough.maybe_offer_storm_hub_tour",
+                new=AsyncMock(),
+            ),
         ):
             await seh.handle_event_hub(bot, inter, "DS")
         inter.response.send_message.assert_awaited_once()
@@ -681,16 +754,24 @@ class TestHandleEventHubRender:
 
     @pytest.mark.asyncio
     async def test_render_uses_followup_when_response_already_done(
-        self, seeded_db,
+        self,
+        seeded_db,
     ):
         bot = MagicMock()
         inter = _make_interaction(response_done=True)
-        with patch(
-            "storm_permissions.is_leader_or_admin", return_value=True,
-        ), patch(
-            "premium.is_premium", new=AsyncMock(return_value=True),
-        ), patch(
-            "storm_walkthrough.maybe_offer_storm_hub_tour", new=AsyncMock(),
+        with (
+            patch(
+                "storm_permissions.is_leader_or_admin",
+                return_value=True,
+            ),
+            patch(
+                "premium.is_premium",
+                new=AsyncMock(return_value=True),
+            ),
+            patch(
+                "storm_walkthrough.maybe_offer_storm_hub_tour",
+                new=AsyncMock(),
+            ),
         ):
             await seh.handle_event_hub(bot, inter, "DS")
         inter.response.send_message.assert_not_called()
@@ -703,20 +784,27 @@ class TestHandleEventHubRender:
 
     @pytest.mark.asyncio
     async def test_premium_check_failure_falls_through_to_free_tier(
-        self, seeded_db,
+        self,
+        seeded_db,
     ):
         """A flaky premium check shouldn't 500 the hub; it falls
         through to `is_premium=False` so the user still sees the
         embed (with the locked buttons + upgrade hint)."""
         bot = MagicMock()
         inter = _make_interaction()
-        with patch(
-            "storm_permissions.is_leader_or_admin", return_value=True,
-        ), patch(
-            "premium.is_premium",
-            new=AsyncMock(side_effect=RuntimeError("entitlement boom")),
-        ), patch(
-            "storm_walkthrough.maybe_offer_storm_hub_tour", new=AsyncMock(),
+        with (
+            patch(
+                "storm_permissions.is_leader_or_admin",
+                return_value=True,
+            ),
+            patch(
+                "premium.is_premium",
+                new=AsyncMock(side_effect=RuntimeError("entitlement boom")),
+            ),
+            patch(
+                "storm_walkthrough.maybe_offer_storm_hub_tour",
+                new=AsyncMock(),
+            ),
         ):
             await seh.handle_event_hub(bot, inter, "DS")
         view = inter.response.send_message.await_args.kwargs["view"]
@@ -726,13 +814,20 @@ class TestHandleEventHubRender:
     async def test_tour_offer_fires_after_hub_lands(self, seeded_db):
         bot = MagicMock()
         inter = _make_interaction()
-        with patch(
-            "storm_permissions.is_leader_or_admin", return_value=True,
-        ), patch(
-            "premium.is_premium", new=AsyncMock(return_value=True),
-        ), patch(
-            "storm_walkthrough.maybe_offer_storm_hub_tour", new=AsyncMock(),
-        ) as offer:
+        with (
+            patch(
+                "storm_permissions.is_leader_or_admin",
+                return_value=True,
+            ),
+            patch(
+                "premium.is_premium",
+                new=AsyncMock(return_value=True),
+            ),
+            patch(
+                "storm_walkthrough.maybe_offer_storm_hub_tour",
+                new=AsyncMock(),
+            ) as offer,
+        ):
             await seh.handle_event_hub(bot, inter, "DS")
         offer.assert_awaited_once()
         kwargs = offer.await_args.kwargs
@@ -745,13 +840,19 @@ class TestHandleEventHubRender:
         `handle_event_hub`."""
         bot = MagicMock()
         inter = _make_interaction()
-        with patch(
-            "storm_permissions.is_leader_or_admin", return_value=True,
-        ), patch(
-            "premium.is_premium", new=AsyncMock(return_value=True),
-        ), patch(
-            "storm_walkthrough.maybe_offer_storm_hub_tour",
-            new=AsyncMock(side_effect=RuntimeError("walkthrough boom")),
+        with (
+            patch(
+                "storm_permissions.is_leader_or_admin",
+                return_value=True,
+            ),
+            patch(
+                "premium.is_premium",
+                new=AsyncMock(return_value=True),
+            ),
+            patch(
+                "storm_walkthrough.maybe_offer_storm_hub_tour",
+                new=AsyncMock(side_effect=RuntimeError("walkthrough boom")),
+            ),
         ):
             # Must not raise.
             await seh.handle_event_hub(bot, inter, "DS")
@@ -769,6 +870,7 @@ class TestTourOfferSuppression:
     @pytest.mark.asyncio
     async def test_offer_fires_when_not_dismissed(self, seeded_db):
         import storm_walkthrough as sw
+
         inter = _make_interaction()
         await sw.maybe_offer_storm_hub_tour(inter, event_type="DS")
         inter.followup.send.assert_awaited_once()
@@ -777,8 +879,11 @@ class TestTourOfferSuppression:
     async def test_offer_suppressed_after_dismissal(self, seeded_db):
         import config
         import storm_walkthrough as sw
+
         config.dismiss_walkthrough(
-            TEST_GUILD_ID, 42, sw.STORM_HUB_TOUR_KEY,
+            TEST_GUILD_ID,
+            42,
+            sw.STORM_HUB_TOUR_KEY,
         )
         inter = _make_interaction(user_id=42)
         await sw.maybe_offer_storm_hub_tour(inter, event_type="DS")

@@ -110,22 +110,24 @@ class CategoryPickerView(discord.ui.View):
         self.add_item(self._select)
 
         confirm_btn = discord.ui.Button(label="✅ Confirm", style=discord.ButtonStyle.success)
-        cancel_btn  = discord.ui.Button(label="❌ Cancel",  style=discord.ButtonStyle.danger)
+        cancel_btn = discord.ui.Button(label="❌ Cancel", style=discord.ButtonStyle.danger)
 
         async def _on_confirm(inter: discord.Interaction):
             self.confirmed = True
-            for item in self.children: item.disabled = True
+            for item in self.children:
+                item.disabled = True
             await wizard_registry.safe_edit_response(inter, view=self)
             self.stop()
 
         async def _on_cancel(inter: discord.Interaction):
             self.confirmed = False
-            for item in self.children: item.disabled = True
+            for item in self.children:
+                item.disabled = True
             await wizard_registry.safe_edit_response(inter, view=self)
             self.stop()
 
         confirm_btn.callback = _on_confirm
-        cancel_btn.callback  = _on_cancel
+        cancel_btn.callback = _on_cancel
         self.add_item(confirm_btn)
         self.add_item(cancel_btn)
 
@@ -152,15 +154,19 @@ class _ChannelRemapView(discord.ui.View):
                 discord.ChannelType.private_thread,
                 discord.ChannelType.news_thread,
             ],
-            min_values=1, max_values=1,
+            min_values=1,
+            max_values=1,
         )
 
         async def _on_pick(inter: discord.Interaction):
             picked = select.values[0]
             self.decision = ("set", int(picked.id))
-            for item in self.children: item.disabled = True
+            for item in self.children:
+                item.disabled = True
             await wizard_registry.safe_edit_response(
-                inter, content=f"✅ Picked: <#{picked.id}>", view=self,
+                inter,
+                content=f"✅ Picked: <#{picked.id}>",
+                view=self,
             )
             self.stop()
 
@@ -172,9 +178,12 @@ class _ChannelRemapView(discord.ui.View):
 
             async def _on_keep(inter: discord.Interaction):
                 self.decision = ("keep_current",)
-                for item in self.children: item.disabled = True
+                for item in self.children:
+                    item.disabled = True
                 await wizard_registry.safe_edit_response(
-                    inter, content="↩️ Keeping current values.", view=self,
+                    inter,
+                    content="↩️ Keeping current values.",
+                    view=self,
                 )
                 self.stop()
 
@@ -185,9 +194,12 @@ class _ChannelRemapView(discord.ui.View):
 
         async def _on_skip(inter: discord.Interaction):
             self.decision = ("skip",)
-            for item in self.children: item.disabled = True
+            for item in self.children:
+                item.disabled = True
             await wizard_registry.safe_edit_response(
-                inter, content="⏭️ Skipped — affected fields will be cleared.", view=self,
+                inter,
+                content="⏭️ Skipped — affected fields will be cleared.",
+                view=self,
             )
             self.stop()
 
@@ -204,15 +216,19 @@ class _RoleRemapView(discord.ui.View):
 
         select = discord.ui.RoleSelect(
             placeholder="Pick the new role…",
-            min_values=1, max_values=1,
+            min_values=1,
+            max_values=1,
         )
 
         async def _on_pick(inter: discord.Interaction):
             picked = select.values[0]
             self.decision = ("set", int(picked.id))
-            for item in self.children: item.disabled = True
+            for item in self.children:
+                item.disabled = True
             await wizard_registry.safe_edit_response(
-                inter, content=f"✅ Picked: <@&{picked.id}>", view=self,
+                inter,
+                content=f"✅ Picked: <@&{picked.id}>",
+                view=self,
             )
             self.stop()
 
@@ -224,9 +240,12 @@ class _RoleRemapView(discord.ui.View):
 
             async def _on_keep(inter: discord.Interaction):
                 self.decision = ("keep_current",)
-                for item in self.children: item.disabled = True
+                for item in self.children:
+                    item.disabled = True
                 await wizard_registry.safe_edit_response(
-                    inter, content="↩️ Keeping current values.", view=self,
+                    inter,
+                    content="↩️ Keeping current values.",
+                    view=self,
                 )
                 self.stop()
 
@@ -237,9 +256,12 @@ class _RoleRemapView(discord.ui.View):
 
         async def _on_skip(inter: discord.Interaction):
             self.decision = ("skip",)
-            for item in self.children: item.disabled = True
+            for item in self.children:
+                item.disabled = True
             await wizard_registry.safe_edit_response(
-                inter, content="⏭️ Skipped — affected fields will be cleared.", view=self,
+                inter,
+                content="⏭️ Skipped — affected fields will be cleared.",
+                view=self,
             )
             self.stop()
 
@@ -265,47 +287,62 @@ class _SheetIdView(discord.ui.View):
         self.decision: Optional[str] = None
 
         use_exported_btn = discord.ui.Button(
-            label="Use exported", style=discord.ButtonStyle.success,
+            label="Use exported",
+            style=discord.ButtonStyle.success,
         )
+
         async def _on_use_exported(inter: discord.Interaction):
             self.decision = exported_id
-            for item in self.children: item.disabled = True
+            for item in self.children:
+                item.disabled = True
             await wizard_registry.safe_edit_response(
-                inter, content=f"✅ Will use exported sheet ID `{exported_id}`.",
+                inter,
+                content=f"✅ Will use exported sheet ID `{exported_id}`.",
                 view=self,
             )
             self.stop()
+
         use_exported_btn.callback = _on_use_exported
         self.add_item(use_exported_btn)
 
         if current_id:
             keep_btn = discord.ui.Button(
-                label="Keep current", style=discord.ButtonStyle.secondary,
+                label="Keep current",
+                style=discord.ButtonStyle.secondary,
             )
+
             async def _on_keep_current(inter: discord.Interaction):
                 self.decision = current_id
-                for item in self.children: item.disabled = True
+                for item in self.children:
+                    item.disabled = True
                 await wizard_registry.safe_edit_response(
-                    inter, content=f"↩️ Keeping current sheet ID `{current_id}`.",
+                    inter,
+                    content=f"↩️ Keeping current sheet ID `{current_id}`.",
                     view=self,
                 )
                 self.stop()
+
             keep_btn.callback = _on_keep_current
             self.add_item(keep_btn)
 
         new_btn = discord.ui.Button(
-            label="Enter a different ID", style=discord.ButtonStyle.primary,
+            label="Enter a different ID",
+            style=discord.ButtonStyle.primary,
         )
+
         async def _on_new(inter: discord.Interaction):
             class _SheetModal(discord.ui.Modal, title="Enter sheet ID"):
                 _ti = discord.ui.TextInput(
                     label="Spreadsheet ID",
                     placeholder="e.g. 1abc...XYZ — long alphanumeric ID from the sheet URL",
-                    required=True, max_length=200,
+                    required=True,
+                    max_length=200,
                 )
+
                 async def on_submit(self, modal_inter: discord.Interaction):
                     await modal_inter.response.defer()
                     self.stop()
+
             modal = _SheetModal()
             await inter.response.send_modal(modal)
             await modal.wait()
@@ -315,28 +352,36 @@ class _SheetIdView(discord.ui.View):
                 self.stop()
                 return
             self.decision = value
-            for item in self.children: item.disabled = True
+            for item in self.children:
+                item.disabled = True
             try:
                 await inter.edit_original_response(
-                    content=f"✅ Will use sheet ID `{value}`.", view=self,
+                    content=f"✅ Will use sheet ID `{value}`.",
+                    view=self,
                 )
             except Exception:
                 pass
             self.stop()
+
         new_btn.callback = _on_new
         self.add_item(new_btn)
 
         skip_btn = discord.ui.Button(
-            label="Skip (clear)", style=discord.ButtonStyle.danger,
+            label="Skip (clear)",
+            style=discord.ButtonStyle.danger,
         )
+
         async def _on_skip(inter: discord.Interaction):
             self.decision = ""
-            for item in self.children: item.disabled = True
+            for item in self.children:
+                item.disabled = True
             await wizard_registry.safe_edit_response(
-                inter, content="⏭️ Sheet ID will be cleared — run `/setup` after import.",
+                inter,
+                content="⏭️ Sheet ID will be cleared — run `/setup` after import.",
                 view=self,
             )
             self.stop()
+
         skip_btn.callback = _on_skip
         self.add_item(skip_btn)
 
@@ -376,7 +421,7 @@ class ExportImportCog(commands.Cog):
         guild = interaction.guild
         guild_id = interaction.guild_id
         channel_lookup = _build_channel_lookup(guild)
-        role_lookup    = _build_role_lookup(guild)
+        role_lookup = _build_role_lookup(guild)
 
         available = config_export.collect_available_categories(
             guild_id,
@@ -402,7 +447,7 @@ class ExportImportCog(commands.Cog):
             labels = [config_export.CATEGORY_LABELS[k] for k in available]
             embed.add_field(
                 name=f"Available to export ({len(available)} categor"
-                     f"{'y' if len(available) == 1 else 'ies'})",
+                f"{'y' if len(available) == 1 else 'ies'})",
                 value="\n".join(f"• {l}" for l in labels),
                 inline=False,
             )
@@ -433,7 +478,7 @@ class ExportImportCog(commands.Cog):
         guild_id = interaction.guild_id
         user = interaction.user
         channel_lookup = _build_channel_lookup(guild)
-        role_lookup    = _build_role_lookup(guild)
+        role_lookup = _build_role_lookup(guild)
 
         available = config_export.collect_available_categories(
             guild_id,
@@ -518,7 +563,6 @@ class ExportImportCog(commands.Cog):
             )
             return
 
-        guild = interaction.guild
         guild_id = interaction.guild_id
         user = interaction.user
 
@@ -543,10 +587,10 @@ class ExportImportCog(commands.Cog):
             return
 
         source_guild = parsed.get("source_guild") or {}
-        source_guild_id   = int(source_guild.get("id") or 0)
+        source_guild_id = int(source_guild.get("id") or 0)
         source_guild_name = source_guild.get("name") or "Unknown"
         cats = parsed.get("categories_present") or []
-        same_guild = (source_guild_id == guild_id)
+        same_guild = source_guild_id == guild_id
         warnings = []
         if parsed.get("unknown_keys"):
             warnings.append(
@@ -564,9 +608,13 @@ class ExportImportCog(commands.Cog):
                 f"**Source server:** {source_guild_name} (`{source_guild_id}`)\n"
                 f"**Schema version:** v{parsed.get('schema_version')}\n"
                 f"**Exported at:** {parsed.get('exported_at', '?')}\n"
-                + ("**Same-guild restore** — channel/role IDs will likely still "
-                   "resolve, but the wizard still runs in case anything was "
-                   "revamped.\n" if same_guild else "")
+                + (
+                    "**Same-guild restore** — channel/role IDs will likely still "
+                    "resolve, but the wizard still runs in case anything was "
+                    "revamped.\n"
+                    if same_guild
+                    else ""
+                )
             ),
             color=discord.Color.blurple(),
         )
@@ -576,27 +624,28 @@ class ExportImportCog(commands.Cog):
             inline=False,
         )
         if warnings:
-            embed.add_field(name="⚠️ Warnings",
-                            value="\n".join(warnings),
-                            inline=False)
+            embed.add_field(name="⚠️ Warnings", value="\n".join(warnings), inline=False)
 
         class _ConfirmView(discord.ui.View):
             def __init__(self):
                 super().__init__(timeout=WIZARD_TIMEOUT)
                 self.confirmed = False
 
-            @discord.ui.button(label="Continue → walk through remap",
-                               style=discord.ButtonStyle.success)
+            @discord.ui.button(
+                label="Continue → walk through remap", style=discord.ButtonStyle.success
+            )
             async def go(self, inter: discord.Interaction, button: discord.ui.Button):
                 self.confirmed = True
-                for item in self.children: item.disabled = True
+                for item in self.children:
+                    item.disabled = True
                 await wizard_registry.safe_edit_response(inter, view=self)
                 self.stop()
 
             @discord.ui.button(label="Cancel", style=discord.ButtonStyle.danger)
             async def cancel(self, inter: discord.Interaction, button: discord.ui.Button):
                 self.confirmed = False
-                for item in self.children: item.disabled = True
+                for item in self.children:
+                    item.disabled = True
                 await wizard_registry.safe_edit_response(inter, view=self)
                 self.stop()
 
@@ -611,11 +660,13 @@ class ExportImportCog(commands.Cog):
         # 3) Sheet ID prompt.
         exported_sheet_id = ""
         try:
-            exported_sheet_id = ((parsed.get("data") or {})
-                                 .get("core") or {}).get("travels", {}).get("spreadsheet_id", "") or ""
+            exported_sheet_id = ((parsed.get("data") or {}).get("core") or {}).get(
+                "travels", {}
+            ).get("spreadsheet_id", "") or ""
         except AttributeError:
             exported_sheet_id = ""
         from config import get_config
+
         cur_cfg = get_config(guild_id)
         current_sheet_id = (cur_cfg.spreadsheet_id if cur_cfg else "") or ""
 
@@ -642,7 +693,7 @@ class ExportImportCog(commands.Cog):
         channel_groups, role_groups = config_export.discover_remap_groups(parsed)
 
         channel_decisions: dict[int, tuple] = {}
-        role_decisions:    dict[int, tuple] = {}
+        role_decisions: dict[int, tuple] = {}
 
         if channel_groups or role_groups:
             await channel.send(
@@ -706,8 +757,7 @@ class ExportImportCog(commands.Cog):
         # 6) Report.
         result_embed = discord.Embed(
             title="📥 Import Result",
-            color=(discord.Color.green() if not summary["skipped"]
-                   else discord.Color.orange()),
+            color=(discord.Color.green() if not summary["skipped"] else discord.Color.orange()),
         )
         if summary["applied"]:
             applied_labels = "\n".join(

@@ -49,24 +49,25 @@ def _patch_member_log(rows: list[list[str]]):
 
 
 class TestQueryMemberLog:
-
     def test_greater_than_or_equal_filters_correctly(self):
         from storm_trends import query_member_log
+
         rows = [
             ["Event Date", "Member", "sat_out"],
             ["2026-05-01", "alice", "yes"],
-            ["2026-05-01", "bob",   "no"],
+            ["2026-05-01", "bob", "no"],
             ["2026-05-01", "carol", "no"],
             ["2026-05-08", "alice", "yes"],
-            ["2026-05-08", "bob",   "no"],
+            ["2026-05-08", "bob", "no"],
             ["2026-05-08", "carol", "yes"],
             ["2026-05-15", "alice", "yes"],
-            ["2026-05-15", "bob",   "yes"],
+            ["2026-05-15", "bob", "yes"],
             ["2026-05-15", "carol", "no"],
         ]
         with _patch_member_log(rows):
             out = query_member_log(
-                TEST_GUILD_ID, "DS",
+                TEST_GUILD_ID,
+                "DS",
                 question_key="sat_out",
                 operator_sym=">=",
                 threshold=2,
@@ -83,16 +84,18 @@ class TestQueryMemberLog:
 
     def test_greater_than_strict(self):
         from storm_trends import query_member_log
+
         rows = [
             ["Event Date", "Member", "sat_out"],
             ["2026-05-01", "alice", "yes"],
             ["2026-05-08", "alice", "yes"],
-            ["2026-05-01", "bob",   "yes"],
-            ["2026-05-08", "bob",   "yes"],
+            ["2026-05-01", "bob", "yes"],
+            ["2026-05-08", "bob", "yes"],
         ]
         with _patch_member_log(rows):
             out = query_member_log(
-                TEST_GUILD_ID, "DS",
+                TEST_GUILD_ID,
+                "DS",
                 question_key="sat_out",
                 operator_sym=">",
                 threshold=2,
@@ -103,16 +106,18 @@ class TestQueryMemberLog:
 
     def test_equal_to(self):
         from storm_trends import query_member_log
+
         rows = [
             ["Event Date", "Member", "sat_out"],
             ["2026-05-01", "alice", "yes"],
             ["2026-05-08", "alice", "no"],
-            ["2026-05-01", "bob",   "yes"],
-            ["2026-05-08", "bob",   "yes"],
+            ["2026-05-01", "bob", "yes"],
+            ["2026-05-08", "bob", "yes"],
         ]
         with _patch_member_log(rows):
             out = query_member_log(
-                TEST_GUILD_ID, "DS",
+                TEST_GUILD_ID,
+                "DS",
                 question_key="sat_out",
                 operator_sym="==",
                 threshold=1,
@@ -124,14 +129,16 @@ class TestQueryMemberLog:
     def test_less_than_includes_zeros(self):
         """`< 1` returns everyone with zero flagged events too."""
         from storm_trends import query_member_log
+
         rows = [
             ["Event Date", "Member", "sat_out"],
             ["2026-05-01", "alice", "yes"],
-            ["2026-05-01", "bob",   "no"],
+            ["2026-05-01", "bob", "no"],
         ]
         with _patch_member_log(rows):
             out = query_member_log(
-                TEST_GUILD_ID, "DS",
+                TEST_GUILD_ID,
+                "DS",
                 question_key="sat_out",
                 operator_sym="<",
                 threshold=1,
@@ -148,18 +155,20 @@ class TestQueryMemberLog:
         """Lookback=2 caps the query to the most-recent 2 distinct
         event dates — earlier flags don't count toward the total."""
         from storm_trends import query_member_log
+
         rows = [
             ["Event Date", "Member", "sat_out"],
             ["2026-05-01", "alice", "yes"],  # outside lookback=2
             ["2026-05-08", "alice", "yes"],
             ["2026-05-15", "alice", "yes"],
-            ["2026-05-01", "bob",   "yes"],
-            ["2026-05-08", "bob",   "no"],
-            ["2026-05-15", "bob",   "no"],
+            ["2026-05-01", "bob", "yes"],
+            ["2026-05-08", "bob", "no"],
+            ["2026-05-15", "bob", "no"],
         ]
         with _patch_member_log(rows):
             out = query_member_log(
-                TEST_GUILD_ID, "DS",
+                TEST_GUILD_ID,
+                "DS",
                 question_key="sat_out",
                 operator_sym=">=",
                 threshold=1,
@@ -173,17 +182,19 @@ class TestQueryMemberLog:
 
     def test_results_sorted_by_count_desc_then_member_asc(self):
         from storm_trends import query_member_log
+
         rows = [["Event Date", "Member", "sat_out"]]
         for ev in ("2026-05-01", "2026-05-08"):
             rows.append([ev, "alice", "yes"])
-            rows.append([ev, "bob",   "yes"])
+            rows.append([ev, "bob", "yes"])
             rows.append([ev, "carol", "yes"])
         # carol only on one event.
         rows.append(["2026-05-15", "alice", "yes"])
-        rows.append(["2026-05-15", "bob",   "yes"])
+        rows.append(["2026-05-15", "bob", "yes"])
         with _patch_member_log(rows):
             out = query_member_log(
-                TEST_GUILD_ID, "DS",
+                TEST_GUILD_ID,
+                "DS",
                 question_key="sat_out",
                 operator_sym=">=",
                 threshold=1,
@@ -195,14 +206,16 @@ class TestQueryMemberLog:
 
     def test_empty_result_set(self):
         from storm_trends import query_member_log
+
         rows = [
             ["Event Date", "Member", "sat_out"],
             ["2026-05-01", "alice", "no"],
-            ["2026-05-01", "bob",   "no"],
+            ["2026-05-01", "bob", "no"],
         ]
         with _patch_member_log(rows):
             out = query_member_log(
-                TEST_GUILD_ID, "DS",
+                TEST_GUILD_ID,
+                "DS",
                 question_key="sat_out",
                 operator_sym=">=",
                 threshold=1,
@@ -213,10 +226,12 @@ class TestQueryMemberLog:
 
     def test_no_events_captured_yet(self):
         from storm_trends import query_member_log
+
         rows = [["Event Date", "Member", "sat_out"]]  # header only
         with _patch_member_log(rows):
             out = query_member_log(
-                TEST_GUILD_ID, "DS",
+                TEST_GUILD_ID,
+                "DS",
                 question_key="sat_out",
                 operator_sym=">=",
                 threshold=1,
@@ -227,12 +242,14 @@ class TestQueryMemberLog:
 
     def test_truncation_at_25_rows(self):
         from storm_trends import query_member_log
+
         rows = [["Event Date", "Member", "sat_out"]]
         for i in range(30):
             rows.append(["2026-05-15", f"member{i:02d}", "yes"])
         with _patch_member_log(rows):
             out = query_member_log(
-                TEST_GUILD_ID, "DS",
+                TEST_GUILD_ID,
+                "DS",
                 question_key="sat_out",
                 operator_sym=">=",
                 threshold=1,
@@ -245,17 +262,20 @@ class TestQueryMemberLog:
         """With a saved team-A plan, the team_filter=A constrains the
         match list to plan members only."""
         from storm_trends import query_member_log
+
         rows = [
             ["Event Date", "Member", "sat_out"],
             ["2026-05-01", "alice", "yes"],
-            ["2026-05-01", "bob",   "yes"],
+            ["2026-05-01", "bob", "yes"],
             ["2026-05-01", "carol", "yes"],
         ]
-        with _patch_member_log(rows), \
-             patch("storm_trends._team_plan_member_set",
-                   return_value={"alice", "bob"}):
+        with (
+            _patch_member_log(rows),
+            patch("storm_trends._team_plan_member_set", return_value={"alice", "bob"}),
+        ):
             out = query_member_log(
-                TEST_GUILD_ID, "DS",
+                TEST_GUILD_ID,
+                "DS",
                 question_key="sat_out",
                 operator_sym=">=",
                 threshold=1,
@@ -269,15 +289,19 @@ class TestQueryMemberLog:
         """No saved team plan → team filter no-ops and every match
         appears regardless of `A`/`B`."""
         from storm_trends import query_member_log
+
         rows = [
             ["Event Date", "Member", "sat_out"],
             ["2026-05-01", "alice", "yes"],
-            ["2026-05-01", "bob",   "yes"],
+            ["2026-05-01", "bob", "yes"],
         ]
-        with _patch_member_log(rows), \
-             patch("storm_trends._team_plan_member_set", return_value=None):
+        with (
+            _patch_member_log(rows),
+            patch("storm_trends._team_plan_member_set", return_value=None),
+        ):
             out = query_member_log(
-                TEST_GUILD_ID, "DS",
+                TEST_GUILD_ID,
+                "DS",
                 question_key="sat_out",
                 operator_sym=">=",
                 threshold=1,
@@ -289,9 +313,11 @@ class TestQueryMemberLog:
 
     def test_invalid_operator_returns_empty(self):
         from storm_trends import query_member_log
+
         with _patch_member_log([["Event Date", "Member", "sat_out"]]):
             out = query_member_log(
-                TEST_GUILD_ID, "DS",
+                TEST_GUILD_ID,
+                "DS",
                 question_key="sat_out",
                 operator_sym="garbage",
                 threshold=1,
@@ -304,14 +330,13 @@ class TestQueryMemberLog:
 
 
 class TestListTrendableQuestions:
-
     def test_attendance_question_always_present(self):
         """The `showed_up` attendance question is always in the list,
         even when participation tracking is unconfigured — officers
         who only use /attendance still get a trends entry."""
         from storm_trends import list_trendable_questions
-        with patch("config.get_participation_config",
-                   return_value={"questions": []}):
+
+        with patch("config.get_participation_config", return_value={"questions": []}):
             items = list_trendable_questions(TEST_GUILD_ID, "DS")
         keys = [q["key"] for q in items]
         assert "showed_up" in keys
@@ -319,16 +344,25 @@ class TestListTrendableQuestions:
 
     def test_roster_multi_select_questions_included(self):
         from storm_trends import list_trendable_questions
-        with patch("config.get_participation_config", return_value={
-            "questions": [
-                {"key": "sat_out", "label": "Who sat out?",
-                 "type": "roster_multi_select"},
-                {"key": "didnt_vote", "label": "Who didn't vote?",
-                 "type": "roster_multi_select"},
-                {"key": "free_text", "label": "Notes",
-                 "type": "text"},  # skipped — not trendable
-            ],
-        }):
+
+        with patch(
+            "config.get_participation_config",
+            return_value={
+                "questions": [
+                    {"key": "sat_out", "label": "Who sat out?", "type": "roster_multi_select"},
+                    {
+                        "key": "didnt_vote",
+                        "label": "Who didn't vote?",
+                        "type": "roster_multi_select",
+                    },
+                    {
+                        "key": "free_text",
+                        "label": "Notes",
+                        "type": "text",
+                    },  # skipped — not trendable
+                ],
+            },
+        ):
             items = list_trendable_questions(TEST_GUILD_ID, "DS")
         labels = [q["label"] for q in items]
         # attendance is always first, then the configured questions.
@@ -343,12 +377,15 @@ class TestListTrendableQuestions:
         query its source question instead. The Trends Viewer keeps
         derived count out of the question list."""
         from storm_trends import list_trendable_questions
-        with patch("config.get_participation_config", return_value={
-            "questions": [
-                {"key": "sit_out_streak", "label": "Sit-out streak",
-                 "type": "derived_count"},
-            ],
-        }):
+
+        with patch(
+            "config.get_participation_config",
+            return_value={
+                "questions": [
+                    {"key": "sit_out_streak", "label": "Sit-out streak", "type": "derived_count"},
+                ],
+            },
+        ):
             items = list_trendable_questions(TEST_GUILD_ID, "DS")
         keys = [q["key"] for q in items]
         assert "sit_out_streak" not in keys
@@ -358,11 +395,11 @@ class TestListTrendableQuestions:
 
 
 class TestRenderResultsText:
-
     def test_uses_words_not_symbols_for_operator(self):
         """Style memory: "operators use words" — text output should
         say "greater than or equal to", not "≥"."""
         from storm_trends import render_results_text
+
         text = render_results_text(
             event_type="DS",
             question_label="Who sat out?",
@@ -370,14 +407,14 @@ class TestRenderResultsText:
             threshold=3,
             lookback_events=8,
             team_filter="both",
-            query_out={"results": [], "total_events_captured": 8,
-                       "truncated": False},
+            query_out={"results": [], "total_events_captured": 8, "truncated": False},
         )
         assert "greater than or equal to" in text
         assert "≥" not in text
 
     def test_team_filter_callout(self):
         from storm_trends import render_results_text
+
         text_a = render_results_text(
             event_type="DS",
             question_label="X",
@@ -385,13 +422,13 @@ class TestRenderResultsText:
             threshold=1,
             lookback_events=4,
             team_filter="A",
-            query_out={"results": [], "total_events_captured": 0,
-                       "truncated": False},
+            query_out={"results": [], "total_events_captured": 0, "truncated": False},
         )
         assert "Team A only" in text_a
 
     def test_results_table_lines(self):
         from storm_trends import render_results_text
+
         text = render_results_text(
             event_type="DS",
             question_label="Who sat out?",
@@ -402,7 +439,7 @@ class TestRenderResultsText:
             query_out={
                 "results": [
                     {"member": "alice", "count": 3, "last_flagged": "2026-05-15"},
-                    {"member": "bob",   "count": 2, "last_flagged": "2026-05-08"},
+                    {"member": "bob", "count": 2, "last_flagged": "2026-05-08"},
                 ],
                 "total_events_captured": 4,
                 "truncated": False,
@@ -417,23 +454,24 @@ class TestRenderResultsText:
 
 
 class TestTrendsView:
-
     def _state(self, *, questions=None):
         from storm_trends import _TrendsState
+
         return _TrendsState(
             guild_id=TEST_GUILD_ID,
             user_id=42,
             event_type="DS",
-            questions=questions if questions is not None else [
-                {"key": "sat_out", "label": "Who sat out?",
-                 "source": "participation"},
-                {"key": "showed_up", "label": "Did this member show up?",
-                 "source": "attendance"},
+            questions=questions
+            if questions is not None
+            else [
+                {"key": "sat_out", "label": "Who sat out?", "source": "participation"},
+                {"key": "showed_up", "label": "Did this member show up?", "source": "attendance"},
             ],
         )
 
     def test_view_empty_when_no_questions(self):
         from storm_trends import _TrendsView
+
         state = self._state(questions=[])
         view = _TrendsView(state)
         # No questions → no selects/buttons.
@@ -442,6 +480,7 @@ class TestTrendsView:
     def test_view_renders_all_selects_and_buttons(self):
         from storm_trends import _TrendsView
         import discord as _discord
+
         view = _TrendsView(self._state())
         selects = [c for c in view.children if isinstance(c, _discord.ui.Select)]
         buttons = [c for c in view.children if isinstance(c, _discord.ui.Button)]
@@ -456,31 +495,33 @@ class TestTrendsView:
     def test_copy_button_disabled_before_first_query(self):
         from storm_trends import _TrendsView
         import discord as _discord
+
         view = _TrendsView(self._state())
         copy_btn = next(
-            c for c in view.children
-            if isinstance(c, _discord.ui.Button)
-            and c.label and "Copy" in c.label
+            c
+            for c in view.children
+            if isinstance(c, _discord.ui.Button) and c.label and "Copy" in c.label
         )
         assert copy_btn.disabled is True
 
     def test_copy_button_enabled_after_query(self):
         from storm_trends import _TrendsView
         import discord as _discord
+
         state = self._state()
-        state.last_query = {"results": [], "total_events_captured": 0,
-                            "truncated": False}
+        state.last_query = {"results": [], "total_events_captured": 0, "truncated": False}
         view = _TrendsView(state)
         copy_btn = next(
-            c for c in view.children
-            if isinstance(c, _discord.ui.Button)
-            and c.label and "Copy" in c.label
+            c
+            for c in view.children
+            if isinstance(c, _discord.ui.Button) and c.label and "Copy" in c.label
         )
         assert copy_btn.disabled is False
 
     @pytest.mark.asyncio
     async def test_team_cycle_advances_filter(self):
         from storm_trends import _TrendsView
+
         view = _TrendsView(self._state())
         assert view.state.team_filter == "both"
 
@@ -497,6 +538,7 @@ class TestTrendsView:
     @pytest.mark.asyncio
     async def test_owner_guard_blocks_others(self):
         from storm_trends import _TrendsView
+
         view = _TrendsView(self._state())
         inter = MagicMock()
         inter.user.id = 999  # not the owner (42)
@@ -511,12 +553,14 @@ class TestTrendsView:
 
 
 class TestBuilderEmbed:
-
     def test_empty_state_explains_what_to_do(self):
         from storm_trends import _TrendsState, _render_builder_embed
+
         state = _TrendsState(
-            guild_id=TEST_GUILD_ID, user_id=42,
-            event_type="DS", questions=[],
+            guild_id=TEST_GUILD_ID,
+            user_id=42,
+            event_type="DS",
+            questions=[],
         )
         embed = _render_builder_embed(state)
         body = embed.description or ""
@@ -525,15 +569,16 @@ class TestBuilderEmbed:
 
     def test_renders_default_query(self):
         from storm_trends import _TrendsState, _render_builder_embed
+
         state = _TrendsState(
-            guild_id=TEST_GUILD_ID, user_id=42,
+            guild_id=TEST_GUILD_ID,
+            user_id=42,
             event_type="DS",
-            questions=[{"key": "sat_out", "label": "Who sat out?",
-                        "source": "participation"}],
+            questions=[{"key": "sat_out", "label": "Who sat out?", "source": "participation"}],
         )
         embed = _render_builder_embed(state)
         body = embed.description or ""
         assert "Who sat out?" in body
         assert "greater than or equal to" in body
         assert "**3**" in body  # default threshold
-        assert "8" in body      # default lookback
+        assert "8" in body  # default lookback

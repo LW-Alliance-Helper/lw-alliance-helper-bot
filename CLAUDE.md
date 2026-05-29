@@ -89,12 +89,29 @@ repo `../lw-alliance-helper.github.io` (the website) has its own
   release-on-main workflow uses the CHANGELOG section as the GitHub
   Release notes, and the PR body is what reviewers (and your future
   self when bisecting) see first.
-- **Tests must pass before commit.** Pre-commit hook enforces this. If
-  it fails: investigate the underlying issue, don't bypass with
-  `--no-verify`.
-- **Commit messages:** use HEREDOC, end with the
-  `Co-Authored-By: Claude Opus 4.7 (1M context) <noreply@anthropic.com>`
-  trailer.
+- **Pre-commit hooks run on staged files** (`pre-commit` framework, config
+  in `.pre-commit-config.yaml`): ruff lint + ruff format (line-length 100),
+  codespell, and a gitleaks staged-secret scan. Install once per clone with
+  `py -m pre_commit install`. If a hook fails: investigate and fix, don't
+  bypass with `--no-verify`. ruff config is in `ruff.toml`, codespell's
+  ignore list in `.codespellrc`.
+  - **ruff lint scope is bugs + dead code only** (`E9` + pyflakes `F`).
+    **F401 (unused import) and F811 (redefinition) are deliberately OFF** —
+    they break this repo's module re-exports (e.g. `train.py`) and inline
+    late-binding `from config import X` imports, and their autofix silently
+    deleted both during the initial sweep. Don't re-enable them without
+    `# noqa`-ing every re-export and inline-import site first.
+  - **ruff format reflows to its own style**; the whole tree was formatted
+    once at line-length 100. It does NOT split `if x: return` (that's a lint
+    rule we don't enable).
+- **Tests are NOT in the commit hook.** They run in CI (`test.yml`) and
+  targeted-per-issue locally; the full suite (~5 min) runs at the end of a
+  batch. The full suite is the real safety net for sweeps — it's what caught
+  the ruff-autofix import regressions. Don't wire it into pre-commit.
+- **Commit messages:** Conventional Commits style (`type(scope): summary` —
+  `feat` / `fix` / `docs` / `refactor` / `test` / `chore` / `build`),
+  written via HEREDOC. Not enforced by a hook. **No `Co-Authored-By` /
+  attribution trailer** — the user opted out of it.
 - **Never amend** — always make a new commit, even after pre-commit
   hook failures.
 - **Never `push --force` to main**, never `reset --hard`, never delete

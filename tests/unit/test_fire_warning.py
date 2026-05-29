@@ -34,15 +34,15 @@ os.environ.setdefault("DISCORD_TOKEN", "fake-test-token")
 
 ET = ZoneInfo("America/New_York")
 
-GUILD_ID            = 12345
-LEADERSHIP_CHAN_ID  = 1111
+GUILD_ID = 12345
+LEADERSHIP_CHAN_ID = 1111
 ANNOUNCEMENT_CHAN_ID = 2222
 
 
 def _make_cfg():
     cfg = MagicMock()
-    cfg.guild_id                = GUILD_ID
-    cfg.leadership_channel_id   = LEADERSHIP_CHAN_ID
+    cfg.guild_id = GUILD_ID
+    cfg.leadership_channel_id = LEADERSHIP_CHAN_ID
     cfg.announcement_channel_id = ANNOUNCEMENT_CHAN_ID
     return cfg
 
@@ -58,33 +58,40 @@ def _event_list_with_blurb(blurb: str | None = None):
     in scheduler.build_warning_message; passing a custom key + blurb
     exercises the generic 'Re-use the configured announcement blurb'
     path."""
-    return [{
-        "key":   "test_event",
-        "name":  "Test Event",
-        "dt":    datetime(2026, 5, 15, 22, 0, tzinfo=ET),
-        "blurb": blurb or "Test Event at {time} ({server_time}).",
-    }]
+    return [
+        {
+            "key": "test_event",
+            "name": "Test Event",
+            "dt": datetime(2026, 5, 15, 22, 0, tzinfo=ET),
+            "blurb": blurb or "Test Event at {time} ({server_time}).",
+        }
+    ]
 
 
 # ── Happy path ───────────────────────────────────────────────────────────────
 
-class TestFireWarningHappyPath:
 
+class TestFireWarningHappyPath:
     @pytest.mark.asyncio
     async def test_posts_warning_to_announcements_channel(self):
         from scheduler import fire_warning, pending_warnings
+
         pending_warnings["evt-1"] = (
             datetime(2026, 5, 15, 21, 55, tzinfo=ET),
             _event_list_with_blurb(),
             GUILD_ID,
         )
 
-        announcements = AsyncMock(); announcements.send = AsyncMock()
-        leadership    = AsyncMock(); leadership.send    = AsyncMock()
-        bot = _make_bot({
-            ANNOUNCEMENT_CHAN_ID: announcements,
-            LEADERSHIP_CHAN_ID:   leadership,
-        })
+        announcements = AsyncMock()
+        announcements.send = AsyncMock()
+        leadership = AsyncMock()
+        leadership.send = AsyncMock()
+        bot = _make_bot(
+            {
+                ANNOUNCEMENT_CHAN_ID: announcements,
+                LEADERSHIP_CHAN_ID: leadership,
+            }
+        )
 
         await fire_warning(bot, "evt-1", _event_list_with_blurb(), cfg=_make_cfg())
 
@@ -97,14 +104,19 @@ class TestFireWarningHappyPath:
     @pytest.mark.asyncio
     async def test_stamps_leadership_with_auto_post_confirmation(self):
         from scheduler import fire_warning, pending_warnings
+
         pending_warnings.clear()
 
-        announcements = AsyncMock(); announcements.send = AsyncMock()
-        leadership    = AsyncMock(); leadership.send    = AsyncMock()
-        bot = _make_bot({
-            ANNOUNCEMENT_CHAN_ID: announcements,
-            LEADERSHIP_CHAN_ID:   leadership,
-        })
+        announcements = AsyncMock()
+        announcements.send = AsyncMock()
+        leadership = AsyncMock()
+        leadership.send = AsyncMock()
+        bot = _make_bot(
+            {
+                ANNOUNCEMENT_CHAN_ID: announcements,
+                LEADERSHIP_CHAN_ID: leadership,
+            }
+        )
 
         await fire_warning(bot, "evt-2", _event_list_with_blurb(), cfg=_make_cfg())
 
@@ -122,12 +134,15 @@ class TestFireWarningHappyPath:
 
         pending_warnings["evt-3"] = (
             datetime(2026, 5, 15, 21, 55, tzinfo=ET),
-            _event_list_with_blurb(), GUILD_ID,
+            _event_list_with_blurb(),
+            GUILD_ID,
         )
-        bot = _make_bot({
-            ANNOUNCEMENT_CHAN_ID: AsyncMock(send=AsyncMock()),
-            LEADERSHIP_CHAN_ID:   AsyncMock(send=AsyncMock()),
-        })
+        bot = _make_bot(
+            {
+                ANNOUNCEMENT_CHAN_ID: AsyncMock(send=AsyncMock()),
+                LEADERSHIP_CHAN_ID: AsyncMock(send=AsyncMock()),
+            }
+        )
 
         await fire_warning(bot, "evt-3", _event_list_with_blurb(), cfg=_make_cfg())
 
@@ -136,17 +151,19 @@ class TestFireWarningHappyPath:
 
 # ── Missing-channel edge cases ───────────────────────────────────────────────
 
-class TestFireWarningMissingChannels:
 
+class TestFireWarningMissingChannels:
     @pytest.mark.asyncio
     async def test_returns_quietly_when_announcements_channel_missing(self):
         """If the announcement channel was deleted between scheduling
         and firing, fire_warning bails out before posting anything —
         no crash, no half-fired warning."""
         from scheduler import fire_warning, pending_warnings
+
         pending_warnings.clear()
 
-        leadership = AsyncMock(); leadership.send = AsyncMock()
+        leadership = AsyncMock()
+        leadership.send = AsyncMock()
         bot = _make_bot({LEADERSHIP_CHAN_ID: leadership})  # announcements absent
 
         # Should not raise.
@@ -159,9 +176,11 @@ class TestFireWarningMissingChannels:
         """If announcements is fine but the leadership stamp channel is
         gone, the public warning still posts. Members are the priority."""
         from scheduler import fire_warning, pending_warnings
+
         pending_warnings.clear()
 
-        announcements = AsyncMock(); announcements.send = AsyncMock()
+        announcements = AsyncMock()
+        announcements.send = AsyncMock()
         bot = _make_bot({ANNOUNCEMENT_CHAN_ID: announcements})  # leadership absent
 
         await fire_warning(bot, "evt-y", _event_list_with_blurb(), cfg=_make_cfg())
@@ -172,12 +191,14 @@ class TestFireWarningMissingChannels:
     async def test_no_op_when_cfg_is_none(self):
         """Defensive: a None cfg should not crash the loop."""
         from scheduler import fire_warning
+
         bot = _make_bot({})
         # Should not raise.
         await fire_warning(bot, "evt-z", _event_list_with_blurb(), cfg=None)
 
 
 # ── Warning message content ──────────────────────────────────────────────────
+
 
 class TestFireWarningMessageContent:
     """Verify the body uses the right per-event warning text rather
@@ -186,19 +207,21 @@ class TestFireWarningMessageContent:
     @pytest.mark.asyncio
     async def test_body_uses_event_blurb_with_time_replaced(self):
         from scheduler import fire_warning, pending_warnings
+
         pending_warnings.clear()
 
-        announcements = AsyncMock(); announcements.send = AsyncMock()
-        bot = _make_bot({
-            ANNOUNCEMENT_CHAN_ID: announcements,
-            LEADERSHIP_CHAN_ID:   AsyncMock(send=AsyncMock()),
-        })
+        announcements = AsyncMock()
+        announcements.send = AsyncMock()
+        bot = _make_bot(
+            {
+                ANNOUNCEMENT_CHAN_ID: announcements,
+                LEADERSHIP_CHAN_ID: AsyncMock(send=AsyncMock()),
+            }
+        )
 
         # The warning re-uses the announcement blurb with {time} swapped
         # to "5 minutes" (see scheduler.build_warning_message).
-        evt_list = _event_list_with_blurb(
-            blurb="Cool Raid at {time} ({server_time}). Get ready!"
-        )
+        evt_list = _event_list_with_blurb(blurb="Cool Raid at {time} ({server_time}). Get ready!")
 
         await fire_warning(bot, "evt-content", evt_list, cfg=_make_cfg())
 
@@ -214,13 +237,17 @@ class TestFireWarningMessageContent:
         """build_warning_message guards against an empty list; a
         generic 'Event starting in 5 minutes!' fires instead of a crash."""
         from scheduler import fire_warning, pending_warnings
+
         pending_warnings.clear()
 
-        announcements = AsyncMock(); announcements.send = AsyncMock()
-        bot = _make_bot({
-            ANNOUNCEMENT_CHAN_ID: announcements,
-            LEADERSHIP_CHAN_ID:   AsyncMock(send=AsyncMock()),
-        })
+        announcements = AsyncMock()
+        announcements.send = AsyncMock()
+        bot = _make_bot(
+            {
+                ANNOUNCEMENT_CHAN_ID: announcements,
+                LEADERSHIP_CHAN_ID: AsyncMock(send=AsyncMock()),
+            }
+        )
 
         await fire_warning(bot, "evt-empty", [], cfg=_make_cfg())
 

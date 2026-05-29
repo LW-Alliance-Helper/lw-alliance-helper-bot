@@ -40,11 +40,12 @@ def _make_channel():
 
 # ── Edit path ────────────────────────────────────────────────────────────────
 
-class TestEditPath:
 
+class TestEditPath:
     @pytest.mark.asyncio
     async def test_edit_returns_true(self):
         from setup_cog import ask_proceed_with_existing_config
+
         channel = _make_channel()
 
         async def _click_edit(view, ev):
@@ -68,11 +69,12 @@ class TestEditPath:
 
 # ── No-changes path ──────────────────────────────────────────────────────────
 
-class TestNoChangesPath:
 
+class TestNoChangesPath:
     @pytest.mark.asyncio
     async def test_no_changes_returns_false_and_posts_message(self):
         from setup_cog import ask_proceed_with_existing_config
+
         channel = _make_channel()
 
         async def _click_no(view, ev):
@@ -97,6 +99,7 @@ class TestNoChangesPath:
     @pytest.mark.asyncio
     async def test_no_changes_message_is_customizable(self):
         from setup_cog import ask_proceed_with_existing_config
+
         channel = _make_channel()
 
         async def _click_no(view, ev):
@@ -107,7 +110,8 @@ class TestNoChangesPath:
         with patch("setup_cog.wait_view_or_cancel", _click_no):
             await ask_proceed_with_existing_config(
                 channel,
-                title="t", description="d",
+                title="t",
+                description="d",
                 fields=[("F", "V")],
                 cancel_event=None,
                 no_changes_message=custom,
@@ -117,6 +121,7 @@ class TestNoChangesPath:
 
 # ── Cancel / timeout path ────────────────────────────────────────────────────
 
+
 class TestCancelAndTimeoutReturnNone:
     """Both /cancel and timeout map to None so the caller's single
     `if X is None: return` check covers both."""
@@ -124,6 +129,7 @@ class TestCancelAndTimeoutReturnNone:
     @pytest.mark.asyncio
     async def test_cancel_returns_none(self):
         from setup_cog import ask_proceed_with_existing_config
+
         channel = _make_channel()
 
         async def _cancel(view, ev):
@@ -132,7 +138,8 @@ class TestCancelAndTimeoutReturnNone:
         with patch("setup_cog.wait_view_or_cancel", _cancel):
             result = await ask_proceed_with_existing_config(
                 channel,
-                title="t", description="d",
+                title="t",
+                description="d",
                 fields=[("F", "V")],
                 cancel_event=None,
             )
@@ -143,6 +150,7 @@ class TestCancelAndTimeoutReturnNone:
     @pytest.mark.asyncio
     async def test_timeout_returns_none(self):
         from setup_cog import ask_proceed_with_existing_config
+
         channel = _make_channel()
 
         async def _timeout(view, ev):
@@ -153,7 +161,8 @@ class TestCancelAndTimeoutReturnNone:
         with patch("setup_cog.wait_view_or_cancel", _timeout):
             result = await ask_proceed_with_existing_config(
                 channel,
-                title="t", description="d",
+                title="t",
+                description="d",
                 fields=[("F", "V")],
                 cancel_event=None,
             )
@@ -162,11 +171,12 @@ class TestCancelAndTimeoutReturnNone:
 
 # ── Embed rendering ──────────────────────────────────────────────────────────
 
-class TestEmbedRendering:
 
+class TestEmbedRendering:
     @pytest.mark.asyncio
     async def test_fields_render_as_embed_fields(self):
         from setup_cog import ask_proceed_with_existing_config
+
         channel = _make_channel()
 
         async def _click_edit(view, ev):
@@ -180,8 +190,8 @@ class TestEmbedRendering:
                 description="Edit?",
                 fields=[
                     ("Reminder Channel", "<#123>"),
-                    ("Reminder Time",    "9:00am"),
-                    ("Blurbs",           "Enabled"),
+                    ("Reminder Time", "9:00am"),
+                    ("Blurbs", "Enabled"),
                 ],
                 cancel_event=None,
             )
@@ -189,7 +199,7 @@ class TestEmbedRendering:
         assert embed is not None
         assert embed.title == "⚙️ Current Train"
         # All three fields appear.
-        names  = [f.name  for f in embed.fields]
+        names = [f.name for f in embed.fields]
         values = [f.value for f in embed.fields]
         assert names == ["Reminder Channel", "Reminder Time", "Blurbs"]
         assert values == ["<#123>", "9:00am", "Enabled"]
@@ -197,6 +207,7 @@ class TestEmbedRendering:
     @pytest.mark.asyncio
     async def test_view_has_edit_and_no_changes_buttons(self):
         from setup_cog import ask_proceed_with_existing_config
+
         channel = _make_channel()
 
         async def _bail(view, ev):
@@ -205,7 +216,8 @@ class TestEmbedRendering:
         with patch("setup_cog.wait_view_or_cancel", _bail):
             await ask_proceed_with_existing_config(
                 channel,
-                title="t", description="d",
+                title="t",
+                description="d",
                 fields=[("F", "V")],
                 cancel_event=None,
             )

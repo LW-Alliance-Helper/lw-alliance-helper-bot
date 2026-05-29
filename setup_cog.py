@@ -16,8 +16,12 @@ import discord
 from discord import app_commands
 from discord.ext import commands
 from config import (
-    get_config, get_or_create_config, save_config, update_config_field,
-    GuildConfig, normalize_spreadsheet_id,
+    get_config,
+    get_or_create_config,
+    save_config,
+    update_config_field,
+    GuildConfig,
+    normalize_spreadsheet_id,
 )
 import premium
 import wizard_registry
@@ -58,6 +62,7 @@ def _parse_12h_time(raw: str) -> str:
     HH:MM 24h string for storage. Returns None if unparseable.
     """
     import re
+
     raw = raw.strip().lower().replace(" ", "")
     m = re.match(r"^(\d{1,2})(?::(\d{2}))?(am|pm)$", raw)
     if not m:
@@ -122,16 +127,16 @@ def _format_time_with_tz(time_str: str, tz_name: str | None) -> str:
         return time_str
     period = "am" if hour < 12 else "pm"
     hour12 = hour % 12 or 12
-    base   = f"{hour12}:{minute:02d}{period}"
+    base = f"{hour12}:{minute:02d}{period}"
     if not tz_name:
         return base
     try:
         from datetime import datetime
         from zoneinfo import ZoneInfo
-        tz    = ZoneInfo(tz_name)
+
+        tz = ZoneInfo(tz_name)
         today = datetime.now(tz=tz).date()
-        dt    = datetime(today.year, today.month, today.day,
-                         hour, minute, tzinfo=tz)
+        dt = datetime(today.year, today.month, today.day, hour, minute, tzinfo=tz)
     except Exception:
         return base
     abbr = dt.tzname()
@@ -150,6 +155,7 @@ def _parse_month_day(raw: str) -> str:
     """
     import re
     from datetime import date, datetime
+
     raw = raw.strip()
     try:
         parsed = datetime.strptime(raw, "%B %d")
@@ -158,7 +164,7 @@ def _parse_month_day(raw: str) -> str:
             parsed = datetime.strptime(raw, "%b %d")
         except ValueError:
             return None
-    today     = date.today()
+    today = date.today()
     this_year = date(today.year, parsed.month, parsed.day)
     last_year = date(today.year - 1, parsed.month, parsed.day)
     # Allow up to 31 days in the future (next upcoming event within a month)
@@ -169,6 +175,7 @@ def _parse_month_day(raw: str) -> str:
 
 
 # ── Step views ─────────────────────────────────────────────────────────────────
+
 
 class CreateRoleModal(discord.ui.Modal):
     def __init__(self):
@@ -209,8 +216,8 @@ class RoleSelectStep(discord.ui.View):
     ):
         super().__init__(timeout=WIZARD_TIMEOUT)
         self.selected_role = None
-        self.confirmed     = False
-        self._placeholder  = placeholder
+        self.confirmed = False
+        self._placeholder = placeholder
 
         self.current_id = current_id
         self._current_name = current_name
@@ -263,7 +270,7 @@ class RoleSelectStep(discord.ui.View):
 
             async def _keep_cb(inter: discord.Interaction):
                 self.selected_role = role
-                self.confirmed     = True
+                self.confirmed = True
                 for item in self.children:
                     item.disabled = True
                 await wizard_registry.safe_edit_response(
@@ -272,6 +279,7 @@ class RoleSelectStep(discord.ui.View):
                     view=self,
                 )
                 self.stop()
+
             keep_btn.callback = _keep_cb
             self.add_item(keep_btn)
             select_row = 1
@@ -282,12 +290,14 @@ class RoleSelectStep(discord.ui.View):
 
         select = discord.ui.RoleSelect(
             placeholder=self._placeholder,
-            min_values=1, max_values=1, row=select_row,
+            min_values=1,
+            max_values=1,
+            row=select_row,
         )
 
         async def _select_cb(interaction: discord.Interaction):
             self.selected_role = select.values[0]
-            self.confirmed     = True
+            self.confirmed = True
             for item in self.children:
                 item.disabled = True
             await wizard_registry.safe_edit_response(
@@ -296,6 +306,7 @@ class RoleSelectStep(discord.ui.View):
                 view=self,
             )
             self.stop()
+
         select.callback = _select_cb
         self.add_item(select)
 
@@ -317,7 +328,7 @@ class RoleSelectStep(discord.ui.View):
                     reason=f"Created during Alliance Helper setup by {interaction.user.display_name}",
                 )
                 self.selected_role = new_role
-                self.confirmed     = True
+                self.confirmed = True
                 for item in self.children:
                     item.disabled = True
                 await interaction.message.edit(
@@ -335,6 +346,7 @@ class RoleSelectStep(discord.ui.View):
                     f"⚠️ Could not create role: {e}",
                     ephemeral=True,
                 )
+
         create_btn.callback = _create_cb
         self.add_item(create_btn)
 
@@ -393,20 +405,18 @@ class ChannelSelectStep(discord.ui.View):
     ):
         super().__init__(timeout=WIZARD_TIMEOUT)
         self.selected_channel = None
-        self.confirmed        = False
-        self.suggested_name   = suggested_name
-        self.allow_create     = allow_create
+        self.confirmed = False
+        self.suggested_name = suggested_name
+        self.allow_create = allow_create
 
         # State carried across the button-driven flow.
-        self._placeholder      = placeholder
-        self._explicit_types   = channel_types
-        self._include_threads  = include_threads
-        self._guild            = guild
+        self._placeholder = placeholder
+        self._explicit_types = channel_types
+        self._include_threads = include_threads
+        self._guild = guild
         self._thread_lookup: dict[str, discord.Thread] = {}
         self._pickable_threads: list[discord.Thread] = (
-            self._collect_pickable_threads(guild)
-            if (include_threads and guild is not None)
-            else []
+            self._collect_pickable_threads(guild) if (include_threads and guild is not None) else []
         )
 
         # Keep-current support. If the wizard passes `current_id`, resolve
@@ -466,7 +476,7 @@ class ChannelSelectStep(discord.ui.View):
 
         async def _keep_cb(inter: discord.Interaction):
             self.selected_channel = self._current_channel
-            self.confirmed        = True
+            self.confirmed = True
             for item in self.children:
                 item.disabled = True
             await wizard_registry.safe_edit_response(
@@ -475,6 +485,7 @@ class ChannelSelectStep(discord.ui.View):
                 view=self,
             )
             self.stop()
+
         keep_btn.callback = _keep_cb
         self.add_item(keep_btn)
         return True
@@ -497,13 +508,17 @@ class ChannelSelectStep(discord.ui.View):
             await wizard_registry.safe_edit_response(inter, view=self)
 
         ch_btn = discord.ui.Button(
-            label="📢 Channel", style=discord.ButtonStyle.primary, row=button_row,
+            label="📢 Channel",
+            style=discord.ButtonStyle.primary,
+            row=button_row,
         )
         ch_btn.callback = _on_channel
         self.add_item(ch_btn)
 
         th_btn = discord.ui.Button(
-            label="🧵 Thread", style=discord.ButtonStyle.primary, row=button_row,
+            label="🧵 Thread",
+            style=discord.ButtonStyle.primary,
+            row=button_row,
         )
         th_btn.callback = _on_thread
         self.add_item(th_btn)
@@ -532,19 +547,21 @@ class ChannelSelectStep(discord.ui.View):
     def _render_channel_select(self, *, switchable: bool) -> None:
         self.clear_items()
         keep_added = self._maybe_add_keep_current(row=0)
-        select_row    = 1 if keep_added else 0
+        select_row = 1 if keep_added else 0
         secondary_row = select_row + 1
 
         types = self._channel_types_for_select()
         select = discord.ui.ChannelSelect(
             placeholder=self._placeholder,
-            min_values=1, max_values=1,
-            channel_types=types, row=select_row,
+            min_values=1,
+            max_values=1,
+            channel_types=types,
+            row=select_row,
         )
 
         async def _select_cb(inter: discord.Interaction):
             self.selected_channel = select.values[0]
-            self.confirmed        = True
+            self.confirmed = True
             for item in self.children:
                 item.disabled = True
             await wizard_registry.safe_edit_response(
@@ -553,17 +570,21 @@ class ChannelSelectStep(discord.ui.View):
                 view=self,
             )
             self.stop()
+
         select.callback = _select_cb
         self.add_item(select)
 
         if switchable and self._pickable_threads:
             switch_btn = discord.ui.Button(
                 label="🧵 Pick a thread instead",
-                style=discord.ButtonStyle.secondary, row=secondary_row,
+                style=discord.ButtonStyle.secondary,
+                row=secondary_row,
             )
+
             async def _switch(inter: discord.Interaction):
                 self._render_thread_select(switchable=True)
                 await wizard_registry.safe_edit_response(inter, view=self)
+
             switch_btn.callback = _switch
             self.add_item(switch_btn)
 
@@ -576,7 +597,7 @@ class ChannelSelectStep(discord.ui.View):
         self.clear_items()
         self._thread_lookup.clear()
         keep_added = self._maybe_add_keep_current(row=0)
-        select_row    = 1 if keep_added else 0
+        select_row = 1 if keep_added else 0
         secondary_row = select_row + 1
 
         # Sort so the dropdown groups threads under their parent and is
@@ -588,7 +609,9 @@ class ChannelSelectStep(discord.ui.View):
 
         thread_select = discord.ui.Select(
             placeholder="Pick a thread...",
-            min_values=1, max_values=1, row=select_row,
+            min_values=1,
+            max_values=1,
+            row=select_row,
         )
         # Discord caps Select options at 25.
         for t in sorted_threads[:25]:
@@ -607,7 +630,7 @@ class ChannelSelectStep(discord.ui.View):
                 )
                 return
             self.selected_channel = picked
-            self.confirmed        = True
+            self.confirmed = True
             for item in self.children:
                 item.disabled = True
             parent_name = picked.parent.name if picked.parent else "?"
@@ -617,17 +640,21 @@ class ChannelSelectStep(discord.ui.View):
                 view=self,
             )
             self.stop()
+
         thread_select.callback = _select_cb
         self.add_item(thread_select)
 
         if switchable:
             switch_btn = discord.ui.Button(
                 label="📢 Pick a channel instead",
-                style=discord.ButtonStyle.secondary, row=secondary_row,
+                style=discord.ButtonStyle.secondary,
+                row=secondary_row,
             )
+
             async def _switch(inter: discord.Interaction):
                 self._render_channel_select(switchable=True)
                 await wizard_registry.safe_edit_response(inter, view=self)
+
             switch_btn.callback = _switch
             self.add_item(switch_btn)
 
@@ -639,6 +666,7 @@ class ChannelSelectStep(discord.ui.View):
             style=discord.ButtonStyle.secondary,
             row=row,
         )
+
         async def _create_cb(interaction: discord.Interaction):
             modal = CreateChannelModal(suggested_name=self.suggested_name)
             await interaction.response.send_modal(modal)
@@ -651,7 +679,7 @@ class ChannelSelectStep(discord.ui.View):
                     reason=f"Created during Alliance Helper setup by {interaction.user.display_name}",
                 )
                 self.selected_channel = new_channel
-                self.confirmed        = True
+                self.confirmed = True
                 for item in self.children:
                     item.disabled = True
                 await interaction.message.edit(
@@ -669,6 +697,7 @@ class ChannelSelectStep(discord.ui.View):
                     f"⚠️ Could not create channel: {e}",
                     ephemeral=True,
                 )
+
         create_btn.callback = _create_cb
         self.add_item(create_btn)
 
@@ -693,7 +722,7 @@ class ChannelSelectStep(discord.ui.View):
                 survey_chan = cfg.survey_channel_id or 0
         except Exception:
             pass
-        bot_member   = guild.me
+        bot_member = guild.me
         results: list[discord.Thread] = []
         for t in guild.threads:
             if t.archived or t.locked:
@@ -773,6 +802,7 @@ class ModalLaunchView(discord.ui.View):
     = current_value``, so the caller can populate whatever attributes
     the wizard's post-submit code actually reads.
     """
+
     def __init__(
         self,
         modal: TextInputModal,
@@ -782,9 +812,9 @@ class ModalLaunchView(discord.ui.View):
         on_keep_current=None,
     ):
         super().__init__(timeout=WIZARD_TIMEOUT)
-        self.modal           = modal
-        self.confirmed       = False
-        self._current_value  = current_value
+        self.modal = modal
+        self.confirmed = False
+        self._current_value = current_value
         self._current_display = current_display or current_value
 
         if current_value:
@@ -799,7 +829,7 @@ class ModalLaunchView(discord.ui.View):
                     on_keep_current(self.modal)
                 else:
                     self.modal.value = current_value
-                self.confirmed   = True
+                self.confirmed = True
                 for item in self.children:
                     item.disabled = True
                 await wizard_registry.safe_edit_response(
@@ -808,6 +838,7 @@ class ModalLaunchView(discord.ui.View):
                     view=self,
                 )
                 self.stop()
+
             keep_btn.callback = _keep_cb
             self.add_item(keep_btn)
 
@@ -861,14 +892,14 @@ async def ask_keep_or_change(
     referencing `timeout_cmd` if provided), or on /cancel (silently —
     the /cancel command itself acks the user).
     """
-    has_saved            = bool(current)
+    has_saved = bool(current)
     has_distinct_current = has_saved and current != default
-    pre_filled           = current if has_saved else default
+    pre_filled = current if has_saved else default
 
     class KeepOrChangeDefaultView(discord.ui.View):
         def __init__(self):
             super().__init__(timeout=WIZARD_TIMEOUT)
-            self.value     = None
+            self.value = None
             self.confirmed = False
 
             # Build buttons explicitly so we can vary the layout based on
@@ -876,21 +907,22 @@ async def ask_keep_or_change(
             # Decorator-based buttons can't be conditionally added.
             keep_label = (
                 f"✅ Keep current: {current}"[:80]
-                if has_saved else
-                f"✅ Use default: {default}"[:80]
+                if has_saved
+                else f"✅ Use default: {default}"[:80]
             )
             keep_btn = discord.ui.Button(label=keep_label, style=discord.ButtonStyle.success)
 
             async def _keep_cb(inter: discord.Interaction):
-                chosen         = current if has_saved else default
-                self.value     = chosen
+                chosen = current if has_saved else default
+                self.value = chosen
                 self.confirmed = True
-                for item in self.children: item.disabled = True
+                for item in self.children:
+                    item.disabled = True
                 await wizard_registry.safe_edit_response(
-                    inter,
-                    content=f"{prompt}\n\n✅ Using **{chosen}**", view=self
+                    inter, content=f"{prompt}\n\n✅ Using **{chosen}**", view=self
                 )
                 self.stop()
+
             keep_btn.callback = _keep_cb
             self.add_item(keep_btn)
 
@@ -901,28 +933,33 @@ async def ask_keep_or_change(
                 )
 
                 async def _revert_cb(inter: discord.Interaction):
-                    self.value     = default
+                    self.value = default
                     self.confirmed = True
-                    for item in self.children: item.disabled = True
+                    for item in self.children:
+                        item.disabled = True
                     await wizard_registry.safe_edit_response(
                         inter,
-                        content=f"{prompt}\n\n✅ Reverted to default: **{default}**", view=self
+                        content=f"{prompt}\n\n✅ Reverted to default: **{default}**",
+                        view=self,
                     )
                     self.stop()
+
                 revert_btn.callback = _revert_cb
                 self.add_item(revert_btn)
 
             change_btn = discord.ui.Button(
-                label="✏️ Define my own", style=discord.ButtonStyle.secondary,
+                label="✏️ Define my own",
+                style=discord.ButtonStyle.secondary,
             )
 
             async def _change_cb(inter: discord.Interaction):
                 modal = TextInputModal(modal_title, modal_label, default=pre_filled)
                 await inter.response.send_modal(modal)
                 await modal.wait()
-                self.value     = (modal.value or pre_filled).strip() or pre_filled
+                self.value = (modal.value or pre_filled).strip() or pre_filled
                 self.confirmed = True
-                for item in self.children: item.disabled = True
+                for item in self.children:
+                    item.disabled = True
                 try:
                     await inter.message.edit(
                         content=f"{prompt}\n\n✅ Using **{self.value}**", view=self
@@ -930,6 +967,7 @@ async def ask_keep_or_change(
                 except discord.HTTPException:
                     pass
                 self.stop()
+
             change_btn.callback = _change_cb
             self.add_item(change_btn)
 
@@ -1078,9 +1116,7 @@ async def ask_disable_with_clear(
             except Exception as e:
                 await wizard_registry.safe_edit_response(
                     inter,
-                    content=(
-                        f"{body}\n\n⚠️ Could not clear configuration: {e}"
-                    ),
+                    content=(f"{body}\n\n⚠️ Could not clear configuration: {e}"),
                     view=None,
                 )
                 self.stop()
@@ -1097,7 +1133,8 @@ async def ask_disable_with_clear(
 
         async def on_timeout(self):
             await wizard_registry.expire_view_message(
-                self.message, command_hint=f"`/{setup_command}`",
+                self.message,
+                command_hint=f"`/{setup_command}`",
             )
 
     view = ClearConfigView()
@@ -1106,8 +1143,14 @@ async def ask_disable_with_clear(
 
 
 async def _manage_train_templates(
-    *, bot, channel, check, existing: list, default_name: str,
-    cap: int | None, cancel_event,
+    *,
+    bot,
+    channel,
+    check,
+    existing: list,
+    default_name: str,
+    cap: int | None,
+    cancel_event,
 ):
     """
     Multi-template manager for the train setup wizard.
@@ -1131,12 +1174,12 @@ async def _manage_train_templates(
 
     while True:
         cap_label = "unlimited" if cap is None else str(cap)
-        listing   = []
+        listing = []
         for i, t in enumerate(templates):
             star = " ⭐" if t["name"] == default_name else ""
             preview = (t.get("template") or "").strip().split("\n")[0][:60]
             preview_suffix = f" — *{preview}*" if preview else " — *(empty)*"
-            listing.append(f"`{i+1}.` **{t['name']}**{star}{preview_suffix}")
+            listing.append(f"`{i + 1}.` **{t['name']}**{star}{preview_suffix}")
 
         embed = discord.Embed(
             title="**Step 6 of 8 — Prompt Templates**",
@@ -1153,48 +1196,53 @@ async def _manage_train_templates(
             def __init__(self, count: int, at_cap: bool):
                 super().__init__(timeout=WIZARD_TIMEOUT)
                 self.action: str | None = None
-                self.index: int | None  = None
+                self.index: int | None = None
                 if at_cap:
                     self.add_btn.disabled = True
                 if count <= 1:
                     self.delete_btn.disabled = True
                 if count == 0:
-                    self.edit_btn.disabled        = True
+                    self.edit_btn.disabled = True
                     self.set_default_btn.disabled = True
-                    self.done_btn.disabled        = True
+                    self.done_btn.disabled = True
 
             @discord.ui.button(label="➕ Add", style=discord.ButtonStyle.success, row=0)
             async def add_btn(self, inter, button):
                 self.action = "add"
-                for c in self.children: c.disabled = True
+                for c in self.children:
+                    c.disabled = True
                 await wizard_registry.safe_edit_response(inter, view=self)
                 self.stop()
 
             @discord.ui.button(label="✏️ Edit", style=discord.ButtonStyle.primary, row=0)
             async def edit_btn(self, inter, button):
                 self.action = "edit"
-                for c in self.children: c.disabled = True
+                for c in self.children:
+                    c.disabled = True
                 await wizard_registry.safe_edit_response(inter, view=self)
                 self.stop()
 
             @discord.ui.button(label="⭐ Set Default", style=discord.ButtonStyle.secondary, row=0)
             async def set_default_btn(self, inter, button):
                 self.action = "default"
-                for c in self.children: c.disabled = True
+                for c in self.children:
+                    c.disabled = True
                 await wizard_registry.safe_edit_response(inter, view=self)
                 self.stop()
 
             @discord.ui.button(label="🗑️ Delete", style=discord.ButtonStyle.danger, row=1)
             async def delete_btn(self, inter, button):
                 self.action = "delete"
-                for c in self.children: c.disabled = True
+                for c in self.children:
+                    c.disabled = True
                 await wizard_registry.safe_edit_response(inter, view=self)
                 self.stop()
 
             @discord.ui.button(label="✅ Done", style=discord.ButtonStyle.success, row=1)
             async def done_btn(self, inter, button):
                 self.action = "done"
-                for c in self.children: c.disabled = True
+                for c in self.children:
+                    c.disabled = True
                 await wizard_registry.safe_edit_response(inter, view=self)
                 self.stop()
 
@@ -1217,6 +1265,7 @@ async def _manage_train_templates(
         # ── Pick which template (for edit/default/delete) ─────────────────────
         picked_idx = None
         if list_view.action in ("edit", "default", "delete"):
+
             class PickView(discord.ui.View):
                 def __init__(self):
                     super().__init__(timeout=WIZARD_TIMEOUT)
@@ -1226,11 +1275,14 @@ async def _manage_train_templates(
                         for i, t in enumerate(templates)
                     ]
                     sel = discord.ui.Select(placeholder="Pick a template…", options=options)
+
                     async def _cb(inter):
                         self.idx = int(sel.values[0])
-                        for c in self.children: c.disabled = True
+                        for c in self.children:
+                            c.disabled = True
                         await wizard_registry.safe_edit_response(inter, view=self)
                         self.stop()
+
                     sel.callback = _cb
                     self.add_item(sel)
 
@@ -1266,10 +1318,10 @@ async def _manage_train_templates(
 
         # ── Add or Edit: collect a name + template body ────────────────────────
         existing_t = templates[picked_idx] if list_view.action == "edit" else None
-        is_edit    = existing_t is not None
+        is_edit = existing_t is not None
 
         await channel.send(
-            f"**Template name** *(short label)*"
+            "**Template name** *(short label)*"
             + (f" — *editing* `{existing_t['name']}`" if is_edit else "")
             + "\nReply with a name (e.g. `Birthday`, `Welcome`, `Default`)."
             + " Reply `cancel` to abort."
@@ -1288,7 +1340,9 @@ async def _manage_train_templates(
         # Reject duplicate names (except when editing the same entry).
         for j, t in enumerate(templates):
             if t["name"].lower() == new_name.lower() and not (is_edit and j == picked_idx):
-                await channel.send(f"⚠️ A template named **{new_name}** already exists. Try a different name.")
+                await channel.send(
+                    f"⚠️ A template named **{new_name}** already exists. Try a different name."
+                )
                 new_name = None
                 break
         if new_name is None:
@@ -1331,6 +1385,7 @@ async def _manage_train_templates(
 
 # ── Define Various Setup Commands ────────────────────────────────────────────────────────────────────────
 
+
 def _has_leadership_or_admin(interaction: discord.Interaction) -> bool:
     """
     True if the invoking user is a server administrator OR has the
@@ -1370,11 +1425,11 @@ def _missing_wizard_perms(interaction: discord.Interaction) -> list[str]:
     """
     me = interaction.guild.me if interaction.guild else None
     if me is None:
-        return []   # DM context — wizards aren't supported in DMs anyway
+        return []  # DM context — wizards aren't supported in DMs anyway
     channel = interaction.channel
     if channel is None:
         return []
-    perms   = channel.permissions_for(me)
+    perms = channel.permissions_for(me)
     missing = []
     for name in _WIZARD_REQUIRED_PERMS:
         if not getattr(perms, name, False):
@@ -1397,7 +1452,8 @@ async def _check_wizard_can_run(interaction: discord.Interaction, command_name: 
 
     perm_lines = "\n".join(f"• **{p}**" for p in missing)
     channel_mention = (
-        interaction.channel.mention if interaction.channel and hasattr(interaction.channel, "mention")
+        interaction.channel.mention
+        if interaction.channel and hasattr(interaction.channel, "mention")
         else "this channel"
     )
     msg = (
@@ -1427,9 +1483,13 @@ class SetupCog(commands.Cog):
     def __init__(self, bot):
         self.bot = bot
 
-    @app_commands.command(name="setup", description="Open the setup hub — foundations + every feature wizard, in one place")
+    @app_commands.command(
+        name="setup",
+        description="Open the setup hub — foundations + every feature wizard, in one place",
+    )
     async def setup(self, interaction: discord.Interaction):
         from setup_hub import handle_setup_hub
+
         await handle_setup_hub(self.bot, interaction)
 
 
@@ -1456,9 +1516,12 @@ async def _send_ack(interaction: discord.Interaction, message: str) -> None:
 # the cog. Mirrors the `open_strategy_list` / `open_member_rule_list`
 # pattern from the storm hub (#187).
 
+
 async def _launch_train_setup(interaction: discord.Interaction, bot) -> None:
     if not _has_leadership_or_admin(interaction):
-        await _send_ack(interaction, "⛔ You need the leadership role (or admin) to open the train wizard.")
+        await _send_ack(
+            interaction, "⛔ You need the leadership role (or admin) to open the train wizard."
+        )
         return
     if not await _check_wizard_can_run(interaction, "setup"):
         return
@@ -1468,17 +1531,23 @@ async def _launch_train_setup(interaction: discord.Interaction, bot) -> None:
 
 async def _launch_growth_setup(interaction: discord.Interaction, bot) -> None:
     if not _has_leadership_or_admin(interaction):
-        await _send_ack(interaction, "⛔ You need the leadership role (or admin) to open the growth wizard.")
+        await _send_ack(
+            interaction, "⛔ You need the leadership role (or admin) to open the growth wizard."
+        )
         return
     if not await _check_wizard_can_run(interaction, "setup"):
         return
-    await _send_ack(interaction, "⚙️ Starting growth tracking setup — check the channel for prompts!")
+    await _send_ack(
+        interaction, "⚙️ Starting growth tracking setup — check the channel for prompts!"
+    )
     await run_growth_setup(interaction, bot)
 
 
 async def _launch_growth_breakdown_setup(interaction: discord.Interaction, bot) -> None:
     if not _has_leadership_or_admin(interaction):
-        await _send_ack(interaction, "⛔ You need the leadership role (or admin) to open the breakdown wizard.")
+        await _send_ack(
+            interaction, "⛔ You need the leadership role (or admin) to open the breakdown wizard."
+        )
         return
     if not await premium.is_premium(interaction.guild_id, interaction=interaction):
         await _send_ack(
@@ -1492,13 +1561,17 @@ async def _launch_growth_breakdown_setup(interaction: discord.Interaction, bot) 
         return
     if not await _check_wizard_can_run(interaction, "setup"):
         return
-    await _send_ack(interaction, "⚙️ Starting Growth Breakdown setup — check the channel for prompts!")
+    await _send_ack(
+        interaction, "⚙️ Starting Growth Breakdown setup — check the channel for prompts!"
+    )
     await run_growth_breakdown_setup(interaction, bot)
 
 
 async def _launch_birthday_setup(interaction: discord.Interaction, bot) -> None:
     if not _has_leadership_or_admin(interaction):
-        await _send_ack(interaction, "⛔ You need the leadership role (or admin) to open the birthday wizard.")
+        await _send_ack(
+            interaction, "⛔ You need the leadership role (or admin) to open the birthday wizard."
+        )
         return
     if not await _check_wizard_can_run(interaction, "setup"):
         return
@@ -1509,7 +1582,9 @@ async def _launch_birthday_setup(interaction: discord.Interaction, bot) -> None:
 async def _launch_storm_setup(interaction: discord.Interaction, bot, event_type: str) -> None:
     label = "Desert Storm" if event_type == "DS" else "Canyon Storm"
     if not _has_leadership_or_admin(interaction):
-        await _send_ack(interaction, f"⛔ You need the leadership role (or admin) to open the {label} wizard.")
+        await _send_ack(
+            interaction, f"⛔ You need the leadership role (or admin) to open the {label} wizard."
+        )
         return
     if not await _check_wizard_can_run(interaction, "setup"):
         return
@@ -1519,7 +1594,9 @@ async def _launch_storm_setup(interaction: discord.Interaction, bot, event_type:
 
 async def _launch_event_setup(interaction: discord.Interaction, bot) -> None:
     if not _has_leadership_or_admin(interaction):
-        await _send_ack(interaction, "⛔ You need the leadership role (or admin) to open the event wizard.")
+        await _send_ack(
+            interaction, "⛔ You need the leadership role (or admin) to open the event wizard."
+        )
         return
     if not await _check_wizard_can_run(interaction, "setup"):
         return
@@ -1529,7 +1606,9 @@ async def _launch_event_setup(interaction: discord.Interaction, bot) -> None:
 
 async def _launch_survey_setup(interaction: discord.Interaction, bot) -> None:
     if not _has_leadership_or_admin(interaction):
-        await _send_ack(interaction, "⛔ You need the leadership role (or admin) to open the survey wizard.")
+        await _send_ack(
+            interaction, "⛔ You need the leadership role (or admin) to open the survey wizard."
+        )
         return
     if not await _check_wizard_can_run(interaction, "setup"):
         return
@@ -1539,7 +1618,10 @@ async def _launch_survey_setup(interaction: discord.Interaction, bot) -> None:
 
 async def _launch_shiny_tasks_setup(interaction: discord.Interaction, bot) -> None:
     if not _has_leadership_or_admin(interaction):
-        await _send_ack(interaction, "⛔ You need the leadership role (or admin) to open the shiny-tasks wizard.")
+        await _send_ack(
+            interaction,
+            "⛔ You need the leadership role (or admin) to open the shiny-tasks wizard.",
+        )
         return
     if not await _check_wizard_can_run(interaction, "setup"):
         return
@@ -1584,6 +1666,7 @@ async def _run_reset_flow(interaction: discord.Interaction) -> None:
     await view.wait()
     if view.confirmed:
         from config import save_config, GuildConfig
+
         save_config(GuildConfig(guild_id=interaction.guild_id))
         await interaction.followup.send(
             "✅ Configuration reset. Run `/setup` to configure the bot again.",
@@ -1605,28 +1688,28 @@ async def _run_reset_flow(interaction: discord.Interaction) -> None:
 # Note: offsets shown are standard time — DST-observing zones shift +1 in summer
 
 TIMEZONE_OPTIONS = [
-    ("Pacific/Honolulu",                  "(UTC-10) Hawaii (Honolulu)"),
-    ("America/Anchorage",                 "(UTC-9) Alaska (Anchorage)"),
-    ("America/Los_Angeles",               "(UTC-8) Pacific (Los Angeles, Seattle, Vancouver)"),
-    ("America/Denver",                    "(UTC-7) Mountain (Denver, Phoenix, Calgary)"),
-    ("America/Chicago",                   "(UTC-6) Central (Chicago, Dallas, Mexico City)"),
-    ("America/New_York",                  "(UTC-5) Eastern (New York, Toronto, Miami)"),
-    ("America/Sao_Paulo",                 "(UTC-3) Brazil (São Paulo, Rio de Janeiro)"),
-    ("America/Argentina/Buenos_Aires",    "(UTC-3) Argentina (Buenos Aires)"),
-    ("Atlantic/Azores",                   "(UTC-1) Azores"),
-    ("Europe/London",                     "(UTC+0) GMT/BST (London, Dublin, Lisbon)"),
-    ("Europe/Paris",                      "(UTC+1) Central European (Paris, Berlin, Rome)"),
-    ("Europe/Helsinki",                   "(UTC+2) Eastern European (Helsinki, Athens, Cairo)"),
-    ("Europe/Moscow",                     "(UTC+3) Moscow (Moscow, Istanbul, Riyadh)"),
-    ("Asia/Dubai",                        "(UTC+4) Gulf (Dubai, Abu Dhabi)"),
-    ("Asia/Karachi",                      "(UTC+5) Pakistan (Karachi, Islamabad)"),
-    ("Asia/Kolkata",                      "(UTC+5:30) India (Mumbai, Delhi, Bangalore)"),
-    ("Asia/Dhaka",                        "(UTC+6) Bangladesh (Dhaka)"),
-    ("Asia/Bangkok",                      "(UTC+7) Indochina (Bangkok, Jakarta, Hanoi)"),
-    ("Asia/Shanghai",                     "(UTC+8) China/Singapore (Shanghai, Beijing, Singapore)"),
-    ("Asia/Tokyo",                        "(UTC+9) Japan/Korea (Tokyo, Seoul)"),
-    ("Australia/Sydney",                  "(UTC+10) Eastern Australia (Sydney, Melbourne)"),
-    ("Pacific/Auckland",                  "(UTC+12) New Zealand (Auckland, Wellington)"),
+    ("Pacific/Honolulu", "(UTC-10) Hawaii (Honolulu)"),
+    ("America/Anchorage", "(UTC-9) Alaska (Anchorage)"),
+    ("America/Los_Angeles", "(UTC-8) Pacific (Los Angeles, Seattle, Vancouver)"),
+    ("America/Denver", "(UTC-7) Mountain (Denver, Phoenix, Calgary)"),
+    ("America/Chicago", "(UTC-6) Central (Chicago, Dallas, Mexico City)"),
+    ("America/New_York", "(UTC-5) Eastern (New York, Toronto, Miami)"),
+    ("America/Sao_Paulo", "(UTC-3) Brazil (São Paulo, Rio de Janeiro)"),
+    ("America/Argentina/Buenos_Aires", "(UTC-3) Argentina (Buenos Aires)"),
+    ("Atlantic/Azores", "(UTC-1) Azores"),
+    ("Europe/London", "(UTC+0) GMT/BST (London, Dublin, Lisbon)"),
+    ("Europe/Paris", "(UTC+1) Central European (Paris, Berlin, Rome)"),
+    ("Europe/Helsinki", "(UTC+2) Eastern European (Helsinki, Athens, Cairo)"),
+    ("Europe/Moscow", "(UTC+3) Moscow (Moscow, Istanbul, Riyadh)"),
+    ("Asia/Dubai", "(UTC+4) Gulf (Dubai, Abu Dhabi)"),
+    ("Asia/Karachi", "(UTC+5) Pakistan (Karachi, Islamabad)"),
+    ("Asia/Kolkata", "(UTC+5:30) India (Mumbai, Delhi, Bangalore)"),
+    ("Asia/Dhaka", "(UTC+6) Bangladesh (Dhaka)"),
+    ("Asia/Bangkok", "(UTC+7) Indochina (Bangkok, Jakarta, Hanoi)"),
+    ("Asia/Shanghai", "(UTC+8) China/Singapore (Shanghai, Beijing, Singapore)"),
+    ("Asia/Tokyo", "(UTC+9) Japan/Korea (Tokyo, Seoul)"),
+    ("Australia/Sydney", "(UTC+10) Eastern Australia (Sydney, Melbourne)"),
+    ("Pacific/Auckland", "(UTC+12) New Zealand (Auckland, Wellington)"),
 ]
 
 # Map from tz_database_name → display label
@@ -1640,11 +1723,12 @@ class TimezoneSelectView(discord.ui.View):
     view prepends a green Keep-current button above the select so
     leadership doesn't have to re-pick their timezone on a re-run.
     """
+
     def __init__(self, *, current: str | None = None):
         super().__init__(timeout=WIZARD_TIMEOUT)
-        self.selected  = None
+        self.selected = None
         self.confirmed = False
-        self.current   = current
+        self.current = current
 
         keep_added = False
         if current and current in TIMEZONE_LABELS:
@@ -1656,14 +1740,17 @@ class TimezoneSelectView(discord.ui.View):
             )
 
             async def _keep_cb(inter: discord.Interaction):
-                self.selected  = current
+                self.selected = current
                 self.confirmed = True
                 for item in self.children:
                     item.disabled = True
                 await wizard_registry.safe_edit_response(
-                    inter, content=f"✅ Keeping timezone: **{keep_label}**", view=self,
+                    inter,
+                    content=f"✅ Keeping timezone: **{keep_label}**",
+                    view=self,
                 )
                 self.stop()
+
             keep_btn.callback = _keep_cb
             self.add_item(keep_btn)
             keep_added = True
@@ -1671,16 +1758,15 @@ class TimezoneSelectView(discord.ui.View):
         select = discord.ui.Select(
             placeholder="Select your timezone...",
             options=[
-                discord.SelectOption(label=label[:100], value=tz)
-                for tz, label in TIMEZONE_OPTIONS
+                discord.SelectOption(label=label[:100], value=tz) for tz, label in TIMEZONE_OPTIONS
             ],
             row=1 if keep_added else 0,
         )
 
         async def _cb(interaction: discord.Interaction):
-            self.selected    = select.values[0]
-            self.confirmed   = True
-            select.disabled  = True
+            self.selected = select.values[0]
+            self.confirmed = True
+            select.disabled = True
             label = TIMEZONE_LABELS.get(self.selected, self.selected)
             await wizard_registry.safe_edit_response(
                 interaction, content=f"✅ Timezone: **{label}**", view=self
@@ -1694,7 +1780,7 @@ class TimezoneSelectView(discord.ui.View):
 class ScheduleTypeView(discord.ui.View):
     def __init__(self):
         super().__init__(timeout=120)
-        self.selected  = None
+        self.selected = None
 
     @discord.ui.button(label="🔁 Repeating cycle", style=discord.ButtonStyle.primary)
     async def repeating(self, interaction: discord.Interaction, button: discord.ui.Button):
@@ -1741,25 +1827,33 @@ class YesNoView(discord.ui.View):
 
 # ── 🗂️ View configuration helper (used by the /setup hub button) ─────────────
 
+
 async def _send_view_configuration(interaction: discord.Interaction, cfg) -> None:
     """Build and send a single embed summarising every wizard's configuration."""
     await interaction.response.defer(ephemeral=True)
 
     from config import (
-        get_train_config, get_birthday_config, get_storm_config,
-        get_survey_config, get_growth_config, get_guild_events,
+        get_train_config,
+        get_birthday_config,
+        get_storm_config,
+        get_survey_config,
+        get_growth_config,
+        get_guild_events,
         get_shiny_tasks_config,
     )
+
     guild_id = interaction.guild_id
-    train    = get_train_config(guild_id)
+    train = get_train_config(guild_id)
     birthday = get_birthday_config(guild_id)
-    ds       = get_storm_config(guild_id, "DS")
-    cs       = get_storm_config(guild_id, "CS")
-    survey   = get_survey_config(guild_id)
-    growth   = get_growth_config(guild_id)
-    shiny    = get_shiny_tasks_config(guild_id)
-    events   = get_guild_events(guild_id, active_only=True)
-    is_premium_flag = await premium.is_premium(guild_id, interaction=interaction, bot=interaction.client)
+    ds = get_storm_config(guild_id, "DS")
+    cs = get_storm_config(guild_id, "CS")
+    survey = get_survey_config(guild_id)
+    growth = get_growth_config(guild_id)
+    shiny = get_shiny_tasks_config(guild_id)
+    events = get_guild_events(guild_id, active_only=True)
+    is_premium_flag = await premium.is_premium(
+        guild_id, interaction=interaction, bot=interaction.client
+    )
 
     def _yn(v) -> str:
         return "✅ Configured" if v else "❌ Not configured"
@@ -1821,15 +1915,21 @@ async def _send_view_configuration(interaction: discord.Interaction, cfg) -> Non
     ]
     if train.get("blurbs_enabled"):
         themes = train.get("themes") or []
-        tones  = train.get("tones")  or []
-        train_lines.append(f"**Themes ({len(themes)}):** " + (", ".join(themes) if themes else "*none*"))
-        train_lines.append(f"**Tones ({len(tones)}):** "  + (", ".join(tones)  if tones  else "*none*"))
+        tones = train.get("tones") or []
+        train_lines.append(
+            f"**Themes ({len(themes)}):** " + (", ".join(themes) if themes else "*none*")
+        )
+        train_lines.append(
+            f"**Tones ({len(tones)}):** " + (", ".join(tones) if tones else "*none*")
+        )
         train_lines.append(f"**Default Tone:** {train.get('default_tone', '*not set*')}")
         train_lines.append(f"**Prompt Template:** {_yn(train.get('prompt_template'))}")
     train_lines.append(f"**Reminders:** {_enabled(train.get('reminders_enabled'))}")
     if train.get("reminders_enabled"):
         train_lines.append(f"**Reminder Channel:** {_channel(train.get('reminder_channel_id'))}")
-        train_lines.append(f"**Reminder Time:** {_format_time_with_tz(train.get('reminder_time'), cfg.timezone) or '*not set*'}")
+        train_lines.append(
+            f"**Reminder Time:** {_format_time_with_tz(train.get('reminder_time'), cfg.timezone) or '*not set*'}"
+        )
     embed.add_field(name=HUB_BTN_TRAIN, value="\n".join(train_lines)[:1024], inline=False)
 
     b_lines = [
@@ -1837,9 +1937,12 @@ async def _send_view_configuration(interaction: discord.Interaction, cfg) -> Non
         f"**Source Tab:** {birthday.get('tab_name', '*not set*')}",
         f"**Name Column:** {_col_letter(birthday.get('name_col'))}",
         f"**Birthday Column:** {_col_letter(birthday.get('birthday_col'))}",
-        f"**Discord ID Column:** "
-        + (_col_letter(birthday.get('discord_id_col'))
-           if birthday.get('discord_id_col', -1) >= 0 else "*not set*"),
+        "**Discord ID Column:** "
+        + (
+            _col_letter(birthday.get("discord_id_col"))
+            if birthday.get("discord_id_col", -1) >= 0
+            else "*not set*"
+        ),
         f"**Data Start Row:** {birthday.get('data_start_row', '*not set*')}",
         f"**Lookahead Days:** {birthday.get('lookahead_days', '*not set*')}",
         f"**Train Integration:** {_enabled(birthday.get('train_integration'))}",
@@ -1847,10 +1950,13 @@ async def _send_view_configuration(interaction: discord.Interaction, cfg) -> Non
     ]
     if birthday.get("reminders_enabled"):
         b_lines.append(f"**Reminder Channel:** {_channel(birthday.get('reminder_channel_id'))}")
-        b_lines.append(f"**Reminder Time:** {_format_time_with_tz(birthday.get('reminder_time'), cfg.timezone) or '*not set*'}")
+        b_lines.append(
+            f"**Reminder Time:** {_format_time_with_tz(birthday.get('reminder_time'), cfg.timezone) or '*not set*'}"
+        )
     embed.add_field(name=HUB_BTN_BIRTHDAYS, value="\n".join(b_lines)[:1024], inline=False)
 
     from config import get_storm_slot_labels
+
     ds_slot_labels = get_storm_slot_labels("DS", interaction.guild_id)
     cs_slot_labels = get_storm_slot_labels("CS", interaction.guild_id)
 
@@ -1895,8 +2001,8 @@ async def _send_view_configuration(interaction: discord.Interaction, cfg) -> Non
     g_lines = [f"**Enabled:** {_enabled(growth.get('enabled'))}"]
     if growth.get("enabled"):
         metrics = growth.get("metrics") or []
-        freq    = growth.get("snapshot_frequency", "monthly")
-        sched   = (
+        freq = growth.get("snapshot_frequency", "monthly")
+        sched = (
             f"Monthly on day {growth.get('snapshot_day', 1)}"
             if freq == "monthly"
             else f"Every {growth.get('snapshot_interval', 30)} days"
@@ -1908,7 +2014,11 @@ async def _send_view_configuration(interaction: discord.Interaction, cfg) -> Non
             f"**Growth Tab:** {growth.get('tab_growth', '*not set*')}",
             f"**Snapshot Schedule:** {sched}",
             f"**Metrics ({len(metrics)}):** "
-            + (", ".join(f"{m['label']} (col {m['col']})" for m in metrics) if metrics else "*none*"),
+            + (
+                ", ".join(f"{m['label']} (col {m['col']})" for m in metrics)
+                if metrics
+                else "*none*"
+            ),
         ]
     embed.add_field(name=HUB_BTN_GROWTH, value="\n".join(g_lines)[:1024], inline=False)
 
@@ -1924,38 +2034,42 @@ async def _send_view_configuration(interaction: discord.Interaction, cfg) -> Non
     embed.add_field(name="🌟 Shiny Tasks", value="\n".join(st_lines)[:1024], inline=False)
 
     if is_premium_flag:
-        embed.set_footer(text="💎 Premium is active. Run /setup and click a section button to update it.")
+        embed.set_footer(
+            text="💎 Premium is active. Run /setup and click a section button to update it."
+        )
     else:
-        embed.set_footer(text="Run /upgrade for Premium • /help for all commands • /setup to update a section")
+        embed.set_footer(
+            text="Run /upgrade for Premium • /help for all commands • /setup to update a section"
+        )
     await interaction.followup.send(embed=embed, ephemeral=True)
 
 
 # ── Run Various Setups ───────────────────────────────────────────────────────
 
+
 async def run_setup(interaction: discord.Interaction, bot):
     import wizard_registry
+
     guild_id = interaction.guild_id
-    cfg      = get_or_create_config(guild_id)
-    channel  = interaction.channel
-    user     = interaction.user
+    cfg = get_or_create_config(guild_id)
+    channel = interaction.channel
+    user = interaction.user
     cancel_event = wizard_registry.register(user.id)
 
     # ── If already configured, show summary and offer edit or cancel ──────────
     if cfg.setup_complete:
         tz_label = TIMEZONE_LABELS.get(cfg.timezone, cfg.timezone)
-        sheet_display = (
-            f"`{cfg.spreadsheet_id[:20]}...`" if cfg.spreadsheet_id else "Not set"
-        )
+        sheet_display = f"`{cfg.spreadsheet_id[:20]}...`" if cfg.spreadsheet_id else "Not set"
         proceed = await ask_proceed_with_existing_config(
             channel,
             title="⚙️ Current Core Setup",
             description="Your server is already configured. Would you like to edit these settings?",
             fields=[
-                ("Member Role",        cfg.member_role_name),
-                ("Leadership Role",    cfg.leadership_role_name),
+                ("Member Role", cfg.member_role_name),
+                ("Leadership Role", cfg.leadership_role_name),
                 ("Leadership Channel", f"<#{cfg.leadership_channel_id}>"),
-                ("Timezone",           tz_label),
-                ("Sheet ID",           sheet_display),
+                ("Timezone", tz_label),
+                ("Sheet ID", sheet_display),
             ],
             cancel_event=cancel_event,
             no_changes_message="✅ No changes made. Your existing setup is still active.",
@@ -1971,7 +2085,9 @@ async def run_setup(interaction: discord.Interaction, bot):
     )
 
     # ── Step 1: Member role ────────────────────────────────────────────────────
-    await channel.send("**Step 1 of 6 — Member Role**\nSelect the role that all alliance members have:")
+    await channel.send(
+        "**Step 1 of 6 — Member Role**\nSelect the role that all alliance members have:"
+    )
     v = RoleSelectStep(
         "Select member role...",
         current_id=cfg.member_role_id,
@@ -1991,10 +2107,12 @@ async def run_setup(interaction: discord.Interaction, bot):
         await channel.send(GENERIC_CMD_TIMEOUT.format(cmd="setup"))
         return
     cfg.member_role_name = v.selected_role.name
-    cfg.member_role_id   = v.selected_role.id
+    cfg.member_role_id = v.selected_role.id
 
     # ── Step 2: Leadership role ────────────────────────────────────────────────
-    await channel.send("**Step 2 of 6 — Leadership Role**\nSelect the elevated role for alliance leadership:")
+    await channel.send(
+        "**Step 2 of 6 — Leadership Role**\nSelect the elevated role for alliance leadership:"
+    )
     v = RoleSelectStep(
         "Select leadership role...",
         current_id=cfg.leadership_role_id,
@@ -2014,10 +2132,12 @@ async def run_setup(interaction: discord.Interaction, bot):
         await channel.send(GENERIC_CMD_TIMEOUT.format(cmd="setup"))
         return
     cfg.leadership_role_name = v.selected_role.name
-    cfg.leadership_role_id   = v.selected_role.id
+    cfg.leadership_role_id = v.selected_role.id
 
     # ── Step 3: Leadership channel ─────────────────────────────────────────────
-    is_premium_flag = await premium.is_premium(guild_id, interaction=interaction, bot=interaction.client)
+    is_premium_flag = await premium.is_premium(
+        guild_id, interaction=interaction, bot=interaction.client
+    )
     await channel.send(
         "**Step 3 of 6 — Leadership Channel**\n"
         "Pick the channel where I should post drafts, reminders, and approvals "
@@ -2032,9 +2152,7 @@ async def run_setup(interaction: discord.Interaction, bot):
         current_id=cfg.leadership_channel_id,
     )
     if v.is_current_stale:
-        await channel.send(
-            PREV_CHANNEL_GONE.format(channel_label="leadership")
-        )
+        await channel.send(PREV_CHANNEL_GONE.format(channel_label="leadership"))
     await channel.send("\u200b", view=v)
     await wait_view_or_cancel(v, cancel_event)
     if v.cancelled:
@@ -2067,7 +2185,7 @@ async def run_setup(interaction: discord.Interaction, bot):
         "`https://docs.google.com/spreadsheets/d/`**`YOUR_SHEET_ID`**`/edit`\n"
         "*(You can paste the whole URL and I'll pull the ID out.)*"
     )
-    modal   = TextInputModal("Google Sheet ID", "Sheet ID", placeholder="Paste your Sheet ID here...")
+    modal = TextInputModal("Google Sheet ID", "Sheet ID", placeholder="Paste your Sheet ID here...")
     # Truncate long sheet ids for the Keep-current button label —
     # full ids are ~44 chars and overflow Discord's 80-char cap once
     # the "✅ Keep current: " prefix is added.
@@ -2139,11 +2257,13 @@ async def run_setup(interaction: discord.Interaction, bot):
         ),
         color=discord.Color.blurple(),
     )
-    embed.add_field(name="Member Role",        value=cfg.member_role_name,              inline=False)
-    embed.add_field(name="Leadership Role",    value=cfg.leadership_role_name,          inline=False)
-    embed.add_field(name="Leadership Channel", value=f"<#{cfg.leadership_channel_id}>", inline=False)
-    embed.add_field(name="Timezone",           value=tz_label,                          inline=False)
-    embed.add_field(name="Sheet ID",           value=f"`{sheet_id[:20]}...`",           inline=False)
+    embed.add_field(name="Member Role", value=cfg.member_role_name, inline=False)
+    embed.add_field(name="Leadership Role", value=cfg.leadership_role_name, inline=False)
+    embed.add_field(
+        name="Leadership Channel", value=f"<#{cfg.leadership_channel_id}>", inline=False
+    )
+    embed.add_field(name="Timezone", value=tz_label, inline=False)
+    embed.add_field(name="Sheet ID", value=f"`{sheet_id[:20]}...`", inline=False)
 
     confirm_view = ConfirmView()
     await channel.send(embed=embed, view=confirm_view)
@@ -2177,12 +2297,14 @@ async def run_setup(interaction: discord.Interaction, bot):
     wizard_registry.unregister(user.id, cancel_event)
     print(f"[SETUP] Guild {guild_id} core setup complete")
 
+
 async def run_growth_setup(interaction: discord.Interaction, bot):
     """Walk an admin through configuring growth tracking."""
     import wizard_registry
+
     guild_id = interaction.guild_id
-    channel  = interaction.channel
-    user     = interaction.user
+    channel = interaction.channel
+    user = interaction.user
     cancel_event = wizard_registry.register(user.id)
 
     def check(m):
@@ -2203,9 +2325,12 @@ async def run_growth_setup(interaction: discord.Interaction, bot):
         return reply.content.strip()[:max_chars]
 
     from config import (
-        get_growth_config, save_growth_config,
-        has_growth_config, clear_growth_config,
+        get_growth_config,
+        save_growth_config,
+        has_growth_config,
+        clear_growth_config,
     )
+
     current = get_growth_config(guild_id)
     growth_already_configured = has_growth_config(guild_id)
 
@@ -2214,11 +2339,11 @@ async def run_growth_setup(interaction: discord.Interaction, bot):
     # (if any) is passed as `current=` so the wizard can label it
     # accurately ("Keep current: X" vs "Use default: Y") instead of
     # showing every saved value as the "default".
-    DEFAULT_TAB_SOURCE        = "Squad Powers"
-    DEFAULT_DATA_START_ROW    = 2
-    DEFAULT_NAME_COL          = "A"
-    DEFAULT_TAB_GROWTH        = "Growth Tracking"
-    DEFAULT_SNAPSHOT_DAY      = 1
+    DEFAULT_TAB_SOURCE = "Squad Powers"
+    DEFAULT_DATA_START_ROW = 2
+    DEFAULT_NAME_COL = "A"
+    DEFAULT_TAB_GROWTH = "Growth Tracking"
+    DEFAULT_SNAPSHOT_DAY = 1
     DEFAULT_SNAPSHOT_INTERVAL = 30
 
     # ── If already enabled, show summary and offer edit or cancel ─────────────
@@ -2230,15 +2355,16 @@ async def run_growth_setup(interaction: discord.Interaction, bot):
         else:
             sched = f"Every {current.get('snapshot_interval', 30)} days"
         fields = [
-            ("Source Tab",        current.get("tab_source") or "*not set*"),
-            ("Name Column",       f"Column {current.get('name_col') or '*not set*'}"),
-            ("Data Start Row",    str(current.get("data_start_row") or "*not set*")),
-            ("Growth Tab",        current.get("tab_growth") or "*not set*"),
+            ("Source Tab", current.get("tab_source") or "*not set*"),
+            ("Name Column", f"Column {current.get('name_col') or '*not set*'}"),
+            ("Data Start Row", str(current.get("data_start_row") or "*not set*")),
+            ("Growth Tab", current.get("tab_growth") or "*not set*"),
             ("Snapshot Schedule", sched),
             (
                 f"Metrics ({len(metrics_list)})",
                 "\n".join(f"• {m['label']} — column {m['col']}" for m in metrics_list)
-                if metrics_list else "*none*",
+                if metrics_list
+                else "*none*",
             ),
         ]
         proceed = await ask_proceed_with_existing_config(
@@ -2274,7 +2400,8 @@ async def run_growth_setup(interaction: discord.Interaction, bot):
         return
     if not enabled_view.selected:
         save_growth_config(
-            guild_id, enabled=0,
+            guild_id,
+            enabled=0,
             tab_source=current.get("tab_source", ""),
             name_col=current.get("name_col", "A"),
             metrics=current.get("metrics", []),
@@ -2327,17 +2454,19 @@ async def run_growth_setup(interaction: discord.Interaction, bot):
     try:
         data_start_row = int(str(start_raw).strip())
     except ValueError:
-        await channel.send(INPUT_INVALID.format(
-            type="row number", example="2",
-            recovery=f"`/setup` → {HUB_BTN_GROWTH}",
-        ))
+        await channel.send(
+            INPUT_INVALID.format(
+                type="row number",
+                example="2",
+                recovery=f"`/setup` → {HUB_BTN_GROWTH}",
+            )
+        )
         return
 
     # ── Step 4: Name column ───────────────────────────────────────────────────
     name_raw = await ask_keep_or_change(
         channel,
-        "**Step 4 of 7 — Name Column**\n"
-        "Which column contains the member's name?",
+        "**Step 4 of 7 — Name Column**\nWhich column contains the member's name?",
         default=DEFAULT_NAME_COL,
         current=current.get("name_col", ""),
         modal_title="Name Column",
@@ -2349,10 +2478,13 @@ async def run_growth_setup(interaction: discord.Interaction, bot):
         return
     name_col = name_raw.strip().upper()
     if len(name_col) != 1 or not name_col.isalpha():
-        await channel.send(INPUT_INVALID.format(
-            type="single column letter", example="A",
-            recovery=f"`/setup` → {HUB_BTN_GROWTH}",
-        ))
+        await channel.send(
+            INPUT_INVALID.format(
+                type="single column letter",
+                example="A",
+                recovery=f"`/setup` → {HUB_BTN_GROWTH}",
+            )
+        )
         return
 
     # ── Step 5: Metrics ───────────────────────────────────────────────────────
@@ -2399,16 +2531,23 @@ async def run_growth_setup(interaction: discord.Interaction, bot):
             for m in metrics:
                 embed.add_field(name=m["label"], value=f"Column {m['col']}", inline=False)
         else:
-            embed.add_field(name="No metrics yet", value="Click **Add Metric** to begin.", inline=False)
+            embed.add_field(
+                name="No metrics yet", value="Click **Add Metric** to begin.", inline=False
+            )
         if cap is not None:
-            embed.set_footer(text=TIER_COMPARISON.format(
-                free_limit=f"{len(metrics)} of {cap} metrics used", premium_limit="unlimited",
-            ))
+            embed.set_footer(
+                text=TIER_COMPARISON.format(
+                    free_limit=f"{len(metrics)} of {cap} metrics used",
+                    premium_limit="unlimited",
+                )
+            )
         return embed
 
     while True:
         # Free-tier cap on number of growth metrics
-        metrics_cap = await premium.get_limit("growth_metrics", guild_id, interaction=interaction, bot=interaction.client)
+        metrics_cap = await premium.get_limit(
+            "growth_metrics", guild_id, interaction=interaction, bot=interaction.client
+        )
         at_metrics_cap = metrics_cap is not None and len(metrics) >= metrics_cap
 
         class MetricsActionView(discord.ui.View):
@@ -2483,14 +2622,16 @@ async def run_growth_setup(interaction: discord.Interaction, bot):
                 self.select = discord.ui.Select(
                     placeholder="Choose a metric...",
                     options=options,
-                    min_values=1, max_values=1,
+                    min_values=1,
+                    max_values=1,
                 )
                 self.select.callback = self._on_select
                 self.add_item(self.select)
 
             async def _on_select(self, inter: discord.Interaction):
                 self.index = int(self.select.values[0])
-                for item in self.children: item.disabled = True
+                for item in self.children:
+                    item.disabled = True
                 await wizard_registry.safe_edit_response(inter, view=self)
                 self.stop()
 
@@ -2535,10 +2676,14 @@ async def run_growth_setup(interaction: discord.Interaction, bot):
         await wait_view_or_cancel(edit_launch, cancel_event)
         if edit_launch.cancelled:
             return
-        if edit_launch.modal.label_value and edit_launch.modal.col_value and edit_launch.modal.col_value.isalpha():
+        if (
+            edit_launch.modal.label_value
+            and edit_launch.modal.col_value
+            and edit_launch.modal.col_value.isalpha()
+        ):
             metrics[pick_view.index] = {
                 "label": edit_launch.modal.label_value,
-                "col":   edit_launch.modal.col_value,
+                "col": edit_launch.modal.col_value,
             }
 
     if not metrics:
@@ -2563,7 +2708,9 @@ async def run_growth_setup(interaction: discord.Interaction, bot):
 
     # ── Step 7: Snapshot frequency ────────────────────────────────────────────
     # Custom-interval frequency is a premium-only feature.
-    custom_interval_unlocked = await premium.is_premium(guild_id, interaction=interaction, bot=interaction.client)
+    custom_interval_unlocked = await premium.is_premium(
+        guild_id, interaction=interaction, bot=interaction.client
+    )
 
     class FrequencyView(discord.ui.View):
         def __init__(self):
@@ -2572,25 +2719,30 @@ async def run_growth_setup(interaction: discord.Interaction, bot):
             if not custom_interval_unlocked:
                 self.custom.disabled = True
 
-        @discord.ui.button(label="📅 Monthly (1st of each month)", style=discord.ButtonStyle.primary)
+        @discord.ui.button(
+            label="📅 Monthly (1st of each month)", style=discord.ButtonStyle.primary
+        )
         async def monthly(self, inter: discord.Interaction, button: discord.ui.Button):
             self.selected = "monthly"
-            for item in self.children: item.disabled = True
-            await wizard_registry.safe_edit_response(inter, content="✅ Frequency: **Monthly**", view=self)
+            for item in self.children:
+                item.disabled = True
+            await wizard_registry.safe_edit_response(
+                inter, content="✅ Frequency: **Monthly**", view=self
+            )
             self.stop()
 
-        @discord.ui.button(label="🔁 Custom interval (every X days) 💎", style=discord.ButtonStyle.secondary)
+        @discord.ui.button(
+            label="🔁 Custom interval (every X days) 💎", style=discord.ButtonStyle.secondary
+        )
         async def custom(self, inter: discord.Interaction, button: discord.ui.Button):
             self.selected = "interval"
-            for item in self.children: item.disabled = True
+            for item in self.children:
+                item.disabled = True
             await wizard_registry.safe_edit_response(inter, view=self)
             self.stop()
 
     freq_view = FrequencyView()
-    freq_prompt = (
-        "**Step 7 of 7 — Snapshot Frequency**\n"
-        "How often should the bot take a snapshot?"
-    )
+    freq_prompt = "**Step 7 of 7 — Snapshot Frequency**\nHow often should the bot take a snapshot?"
     if not custom_interval_unlocked:
         freq_prompt += "\n*🔒 Custom interval is a Premium feature.*"
     await channel.send(
@@ -2605,8 +2757,8 @@ async def run_growth_setup(interaction: discord.Interaction, bot):
         return
 
     snapshot_frequency = freq_view.selected
-    snapshot_day       = DEFAULT_SNAPSHOT_DAY
-    snapshot_interval  = DEFAULT_SNAPSHOT_INTERVAL
+    snapshot_day = DEFAULT_SNAPSHOT_DAY
+    snapshot_interval = DEFAULT_SNAPSHOT_INTERVAL
 
     if snapshot_frequency == "monthly":
         day_raw = await ask_keep_or_change(
@@ -2629,8 +2781,7 @@ async def run_growth_setup(interaction: discord.Interaction, bot):
     else:
         interval_raw = await ask_keep_or_change(
             channel,
-            "**Step 7a of 7 — Interval (days)**\n"
-            "How many days between each snapshot?",
+            "**Step 7a of 7 — Interval (days)**\nHow many days between each snapshot?",
             default=str(DEFAULT_SNAPSHOT_INTERVAL),
             current=str(current.get("snapshot_interval") or ""),
             modal_title="Interval",
@@ -2647,16 +2798,19 @@ async def run_growth_setup(interaction: discord.Interaction, bot):
 
     # ── Save ───────────────────────────────────────────────────────────────────
     save_growth_config(
-        guild_id, enabled=1,
-        tab_source=tab_source, name_col=name_col,
-        metrics=metrics, tab_growth=tab_growth,
+        guild_id,
+        enabled=1,
+        tab_source=tab_source,
+        name_col=name_col,
+        metrics=metrics,
+        tab_growth=tab_growth,
         snapshot_frequency=snapshot_frequency,
         snapshot_day=snapshot_day,
         snapshot_interval=snapshot_interval,
         data_start_row=data_start_row,
     )
 
-    freq_desc  = (
+    freq_desc = (
         f"Monthly on day {snapshot_day}"
         if snapshot_frequency == "monthly"
         else f"Every {snapshot_interval} days"
@@ -2668,12 +2822,15 @@ async def run_growth_setup(interaction: discord.Interaction, bot):
     # interval — picking 14 days doesn't tell them whether the first
     # snapshot is today, tomorrow, or 14 days from now.
     from growth import compute_next_snapshot
-    next_dt = compute_next_snapshot({
-        "enabled": 1,
-        "snapshot_frequency": snapshot_frequency,
-        "snapshot_day": snapshot_day,
-        "snapshot_interval": snapshot_interval,
-    })
+
+    next_dt = compute_next_snapshot(
+        {
+            "enabled": 1,
+            "snapshot_frequency": snapshot_frequency,
+            "snapshot_day": snapshot_day,
+            "snapshot_interval": snapshot_interval,
+        }
+    )
     if next_dt is not None:
         ts = int(next_dt.timestamp())
         # Discord renders <t:N:F> as a localized full date/time per viewer
@@ -2688,16 +2845,16 @@ async def run_growth_setup(interaction: discord.Interaction, bot):
         next_value = "*Could not compute — check `/growth overview` for status.*"
 
     embed = discord.Embed(title="✅ Growth Tracking Configured", color=discord.Color.green())
-    embed.add_field(name="Source Tab",        value=tab_source,           inline=False)
-    embed.add_field(name="Name Column",       value=f"Column {name_col}", inline=False)
-    embed.add_field(name="Data Start Row",    value=str(data_start_row),  inline=False)
-    embed.add_field(name="Growth Tab",        value=tab_growth,           inline=False)
-    embed.add_field(name="Snapshot Schedule", value=freq_desc,            inline=False)
-    embed.add_field(name="Next Snapshot",     value=next_value,           inline=False)
-    embed.add_field(name="Metrics",           value=metrics_display,      inline=False)
+    embed.add_field(name="Source Tab", value=tab_source, inline=False)
+    embed.add_field(name="Name Column", value=f"Column {name_col}", inline=False)
+    embed.add_field(name="Data Start Row", value=str(data_start_row), inline=False)
+    embed.add_field(name="Growth Tab", value=tab_growth, inline=False)
+    embed.add_field(name="Snapshot Schedule", value=freq_desc, inline=False)
+    embed.add_field(name="Next Snapshot", value=next_value, inline=False)
+    embed.add_field(name="Metrics", value=metrics_display, inline=False)
     embed.set_footer(
         text=SETUP_POINTER_FOOTER.format(wizard=HUB_BTN_GROWTH)
-             + " Use /growth overview to take a manual snapshot.",
+        + " Use /growth overview to take a manual snapshot.",
     )
     await channel.send(embed=embed)
     wizard_registry.unregister(user.id, cancel_event)
@@ -2724,14 +2881,15 @@ async def run_growth_breakdown_setup(interaction: discord.Interaction, bot):
     """
     import wizard_registry
     from config import (
-        get_growth_config, save_growth_breakdown_config,
+        get_growth_config,
+        save_growth_breakdown_config,
         has_growth_breakdown_config,
     )
     from growth import DEFAULT_THRESHOLDS, DEFAULT_BUCKET_LABELS, BUCKET_ORDER
 
     guild_id = interaction.guild_id
-    channel  = interaction.channel
-    user     = interaction.user
+    channel = interaction.channel
+    user = interaction.user
     cancel_event = wizard_registry.register(user.id)
 
     current = get_growth_config(guild_id)
@@ -2748,35 +2906,43 @@ async def run_growth_breakdown_setup(interaction: discord.Interaction, bot):
     if has_growth_breakdown_config(guild_id):
         post_ch = current.get("breakdown_post_channel_id") or 0
         thresholds = current.get("breakdown_thresholds") or {}
-        labels     = current.get("breakdown_labels") or {}
+        labels = current.get("breakdown_labels") or {}
         bucket_filter = current.get("breakdown_bucket_filter") or []
         fields = [
             ("Breakdown Tab", current.get("tab_breakdown") or "Growth Breakdown"),
             ("Auto-Post Channel", f"<#{post_ch}>" if post_ch else "❌ Off"),
         ]
         if post_ch and bucket_filter:
-            fields.append((
-                "Bucket Filter",
-                ", ".join(DEFAULT_BUCKET_LABELS.get(b, b) for b in bucket_filter),
-            ))
+            fields.append(
+                (
+                    "Bucket Filter",
+                    ", ".join(DEFAULT_BUCKET_LABELS.get(b, b) for b in bucket_filter),
+                )
+            )
         elif post_ch:
             fields.append(("Bucket Filter", "All buckets"))
         if thresholds:
-            fields.append((
-                "Custom Thresholds",
-                f"Increased ≥ {thresholds.get('increased', 0):g}%, "
-                f"Steady ≥ {thresholds.get('steady', 0):g}%, "
-                f"Low ≥ {thresholds.get('low', 0):g}%, "
-                f"None ≥ {thresholds.get('none', 0):g}%",
-            ))
+            fields.append(
+                (
+                    "Custom Thresholds",
+                    f"Increased ≥ {thresholds.get('increased', 0):g}%, "
+                    f"Steady ≥ {thresholds.get('steady', 0):g}%, "
+                    f"Low ≥ {thresholds.get('low', 0):g}%, "
+                    f"None ≥ {thresholds.get('none', 0):g}%",
+                )
+            )
         if labels:
-            fields.append((
-                "Custom Labels",
-                ", ".join(
-                    f"{DEFAULT_BUCKET_LABELS[b]}→{labels[b]}"
-                    for b in BUCKET_ORDER if labels.get(b)
-                ) or "—",
-            ))
+            fields.append(
+                (
+                    "Custom Labels",
+                    ", ".join(
+                        f"{DEFAULT_BUCKET_LABELS[b]}→{labels[b]}"
+                        for b in BUCKET_ORDER
+                        if labels.get(b)
+                    )
+                    or "—",
+                )
+            )
         proceed = await ask_proceed_with_existing_config(
             channel,
             title="📊 Current Growth Breakdown Setup",
@@ -2838,12 +3004,9 @@ async def run_growth_breakdown_setup(interaction: discord.Interaction, bot):
             current_id=saved_post_ch,
         )
         if post_ch_view.is_current_stale:
-            await channel.send(
-                PREV_CHANNEL_GONE.format(channel_label="breakdown")
-            )
+            await channel.send(PREV_CHANNEL_GONE.format(channel_label="breakdown"))
         await channel.send(
-            "**Auto-Post Channel**\n"
-            "Where should the breakdown summaries land?",
+            "**Auto-Post Channel**\nWhere should the breakdown summaries land?",
             view=post_ch_view,
         )
         await wait_view_or_cancel(post_ch_view, cancel_event)
@@ -2882,9 +3045,11 @@ async def run_growth_breakdown_setup(interaction: discord.Interaction, bot):
 
                     async def _keep_cb(inter: discord.Interaction):
                         self.selected = list(saved_filter)
-                        for item in self.children: item.disabled = True
+                        for item in self.children:
+                            item.disabled = True
                         await wizard_registry.safe_edit_response(inter, view=self)
                         self.stop()
+
                     keep_btn.callback = _keep_cb
                     self.add_item(keep_btn)
 
@@ -2906,7 +3071,8 @@ async def run_growth_breakdown_setup(interaction: discord.Interaction, bot):
 
                 async def _select_cb(inter: discord.Interaction):
                     self.selected = list(select.values)
-                    for item in self.children: item.disabled = True
+                    for item in self.children:
+                        item.disabled = True
                     await wizard_registry.safe_edit_response(inter, view=self)
                     self.stop()
 
@@ -2921,7 +3087,8 @@ async def run_growth_breakdown_setup(interaction: discord.Interaction, bot):
 
                 async def _all_cb(inter: discord.Interaction):
                     self.selected = []
-                    for item in self.children: item.disabled = True
+                    for item in self.children:
+                        item.disabled = True
                     await wizard_registry.safe_edit_response(inter, view=self)
                     self.stop()
 
@@ -2930,9 +3097,7 @@ async def run_growth_breakdown_setup(interaction: discord.Interaction, bot):
 
         bf_view = BucketFilterView()
         if saved_filter:
-            saved_disp = ", ".join(
-                DEFAULT_BUCKET_LABELS.get(b, b) for b in saved_filter
-            )
+            saved_disp = ", ".join(DEFAULT_BUCKET_LABELS.get(b, b) for b in saved_filter)
             await channel.send(
                 f"**Step 3 of 5 — Bucket Filter**\n"
                 f"Currently alerting on: **{saved_disp}**. Pick a new set of "
@@ -2965,25 +3130,29 @@ async def run_growth_breakdown_setup(interaction: discord.Interaction, bot):
                 label="Increased ≥",
                 placeholder="e.g. 20 — bucket lower bound, %",
                 default=str(thresholds.get("increased", DEFAULT_THRESHOLDS["increased"])),
-                required=True, max_length=6,
+                required=True,
+                max_length=6,
             )
             self._steady = discord.ui.TextInput(
                 label="Steady ≥",
                 placeholder="e.g. 10",
                 default=str(thresholds.get("steady", DEFAULT_THRESHOLDS["steady"])),
-                required=True, max_length=6,
+                required=True,
+                max_length=6,
             )
             self._low = discord.ui.TextInput(
                 label="Low ≥",
                 placeholder="e.g. 5",
                 default=str(thresholds.get("low", DEFAULT_THRESHOLDS["low"])),
-                required=True, max_length=6,
+                required=True,
+                max_length=6,
             )
             self._none = discord.ui.TextInput(
                 label="None ≥",
                 placeholder="0 — usually leave as 0. Decline is < 0.",
                 default=str(thresholds.get("none", DEFAULT_THRESHOLDS["none"])),
-                required=True, max_length=6,
+                required=True,
+                max_length=6,
             )
             for i in (self._increased, self._steady, self._low, self._none):
                 self.add_item(i)
@@ -2992,9 +3161,9 @@ async def run_growth_breakdown_setup(interaction: discord.Interaction, bot):
             try:
                 self.values_out = {
                     "increased": float(self._increased.value),
-                    "steady":    float(self._steady.value),
-                    "low":       float(self._low.value),
-                    "none":      float(self._none.value),
+                    "steady": float(self._steady.value),
+                    "low": float(self._low.value),
+                    "none": float(self._none.value),
                 }
             except (ValueError, TypeError):
                 self.values_out = None
@@ -3023,16 +3192,19 @@ async def run_growth_breakdown_setup(interaction: discord.Interaction, bot):
 
                 async def _keep_cb(inter: discord.Interaction):
                     self.choice = "keep"
-                    for item in self.children: item.disabled = True
+                    for item in self.children:
+                        item.disabled = True
                     await wizard_registry.safe_edit_response(inter, view=self)
                     self.stop()
+
                 keep_btn.callback = _keep_cb
                 self.add_item(keep_btn)
 
         @discord.ui.button(label="✅ Use defaults", style=discord.ButtonStyle.success)
         async def defaults_btn(self, inter: discord.Interaction, button: discord.ui.Button):
             self.choice = "defaults"
-            for item in self.children: item.disabled = True
+            for item in self.children:
+                item.disabled = True
             await wizard_registry.safe_edit_response(inter, view=self)
             self.stop()
 
@@ -3043,7 +3215,8 @@ async def run_growth_breakdown_setup(interaction: discord.Interaction, bot):
             await modal.wait()
             self.choice = "customize" if modal.values_out else None
             self._modal_values = modal.values_out
-            for item in self.children: item.disabled = True
+            for item in self.children:
+                item.disabled = True
             try:
                 await inter.edit_original_response(view=self)
             except Exception:
@@ -3093,7 +3266,8 @@ async def run_growth_breakdown_setup(interaction: discord.Interaction, bot):
                     label=DEFAULT_BUCKET_LABELS[b],
                     placeholder=f"e.g. '{DEFAULT_BUCKET_LABELS[b]}'",
                     default=str(labels.get(b, DEFAULT_BUCKET_LABELS[b])),
-                    required=True, max_length=30,
+                    required=True,
+                    max_length=30,
                 )
                 self._inputs[b] = ti
                 self.add_item(ti)
@@ -3124,16 +3298,19 @@ async def run_growth_breakdown_setup(interaction: discord.Interaction, bot):
 
                 async def _keep_cb(inter: discord.Interaction):
                     self.choice = "keep"
-                    for item in self.children: item.disabled = True
+                    for item in self.children:
+                        item.disabled = True
                     await wizard_registry.safe_edit_response(inter, view=self)
                     self.stop()
+
                 keep_btn.callback = _keep_cb
                 self.add_item(keep_btn)
 
         @discord.ui.button(label="✅ Use defaults", style=discord.ButtonStyle.success)
         async def defaults_btn(self, inter: discord.Interaction, button: discord.ui.Button):
             self.choice = "defaults"
-            for item in self.children: item.disabled = True
+            for item in self.children:
+                item.disabled = True
             await wizard_registry.safe_edit_response(inter, view=self)
             self.stop()
 
@@ -3144,7 +3321,8 @@ async def run_growth_breakdown_setup(interaction: discord.Interaction, bot):
             await modal.wait()
             self.choice = "customize" if modal.values_out else None
             self._modal_values = modal.values_out
-            for item in self.children: item.disabled = True
+            for item in self.children:
+                item.disabled = True
             try:
                 await inter.edit_original_response(view=self)
             except Exception:
@@ -3164,9 +3342,7 @@ async def run_growth_breakdown_setup(interaction: discord.Interaction, bot):
     if l_view.cancelled:
         return
     if l_view.choice is None:
-        await channel.send(
-            WIZARD_TIMEOUT.format(wizard=HUB_BTN_BREAKDOWN)
-        )
+        await channel.send(WIZARD_TIMEOUT.format(wizard=HUB_BTN_BREAKDOWN))
         return
     if l_view.choice == "defaults":
         labels = {}
@@ -3198,12 +3374,17 @@ async def run_growth_breakdown_setup(interaction: discord.Interaction, bot):
     if post_channel_id:
         bf_text = (
             ", ".join(DEFAULT_BUCKET_LABELS.get(b, b) for b in bucket_filter)
-            if bucket_filter else "All buckets"
+            if bucket_filter
+            else "All buckets"
         )
         embed.add_field(name="Auto-Post Channel", value=f"<#{post_channel_id}>", inline=False)
-        embed.add_field(name="Bucket Filter",     value=bf_text,                inline=False)
+        embed.add_field(name="Bucket Filter", value=bf_text, inline=False)
     else:
-        embed.add_field(name="Auto-Post", value="❌ Off — use `/growth breakdown` (or `/growth overview` → 📊 See most recent Breakdown) to view on demand.", inline=False)
+        embed.add_field(
+            name="Auto-Post",
+            value="❌ Off — use `/growth breakdown` (or `/growth overview` → 📊 See most recent Breakdown) to view on demand.",
+            inline=False,
+        )
     if thresholds:
         t_text = (
             f"Increased ≥ {thresholds['increased']:g}%, "
@@ -3213,9 +3394,15 @@ async def run_growth_breakdown_setup(interaction: discord.Interaction, bot):
         )
         embed.add_field(name="Custom Thresholds", value=t_text, inline=False)
     else:
-        embed.add_field(name="Thresholds", value="Defaults (Increased ≥ 20%, Steady ≥ 10%, Low ≥ 5%, None ≥ 0%, Decline < 0%)", inline=False)
+        embed.add_field(
+            name="Thresholds",
+            value="Defaults (Increased ≥ 20%, Steady ≥ 10%, Low ≥ 5%, None ≥ 0%, Decline < 0%)",
+            inline=False,
+        )
     if labels:
-        l_text = ", ".join(f"{DEFAULT_BUCKET_LABELS[b]}→{labels[b]}" for b in BUCKET_ORDER if labels.get(b))
+        l_text = ", ".join(
+            f"{DEFAULT_BUCKET_LABELS[b]}→{labels[b]}" for b in BUCKET_ORDER if labels.get(b)
+        )
         embed.add_field(name="Custom Labels", value=l_text or "—", inline=False)
     embed.set_footer(text=SETUP_POINTER_FOOTER.format(wizard=HUB_BTN_BREAKDOWN))
     await channel.send(embed=embed)
@@ -3226,9 +3413,10 @@ async def run_growth_breakdown_setup(interaction: discord.Interaction, bot):
 async def run_train_setup(interaction: discord.Interaction, bot):
     """Walk an admin through configuring the train schedule."""
     import wizard_registry
+
     guild_id = interaction.guild_id
-    channel  = interaction.channel
-    user     = interaction.user
+    channel = interaction.channel
+    user = interaction.user
     cancel_event = wizard_registry.register(user.id)
 
     def check(m):
@@ -3250,28 +3438,36 @@ async def run_train_setup(interaction: discord.Interaction, bot):
         return reply.content.strip()[:max_chars]
 
     from config import get_train_config, has_train_config, get_config
+
     current = get_train_config(guild_id)
     train_already_configured = has_train_config(guild_id)
     guild_cfg = get_config(guild_id)
-    guild_tz  = guild_cfg.timezone if guild_cfg else "America/New_York"
+    guild_tz = guild_cfg.timezone if guild_cfg else "America/New_York"
 
     # ── If already configured, show summary and offer edit or cancel ──────────
     if train_already_configured:
         themes = current.get("themes") or []
-        tones  = current.get("tones") or []
+        tones = current.get("tones") or []
         fields = [
             ("Schedule Tab", current.get("tab_name") or "*not set*"),
-            ("Blurbs",       "✅ Enabled" if current.get("blurbs_enabled") else "❌ Disabled"),
+            ("Blurbs", "✅ Enabled" if current.get("blurbs_enabled") else "❌ Disabled"),
         ]
         if current.get("blurbs_enabled"):
             fields.append(("Themes", ", ".join(themes) if themes else "*none*"))
-            fields.append(("Tones",  ", ".join(tones)  if tones  else "*none*"))
+            fields.append(("Tones", ", ".join(tones) if tones else "*none*"))
             fields.append(("Default Tone", current.get("default_tone") or "*not set*"))
-        fields.append(("Reminders", "✅ Enabled" if current.get("reminders_enabled") else "❌ Disabled"))
+        fields.append(
+            ("Reminders", "✅ Enabled" if current.get("reminders_enabled") else "❌ Disabled")
+        )
         if current.get("reminders_enabled"):
             rc = current.get("reminder_channel_id", 0) or 0
             fields.append(("Reminder Channel", f"<#{rc}>" if rc else "*not set*"))
-            fields.append(("Reminder Time",    _format_time_with_tz(current.get("reminder_time"), guild_tz) or "*not set*"))
+            fields.append(
+                (
+                    "Reminder Time",
+                    _format_time_with_tz(current.get("reminder_time"), guild_tz) or "*not set*",
+                )
+            )
         proceed = await ask_proceed_with_existing_config(
             channel,
             title="🚂 Current Train Setup",
@@ -3284,8 +3480,7 @@ async def run_train_setup(interaction: discord.Interaction, bot):
             return
 
     await channel.send(
-        "⚙️ **Train Schedule Setup**\n"
-        "*Configure how the train schedule works for your alliance.*"
+        "⚙️ **Train Schedule Setup**\n*Configure how the train schedule works for your alliance.*"
     )
 
     # ── Step 1: Sheet tab ──────────────────────────────────────────────────────
@@ -3337,16 +3532,22 @@ async def run_train_setup(interaction: discord.Interaction, bot):
                 "blurb generation is off.*"
             )
 
-    themes        = current["themes"]
-    tones         = current["tones"]
-    default_tone  = current["default_tone"]
+    themes = current["themes"]
+    tones = current["tones"]
+    default_tone = current["default_tone"]
     prompt_template = current.get("prompt_template", "")
 
     # Free-tier slot caps for themes / tones (None = unlimited).
     # Also used by the reminder-channel step to expose threads on premium.
-    is_premium_flag = await premium.is_premium(guild_id, interaction=interaction, bot=interaction.client)
-    themes_cap = await premium.get_limit("themes", guild_id, interaction=interaction, bot=interaction.client)
-    tones_cap  = await premium.get_limit("tones",  guild_id, interaction=interaction, bot=interaction.client)
+    is_premium_flag = await premium.is_premium(
+        guild_id, interaction=interaction, bot=interaction.client
+    )
+    themes_cap = await premium.get_limit(
+        "themes", guild_id, interaction=interaction, bot=interaction.client
+    )
+    tones_cap = await premium.get_limit(
+        "tones", guild_id, interaction=interaction, bot=interaction.client
+    )
 
     def _trim(values: list[str], cap: int | None) -> tuple[list[str], bool]:
         """Trim list to cap. Returns (trimmed_list, was_truncated)."""
@@ -3358,8 +3559,12 @@ async def run_train_setup(interaction: discord.Interaction, bot):
         from defaults import DEFAULT_THEMES, DEFAULT_TONES
 
         async def _ask_csv_keep_or_change(
-            *, step_label: str, label: str, current_list: list[str],
-            default_list: list[str], cap: int | None,
+            *,
+            step_label: str,
+            label: str,
+            current_list: list[str],
+            default_list: list[str],
+            cap: int | None,
         ) -> list[str] | None:
             """Wrapper around ask_keep_or_change for comma-separated lists.
 
@@ -3372,7 +3577,8 @@ async def run_train_setup(interaction: discord.Interaction, bot):
             cap_capped_current, _ = _trim(list(current_list), cap)
             cap_note = (
                 f"\n*Free tier: up to {cap} {label}. Upgrade for unlimited.*"
-                if cap is not None else ""
+                if cap is not None
+                else ""
             )
 
             chosen = await ask_keep_or_change(
@@ -3447,6 +3653,7 @@ async def run_train_setup(interaction: discord.Interaction, bot):
                             view=self,
                         )
                         self.stop()
+
                     keep_btn.callback = _keep_cb
                     self.add_item(keep_btn)
                     keep_added = True
@@ -3456,22 +3663,22 @@ async def run_train_setup(interaction: discord.Interaction, bot):
                     options=[discord.SelectOption(label=t, value=t) for t in tone_list],
                     row=1 if keep_added else 0,
                 )
+
                 async def _cb(inter: discord.Interaction):
                     self.selected = select.values[0]
                     for item in self.children:
                         item.disabled = True
                     await wizard_registry.safe_edit_response(
-                        inter,
-                        content=f"✅ Default tone: **{self.selected}**", view=self
+                        inter, content=f"✅ Default tone: **{self.selected}**", view=self
                     )
                     self.stop()
+
                 select.callback = _cb
                 self.add_item(select)
 
         tone_default_view = ToneDefaultView(tones, current=current.get("default_tone"))
         await channel.send(
-            f"**Step 5 of 8 — Default Tone**\n"
-            f"Which tone should be pre-selected by default?",
+            "**Step 5 of 8 — Default Tone**\nWhich tone should be pre-selected by default?",
             view=tone_default_view,
         )
         await wait_view_or_cancel(tone_default_view, cancel_event)
@@ -3485,16 +3692,22 @@ async def run_train_setup(interaction: discord.Interaction, bot):
         # ── Step 6: Prompt templates ───────────────────────────────────────────
         # Free tier keeps a single "Default" template; premium can save up to
         # `template_cap` named templates and pick which is the default.
-        template_cap     = await premium.get_limit("train_templates", guild_id, interaction=interaction, bot=interaction.client)
+        template_cap = await premium.get_limit(
+            "train_templates", guild_id, interaction=interaction, bot=interaction.client
+        )
         existing_templates = list(current.get("templates") or [])
         if not existing_templates:
             existing_templates = [{"name": "Default", "template": prompt_template or ""}]
         default_template_name = current.get("default_template") or existing_templates[0]["name"]
 
         templates, default_template_name = await _manage_train_templates(
-            bot=bot, channel=channel, check=check,
-            existing=existing_templates, default_name=default_template_name,
-            cap=template_cap, cancel_event=cancel_event,
+            bot=bot,
+            channel=channel,
+            check=check,
+            existing=existing_templates,
+            default_name=default_template_name,
+            cap=template_cap,
+            cancel_event=cancel_event,
         )
         if templates is None:
             return  # timed out / cancelled
@@ -3516,9 +3729,9 @@ async def run_train_setup(interaction: discord.Interaction, bot):
     if reminder_view.selected is None:
         await channel.send(WIZARD_TIMEOUT.format(wizard=HUB_BTN_TRAIN))
         return
-    reminders_enabled  = 1 if reminder_view.selected else 0
+    reminders_enabled = 1 if reminder_view.selected else 0
     reminder_channel_id = 0
-    reminder_time       = "22:00"
+    reminder_time = "22:00"
     if not reminders_enabled:
         had_prior_reminders = train_already_configured and current.get("reminders_enabled")
         if had_prior_reminders:
@@ -3542,9 +3755,7 @@ async def run_train_setup(interaction: discord.Interaction, bot):
             current_id=saved_reminder_ch,
         )
         if reminder_ch_view.is_current_stale:
-            await channel.send(
-                PREV_CHANNEL_GONE.format(channel_label="reminder")
-            )
+            await channel.send(PREV_CHANNEL_GONE.format(channel_label="reminder"))
         await channel.send(
             "**Step 7a of 8 — Reminder Channel**\n"
             "Which channel should the train reminder be posted to?",
@@ -3563,8 +3774,11 @@ async def run_train_setup(interaction: discord.Interaction, bot):
         # falling back to a default — gives leadership a chance to correct
         # a typo without restarting the whole wizard.
         from config import get_config
+
         guild_cfg = get_config(guild_id)
-        tz_label  = TIMEZONE_LABELS.get(guild_cfg.timezone if guild_cfg else "America/New_York", "ET")
+        tz_label = TIMEZONE_LABELS.get(
+            guild_cfg.timezone if guild_cfg else "America/New_York", "ET"
+        )
         attempts_left = 3
         reminder_time = "22:00"
         while True:
@@ -3589,15 +3803,16 @@ async def run_train_setup(interaction: discord.Interaction, bot):
             if parsed:
                 reminder_time = parsed
                 break
-            if (len(time_raw) == 5 and time_raw[2] == ":"
-                    and time_raw.replace(":", "").isdigit()):
+            if len(time_raw) == 5 and time_raw[2] == ":" and time_raw.replace(":", "").isdigit():
                 reminder_time = time_raw  # already 24h
                 break
             attempts_left -= 1
             if attempts_left <= 0:
-                await channel.send(TIME_PARSE_GIVE_UP.format(
-                    recovery=f"`/setup` → {HUB_BTN_TRAIN}",
-                ))
+                await channel.send(
+                    TIME_PARSE_GIVE_UP.format(
+                        recovery=f"`/setup` → {HUB_BTN_TRAIN}",
+                    )
+                )
                 return
             await channel.send(TIME_PARSE_RETRY.format(raw=time_raw))
 
@@ -3609,6 +3824,7 @@ async def run_train_setup(interaction: discord.Interaction, bot):
     train_dm_message = ""
     if reminders_enabled:
         from train_cog import DEFAULT_TRAIN_DM
+
         saved_train_dm = (current.get("dm_message") or "").strip()
         train_dm_input = await ask_keep_or_change(
             channel,
@@ -3633,6 +3849,7 @@ async def run_train_setup(interaction: discord.Interaction, bot):
 
     # ── Save ───────────────────────────────────────────────────────────────────
     from config import save_train_config
+
     save_kwargs = dict(
         blurbs_enabled=blurbs_enabled,
         reminders_enabled=reminders_enabled,
@@ -3641,25 +3858,36 @@ async def run_train_setup(interaction: discord.Interaction, bot):
         dm_message=train_dm_message,
     )
     if blurbs_enabled:
-        save_kwargs["templates"]        = templates
+        save_kwargs["templates"] = templates
         save_kwargs["default_template"] = default_template_name
     save_train_config(
-        guild_id, tab_name, themes, tones, prompt_template, default_tone,
+        guild_id,
+        tab_name,
+        themes,
+        tones,
+        prompt_template,
+        default_tone,
         **save_kwargs,
     )
 
     embed = discord.Embed(title="✅ Train Schedule Configured", color=discord.Color.green())
-    embed.add_field(name="Sheet Tab",       value=tab_name,                        inline=True)
-    embed.add_field(name="Blurb Generation",value="Enabled" if blurbs_enabled else "Disabled", inline=True)
-    embed.add_field(name="Reminders",       value="Enabled" if reminders_enabled else "Disabled", inline=True)
+    embed.add_field(name="Sheet Tab", value=tab_name, inline=True)
+    embed.add_field(
+        name="Blurb Generation", value="Enabled" if blurbs_enabled else "Disabled", inline=True
+    )
+    embed.add_field(
+        name="Reminders", value="Enabled" if reminders_enabled else "Disabled", inline=True
+    )
     if reminders_enabled:
         embed.add_field(name="Reminder Channel", value=f"<#{reminder_channel_id}>", inline=True)
-        embed.add_field(name="Reminder Time",    value=_format_time_with_tz(reminder_time, guild_tz), inline=True)
+        embed.add_field(
+            name="Reminder Time", value=_format_time_with_tz(reminder_time, guild_tz), inline=True
+        )
     if blurbs_enabled:
-        embed.add_field(name="Default Tone", value=default_tone,          inline=True)
-        embed.add_field(name="Themes",       value=", ".join(themes),     inline=False)
-        embed.add_field(name="Tones",        value=", ".join(tones),      inline=False)
-        template_count = len(templates) if 'templates' in locals() else 0
+        embed.add_field(name="Default Tone", value=default_tone, inline=True)
+        embed.add_field(name="Themes", value=", ".join(themes), inline=False)
+        embed.add_field(name="Tones", value=", ".join(tones), inline=False)
+        template_count = len(templates) if "templates" in locals() else 0
         if template_count > 0:
             template_names = ", ".join(t["name"] for t in templates)
             embed.add_field(
@@ -3675,6 +3903,7 @@ async def run_train_setup(interaction: discord.Interaction, bot):
     wizard_registry.unregister(user.id, cancel_event)
     print(f"[SETUP] Train config saved for guild {guild_id}")
 
+
 async def run_create_new_extra_survey(interaction: discord.Interaction, bot):
     """
     Premium-only: ask leadership for a display name for a new extra survey,
@@ -3686,7 +3915,7 @@ async def run_create_new_extra_survey(interaction: discord.Interaction, bot):
     from config import list_surveys
 
     channel = interaction.channel
-    user    = interaction.user
+    user = interaction.user
 
     def check(m):
         return m.author == user and m.channel == channel
@@ -3704,25 +3933,31 @@ async def run_create_new_extra_survey(interaction: discord.Interaction, bot):
 
     survey_name = (name_reply.content or "").strip()[:60]
     if not survey_name:
-        await channel.send("⚠️ Empty name — aborting. Click **➕ Add Survey** on `/survey` to try again.")
+        await channel.send(
+            "⚠️ Empty name — aborting. Click **➕ Add Survey** on `/survey` to try again."
+        )
         return
 
-    extras = [s for s in list_surveys(interaction.guild_id)
-              if (s.get("survey_id") or "default") != "default"]
-    base_slug    = _re.sub(r"[^a-z0-9]+", "-", survey_name.lower()).strip("-") or "survey"
+    extras = [
+        s
+        for s in list_surveys(interaction.guild_id)
+        if (s.get("survey_id") or "default") != "default"
+    ]
+    base_slug = _re.sub(r"[^a-z0-9]+", "-", survey_name.lower()).strip("-") or "survey"
     existing_ids = {s.get("survey_id") for s in extras}
-    survey_id    = base_slug
-    suffix       = 2
+    survey_id = base_slug
+    suffix = 2
     while survey_id in existing_ids:
         survey_id = f"{base_slug}-{suffix}"
-        suffix   += 1
+        suffix += 1
 
     await channel.send(
         f"✅ Creating new survey **{survey_name}** (id: `{survey_id}`).\n"
         f"Walking you through the same setup steps as `/setup` → 📋 Survey…"
     )
     await run_survey_setup(
-        interaction, bot,
+        interaction,
+        bot,
         target_survey_id=survey_id,
         target_survey_name=survey_name,
     )
@@ -3736,8 +3971,11 @@ async def run_remove_extra_survey(interaction: discord.Interaction, bot):
     """
     from config import list_surveys, delete_extra_survey
 
-    extras = [s for s in list_surveys(interaction.guild_id)
-              if (s.get("survey_id") or "default") != "default"]
+    extras = [
+        s
+        for s in list_surveys(interaction.guild_id)
+        if (s.get("survey_id") or "default") != "default"
+    ]
     if not extras:
         await interaction.followup.send(
             "*You have no extra surveys to remove.* "
@@ -3756,14 +3994,17 @@ async def run_remove_extra_survey(interaction: discord.Interaction, bot):
             ok = delete_extra_survey(interaction.guild_id, self.target["survey_id"])
             msg = (
                 f"🗑️ Removed **{self.target.get('survey_name')}**."
-                if ok else "⚠️ Could not remove that survey."
+                if ok
+                else "⚠️ Could not remove that survey."
             )
             await wizard_registry.safe_edit_response(inter, content=msg, view=None)
             self.stop()
 
         @discord.ui.button(label="❌ Cancel", style=discord.ButtonStyle.secondary)
         async def cancel(self, inter: discord.Interaction, button: discord.ui.Button):
-            await wizard_registry.safe_edit_response(inter, content="❌ Cancelled. No surveys removed.", view=None)
+            await wizard_registry.safe_edit_response(
+                inter, content="❌ Cancelled. No surveys removed.", view=None
+            )
             self.stop()
 
     class _RemovePickView(discord.ui.View):
@@ -3775,9 +4016,11 @@ async def run_remove_extra_survey(interaction: discord.Interaction, bot):
                     discord.SelectOption(
                         label=(s.get("survey_name") or s.get("survey_id"))[:100],
                         value=s.get("survey_id"),
-                    ) for s in extras[:25]
+                    )
+                    for s in extras[:25]
                 ],
             )
+
             async def _cb(inter: discord.Interaction):
                 sid = sel.values[0]
                 picked = next((s for s in extras if s.get("survey_id") == sid), None)
@@ -3789,6 +4032,7 @@ async def run_remove_extra_survey(interaction: discord.Interaction, bot):
                     view=_ConfirmRemoveView(picked),
                 )
                 self.stop()
+
             sel.callback = _cb
             self.add_item(sel)
 
@@ -3818,25 +4062,32 @@ async def run_pick_survey_to_edit(interaction: discord.Interaction, bot):
                     discord.SelectOption(
                         label=(s.get("survey_name") or s.get("survey_id"))[:100],
                         value=s.get("survey_id") or "default",
-                    ) for s in surveys[:25]
+                    )
+                    for s in surveys[:25]
                 ],
             )
+
             async def _cb(inter: discord.Interaction):
                 sid = sel.values[0]
-                target = next((s for s in surveys
-                               if (s.get("survey_id") or "default") == sid), None)
+                target = next(
+                    (s for s in surveys if (s.get("survey_id") or "default") == sid), None
+                )
                 sel.disabled = True
                 name = (target.get("survey_name") if target else sid) or sid
-                await wizard_registry.safe_edit_response(inter, content=f"✏️ Editing **{name}**…", view=self)
+                await wizard_registry.safe_edit_response(
+                    inter, content=f"✏️ Editing **{name}**…", view=self
+                )
                 self.stop()
                 # Dispatch into the wizard. `target_survey_id=None` means
                 # the default survey (run_survey_setup edits guild_survey_config).
                 target_id = None if sid == "default" else sid
                 await run_survey_setup(
-                    interaction, bot,
+                    interaction,
+                    bot,
                     target_survey_id=target_id,
                     target_survey_name=(target.get("survey_name") if target else None),
                 )
+
             sel.callback = _cb
             self.add_item(sel)
 
@@ -3847,9 +4098,12 @@ async def run_pick_survey_to_edit(interaction: discord.Interaction, bot):
     )
 
 
-async def run_survey_setup(interaction: discord.Interaction, bot,
-                           target_survey_id: str | None = None,
-                           target_survey_name: str | None = None):
+async def run_survey_setup(
+    interaction: discord.Interaction,
+    bot,
+    target_survey_id: str | None = None,
+    target_survey_name: str | None = None,
+):
     """
     Walk an admin through configuring a survey.
 
@@ -3860,18 +4114,22 @@ async def run_survey_setup(interaction: discord.Interaction, bot,
         which premium guilds use for additional named surveys.
     """
     import wizard_registry
+
     guild_id = interaction.guild_id
-    channel  = interaction.channel
-    user     = interaction.user
+    channel = interaction.channel
+    user = interaction.user
     cancel_event = wizard_registry.register(user.id)
 
     def check(m):
         return m.author == user and m.channel == channel
 
     from config import (
-        get_survey_config, save_survey_config,
-        get_survey, save_extra_survey,
-        has_survey_config, get_config,
+        get_survey_config,
+        save_survey_config,
+        get_survey,
+        save_extra_survey,
+        has_survey_config,
+        get_config,
     )
     from defaults import DEFAULT_SURVEY_QUESTIONS
 
@@ -3892,8 +4150,8 @@ async def run_survey_setup(interaction: discord.Interaction, bot,
         wizard_label = f"Survey Setup — {target_survey_name}"
         survey_already_configured = bool(current)
         # Extra surveys: channel ids are stored alongside the survey row.
-        saved_survey_ch = (current.get("survey_channel_id") or 0)
-        saved_notify_ch = (current.get("notify_channel_id") or 0)
+        saved_survey_ch = current.get("survey_channel_id") or 0
+        saved_notify_ch = current.get("notify_channel_id") or 0
     questions = list(current.get("questions") or [])
 
     # ── If already configured, show summary and offer edit or cancel ─────────
@@ -3908,13 +4166,14 @@ async def run_survey_setup(interaction: discord.Interaction, bot,
                 "Notification Channel",
                 f"<#{saved_notify_ch}>" if saved_notify_ch else "*not set*",
             ),
-            ("Stats Tab",   current.get("tab_squad_powers") or "*not set*"),
-            ("History Tab", current.get("tab_history")      or "*not set*"),
-            ("Questions",   f"{q_count} configured" if q_count else "*none*"),
+            ("Stats Tab", current.get("tab_squad_powers") or "*not set*"),
+            ("History Tab", current.get("tab_history") or "*not set*"),
+            ("Questions", f"{q_count} configured" if q_count else "*none*"),
         ]
         title = (
             f"📋 Current Survey Setup — {target_survey_name}"
-            if target_survey_id else "📋 Current Survey Setup"
+            if target_survey_id
+            else "📋 Current Survey Setup"
         )
         proceed = await ask_proceed_with_existing_config(
             channel,
@@ -3927,12 +4186,11 @@ async def run_survey_setup(interaction: discord.Interaction, bot,
         if proceed is not True:
             return
 
-    await channel.send(
-        f"⚙️ **{wizard_label}**\n"
-        "Configure the survey for your alliance."
-    )
+    await channel.send(f"⚙️ **{wizard_label}**\nConfigure the survey for your alliance.")
 
-    is_premium_flag = await premium.is_premium(guild_id, interaction=interaction, bot=interaction.client)
+    is_premium_flag = await premium.is_premium(
+        guild_id, interaction=interaction, bot=interaction.client
+    )
 
     # ── Step 1: Survey channel ─────────────────────────────────────────────────
     survey_ch_view = ChannelSelectStep(
@@ -3943,9 +4201,7 @@ async def run_survey_setup(interaction: discord.Interaction, bot,
         current_id=saved_survey_ch,
     )
     if survey_ch_view.is_current_stale:
-        await channel.send(
-            PREV_CHANNEL_GONE.format(channel_label="survey")
-        )
+        await channel.send(PREV_CHANNEL_GONE.format(channel_label="survey"))
     await channel.send(
         "**Step 1 of 6 — Survey Channel**\n"
         "Select the channel where the survey button will be posted for members to access:",
@@ -3968,9 +4224,7 @@ async def run_survey_setup(interaction: discord.Interaction, bot,
         current_id=saved_notify_ch,
     )
     if notify_ch_view.is_current_stale:
-        await channel.send(
-            PREV_CHANNEL_GONE.format(channel_label="notification")
-        )
+        await channel.send(PREV_CHANNEL_GONE.format(channel_label="notification"))
     await channel.send(
         "**Step 2 of 6 — Survey Notification Channel**\n"
         "Select the channel where leadership will be notified when a member submits the survey:",
@@ -4041,14 +4295,16 @@ async def run_survey_setup(interaction: discord.Interaction, bot,
             @discord.ui.button(label="✅ Keep current", style=discord.ButtonStyle.success)
             async def keep(self, inter: discord.Interaction, button: discord.ui.Button):
                 self.intro_choice = "keep"
-                for item in self.children: item.disabled = True
+                for item in self.children:
+                    item.disabled = True
                 await wizard_registry.safe_edit_response(inter, view=self)
                 self.stop()
 
             @discord.ui.button(label="✏️ Edit", style=discord.ButtonStyle.primary)
             async def edit(self, inter: discord.Interaction, button: discord.ui.Button):
                 self.intro_choice = "edit"
-                for item in self.children: item.disabled = True
+                for item in self.children:
+                    item.disabled = True
                 await wizard_registry.safe_edit_response(inter, view=self)
                 self.stop()
 
@@ -4098,13 +4354,17 @@ async def run_survey_setup(interaction: discord.Interaction, bot,
     # ── Step 6: Survey Questions ───────────────────────────────────────────────
     # Show default questions and ask keep/edit/scratch
     default_q_list = "\n".join(
-        f"{i+1}. **{q['label']}** — {'dropdown: ' + ', '.join(q['options']) if q['type'] == 'dropdown' else 'text'}"
+        f"{i + 1}. **{q['label']}** — {'dropdown: ' + ', '.join(q['options']) if q['type'] == 'dropdown' else 'text'}"
         for i, q in enumerate(DEFAULT_SURVEY_QUESTIONS)
     )
-    existing_q_list = "\n".join(
-        f"{i+1}. **{q['label']}** — {'dropdown: ' + ', '.join(q['options']) if q['type'] == 'dropdown' else 'text'}"
-        for i, q in enumerate(questions)
-    ) if questions else "*(no questions configured yet)*"
+    existing_q_list = (
+        "\n".join(
+            f"{i + 1}. **{q['label']}** — {'dropdown: ' + ', '.join(q['options']) if q['type'] == 'dropdown' else 'text'}"
+            for i, q in enumerate(questions)
+        )
+        if questions
+        else "*(no questions configured yet)*"
+    )
 
     class QuestionStartView(discord.ui.View):
         def __init__(self):
@@ -4114,22 +4374,31 @@ async def run_survey_setup(interaction: discord.Interaction, bot,
         @discord.ui.button(label="✅ Use default questions", style=discord.ButtonStyle.success)
         async def use_default(self, inter: discord.Interaction, button: discord.ui.Button):
             self.choice = "default"
-            for item in self.children: item.disabled = True
-            await wizard_registry.safe_edit_response(inter, content="✅ Using default questions.", view=self)
+            for item in self.children:
+                item.disabled = True
+            await wizard_registry.safe_edit_response(
+                inter, content="✅ Using default questions.", view=self
+            )
             self.stop()
 
         @discord.ui.button(label="✏️ Edit existing questions", style=discord.ButtonStyle.primary)
         async def edit_existing(self, inter: discord.Interaction, button: discord.ui.Button):
             self.choice = "edit"
-            for item in self.children: item.disabled = True
-            await wizard_registry.safe_edit_response(inter, content="✏️ Entering edit mode...", view=self)
+            for item in self.children:
+                item.disabled = True
+            await wizard_registry.safe_edit_response(
+                inter, content="✏️ Entering edit mode...", view=self
+            )
             self.stop()
 
         @discord.ui.button(label="🔄 Start from scratch", style=discord.ButtonStyle.secondary)
         async def start_scratch(self, inter: discord.Interaction, button: discord.ui.Button):
             self.choice = "scratch"
-            for item in self.children: item.disabled = True
-            await wizard_registry.safe_edit_response(inter, content="🔄 Starting from scratch...", view=self)
+            for item in self.children:
+                item.disabled = True
+            await wizard_registry.safe_edit_response(
+                inter, content="🔄 Starting from scratch...", view=self
+            )
             self.stop()
 
     q_start_view = QuestionStartView()
@@ -4163,9 +4432,13 @@ async def run_survey_setup(interaction: discord.Interaction, bot,
                 # Build display
                 if questions:
                     q_display = "\n".join(
-                        f"{i+1}. **{q['label']}** — "
-                        + ('dropdown: ' + ', '.join(q['options']) if q['type'] == 'dropdown' else 'text')
-                        + (f" *(help: {q['placeholder']})*" if q.get('placeholder') else "")
+                        f"{i + 1}. **{q['label']}** — "
+                        + (
+                            "dropdown: " + ", ".join(q["options"])
+                            if q["type"] == "dropdown"
+                            else "text"
+                        )
+                        + (f" *(help: {q['placeholder']})*" if q.get("placeholder") else "")
                         for i, q in enumerate(questions)
                     )
                 else:
@@ -4174,54 +4447,74 @@ async def run_survey_setup(interaction: discord.Interaction, bot,
                 class QuestionListView(discord.ui.View):
                     def __init__(self, q_count: int):
                         super().__init__(timeout=300)
-                        self.action     = None
+                        self.action = None
                         self.edit_index = None
-                        self.del_index  = None
+                        self.del_index = None
 
                         if q_count > 0:
                             # Edit dropdown
                             edit_select = discord.ui.Select(
                                 placeholder="✏️ Edit a question...",
-                                options=[discord.SelectOption(label=f"Edit: {questions[i]['label']}", value=str(i))
-                                         for i in range(q_count)],
+                                options=[
+                                    discord.SelectOption(
+                                        label=f"Edit: {questions[i]['label']}", value=str(i)
+                                    )
+                                    for i in range(q_count)
+                                ],
                                 row=0,
                             )
+
                             async def _edit_cb(inter: discord.Interaction):
-                                self.action     = "edit"
+                                self.action = "edit"
                                 self.edit_index = int(edit_select.values[0])
-                                for item in self.children: item.disabled = True
+                                for item in self.children:
+                                    item.disabled = True
                                 await wizard_registry.safe_edit_response(inter, view=self)
                                 self.stop()
+
                             edit_select.callback = _edit_cb
                             self.add_item(edit_select)
 
                             # Delete dropdown
                             del_select = discord.ui.Select(
                                 placeholder="🗑️ Delete a question...",
-                                options=[discord.SelectOption(label=f"Delete: {questions[i]['label']}", value=str(i))
-                                         for i in range(q_count)],
+                                options=[
+                                    discord.SelectOption(
+                                        label=f"Delete: {questions[i]['label']}", value=str(i)
+                                    )
+                                    for i in range(q_count)
+                                ],
                                 row=1,
                             )
+
                             async def _del_cb(inter: discord.Interaction):
-                                self.action    = "delete"
+                                self.action = "delete"
                                 self.del_index = int(del_select.values[0])
-                                for item in self.children: item.disabled = True
+                                for item in self.children:
+                                    item.disabled = True
                                 await wizard_registry.safe_edit_response(inter, view=self)
                                 self.stop()
+
                             del_select.callback = _del_cb
                             self.add_item(del_select)
 
-                    @discord.ui.button(label="➕ Add Question", style=discord.ButtonStyle.primary, row=2)
+                    @discord.ui.button(
+                        label="➕ Add Question", style=discord.ButtonStyle.primary, row=2
+                    )
                     async def add_q(self, inter: discord.Interaction, button: discord.ui.Button):
                         self.action = "add"
-                        for item in self.children: item.disabled = True
+                        for item in self.children:
+                            item.disabled = True
                         await wizard_registry.safe_edit_response(inter, view=self)
                         self.stop()
 
-                    @discord.ui.button(label="✅ Finish Survey Setup", style=discord.ButtonStyle.success, row=2)
+                    @discord.ui.button(
+                        label="✅ Finish Survey Setup", style=discord.ButtonStyle.success, row=2
+                    )
                     async def finish(self, inter: discord.Interaction, button: discord.ui.Button):
                         self.action = "finish"
-                        for item in self.children: item.disabled = True
+                        for item in self.children:
+                            item.disabled = True
                         await wizard_registry.safe_edit_response(inter, view=self)
                         self.stop()
 
@@ -4242,30 +4535,41 @@ async def run_survey_setup(interaction: discord.Interaction, bot,
                     return True
 
                 elif list_view.action == "delete":
-                    idx     = list_view.del_index
+                    idx = list_view.del_index
                     removed = questions.pop(idx)
                     await channel.send(f"🗑️ Removed **{removed['label']}**.")
 
                 elif list_view.action in ("add", "edit"):
                     # ── Question builder ───────────────────────────────────────
                     if list_view.action == "edit":
-                        idx      = list_view.edit_index
+                        idx = list_view.edit_index
                         existing = questions[idx]
-                        q_num    = f"Question {idx + 1}"
+                        q_num = f"Question {idx + 1}"
                     else:
                         # Free-tier cap on number of survey questions
-                        q_cap = await premium.get_limit("survey_questions", guild_id, interaction=interaction, bot=interaction.client)
+                        q_cap = await premium.get_limit(
+                            "survey_questions",
+                            guild_id,
+                            interaction=interaction,
+                            bot=interaction.client,
+                        )
                         if q_cap is not None and len(questions) >= q_cap:
-                            await channel.send(embed=premium.limit_reached_embed(
-                                feature_label="Survey Questions",
-                                current=len(questions), cap=q_cap, plural_unit="questions",
-                            ))
+                            await channel.send(
+                                embed=premium.limit_reached_embed(
+                                    feature_label="Survey Questions",
+                                    current=len(questions),
+                                    cap=q_cap,
+                                    plural_unit="questions",
+                                )
+                            )
                             continue
                         existing = {}
-                        q_num    = f"Question {len(questions) + 1}"
+                        q_num = f"Question {len(questions) + 1}"
 
                     # Label
-                    label_extra = f"\n*Existing label:* `{existing.get('label', '')}`" if existing else ""
+                    label_extra = (
+                        f"\n*Existing label:* `{existing.get('label', '')}`" if existing else ""
+                    )
                     await channel.send(
                         f"**{q_num} — Label**\n"
                         f"What is the label for this question? (e.g. `1st Squad Power`, `Profession`)"
@@ -4273,28 +4577,50 @@ async def run_survey_setup(interaction: discord.Interaction, bot,
                     )
                     try:
                         label_reply = await bot.wait_for("message", check=check, timeout=120)
-                        q_label     = label_reply.content.strip() or existing.get("label", "")
+                        q_label = label_reply.content.strip() or existing.get("label", "")
                     except asyncio.TimeoutError:
                         await channel.send(WIZARD_TIMEOUT.format(wizard=HUB_BTN_SURVEY))
                         return False
 
-                    q_key = q_label.lower().replace(" ", "_").replace("(", "").replace(")", "").replace("/", "_")
+                    q_key = (
+                        q_label.lower()
+                        .replace(" ", "_")
+                        .replace("(", "")
+                        .replace(")", "")
+                        .replace("/", "_")
+                    )
 
                     # Type — Numeric is free; Multi-select / Date are Premium.
-                    is_premium_for_q = await premium.is_premium(guild_id, interaction=interaction, bot=interaction.client)
+                    is_premium_for_q = await premium.is_premium(
+                        guild_id, interaction=interaction, bot=interaction.client
+                    )
                     type_options = [
-                        discord.SelectOption(label="Text — member types their answer", value="text"),
-                        discord.SelectOption(label="Dropdown — member selects from a list", value="dropdown"),
-                        discord.SelectOption(label="Numeric — number, with shorthand support", value="numeric"),
+                        discord.SelectOption(
+                            label="Text — member types their answer", value="text"
+                        ),
+                        discord.SelectOption(
+                            label="Dropdown — member selects from a list", value="dropdown"
+                        ),
+                        discord.SelectOption(
+                            label="Numeric — number, with shorthand support", value="numeric"
+                        ),
                     ]
                     if is_premium_for_q:
                         type_options += [
-                            discord.SelectOption(label="💎 Multi-select — pick multiple options",     value="multi_select"),
-                            discord.SelectOption(label="💎 Date — formatted date entry",              value="date"),
+                            discord.SelectOption(
+                                label="💎 Multi-select — pick multiple options",
+                                value="multi_select",
+                            ),
+                            discord.SelectOption(
+                                label="💎 Date — formatted date entry", value="date"
+                            ),
                         ]
                     _type_pretty = {
-                        "text": "Text", "dropdown": "Dropdown",
-                        "numeric": "Numeric", "multi_select": "Multi-Select", "date": "Date",
+                        "text": "Text",
+                        "dropdown": "Dropdown",
+                        "numeric": "Numeric",
+                        "multi_select": "Multi-Select",
+                        "date": "Date",
                     }
 
                     class TypeView(discord.ui.View):
@@ -4305,6 +4631,7 @@ async def run_survey_setup(interaction: discord.Interaction, bot,
                                 placeholder="Select answer type...",
                                 options=type_options,
                             )
+
                             async def _cb(inter: discord.Interaction):
                                 self.selected = select.values[0]
                                 select.disabled = True
@@ -4314,16 +4641,16 @@ async def run_survey_setup(interaction: discord.Interaction, bot,
                                     view=self,
                                 )
                                 self.stop()
+
                             select.callback = _cb
                             self.add_item(select)
 
-                    type_view    = TypeView()
+                    type_view = TypeView()
                     existing_type = existing.get("type", "text")
-                    type_extra   = f"\n*Existing type:* `{existing_type}`" if existing else ""
-                    type_prompt  = (
+                    type_extra = f"\n*Existing type:* `{existing_type}`" if existing else ""
+                    type_prompt = (
                         f"**{q_num} — Answer Type**\n"
-                        "Pick how members answer this question."
-                        + type_extra
+                        "Pick how members answer this question." + type_extra
                     )
                     await channel.send(type_prompt, view=type_view)
                     await wait_view_or_cancel(type_view, cancel_event)
@@ -4337,39 +4664,42 @@ async def run_survey_setup(interaction: discord.Interaction, bot,
                     # Help text
                     help_extra = (
                         f"\n*Existing help text:* `{existing.get('placeholder') or 'none'}`"
-                        if existing else ""
+                        if existing
+                        else ""
                     )
                     await channel.send(
                         f"**{q_num} — Help Text**\n"
                         f"Do you want to show help text for this question? "
                         f"This appears as a hint to help members answer correctly.\n"
                         f"*(e.g. `e.g. 43.27` or `What is your first squad's power?`)*\n"
-                        f"Type your help text, or type `none` to skip."
-                        + help_extra
+                        f"Type your help text, or type `none` to skip." + help_extra
                     )
                     try:
-                        help_reply  = await bot.wait_for("message", check=check, timeout=120)
-                        help_raw    = help_reply.content.strip()
+                        help_reply = await bot.wait_for("message", check=check, timeout=120)
+                        help_raw = help_reply.content.strip()
                         placeholder = "" if help_raw.lower() == "none" else help_raw
                     except asyncio.TimeoutError:
                         await channel.send(WIZARD_TIMEOUT.format(wizard=HUB_BTN_SURVEY))
                         return False
 
                     # Type-specific extras
-                    options       = []
-                    extra_meta    = {}    # numeric min/max, date format, etc.
+                    options = []
+                    extra_meta = {}  # numeric min/max, date format, etc.
                     if q_type in ("dropdown", "multi_select"):
                         existing_opts = ", ".join(existing.get("options", [])) if existing else ""
-                        opts_extra    = f"\n*Existing options:* `{existing_opts}`" if existing_opts else ""
+                        opts_extra = (
+                            f"\n*Existing options:* `{existing_opts}`" if existing_opts else ""
+                        )
                         await channel.send(
                             f"**{q_num} — Options**\n"
                             f"Enter the options as comma-separated values. Maximum of 25.\n"
-                            f"*(e.g. `Missile, Air, Tank`)*"
-                            + opts_extra
+                            f"*(e.g. `Missile, Air, Tank`)*" + opts_extra
                         )
                         try:
                             opts_reply = await bot.wait_for("message", check=check, timeout=120)
-                            options    = [o.strip() for o in opts_reply.content.split(",") if o.strip()][:25]
+                            options = [
+                                o.strip() for o in opts_reply.content.split(",") if o.strip()
+                            ][:25]
                         except asyncio.TimeoutError:
                             await channel.send(WIZARD_TIMEOUT.format(wizard=HUB_BTN_SURVEY))
                             return False
@@ -4404,29 +4734,36 @@ async def run_survey_setup(interaction: discord.Interaction, bot,
                                     placeholder="Select number scale...",
                                     options=mag_options,
                                 )
+
                                 async def _cb(inter: discord.Interaction):
                                     self.selected = select.values[0]
                                     select.disabled = True
-                                    pretty = {"raw": "Exact number", "K": "Thousands (K)",
-                                              "M": "Millions (M)", "B": "Billions (B)"}
+                                    pretty = {
+                                        "raw": "Exact number",
+                                        "K": "Thousands (K)",
+                                        "M": "Millions (M)",
+                                        "B": "Billions (B)",
+                                    }
                                     await wizard_registry.safe_edit_response(
                                         inter,
                                         content=f"✅ Scale: **{pretty.get(self.selected, self.selected)}**",
                                         view=self,
                                     )
                                     self.stop()
+
                                 select.callback = _cb
                                 self.add_item(select)
 
                         existing_mag = (existing.get("magnitude") if existing else "") or ""
-                        mag_extra    = f"\n*Existing scale:* `{existing_mag or 'raw'}`" if existing else ""
-                        mag_view     = MagnitudeView()
+                        mag_extra = (
+                            f"\n*Existing scale:* `{existing_mag or 'raw'}`" if existing else ""
+                        )
+                        mag_view = MagnitudeView()
                         await channel.send(
                             f"**{q_num} — Number Scale**\n"
                             f"How big are these numbers typically? Picking a scale lets members type "
                             f"the natural shorthand (`301`) instead of the full value (`304,743,912`) — "
-                            f"the bot accepts both either way."
-                            + mag_extra,
+                            f"the bot accepts both either way." + mag_extra,
                             view=mag_view,
                         )
                         await wait_view_or_cancel(mag_view, cancel_event)
@@ -4447,7 +4784,9 @@ async def run_survey_setup(interaction: discord.Interaction, bot,
                                 f"*Bounds are checked against the stored value after scaling.*"
                             )
                             try:
-                                bounds_reply = await bot.wait_for("message", check=check, timeout=120)
+                                bounds_reply = await bot.wait_for(
+                                    "message", check=check, timeout=120
+                                )
                             except asyncio.TimeoutError:
                                 await channel.send(WIZARD_TIMEOUT.format(wizard=HUB_BTN_SURVEY))
                                 return False
@@ -4455,8 +4794,10 @@ async def run_survey_setup(interaction: discord.Interaction, bot,
                             if raw not in ("", "none"):
                                 try:
                                     lo_s, _, hi_s = raw.partition(",")
-                                    if lo_s.strip(): extra_meta["min"] = float(lo_s.strip())
-                                    if hi_s.strip(): extra_meta["max"] = float(hi_s.strip())
+                                    if lo_s.strip():
+                                        extra_meta["min"] = float(lo_s.strip())
+                                    if hi_s.strip():
+                                        extra_meta["max"] = float(hi_s.strip())
                                 except ValueError:
                                     await channel.send(
                                         "⚠️ Couldn't parse bounds. Run `/setup` → 📋 Survey to try again."
@@ -4486,12 +4827,12 @@ async def run_survey_setup(interaction: discord.Interaction, bot,
                         )
 
                     new_q = {
-                        "key":         q_key,
-                        "label":       q_label,
-                        "type":        q_type,
-                        "options":     options,
+                        "key": q_key,
+                        "label": q_label,
+                        "type": q_type,
+                        "options": options,
                         "placeholder": placeholder,
-                        "max_chars":   0,
+                        "max_chars": 0,
                         **extra_meta,
                     }
 
@@ -4500,7 +4841,9 @@ async def run_survey_setup(interaction: discord.Interaction, bot,
                         await channel.send(f"✅ Updated **{q_label}**.")
                     else:
                         questions.append(new_q)
-                        await channel.send(f"✅ Added **{q_label}** ({len(questions)} question(s) so far).")
+                        await channel.send(
+                            f"✅ Added **{q_label}** ({len(questions)} question(s) so far)."
+                        )
 
         result = await build_question_list()
         if not result:
@@ -4516,14 +4859,16 @@ async def run_survey_setup(interaction: discord.Interaction, bot,
         # to guild_configs so older code that reads them stays happy.
         save_survey_config(guild_id, tab_squad_powers, tab_history, questions, intro_message)
         from config import update_config_field
-        update_config_field(guild_id, "survey_channel_id",        survey_channel_id)
+
+        update_config_field(guild_id, "survey_channel_id", survey_channel_id)
         update_config_field(guild_id, "survey_notify_channel_id", survey_notify_channel_id)
         next_step_cmd = "/setup → 📋 Survey"
     else:
         # Extra survey: save into guild_extra_surveys; preserve any custom
         # reminder body the leadership previously set.
         save_extra_survey(
-            guild_id, target_survey_id,
+            guild_id,
+            target_survey_id,
             survey_name=target_survey_name or target_survey_id,
             tab_squad_powers=tab_squad_powers,
             tab_history=tab_history,
@@ -4538,34 +4883,41 @@ async def run_survey_setup(interaction: discord.Interaction, bot,
 
     q_summary = "\n".join(
         f"• **{q['label']}** — {q['type']}"
-        + (f" ({', '.join(q['options'])})" if q['type'] == 'dropdown' else "")
+        + (f" ({', '.join(q['options'])})" if q["type"] == "dropdown" else "")
         for q in questions
     )
     title = (
         f"✅ Survey Configured — {target_survey_name}"
-        if target_survey_id else "✅ Survey Configured"
+        if target_survey_id
+        else "✅ Survey Configured"
     )
     embed = discord.Embed(title=title, color=discord.Color.green())
-    embed.add_field(name="Survey Channel",      value=f"<#{survey_channel_id}>",        inline=True)
-    embed.add_field(name="Notification Channel",value=f"<#{survey_notify_channel_id}>", inline=True)
-    embed.add_field(name="Stats Tab",           value=tab_squad_powers,                  inline=True)
-    embed.add_field(name="History Tab",         value=tab_history,                       inline=True)
-    embed.add_field(name="Questions",           value=q_summary[:1024],                  inline=False)
+    embed.add_field(name="Survey Channel", value=f"<#{survey_channel_id}>", inline=True)
+    embed.add_field(
+        name="Notification Channel", value=f"<#{survey_notify_channel_id}>", inline=True
+    )
+    embed.add_field(name="Stats Tab", value=tab_squad_powers, inline=True)
+    embed.add_field(name="History Tab", value=tab_history, inline=True)
+    embed.add_field(name="Questions", value=q_summary[:1024], inline=False)
     embed.set_footer(
         text=f"Run {next_step_cmd} again to update. Run /survey post to post the survey button."
     )
     await channel.send(embed=embed)
     wizard_registry.unregister(user.id, cancel_event)
-    print(f"[SETUP] Survey config saved for guild {guild_id} "
-          f"(survey_id={target_survey_id or 'default'}) — {len(questions)} questions")
+    print(
+        f"[SETUP] Survey config saved for guild {guild_id} "
+        f"(survey_id={target_survey_id or 'default'}) — {len(questions)} questions"
+    )
+
 
 async def run_storm_setup(interaction: discord.Interaction, bot, event_type: str):
     """Shared setup wizard for Desert Storm and Canyon Storm."""
     import wizard_registry
+
     guild_id = interaction.guild_id
-    channel  = interaction.channel
-    user     = interaction.user
-    label    = "Desert Storm" if event_type == "DS" else "Canyon Storm"
+    channel = interaction.channel
+    user = interaction.user
+    label = "Desert Storm" if event_type == "DS" else "Canyon Storm"
     # cmd_name is the user-facing hint shown after `Run /` in timeout /
     # footer messages throughout this wizard. The old `/setup_desertstorm`
     # and `/setup_canyonstorm` slash commands were consolidated under the
@@ -4594,20 +4946,24 @@ async def run_storm_setup(interaction: discord.Interaction, bot, event_type: str
         return reply.content.strip()[:max_chars]
 
     from config import (
-        get_storm_config, get_config, has_storm_config,
+        get_storm_config,
+        get_config,
+        has_storm_config,
         get_structured_storm_config,
     )
     from defaults import DEFAULT_DS_TEMPLATE, DEFAULT_CS_TEMPLATE
-    current            = get_storm_config(guild_id, event_type)
+
+    current = get_storm_config(guild_id, event_type)
     current_structured = get_structured_storm_config(guild_id, event_type)
     guild_cfg = get_config(guild_id)
-    timezone  = guild_cfg.timezone if guild_cfg and guild_cfg.timezone else "America/New_York"
-    tz_label  = TIMEZONE_LABELS.get(timezone, timezone)
+    timezone = guild_cfg.timezone if guild_cfg and guild_cfg.timezone else "America/New_York"
+    tz_label = TIMEZONE_LABELS.get(timezone, timezone)
     storm_already_configured = has_storm_config(guild_id, event_type)
     saved_log_ch = (
-        guild_cfg.ds_log_channel_id if event_type == "DS"
-        else guild_cfg.cs_log_channel_id
-    ) if guild_cfg else 0
+        (guild_cfg.ds_log_channel_id if event_type == "DS" else guild_cfg.cs_log_channel_id)
+        if guild_cfg
+        else 0
+    )
     saved_log_ch = saved_log_ch or 0
     saved_post_ch = current.get("post_channel_id") or 0
 
@@ -4629,16 +4985,16 @@ async def run_storm_setup(interaction: discord.Interaction, bot, event_type: str
 
     # Default template and placeholders per event type
     if event_type == "DS":
-        default_template  = DEFAULT_DS_TEMPLATE
-        placeholder_info  = (
+        default_template = DEFAULT_DS_TEMPLATE
+        placeholder_info = (
             "• `{alliance_name}`: your alliance name\n"
             "• `{zones}`: zone assignments block\n"
             "• `{subs}`: substitute members\n"
             "• `{time}`: event time (auto-filled when drafting)"
         )
     else:
-        default_template  = DEFAULT_CS_TEMPLATE
-        placeholder_info  = (
+        default_template = DEFAULT_CS_TEMPLATE
+        placeholder_info = (
             "• `{alliance_name}`: your alliance name\n"
             "• `{zones}`: zone assignments block\n"
             "• `{subs}`: substitute members\n"
@@ -4649,14 +5005,15 @@ async def run_storm_setup(interaction: discord.Interaction, bot, event_type: str
     if storm_already_configured:
         templates = current.get("templates") or []
         structured_status = (
-            "✅ Enabled" if current_structured.get("structured_flow_enabled")
+            "✅ Enabled"
+            if current_structured.get("structured_flow_enabled")
             else "❌ Off (preset tabs available on free tier)"
         )
         fields = [
-            ("Sheet Tab",    current.get("tab_name") or "*not set*"),
-            ("Log Channel",  f"<#{saved_log_ch}>" if saved_log_ch else "*not set*"),
+            ("Sheet Tab", current.get("tab_name") or "*not set*"),
+            ("Log Channel", f"<#{saved_log_ch}>" if saved_log_ch else "*not set*"),
             ("Post Channel", f"<#{saved_post_ch}>" if saved_post_ch else "*not set*"),
-            ("Timezone",     tz_label),
+            ("Timezone", tz_label),
             (
                 "Mail Templates",
                 ", ".join(t["name"] for t in templates) if templates else "Default",
@@ -4671,7 +5028,8 @@ async def run_storm_setup(interaction: discord.Interaction, bot, event_type: str
         # field in the re-entry summary for both event types — officers
         # can see their current single-team / both-teams config.
         _summary_teams = {"both": "A & B", "A": "A only", "B": "B only"}.get(
-            (current.get("teams") or "both"), "A & B",
+            (current.get("teams") or "both"),
+            "A & B",
         )
         fields.insert(1, ("Teams", _summary_teams))
 
@@ -4679,6 +5037,7 @@ async def run_storm_setup(interaction: discord.Interaction, bot, event_type: str
         # a glance whether the slots are set, and what they're set to,
         # without having to re-enter the wizard's Step 3.
         from config import get_storm_slot_labels as _gslot
+
         try:
             _slot_lbls = _gslot(event_type, guild_id)
         except Exception:
@@ -4697,10 +5056,7 @@ async def run_storm_setup(interaction: discord.Interaction, bot, event_type: str
         elif _team_summary == "B":
             _times_value = f"Team B: {_slot_blurb(_b_idx)}"
         else:
-            _times_value = (
-                f"Team A: {_slot_blurb(_a_idx)} · "
-                f"Team B: {_slot_blurb(_b_idx)}"
-            )
+            _times_value = f"Team A: {_slot_blurb(_a_idx)} · Team B: {_slot_blurb(_b_idx)}"
         fields.insert(2, ("Team Times", _times_value))
         emoji = "⚔️" if event_type == "DS" else "🏜️"
         proceed = await ask_proceed_with_existing_config(
@@ -4716,7 +5072,9 @@ async def run_storm_setup(interaction: discord.Interaction, bot, event_type: str
 
     await channel.send(f"⚙️ **{label} Setup**")
 
-    is_premium_flag = await premium.is_premium(guild_id, interaction=interaction, bot=interaction.client)
+    is_premium_flag = await premium.is_premium(
+        guild_id, interaction=interaction, bot=interaction.client
+    )
 
     # ── Step 1: Sheet tab ──────────────────────────────────────────────────────
     # When Member Sync is enabled, default to the alliance's Member
@@ -4726,6 +5084,7 @@ async def run_storm_setup(interaction: discord.Interaction, bot, event_type: str
     # back to the legacy `DS Assignments` / `CS Assignments` default
     # when Member Sync isn't configured yet.
     from config import get_member_roster_config as _gmrc_step1
+
     _sync_cfg_step1 = _gmrc_step1(guild_id) if guild_id else {}
     if _sync_cfg_step1.get("enabled"):
         hardcoded_tab = _sync_cfg_step1.get("tab_name") or "Member Roster"
@@ -4753,20 +5112,16 @@ async def run_storm_setup(interaction: discord.Interaction, bot, event_type: str
     saved_teams = saved_teams_raw if saved_teams_raw in ("both", "A", "B") else "both"
     _team_blurb = {
         "both": "Team A & Team B",
-        "A":    "Team A only",
-        "B":    "Team B only",
+        "A": "Team A only",
+        "B": "Team B only",
     }
 
     # Capture the prompt so the button callbacks can preserve it in the
     # edited message — otherwise the question disappears the moment a
     # button is clicked and officers scrolling back to review what they
     # answered see only the bare confirmation line.
-    team_prompt = (
-        f"**Step 2 of 9: Which teams do you run for {label}?**"
-        + (
-            f"\nCurrent: **{_team_blurb[saved_teams]}**"
-            if storm_already_configured else ""
-        )
+    team_prompt = f"**Step 2 of 9: Which teams do you run for {label}?**" + (
+        f"\nCurrent: **{_team_blurb[saved_teams]}**" if storm_already_configured else ""
     )
 
     class TeamChoiceView(discord.ui.View):
@@ -4777,7 +5132,8 @@ async def run_storm_setup(interaction: discord.Interaction, bot, event_type: str
         @discord.ui.button(label="Team A & Team B", style=discord.ButtonStyle.primary)
         async def both(self, inter: discord.Interaction, button: discord.ui.Button):
             self.selected = "both"
-            for item in self.children: item.disabled = True
+            for item in self.children:
+                item.disabled = True
             await wizard_registry.safe_edit_response(
                 inter,
                 content=f"{team_prompt}\n\n✅ Teams: **Team A & Team B**",
@@ -4788,7 +5144,8 @@ async def run_storm_setup(interaction: discord.Interaction, bot, event_type: str
         @discord.ui.button(label="Team A only", style=discord.ButtonStyle.secondary)
         async def a_only(self, inter: discord.Interaction, button: discord.ui.Button):
             self.selected = "A"
-            for item in self.children: item.disabled = True
+            for item in self.children:
+                item.disabled = True
             await wizard_registry.safe_edit_response(
                 inter,
                 content=f"{team_prompt}\n\n✅ Teams: **Team A only**",
@@ -4799,7 +5156,8 @@ async def run_storm_setup(interaction: discord.Interaction, bot, event_type: str
         @discord.ui.button(label="Team B only", style=discord.ButtonStyle.secondary)
         async def b_only(self, inter: discord.Interaction, button: discord.ui.Button):
             self.selected = "B"
-            for item in self.children: item.disabled = True
+            for item in self.children:
+                item.disabled = True
             await wizard_registry.safe_edit_response(
                 inter,
                 content=f"{team_prompt}\n\n✅ Teams: **Team B only**",
@@ -4815,12 +5173,12 @@ async def run_storm_setup(interaction: discord.Interaction, bot, event_type: str
         @discord.ui.button(label="Keep current", style=discord.ButtonStyle.success)
         async def keep_current(self, inter: discord.Interaction, button: discord.ui.Button):
             self.selected = saved_teams
-            for item in self.children: item.disabled = True
+            for item in self.children:
+                item.disabled = True
             await wizard_registry.safe_edit_response(
                 inter,
                 content=(
-                    f"{team_prompt}\n\n"
-                    f"✅ Teams: **{_team_blurb[saved_teams]}** (kept current)"
+                    f"{team_prompt}\n\n✅ Teams: **{_team_blurb[saved_teams]}** (kept current)"
                 ),
                 view=self,
             )
@@ -4831,9 +5189,7 @@ async def run_storm_setup(interaction: discord.Interaction, bot, event_type: str
         # Surface the saved value on the Keep current button so the
         # officer can see what would be preserved without reading the
         # prompt — mirrors the convention used by `ask_keep_or_change`.
-        team_view.keep_current.label = (
-            f"✅ Keep current: {_team_blurb[saved_teams]}"[:80]
-        )
+        team_view.keep_current.label = f"✅ Keep current: {_team_blurb[saved_teams]}"[:80]
     else:
         # Hide Keep current on fresh setup — there's no current value to keep.
         team_view.remove_item(team_view.keep_current)
@@ -4853,6 +5209,7 @@ async def run_storm_setup(interaction: discord.Interaction, bot, event_type: str
     # default for every weekly sign-up; the officer can override it for
     # a single week when posting that week's sign-up.
     from config import get_storm_slot_labels
+
     slot_labels = get_storm_slot_labels(event_type, guild_id)
     saved_a_idx = current.get("team_a_slot_index")
     saved_b_idx = current.get("team_b_slot_index")
@@ -4860,18 +5217,12 @@ async def run_storm_setup(interaction: discord.Interaction, bot, event_type: str
     async def pick_team_slot(team_letter: str, saved_idx):
         """Single-team slot picker. Returns 1 / 2 (selected), or None on
         cancel / timeout. `saved_idx` drives whether Keep current renders."""
-        current_line = (
-            f"\nCurrent: **{slot_labels[saved_idx - 1]}**"
-            if saved_idx in (1, 2) else ""
-        )
+        current_line = f"\nCurrent: **{slot_labels[saved_idx - 1]}**" if saved_idx in (1, 2) else ""
         # Capture the prompt so each button callback can echo it in the
         # edited message — keeps the original question visible when the
         # officer scrolls back to review what they chose, instead of
         # leaving only the bare confirmation line.
-        slot_prompt = (
-            f"Which time slot does **Team {team_letter}** run for {label}?"
-            + current_line
-        )
+        slot_prompt = f"Which time slot does **Team {team_letter}** run for {label}?" + current_line
 
         class TeamSlotView(discord.ui.View):
             def __init__(self):
@@ -4881,13 +5232,11 @@ async def run_storm_setup(interaction: discord.Interaction, bot, event_type: str
             @discord.ui.button(label=slot_labels[0], style=discord.ButtonStyle.primary)
             async def slot1(self, inter: discord.Interaction, button: discord.ui.Button):
                 self.selected = 1
-                for item in self.children: item.disabled = True
+                for item in self.children:
+                    item.disabled = True
                 await wizard_registry.safe_edit_response(
                     inter,
-                    content=(
-                        f"{slot_prompt}\n\n"
-                        f"✅ Team {team_letter}: **{slot_labels[0]}**"
-                    ),
+                    content=(f"{slot_prompt}\n\n✅ Team {team_letter}: **{slot_labels[0]}**"),
                     view=self,
                 )
                 self.stop()
@@ -4895,13 +5244,11 @@ async def run_storm_setup(interaction: discord.Interaction, bot, event_type: str
             @discord.ui.button(label=slot_labels[1], style=discord.ButtonStyle.primary)
             async def slot2(self, inter: discord.Interaction, button: discord.ui.Button):
                 self.selected = 2
-                for item in self.children: item.disabled = True
+                for item in self.children:
+                    item.disabled = True
                 await wizard_registry.safe_edit_response(
                     inter,
-                    content=(
-                        f"{slot_prompt}\n\n"
-                        f"✅ Team {team_letter}: **{slot_labels[1]}**"
-                    ),
+                    content=(f"{slot_prompt}\n\n✅ Team {team_letter}: **{slot_labels[1]}**"),
                     view=self,
                 )
                 self.stop()
@@ -4909,13 +5256,13 @@ async def run_storm_setup(interaction: discord.Interaction, bot, event_type: str
             @discord.ui.button(label="Keep current", style=discord.ButtonStyle.success)
             async def keep_current(self, inter: discord.Interaction, button: discord.ui.Button):
                 self.selected = saved_idx
-                for item in self.children: item.disabled = True
+                for item in self.children:
+                    item.disabled = True
                 kept_label = slot_labels[saved_idx - 1] if saved_idx in (1, 2) else "—"
                 await wizard_registry.safe_edit_response(
                     inter,
                     content=(
-                        f"{slot_prompt}\n\n"
-                        f"✅ Team {team_letter}: **{kept_label}** (kept current)"
+                        f"{slot_prompt}\n\n✅ Team {team_letter}: **{kept_label}** (kept current)"
                     ),
                     view=self,
                 )
@@ -4929,9 +5276,7 @@ async def run_storm_setup(interaction: discord.Interaction, bot, event_type: str
             # officer can see what would be preserved without reading
             # back through the prompt — matches the convention used by
             # `ask_keep_or_change` elsewhere in the wizard.
-            view.keep_current.label = (
-                f"✅ Keep current: {slot_labels[saved_idx - 1]}"[:80]
-            )
+            view.keep_current.label = f"✅ Keep current: {slot_labels[saved_idx - 1]}"[:80]
         await channel.send(slot_prompt, view=view)
         await wait_view_or_cancel(view, cancel_event)
         if view.cancelled:
@@ -4970,9 +5315,7 @@ async def run_storm_setup(interaction: discord.Interaction, bot, event_type: str
         current_id=saved_log_ch,
     )
     if log_ch_view.is_current_stale:
-        await channel.send(
-            PREV_CHANNEL_GONE.format(channel_label=f"{label} log")
-        )
+        await channel.send(PREV_CHANNEL_GONE.format(channel_label=f"{label} log"))
     await channel.send(
         f"**Step 4 of 9: Storm Log Channel**\n"
         f"Select the channel where {label} participation/log summaries will be posted:",
@@ -4995,9 +5338,7 @@ async def run_storm_setup(interaction: discord.Interaction, bot, event_type: str
         current_id=saved_post_ch,
     )
     if post_ch_view.is_current_stale:
-        await channel.send(
-            PREV_CHANNEL_GONE.format(channel_label=f"{label} mail post")
-        )
+        await channel.send(PREV_CHANNEL_GONE.format(channel_label=f"{label} mail post"))
     parent_cmd = "desertstorm" if event_type == "DS" else "canyonstorm"
     await channel.send(
         f"**Step 5 of 9: Mail Post Channel**\n"
@@ -5034,24 +5375,29 @@ async def run_storm_setup(interaction: discord.Interaction, bot, event_type: str
                 self.outcome: str | None = None  # "keep" | "default" | "edit"
 
             # Re-entry only — only added when saved_is_custom.
-            @discord.ui.button(label="✅ Keep current custom template", style=discord.ButtonStyle.success)
+            @discord.ui.button(
+                label="✅ Keep current custom template", style=discord.ButtonStyle.success
+            )
             async def keep(self, inter: discord.Interaction, button: discord.ui.Button):
                 self.outcome = "keep"
-                for item in self.children: item.disabled = True
+                for item in self.children:
+                    item.disabled = True
                 await wizard_registry.safe_edit_response(
                     inter,
-                    content=f"✅ Keeping your saved custom template for {team_label}.", view=self
+                    content=f"✅ Keeping your saved custom template for {team_label}.",
+                    view=self,
                 )
                 self.stop()
 
             @discord.ui.button(label="↩️ Use default template", style=discord.ButtonStyle.secondary)
             async def use_def(self, inter: discord.Interaction, button: discord.ui.Button):
                 self.outcome = "default"
-                for item in self.children: item.disabled = True
+                for item in self.children:
+                    item.disabled = True
                 msg = (
                     f"✅ Reverted to default template for {team_label}."
-                    if saved_is_custom else
-                    f"✅ Using default template for {team_label}."
+                    if saved_is_custom
+                    else f"✅ Using default template for {team_label}."
                 )
                 await wizard_registry.safe_edit_response(inter, content=msg, view=self)
                 self.stop()
@@ -5059,7 +5405,8 @@ async def run_storm_setup(interaction: discord.Interaction, bot, event_type: str
             @discord.ui.button(label="✏️ Edit template", style=discord.ButtonStyle.secondary)
             async def edit(self, inter: discord.Interaction, button: discord.ui.Button):
                 self.outcome = "edit"
-                for item in self.children: item.disabled = True
+                for item in self.children:
+                    item.disabled = True
                 await wizard_registry.safe_edit_response(inter, view=self)
                 self.stop()
 
@@ -5073,12 +5420,13 @@ async def run_storm_setup(interaction: discord.Interaction, bot, event_type: str
 
         custom_block = (
             f"\n\nHere is your saved custom template:\n```\n{saved_template}\n```"
-            if saved_is_custom else ""
+            if saved_is_custom
+            else ""
         )
         question = (
             "Would you like to keep your custom template, revert to the default, or edit it?"
-            if saved_is_custom else
-            "Would you like to use this or edit it?"
+            if saved_is_custom
+            else "Would you like to use this or edit it?"
         )
         await channel.send(
             f"**{label} Mail Template: {team_label}**\n"
@@ -5127,9 +5475,7 @@ async def run_storm_setup(interaction: discord.Interaction, bot, event_type: str
         # bodies — switching from A-only / B-only to both is first-time
         # for the shared/separate decision.
         if saved_template_a and saved_template_b:
-            saved_share_mode = (
-                "shared" if saved_template_a == saved_template_b else "separate"
-            )
+            saved_share_mode = "shared" if saved_template_a == saved_template_b else "separate"
         else:
             saved_share_mode = None
 
@@ -5142,32 +5488,37 @@ async def run_storm_setup(interaction: discord.Interaction, bot, event_type: str
             @discord.ui.button(label="Keep current", style=discord.ButtonStyle.success)
             async def keep_current(self, inter: discord.Interaction, button: discord.ui.Button):
                 self.selected = saved_share_mode
-                for item in self.children: item.disabled = True
+                for item in self.children:
+                    item.disabled = True
                 ack = (
                     "✅ Kept current: **One shared template** for Team A & B"
-                    if saved_share_mode == "shared" else
-                    "✅ Kept current: **Separate templates** for Team A & Team B"
+                    if saved_share_mode == "shared"
+                    else "✅ Kept current: **Separate templates** for Team A & Team B"
                 )
                 await wizard_registry.safe_edit_response(inter, content=ack, view=self)
                 self.stop()
 
-            @discord.ui.button(label="One template for both teams", style=discord.ButtonStyle.primary)
+            @discord.ui.button(
+                label="One template for both teams", style=discord.ButtonStyle.primary
+            )
             async def shared(self, inter: discord.Interaction, button: discord.ui.Button):
                 self.selected = "shared"
-                for item in self.children: item.disabled = True
+                for item in self.children:
+                    item.disabled = True
                 await wizard_registry.safe_edit_response(
-                    inter,
-                    content="✅ **One shared template** for Team A & B", view=self
+                    inter, content="✅ **One shared template** for Team A & B", view=self
                 )
                 self.stop()
 
-            @discord.ui.button(label="Separate templates per team", style=discord.ButtonStyle.secondary)
+            @discord.ui.button(
+                label="Separate templates per team", style=discord.ButtonStyle.secondary
+            )
             async def separate(self, inter: discord.Interaction, button: discord.ui.Button):
                 self.selected = "separate"
-                for item in self.children: item.disabled = True
+                for item in self.children:
+                    item.disabled = True
                 await wizard_registry.safe_edit_response(
-                    inter,
-                    content="✅ **Separate templates** for Team A & Team B", view=self
+                    inter, content="✅ **Separate templates** for Team A & Team B", view=self
                 )
                 self.stop()
 
@@ -5177,8 +5528,8 @@ async def run_storm_setup(interaction: discord.Interaction, bot, event_type: str
         else:
             shared_view.keep_current.label = (
                 "✅ Keep current: One shared template"
-                if saved_share_mode == "shared" else
-                "✅ Keep current: Separate templates"
+                if saved_share_mode == "shared"
+                else "✅ Keep current: Separate templates"
             )
         prompt_lines = [
             "**Step 6 of 9: Mail Template**",
@@ -5230,19 +5581,33 @@ async def run_storm_setup(interaction: discord.Interaction, bot, event_type: str
 
     # ── Step 6: Participation log tracking (optional) ─────────────────────────
     participation_cfg = await _run_storm_participation_step(
-        channel, bot, user, cancel_event,
-        guild_id=guild_id, event_type=event_type, label=label, cmd_name=cmd_name,
-        is_premium_flag=is_premium_flag, current=current,
+        channel,
+        bot,
+        user,
+        cancel_event,
+        guild_id=guild_id,
+        event_type=event_type,
+        label=label,
+        cmd_name=cmd_name,
+        is_premium_flag=is_premium_flag,
+        current=current,
     )
     if participation_cfg is None:
         return  # cancelled / timed out
 
     # ── Structured roster flow (#38 + #54) — Premium opt-in + preset tabs ────
     structured_cfg = await _run_structured_flow_setup_step(
-        channel, bot, user, cancel_event,
-        guild_id=guild_id, event_type=event_type, label=label, cmd_name=cmd_name,
+        channel,
+        bot,
+        user,
+        cancel_event,
+        guild_id=guild_id,
+        event_type=event_type,
+        label=label,
+        cmd_name=cmd_name,
         is_premium_flag=is_premium_flag,
-        current=current, current_structured=current_structured,
+        current=current,
+        current_structured=current_structured,
         interaction_guild=interaction.guild,
     )
     if structured_cfg is None:
@@ -5255,8 +5620,9 @@ async def run_storm_setup(interaction: discord.Interaction, bot, event_type: str
     # guilds can configure this now too — it just won't fire until they
     # upgrade.
     from storm_log import DEFAULT_STORM_REMINDER_DM
+
     default_remind_dm = DEFAULT_STORM_REMINDER_DM.format(label=label)
-    saved_remind_dm   = (current.get("dm_reminder_message") or "").strip()
+    saved_remind_dm = (current.get("dm_reminder_message") or "").strip()
     parent_cmd = "desertstorm" if event_type == "DS" else "canyonstorm"
     remind_dm = await ask_keep_or_change(
         channel,
@@ -5282,50 +5648,74 @@ async def run_storm_setup(interaction: discord.Interaction, bot, event_type: str
 
     # ── Save ───────────────────────────────────────────────────────────────────
     from config import (
-        save_storm_config, save_participation_config, update_config_field,
-        save_structured_storm_config, save_storm_team_slots,
+        save_storm_config,
+        save_participation_config,
+        update_config_field,
+        save_structured_storm_config,
+        save_storm_team_slots,
     )
+
     # `teams` carries the wizard's Step 2 choice ('both' / 'A' / 'B') so
     # the strategy preset editor can hide Min Power inputs for a team the
     # alliance doesn't run (#148). CS rows store 'both' and ignore it.
     teams_persisted = teams if event_type == "DS" else "both"
     if template_a:
-        save_storm_config(guild_id, f"{event_type}_A", tab_name, template_a,
-                          timezone, log_channel_id,
-                          post_channel_id=post_channel_id,
-                          dm_reminder_message=dm_reminder_message,
-                          teams=teams_persisted)
+        save_storm_config(
+            guild_id,
+            f"{event_type}_A",
+            tab_name,
+            template_a,
+            timezone,
+            log_channel_id,
+            post_channel_id=post_channel_id,
+            dm_reminder_message=dm_reminder_message,
+            teams=teams_persisted,
+        )
     if template_b:
-        save_storm_config(guild_id, f"{event_type}_B", tab_name, template_b,
-                          timezone, log_channel_id,
-                          post_channel_id=post_channel_id,
-                          dm_reminder_message=dm_reminder_message,
-                          teams=teams_persisted)
-    save_storm_config(guild_id, event_type, tab_name, template_a or template_b,
-                      timezone, log_channel_id,
-                      post_channel_id=post_channel_id,
-                      dm_reminder_message=dm_reminder_message,
-                      teams=teams_persisted)
+        save_storm_config(
+            guild_id,
+            f"{event_type}_B",
+            tab_name,
+            template_b,
+            timezone,
+            log_channel_id,
+            post_channel_id=post_channel_id,
+            dm_reminder_message=dm_reminder_message,
+            teams=teams_persisted,
+        )
+    save_storm_config(
+        guild_id,
+        event_type,
+        tab_name,
+        template_a or template_b,
+        timezone,
+        log_channel_id,
+        post_channel_id=post_channel_id,
+        dm_reminder_message=dm_reminder_message,
+        teams=teams_persisted,
+    )
 
     # Persist the per-team slot mapping (#251). Kept separate from
     # save_storm_config so this step can be re-run without re-typing the
     # rest of the config — same precedent as save_structured_storm_config.
     save_storm_team_slots(
-        guild_id, event_type,
+        guild_id,
+        event_type,
         team_a_slot_index=team_a_slot,
         team_b_slot_index=team_b_slot,
     )
 
     # Persist the participation config to the (guild, event_type) row.
     save_participation_config(
-        guild_id, event_type,
-        enabled          = participation_cfg["enabled"],
-        tab_name         = participation_cfg["tab_name"],
-        questions        = participation_cfg["questions"],
-        roster_tab       = participation_cfg["roster_tab"],
-        roster_name_col  = participation_cfg["roster_name_col"],
-        roster_alias_col = participation_cfg["roster_alias_col"],
-        roster_start_row = participation_cfg["roster_start_row"],
+        guild_id,
+        event_type,
+        enabled=participation_cfg["enabled"],
+        tab_name=participation_cfg["tab_name"],
+        questions=participation_cfg["questions"],
+        roster_tab=participation_cfg["roster_tab"],
+        roster_name_col=participation_cfg["roster_name_col"],
+        roster_alias_col=participation_cfg["roster_alias_col"],
+        roster_start_row=participation_cfg["roster_start_row"],
     )
 
     # Persist the log channel to guild_configs so storm_log.py can read it
@@ -5343,39 +5733,45 @@ async def run_storm_setup(interaction: discord.Interaction, bot, event_type: str
     # strings persist as "fall back to the hardcoded default at send
     # time."
     from config import save_roster_dm_templates
+
     save_roster_dm_templates(
-        guild_id, event_type,
-        starter   =structured_cfg.get("roster_dm_starter_template", ""),
+        guild_id,
+        event_type,
+        starter=structured_cfg.get("roster_dm_starter_template", ""),
         paired_sub=structured_cfg.get("roster_dm_paired_sub_template", ""),
-        pool_sub  =structured_cfg.get("roster_dm_pool_sub_template", ""),
+        pool_sub=structured_cfg.get("roster_dm_pool_sub_template", ""),
     )
 
     save_structured_storm_config(
-        guild_id, event_type,
+        guild_id,
+        event_type,
         structured_flow_enabled=structured_cfg["structured_flow_enabled"],
-        power_metric_column    =structured_cfg.get("power_metric_column", "B"),
-        power_metric_tab       =structured_cfg.get("power_metric_tab", ""),
-        power_match_column     =structured_cfg.get("power_match_column", ""),
-        sub_mode               =structured_cfg["sub_mode"],
-        signup_channel_id      =structured_cfg["signup_channel_id"],
-        signup_schedule_cron   =structured_cfg.get("signup_schedule_cron", ""),
-        signups_tab            =structured_cfg["signups_tab"],
-        rosters_tab            =structured_cfg["rosters_tab"],
-        attendance_tab         =structured_cfg["attendance_tab"],
-        strategies_tab         =structured_cfg["strategies_tab"],
-        member_rules_tab       =structured_cfg["member_rules_tab"],
-        poll_day_of_week       =structured_cfg.get("poll_day_of_week", -1),
-        signup_time            =structured_cfg.get("signup_time", ""),
+        power_metric_column=structured_cfg.get("power_metric_column", "B"),
+        power_metric_tab=structured_cfg.get("power_metric_tab", ""),
+        power_match_column=structured_cfg.get("power_match_column", ""),
+        sub_mode=structured_cfg["sub_mode"],
+        signup_channel_id=structured_cfg["signup_channel_id"],
+        signup_schedule_cron=structured_cfg.get("signup_schedule_cron", ""),
+        signups_tab=structured_cfg["signups_tab"],
+        rosters_tab=structured_cfg["rosters_tab"],
+        attendance_tab=structured_cfg["attendance_tab"],
+        strategies_tab=structured_cfg["strategies_tab"],
+        member_rules_tab=structured_cfg["member_rules_tab"],
+        poll_day_of_week=structured_cfg.get("poll_day_of_week", -1),
+        signup_time=structured_cfg.get("signup_time", ""),
         power_refresh_dm_enabled=bool(structured_cfg.get("power_refresh_dm_enabled", False)),
-        power_last_updated_tab          =structured_cfg.get("power_last_updated_tab", ""),
-        power_last_updated_column       =structured_cfg.get("power_last_updated_column", ""),
-        power_last_updated_match_column =structured_cfg.get("power_last_updated_match_column", ""),
-        power_refresh_stale_days        =int(structured_cfg.get("power_refresh_stale_days", 0)),
+        power_last_updated_tab=structured_cfg.get("power_last_updated_tab", ""),
+        power_last_updated_column=structured_cfg.get("power_last_updated_column", ""),
+        power_last_updated_match_column=structured_cfg.get("power_last_updated_match_column", ""),
+        power_refresh_stale_days=int(structured_cfg.get("power_refresh_stale_days", 0)),
     )
 
     embed = discord.Embed(title=f"✅ {label} Configured", color=discord.Color.green())
-    embed.add_field(name="Sheet Tab",    value=tab_name, inline=True)
-    embed.add_field(name="Teams",        value={"both": "A & B", "A": "A only", "B": "B only"}[teams], inline=True)
+    embed.add_field(name="Sheet Tab", value=tab_name, inline=True)
+    embed.add_field(
+        name="Teams", value={"both": "A & B", "A": "A only", "B": "B only"}[teams], inline=True
+    )
+
     # Team time-slot mapping (#251) — surfaced inline alongside the
     # other event-shape fields so officers can confirm their slot picks
     # made it through the wizard.
@@ -5383,6 +5779,7 @@ async def run_storm_setup(interaction: discord.Interaction, bot, event_type: str
         if idx in (1, 2) and len(slot_labels) >= idx:
             return slot_labels[idx - 1]
         return "—"
+
     if teams == "A":
         embed.add_field(name="Team Times", value=f"A: {_slot_lbl(team_a_slot)}", inline=False)
     elif teams == "B":
@@ -5393,15 +5790,14 @@ async def run_storm_setup(interaction: discord.Interaction, bot, event_type: str
             value=f"A: {_slot_lbl(team_a_slot)} · B: {_slot_lbl(team_b_slot)}",
             inline=False,
         )
-    embed.add_field(name="Timezone",     value=tz_label, inline=True)
-    embed.add_field(name="Log Channel",  value=f"<#{log_channel_id}>", inline=True)
+    embed.add_field(name="Timezone", value=tz_label, inline=True)
+    embed.add_field(name="Log Channel", value=f"<#{log_channel_id}>", inline=True)
     embed.add_field(name="Post Channel", value=f"<#{post_channel_id}>", inline=True)
     if participation_cfg["enabled"]:
         n_q = len(participation_cfg["questions"])
         embed.add_field(
             name="Participation Tracking",
-            value=(f"✅ Enabled · {n_q} question(s) · Tab: "
-                   f"`{participation_cfg['tab_name']}`"),
+            value=(f"✅ Enabled · {n_q} question(s) · Tab: `{participation_cfg['tab_name']}`"),
             inline=False,
         )
     else:
@@ -5411,15 +5807,15 @@ async def run_storm_setup(interaction: discord.Interaction, bot, event_type: str
         _pwr_tab = structured_cfg.get("power_metric_tab", "") or ""
         _pwr_match = structured_cfg.get("power_match_column", "") or ""
         if _pwr_tab:
-            power_blurb = (
-                f"Power source: `{_pwr_tab}` · column `{_pwr_letter}`"
-                + (f" · matched by `{_pwr_match}`" if _pwr_match else "")
+            power_blurb = f"Power source: `{_pwr_tab}` · column `{_pwr_letter}`" + (
+                f" · matched by `{_pwr_match}`" if _pwr_match else ""
             )
         else:
             power_blurb = f"Power column: `{_pwr_letter}`"
         signup_blurb = (
             f" · Sign-up channel: <#{structured_cfg['signup_channel_id']}>"
-            if structured_cfg["signup_channel_id"] else ""
+            if structured_cfg["signup_channel_id"]
+            else ""
         )
         embed.add_field(
             name="Structured Roster Flow",
@@ -5437,13 +5833,17 @@ async def run_storm_setup(interaction: discord.Interaction, bot, event_type: str
             inline=False,
         )
     if template_a:
-        embed.add_field(name="Template A Preview",
-                        value=f"```{template_a[:150]}{'...' if len(template_a) > 150 else ''}```",
-                        inline=False)
+        embed.add_field(
+            name="Template A Preview",
+            value=f"```{template_a[:150]}{'...' if len(template_a) > 150 else ''}```",
+            inline=False,
+        )
     if template_b and template_b != template_a:
-        embed.add_field(name="Template B Preview",
-                        value=f"```{template_b[:150]}{'...' if len(template_b) > 150 else ''}```",
-                        inline=False)
+        embed.add_field(
+            name="Template B Preview",
+            value=f"```{template_b[:150]}{'...' if len(template_b) > 150 else ''}```",
+            inline=False,
+        )
     embed.set_footer(text=f"Run /{cmd_name} again to update.")
     await channel.send(embed=embed)
 
@@ -5454,25 +5854,30 @@ async def run_storm_setup(interaction: discord.Interaction, bot, event_type: str
     # guild + event type. Whether auto-scheduling was configured or
     # skipped, this gives the alliance one fully-live sign-up post right
     # at the end of setup — the discovery surface #144 is closing.
-    if (
-        structured_cfg["structured_flow_enabled"]
-        and structured_cfg.get("signup_channel_id")
-    ):
+    if structured_cfg["structured_flow_enabled"] and structured_cfg.get("signup_channel_id"):
         try:
             import config as _config
+
             with _config._get_conn() as conn:
-                already_posted = conn.execute(
-                    "SELECT 1 FROM storm_registration_posts "
-                    "WHERE guild_id = ? AND event_type = ? LIMIT 1",
-                    (guild_id, event_type),
-                ).fetchone() is not None
+                already_posted = (
+                    conn.execute(
+                        "SELECT 1 FROM storm_registration_posts "
+                        "WHERE guild_id = ? AND event_type = ? LIMIT 1",
+                        (guild_id, event_type),
+                    ).fetchone()
+                    is not None
+                )
         except Exception:
             already_posted = True  # err on the side of not nagging
         if not already_posted:
             parent = "desertstorm" if event_type == "DS" else "canyonstorm"
             post_offer = _InlinePostFirstSignupOffer(
-                owner_id=user.id, bot=bot, guild_id=guild_id,
-                event_type=event_type, parent=parent, label=label,
+                owner_id=user.id,
+                bot=bot,
+                guild_id=guild_id,
+                event_type=event_type,
+                parent=parent,
+                label=label,
             )
             post_offer.message = await channel.send(
                 f"📣 Want to post your first {label} sign-up now? "
@@ -5501,20 +5906,27 @@ async def run_storm_setup(interaction: discord.Interaction, bot, event_type: str
 # aggregate across events. `roster_names` keeps working unchanged for
 # alliances on the legacy free-text-list pattern.
 _PARTICIPATION_FREE_TYPES = [
-    "text", "yes_no", "numeric", "roster_names", "roster_multi_select",
+    "text",
+    "yes_no",
+    "numeric",
+    "roster_names",
+    "roster_multi_select",
 ]
 _PARTICIPATION_PREMIUM_TYPES = [
-    "single_select", "multi_select", "date", "derived_count",
+    "single_select",
+    "multi_select",
+    "date",
+    "derived_count",
 ]
 _PARTICIPATION_TYPE_LABELS = {
-    "text":          "Text: short typed answer",
-    "yes_no":        "Yes / No",
-    "numeric":       "Numeric: number with optional min/max",
-    "roster_names":  "Roster names: pick or type member names",
+    "text": "Text: short typed answer",
+    "yes_no": "Yes / No",
+    "numeric": "Numeric: number with optional min/max",
+    "roster_names": "Roster names: pick or type member names",
     "roster_multi_select": "Roster multi-select: pick members from a dropdown",
     "single_select": "💎 Single-select dropdown",
-    "multi_select":  "💎 Multi-select dropdown",
-    "date":          "💎 Date (formatted entry)",
+    "multi_select": "💎 Multi-select dropdown",
+    "date": "💎 Date (formatted entry)",
     "derived_count": "💎 Derived count: bot counts past events per member",
 }
 
@@ -5527,7 +5939,11 @@ _PARTICIPATION_PER_MEMBER_TYPES = ("roster_multi_select", "derived_count")
 
 
 async def _run_participation_preset_picker_step(
-    channel, bot, user, cancel_event, *,
+    channel,
+    bot,
+    user,
+    cancel_event,
+    *,
     cmd_name: str,
     is_premium_flag: bool,
     existing_questions: list[dict],
@@ -5547,7 +5963,8 @@ async def _run_participation_preset_picker_step(
     """
     import wizard_registry
     from defaults import (
-        storm_participation_presets, preset_to_question,
+        storm_participation_presets,
+        preset_to_question,
     )
 
     # Always show both tiers' presets so free-tier officers can see
@@ -5573,9 +5990,9 @@ async def _run_participation_preset_picker_step(
     # are never default-checked on free tier — defaulting to a 💎
     # preset would force the upsell ack just for hitting Add.
     default_checked = {
-        p["key"] for p in available
-        if p.get("default_checked")
-        and (is_premium_flag or not _is_premium_only(p))
+        p["key"]
+        for p in available
+        if p.get("default_checked") and (is_premium_flag or not _is_premium_only(p))
     }
 
     class _PresetPickerView(discord.ui.View):
@@ -5596,12 +6013,14 @@ async def _run_participation_preset_picker_step(
                 else:
                     label = f"{emoji} {p['label']}"[:100]
                     description = p.get("description", "")[:100]
-                options.append(discord.SelectOption(
-                    label=label,
-                    value=p["key"],
-                    description=description,
-                    default=(p["key"] in default_checked),
-                ))
+                options.append(
+                    discord.SelectOption(
+                        label=label,
+                        value=p["key"],
+                        description=description,
+                        default=(p["key"] in default_checked),
+                    )
+                )
             sel = discord.ui.Select(
                 placeholder="Pick the preset questions you want…",
                 options=options,
@@ -5619,7 +6038,8 @@ async def _run_participation_preset_picker_step(
 
         @discord.ui.button(
             label="✅ Add picked presets",
-            style=discord.ButtonStyle.success, row=1,
+            style=discord.ButtonStyle.success,
+            row=1,
         )
         async def add(self, inter: discord.Interaction, _btn):
             self.action = "add"
@@ -5630,7 +6050,8 @@ async def _run_participation_preset_picker_step(
 
         @discord.ui.button(
             label="↩️ Skip presets",
-            style=discord.ButtonStyle.secondary, row=1,
+            style=discord.ButtonStyle.secondary,
+            row=1,
         )
         async def skip(self, inter: discord.Interaction, _btn):
             self.action = "skip"
@@ -5682,9 +6103,7 @@ async def _run_participation_preset_picker_step(
                 f"💎 *Skipped Premium-only preset(s):* {labels}. Run "
                 f"`/upgrade` to unlock them, then re-run setup to add."
             )
-            selected_in_order = [
-                p for p in selected_in_order if not _is_premium_only(p)
-            ]
+            selected_in_order = [p for p in selected_in_order if not _is_premium_only(p)]
         if not selected_in_order:
             return []
 
@@ -5736,9 +6155,17 @@ async def _run_participation_preset_picker_step(
 
 
 async def _run_storm_participation_step(
-    channel, bot, user, cancel_event, *,
-    guild_id: int, event_type: str, label: str, cmd_name: str,
-    is_premium_flag: bool, current: dict,
+    channel,
+    bot,
+    user,
+    cancel_event,
+    *,
+    guild_id: int,
+    event_type: str,
+    label: str,
+    cmd_name: str,
+    is_premium_flag: bool,
+    current: dict,
 ) -> dict | None:
     """
     Step 6 of the storm setup wizard (DS + CS). Walks leadership
@@ -5748,7 +6175,9 @@ async def _run_storm_participation_step(
     """
     import wizard_registry
     from config import (
-        get_participation_config, get_survey_config, get_birthday_config,
+        get_participation_config,
+        get_survey_config,
+        get_birthday_config,
     )
     import premium
 
@@ -5797,12 +6226,14 @@ async def _run_storm_participation_step(
     if not enable_selected:
         # Disabled — keep the existing values around but mark off.
         return {
-            "enabled":          0,
-            "tab_name":         cur_part.get("tab_name") or "",
-            "questions":        cur_part.get("questions") or [],
-            "roster_tab":       cur_part.get("roster_tab") or "",
-            "roster_name_col":  cur_part.get("roster_name_col") or 0,
-            "roster_alias_col": cur_part.get("roster_alias_col") if cur_part.get("roster_alias_col") is not None else -1,
+            "enabled": 0,
+            "tab_name": cur_part.get("tab_name") or "",
+            "questions": cur_part.get("questions") or [],
+            "roster_tab": cur_part.get("roster_tab") or "",
+            "roster_name_col": cur_part.get("roster_name_col") or 0,
+            "roster_alias_col": cur_part.get("roster_alias_col")
+            if cur_part.get("roster_alias_col") is not None
+            else -1,
             "roster_start_row": cur_part.get("roster_start_row") or 2,
         }
 
@@ -5829,9 +6260,9 @@ async def _run_storm_participation_step(
     # for this event type, else fall back to the survey stats tab if
     # configured, else birthday tab. The hardcoded default ("Squad
     # Powers") is the bot's baseline if none of those exist either.
-    survey_cfg     = get_survey_config(guild_id) or {}
-    birthday_cfg   = get_birthday_config(guild_id) or {}
-    suggested_tab  = (
+    survey_cfg = get_survey_config(guild_id) or {}
+    birthday_cfg = get_birthday_config(guild_id) or {}
+    suggested_tab = (
         cur_part.get("roster_tab")
         or survey_cfg.get("tab_squad_powers")
         or birthday_cfg.get("tab_name")
@@ -5857,8 +6288,8 @@ async def _run_storm_participation_step(
     saved_name_col_idx = cur_part.get("roster_name_col")
     raw_name_col = await ask_keep_or_change(
         channel,
-        f"**Step 7.3: Roster Source: Name Column**\n"
-        f"Which column letter has the member name? (e.g. `A`, `B`, `E`)",
+        "**Step 7.3: Roster Source: Name Column**\n"
+        "Which column letter has the member name? (e.g. `A`, `B`, `E`)",
         default="A",
         current=(
             _col_index_to_letter(saved_name_col_idx)
@@ -5874,17 +6305,16 @@ async def _run_storm_participation_step(
         return None
     roster_name_col = _col_letter_to_index(raw_name_col)
     if roster_name_col < 0:
-        await channel.send(f"⚠️ `{raw_name_col}` isn't a valid column letter. Run `/{cmd_name}` to start again.")
+        await channel.send(
+            f"⚠️ `{raw_name_col}` isn't a valid column letter. Run `/{cmd_name}` to start again."
+        )
         return None
 
     # Re-entry: if the alliance previously configured a roster alias
     # column (saved as >= 0) OR explicitly opted out (-1) on a prior
     # save, surface the keep-or-flip gate instead of plain Yes/No.
     saved_alias_idx = cur_part.get("roster_alias_col")
-    alias_was_previously_answered = (
-        part_previously_saved
-        and isinstance(saved_alias_idx, int)
-    )
+    alias_was_previously_answered = part_previously_saved and isinstance(saved_alias_idx, int)
     alias_prompt = (
         "**Step 7.4: Roster Source: Alias Column?**\n"
         "If you have other names or nicknames that you call your members in these "
@@ -5923,11 +6353,10 @@ async def _run_storm_participation_step(
         # maintains). Otherwise fall back to the historic
         # "column right after the name column" convention.
         from config import get_member_roster_config as _gmrc_alias
+
         _sync_cfg_alias = _gmrc_alias(guild_id) if guild_id else {}
         if _sync_cfg_alias.get("enabled"):
-            _alias_default_letter = _col_index_to_letter(
-                int(_sync_cfg_alias.get("display_col", 2))
-            )
+            _alias_default_letter = _col_index_to_letter(int(_sync_cfg_alias.get("display_col", 2)))
         else:
             _alias_default_letter = _col_index_to_letter(roster_name_col + 1)
         raw_alias = await ask_keep_or_change(
@@ -5948,7 +6377,9 @@ async def _run_storm_participation_step(
             return None
         roster_alias_col = _col_letter_to_index(raw_alias)
         if roster_alias_col < 0:
-            await channel.send(f"⚠️ `{raw_alias}` isn't a valid column letter. Run `/{cmd_name}` to start again.")
+            await channel.send(
+                f"⚠️ `{raw_alias}` isn't a valid column letter. Run `/{cmd_name}` to start again."
+            )
             return None
 
     raw_start = await ask_keep_or_change(
@@ -5981,7 +6412,10 @@ async def _run_storm_participation_step(
     questions = list(cur_part.get("questions") or [])
     cap = None if is_premium_flag else 3
     preset_additions = await _run_participation_preset_picker_step(
-        channel, bot, user, cancel_event,
+        channel,
+        bot,
+        user,
+        cancel_event,
         cmd_name=cmd_name,
         is_premium_flag=is_premium_flag,
         existing_questions=questions,
@@ -6001,6 +6435,7 @@ async def _run_storm_participation_step(
         return "\n".join(lines)
 
     while True:
+
         class _BuilderView(discord.ui.View):
             def __init__(self, count: int):
                 super().__init__(timeout=300)
@@ -6011,52 +6446,68 @@ async def _run_storm_participation_step(
                 if count > 0:
                     edit_sel = discord.ui.Select(
                         placeholder="✏️ Edit a question…",
-                        options=[discord.SelectOption(label=f"Edit: {q.get('label', '?')[:90]}", value=str(i))
-                                 for i, q in enumerate(questions[:25])],
+                        options=[
+                            discord.SelectOption(
+                                label=f"Edit: {q.get('label', '?')[:90]}", value=str(i)
+                            )
+                            for i, q in enumerate(questions[:25])
+                        ],
                         row=0,
                     )
+
                     async def _ec(inter: discord.Interaction):
-                        self.action   = "edit"
+                        self.action = "edit"
                         self.edit_idx = int(edit_sel.values[0])
-                        for c in self.children: c.disabled = True
+                        for c in self.children:
+                            c.disabled = True
                         await wizard_registry.safe_edit_response(inter, view=self)
                         self.stop()
+
                     edit_sel.callback = _ec
                     self.add_item(edit_sel)
 
                     del_sel = discord.ui.Select(
                         placeholder="🗑️ Remove a question…",
-                        options=[discord.SelectOption(label=f"Remove: {q.get('label', '?')[:90]}", value=str(i))
-                                 for i, q in enumerate(questions[:25])],
+                        options=[
+                            discord.SelectOption(
+                                label=f"Remove: {q.get('label', '?')[:90]}", value=str(i)
+                            )
+                            for i, q in enumerate(questions[:25])
+                        ],
                         row=1,
                     )
+
                     async def _dc(inter: discord.Interaction):
-                        self.action  = "delete"
+                        self.action = "delete"
                         self.del_idx = int(del_sel.values[0])
-                        for c in self.children: c.disabled = True
+                        for c in self.children:
+                            c.disabled = True
                         await wizard_registry.safe_edit_response(inter, view=self)
                         self.stop()
+
                     del_sel.callback = _dc
                     self.add_item(del_sel)
 
             @discord.ui.button(label="➕ Add question", style=discord.ButtonStyle.primary, row=2)
             async def add_q(self, inter: discord.Interaction, button: discord.ui.Button):
                 self.action = "add"
-                for c in self.children: c.disabled = True
+                for c in self.children:
+                    c.disabled = True
                 await wizard_registry.safe_edit_response(inter, view=self)
                 self.stop()
 
             @discord.ui.button(label="✅ Done", style=discord.ButtonStyle.success, row=2)
             async def done(self, inter: discord.Interaction, button: discord.ui.Button):
                 self.action = "done"
-                for c in self.children: c.disabled = True
+                for c in self.children:
+                    c.disabled = True
                 await wizard_registry.safe_edit_response(inter, view=self)
                 self.stop()
 
         cap_note = (
             f"\n*Free tier limit: {cap} questions.*"
-            if cap is not None else
-            "\n💎 *Premium: unlimited questions and three extra question types.*"
+            if cap is not None
+            else "\n💎 *Premium: unlimited questions and three extra question types.*"
         )
         view = _BuilderView(len(questions))
         await channel.send(
@@ -6082,14 +6533,21 @@ async def _run_storm_participation_step(
             continue
         if view.action in ("add", "edit"):
             if view.action == "add" and cap is not None and len(questions) >= cap:
-                await channel.send(embed=premium.limit_reached_embed(
-                    feature_label="Participation Questions",
-                    current=len(questions), cap=cap, plural_unit="questions",
-                ))
+                await channel.send(
+                    embed=premium.limit_reached_embed(
+                        feature_label="Participation Questions",
+                        current=len(questions),
+                        cap=cap,
+                        plural_unit="questions",
+                    )
+                )
                 continue
             existing = questions[view.edit_idx] if view.action == "edit" else None
             new_q = await _build_participation_question(
-                channel, bot, user, cancel_event,
+                channel,
+                bot,
+                user,
+                cancel_event,
                 cmd_name=cmd_name,
                 is_premium_flag=is_premium_flag,
                 existing=existing,
@@ -6105,11 +6563,11 @@ async def _run_storm_participation_step(
                 await channel.send(f"✅ Added **{new_q['label']}** ({len(questions)} so far).")
 
     return {
-        "enabled":          1,
-        "tab_name":         tab_name,
-        "questions":        questions,
-        "roster_tab":       roster_tab,
-        "roster_name_col":  roster_name_col,
+        "enabled": 1,
+        "tab_name": tab_name,
+        "questions": questions,
+        "roster_tab": roster_tab,
+        "roster_name_col": roster_name_col,
         "roster_alias_col": roster_alias_col,
         "roster_start_row": roster_start_row,
     }
@@ -6118,14 +6576,19 @@ async def _run_storm_participation_step(
 # ── Auto-schedule sub-flow (#131) ────────────────────────────────────────────
 
 
-_DOW_NAMES = ["Monday", "Tuesday", "Wednesday", "Thursday",
-              "Friday", "Saturday", "Sunday"]
+_DOW_NAMES = ["Monday", "Tuesday", "Wednesday", "Thursday", "Friday", "Saturday", "Sunday"]
 
 
 async def _ask_signup_schedule(
-    channel, bot, user, cancel_event, *,
-    label: str, cmd_name: str,
-    current_dow: int, current_time: str,
+    channel,
+    bot,
+    user,
+    cancel_event,
+    *,
+    label: str,
+    cmd_name: str,
+    current_dow: int,
+    current_time: str,
     tz_label: str = "",
     event_type: str = "DS",
 ) -> dict | None:
@@ -6142,7 +6605,6 @@ async def _ask_signup_schedule(
     `/<parent> post_signup` remains usable). Returns None on cancel
     or timeout — callers should propagate the None.
     """
-    parent = "desertstorm" if event_type == "DS" else "canyonstorm"
     import wizard_registry
 
     # Per Rule H, valid poll days per event type sit between the day
@@ -6187,7 +6649,8 @@ async def _ask_signup_schedule(
 
             async def _on_keep(inter: discord.Interaction):
                 self.selected = current if (0 <= current <= 6 and current in poll_options) else -1
-                for item in self.children: item.disabled = True
+                for item in self.children:
+                    item.disabled = True
                 if self.selected < 0:
                     await wizard_registry.safe_edit_response(
                         inter,
@@ -6211,19 +6674,23 @@ async def _ask_signup_schedule(
 
             options = [
                 discord.SelectOption(
-                    label=_DOW_NAMES[i], value=str(i),
+                    label=_DOW_NAMES[i],
+                    value=str(i),
                     default=(i == current),
                 )
                 for i in poll_options
             ]
-            options.append(discord.SelectOption(
-                label="Skip auto-scheduling (post manually from the hub)",
-                value="-1",
-                default=(current < 0),
-            ))
+            options.append(
+                discord.SelectOption(
+                    label="Skip auto-scheduling (post manually from the hub)",
+                    value="-1",
+                    default=(current < 0),
+                )
+            )
             sel = discord.ui.Select(
                 placeholder="When should the bot post the sign-up poll?",
-                min_values=1, max_values=1,
+                min_values=1,
+                max_values=1,
                 options=options,
                 row=1,
             )
@@ -6233,7 +6700,8 @@ async def _ask_signup_schedule(
                     self.selected = int(sel.values[0])
                 except ValueError:
                     self.selected = -1
-                for item in self.children: item.disabled = True
+                for item in self.children:
+                    item.disabled = True
                 if self.selected < 0:
                     await wizard_registry.safe_edit_response(
                         inter,
@@ -6316,7 +6784,7 @@ async def _ask_signup_schedule(
         time_clean = _parse_12h_time("12:00pm") or "12:00"
 
     return {
-        "dow":  dow_view.selected,
+        "dow": dow_view.selected,
         "time": time_clean,
     }
 
@@ -6327,6 +6795,7 @@ def _normalise_hhmm(raw: str) -> str | None:
     The canonical implementation lives in `config.py` so the scheduler
     and the wizard can't drift on parsing rules."""
     from config import parse_storm_signup_time
+
     return parse_storm_signup_time(raw)
 
 
@@ -6341,7 +6810,8 @@ class _KeepOrFlipYesNoGate(discord.ui.View):
     Sets `self.value` to the resolved bool, or None on timeout."""
 
     def __init__(
-        self, *,
+        self,
+        *,
         current_value: bool,
         keep_label_yes: str = "✅ Keep current: Yes",
         keep_label_no: str = "✅ Keep current: No",
@@ -6356,12 +6826,14 @@ class _KeepOrFlipYesNoGate(discord.ui.View):
         flip_label = flip_label_no if current_value else flip_label_yes
 
         keep_btn = discord.ui.Button(
-            label=keep_label[:80], style=discord.ButtonStyle.success,
+            label=keep_label[:80],
+            style=discord.ButtonStyle.success,
         )
 
         async def _keep_cb(inter: discord.Interaction):
             self.value = bool(current_value)
-            for item in self.children: item.disabled = True
+            for item in self.children:
+                item.disabled = True
             await wizard_registry.safe_edit_response(
                 inter,
                 content=f"✅ Keeping **{'Yes' if self.value else 'No'}**",
@@ -6373,12 +6845,14 @@ class _KeepOrFlipYesNoGate(discord.ui.View):
         self.add_item(keep_btn)
 
         flip_btn = discord.ui.Button(
-            label=flip_label[:80], style=discord.ButtonStyle.secondary,
+            label=flip_label[:80],
+            style=discord.ButtonStyle.secondary,
         )
 
         async def _flip_cb(inter: discord.Interaction):
             self.value = not bool(current_value)
-            for item in self.children: item.disabled = True
+            for item in self.children:
+                item.disabled = True
             await wizard_registry.safe_edit_response(
                 inter,
                 content=f"✅ Switched to **{'Yes' if self.value else 'No'}**",
@@ -6403,12 +6877,13 @@ class _InlineCreatePresetOffer(discord.ui.View):
     alliance has zero presets). 'Create now' opens the same preset
     editor as `/<parent> strategy create`."""
 
-    def __init__(self, *, owner_id: int, event_type: str, parent: str,
-                 default_name: str = "Standard"):
+    def __init__(
+        self, *, owner_id: int, event_type: str, parent: str, default_name: str = "Standard"
+    ):
         super().__init__(timeout=300)
-        self.owner_id     = owner_id
-        self.event_type   = event_type
-        self.parent       = parent
+        self.owner_id = owner_id
+        self.event_type = event_type
+        self.parent = parent
         self.default_name = default_name
         self.choice: str | None = None
         self.message: discord.Message | None = None
@@ -6422,8 +6897,7 @@ class _InlineCreatePresetOffer(discord.ui.View):
             return False
         return True
 
-    @discord.ui.button(label="✨ Create my first preset now",
-                       style=discord.ButtonStyle.primary)
+    @discord.ui.button(label="✨ Create my first preset now", style=discord.ButtonStyle.primary)
     async def create_btn(self, inter: discord.Interaction, _btn):
         self.choice = "create"
         for child in self.children:
@@ -6431,6 +6905,7 @@ class _InlineCreatePresetOffer(discord.ui.View):
         await inter.response.edit_message(view=self)
         try:
             from storm_strategy import seed_default_preset, open_editor_followup
+
             buf = seed_default_preset(self.default_name, self.event_type)
             buf.dirty = True
             await open_editor_followup(inter, self.event_type, buf)
@@ -6453,6 +6928,7 @@ class _InlineCreatePresetOffer(discord.ui.View):
 
     async def on_timeout(self) -> None:
         from wizard_registry import expire_view_message
+
         await expire_view_message(
             self.message,
             command_hint=f"`{HUB_COMMAND[self.event_type]}` → **{HUB_BTN_PRESETS}**",
@@ -6467,9 +6943,9 @@ class _InlineCreateMemberRuleOffer(discord.ui.View):
 
     def __init__(self, *, owner_id: int, event_type: str, parent: str):
         super().__init__(timeout=300)
-        self.owner_id   = owner_id
+        self.owner_id = owner_id
         self.event_type = event_type
-        self.parent     = parent
+        self.parent = parent
         self.choice: str | None = None
         self.message: discord.Message | None = None
 
@@ -6482,8 +6958,7 @@ class _InlineCreateMemberRuleOffer(discord.ui.View):
             return False
         return True
 
-    @discord.ui.button(label="✨ Add a power-band rule now",
-                       style=discord.ButtonStyle.primary)
+    @discord.ui.button(label="✨ Add a power-band rule now", style=discord.ButtonStyle.primary)
     async def create_btn(self, inter: discord.Interaction, _btn):
         self.choice = "create"
         for child in self.children:
@@ -6493,13 +6968,15 @@ class _InlineCreateMemberRuleOffer(discord.ui.View):
         # itself sends a fresh ephemeral with its own select + modal.
         try:
             from storm_member_rules import InlinePowerBandView
+
             picker = InlinePowerBandView(self.event_type, owner_id=inter.user.id)
             await inter.response.send_message(
                 content=(
                     "Pick the zone the rule applies to, then click "
                     "**Set minimum power** to enter the threshold."
                 ),
-                view=picker, ephemeral=True,
+                view=picker,
+                ephemeral=True,
             )
             picker.message = await inter.original_response()
         except Exception as e:
@@ -6526,6 +7003,7 @@ class _InlineCreateMemberRuleOffer(discord.ui.View):
 
     async def on_timeout(self) -> None:
         from wizard_registry import expire_view_message
+
         await expire_view_message(
             self.message,
             command_hint=f"`{HUB_COMMAND[self.event_type]}` → **{HUB_BTN_RULES}**",
@@ -6538,15 +7016,16 @@ class _InlinePostFirstSignupOffer(discord.ui.View):
     and no sign-up post has been recorded yet. 'Post now' fires
     `post_registration` against the next configured event date."""
 
-    def __init__(self, *, owner_id: int, bot, guild_id: int,
-                 event_type: str, parent: str, label: str):
+    def __init__(
+        self, *, owner_id: int, bot, guild_id: int, event_type: str, parent: str, label: str
+    ):
         super().__init__(timeout=300)
-        self.owner_id   = owner_id
-        self.bot        = bot
-        self.guild_id   = guild_id
+        self.owner_id = owner_id
+        self.bot = bot
+        self.guild_id = guild_id
         self.event_type = event_type
-        self.parent     = parent
-        self.label      = label
+        self.parent = parent
+        self.label = label
         self.choice: str | None = None
         self.message: discord.Message | None = None
 
@@ -6559,8 +7038,7 @@ class _InlinePostFirstSignupOffer(discord.ui.View):
             return False
         return True
 
-    @discord.ui.button(label="📣 Post my first sign-up now",
-                       style=discord.ButtonStyle.primary)
+    @discord.ui.button(label="📣 Post my first sign-up now", style=discord.ButtonStyle.primary)
     async def post_btn(self, inter: discord.Interaction, _btn):
         self.choice = "post"
         for child in self.children:
@@ -6570,8 +7048,9 @@ class _InlinePostFirstSignupOffer(discord.ui.View):
             from storm_date_helpers import next_event_date
             from storm_signup_post import post_registration, _format_post_result_message
             from config import get_structured_storm_config
+
             target_date = next_event_date(self.guild_id, self.event_type)
-            structured  = get_structured_storm_config(self.guild_id, self.event_type)
+            structured = get_structured_storm_config(self.guild_id, self.event_type)
             guild = self.bot.get_guild(self.guild_id)
             if guild is None:
                 await inter.followup.send(
@@ -6582,7 +7061,10 @@ class _InlinePostFirstSignupOffer(discord.ui.View):
                 )
                 return
             result = await post_registration(
-                self.bot, guild, self.event_type, target_date,
+                self.bot,
+                guild,
+                self.event_type,
+                target_date,
                 structured=structured,
                 # Leadership-triggered repost (#265): bypass the
                 # once-per-event guard so the first-sign-up wizard
@@ -6613,6 +7095,7 @@ class _InlinePostFirstSignupOffer(discord.ui.View):
 
     async def on_timeout(self) -> None:
         from wizard_registry import expire_view_message
+
         await expire_view_message(
             self.message,
             command_hint=f"`{HUB_COMMAND[self.event_type]}` → **{HUB_BTN_POST_SIGNUP}**",
@@ -6621,10 +7104,20 @@ class _InlinePostFirstSignupOffer(discord.ui.View):
 
 # ── Structured storm flow setup sub-flow (#38 + #54) ─────────────────────────
 
+
 async def _run_structured_flow_setup_step(
-    channel, bot, user, cancel_event, *,
-    guild_id: int, event_type: str, label: str, cmd_name: str,
-    is_premium_flag: bool, current: dict, current_structured: dict,
+    channel,
+    bot,
+    user,
+    cancel_event,
+    *,
+    guild_id: int,
+    event_type: str,
+    label: str,
+    cmd_name: str,
+    is_premium_flag: bool,
+    current: dict,
+    current_structured: dict,
     interaction_guild,
 ) -> dict | None:
     """
@@ -6660,8 +7153,13 @@ async def _run_structured_flow_setup_step(
     result.setdefault("sub_mode", "pool")
     result.setdefault("signup_channel_id", 0)
     result.setdefault("signup_schedule_cron", "")
-    for tab in ("signups_tab", "rosters_tab", "attendance_tab",
-                "strategies_tab", "member_rules_tab"):
+    for tab in (
+        "signups_tab",
+        "rosters_tab",
+        "attendance_tab",
+        "strategies_tab",
+        "member_rules_tab",
+    ):
         result.setdefault(tab, "")
     result.setdefault("poll_day_of_week", -1)
     result.setdefault("signup_time", "")
@@ -6706,12 +7204,11 @@ async def _run_structured_flow_setup_step(
         # dict with `structured_flow_enabled`, so detect prior setup by
         # asking has_storm_config directly.
         from config import has_storm_config
+
         already_decided = has_storm_config(guild_id, event_type)
         if already_decided:
             structured_gate = _KeepOrFlipYesNoGate(
-                current_value=bool(
-                    current_structured.get("structured_flow_enabled")
-                ),
+                current_value=bool(current_structured.get("structured_flow_enabled")),
             )
             await channel.send(
                 f"Turn on the structured flow for {label}?",
@@ -6750,11 +7247,13 @@ async def _run_structured_flow_setup_step(
         # first when the cell looks like one, otherwise it falls back
         # to case-insensitive name match.
         from config import get_member_roster_config
+
         _roster_cfg_for_defaults = get_member_roster_config(guild_id)
         _sync_enabled = bool(_roster_cfg_for_defaults.get("enabled"))
         default_tab = (
             (_roster_cfg_for_defaults.get("tab_name") or "Member Roster")
-            if _sync_enabled else "Member Roster"
+            if _sync_enabled
+            else "Member Roster"
         )
         if _sync_enabled:
             default_match_letter = _col_index_to_letter(
@@ -6764,9 +7263,7 @@ async def _run_structured_flow_setup_step(
             default_match_letter = "A"
 
         saved_tab = (result.get("power_metric_tab") or "").strip()
-        saved_letter = (
-            result.get("power_metric_column") or "B"
-        ).strip().upper()
+        saved_letter = (result.get("power_metric_column") or "B").strip().upper()
         if not (len(saved_letter) == 1 and "A" <= saved_letter <= "Z"):
             saved_letter = "B"
         saved_match = (result.get("power_match_column") or "").strip().upper()
@@ -6778,11 +7275,7 @@ async def _run_structured_flow_setup_step(
         # below (same idiom `ask_keep_or_change` uses).
         effective_tab = saved_tab or default_tab
         effective_match = saved_match or default_match_letter
-        has_custom = (
-            saved_tab != ""
-            or saved_letter != "B"
-            or saved_match != ""
-        )
+        has_custom = saved_tab != "" or saved_letter != "B" or saved_match != ""
 
         class _PowerDataSourceModal(discord.ui.Modal):
             def __init__(self):
@@ -6829,7 +7322,9 @@ async def _run_structured_flow_setup_step(
                 style=discord.ButtonStyle.success,
             )
             async def use_default(
-                self, inter: discord.Interaction, _btn: discord.ui.Button,
+                self,
+                inter: discord.Interaction,
+                _btn: discord.ui.Button,
             ):
                 self.outcome = "default"
                 for item in self.children:
@@ -6849,7 +7344,9 @@ async def _run_structured_flow_setup_step(
                 style=discord.ButtonStyle.success,
             )
             async def keep_current(
-                self, inter: discord.Interaction, _btn: discord.ui.Button,
+                self,
+                inter: discord.Interaction,
+                _btn: discord.ui.Button,
             ):
                 self.outcome = "keep"
                 for item in self.children:
@@ -6870,7 +7367,9 @@ async def _run_structured_flow_setup_step(
                 style=discord.ButtonStyle.secondary,
             )
             async def define(
-                self, inter: discord.Interaction, _btn: discord.ui.Button,
+                self,
+                inter: discord.Interaction,
+                _btn: discord.ui.Button,
             ):
                 self.modal = _PowerDataSourceModal()
                 await inter.response.send_modal(self.modal)
@@ -6893,22 +7392,22 @@ async def _run_structured_flow_setup_step(
         if has_custom:
             picker.remove_item(picker.use_default)
             picker.keep_current.label = (
-                f"✅ Keep current: {effective_tab} · {saved_letter} · "
-                f"matched by {effective_match}"[:80]
+                f"✅ Keep current: {effective_tab} · {saved_letter} · matched by {effective_match}"[
+                    :80
+                ]
             )
         else:
             picker.remove_item(picker.keep_current)
             picker.use_default.label = (
-                f"✅ Use defaults: {default_tab} · B · matched by "
-                f"{default_match_letter}"[:80]
+                f"✅ Use defaults: {default_tab} · B · matched by {default_match_letter}"[:80]
             )
 
         sync_blurb = (
             f"\n\n_Member Sync is enabled, so we're suggesting tab "
             f"`{default_tab}` matched by column `{default_match_letter}` "
             f"(the bot's Discord ID slot)._"
-            if _sync_enabled else
-            "\n\n_Member Sync isn't enabled yet — the default tab "
+            if _sync_enabled
+            else "\n\n_Member Sync isn't enabled yet — the default tab "
             "name is just a placeholder; pick whichever tab actually "
             "has your power data._"
         )
@@ -6935,9 +7434,7 @@ async def _run_structured_flow_setup_step(
         if getattr(picker, "cancelled", False):
             return None
         if picker.outcome is None:
-            await channel.send(
-                GENERIC_CMD_TIMEOUT.format(cmd=cmd_name)
-            )
+            await channel.send(GENERIC_CMD_TIMEOUT.format(cmd=cmd_name))
             return None
 
         if picker.outcome == "default":
@@ -6963,12 +7460,8 @@ async def _run_structured_flow_setup_step(
             # Store tab verbatim only when it differs from the Member
             # Roster tab; otherwise persist empty so the read path
             # falls through to the canonical default.
-            member_roster_tab = (
-                _roster_cfg_for_defaults.get("tab_name") or "Member Roster"
-            )
-            result["power_metric_tab"] = (
-                tab_val if tab_val and tab_val != member_roster_tab else ""
-            )
+            member_roster_tab = _roster_cfg_for_defaults.get("tab_name") or "Member Roster"
+            result["power_metric_tab"] = tab_val if tab_val and tab_val != member_roster_tab else ""
             result["power_metric_column"] = col_val
             result["power_match_column"] = match_val
 
@@ -6989,9 +7482,7 @@ async def _run_structured_flow_setup_step(
                 self.selected = None
                 self.cancelled = False
                 if current_mode == "pool":
-                    pool_label = (
-                        "Use Current: Pool" if has_saved else "Use Default: Pool"
-                    )
+                    pool_label = "Use Current: Pool" if has_saved else "Use Default: Pool"
                     pool_style = discord.ButtonStyle.success
                     paired_label = "Paired: primary↔sub pairs"
                     paired_style = discord.ButtonStyle.primary
@@ -7006,7 +7497,8 @@ async def _run_structured_flow_setup_step(
 
                 async def _pool(inter):
                     self.selected = "pool"
-                    for item in self.children: item.disabled = True
+                    for item in self.children:
+                        item.disabled = True
                     await wizard_registry.safe_edit_response(
                         inter, content="✅ Sub mode: Pool", view=self
                     )
@@ -7014,7 +7506,8 @@ async def _run_structured_flow_setup_step(
 
                 async def _paired(inter):
                     self.selected = "paired"
-                    for item in self.children: item.disabled = True
+                    for item in self.children:
+                        item.disabled = True
                     await wizard_registry.safe_edit_response(
                         inter, content="✅ Sub mode: Paired", view=self
                     )
@@ -7079,15 +7572,17 @@ async def _run_structured_flow_setup_step(
         # 12-hour example — matches the train / birthday / shiny
         # patterns already established in this file.
         from config import get_config
+
         guild_cfg = get_config(guild_id) if guild_id else None
-        tz_str = (
-            guild_cfg.timezone if guild_cfg and guild_cfg.timezone
-            else "America/New_York"
-        )
+        tz_str = guild_cfg.timezone if guild_cfg and guild_cfg.timezone else "America/New_York"
         tz_label = TIMEZONE_LABELS.get(tz_str, tz_str)
         sched_result = await _ask_signup_schedule(
-            channel, bot, user, cancel_event,
-            label=label, cmd_name=cmd_name,
+            channel,
+            bot,
+            user,
+            cancel_event,
+            label=label,
+            cmd_name=cmd_name,
             current_dow=result.get("poll_day_of_week", -1),
             current_time=result.get("signup_time", ""),
             tz_label=tz_label,
@@ -7096,15 +7591,16 @@ async def _run_structured_flow_setup_step(
         if sched_result is None:
             return None
         result["poll_day_of_week"] = sched_result["dow"]
-        result["signup_time"]      = sched_result["time"]
+        result["signup_time"] = sched_result["time"]
 
         # Sign-ups / rosters / attendance tab names — Premium only
         for tab_key, label_text in (
-            ("signups_tab",    "Sign-Ups"),
-            ("rosters_tab",    "Rosters"),
+            ("signups_tab", "Sign-Ups"),
+            ("rosters_tab", "Rosters"),
             ("attendance_tab", "Attendance"),
         ):
             from config import default_structured_tab
+
             tab_default = default_structured_tab(event_type, tab_key)
             picked = await ask_keep_or_change(
                 channel,
@@ -7158,9 +7654,7 @@ async def _run_structured_flow_setup_step(
             if getattr(gate, "cancelled", False):
                 return None
             if gate.value is None:
-                await channel.send(
-                    GENERIC_CMD_TIMEOUT.format(cmd=cmd_name)
-                )
+                await channel.send(GENERIC_CMD_TIMEOUT.format(cmd=cmd_name))
                 return None
             result["power_refresh_dm_enabled"] = bool(gate.value)
         else:
@@ -7195,7 +7689,7 @@ async def _run_structured_flow_setup_step(
         # common case for survey-using alliances.
         if result.get("power_refresh_dm_enabled"):
             saved_stale_days = int(result.get("power_refresh_stale_days") or 0)
-            saved_stale_on  = saved_stale_days > 0
+            saved_stale_on = saved_stale_days > 0
 
             prior_stale = prior_enabled and saved_stale_on
             if prior_stale:
@@ -7218,15 +7712,13 @@ async def _run_structured_flow_setup_step(
                 if getattr(gate, "cancelled", False):
                     return None
                 if gate.value is None:
-                    await channel.send(
-                        GENERIC_CMD_TIMEOUT.format(cmd=cmd_name)
-                    )
+                    await channel.send(GENERIC_CMD_TIMEOUT.format(cmd=cmd_name))
                     return None
                 stale_on = bool(gate.value)
             else:
                 stale_view = YesNoView()
                 blurb = (
-                    f"Currently **off**."
+                    "Currently **off**."
                     if prior_enabled and not saved_stale_on
                     else "Currently **off**."
                 )
@@ -7243,9 +7735,7 @@ async def _run_structured_flow_setup_step(
                 if getattr(stale_view, "cancelled", False):
                     return None
                 if stale_view.selected is None:
-                    await channel.send(
-                        GENERIC_CMD_TIMEOUT.format(cmd=cmd_name)
-                    )
+                    await channel.send(GENERIC_CMD_TIMEOUT.format(cmd=cmd_name))
                     return None
                 stale_on = bool(stale_view.selected)
 
@@ -7293,7 +7783,8 @@ async def _run_structured_flow_setup_step(
                         style=discord.ButtonStyle.success,
                     )
                     async def keep(
-                        self, inter: discord.Interaction,
+                        self,
+                        inter: discord.Interaction,
                         _btn: discord.ui.Button,
                     ):
                         self.outcome = "keep"
@@ -7311,7 +7802,8 @@ async def _run_structured_flow_setup_step(
                         style=discord.ButtonStyle.secondary,
                     )
                     async def define(
-                        self, inter: discord.Interaction,
+                        self,
+                        inter: discord.Interaction,
                         _btn: discord.ui.Button,
                     ):
                         self.modal = _StaleDaysModal()
@@ -7335,30 +7827,25 @@ async def _run_structured_flow_setup_step(
                         # promote Set days. (Mirrors the Power Data
                         # Source picker's first-time-vs-re-entry idiom.)
                         days_picker.remove_item(days_picker.keep)
-                        days_picker.define.label = (
-                            f"✏️ Set days (default: 7)"
-                        )
+                        days_picker.define.label = "✏️ Set days (default: 7)"
                     if attempts == 0:
                         await channel.send(
-                            f"**Stale-Power Threshold (💎 Premium)**\n"
-                            f"How many days old must a member's power value "
-                            f"be before the bot DMs them? Recommended: **7**. "
-                            f"Range: 1–365.",
+                            "**Stale-Power Threshold (💎 Premium)**\n"
+                            "How many days old must a member's power value "
+                            "be before the bot DMs them? Recommended: **7**. "
+                            "Range: 1–365.",
                             view=days_picker,
                         )
                     else:
                         await channel.send(
-                            f"⚠️ Couldn't parse that — try a whole number "
-                            f"between 1 and 365.",
+                            "⚠️ Couldn't parse that — try a whole number between 1 and 365.",
                             view=days_picker,
                         )
                     await wait_view_or_cancel(days_picker, cancel_event)
                     if getattr(days_picker, "cancelled", False):
                         return None
                     if days_picker.outcome is None:
-                        await channel.send(
-                            GENERIC_CMD_TIMEOUT.format(cmd=cmd_name)
-                        )
+                        await channel.send(GENERIC_CMD_TIMEOUT.format(cmd=cmd_name))
                         return None
 
                     if days_picker.outcome == "keep":
@@ -7390,10 +7877,9 @@ async def _run_structured_flow_setup_step(
                 # Powers tab, the survey writes a `Date Modified` column
                 # we can locate by header — skip the picker entirely.
                 from config import get_survey_config, get_spreadsheet
+
                 survey_cfg = get_survey_config(guild_id) if guild_id else {}
-                survey_tab = (
-                    survey_cfg.get("tab_squad_powers") or "Squad Powers"
-                )
+                survey_tab = survey_cfg.get("tab_squad_powers") or "Squad Powers"
                 # `power_metric_tab` is stored empty when it matches
                 # Member Roster (read path falls back to default).
                 # Treat the wizard-side `effective_tab` value the
@@ -7408,10 +7894,7 @@ async def _run_structured_flow_setup_step(
                     try:
                         sh = get_spreadsheet(guild_id)
                         ws = sh.worksheet(survey_tab) if sh else None
-                        header_row = (
-                            await asyncio.to_thread(ws.row_values, 1)
-                            if ws else []
-                        )
+                        header_row = await asyncio.to_thread(ws.row_values, 1) if ws else []
                     except Exception as e:
                         print(
                             f"[SETUP] survey Date-Modified header lookup "
@@ -7442,24 +7925,14 @@ async def _run_structured_flow_setup_step(
 
                 if not survey_shortcut_applied:
                     # Full picker — mirrors the Power Data Source idiom.
-                    saved_lu_tab = (
-                        result.get("power_last_updated_tab") or ""
-                    ).strip()
-                    saved_lu_col = (
-                        result.get("power_last_updated_column") or ""
-                    ).strip().upper()
-                    if not (
-                        len(saved_lu_col) == 1
-                        and "A" <= saved_lu_col <= "Z"
-                    ):
+                    saved_lu_tab = (result.get("power_last_updated_tab") or "").strip()
+                    saved_lu_col = (result.get("power_last_updated_column") or "").strip().upper()
+                    if not (len(saved_lu_col) == 1 and "A" <= saved_lu_col <= "Z"):
                         saved_lu_col = ""
                     saved_lu_match = (
-                        result.get("power_last_updated_match_column") or ""
-                    ).strip().upper()
-                    if not (
-                        len(saved_lu_match) == 1
-                        and "A" <= saved_lu_match <= "Z"
-                    ):
+                        (result.get("power_last_updated_match_column") or "").strip().upper()
+                    )
+                    if not (len(saved_lu_match) == 1 and "A" <= saved_lu_match <= "Z"):
                         saved_lu_match = ""
 
                     # Pre-fill defaults from the Power Data Source so
@@ -7468,10 +7941,7 @@ async def _run_structured_flow_setup_step(
                     # defaults to the power's match column (which
                     # itself defaults to Member Roster's discord_id_col).
                     pdef_tab = resolved_power_tab
-                    pdef_match = (
-                        result.get("power_match_column")
-                        or default_match_letter
-                    )
+                    pdef_match = result.get("power_match_column") or default_match_letter
 
                     lu_effective_tab = saved_lu_tab or pdef_tab
                     lu_effective_col = saved_lu_col or ""
@@ -7498,9 +7968,7 @@ async def _run_structured_flow_setup_step(
                             )
                             self.match_input = discord.ui.TextInput(
                                 label="Name-match column letter (A-Z, optional)",
-                                placeholder=(
-                                    "Leave blank to reuse Power match column"
-                                ),
+                                placeholder=("Leave blank to reuse Power match column"),
                                 default=lu_effective_match,
                                 required=False,
                                 max_length=2,
@@ -7510,7 +7978,8 @@ async def _run_structured_flow_setup_step(
                             self.add_item(self.match_input)
 
                         async def on_submit(
-                            self, inter: discord.Interaction,
+                            self,
+                            inter: discord.Interaction,
                         ):
                             self.confirmed = True
                             await inter.response.defer()
@@ -7527,7 +7996,8 @@ async def _run_structured_flow_setup_step(
                             style=discord.ButtonStyle.success,
                         )
                         async def keep(
-                            self, inter: discord.Interaction,
+                            self,
+                            inter: discord.Interaction,
                             _btn: discord.ui.Button,
                         ):
                             self.outcome = "keep"
@@ -7549,15 +8019,14 @@ async def _run_structured_flow_setup_step(
                             style=discord.ButtonStyle.secondary,
                         )
                         async def define(
-                            self, inter: discord.Interaction,
+                            self,
+                            inter: discord.Interaction,
                             _btn: discord.ui.Button,
                         ):
                             self.modal = _LastUpdatedSourceModal()
                             await inter.response.send_modal(self.modal)
                             await self.modal.wait()
-                            self.outcome = (
-                                "edit" if self.modal.confirmed else None
-                            )
+                            self.outcome = "edit" if self.modal.confirmed else None
                             for item in self.children:
                                 item.disabled = True
                             try:
@@ -7573,41 +8042,38 @@ async def _run_structured_flow_setup_step(
                         lu_picker.remove_item(lu_picker.keep)
                         lu_picker.define.label = (
                             f"✏️ Set source: {pdef_tab[:30]}…"
-                            if len(pdef_tab) > 30 else
-                            f"✏️ Set source: {pdef_tab}"
+                            if len(pdef_tab) > 30
+                            else f"✏️ Set source: {pdef_tab}"
                         )
                     else:
-                        lu_picker.keep.label = (
-                            f"✅ Keep: {lu_effective_tab} · "
-                            f"{lu_effective_col}"[:80]
-                        )
+                        lu_picker.keep.label = f"✅ Keep: {lu_effective_tab} · {lu_effective_col}"[
+                            :80
+                        ]
 
                     await channel.send(
-                        f"**Last-Updated Source (💎 Premium)**\n"
-                        f"Where on the Sheet does the bot find each "
-                        f"member's last-updated timestamp? We support "
-                        f"the bot's own Squad Power Survey, a manually-"
-                        f"maintained column, or an export from a "
-                        f"different bot.\n\n"
-                        f"• **Tab**: the Sheet tab with the timestamp.\n"
-                        f"• **Last-updated column**: the column with the "
-                        f"timestamp values (e.g. `N`).\n"
-                        f"• **Name-match column**: blank reuses the Power "
-                        f"Data Source's match column. Same row-matching "
-                        f"rules: Discord ID first, name fallback.\n\n"
-                        f"_Date formats are auto-detected. MM/DD/YYYY, "
-                        f"DD/MM/YYYY, ISO 8601, and `May 5, 2026`-style "
-                        f"long-month all work. Rows whose timestamp "
-                        f"doesn't parse are silently skipped._",
+                        "**Last-Updated Source (💎 Premium)**\n"
+                        "Where on the Sheet does the bot find each "
+                        "member's last-updated timestamp? We support "
+                        "the bot's own Squad Power Survey, a manually-"
+                        "maintained column, or an export from a "
+                        "different bot.\n\n"
+                        "• **Tab**: the Sheet tab with the timestamp.\n"
+                        "• **Last-updated column**: the column with the "
+                        "timestamp values (e.g. `N`).\n"
+                        "• **Name-match column**: blank reuses the Power "
+                        "Data Source's match column. Same row-matching "
+                        "rules: Discord ID first, name fallback.\n\n"
+                        "_Date formats are auto-detected. MM/DD/YYYY, "
+                        "DD/MM/YYYY, ISO 8601, and `May 5, 2026`-style "
+                        "long-month all work. Rows whose timestamp "
+                        "doesn't parse are silently skipped._",
                         view=lu_picker,
                     )
                     await wait_view_or_cancel(lu_picker, cancel_event)
                     if getattr(lu_picker, "cancelled", False):
                         return None
                     if lu_picker.outcome is None:
-                        await channel.send(
-                            GENERIC_CMD_TIMEOUT.format(cmd=cmd_name)
-                        )
+                        await channel.send(GENERIC_CMD_TIMEOUT.format(cmd=cmd_name))
                         return None
 
                     if lu_picker.outcome == "keep":
@@ -7617,15 +8083,10 @@ async def _run_structured_flow_setup_step(
                         assert modal is not None
                         tab_val = (modal.tab_input.value or "").strip()
                         col_val = (modal.col_input.value or "").strip().upper()
-                        match_val = (
-                            modal.match_input.value or ""
-                        ).strip().upper()
+                        match_val = (modal.match_input.value or "").strip().upper()
                         if not (len(col_val) == 1 and "A" <= col_val <= "Z"):
                             col_val = ""
-                        if not (
-                            len(match_val) == 1
-                            and "A" <= match_val <= "Z"
-                        ):
+                        if not (len(match_val) == 1 and "A" <= match_val <= "Z"):
                             match_val = ""  # blank → reuse power match
                         result["power_last_updated_tab"] = tab_val
                         result["power_last_updated_column"] = col_val
@@ -7660,8 +8121,8 @@ async def _run_structured_flow_setup_step(
 
         saved_dm_templates = (
             get_roster_dm_templates(guild_id, event_type)
-            if guild_id else
-            {"starter": "", "paired_sub": "", "pool_sub": ""}
+            if guild_id
+            else {"starter": "", "paired_sub": "", "pool_sub": ""}
         )
 
         dm_placeholder_info = (
@@ -7677,7 +8138,8 @@ async def _run_structured_flow_setup_step(
         )
 
         async def _get_dm_template(
-            role_label: str, default_template: str,
+            role_label: str,
+            default_template: str,
             saved_template: str,
         ) -> str | None:
             """Walk one DM template through the Use default / Keep
@@ -7685,10 +8147,7 @@ async def _run_structured_flow_setup_step(
             empty string for "use default" (so the DB stays clean
             when the bot ships an updated default later), or None
             on cancel / timeout."""
-            saved_is_custom = (
-                bool(saved_template)
-                and saved_template != default_template
-            )
+            saved_is_custom = bool(saved_template) and saved_template != default_template
 
             class _DmTemplateChoiceView(discord.ui.View):
                 def __init__(self):
@@ -7700,7 +8159,8 @@ async def _run_structured_flow_setup_step(
                     style=discord.ButtonStyle.success,
                 )
                 async def keep(
-                    self, inter: discord.Interaction,
+                    self,
+                    inter: discord.Interaction,
                     _btn: discord.ui.Button,
                 ):
                     self.outcome = "keep"
@@ -7708,10 +8168,7 @@ async def _run_structured_flow_setup_step(
                         item.disabled = True
                     await wizard_registry.safe_edit_response(
                         inter,
-                        content=(
-                            f"✅ Keeping your saved {role_label} DM "
-                            f"template."
-                        ),
+                        content=(f"✅ Keeping your saved {role_label} DM template."),
                         view=self,
                     )
                     self.stop()
@@ -7721,20 +8178,22 @@ async def _run_structured_flow_setup_step(
                     style=discord.ButtonStyle.secondary,
                 )
                 async def use_def(
-                    self, inter: discord.Interaction,
+                    self,
+                    inter: discord.Interaction,
                     _btn: discord.ui.Button,
                 ):
                     self.outcome = "default"
                     for item in self.children:
                         item.disabled = True
                     msg = (
-                        f"✅ Reverted to default {role_label} DM "
-                        f"template."
-                        if saved_is_custom else
-                        f"✅ Using default {role_label} DM template."
+                        f"✅ Reverted to default {role_label} DM template."
+                        if saved_is_custom
+                        else f"✅ Using default {role_label} DM template."
                     )
                     await wizard_registry.safe_edit_response(
-                        inter, content=msg, view=self,
+                        inter,
+                        content=msg,
+                        view=self,
                     )
                     self.stop()
 
@@ -7743,14 +8202,16 @@ async def _run_structured_flow_setup_step(
                     style=discord.ButtonStyle.secondary,
                 )
                 async def edit(
-                    self, inter: discord.Interaction,
+                    self,
+                    inter: discord.Interaction,
                     _btn: discord.ui.Button,
                 ):
                     self.outcome = "edit"
                     for item in self.children:
                         item.disabled = True
                     await wizard_registry.safe_edit_response(
-                        inter, view=self,
+                        inter,
+                        view=self,
                     )
                     self.stop()
 
@@ -7763,15 +8224,14 @@ async def _run_structured_flow_setup_step(
                 choice_view.use_def.style = discord.ButtonStyle.success
 
             custom_block = (
-                f"\n\nHere is your saved custom template:\n```\n"
-                f"{saved_template}\n```"
-                if saved_is_custom else ""
+                f"\n\nHere is your saved custom template:\n```\n{saved_template}\n```"
+                if saved_is_custom
+                else ""
             )
             question = (
-                "Would you like to keep your custom template, revert "
-                "to the default, or edit it?"
-                if saved_is_custom else
-                "Would you like to use this default or write your own?"
+                "Would you like to keep your custom template, revert to the default, or edit it?"
+                if saved_is_custom
+                else "Would you like to use this default or write your own?"
             )
             await channel.send(
                 f"**Roster DM Template: {role_label}**\n"
@@ -7787,9 +8247,7 @@ async def _run_structured_flow_setup_step(
             if getattr(choice_view, "cancelled", False):
                 return None
             if choice_view.outcome is None:
-                await channel.send(
-                    GENERIC_CMD_TIMEOUT.format(cmd=cmd_name)
-                )
+                await channel.send(GENERIC_CMD_TIMEOUT.format(cmd=cmd_name))
                 return None
             if choice_view.outcome == "keep":
                 return saved_template
@@ -7800,9 +8258,7 @@ async def _run_structured_flow_setup_step(
 
             # Edit branch — pasted as a chat message so multi-line
             # templates work without fighting a 200-char modal.
-            reference_label = (
-                "current custom" if saved_is_custom else "default"
-            )
+            reference_label = "current custom" if saved_is_custom else "default"
             await channel.send(
                 f"Paste your custom {role_label} DM template. "
                 f"You can copy the {reference_label} above and modify "
@@ -7811,35 +8267,34 @@ async def _run_structured_flow_setup_step(
                 f"*This form will time out in 5 minutes. "
                 f"You can run `/{cmd_name}` again if it times out.*"
             )
+
             def check(m):
                 return m.author == user and m.channel == channel
 
             try:
                 reply = await bot.wait_for(
-                    "message", check=check, timeout=300,
+                    "message",
+                    check=check,
+                    timeout=300,
                 )
-                fallback = (
-                    saved_template if saved_is_custom
-                    else default_template
-                )
+                fallback = saved_template if saved_is_custom else default_template
                 return reply.content.strip() or fallback
             except asyncio.TimeoutError:
-                await channel.send(
-                    GENERIC_CMD_TIMEOUT.format(cmd=cmd_name)
-                )
+                await channel.send(GENERIC_CMD_TIMEOUT.format(cmd=cmd_name))
                 return None
 
         await channel.send(
-            f"📨 **Roster DM Templates** _(3 templates, one per role)_"
-            f"\nNext we'll set up the three DMs the bot sends after "
-            f"Approve & Post when leadership clicks 📨 DM rostered "
-            f"members. Each role (Starter, Paired Sub, Pool Sub) gets "
-            f"its own message. You can use the defaults or customise "
-            f"each one."
+            "📨 **Roster DM Templates** _(3 templates, one per role)_"
+            "\nNext we'll set up the three DMs the bot sends after "
+            "Approve & Post when leadership clicks 📨 DM rostered "
+            "members. Each role (Starter, Paired Sub, Pool Sub) gets "
+            "its own message. You can use the defaults or customise "
+            "each one."
         )
 
         starter_template = await _get_dm_template(
-            "Starter", DEFAULT_ROSTER_DM_STARTER,
+            "Starter",
+            DEFAULT_ROSTER_DM_STARTER,
             saved_dm_templates.get("starter", ""),
         )
         if starter_template is None:
@@ -7847,7 +8302,8 @@ async def _run_structured_flow_setup_step(
         result["roster_dm_starter_template"] = starter_template
 
         paired_template = await _get_dm_template(
-            "Paired Sub", DEFAULT_ROSTER_DM_PAIRED_SUB,
+            "Paired Sub",
+            DEFAULT_ROSTER_DM_PAIRED_SUB,
             saved_dm_templates.get("paired_sub", ""),
         )
         if paired_template is None:
@@ -7855,7 +8311,8 @@ async def _run_structured_flow_setup_step(
         result["roster_dm_paired_sub_template"] = paired_template
 
         pool_template = await _get_dm_template(
-            "Pool Sub", DEFAULT_ROSTER_DM_POOL_SUB,
+            "Pool Sub",
+            DEFAULT_ROSTER_DM_POOL_SUB,
             saved_dm_templates.get("pool_sub", ""),
         )
         if pool_template is None:
@@ -7922,14 +8379,19 @@ async def _run_structured_flow_setup_step(
     # surface entirely for a guild that genuinely has no presets).
     try:
         import storm_strategy as ss
+
         existing_presets = await asyncio.to_thread(
-            ss.list_presets, guild_id, event_type,
+            ss.list_presets,
+            guild_id,
+            event_type,
         )
     except Exception:
         existing_presets = []
     if not existing_presets:
         preset_offer = _InlineCreatePresetOffer(
-            owner_id=user.id, event_type=event_type, parent=parent,
+            owner_id=user.id,
+            event_type=event_type,
+            parent=parent,
         )
         preset_offer.message = await channel.send(
             f"Want to create your first {label} preset now? You can also "
@@ -7982,14 +8444,19 @@ async def _run_structured_flow_setup_step(
 
     try:
         import storm_member_rules as smr
+
         existing_rules = await asyncio.to_thread(
-            smr.list_rules, guild_id, event_type,
+            smr.list_rules,
+            guild_id,
+            event_type,
         )
     except Exception:
         existing_rules = []
     if not existing_rules:
         rule_offer = _InlineCreateMemberRuleOffer(
-            owner_id=user.id, event_type=event_type, parent=parent,
+            owner_id=user.id,
+            event_type=event_type,
+            parent=parent,
         )
         # Per Rule A / #166 both DS and CS support per-member rules.
         # Pointer text is identical for both event types.
@@ -8031,8 +8498,14 @@ def _col_index_to_letter(idx: int) -> str:
 
 
 async def _build_participation_question(
-    channel, bot, user, cancel_event, *,
-    cmd_name: str, is_premium_flag: bool, existing: dict | None,
+    channel,
+    bot,
+    user,
+    cancel_event,
+    *,
+    cmd_name: str,
+    is_premium_flag: bool,
+    existing: dict | None,
     all_questions: list[dict] | None = None,
 ) -> dict | None:
     """Add or edit a single participation question. Mirrors the survey
@@ -8049,8 +8522,8 @@ async def _build_participation_question(
     # Label
     label_extra = f"\n*Existing label:* `{existing.get('label', '')}`" if existing else ""
     await channel.send(
-        f"**Question: Label**\n"
-        f"What's the label for this question? (e.g. `Sitting Out`, `Vote Count`)" + label_extra
+        "**Question: Label**\n"
+        "What's the label for this question? (e.g. `Sitting Out`, `Vote Count`)" + label_extra
     )
     try:
         reply = await bot.wait_for("message", check=check, timeout=180)
@@ -8063,8 +8536,11 @@ async def _build_participation_question(
         return None
     q_key = (
         q_label.lower()
-        .replace(" ", "_").replace("-", "_").replace("/", "_")
-        .replace("(", "").replace(")", "")
+        .replace(" ", "_")
+        .replace("-", "_")
+        .replace("/", "_")
+        .replace("(", "")
+        .replace(")", "")
     )
 
     # Type
@@ -8080,6 +8556,7 @@ async def _build_participation_question(
             super().__init__(timeout=120)
             self.selected: str | None = None
             sel = discord.ui.Select(placeholder="Pick the answer type…", options=type_options)
+
             async def _cb(inter):
                 self.selected = sel.values[0]
                 sel.disabled = True
@@ -8089,6 +8566,7 @@ async def _build_participation_question(
                     view=self,
                 )
                 self.stop()
+
             sel.callback = _cb
             self.add_item(sel)
 
@@ -8108,8 +8586,7 @@ async def _build_participation_question(
     # Type-specific extras
     if q_type == "numeric":
         await channel.send(
-            "**Optional bounds**\nReply with `min,max` (e.g. `0,500`) or "
-            "type `none` for no bounds."
+            "**Optional bounds**\nReply with `min,max` (e.g. `0,500`) or type `none` for no bounds."
         )
         try:
             reply = await bot.wait_for("message", check=check, timeout=120)
@@ -8161,6 +8638,7 @@ async def _build_participation_question(
         # Optional auto-prefill source (Premium only). Free tier always
         # captures manually.
         if is_premium_flag:
+
             class _PrefillView(discord.ui.View):
                 def __init__(self):
                     super().__init__(timeout=120)
@@ -8226,8 +8704,7 @@ async def _build_participation_question(
 
         # Source question picker — must be a roster_multi_select.
         source_candidates = [
-            other for other in (all_questions or [])
-            if other.get("type") == "roster_multi_select"
+            other for other in (all_questions or []) if other.get("type") == "roster_multi_select"
         ]
         if not source_candidates:
             await channel.send(
@@ -8264,6 +8741,7 @@ async def _build_participation_question(
                         view=self,
                     )
                     self.stop()
+
                 sel.callback = _cb
                 self.add_item(sel)
 
@@ -8285,7 +8763,10 @@ async def _build_participation_question(
         lookback = 4
         while attempts > 0:
             raw = await wait_for_msg_simple(
-                channel, bot, user, cancel_event,
+                channel,
+                bot,
+                user,
+                cancel_event,
                 "**Lookback window** *(💎 Premium)*\n"
                 "How many past captured events should the count cover? "
                 "(e.g. `4` for 'past 4 events'). Default is 4.",
@@ -8300,9 +8781,7 @@ async def _build_participation_question(
                 break
             except ValueError:
                 attempts -= 1
-                await channel.send(
-                    f"⚠️ `{raw}` isn't a number. Please re-enter."
-                )
+                await channel.send(f"⚠️ `{raw}` isn't a number. Please re-enter.")
         q["lookback_events"] = lookback
 
         # Show-during-log toggle.
@@ -8321,7 +8800,9 @@ async def _build_participation_question(
                 for c in self.children:
                     c.disabled = True
                 await wizard_registry.safe_edit_response(
-                    inter, content="✅ Show during the log: **Yes**", view=self,
+                    inter,
+                    content="✅ Show during the log: **Yes**",
+                    view=self,
                 )
                 self.stop()
 
@@ -8334,7 +8815,9 @@ async def _build_participation_question(
                 for c in self.children:
                     c.disabled = True
                 await wizard_registry.safe_edit_response(
-                    inter, content="✅ Show during the log: **No**", view=self,
+                    inter,
+                    content="✅ Show during the log: **No**",
+                    view=self,
                 )
                 self.stop()
 
@@ -8356,8 +8839,13 @@ async def _build_participation_question(
 
 
 async def wait_for_msg_simple(
-    channel, bot, user, cancel_event, prompt: str,
-    *, timeout: int = 120,
+    channel,
+    bot,
+    user,
+    cancel_event,
+    prompt: str,
+    *,
+    timeout: int = 120,
 ) -> str | None:
     """Minimal message-wait helper for inline use inside
     `_build_participation_question`. Returns the user's reply text
@@ -8380,20 +8868,23 @@ async def run_event_setup(interaction: discord.Interaction, bot):
     draft channel, announcement channel, draft time, and 5-minute warning.
     Individual events (add/edit/delete) live on the /events hub (#249)."""
     import wizard_registry
+
     guild_id = interaction.guild_id
-    channel  = interaction.channel
-    user     = interaction.user
+    channel = interaction.channel
+    user = interaction.user
     cancel_event = wizard_registry.register(user.id)
 
     from config import get_config, get_or_create_config, update_config_field
 
     guild_cfg = get_config(guild_id) or get_or_create_config(guild_id)
-    timezone  = guild_cfg.timezone if guild_cfg.timezone else "America/New_York"
+    timezone = guild_cfg.timezone if guild_cfg.timezone else "America/New_York"
 
-    draft_channel_id    = guild_cfg.event_draft_channel_id or 0
+    draft_channel_id = guild_cfg.event_draft_channel_id or 0
     announce_channel_id = guild_cfg.event_announce_channel_id or 0
-    draft_time          = guild_cfg.event_draft_time or "12:00"
-    five_min_warning    = guild_cfg.event_five_min_warning if guild_cfg.event_five_min_warning is not None else 1
+    draft_time = guild_cfg.event_draft_time or "12:00"
+    five_min_warning = (
+        guild_cfg.event_five_min_warning if guild_cfg.event_five_min_warning is not None else 1
+    )
 
     # Post-#249: this wizard owns only the four shared event settings
     # (channels, draft time, 5-minute warning). Event creation, editing,
@@ -8404,13 +8895,15 @@ async def run_event_setup(interaction: discord.Interaction, bot):
         "⚙️ **Event Setup**\n"
         "Configure your alliance event channels and draft cadence. "
         "All events share these four settings. To add, edit, or remove "
-        f"individual events, run `/events` after this wizard completes."
+        "individual events, run `/events` after this wizard completes."
     )
 
     # ── Steps 1-4: Channel/time settings ──────────────────────────────────────
-    is_premium_flag  = await premium.is_premium(guild_id, interaction=interaction, bot=interaction.client)
+    is_premium_flag = await premium.is_premium(
+        guild_id, interaction=interaction, bot=interaction.client
+    )
     current_draft_id = guild_cfg.event_draft_channel_id or 0
-    draft_ch_view    = ChannelSelectStep(
+    draft_ch_view = ChannelSelectStep(
         "Select the draft channel...",
         suggested_name="event-drafts",
         include_threads=is_premium_flag,
@@ -8418,9 +8911,7 @@ async def run_event_setup(interaction: discord.Interaction, bot):
         current_id=current_draft_id,
     )
     if draft_ch_view.is_current_stale:
-        await channel.send(
-            PREV_CHANNEL_GONE.format(channel_label="draft")
-        )
+        await channel.send(PREV_CHANNEL_GONE.format(channel_label="draft"))
     await channel.send(
         "**Step 1 of 4 — Draft Channel**\n"
         "Which channel should the bot post event announcement drafts for leadership to review?\n"
@@ -8436,7 +8927,7 @@ async def run_event_setup(interaction: discord.Interaction, bot):
     draft_channel_id = draft_ch_view.selected_channel.id
 
     current_ann_id = guild_cfg.event_announce_channel_id or 0
-    ann_ch_view    = ChannelSelectStep(
+    ann_ch_view = ChannelSelectStep(
         "Select the announcement channel...",
         suggested_name="announcements",
         include_threads=is_premium_flag,
@@ -8444,9 +8935,7 @@ async def run_event_setup(interaction: discord.Interaction, bot):
         current_id=current_ann_id,
     )
     if ann_ch_view.is_current_stale:
-        await channel.send(
-            PREV_CHANNEL_GONE.format(channel_label="announcement")
-        )
+        await channel.send(PREV_CHANNEL_GONE.format(channel_label="announcement"))
     await channel.send(
         "**Step 2 of 4 — Announcement Channel**\n"
         "Which channel should approved announcements be posted to?\n"
@@ -8461,7 +8950,7 @@ async def run_event_setup(interaction: discord.Interaction, bot):
         return
     announce_channel_id = ann_ch_view.selected_channel.id
 
-    tz_label       = TIMEZONE_LABELS.get(timezone, timezone)
+    tz_label = TIMEZONE_LABELS.get(timezone, timezone)
     # `draft_time` is stored in 24h format ("12:00"); show it as-is in the
     # default button label, but accept either format from user input.
     # Re-prompt up to 3 times on unparseable input before bailing out.
@@ -8485,15 +8974,20 @@ async def run_event_setup(interaction: discord.Interaction, bot):
         if parsed_draft:
             draft_time = parsed_draft
             break
-        if (len(draft_time_raw) == 5 and draft_time_raw[2] == ":"
-                and draft_time_raw.replace(":", "").isdigit()):
-            draft_time = draft_time_raw   # already 24h
+        if (
+            len(draft_time_raw) == 5
+            and draft_time_raw[2] == ":"
+            and draft_time_raw.replace(":", "").isdigit()
+        ):
+            draft_time = draft_time_raw  # already 24h
             break
         attempts_left -= 1
         if attempts_left <= 0:
-            await channel.send(TIME_PARSE_GIVE_UP.format(
-                recovery=f"`/setup` → {HUB_BTN_EVENTS}",
-            ))
+            await channel.send(
+                TIME_PARSE_GIVE_UP.format(
+                    recovery=f"`/setup` → {HUB_BTN_EVENTS}",
+                )
+            )
             return
         await channel.send(TIME_PARSE_RETRY.format(raw=draft_time_raw))
 
@@ -8512,28 +9006,32 @@ async def run_event_setup(interaction: discord.Interaction, bot):
         return
     five_min_warning = 1 if warn_view.selected else 0
 
-    update_config_field(guild_id, "event_draft_channel_id",    draft_channel_id)
+    update_config_field(guild_id, "event_draft_channel_id", draft_channel_id)
     update_config_field(guild_id, "event_announce_channel_id", announce_channel_id)
-    update_config_field(guild_id, "event_draft_time",          draft_time)
-    update_config_field(guild_id, "event_five_min_warning",    five_min_warning)
+    update_config_field(guild_id, "event_draft_time", draft_time)
+    update_config_field(guild_id, "event_five_min_warning", five_min_warning)
 
     # ── Summary ────────────────────────────────────────────────────────────────
     embed = discord.Embed(title="✅ Event Settings Saved", color=discord.Color.green())
-    embed.add_field(name="Draft Channel",        value=f"<#{draft_channel_id}>",    inline=False)
+    embed.add_field(name="Draft Channel", value=f"<#{draft_channel_id}>", inline=False)
     embed.add_field(name="Announcement Channel", value=f"<#{announce_channel_id}>", inline=False)
-    embed.add_field(name="Draft Time",           value=_format_time_with_tz(draft_time, timezone), inline=False)
-    embed.add_field(name="5-min Warning",        value="Yes" if five_min_warning else "No", inline=False)
+    embed.add_field(
+        name="Draft Time", value=_format_time_with_tz(draft_time, timezone), inline=False
+    )
+    embed.add_field(name="5-min Warning", value="Yes" if five_min_warning else "No", inline=False)
     embed.set_footer(text="Run /events to add, edit, or remove individual events.")
     await channel.send(embed=embed)
     wizard_registry.unregister(user.id, cancel_event)
     print(f"[SETUP] Event settings saved for guild {guild_id}")
 
+
 async def run_birthday_setup(interaction: discord.Interaction, bot):
     """Walk an admin through configuring birthday tracking."""
     import wizard_registry
+
     guild_id = interaction.guild_id
-    channel  = interaction.channel
-    user     = interaction.user
+    channel = interaction.channel
+    user = interaction.user
     cancel_event = wizard_registry.register(user.id)
 
     def check(m):
@@ -8554,36 +9052,51 @@ async def run_birthday_setup(interaction: discord.Interaction, bot):
         return reply.content.strip()[:max_chars]
 
     from config import (
-        get_birthday_config, has_birthday_config, clear_birthday_config,
+        get_birthday_config,
+        has_birthday_config,
+        clear_birthday_config,
         get_config,
     )
+
     current = get_birthday_config(guild_id)
     birthdays_already_configured = has_birthday_config(guild_id)
     guild_cfg = get_config(guild_id)
-    guild_tz  = guild_cfg.timezone if guild_cfg else "America/New_York"
+    guild_tz = guild_cfg.timezone if guild_cfg else "America/New_York"
 
     # ── If already enabled, show summary and offer edit or cancel ─────────────
     if birthdays_already_configured and current.get("enabled"):
         rc = current.get("reminder_channel_id", 0) or 0
         fields = [
-            ("Sheet Tab",          current.get("tab_name") or "*not set*"),
-            ("Name Column",        _col_index_to_letter(current.get("name_col", 0))),
-            ("Birthday Column",    _col_index_to_letter(current.get("birthday_col", 0))),
-            ("Train Integration",  "✅ Enabled" if current.get("train_integration") else "❌ Disabled"),
+            ("Sheet Tab", current.get("tab_name") or "*not set*"),
+            ("Name Column", _col_index_to_letter(current.get("name_col", 0))),
+            ("Birthday Column", _col_index_to_letter(current.get("birthday_col", 0))),
+            (
+                "Train Integration",
+                "✅ Enabled" if current.get("train_integration") else "❌ Disabled",
+            ),
         ]
         if current.get("train_integration"):
-            fields.append((
-                "Placement",
-                "Flexible (±1 day)" if current.get("flexible_placement") else "Birthday only",
-            ))
+            fields.append(
+                (
+                    "Placement",
+                    "Flexible (±1 day)" if current.get("flexible_placement") else "Birthday only",
+                )
+            )
             fields.append(("Lookahead", f"{current.get('lookahead_days', 14)} days"))
-        fields.append((
-            "Reminders",
-            "✅ Enabled" if current.get("reminders_enabled") else "❌ Disabled",
-        ))
+        fields.append(
+            (
+                "Reminders",
+                "✅ Enabled" if current.get("reminders_enabled") else "❌ Disabled",
+            )
+        )
         if current.get("reminders_enabled"):
             fields.append(("Reminder Channel", f"<#{rc}>" if rc else "*not set*"))
-            fields.append(("Reminder Time",    _format_time_with_tz(current.get("reminder_time"), guild_tz) or "*not set*"))
+            fields.append(
+                (
+                    "Reminder Time",
+                    _format_time_with_tz(current.get("reminder_time"), guild_tz) or "*not set*",
+                )
+            )
         proceed = await ask_proceed_with_existing_config(
             channel,
             title="🎂 Current Birthday Setup",
@@ -8596,8 +9109,7 @@ async def run_birthday_setup(interaction: discord.Interaction, bot):
             return
 
     await channel.send(
-        "⚙️ **Birthday Tracking Setup**\n"
-        "Configure how the bot tracks member birthdays."
+        "⚙️ **Birthday Tracking Setup**\nConfigure how the bot tracks member birthdays."
     )
 
     # ── Step 1: Enable? ───────────────────────────────────────────────────────
@@ -8615,14 +9127,19 @@ async def run_birthday_setup(interaction: discord.Interaction, bot):
         return
     if not enabled_view.selected:
         from config import save_birthday_config
+
         # `last_train_population_date` is operational state owned by the
         # train-auto-pop scheduler (see #89) — not a `save_birthday_config`
         # parameter. Strip it from the splat so the disable path still
         # works when the column exists on the loaded row.
         save_birthday_config(
-            guild_id, enabled=0,
-            **{k: v for k, v in current.items()
-               if k not in ("guild_id", "enabled", "last_train_population_date")}
+            guild_id,
+            enabled=0,
+            **{
+                k: v
+                for k, v in current.items()
+                if k not in ("guild_id", "enabled", "last_train_population_date")
+            },
         )
         await ask_disable_with_clear(
             channel,
@@ -8658,8 +9175,7 @@ async def run_birthday_setup(interaction: discord.Interaction, bot):
     saved_name_col = current.get("name_col")
     name_col_raw = await ask_keep_or_change(
         channel,
-        "**Step 3 of 9 — Name Column**\n"
-        "Which column contains the member's name?",
+        "**Step 3 of 9 — Name Column**\nWhich column contains the member's name?",
         default="A",
         current=(
             _col_index_to_letter(saved_name_col)
@@ -8675,10 +9191,13 @@ async def run_birthday_setup(interaction: discord.Interaction, bot):
         return
     name_col = _col_letter_to_index(name_col_raw)
     if name_col < 0:
-        await channel.send(INPUT_INVALID.format(
-            type="single column letter", example="A",
-            recovery=f"`/setup` → {HUB_BTN_BIRTHDAYS}",
-        ))
+        await channel.send(
+            INPUT_INVALID.format(
+                type="single column letter",
+                example="A",
+                recovery=f"`/setup` → {HUB_BTN_BIRTHDAYS}",
+            )
+        )
         return
 
     # ── Step 4: Birthday column ────────────────────────────────────────────────
@@ -8706,10 +9225,13 @@ async def run_birthday_setup(interaction: discord.Interaction, bot):
         return
     birthday_col = _col_letter_to_index(bday_col_raw)
     if birthday_col < 0:
-        await channel.send(INPUT_INVALID.format(
-            type="single column letter", example="B",
-            recovery=f"`/setup` → {HUB_BTN_BIRTHDAYS}",
-        ))
+        await channel.send(
+            INPUT_INVALID.format(
+                type="single column letter",
+                example="B",
+                recovery=f"`/setup` → {HUB_BTN_BIRTHDAYS}",
+            )
+        )
         return
 
     # ── Step 5: Train integration ─────────────────────────────────────────────
@@ -8728,7 +9250,7 @@ async def run_birthday_setup(interaction: discord.Interaction, bot):
     train_integration = 1 if train_view.selected else 0
 
     flexible_placement = 0
-    lookahead_days     = 14
+    lookahead_days = 14
 
     if not train_integration:
         await channel.send(
@@ -8752,15 +9274,25 @@ async def run_birthday_setup(interaction: discord.Interaction, bot):
             @discord.ui.button(label="🎂 Birthday only", style=discord.ButtonStyle.primary)
             async def birthday_only(self, inter: discord.Interaction, button: discord.ui.Button):
                 self.selected = 0
-                for item in self.children: item.disabled = True
-                await wizard_registry.safe_edit_response(inter, content="✅ Placement: **Birthday only**", view=self)
+                for item in self.children:
+                    item.disabled = True
+                await wizard_registry.safe_edit_response(
+                    inter, content="✅ Placement: **Birthday only**", view=self
+                )
                 self.stop()
 
-            @discord.ui.button(label="📅 Assign nearby if taken", style=discord.ButtonStyle.secondary)
+            @discord.ui.button(
+                label="📅 Assign nearby if taken", style=discord.ButtonStyle.secondary
+            )
             async def flexible(self, inter: discord.Interaction, button: discord.ui.Button):
                 self.selected = 1
-                for item in self.children: item.disabled = True
-                await wizard_registry.safe_edit_response(inter, content="✅ Placement: **Assign 1 day before or after if birthday is taken**", view=self)
+                for item in self.children:
+                    item.disabled = True
+                await wizard_registry.safe_edit_response(
+                    inter,
+                    content="✅ Placement: **Assign 1 day before or after if birthday is taken**",
+                    view=self,
+                )
                 self.stop()
 
         placement_view = PlacementView()
@@ -8800,10 +9332,13 @@ async def run_birthday_setup(interaction: discord.Interaction, bot):
             if lookahead_days < 1:
                 raise ValueError
         except ValueError:
-            await channel.send(INPUT_INVALID.format(
-                type="number", example="14",
-                recovery=f"`/setup` → {HUB_BTN_BIRTHDAYS}",
-            ))
+            await channel.send(
+                INPUT_INVALID.format(
+                    type="number",
+                    example="14",
+                    recovery=f"`/setup` → {HUB_BTN_BIRTHDAYS}",
+                )
+            )
             return
 
     # ── Step 8: Birthday reminders ─────────────────────────────────────────────
@@ -8811,7 +9346,7 @@ async def run_birthday_setup(interaction: discord.Interaction, bot):
     await channel.send(
         "**Step 8 of 9 — Birthday Reminders**\n"
         "Should the bot post a message in Discord on a member's birthday?\n"
-        f"*(It will post: \"🎂 Today is **[name]**'s birthday!\")*",
+        '*(It will post: "🎂 Today is **[name]**\'s birthday!")*',
         view=remind_view,
     )
     await wait_view_or_cancel(remind_view, cancel_event)
@@ -8820,9 +9355,9 @@ async def run_birthday_setup(interaction: discord.Interaction, bot):
     if remind_view.selected is None:
         await channel.send(WIZARD_TIMEOUT.format(wizard=HUB_BTN_BIRTHDAYS))
         return
-    reminders_enabled    = 1 if remind_view.selected else 0
-    reminder_channel_id  = 0
-    reminder_time        = "08:00"
+    reminders_enabled = 1 if remind_view.selected else 0
+    reminder_channel_id = 0
+    reminder_time = "08:00"
     if not reminders_enabled:
         await channel.send(
             "ℹ️ *Skipping Steps 8a–8b (reminder channel and time) — birthday reminders are off.*"
@@ -8830,7 +9365,9 @@ async def run_birthday_setup(interaction: discord.Interaction, bot):
 
     if reminders_enabled:
         # ── Step 8a: Reminder channel ──────────────────────────────────────────
-        is_premium_flag = await premium.is_premium(guild_id, interaction=interaction, bot=interaction.client)
+        is_premium_flag = await premium.is_premium(
+            guild_id, interaction=interaction, bot=interaction.client
+        )
         saved_remind_ch = current.get("reminder_channel_id", 0) or 0
         remind_ch_view = ChannelSelectStep(
             "Select the birthday announcement channel...",
@@ -8840,9 +9377,7 @@ async def run_birthday_setup(interaction: discord.Interaction, bot):
             current_id=saved_remind_ch,
         )
         if remind_ch_view.is_current_stale:
-            await channel.send(
-                PREV_CHANNEL_GONE.format(channel_label="birthday")
-            )
+            await channel.send(PREV_CHANNEL_GONE.format(channel_label="birthday"))
         await channel.send(
             "**Step 8a of 9 — Birthday Announcement Channel**\n"
             "Which channel should birthday announcements be posted in?",
@@ -8860,8 +9395,11 @@ async def run_birthday_setup(interaction: discord.Interaction, bot):
         # Re-prompt up to 3 times on unparseable input rather than silently
         # falling back to a default.
         from config import get_config
+
         guild_cfg = get_config(guild_id)
-        tz_label  = TIMEZONE_LABELS.get(guild_cfg.timezone if guild_cfg else "America/New_York", "your timezone")
+        tz_label = TIMEZONE_LABELS.get(
+            guild_cfg.timezone if guild_cfg else "America/New_York", "your timezone"
+        )
         attempts_left = 3
         reminder_time = "08:00"
         while True:
@@ -8886,15 +9424,16 @@ async def run_birthday_setup(interaction: discord.Interaction, bot):
             if parsed:
                 reminder_time = parsed
                 break
-            if (len(time_raw) == 5 and time_raw[2] == ":"
-                    and time_raw.replace(":", "").isdigit()):
+            if len(time_raw) == 5 and time_raw[2] == ":" and time_raw.replace(":", "").isdigit():
                 reminder_time = time_raw  # already 24h
                 break
             attempts_left -= 1
             if attempts_left <= 0:
-                await channel.send(TIME_PARSE_GIVE_UP.format(
-                    recovery=f"`/setup` → {HUB_BTN_BIRTHDAYS}",
-                ))
+                await channel.send(
+                    TIME_PARSE_GIVE_UP.format(
+                        recovery=f"`/setup` → {HUB_BTN_BIRTHDAYS}",
+                    )
+                )
                 return
             await channel.send(TIME_PARSE_RETRY.format(raw=time_raw))
 
@@ -8906,6 +9445,7 @@ async def run_birthday_setup(interaction: discord.Interaction, bot):
     birthday_dm_message = ""
     if reminders_enabled:
         from train_cog import DEFAULT_BIRTHDAY_DM
+
         saved_birthday_dm = (current.get("dm_message") or "").strip()
         bday_dm_input = await ask_keep_or_change(
             channel,
@@ -8927,40 +9467,62 @@ async def run_birthday_setup(interaction: discord.Interaction, bot):
 
     # ── Save ───────────────────────────────────────────────────────────────────
     from config import save_birthday_config
+
     save_birthday_config(
-        guild_id        = guild_id,
-        tab_name        = tab_name,
-        name_col        = name_col,
-        birthday_col    = birthday_col,
-        discord_id_col  = discord_id_col,
-        data_start_row  = 2,
-        enabled         = 1,
-        train_integration   = train_integration,
-        flexible_placement  = flexible_placement,
-        lookahead_days      = lookahead_days,
-        reminders_enabled   = reminders_enabled,
-        reminder_channel_id = reminder_channel_id,
-        reminder_time       = reminder_time,
-        dm_message          = birthday_dm_message,
+        guild_id=guild_id,
+        tab_name=tab_name,
+        name_col=name_col,
+        birthday_col=birthday_col,
+        discord_id_col=discord_id_col,
+        data_start_row=2,
+        enabled=1,
+        train_integration=train_integration,
+        flexible_placement=flexible_placement,
+        lookahead_days=lookahead_days,
+        reminders_enabled=reminders_enabled,
+        reminder_channel_id=reminder_channel_id,
+        reminder_time=reminder_time,
+        dm_message=birthday_dm_message,
     )
 
     embed = discord.Embed(title="✅ Birthday Tracking Configured", color=discord.Color.green())
-    embed.add_field(name="Sheet Tab",           value=tab_name,                            inline=True)
-    embed.add_field(name="Name Column",         value=f"Column {_col_index_to_letter(name_col)}",     inline=True)
-    embed.add_field(name="Birthday Column",     value=f"Column {_col_index_to_letter(birthday_col)}", inline=True)
-    embed.add_field(name="Discord ID Column",   value=f"Column {_col_index_to_letter(discord_id_col)}" if discord_id_col >= 0 else "Not stored", inline=True)
-    embed.add_field(name="Train Integration",   value="Enabled" if train_integration else "Disabled", inline=True)
+    embed.add_field(name="Sheet Tab", value=tab_name, inline=True)
+    embed.add_field(
+        name="Name Column", value=f"Column {_col_index_to_letter(name_col)}", inline=True
+    )
+    embed.add_field(
+        name="Birthday Column", value=f"Column {_col_index_to_letter(birthday_col)}", inline=True
+    )
+    embed.add_field(
+        name="Discord ID Column",
+        value=f"Column {_col_index_to_letter(discord_id_col)}"
+        if discord_id_col >= 0
+        else "Not stored",
+        inline=True,
+    )
+    embed.add_field(
+        name="Train Integration", value="Enabled" if train_integration else "Disabled", inline=True
+    )
     if train_integration:
-        embed.add_field(name="Placement",       value="Flexible (±1 day)" if flexible_placement else "Birthday only", inline=True)
-        embed.add_field(name="Lookahead",       value=f"{lookahead_days} days",           inline=True)
-    embed.add_field(name="Reminders",           value="Enabled" if reminders_enabled else "Disabled", inline=True)
+        embed.add_field(
+            name="Placement",
+            value="Flexible (±1 day)" if flexible_placement else "Birthday only",
+            inline=True,
+        )
+        embed.add_field(name="Lookahead", value=f"{lookahead_days} days", inline=True)
+    embed.add_field(
+        name="Reminders", value="Enabled" if reminders_enabled else "Disabled", inline=True
+    )
     if reminders_enabled:
-        embed.add_field(name="Reminder Channel", value=f"<#{reminder_channel_id}>",       inline=True)
-        embed.add_field(name="Reminder Time",    value=_format_time_with_tz(reminder_time, guild_tz), inline=True)
+        embed.add_field(name="Reminder Channel", value=f"<#{reminder_channel_id}>", inline=True)
+        embed.add_field(
+            name="Reminder Time", value=_format_time_with_tz(reminder_time, guild_tz), inline=True
+        )
     embed.set_footer(text=SETUP_POINTER_FOOTER.format(wizard=HUB_BTN_BIRTHDAYS))
     await channel.send(embed=embed)
     wizard_registry.unregister(user.id, cancel_event)
     print(f"[SETUP] Birthday config saved for guild {guild_id}")
+
 
 async def run_shiny_tasks_setup(interaction: discord.Interaction, bot):
     """Walk leadership through configuring the daily shiny-tasks
@@ -8968,18 +9530,21 @@ async def run_shiny_tasks_setup(interaction: discord.Interaction, bot):
     time → message template → confirm. Free for all tiers."""
     import wizard_registry
     from config import (
-        get_config, get_shiny_tasks_config, save_shiny_tasks_config,
-        has_shiny_tasks_config, clear_shiny_tasks_config,
+        get_config,
+        get_shiny_tasks_config,
+        save_shiny_tasks_config,
+        has_shiny_tasks_config,
+        clear_shiny_tasks_config,
     )
     from defaults import DEFAULT_SHINY_TASKS_MESSAGE
 
-    guild_id     = interaction.guild_id
-    channel      = interaction.channel
-    user         = interaction.user
+    guild_id = interaction.guild_id
+    channel = interaction.channel
+    user = interaction.user
     cancel_event = wizard_registry.register(user.id)
 
-    current  = get_shiny_tasks_config(guild_id)
-    cfg      = get_config(guild_id)
+    current = get_shiny_tasks_config(guild_id)
+    cfg = get_config(guild_id)
     guild_tz = cfg.timezone if cfg else "America/New_York"
     tz_label = TIMEZONE_LABELS.get(guild_tz, "ET")
     shiny_already_configured = has_shiny_tasks_config(guild_id)
@@ -8988,7 +9553,7 @@ async def run_shiny_tasks_setup(interaction: discord.Interaction, bot):
     if shiny_already_configured and current.get("enabled"):
         ch_id = current.get("channel_id", 0) or 0
         fields = [
-            ("Channel",       f"<#{ch_id}>" if ch_id else "*not set*"),
+            ("Channel", f"<#{ch_id}>" if ch_id else "*not set*"),
             (
                 "Server Range",
                 f"{current.get('server_min') or '?'} – {current.get('server_max') or '?'}",
@@ -9059,7 +9624,9 @@ async def run_shiny_tasks_setup(interaction: discord.Interaction, bot):
         return
 
     # ── Step 2: Channel ───────────────────────────────────────────────────────
-    is_premium_flag = await premium.is_premium(guild_id, interaction=interaction, bot=interaction.client)
+    is_premium_flag = await premium.is_premium(
+        guild_id, interaction=interaction, bot=interaction.client
+    )
     await channel.send(
         "**Step 2 of 6 — Announcement Channel**\n"
         "Pick the channel where the daily shiny tasks post should be posted."
@@ -9073,9 +9640,7 @@ async def run_shiny_tasks_setup(interaction: discord.Interaction, bot):
         current_id=saved_channel_id,
     )
     if ch_view.is_current_stale:
-        await channel.send(
-            PREV_CHANNEL_GONE.format(channel_label="shiny tasks")
-        )
+        await channel.send(PREV_CHANNEL_GONE.format(channel_label="shiny tasks"))
     await channel.send("​", view=ch_view)
     await wait_view_or_cancel(ch_view, cancel_event)
     if ch_view.cancelled:
@@ -9097,13 +9662,15 @@ async def run_shiny_tasks_setup(interaction: discord.Interaction, bot):
                 label="Lowest reachable server number",
                 placeholder="e.g. 677",
                 default=min_default,
-                required=True, max_length=5,
+                required=True,
+                max_length=5,
             )
             self._max = discord.ui.TextInput(
                 label="Highest reachable server number",
                 placeholder="e.g. 804",
                 default=max_default,
-                required=True, max_length=5,
+                required=True,
+                max_length=5,
             )
             self.add_item(self._min)
             self.add_item(self._max)
@@ -9245,15 +9812,16 @@ async def run_shiny_tasks_setup(interaction: discord.Interaction, bot):
         if parsed:
             post_time = parsed
             break
-        if (len(time_raw) == 5 and time_raw[2] == ":"
-                and time_raw.replace(":", "").isdigit()):
+        if len(time_raw) == 5 and time_raw[2] == ":" and time_raw.replace(":", "").isdigit():
             post_time = time_raw  # already 24h
             break
         attempts_left -= 1
         if attempts_left <= 0:
-            await channel.send(TIME_PARSE_GIVE_UP.format(
-                recovery=f"`/setup` → {HUB_BTN_SHINY}",
-            ))
+            await channel.send(
+                TIME_PARSE_GIVE_UP.format(
+                    recovery=f"`/setup` → {HUB_BTN_SHINY}",
+                )
+            )
             wizard_registry.unregister(user.id, cancel_event)
             return
         await channel.send(TIME_PARSE_RETRY.format(raw=time_raw))
@@ -9279,7 +9847,8 @@ async def run_shiny_tasks_setup(interaction: discord.Interaction, bot):
     # change to DEFAULT_SHINY_TASKS_MESSAGE automatically propagates,
     # instead of freezing today's wording in the DB.
     message_template = (
-        "" if template_input.strip() == DEFAULT_SHINY_TASKS_MESSAGE.strip()
+        ""
+        if template_input.strip() == DEFAULT_SHINY_TASKS_MESSAGE.strip()
         else template_input.strip()
     )
 
@@ -9289,10 +9858,10 @@ async def run_shiny_tasks_setup(interaction: discord.Interaction, bot):
         description="Confirm to save this configuration.",
         color=discord.Color.gold(),
     )
-    embed.add_field(name="Status",         value="✅ Enabled",                       inline=True)
-    embed.add_field(name="Channel",        value=f"<#{channel_id}>",                inline=True)
-    embed.add_field(name="Server Range",   value=f"{server_min} – {server_max}",    inline=True)
-    embed.add_field(name="Post Time",      value=_format_time_with_tz(post_time, guild_tz), inline=True)
+    embed.add_field(name="Status", value="✅ Enabled", inline=True)
+    embed.add_field(name="Channel", value=f"<#{channel_id}>", inline=True)
+    embed.add_field(name="Server Range", value=f"{server_min} – {server_max}", inline=True)
+    embed.add_field(name="Post Time", value=_format_time_with_tz(post_time, guild_tz), inline=True)
     embed.add_field(
         name="Message",
         value=(message_template or DEFAULT_SHINY_TASKS_MESSAGE)[:1024],
@@ -9321,9 +9890,7 @@ async def run_shiny_tasks_setup(interaction: discord.Interaction, bot):
 
     _human = _format_time_with_tz(post_time, guild_tz) or post_time
 
-    await channel.send(
-        f"✅ Shiny-tasks announcement saved! The first post will fire at {_human}."
-    )
+    await channel.send(f"✅ Shiny-tasks announcement saved! The first post will fire at {_human}.")
     wizard_registry.unregister(user.id, cancel_event)
     print(f"[SETUP] Shiny tasks config saved for guild {guild_id}")
 

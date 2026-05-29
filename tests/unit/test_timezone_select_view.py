@@ -25,12 +25,14 @@ def _labels(view) -> list[str]:
 
 # ── Default (no current) path ────────────────────────────────────────────────
 
+
 class TestDefaultRendering:
     """When `current` isn't passed, the view should look exactly like
     the pre-#106 version: just the timezone select on row 0."""
 
     def test_no_current_renders_select_only(self):
         from setup_cog import TimezoneSelectView
+
         view = TimezoneSelectView()
         labels = _labels(view)
         assert not any("Keep current" in lbl for lbl in labels)
@@ -45,6 +47,7 @@ class TestDefaultRendering:
         from a different bot version), don't render a misleading
         Keep-current button — fall back to the plain picker."""
         from setup_cog import TimezoneSelectView
+
         view = TimezoneSelectView(current="Mars/Olympus_Mons")
         labels = _labels(view)
         assert not any("Keep current" in lbl for lbl in labels)
@@ -52,43 +55,42 @@ class TestDefaultRendering:
 
 # ── Keep-current path (#106) ─────────────────────────────────────────────────
 
-class TestKeepCurrent:
 
+class TestKeepCurrent:
     def test_known_current_renders_keep_button(self):
         from setup_cog import TimezoneSelectView, TIMEZONE_LABELS
+
         # Use whatever the bot considers "America/New_York" to label
         # (matches the prod default).
         view = TimezoneSelectView(current="America/New_York")
         labels = _labels(view)
         expected_label_fragment = TIMEZONE_LABELS["America/New_York"]
-        assert any("Keep current" in lbl and expected_label_fragment in lbl
-                   for lbl in labels)
+        assert any("Keep current" in lbl and expected_label_fragment in lbl for lbl in labels)
 
     def test_keep_button_is_on_row_zero_select_shifts_down(self):
         from setup_cog import TimezoneSelectView
+
         view = TimezoneSelectView(current="America/New_York")
-        keep_btn = next(c for c in view.children
-                        if isinstance(c, discord.ui.Button))
-        select   = next(c for c in view.children
-                        if isinstance(c, discord.ui.Select))
+        keep_btn = next(c for c in view.children if isinstance(c, discord.ui.Button))
+        select = next(c for c in view.children if isinstance(c, discord.ui.Select))
         assert keep_btn.row == 0
-        assert select.row   == 1
+        assert select.row == 1
 
     @pytest.mark.asyncio
     async def test_clicking_keep_returns_current_timezone(self):
         from setup_cog import TimezoneSelectView
+
         view = TimezoneSelectView(current="America/New_York")
-        keep_btn = next(c for c in view.children
-                        if isinstance(c, discord.ui.Button))
+        keep_btn = next(c for c in view.children if isinstance(c, discord.ui.Button))
         inter = MagicMock()
         inter.response.edit_message = AsyncMock()
         await keep_btn.callback(inter)
-        assert view.selected  == "America/New_York"
+        assert view.selected == "America/New_York"
         assert view.confirmed is True
 
     def test_long_label_clipped_to_80_chars(self):
         from setup_cog import TimezoneSelectView, TIMEZONE_LABELS
+
         view = TimezoneSelectView(current="America/New_York")
-        keep_btn = next(c for c in view.children
-                        if isinstance(c, discord.ui.Button))
+        keep_btn = next(c for c in view.children if isinstance(c, discord.ui.Button))
         assert len(keep_btn.label) <= 80

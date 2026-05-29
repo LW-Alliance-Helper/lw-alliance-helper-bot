@@ -54,17 +54,101 @@ DEFAULT_PROMPT = (
 # ── Squad-power survey ──────────────────────────────────────────────────────
 
 DEFAULT_SURVEY_QUESTIONS = [
-    {"key": "squad1_power",  "label": "1st Squad Power",           "type": "numeric",  "options": [],                                                      "placeholder": "e.g. 43.27", "max_chars": 5, "magnitude": "M"},
-    {"key": "squad1_type",   "label": "1st Squad Type",            "type": "dropdown", "options": ["Missile", "Air", "Tank"],                              "placeholder": "Select squad type...", "max_chars": 0},
-    {"key": "squad2_power",  "label": "2nd Squad Power",           "type": "numeric",  "options": [],                                                      "placeholder": "e.g. 43.27", "max_chars": 5, "magnitude": "M"},
-    {"key": "squad3_power",  "label": "3rd Squad Power",           "type": "numeric",  "options": [],                                                      "placeholder": "e.g. 43.27", "max_chars": 5, "magnitude": "M"},
-    {"key": "drone_level",   "label": "Drone Level",               "type": "numeric",  "options": [],                                                      "placeholder": "e.g. 243",   "max_chars": 5, "magnitude": "raw"},
-    {"key": "gorilla_level", "label": "Gorilla Level",             "type": "numeric",  "options": [],                                                      "placeholder": "e.g. 70",    "max_chars": 5, "magnitude": "raw"},
-    {"key": "thp",           "label": "Total Hero Power (THP)",    "type": "numeric",  "options": [],                                                      "placeholder": "e.g. 301",   "max_chars": 5, "magnitude": "M"},
-    {"key": "total_kills",   "label": "Total Kills",               "type": "numeric",  "options": [],                                                      "placeholder": "e.g. 55.40", "max_chars": 5, "magnitude": "M"},
-    {"key": "profession",    "label": "Profession",                "type": "dropdown", "options": ["War Leader", "Engineer"],                              "placeholder": "Select profession...", "max_chars": 0},
-    {"key": "banner",        "label": "Charge Banner",             "type": "dropdown", "options": ["Yes", "No"],                                           "placeholder": "Select...",  "max_chars": 0},
-    {"key": "aid_removal",   "label": "Medical Aid / Ruin Removal","type": "dropdown", "options": ["Yes", "Only Medical Aid", "Only Ruin Removal", "No"], "placeholder": "Select...",  "max_chars": 0},
+    {
+        "key": "squad1_power",
+        "label": "1st Squad Power",
+        "type": "numeric",
+        "options": [],
+        "placeholder": "e.g. 43.27",
+        "max_chars": 5,
+        "magnitude": "M",
+    },
+    {
+        "key": "squad1_type",
+        "label": "1st Squad Type",
+        "type": "dropdown",
+        "options": ["Missile", "Air", "Tank"],
+        "placeholder": "Select squad type...",
+        "max_chars": 0,
+    },
+    {
+        "key": "squad2_power",
+        "label": "2nd Squad Power",
+        "type": "numeric",
+        "options": [],
+        "placeholder": "e.g. 43.27",
+        "max_chars": 5,
+        "magnitude": "M",
+    },
+    {
+        "key": "squad3_power",
+        "label": "3rd Squad Power",
+        "type": "numeric",
+        "options": [],
+        "placeholder": "e.g. 43.27",
+        "max_chars": 5,
+        "magnitude": "M",
+    },
+    {
+        "key": "drone_level",
+        "label": "Drone Level",
+        "type": "numeric",
+        "options": [],
+        "placeholder": "e.g. 243",
+        "max_chars": 5,
+        "magnitude": "raw",
+    },
+    {
+        "key": "gorilla_level",
+        "label": "Gorilla Level",
+        "type": "numeric",
+        "options": [],
+        "placeholder": "e.g. 70",
+        "max_chars": 5,
+        "magnitude": "raw",
+    },
+    {
+        "key": "thp",
+        "label": "Total Hero Power (THP)",
+        "type": "numeric",
+        "options": [],
+        "placeholder": "e.g. 301",
+        "max_chars": 5,
+        "magnitude": "M",
+    },
+    {
+        "key": "total_kills",
+        "label": "Total Kills",
+        "type": "numeric",
+        "options": [],
+        "placeholder": "e.g. 55.40",
+        "max_chars": 5,
+        "magnitude": "M",
+    },
+    {
+        "key": "profession",
+        "label": "Profession",
+        "type": "dropdown",
+        "options": ["War Leader", "Engineer"],
+        "placeholder": "Select profession...",
+        "max_chars": 0,
+    },
+    {
+        "key": "banner",
+        "label": "Charge Banner",
+        "type": "dropdown",
+        "options": ["Yes", "No"],
+        "placeholder": "Select...",
+        "max_chars": 0,
+    },
+    {
+        "key": "aid_removal",
+        "label": "Medical Aid / Ruin Removal",
+        "type": "dropdown",
+        "options": ["Yes", "Only Medical Aid", "Only Ruin Removal", "No"],
+        "placeholder": "Select...",
+        "max_chars": 0,
+    },
 ]
 
 DEFAULT_SURVEY_INTRO = (
@@ -160,9 +244,7 @@ Please let us know if you aren't able to participate!"""
 # e.g. "Monday, May 11". Unknown placeholders render literally via
 # SafeDict so a typo doesn't crash the scheduler loop.
 
-DEFAULT_SHINY_TASKS_MESSAGE = (
-    "🌟 Daily shiny tasks are available on servers: {servers}."
-)
+DEFAULT_SHINY_TASKS_MESSAGE = "🌟 Daily shiny tasks are available on servers: {servers}."
 
 
 # ── Storm participation question presets (#247) ─────────────────────────────
@@ -190,54 +272,54 @@ DEFAULT_SHINY_TASKS_MESSAGE = (
 
 STORM_PARTICIPATION_PRESETS_FREE = [
     {
-        "key":             "showed_up",
-        "label":           "Did this member show up?",
-        "type":            "roster_multi_select",
-        "description":     "Roster multi-select. Tracks attendance per event.",
-        "emoji":           "✅",
+        "key": "showed_up",
+        "label": "Did this member show up?",
+        "type": "roster_multi_select",
+        "description": "Roster multi-select. Tracks attendance per event.",
+        "emoji": "✅",
         "default_checked": True,
     },
     {
-        "key":         "sat_out",
-        "label":       "Who sat out this week?",
-        "type":        "roster_multi_select",
+        "key": "sat_out",
+        "label": "Who sat out this week?",
+        "type": "roster_multi_select",
         "description": "Roster multi-select against your full roster.",
-        "emoji":       "📝",
+        "emoji": "📝",
     },
     {
-        "key":         "didnt_vote",
-        "label":       "Who didn't vote this week?",
-        "type":        "roster_multi_select",
+        "key": "didnt_vote",
+        "label": "Who didn't vote this week?",
+        "type": "roster_multi_select",
         "description": "Roster multi-select. Manual selection only on free tier.",
-        "emoji":       "🗳️",
+        "emoji": "🗳️",
     },
 ]
 
 STORM_PARTICIPATION_PRESETS_PREMIUM = [
     {
-        "key":                 "sit_out_count_4",
-        "label":               "Sit-out count, past 4 events",
-        "type":                "derived_count",
-        "description":         "Derived count from the \"Who sat out?\" question.",
-        "emoji":               "📊",
+        "key": "sit_out_count_4",
+        "label": "Sit-out count, past 4 events",
+        "type": "derived_count",
+        "description": 'Derived count from the "Who sat out?" question.',
+        "emoji": "📊",
         "source_question_key": "sat_out",
-        "lookback_events":     4,
+        "lookback_events": 4,
     },
     {
-        "key":                 "vote_miss_count_8",
-        "label":               "Vote-miss count, past 8 events",
-        "type":                "derived_count",
-        "description":         "Derived count from the \"Who didn't vote?\" question.",
-        "emoji":               "📊",
+        "key": "vote_miss_count_8",
+        "label": "Vote-miss count, past 8 events",
+        "type": "derived_count",
+        "description": 'Derived count from the "Who didn\'t vote?" question.',
+        "emoji": "📊",
         "source_question_key": "didnt_vote",
-        "lookback_events":     8,
+        "lookback_events": 8,
     },
     {
-        "key":            "didnt_vote_autoprefill",
-        "label":          "Who didn't vote this week? (auto-prefill from poll)",
-        "type":           "roster_multi_select",
-        "description":    "Variant of the above that pre-checks members from the Discord signup poll.",
-        "emoji":          "🗳️",
+        "key": "didnt_vote_autoprefill",
+        "label": "Who didn't vote this week? (auto-prefill from poll)",
+        "type": "roster_multi_select",
+        "description": "Variant of the above that pre-checks members from the Discord signup poll.",
+        "emoji": "🗳️",
         "prefill_source": "discord_poll",
     },
 ]
@@ -256,7 +338,11 @@ def preset_to_question(preset: dict) -> dict:
     emoji, default_checked) and keeps only the run-time question
     fields."""
     runtime_keys = {
-        "key", "label", "type",
-        "source_question_key", "lookback_events", "prefill_source",
+        "key",
+        "label",
+        "type",
+        "source_question_key",
+        "lookback_events",
+        "prefill_source",
     }
     return {k: v for k, v in preset.items() if k in runtime_keys}

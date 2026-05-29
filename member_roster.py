@@ -32,8 +32,12 @@ from discord.ext import commands
 
 import premium
 from config import (
-    get_config, get_member_roster_config, save_member_roster_config,
-    update_roster_last_synced, get_member_roster_sheet, get_spreadsheet,
+    get_config,
+    get_member_roster_config,
+    save_member_roster_config,
+    update_roster_last_synced,
+    get_member_roster_sheet,
+    get_spreadsheet,
 )
 from messages import FEATURE_NOT_CONFIGURED, WIZARD_TIMEOUT
 from setup_hub import HUB_BTN_MEMBERS
@@ -48,6 +52,7 @@ DISCORD_FLAG_COLUMN_HEADER = "Is this user in Discord?"
 
 
 # ── Sync logic (pure-ish; takes a guild and config) ───────────────────────────
+
 
 def _format_joined(member: discord.Member) -> str:
     if member.joined_at is None:
@@ -76,11 +81,11 @@ def _bot_managed_cols(cfg: dict) -> dict[int, tuple[str, callable]]:
     owned data (custom power columns, the `not_on_discord` flag, etc.)
     and must be preserved across sync calls."""
     return {
-        cfg["discord_id_col"]: ("Discord ID",   lambda m: str(m.id)),
-        cfg["name_col"]:       ("Name",         lambda m: m.name),
-        cfg["display_col"]:    ("Display Name", lambda m: m.display_name),
-        cfg["joined_col"]:     ("Joined",       _format_joined),
-        cfg["roles_col"]:      ("Roles",        lambda m: _format_roles(m)),
+        cfg["discord_id_col"]: ("Discord ID", lambda m: str(m.id)),
+        cfg["name_col"]: ("Name", lambda m: m.name),
+        cfg["display_col"]: ("Display Name", lambda m: m.display_name),
+        cfg["joined_col"]: ("Joined", _format_joined),
+        cfg["roles_col"]: ("Roles", lambda m: _format_roles(m)),
     }
 
 
@@ -103,10 +108,10 @@ def _bot_managed_cols(cfg: dict) -> dict[int, tuple[str, callable]]:
 # the FIRST alias as the canonical label when appending a new column.
 _FIELD_HEADER_ALIASES: dict[str, tuple[str, ...]] = {
     "discord_id_col": ("discord id", "discordid", "id"),
-    "name_col":       ("name", "username", "discord name"),
-    "display_col":    ("display name", "displayname", "alias"),
-    "joined_col":     ("joined", "join date", "joined at"),
-    "roles_col":      ("roles", "role"),
+    "name_col": ("name", "username", "discord name"),
+    "display_col": ("display name", "displayname", "alias"),
+    "joined_col": ("joined", "join date", "joined at"),
+    "roles_col": ("roles", "role"),
 }
 
 
@@ -207,7 +212,9 @@ def _build_roster_rows(guild: discord.Guild, cfg: dict) -> list[list[str]]:
 
 
 def _merge_with_existing(
-    new_rows: list[list[str]], existing: list[list[str]], cfg: dict,
+    new_rows: list[list[str]],
+    existing: list[list[str]],
+    cfg: dict,
     guild: discord.Guild | None = None,
 ) -> tuple[list[list[str]], dict]:
     """Merge bot-managed columns from `new_rows` with alliance-owned
@@ -261,17 +268,17 @@ def _merge_with_existing(
         pre-#226 behaviour for callers that don't have a guild handle).
     """
     report = {
-        "matched_by_id":   [],
+        "matched_by_id": [],
         "matched_by_name": [],
-        "ambiguous":       [],
-        "no_match":        [],
+        "ambiguous": [],
+        "no_match": [],
     }
 
     if not new_rows:
         return new_rows, report
 
     bot_cols = set(_bot_managed_cols(cfg).keys())
-    id_col   = cfg["discord_id_col"]
+    id_col = cfg["discord_id_col"]
     name_col = cfg["name_col"]
     display_col = cfg["display_col"]
 
@@ -338,7 +345,7 @@ def _merge_with_existing(
     # picks it up like any other matched row.
     existing_processed: list[list[str]] = []
     existing_by_id: dict[str, list[str]] = {}
-    for raw_row in (existing[1:] if existing else []):
+    for raw_row in existing[1:] if existing else []:
         row = list(raw_row)
         if _row_is_non_discord(row):
             # Explicit non-Discord flag — skip the ID-match and
@@ -352,14 +359,8 @@ def _merge_with_existing(
             continue
         # No Discord ID — try name fallback against the row's name
         # column first, then display-name column.
-        name_cell = (
-            row[name_col].strip().lower()
-            if name_col < len(row) else ""
-        )
-        display_cell = (
-            row[display_col].strip().lower()
-            if display_col < len(row) else ""
-        )
+        name_cell = row[name_col].strip().lower() if name_col < len(row) else ""
+        display_cell = row[display_col].strip().lower() if display_col < len(row) else ""
         candidate_name = name_cell or display_cell
         if not candidate_name:
             # Empty row with no name — nothing to match. Skip.
@@ -405,7 +406,7 @@ def _merge_with_existing(
     # any hand-typed alliance member who doesn't use Discord disappears
     # on every sync — breaking the storm officer view's non-Discord
     # on-behalf voting path.
-    for raw_row in (existing[1:] if existing else []):
+    for raw_row in existing[1:] if existing else []:
         if not _row_is_non_discord(raw_row):
             continue
         preserved = list(raw_row)
@@ -448,7 +449,10 @@ def write_roster(guild: discord.Guild, cfg: dict) -> tuple[int, dict]:
     except Exception:
         existing = []
     merged, name_match_report = _merge_with_existing(
-        new_rows, existing, cfg, guild=guild,
+        new_rows,
+        existing,
+        cfg,
+        guild=guild,
     )
     # Ensure the "Is this user in Discord?" column exists on the
     # sheet and is filled with bot-derived Yes/No values. Returns the
@@ -463,19 +467,25 @@ def write_roster(guild: discord.Guild, cfg: dict) -> tuple[int, dict]:
     if flag_col_idx is not None and len(merged) > 1:
         try:
             _apply_discord_flag_validation(
-                guild.id, ws, flag_col_idx, row_count=len(merged),
+                guild.id,
+                ws,
+                flag_col_idx,
+                row_count=len(merged),
             )
         except Exception as e:
             logger.warning(
                 "[ROSTER] data-validation rule write failed for guild=%s: %s",
-                guild.id, e,
+                guild.id,
+                e,
             )
     update_roster_last_synced(guild.id, datetime.now(timezone.utc).isoformat())
     return max(0, len(merged) - 1), name_match_report
 
 
 def _ensure_discord_flag_column(
-    merged: list[list[str]], guild: discord.Guild, cfg: dict,
+    merged: list[list[str]],
+    guild: discord.Guild,
+    cfg: dict,
 ) -> int | None:
     """Ensure the bot-maintained presence column exists in `merged` and
     fill every member row with "Yes" or "No" based on live guild
@@ -539,7 +549,11 @@ def _ensure_discord_flag_column(
 
 
 def _apply_discord_flag_validation(
-    guild_id: int, ws, flag_col_idx: int, *, row_count: int,
+    guild_id: int,
+    ws,
+    flag_col_idx: int,
+    *,
+    row_count: int,
 ) -> None:
     """Write a Yes/No-dropdown data validation rule on the presence
     column for every member row. Spans rows 2..row_count (skipping
@@ -562,22 +576,22 @@ def _apply_discord_flag_validation(
             {
                 "setDataValidation": {
                     "range": {
-                        "sheetId":          sheet_id_int,
-                        "startRowIndex":    1,            # skip header
-                        "endRowIndex":      row_count,    # exclusive
+                        "sheetId": sheet_id_int,
+                        "startRowIndex": 1,  # skip header
+                        "endRowIndex": row_count,  # exclusive
                         "startColumnIndex": flag_col_idx,
-                        "endColumnIndex":   flag_col_idx + 1,
+                        "endColumnIndex": flag_col_idx + 1,
                     },
                     "rule": {
                         "condition": {
-                            "type":   "ONE_OF_LIST",
+                            "type": "ONE_OF_LIST",
                             "values": [
                                 {"userEnteredValue": "Yes"},
                                 {"userEnteredValue": "No"},
                             ],
                         },
                         "showCustomUi": True,
-                        "strict":       True,
+                        "strict": True,
                         "inputMessage": (
                             "Auto-filled by the LW Alliance Helper bot. "
                             "Override to Yes/No if needed."
@@ -597,13 +611,15 @@ def _warn_if_cache_looks_thin(guild: discord.Guild) -> None:
     wrote 0 rows" — has a breadcrumb pointing at the cause."""
     try:
         cached_count = len(guild.members)
-        raw_total    = getattr(guild, "member_count", None)
-        total_count  = int(raw_total) if isinstance(raw_total, int) else 0
+        raw_total = getattr(guild, "member_count", None)
+        total_count = int(raw_total) if isinstance(raw_total, int) else 0
     except (AttributeError, TypeError) as e:
         # Defensive: shouldn't happen with a real `discord.Guild`, but tests
         # and edge cases (None members list) shouldn't suppress real errors.
-        print(f"[ROSTER] _warn_if_cache_looks_thin diagnostic failed for "
-              f"guild {getattr(guild, 'id', '?')}: {e}")
+        print(
+            f"[ROSTER] _warn_if_cache_looks_thin diagnostic failed for "
+            f"guild {getattr(guild, 'id', '?')}: {e}"
+        )
         return
     if total_count > 1 and cached_count < max(2, total_count // 2):
         print(
@@ -635,6 +651,7 @@ async def _ensure_member_cache(guild: discord.Guild) -> None:
 
 
 # ── Cog ──────────────────────────────────────────────────────────────────────
+
 
 class MemberRosterCog(commands.Cog):
     # /members is a top-level slash-command group containing overview /
@@ -672,10 +689,14 @@ class MemberRosterCog(commands.Cog):
         await _ensure_member_cache(guild)
         try:
             await asyncio.get_event_loop().run_in_executor(
-                None, write_roster, guild, cfg,
+                None,
+                write_roster,
+                guild,
+                cfg,
             )
         except Exception as e:
             from config import describe_sheet_error
+
             print(
                 f"[ROSTER] Auto-sync failed: "
                 f"{describe_sheet_error(e, guild_id=guild.id, tab=cfg.get('tab_name'))}"
@@ -687,6 +708,7 @@ class MemberRosterCog(commands.Cog):
             # surfaces non-Discord-API failures for triage.
             try:
                 import sentry_sdk
+
                 sentry_sdk.capture_exception(e)
             except Exception:
                 pass
@@ -697,6 +719,7 @@ class MemberRosterCog(commands.Cog):
     )
     async def members_overview(self, interaction: discord.Interaction):
         from setup_cog import _has_leadership_or_admin
+
         if not _has_leadership_or_admin(interaction):
             await interaction.response.send_message(
                 "⛔ You need the leadership role (or admin) to view the member roster.",
@@ -705,7 +728,9 @@ class MemberRosterCog(commands.Cog):
             return
 
         is_premium = await premium.is_premium(
-            interaction.guild_id, interaction=interaction, bot=self.bot,
+            interaction.guild_id,
+            interaction=interaction,
+            bot=self.bot,
         )
         cfg = get_member_roster_config(interaction.guild_id)
 
@@ -723,14 +748,13 @@ class MemberRosterCog(commands.Cog):
         if not is_premium:
             embed.add_field(
                 name="💎 Premium feature",
-                value=(
-                    "Member Roster Sync is part of Premium. "
-                    "Run `/upgrade` to unlock it."
-                ),
+                value=("Member Roster Sync is part of Premium. Run `/upgrade` to unlock it."),
                 inline=False,
             )
             await interaction.response.send_message(
-                embed=embed, view=premium.upgrade_view(), ephemeral=True,
+                embed=embed,
+                view=premium.upgrade_view(),
+                ephemeral=True,
             )
             return
 
@@ -743,8 +767,7 @@ class MemberRosterCog(commands.Cog):
         if enabled:
             lines = [
                 f"**Sheet tab:** `{tab_name}`",
-                f"**Auto-sync on join/leave/role-change:** "
-                f"{'on' if auto_sync else 'off'}",
+                f"**Auto-sync on join/leave/role-change:** {'on' if auto_sync else 'off'}",
             ]
             if role_filter_id:
                 role = interaction.guild.get_role(role_filter_id) if interaction.guild else None
@@ -754,9 +777,7 @@ class MemberRosterCog(commands.Cog):
                 )
             else:
                 lines.append("**Filtered to role:** *(all members)*")
-            lines.append(
-                f"**Last sync:** {last_synced or '*(never synced)*'}"
-            )
+            lines.append(f"**Last sync:** {last_synced or '*(never synced)*'}")
             embed.add_field(
                 name="Current state",
                 value="\n".join(lines),
@@ -788,6 +809,7 @@ class MemberRosterCog(commands.Cog):
     )
     async def members_sync(self, interaction: discord.Interaction):
         from setup_cog import _has_leadership_or_admin
+
         if not _has_leadership_or_admin(interaction):
             await interaction.response.send_message(
                 "⛔ You need the leadership role (or admin) to sync the member roster.",
@@ -796,8 +818,10 @@ class MemberRosterCog(commands.Cog):
             return
 
         if not await premium.feature_gate(
-            "member_sync", interaction.guild_id,
-            interaction=interaction, bot=self.bot,
+            "member_sync",
+            interaction.guild_id,
+            interaction=interaction,
+            bot=self.bot,
         ):
             await interaction.response.send_message(
                 embed=premium.premium_locked_embed(
@@ -817,7 +841,9 @@ class MemberRosterCog(commands.Cog):
         cfg = get_member_roster_config(interaction.guild_id)
         if not cfg.get("enabled"):
             await interaction.response.send_message(
-                FEATURE_NOT_CONFIGURED.format(feature="Member Roster Sync", wizard_btn=HUB_BTN_MEMBERS),
+                FEATURE_NOT_CONFIGURED.format(
+                    feature="Member Roster Sync", wizard_btn=HUB_BTN_MEMBERS
+                ),
                 ephemeral=True,
             )
             return
@@ -827,10 +853,14 @@ class MemberRosterCog(commands.Cog):
         await _ensure_member_cache(guild)
         try:
             count, _report = await asyncio.get_event_loop().run_in_executor(
-                None, write_roster, guild, cfg,
+                None,
+                write_roster,
+                guild,
+                cfg,
             )
         except Exception as e:
             from config import describe_sheet_error
+
             diagnosis = describe_sheet_error(e, tab=cfg["tab_name"])
             print(
                 f"[ROSTER] /members sync failed: "
@@ -856,8 +886,10 @@ class MemberRosterCog(commands.Cog):
 # the leadership-or-admin + Premium + channel-perms gating that used to
 # live in the slash command.
 
+
 async def _launch_member_roster_setup(interaction: discord.Interaction, bot) -> None:
     from setup_cog import _has_leadership_or_admin, _check_wizard_can_run
+
     if not _has_leadership_or_admin(interaction):
         await interaction.response.send_message(
             "⛔ You need the leadership role (or admin) to configure the member roster.",
@@ -868,8 +900,10 @@ async def _launch_member_roster_setup(interaction: discord.Interaction, bot) -> 
     # Premium gate before the channel-perms pre-check: a free user
     # trying this command should see the upsell, not a perms error.
     if not await premium.feature_gate(
-        "member_sync", interaction.guild_id,
-        interaction=interaction, bot=bot,
+        "member_sync",
+        interaction.guild_id,
+        interaction=interaction,
+        bot=bot,
     ):
         await interaction.response.send_message(
             embed=premium.premium_locked_embed(
@@ -896,21 +930,24 @@ async def _launch_member_roster_setup(interaction: discord.Interaction, bot) -> 
 
 # ── Wizard ───────────────────────────────────────────────────────────────────
 
+
 async def run_member_roster_setup(interaction: discord.Interaction, bot):
     """Walk an admin through configuring the member-roster sync tab."""
     import wizard_registry
     from wizard_registry import wait_view_or_cancel
     from setup_cog import (
-        ask_keep_or_change, YesNoView, ask_proceed_with_existing_config,
+        ask_keep_or_change,
+        YesNoView,
+        ask_proceed_with_existing_config,
     )
     from config import has_member_roster_config
 
-    guild_id     = interaction.guild_id
-    channel      = interaction.channel
-    user         = interaction.user
+    guild_id = interaction.guild_id
+    channel = interaction.channel
+    user = interaction.user
     cancel_event = wizard_registry.register(user.id)
 
-    current   = get_member_roster_config(guild_id)
+    current = get_member_roster_config(guild_id)
     guild_cfg = get_config(guild_id)
     member_role_id = guild_cfg.member_role_id if guild_cfg else 0
     roster_already_configured = has_member_roster_config(guild_id)
@@ -966,7 +1003,7 @@ async def run_member_roster_setup(interaction: discord.Interaction, bot):
 
     # ── Step 2: Filter to member role only? ───────────────────────────────────
     filter_view = YesNoView()
-    role_label  = f"<@&{member_role_id}>" if member_role_id else "the configured member role"
+    role_label = f"<@&{member_role_id}>" if member_role_id else "the configured member role"
     await channel.send(
         f"**Step 2 of 3 — Filter by Member Role?**\n"
         f"Should the roster only include members who have {role_label}?\n"
@@ -1011,11 +1048,16 @@ async def run_member_roster_setup(interaction: discord.Interaction, bot):
         guild = interaction.guild
         await _ensure_member_cache(guild)
         from config import get_member_roster_sheet
+
         _preview_ws = await asyncio.get_event_loop().run_in_executor(
-            None, get_member_roster_sheet, guild_id, tab_name,
+            None,
+            get_member_roster_sheet,
+            guild_id,
+            tab_name,
         )
         _existing_rows = await asyncio.get_event_loop().run_in_executor(
-            None, _preview_ws.get_all_values,
+            None,
+            _preview_ws.get_all_values,
         )
     except Exception as e:
         # If we can't read the tab (perms, network, missing tab), fall
@@ -1023,7 +1065,8 @@ async def run_member_roster_setup(interaction: discord.Interaction, bot):
         # below will surface the error with a clearer diagnosis.
         logger.warning(
             "[ROSTER SETUP] layout preview read failed for guild=%s: %s",
-            guild_id, e,
+            guild_id,
+            e,
         )
         _existing_rows = []
 
@@ -1038,15 +1081,18 @@ async def run_member_roster_setup(interaction: discord.Interaction, bot):
         # column indices.
         _trial_cfg = {
             **detected_layout["layout"],
-            "tab_name":       tab_name,
+            "tab_name": tab_name,
             "role_filter_id": role_filter_id,
-            "auto_sync":      auto_sync,
+            "auto_sync": auto_sync,
         }
         # Skip the merge — we only want the report, not the merged
         # rows. _merge_with_existing also runs the name fallback.
         _new_rows = _build_roster_rows(guild, _trial_cfg)
         _merged, name_match_dry_run = _merge_with_existing(
-            _new_rows, _existing_rows, _trial_cfg, guild=guild,
+            _new_rows,
+            _existing_rows,
+            _trial_cfg,
+            guild=guild,
         )
 
         layout = detected_layout["layout"]
@@ -1062,22 +1108,18 @@ async def run_member_roster_setup(interaction: discord.Interaction, bot):
 
         field_label = {
             "discord_id_col": "Discord ID",
-            "name_col":       "Name",
-            "display_col":    "Display Name",
-            "joined_col":     "Joined",
-            "roles_col":      "Roles",
+            "name_col": "Name",
+            "display_col": "Display Name",
+            "joined_col": "Joined",
+            "roles_col": "Roles",
         }
         layout_lines = []
         for field, label_text in field_label.items():
             idx = layout[field]
             status = (
-                "appending — no existing match"
-                if field in pending else "matched existing header"
+                "appending — no existing match" if field in pending else "matched existing header"
             )
-            layout_lines.append(
-                f"• **{label_text}** → column **{_col_letter(idx)}**  "
-                f"_({status})_"
-            )
+            layout_lines.append(f"• **{label_text}** → column **{_col_letter(idx)}**  _({status})_")
         # Surface the bot-maintained presence column too so the
         # preview accounts for every column the bot will touch — a
         # tester saw column H in the "preserved" list and assumed it
@@ -1100,9 +1142,12 @@ async def run_member_roster_setup(interaction: discord.Interaction, bot):
             # New presence column will append at the right edge AFTER
             # the 5 bot fields + alliance columns. Compute the
             # eventual landing index for the preview.
-            future_presence_idx = max(
-                list(layout.values()) + [len(existing_header) - 1],
-            ) + 1
+            future_presence_idx = (
+                max(
+                    list(layout.values()) + [len(existing_header) - 1],
+                )
+                + 1
+            )
             layout_lines.append(
                 f"• **Is this user in Discord?** → column "
                 f"**{_col_letter(future_presence_idx)}**  "
@@ -1110,8 +1155,7 @@ async def run_member_roster_setup(interaction: discord.Interaction, bot):
             )
 
         match_lines = [
-            f"• **{len(name_match_dry_run['matched_by_id'])}** rows "
-            f"matched by Discord ID",
+            f"• **{len(name_match_dry_run['matched_by_id'])}** rows matched by Discord ID",
         ]
         if name_match_dry_run["matched_by_name"]:
             match_lines.append(
@@ -1142,16 +1186,12 @@ async def run_member_roster_setup(interaction: discord.Interaction, bot):
         if presence_idx is not None:
             bot_claimed.add(presence_idx)
         preserved_letters = [
-            _col_letter(i)
-            for i in range(len(existing_header))
-            if i not in bot_claimed
+            _col_letter(i) for i in range(len(existing_header)) if i not in bot_claimed
         ]
         preserved_blurb = (
-            f"Custom data in columns "
-            f"{', '.join(preserved_letters)} is preserved."
-            if preserved_letters else
-            "No custom alliance columns detected — every column is "
-            "claimed by the bot."
+            f"Custom data in columns {', '.join(preserved_letters)} is preserved."
+            if preserved_letters
+            else "No custom alliance columns detected — every column is claimed by the bot."
         )
 
         class _LayoutRemapModal(discord.ui.Modal):
@@ -1188,7 +1228,9 @@ async def run_member_roster_setup(interaction: discord.Interaction, bot):
                 style=discord.ButtonStyle.success,
             )
             async def confirm(
-                self, inter: discord.Interaction, _btn: discord.ui.Button,
+                self,
+                inter: discord.Interaction,
+                _btn: discord.ui.Button,
             ):
                 self.outcome = "confirm"
                 for item in self.children:
@@ -1205,7 +1247,9 @@ async def run_member_roster_setup(interaction: discord.Interaction, bot):
                 style=discord.ButtonStyle.secondary,
             )
             async def remap(
-                self, inter: discord.Interaction, _btn: discord.ui.Button,
+                self,
+                inter: discord.Interaction,
+                _btn: discord.ui.Button,
             ):
                 self.modal = _LayoutRemapModal(layout)
                 await inter.response.send_modal(self.modal)
@@ -1230,7 +1274,9 @@ async def run_member_roster_setup(interaction: discord.Interaction, bot):
                 style=discord.ButtonStyle.danger,
             )
             async def cancel(
-                self, inter: discord.Interaction, _btn: discord.ui.Button,
+                self,
+                inter: discord.Interaction,
+                _btn: discord.ui.Button,
             ):
                 self.outcome = "cancel"
                 self.cancelled = True
@@ -1246,10 +1292,8 @@ async def run_member_roster_setup(interaction: discord.Interaction, bot):
         preview = _LayoutConfirmView()
         await channel.send(
             f"🔍 **Existing data detected in tab `{tab_name}`.**\n\n"
-            f"**Bot-managed columns will land at:**\n"
-            + "\n".join(layout_lines) + "\n\n"
-            f"**Row matching:**\n"
-            + "\n".join(match_lines) + "\n\n"
+            f"**Bot-managed columns will land at:**\n" + "\n".join(layout_lines) + "\n\n"
+            "**Row matching:**\n" + "\n".join(match_lines) + "\n\n"
             f"_{preserved_blurb}_",
             view=preview,
         )
@@ -1258,9 +1302,7 @@ async def run_member_roster_setup(interaction: discord.Interaction, bot):
             wizard_registry.unregister(user.id, cancel_event)
             return
         if preview.outcome is None:
-            await channel.send(
-                WIZARD_TIMEOUT.format(wizard=HUB_BTN_MEMBERS)
-            )
+            await channel.send(WIZARD_TIMEOUT.format(wizard=HUB_BTN_MEMBERS))
             wizard_registry.unregister(user.id, cancel_event)
             return
 
@@ -1278,14 +1320,19 @@ async def run_member_roster_setup(interaction: discord.Interaction, bot):
         # No header row → blank sheet (or unreachable). Use the hardcoded
         # default layout.
         layout = {
-            "discord_id_col": 0, "name_col": 1, "display_col": 2,
-            "joined_col": 3, "roles_col": 4,
+            "discord_id_col": 0,
+            "name_col": 1,
+            "display_col": 2,
+            "joined_col": 3,
+            "roles_col": 4,
         }
 
     save_member_roster_config(
         guild_id,
-        enabled=1, tab_name=tab_name,
-        role_filter_id=role_filter_id, auto_sync=auto_sync,
+        enabled=1,
+        tab_name=tab_name,
+        role_filter_id=role_filter_id,
+        auto_sync=auto_sync,
         discord_id_col=layout["discord_id_col"],
         name_col=layout["name_col"],
         display_col=layout["display_col"],
@@ -1294,14 +1341,18 @@ async def run_member_roster_setup(interaction: discord.Interaction, bot):
     )
 
     # ── Initial sync ──────────────────────────────────────────────────────────
-    cfg   = get_member_roster_config(guild_id)
+    cfg = get_member_roster_config(guild_id)
     await _ensure_member_cache(guild)
     try:
         count, _report = await asyncio.get_event_loop().run_in_executor(
-            None, write_roster, guild, cfg,
+            None,
+            write_roster,
+            guild,
+            cfg,
         )
     except Exception as e:
         from config import describe_sheet_error
+
         diagnosis = describe_sheet_error(e, tab=cfg["tab_name"])
         print(
             f"[ROSTER] /setup → 👥 Member Sync initial sync failed: "
@@ -1318,13 +1369,13 @@ async def run_member_roster_setup(interaction: discord.Interaction, bot):
         title="✅ Member Roster Sync Configured",
         color=discord.Color.gold(),
     )
-    embed.add_field(name="Tab",          value=tab_name, inline=True)
+    embed.add_field(name="Tab", value=tab_name, inline=True)
     embed.add_field(
         name="Role Filter",
         value=f"<@&{role_filter_id}>" if role_filter_id else "All non-bots",
         inline=True,
     )
-    embed.add_field(name="Auto-Sync",    value="Enabled" if auto_sync else "Disabled", inline=True)
+    embed.add_field(name="Auto-Sync", value="Enabled" if auto_sync else "Disabled", inline=True)
     embed.add_field(name="Initial sync", value=f"**{count}** members written", inline=False)
     embed.add_field(
         name="👤 Alliance members not on Discord",

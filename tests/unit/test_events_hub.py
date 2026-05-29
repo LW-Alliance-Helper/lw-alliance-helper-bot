@@ -1,4 +1,5 @@
 """Smoke + shape tests for the /events hub (#249)."""
+
 from unittest.mock import MagicMock
 
 import pytest
@@ -70,12 +71,12 @@ def test_hub_button_labels_match_expected_text():
     intentionally, update the literal here too — the point is to catch
     typos or autoformatter rewrites that would silently propagate to
     every importing module."""
-    assert EVENTS_HUB_TITLE        == "📣 Event Announcements"
-    assert EVENTS_HUB_BTN_TODAY    == "📅 Today's events"
+    assert EVENTS_HUB_TITLE == "📣 Event Announcements"
+    assert EVENTS_HUB_BTN_TODAY == "📅 Today's events"
     assert EVENTS_HUB_BTN_UPCOMING == "📆 Upcoming events"
-    assert EVENTS_HUB_BTN_LOG      == "📜 Event log"
-    assert EVENTS_HUB_BTN_CREATE   == "➕ Create an event"
-    assert EVENTS_HUB_BTN_DELETE   == "🗑️ Delete an event"
+    assert EVENTS_HUB_BTN_LOG == "📜 Event log"
+    assert EVENTS_HUB_BTN_CREATE == "➕ Create an event"
+    assert EVENTS_HUB_BTN_DELETE == "🗑️ Delete an event"
 
 
 # ── Hub view smoke test ──────────────────────────────────────────────────────
@@ -102,8 +103,8 @@ def test_hub_view_button_layout_two_rows():
     the visual hierarchy; pin it explicitly."""
     view = _EventsHubView(bot=MagicMock(), guild_id=1, owner_user_id=42)
     rows = {item.label: item.row for item in view.children}
-    assert rows[EVENTS_HUB_BTN_TODAY]    == 0
+    assert rows[EVENTS_HUB_BTN_TODAY] == 0
     assert rows[EVENTS_HUB_BTN_UPCOMING] == 0
-    assert rows[EVENTS_HUB_BTN_LOG]      == 0
-    assert rows[EVENTS_HUB_BTN_CREATE]   == 1
-    assert rows[EVENTS_HUB_BTN_DELETE]   == 1
+    assert rows[EVENTS_HUB_BTN_LOG] == 0
+    assert rows[EVENTS_HUB_BTN_CREATE] == 1
+    assert rows[EVENTS_HUB_BTN_DELETE] == 1

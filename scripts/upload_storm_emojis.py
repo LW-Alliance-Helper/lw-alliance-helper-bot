@@ -64,10 +64,7 @@ def _load_and_resize(path: pathlib.Path) -> bytes:
     out = io.BytesIO()
     img.save(out, format="PNG", optimize=True)
     resized = out.getvalue()
-    print(
-        f"[resize] {path.name}: {len(raw)} → {len(resized)} bytes "
-        f"({img.size[0]}x{img.size[1]})"
-    )
+    print(f"[resize] {path.name}: {len(raw)} → {len(resized)} bytes ({img.size[0]}x{img.size[1]})")
     if len(resized) > _MAX_EMOJI_BYTES:
         raise RuntimeError(
             f"{path.name}: even after resize the image is {len(resized)} "
@@ -107,7 +104,8 @@ async def _upload_all(token: str) -> dict[str, int]:
                 try:
                     payload = _load_and_resize(path)
                     emoji = await client.create_application_emoji(
-                        name=name, image=payload,
+                        name=name,
+                        image=payload,
                     )
                 except Exception as e:
                     print(f"[FAIL] {name}: {e}")

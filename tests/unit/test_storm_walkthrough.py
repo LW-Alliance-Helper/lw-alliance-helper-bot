@@ -36,51 +36,87 @@ def _make_interaction(user_id: int, message=None) -> MagicMock:
 class TestWalkthroughDismissals:
     def test_unseen_returns_false(self, seeded_db):
         import config
-        assert config.is_walkthrough_dismissed(
-            TEST_GUILD_ID, 42, sw.STORM_HUB_TOUR_KEY,
-        ) is False
+
+        assert (
+            config.is_walkthrough_dismissed(
+                TEST_GUILD_ID,
+                42,
+                sw.STORM_HUB_TOUR_KEY,
+            )
+            is False
+        )
 
     def test_dismiss_then_check(self, seeded_db):
         import config
+
         config.dismiss_walkthrough(TEST_GUILD_ID, 42, sw.STORM_HUB_TOUR_KEY)
-        assert config.is_walkthrough_dismissed(
-            TEST_GUILD_ID, 42, sw.STORM_HUB_TOUR_KEY,
-        ) is True
+        assert (
+            config.is_walkthrough_dismissed(
+                TEST_GUILD_ID,
+                42,
+                sw.STORM_HUB_TOUR_KEY,
+            )
+            is True
+        )
 
     def test_dismiss_idempotent(self, seeded_db):
         import config
+
         config.dismiss_walkthrough(TEST_GUILD_ID, 42, sw.STORM_HUB_TOUR_KEY)
         config.dismiss_walkthrough(TEST_GUILD_ID, 42, sw.STORM_HUB_TOUR_KEY)
         # Still just one record; still dismissed.
-        assert config.is_walkthrough_dismissed(
-            TEST_GUILD_ID, 42, sw.STORM_HUB_TOUR_KEY,
-        ) is True
+        assert (
+            config.is_walkthrough_dismissed(
+                TEST_GUILD_ID,
+                42,
+                sw.STORM_HUB_TOUR_KEY,
+            )
+            is True
+        )
 
     def test_per_user_isolation(self, seeded_db):
         import config
+
         config.dismiss_walkthrough(TEST_GUILD_ID, 42, sw.STORM_HUB_TOUR_KEY)
         # A different user in the same guild still gets offered the tour.
-        assert config.is_walkthrough_dismissed(
-            TEST_GUILD_ID, 99, sw.STORM_HUB_TOUR_KEY,
-        ) is False
+        assert (
+            config.is_walkthrough_dismissed(
+                TEST_GUILD_ID,
+                99,
+                sw.STORM_HUB_TOUR_KEY,
+            )
+            is False
+        )
 
     def test_per_guild_isolation(self, seeded_db):
         import config
+
         config.dismiss_walkthrough(TEST_GUILD_ID, 42, sw.STORM_HUB_TOUR_KEY)
         # The same user in a different guild still gets offered the tour.
-        assert config.is_walkthrough_dismissed(
-            TEST_GUILD_ID + 1, 42, sw.STORM_HUB_TOUR_KEY,
-        ) is False
+        assert (
+            config.is_walkthrough_dismissed(
+                TEST_GUILD_ID + 1,
+                42,
+                sw.STORM_HUB_TOUR_KEY,
+            )
+            is False
+        )
 
     def test_hub_version_key_re_offers_after_v1_signups_dismissal(self, seeded_db):
         """The pre-#190 tour used `storm_signups_v1`; the hub tour
         uses `storm_hub_v1`. An officer who dismissed the old tour
         should still see the new hub-flow offer once."""
         import config
+
         config.dismiss_walkthrough(TEST_GUILD_ID, 42, "storm_signups_v1")
-        assert config.is_walkthrough_dismissed(
-            TEST_GUILD_ID, 42, sw.STORM_HUB_TOUR_KEY,
-        ) is False
+        assert (
+            config.is_walkthrough_dismissed(
+                TEST_GUILD_ID,
+                42,
+                sw.STORM_HUB_TOUR_KEY,
+            )
+            is False
+        )
 
 
 class TestTourContent:
@@ -173,7 +209,8 @@ class TestTourBuilderBranching:
 
     def test_offer_view_carries_event_type(self):
         view = sw._OfferView(
-            guild_id=TEST_GUILD_ID, user_id=42,
+            guild_id=TEST_GUILD_ID,
+            user_id=42,
             walkthrough_key=sw.STORM_HUB_TOUR_KEY,
             event_type="CS",
         )
@@ -192,8 +229,7 @@ class TestTourStepProgression:
     @pytest.mark.asyncio
     async def test_next_button_advances_to_step_2(self):
         steps = ["one", "two", "three"]
-        view = sw._TourStepView(steps=steps, index=0,
-                                owner_id=42, is_last=False)
+        view = sw._TourStepView(steps=steps, index=0, owner_id=42, is_last=False)
         # The view exposes Next + Skip; the first child is Next.
         assert len(view.children) == 2
         inter = _make_interaction(user_id=42, message=MagicMock(content="one"))
@@ -222,11 +258,13 @@ class TestTourStepProgression:
 
         # Start with the first step's view.
         view = sw._TourStepView(
-            steps=steps, index=0, owner_id=42, is_last=False,
+            steps=steps,
+            index=0,
+            owner_id=42,
+            is_last=False,
         )
         for _ in range(len(steps) - 1):
-            inter = _make_interaction(user_id=42,
-                                      message=MagicMock(content="prior"))
+            inter = _make_interaction(user_id=42, message=MagicMock(content="prior"))
             inter.followup.send = AsyncMock(side_effect=_record_followup_send)
             await view.children[0].callback(inter)
             # The Next callback called `_send_tour_step`, which created
@@ -236,7 +274,10 @@ class TestTourStepProgression:
             next_index = view._index + 1
             is_last = (next_index + 1) >= len(steps)
             view = sw._TourStepView(
-                steps=steps, index=next_index, owner_id=42, is_last=is_last,
+                steps=steps,
+                index=next_index,
+                owner_id=42,
+                is_last=is_last,
             )
 
         # The observed content list should be steps[1] … steps[N-1].
@@ -258,8 +299,7 @@ class TestTourStepProgression:
         view = sw._TourStepView(steps=steps, index=0, owner_id=42, is_last=False)
         # Children: [Next, Skip]
         skip_btn = view.children[1]
-        inter = _make_interaction(user_id=42,
-                                  message=MagicMock(content=None))
+        inter = _make_interaction(user_id=42, message=MagicMock(content=None))
         # Must not raise.
         await skip_btn.callback(inter)
         # The view stopped + disabled.
@@ -273,8 +313,10 @@ class TestTourStepProgression:
         steps = ["one", "two"]
         view = sw._TourStepView(steps=steps, index=0, owner_id=42, is_last=False)
         next_btn = view.children[0]
-        inter = _make_interaction(user_id=99,  # not the owner
-                                  message=MagicMock(content="one"))
+        inter = _make_interaction(
+            user_id=99,  # not the owner
+            message=MagicMock(content="one"),
+        )
         await next_btn.callback(inter)
         # No followup sent — the view rejected the click.
         inter.followup.send.assert_not_called()
@@ -305,7 +347,8 @@ class TestOfferViewDoubleClick:
     @pytest.mark.asyncio
     async def test_double_accept_only_starts_one_tour(self, seeded_db):
         view = sw._OfferView(
-            guild_id=TEST_GUILD_ID, user_id=42,
+            guild_id=TEST_GUILD_ID,
+            user_id=42,
             walkthrough_key=sw.STORM_HUB_TOUR_KEY,
         )
         # discord.ui.button decorates the method into a Button on the View;

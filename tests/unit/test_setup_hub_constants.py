@@ -5,6 +5,7 @@ point is to catch *accidental* renames (typo, autoformatter doing
 something cute, etc.) that would silently propagate everywhere these
 constants are imported.
 """
+
 from setup_hub import (
     HUB_BTN_BIRTHDAYS,
     HUB_BTN_BREAKDOWN,
@@ -26,19 +27,19 @@ from setup_hub import (
 
 def test_hub_button_labels_match_expected_text():
     assert HUB_BTN_SETUP_WIZARD == "⚙️ Open setup wizard"
-    assert HUB_BTN_VIEW_CONFIG  == "🗂️ View configuration"
-    assert HUB_BTN_RESET        == "🗑️ Reset configuration"
-    assert HUB_BTN_RELEASE_ANN  == "📢 Release announcements"
-    assert HUB_BTN_TRAIN        == "🚂 Train"
-    assert HUB_BTN_GROWTH       == "📈 Growth"
-    assert HUB_BTN_BIRTHDAYS    == "🎂 Birthdays"
-    assert HUB_BTN_EVENTS       == "📣 Events"
-    assert HUB_BTN_DS           == "⚔️ Desert Storm"
-    assert HUB_BTN_CS           == "🏜️ Canyon Storm"
-    assert HUB_BTN_SHINY        == "🌟 Shiny Tasks"
-    assert HUB_BTN_MEMBERS      == "👥 Member Sync"
-    assert HUB_BTN_SURVEY       == "📋 Survey"
-    assert HUB_BTN_BREAKDOWN    == "📊 Growth Breakdown"
+    assert HUB_BTN_VIEW_CONFIG == "🗂️ View configuration"
+    assert HUB_BTN_RESET == "🗑️ Reset configuration"
+    assert HUB_BTN_RELEASE_ANN == "📢 Release announcements"
+    assert HUB_BTN_TRAIN == "🚂 Train"
+    assert HUB_BTN_GROWTH == "📈 Growth"
+    assert HUB_BTN_BIRTHDAYS == "🎂 Birthdays"
+    assert HUB_BTN_EVENTS == "📣 Events"
+    assert HUB_BTN_DS == "⚔️ Desert Storm"
+    assert HUB_BTN_CS == "🏜️ Canyon Storm"
+    assert HUB_BTN_SHINY == "🌟 Shiny Tasks"
+    assert HUB_BTN_MEMBERS == "👥 Member Sync"
+    assert HUB_BTN_SURVEY == "📋 Survey"
+    assert HUB_BTN_BREAKDOWN == "📊 Growth Breakdown"
 
 
 def test_storm_setup_nav_builds_correctly():

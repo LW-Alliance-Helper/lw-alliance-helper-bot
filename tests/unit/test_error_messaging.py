@@ -39,6 +39,7 @@ os.environ.setdefault("DISCORD_TOKEN", "fake-token-for-tests")
 
 # ── _format_command_error: categorisation ──────────────────────────────────────
 
+
 class TestFormatCommandError:
     """Each Discord exception subtype produces a message tailored to its
     cause; the Sentry event id (when available) is appended as a
@@ -62,6 +63,7 @@ class TestFormatCommandError:
 
     def test_forbidden_50001_explains_missing_access(self):
         from bot import _format_command_error
+
         err = self._make_forbidden(50001)
         msg = _format_command_error(err, "abc123")
         assert "I don't have access to this channel" in msg
@@ -71,6 +73,7 @@ class TestFormatCommandError:
 
     def test_forbidden_50013_lists_required_permissions(self):
         from bot import _format_command_error
+
         err = self._make_forbidden(50013)
         msg = _format_command_error(err, "abc123")
         assert "missing a Discord permission" in msg
@@ -81,6 +84,7 @@ class TestFormatCommandError:
 
     def test_other_forbidden_surfaces_code(self):
         from bot import _format_command_error
+
         err = self._make_forbidden(99999)
         msg = _format_command_error(err, "abc123")
         assert "Discord blocked" in msg
@@ -91,6 +95,7 @@ class TestFormatCommandError:
         🗂️ View configuration button — the NotFound rescue copy now
         points users at that nav path instead of the bare slash."""
         from bot import _format_command_error
+
         err = self._make_not_found()
         msg = _format_command_error(err, "abc123")
         assert "Discord couldn't find" in msg
@@ -99,6 +104,7 @@ class TestFormatCommandError:
 
     def test_http_exception_includes_status_and_code(self):
         from bot import _format_command_error
+
         err = self._make_http_exception(status=502, code=0)
         msg = _format_command_error(err, "abc123")
         assert "Discord's API returned an error" in msg
@@ -106,6 +112,7 @@ class TestFormatCommandError:
 
     def test_generic_error_says_bug_not_config(self):
         from bot import _format_command_error
+
         err = RuntimeError("something blew up")
         msg = _format_command_error(err, "abc123")
         assert "looks like a bug on my side" in msg
@@ -114,6 +121,7 @@ class TestFormatCommandError:
         """Sentry not initialised → capture_exception() returns None →
         the formatter must not append an empty `Reference:` line."""
         from bot import _format_command_error
+
         err = RuntimeError("x")
         msg = _format_command_error(err, None)
         assert "Reference" not in msg
@@ -122,6 +130,7 @@ class TestFormatCommandError:
         """Every error category should link the user to the issue tracker
         so ticket reporting is one click away."""
         from bot import _format_command_error, ISSUE_TRACKER_URL
+
         cases = [
             self._make_forbidden(50001),
             self._make_forbidden(50013),
@@ -137,6 +146,7 @@ class TestFormatCommandError:
 
 # ── _missing_wizard_perms / _check_wizard_can_run ──────────────────────────────
 
+
 class TestMissingWizardPerms:
     """Returns the list of human-readable perms the bot is missing in
     `interaction.channel`."""
@@ -146,9 +156,9 @@ class TestMissingWizardPerms:
         Permissions-like object. `perm_overrides` lets tests set specific
         perms to False; everything else defaults to True."""
         permissions = MagicMock()
-        permissions.view_channel        = perm_overrides.get("view_channel", True)
-        permissions.send_messages       = perm_overrides.get("send_messages", True)
-        permissions.embed_links         = perm_overrides.get("embed_links", True)
+        permissions.view_channel = perm_overrides.get("view_channel", True)
+        permissions.send_messages = perm_overrides.get("send_messages", True)
+        permissions.embed_links = perm_overrides.get("embed_links", True)
         permissions.read_message_history = perm_overrides.get("read_message_history", True)
 
         channel = MagicMock()
@@ -158,24 +168,30 @@ class TestMissingWizardPerms:
         guild.me = MagicMock()  # a non-None Member-like object
 
         interaction = MagicMock()
-        interaction.guild   = guild
+        interaction.guild = guild
         interaction.channel = channel
         return interaction
 
     def test_all_perms_present_returns_empty(self):
         from setup_cog import _missing_wizard_perms
+
         assert _missing_wizard_perms(self._make_interaction()) == []
 
     def test_missing_send_messages_listed_in_human_form(self):
         from setup_cog import _missing_wizard_perms
+
         out = _missing_wizard_perms(self._make_interaction(send_messages=False))
         assert out == ["Send Messages"]
 
     def test_multiple_missing_returned_in_required_order(self):
         from setup_cog import _missing_wizard_perms
-        out = _missing_wizard_perms(self._make_interaction(
-            send_messages=False, embed_links=False,
-        ))
+
+        out = _missing_wizard_perms(
+            self._make_interaction(
+                send_messages=False,
+                embed_links=False,
+            )
+        )
         # _WIZARD_REQUIRED_PERMS order: view_channel, send_messages, embed_links, read_message_history
         assert out == ["Send Messages", "Embed Links"]
 
@@ -183,6 +199,7 @@ class TestMissingWizardPerms:
         """DM interactions have guild = None; not a relevant context for
         wizard perms checks, so return empty (no error message)."""
         from setup_cog import _missing_wizard_perms
+
         interaction = self._make_interaction()
         interaction.guild = None
         assert _missing_wizard_perms(interaction) == []
@@ -195,29 +212,30 @@ class TestCheckWizardCanRun:
 
     def _make_interaction(self, *, response_done=False, **perm_overrides) -> MagicMock:
         permissions = MagicMock()
-        permissions.view_channel        = perm_overrides.get("view_channel", True)
-        permissions.send_messages       = perm_overrides.get("send_messages", True)
-        permissions.embed_links         = perm_overrides.get("embed_links", True)
+        permissions.view_channel = perm_overrides.get("view_channel", True)
+        permissions.send_messages = perm_overrides.get("send_messages", True)
+        permissions.embed_links = perm_overrides.get("embed_links", True)
         permissions.read_message_history = perm_overrides.get("read_message_history", True)
 
         channel = MagicMock()
         channel.permissions_for = MagicMock(return_value=permissions)
-        channel.mention         = "<#999>"
+        channel.mention = "<#999>"
 
         guild = MagicMock()
         guild.me = MagicMock()
 
         interaction = MagicMock()
-        interaction.guild   = guild
+        interaction.guild = guild
         interaction.channel = channel
-        interaction.response.is_done       = MagicMock(return_value=response_done)
-        interaction.response.send_message  = AsyncMock()
-        interaction.followup.send          = AsyncMock()
+        interaction.response.is_done = MagicMock(return_value=response_done)
+        interaction.response.send_message = AsyncMock()
+        interaction.followup.send = AsyncMock()
         return interaction
 
     @pytest.mark.asyncio
     async def test_returns_true_when_perms_ok(self):
         from setup_cog import _check_wizard_can_run
+
         interaction = self._make_interaction()
         ok = await _check_wizard_can_run(interaction, "setup_train")
         assert ok is True
@@ -228,6 +246,7 @@ class TestCheckWizardCanRun:
     @pytest.mark.asyncio
     async def test_returns_false_and_sends_ephemeral_when_missing(self):
         from setup_cog import _check_wizard_can_run
+
         interaction = self._make_interaction(send_messages=False)
         ok = await _check_wizard_can_run(interaction, "setup_train")
         assert ok is False
@@ -236,10 +255,10 @@ class TestCheckWizardCanRun:
         # since the response wasn't done yet.
         interaction.response.send_message.assert_called_once()
         call = interaction.response.send_message.call_args
-        msg  = call.args[0] if call.args else call.kwargs["content"]
+        msg = call.args[0] if call.args else call.kwargs["content"]
         assert "Send Messages" in msg
         assert "/setup_train" in msg
-        assert "<#999>" in msg            # uses channel.mention
+        assert "<#999>" in msg  # uses channel.mention
         assert call.kwargs.get("ephemeral") is True
 
     @pytest.mark.asyncio
@@ -247,6 +266,7 @@ class TestCheckWizardCanRun:
         """If the slash command already responded (e.g. with a defer or
         intermediate message), the pre-check should use followup.send."""
         from setup_cog import _check_wizard_can_run
+
         interaction = self._make_interaction(response_done=True, send_messages=False)
         ok = await _check_wizard_can_run(interaction, "setup_events")
         assert ok is False
@@ -256,8 +276,11 @@ class TestCheckWizardCanRun:
     @pytest.mark.asyncio
     async def test_lists_all_missing_perms(self):
         from setup_cog import _check_wizard_can_run
+
         interaction = self._make_interaction(
-            send_messages=False, embed_links=False, view_channel=False,
+            send_messages=False,
+            embed_links=False,
+            view_channel=False,
         )
         ok = await _check_wizard_can_run(interaction, "setup_train")
         assert ok is False
@@ -271,6 +294,7 @@ class TestCheckWizardCanRun:
         """The error tells the user what to fix AND how to work around
         it (run from a different channel)."""
         from setup_cog import _check_wizard_can_run
+
         interaction = self._make_interaction(send_messages=False)
         await _check_wizard_can_run(interaction, "setup_train")
         msg = interaction.response.send_message.call_args.args[0]

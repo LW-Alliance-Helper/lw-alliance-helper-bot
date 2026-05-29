@@ -36,6 +36,7 @@ class TestSlotLabels:
         """Saved mapping picks slot 1 for Team A and slot 2 for Team B —
         labels come back in TEAM order matching the picks."""
         import config
+
         config.save_storm_team_slots(TEST_GUILD_ID, "DS", 1, 2)
         slot_labels = config.get_storm_slot_labels("DS", TEST_GUILD_ID)
         a, b = ssp._slot_labels("DS", guild_id=TEST_GUILD_ID)
@@ -49,6 +50,7 @@ class TestSlotLabels:
         same string — the invariant 3-button SignupView layout still
         renders, just with identical Team A and Team B labels."""
         import config
+
         config.save_storm_team_slots(TEST_GUILD_ID, "CS", 2, 2)
         slot_labels = config.get_storm_slot_labels("CS", TEST_GUILD_ID)
         a, b = ssp._slot_labels("CS", guild_id=TEST_GUILD_ID)
@@ -61,12 +63,15 @@ class TestSlotLabels:
         per-week officer-pick path for the `📣 Post sign-up poll`
         confirmation flow."""
         import config
+
         config.save_storm_team_slots(TEST_GUILD_ID, "DS", 1, 2)
         slot_labels = config.get_storm_slot_labels("DS", TEST_GUILD_ID)
         # Override Team A to slot 2 for this render only.
         a, b = ssp._slot_labels(
-            "DS", guild_id=TEST_GUILD_ID,
-            override_a_idx=2, override_b_idx=2,
+            "DS",
+            guild_id=TEST_GUILD_ID,
+            override_a_idx=2,
+            override_b_idx=2,
         )
         assert a == slot_labels[1]
         assert b == slot_labels[1]
@@ -76,10 +81,12 @@ class TestSlotLabels:
         saved default. Lets the override flow ask only the running team
         without blanking the unchanged side."""
         import config
+
         config.save_storm_team_slots(TEST_GUILD_ID, "DS", 1, 2)
         slot_labels = config.get_storm_slot_labels("DS", TEST_GUILD_ID)
         a, b = ssp._slot_labels(
-            "DS", guild_id=TEST_GUILD_ID,
+            "DS",
+            guild_id=TEST_GUILD_ID,
             override_a_idx=2,  # only override A
         )
         assert a == slot_labels[1]
@@ -144,6 +151,7 @@ class TestTodayInGuildTz:
 
     def test_uses_guild_timezone_when_configured(self, seeded_db):
         import config
+
         cfg = config.get_config(TEST_GUILD_ID)
         cfg.timezone = "America/New_York"
         config.save_config(cfg)
@@ -168,6 +176,7 @@ class TestTodayInGuildTz:
 
     def test_falls_back_to_utc_when_no_timezone(self, seeded_db):
         import config
+
         cfg = config.get_config(TEST_GUILD_ID)
         cfg.timezone = ""
         config.save_config(cfg)
@@ -180,6 +189,7 @@ class TestTodayInGuildTz:
 
     def test_invalid_tz_string_does_not_crash(self, seeded_db):
         import config
+
         cfg = config.get_config(TEST_GUILD_ID)
         cfg.timezone = "Not/A_Real_Zone"
         config.save_config(cfg)
@@ -198,11 +208,13 @@ class TestRegistrationEmbedTeamsGate:
     @pytest.mark.parametrize("teams", ["both", "A", "B"])
     def test_embed_accepts_teams_arg_without_emitting_times(self, teams):
         embed = ssp._build_registration_embed(
-            "DS", "2026-05-18", "9pm ET", "4pm ET", teams=teams,
+            "DS",
+            "2026-05-18",
+            "9pm ET",
+            "4pm ET",
+            teams=teams,
         )
-        body = (embed.description or "") + "\n".join(
-            f.value or "" for f in embed.fields
-        )
+        body = (embed.description or "") + "\n".join(f.value or "" for f in embed.fields)
         assert "9pm ET" not in body
         assert "4pm ET" not in body
         assert "Select your availability for Desert Storm" in embed.description
@@ -210,11 +222,13 @@ class TestRegistrationEmbedTeamsGate:
     @pytest.mark.parametrize("teams", ["both", "A", "B"])
     def test_cs_embed_accepts_teams_arg(self, teams):
         embed = ssp._build_registration_embed(
-            "CS", "2026-05-18", "10am ET", "9pm ET", teams=teams,
+            "CS",
+            "2026-05-18",
+            "10am ET",
+            "9pm ET",
+            teams=teams,
         )
-        body = (embed.description or "") + "\n".join(
-            f.value or "" for f in embed.fields
-        )
+        body = (embed.description or "") + "\n".join(f.value or "" for f in embed.fields)
         assert "10am ET" not in body
         assert "9pm ET" not in body
         assert "Select your availability for Canyon Storm" in embed.description
@@ -230,6 +244,7 @@ class TestPostRegistrationForceFlag:
         """Stub guild that owns a stub channel — enough for
         `post_registration` to reach the `has_registration_post` guard."""
         from unittest.mock import AsyncMock
+
         channel = MagicMock()
         channel.send = AsyncMock(return_value=MagicMock(id=999_000))
         guild = MagicMock()
@@ -241,24 +256,31 @@ class TestPostRegistrationForceFlag:
     async def test_default_returns_already_posted_when_one_exists(self, seeded_db):
         """Scheduler-style call (no `force=`) skips when a row exists."""
         import config
+
         # Configure storm + Team A/B slots so we'd otherwise get past
         # `missing_slot_labels`. The `has_registration_post` check fires
         # before slot resolution though, so we don't strictly need it —
         # but seeding makes the test resilient if the guard moves later.
         config.save_storm_team_slots(TEST_GUILD_ID, "DS", 1, 2)
         config.save_structured_storm_config(
-            TEST_GUILD_ID, "DS",
+            TEST_GUILD_ID,
+            "DS",
             structured_flow_enabled=True,
             signup_channel_id=555,
         )
         config.record_storm_registration_post(
-            TEST_GUILD_ID, "DS", "2026-05-29",
-            channel_id=555, message_id=4001,
+            TEST_GUILD_ID,
+            "DS",
+            "2026-05-29",
+            channel_id=555,
+            message_id=4001,
         )
         guild, channel = self._guild_with_channel()
         result = await ssp.post_registration(
-            bot=MagicMock(), guild=guild,
-            event_type="DS", event_date="2026-05-29",
+            bot=MagicMock(),
+            guild=guild,
+            event_type="DS",
+            event_date="2026-05-29",
         )
         assert result["status"] == "already_posted"
         # No new message went out — channel.send was never called.
@@ -270,25 +292,33 @@ class TestPostRegistrationForceFlag:
         message and records a second row — votes still aggregate on
         the same (guild, event_type, event_date) on storm_signups."""
         import config
+
         config.save_storm_team_slots(TEST_GUILD_ID, "DS", 1, 2)
         config.save_structured_storm_config(
-            TEST_GUILD_ID, "DS",
+            TEST_GUILD_ID,
+            "DS",
             structured_flow_enabled=True,
             signup_channel_id=555,
         )
         config.record_storm_registration_post(
-            TEST_GUILD_ID, "DS", "2026-05-29",
-            channel_id=555, message_id=4001,
+            TEST_GUILD_ID,
+            "DS",
+            "2026-05-29",
+            channel_id=555,
+            message_id=4001,
         )
         guild, channel = self._guild_with_channel()
         # Stub the sent-message id so the recorder writes a second row.
         sent_message = MagicMock()
         sent_message.id = 7777
         from unittest.mock import AsyncMock
+
         channel.send = AsyncMock(return_value=sent_message)
         result = await ssp.post_registration(
-            bot=MagicMock(), guild=guild,
-            event_type="DS", event_date="2026-05-29",
+            bot=MagicMock(),
+            guild=guild,
+            event_type="DS",
+            event_date="2026-05-29",
             force=True,
         )
         assert result["status"] == "ok"

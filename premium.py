@@ -66,8 +66,8 @@ PREMIUM_SKU_ID: Optional[int] = (
 # Read snapshots via `silent_fallback_counts()` for diagnostic queries,
 # e.g. an admin command tailing how often these paths fire.
 _silent_fallback_counts: dict[str, int] = {
-    "no_sku":              0,
-    "no_bot":              0,
+    "no_sku": 0,
+    "no_bot": 0,
     "no_assignment_table": 0,
 }
 
@@ -97,18 +97,19 @@ def _reset_silent_fallback_counts() -> None:
     for k in _silent_fallback_counts:
         _silent_fallback_counts[k] = 0
 
+
 # Per-feature limits. None means unlimited.
 LIMITS: dict[str, dict[str, Optional[int]]] = {
-    "events":             {"free": 5,  "premium": None},
-    "themes":             {"free": 3,  "premium": None},
-    "tones":              {"free": 3,  "premium": None},
-    "train_templates":    {"free": 1,  "premium": 10},
-    "storm_templates":    {"free": 1,  "premium": 10},
-    "storm_log_recent":   {"free": 4,  "premium": None},
-    "survey_questions":   {"free": 5,  "premium": None},
-    "growth_metrics":     {"free": 5,  "premium": None},
-    "events_log_days":    {"free": 7,  "premium": 30},
-    "train_log_days":     {"free": 7,  "premium": 30},
+    "events": {"free": 5, "premium": None},
+    "themes": {"free": 3, "premium": None},
+    "tones": {"free": 3, "premium": None},
+    "train_templates": {"free": 1, "premium": 10},
+    "storm_templates": {"free": 1, "premium": 10},
+    "storm_log_recent": {"free": 4, "premium": None},
+    "survey_questions": {"free": 5, "premium": None},
+    "growth_metrics": {"free": 5, "premium": None},
+    "events_log_days": {"free": 7, "premium": 30},
+    "train_log_days": {"free": 7, "premium": 30},
 }
 
 # Premium-only features (boolean gates, not counts).
@@ -193,6 +194,7 @@ def clear_cache() -> None:
 
 # ── Env-driven dev overrides ──────────────────────────────────────────────────
 
+
 def _force_premium_enabled() -> bool:
     return os.environ.get("FORCE_PREMIUM", "").strip().lower() in {"1", "true", "yes"}
 
@@ -219,15 +221,18 @@ def _bypass_guild_ids() -> set[int]:
 # invalidation lives here so callers don't have to remember which guilds
 # need clearing on each operation.
 
+
 def get_assigned_guild(user_id: int) -> Optional[int]:
     """Return the guild_id this user has pinned their license to, or None."""
     from config import get_premium_assignment_for_user
+
     return get_premium_assignment_for_user(user_id)
 
 
 def get_assigned_user(guild_id: int) -> Optional[int]:
     """Return the user_id assigned to this guild, or None."""
     from config import get_premium_assignment_for_guild
+
     return get_premium_assignment_for_guild(guild_id)
 
 
@@ -247,6 +252,7 @@ def assign(user_id: int, guild_id: int) -> bool:
         get_premium_assignment_for_user,
         set_premium_assignment,
     )
+
     prior_guild = get_premium_assignment_for_user(user_id)
     assigned = set_premium_assignment(user_id, guild_id)
     if not assigned:
@@ -263,6 +269,7 @@ def unassign(user_id: int) -> Optional[int]:
     the freed guild. Returns the guild_id that was freed, or None.
     """
     from config import remove_premium_assignment
+
     freed_guild = remove_premium_assignment(user_id)
     if freed_guild is not None:
         _cache_invalidate_guild(freed_guild)
@@ -277,6 +284,7 @@ def invalidate_for_user(user_id: int) -> None:
     listeners so the next `is_premium` read picks up the fresh state.
     """
     from config import get_premium_assignment_for_user
+
     _user_cache_invalidate(user_id)
     assigned = get_premium_assignment_for_user(user_id)
     if assigned is not None:
@@ -284,6 +292,7 @@ def invalidate_for_user(user_id: int) -> None:
 
 
 # ── Public API ────────────────────────────────────────────────────────────────
+
 
 async def user_has_active_subscription(
     user_id: int,
@@ -394,6 +403,7 @@ async def is_premium(
         return cached
 
     from config import get_premium_assignment_for_guild
+
     try:
         assigned_user = get_premium_assignment_for_guild(guild_id)
     except Exception as exc:
@@ -441,6 +451,7 @@ def _entitlement_matches(ent) -> bool:
     ends_at = getattr(ent, "ends_at", None)
     if ends_at is not None:
         from datetime import datetime, timezone
+
         if ends_at < datetime.now(timezone.utc):
             return False
     return True
@@ -518,7 +529,7 @@ def limit_reached_embed(
     countable noun for the limit message (e.g. "events", "metrics", "themes").
     """
     embed = discord.Embed(
-        title=f"📊 Free tier limit reached",
+        title="📊 Free tier limit reached",
         description=(
             f"You've used **{current} of {cap}** {plural_unit} on the free tier. "
             f"Upgrade to {PREMIUM_BRAND} to unlock more."
@@ -542,9 +553,7 @@ def premium_locked_embed(*, feature_label: str, description: str = "") -> discor
     embed = discord.Embed(
         title=f"🔒 {feature_label} is a Premium feature",
         description=(
-            description
-            or f"This feature is part of {PREMIUM_BRAND}. "
-               "Run `/upgrade` to unlock it."
+            description or f"This feature is part of {PREMIUM_BRAND}. Run `/upgrade` to unlock it."
         ),
         color=discord.Color.purple(),
     )
@@ -560,8 +569,10 @@ def upgrade_view() -> Optional[discord.ui.View]:
     if PREMIUM_SKU_ID is None:
         return None
     view = discord.ui.View(timeout=None)
-    view.add_item(discord.ui.Button(
-        style=discord.ButtonStyle.premium,
-        sku_id=PREMIUM_SKU_ID,
-    ))
+    view.add_item(
+        discord.ui.Button(
+            style=discord.ButtonStyle.premium,
+            sku_id=PREMIUM_SKU_ID,
+        )
+    )
     return view

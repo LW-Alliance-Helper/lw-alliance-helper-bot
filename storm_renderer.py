@@ -55,11 +55,12 @@ class RosterZone:
     place each zone's icon + text pill at its layout slot, then
     stacks the per-phase member lists inside the text pill.
     """
-    name: str                   # display name; may include "Stage N — " prefix
+
+    name: str  # display name; may include "Stage N — " prefix
     max_players: int
     members: list[str] = field(default_factory=list)
-    phase: int = 0              # 0 = flat preset, 1/2/3 = phase-aware
-    canonical_zone: str = ""    # base zone name (no phase prefix) for icon lookup
+    phase: int = 0  # 0 = flat preset, 1/2/3 = phase-aware
+    canonical_zone: str = ""  # base zone name (no phase prefix) for icon lookup
 
 
 @dataclass
@@ -75,15 +76,16 @@ class RosterData:
     are leadership-internal signals surfaced in the builder embed and
     mail body, not the public artifact).
     """
-    title: str                                      # legacy back-compat
+
+    title: str  # legacy back-compat
     zones: list[RosterZone]
     subs: list[str] = field(default_factory=list)
     paired_subs: dict[str, str] = field(default_factory=dict)
-    event_type: str = "DS"                          # "DS" or "CS"
-    preset_name: str = ""                           # surfaces under event name
-    team_label: str = ""                            # "Team A" / "Rulebringers" / ""
-    event_date_label: str = ""                      # human-readable date string
-    phase_count: int = 0                            # 0 = flat, 2 or 3 = phase-aware
+    event_type: str = "DS"  # "DS" or "CS"
+    preset_name: str = ""  # surfaces under event name
+    team_label: str = ""  # "Team A" / "Rulebringers" / ""
+    event_date_label: str = ""  # human-readable date string
+    phase_count: int = 0  # 0 = flat, 2 or 3 = phase-aware
     # Populated by `render()` after the slot-flow layout runs (#227):
     # any names that couldn't fit inside their zone's pill go here so
     # the caller can warn the officer in a post-Approve ephemeral.
@@ -100,10 +102,16 @@ _INTER_BOLD = os.path.join(_HERE, "assets", "fonts", "Inter-Bold.ttf")
 # Cyrillic + Greek; these handle CJK and Arabic player names that
 # would otherwise render as `.notdef` tofu boxes.
 _NOTO_CJK_REGULAR = os.path.join(
-    _HERE, "assets", "fonts", "NotoSansCJKsc-Regular.otf",
+    _HERE,
+    "assets",
+    "fonts",
+    "NotoSansCJKsc-Regular.otf",
 )
 _NOTO_ARABIC_REGULAR = os.path.join(
-    _HERE, "assets", "fonts", "NotoSansArabic-Regular.ttf",
+    _HERE,
+    "assets",
+    "fonts",
+    "NotoSansArabic-Regular.ttf",
 )
 _ICONS_DS_DIR = os.path.join(_HERE, "assets", "storm_icons", "ds")
 _ICONS_CS_DIR = os.path.join(_HERE, "assets", "storm_icons", "cs")
@@ -112,31 +120,31 @@ _ICONS_CS_DIR = os.path.join(_HERE, "assets", "storm_icons", "cs")
 # grey placeholder circle, intended for any future zone that ships
 # before its icon does. All DS slots currently have art.
 _DS_ICON_FILES: dict[str, Optional[str]] = {
-    "Nuclear Silo":         "Nuclear Silo.png",
-    "Oil Refinery I":       "Oil Refinery.png",
-    "Oil Refinery II":      "Oil Refinery.png",
-    "Science Hub":          "Science Hub.png",
-    "Info Center":          "Info Center.png",
-    "Field Hospital I":     "Field Hospital.png",
-    "Field Hospital II":    "Field Hospital.png",
-    "Field Hospital III":   "Field Hospital.png",
-    "Field Hospital IV":    "Field Hospital.png",
-    "Arsenal":              "Arsenal.png",
-    "Mercenary Factory":    "Mercenary Factory.png",
+    "Nuclear Silo": "Nuclear Silo.png",
+    "Oil Refinery I": "Oil Refinery.png",
+    "Oil Refinery II": "Oil Refinery.png",
+    "Science Hub": "Science Hub.png",
+    "Info Center": "Info Center.png",
+    "Field Hospital I": "Field Hospital.png",
+    "Field Hospital II": "Field Hospital.png",
+    "Field Hospital III": "Field Hospital.png",
+    "Field Hospital IV": "Field Hospital.png",
+    "Arsenal": "Arsenal.png",
+    "Mercenary Factory": "Mercenary Factory.png",
 }
 _CS_ICON_FILES: dict[str, Optional[str]] = {
-    "Power Tower":          "Power Tower.png",
-    "Data Center 1":        "Data Center.png",
-    "Data Center 2":        "Data Center.png",
-    "Defense System 1":     "Defense System.png",
-    "Defense System 2":     "Defense System.png",
-    "Serum Factory 1":      "Serum Factory.png",
-    "Serum Factory 2":      "Serum Factory.png",
-    "Sample Warehouse 1":   "Sample Warehouse.png",
-    "Sample Warehouse 2":   "Sample Warehouse.png",
-    "Sample Warehouse 3":   "Sample Warehouse.png",
-    "Sample Warehouse 4":   "Sample Warehouse.png",
-    "Virus Lab":            "Virus Lab.png",
+    "Power Tower": "Power Tower.png",
+    "Data Center 1": "Data Center.png",
+    "Data Center 2": "Data Center.png",
+    "Defense System 1": "Defense System.png",
+    "Defense System 2": "Defense System.png",
+    "Serum Factory 1": "Serum Factory.png",
+    "Serum Factory 2": "Serum Factory.png",
+    "Sample Warehouse 1": "Sample Warehouse.png",
+    "Sample Warehouse 2": "Sample Warehouse.png",
+    "Sample Warehouse 3": "Sample Warehouse.png",
+    "Sample Warehouse 4": "Sample Warehouse.png",
+    "Virus Lab": "Virus Lab.png",
 }
 
 
@@ -194,6 +202,7 @@ _OUTER_MAX_ROWS = 10
 class Box:
     """Pixel-coordinate box in SVG units. The renderer multiplies by
     SCALE when committing to canvas."""
+
     x: float
     y: float
     w: float
@@ -222,6 +231,7 @@ class ZoneLayout:
     below the icon. Outer zones leave this as `None` and accept
     however many rows the content needs.
     """
+
     title: Box
     text: Box
     icon: Box
@@ -239,6 +249,7 @@ class ZoneLayout:
 class EventLayout:
     """Per-event-type layout: canvas size, backgrounds, header, spawn
     zones, per-zone slots, subs section."""
+
     svg_w: float
     svg_h: float
     header: Box
@@ -247,7 +258,7 @@ class EventLayout:
     # Spawn rectangles. DS = two vertical strips; CS = one blue band
     # top + two red bands bottom. Each rect carries an RGBA fill.
     spawn_rects: list[tuple[Box, tuple[int, int, int, int]]]
-    zones: dict[str, ZoneLayout]                # canonical_zone → layout
+    zones: dict[str, ZoneLayout]  # canonical_zone → layout
     subs_title: Box
     subs_text_flat: Box
     subs_text_pairs: Box
@@ -272,7 +283,8 @@ _DS_LAYOUT = EventLayout(
     # between them — pills now have ~90 SVG of breathing room
     # between the bottom of the row-3 pill and the row-4 icon
     # (previously ~30 SVG, which clipped at typical roster size).
-    svg_w=1107.60, svg_h=884.26,
+    svg_w=1107.60,
+    svg_h=884.26,
     header=Box(0, 0, 1107.60, 48.00),
     bg_main=Box(1.30, 46.75, 920.03, 835.24),
     bg_subs=Box(921.27, 46.71, 184.79, 835.24),
@@ -280,8 +292,8 @@ _DS_LAYOUT = EventLayout(
         # DS spawn squares — narrow vertical strips at left/right edges.
         # Game-defined colours: Team A blue, Team B red. Centered
         # vertically with the new taller canvas (+60 SVG).
-        (Box(0, 349.84, 38.33, 213.57),       (92, 124, 199, 204)),    # blue
-        (Box(883.01, 347.32, 38.33, 213.57),  (208, 102, 99, 204)),    # red
+        (Box(0, 349.84, 38.33, 213.57), (92, 124, 199, 204)),  # blue
+        (Box(883.01, 347.32, 38.33, 213.57), (208, 102, 99, 204)),  # red
     ],
     zones={
         "Info Center": ZoneLayout(
@@ -357,9 +369,9 @@ _DS_LAYOUT = EventLayout(
     subs_text_pairs=Box(930.69, 106.73, 167.59, 489.32),
     subs_pair_left_x=946.03,
     subs_pair_right_x=1018.60,
-    pairs_header_offset_y=287.82 - 266.73,       # ≈ 21.09
-    pairs_underline_offset_y=308.75 - 266.73,    # ≈ 42.02
-    pairs_row1_offset_y=320.24 - 266.73,         # ≈ 53.51
+    pairs_header_offset_y=287.82 - 266.73,  # ≈ 21.09
+    pairs_underline_offset_y=308.75 - 266.73,  # ≈ 42.02
+    pairs_row1_offset_y=320.24 - 266.73,  # ≈ 53.51
     pairs_row_step=32.0,
     pairs_divider_x0=940.59,
     pairs_divider_x1=1086.72,
@@ -385,19 +397,20 @@ _CS_LAYOUT = EventLayout(
     #      so SW pills don't crowd the bottom spawn band — tester
     #      asked for "more spacing between text boxes and spawn
     #      zones" on the SW row specifically.
-    svg_w=1235.67, svg_h=1240.00,
+    svg_w=1235.67,
+    svg_h=1240.00,
     header=Box(0, 0, 1235.67, 48.00),
     bg_main=Box(1.30, 46.77, 1049.07, 1191.00),
     bg_subs=Box(1050.26, 47.62, 184.79, 1191.00),
     spawn_rects=[
         # CS spawn bands — game-defined factions.
         # Rulebringers (blue) — single horizontal band at top.
-        (Box(343.01, 47.48, 349.54, 38.33),    (92, 124, 199, 204)),
+        (Box(343.01, 47.48, 349.54, 38.33), (92, 124, 199, 204)),
         # Dawnbreakers (red) — split into two horizontal bands at
         # the very bottom. SW pills end ~y=1100 with content; the
         # spawn band sits at y=1199 with ~99 SVG of breathing room.
-        (Box(117.97, 1199.00, 392.00, 38.33),   (208, 102, 99, 204)),
-        (Box(550.35, 1199.00, 374.27, 38.33),   (208, 102, 99, 204)),
+        (Box(117.97, 1199.00, 392.00, 38.33), (208, 102, 99, 204)),
+        (Box(550.35, 1199.00, 374.27, 38.33), (208, 102, 99, 204)),
     ],
     zones={
         # Top row — DCs symmetric around the BLUE SPAWN BAND
@@ -626,8 +639,7 @@ def render(roster: RosterData) -> bytes:
     # divider between the map and the sidebar reads clearly.
     border_layer = Image.new("RGBA", canvas.size, (0, 0, 0, 0))
     border_draw = ImageDraw.Draw(border_layer)
-    border_draw.rectangle(_s_box(layout.bg_subs),
-                          outline=(0, 0, 0, 255), width=max(2, SCALE))
+    border_draw.rectangle(_s_box(layout.bg_subs), outline=(0, 0, 0, 255), width=max(2, SCALE))
     canvas.alpha_composite(border_layer)
 
     # 2. Header bar with event / team / date.
@@ -640,8 +652,7 @@ def render(roster: RosterData) -> bytes:
     layer = Image.new("RGBA", canvas.size, (0, 0, 0, 0))
     d = ImageDraw.Draw(layer)
     for spawn_box, color in layout.spawn_rects:
-        d.rectangle(_s_box(spawn_box), fill=color,
-                    outline=_SPAWN_OUTLINE, width=max(1, SCALE // 2))
+        d.rectangle(_s_box(spawn_box), fill=color, outline=_SPAWN_OUTLINE, width=max(1, SCALE // 2))
     canvas.alpha_composite(layer)
 
     # 4. Zones. Group input zones by `canonical_zone` so each layout
@@ -650,10 +661,8 @@ def render(roster: RosterData) -> bytes:
     for z in roster.zones:
         key = z.canonical_zone or z.name
         grouped.setdefault(key, []).append(z)
-    icon_files = (_DS_ICON_FILES if roster.event_type.upper() == "DS"
-                  else _CS_ICON_FILES)
-    icons_dir = (_ICONS_DS_DIR if roster.event_type.upper() == "DS"
-                 else _ICONS_CS_DIR)
+    icon_files = _DS_ICON_FILES if roster.event_type.upper() == "DS" else _CS_ICON_FILES
+    icons_dir = _ICONS_DS_DIR if roster.event_type.upper() == "DS" else _ICONS_CS_DIR
 
     overflow: list[_OverflowEntry] = []
     for canonical, phase_blocks in grouped.items():
@@ -661,12 +670,19 @@ def render(roster: RosterData) -> bytes:
         if zlayout is None:
             # Non-canonical zone name — skip silently. Pre-#152
             # presets with typo zones would otherwise crash here.
-            logger.debug("render: skipping unknown zone %r for %s",
-                         canonical, roster.event_type)
+            logger.debug("render: skipping unknown zone %r for %s", canonical, roster.event_type)
             continue
-        _draw_zone(canvas, zlayout, canonical, phase_blocks,
-                   icon_files, icons_dir, roster, overflow,
-                   layout=layout)
+        _draw_zone(
+            canvas,
+            zlayout,
+            canonical,
+            phase_blocks,
+            icon_files,
+            icons_dir,
+            roster,
+            overflow,
+            layout=layout,
+        )
 
     # 5. Subs section — picks flat or pairs variant on data shape.
     _draw_subs_section(canvas, layout, roster)
@@ -703,13 +719,17 @@ def _try_font(size: int, bold: bool = False):
     keeps `render()` non-fatal in environments where assets weren't
     copied (e.g. partial deployments)."""
     from PIL import ImageFont
+
     candidates = [_INTER_BOLD if bold else _INTER_REGULAR]
-    candidates.extend([
-        "arialbd.ttf" if bold else "arial.ttf",
-        "DejaVuSans-Bold.ttf" if bold else "DejaVuSans.ttf",
-        "/usr/share/fonts/truetype/dejavu/DejaVuSans-Bold.ttf"
-            if bold else "/usr/share/fonts/truetype/dejavu/DejaVuSans.ttf",
-    ])
+    candidates.extend(
+        [
+            "arialbd.ttf" if bold else "arial.ttf",
+            "DejaVuSans-Bold.ttf" if bold else "DejaVuSans.ttf",
+            "/usr/share/fonts/truetype/dejavu/DejaVuSans-Bold.ttf"
+            if bold
+            else "/usr/share/fonts/truetype/dejavu/DejaVuSans.ttf",
+        ]
+    )
     for path in candidates:
         try:
             return ImageFont.truetype(path, size)
@@ -771,7 +791,9 @@ def _script_family_for_text(text: str) -> str:
 
 
 def _wrap_name_to_lines(
-    name: str, font, max_width_px: int,
+    name: str,
+    font,
+    max_width_px: int,
 ) -> list[str]:
     """Wrap a long member name to fit within `max_width_px` per line.
 
@@ -894,6 +916,7 @@ def _font_for_text(text: str, size: int, *, bold: bool = False):
     file.
     """
     from PIL import ImageFont
+
     family = _script_family_for_text(text)
     if family == "inter":
         return _try_font(size, bold=bold)
@@ -930,21 +953,22 @@ def _draw_header(draw, layout: EventLayout, roster: RosterData) -> None:
 
     if roster.team_label:
         tw = draw.textlength(roster.team_label, font=font)
-        draw.text(((canvas_w - tw) / 2, text_y),
-                  roster.team_label, fill=_HEADER_TEXT, font=font)
+        draw.text(((canvas_w - tw) / 2, text_y), roster.team_label, fill=_HEADER_TEXT, font=font)
 
     if roster.event_date_label:
         tw = draw.textlength(roster.event_date_label, font=font)
-        draw.text((canvas_w - pad_x - tw, text_y),
-                  roster.event_date_label, fill=_HEADER_TEXT, font=font)
+        draw.text(
+            (canvas_w - pad_x - tw, text_y), roster.event_date_label, fill=_HEADER_TEXT, font=font
+        )
 
 
 def _draw_pill(draw, b: Box, radius_svg: float) -> None:
     x0, y0, x1, y1 = _s_box(b)
     r = int(round(radius_svg * SCALE))
     draw.rounded_rectangle((x0, y0, x1, y1), radius=r, fill=_PILL_FILL)
-    draw.rounded_rectangle((x0, y0, x1, y1), radius=r,
-                           outline=_PILL_OUTLINE, width=max(1, SCALE // 2))
+    draw.rounded_rectangle(
+        (x0, y0, x1, y1), radius=r, outline=_PILL_OUTLINE, width=max(1, SCALE // 2)
+    )
 
 
 def _draw_centered_text(draw, b: Box, text: str, font, fill) -> None:
@@ -955,12 +979,14 @@ def _draw_centered_text(draw, b: Box, text: str, font, fill) -> None:
     draw.text((tx, ty), text, fill=fill, font=font)
 
 
-def _draw_icon(canvas, draw, zlayout: ZoneLayout, canonical: str,
-               icon_files: dict, icons_dir: str) -> None:
+def _draw_icon(
+    canvas, draw, zlayout: ZoneLayout, canonical: str, icon_files: dict, icons_dir: str
+) -> None:
     """Place the zone icon at its layout position. Falls back to a
     grey placeholder circle if the icon file is missing — a defensive
     guard for any future zone that ships before its art does."""
     from PIL import Image
+
     x0, y0, x1, y1 = _s_box(zlayout.icon)
     icon_name = icon_files.get(canonical)
     if icon_name:
@@ -971,11 +997,13 @@ def _draw_icon(canvas, draw, zlayout: ZoneLayout, canonical: str,
             canvas.alpha_composite(icon, (x0, y0))
             return
         except (OSError, IOError) as e:
-            logger.debug("render: icon load failed for %s (%s) — placeholder",
-                         canonical, e)
-    draw.ellipse((x0, y0, x1, y1),
-                 fill=_PLACEHOLDER_FILL, outline=_PLACEHOLDER_OUTLINE,
-                 width=max(1, SCALE // 2))
+            logger.debug("render: icon load failed for %s (%s) — placeholder", canonical, e)
+    draw.ellipse(
+        (x0, y0, x1, y1),
+        fill=_PLACEHOLDER_FILL,
+        outline=_PLACEHOLDER_OUTLINE,
+        width=max(1, SCALE // 2),
+    )
 
 
 # ── Slot-flow member layout (#227) ──────────────────────────────────
@@ -997,6 +1025,7 @@ class _OverflowEntry:
     at `max_rows` for central zones). The renderer collects these so
     the caller (`_finalize_structured_roster`) can warn the officer
     after Approve-with-image lands the post."""
+
     canonical_zone: str
     phase: int
     name: str
@@ -1011,9 +1040,9 @@ class _OverflowEntry:
 _PILL_PAD_X_SVG = 7.0
 _PILL_PAD_Y_SVG = 6.0
 _PILL_LINE_GAP_SVG = 2.0
-_PILL_HEADER_GAP_SVG = 3.0      # gap between a Stage header and its first row
-_PILL_STAGE_GAP_SVG = 6.0       # gap between end of Stage 1's rows and Stage 2's header
-_PILL_NAME_INDENT_SVG = 4.0     # left indent for member rows (under the Stage header)
+_PILL_HEADER_GAP_SVG = 3.0  # gap between a Stage header and its first row
+_PILL_STAGE_GAP_SVG = 6.0  # gap between end of Stage 1's rows and Stage 2's header
+_PILL_NAME_INDENT_SVG = 4.0  # left indent for member rows (under the Stage header)
 # Horizontal gap between adjacent column slots in multi-col layouts.
 # Without this, packed names like "Member 2 Member 9" run together at
 # 8 pt (#227 dev review).
@@ -1093,12 +1122,14 @@ def _safe_pill_extension_px(zlayout, layout) -> tuple[int, int]:
         # Icon is to the LEFT of the pill — clamp left extension to
         # icon right edge + gap so the pill never overlaps it.
         left_neighbour_right_px = max(
-            left_neighbour_right_px, own_icon_right_px + icon_gap_px,
+            left_neighbour_right_px,
+            own_icon_right_px + icon_gap_px,
         )
     if own_icon_left_px >= pill_right_px:
         # Icon is to the RIGHT of the pill — clamp right extension.
         right_neighbour_left_px = min(
-            right_neighbour_left_px, own_icon_left_px - icon_gap_px,
+            right_neighbour_left_px,
+            own_icon_left_px - icon_gap_px,
         )
 
     # Half of the inter-pill gap so each side's budget keeps a
@@ -1129,13 +1160,15 @@ def _safe_pill_extension_px(zlayout, layout) -> tuple[int, int]:
             # Neighbour is to our LEFT.
             mid_px = (other_right_px + pill_left_px) // 2
             left_neighbour_right_px = max(
-                left_neighbour_right_px, mid_px + half_pill_gap_px,
+                left_neighbour_right_px,
+                mid_px + half_pill_gap_px,
             )
         elif other_left_px >= pill_right_px:
             # Neighbour is to our RIGHT.
             mid_px = (other_left_px + pill_right_px) // 2
             right_neighbour_left_px = min(
-                right_neighbour_left_px, mid_px - half_pill_gap_px,
+                right_neighbour_left_px,
+                mid_px - half_pill_gap_px,
             )
 
     left_budget_px = max(0, pill_left_px - left_neighbour_right_px)
@@ -1165,8 +1198,9 @@ _CANVAS_MARGIN_SVG = 24.0
 _PILL_NEIGHBOUR_GAP_SVG = 20.0
 
 
-def _max_line_width_px(lines: list[dict], font_regular, font_bold,
-                       slot_width_px: int, col_gap_px: int) -> int:
+def _max_line_width_px(
+    lines: list[dict], font_regular, font_bold, slot_width_px: int, col_gap_px: int
+) -> int:
     """Maximum rendered pixel width across all lines in a flow layout.
     Used to size the pill horizontally so long-row names + multi-col
     rows fit without clipping (#227 dev review)."""
@@ -1199,12 +1233,15 @@ def _max_line_width_px(lines: list[dict], font_regular, font_bold,
     return max_inner + overhead
 
 
-def _attempt_flow_at(phase_blocks: list[RosterZone], font_regular,
-                     pill_content_width_px: int, cols: int,
-                     max_rows: int,
-                     canonical_zone: str,
-                     wrap_max_px: int | None = None,
-                     ) -> tuple[list[dict], list[_OverflowEntry]]:
+def _attempt_flow_at(
+    phase_blocks: list[RosterZone],
+    font_regular,
+    pill_content_width_px: int,
+    cols: int,
+    max_rows: int,
+    canonical_zone: str,
+    wrap_max_px: int | None = None,
+) -> tuple[list[dict], list[_OverflowEntry]]:
     """Attempt the slot layout at `cols` columns. Returns the lines +
     any members that didn't fit within `max_rows` content rows.
 
@@ -1250,11 +1287,7 @@ def _attempt_flow_at(phase_blocks: list[RosterZone], font_regular,
         # Hide phases before the zone opens — same rule as the
         # mail builder and the summary embed, so all three surfaces
         # stay consistent.
-        if (
-            first_open_phase is not None
-            and block.phase >= 1
-            and block.phase < first_open_phase
-        ):
+        if first_open_phase is not None and block.phase >= 1 and block.phase < first_open_phase:
             continue
 
         # Stage header always renders (when present), but doesn't tick
@@ -1298,9 +1331,13 @@ def _attempt_flow_at(phase_blocks: list[RosterZone], font_regular,
                 if current_row:
                     if not _budget_ok():
                         for n in current_row:
-                            overflow.append(_OverflowEntry(
-                                canonical_zone, block.phase, n,
-                            ))
+                            overflow.append(
+                                _OverflowEntry(
+                                    canonical_zone,
+                                    block.phase,
+                                    n,
+                                )
+                            )
                         current_row = []
                     else:
                         lines.append({"type": "row", "items": current_row})
@@ -1312,19 +1349,23 @@ def _attempt_flow_at(phase_blocks: list[RosterZone], font_regular,
                     # 1-col long rows can use the full pill width;
                     # multi-col promoted-long rows are bounded by
                     # the slot width.
-                    wrap_budget = (
-                        pill_content_width_px if cols == 1 else wrap_max_px
-                    )
+                    wrap_budget = pill_content_width_px if cols == 1 else wrap_max_px
                     pieces = _wrap_name_to_lines(
-                        name, font_regular, wrap_budget,
+                        name,
+                        font_regular,
+                        wrap_budget,
                     )
                 else:
                     pieces = [name]
                 for piece in pieces:
                     if not _budget_ok():
-                        overflow.append(_OverflowEntry(
-                            canonical_zone, block.phase, piece,
-                        ))
+                        overflow.append(
+                            _OverflowEntry(
+                                canonical_zone,
+                                block.phase,
+                                piece,
+                            )
+                        )
                         continue
                     lines.append({"type": "long", "name": piece})
                     content_rows += 1
@@ -1333,9 +1374,13 @@ def _attempt_flow_at(phase_blocks: list[RosterZone], font_regular,
                 if len(current_row) >= cols:
                     if not _budget_ok():
                         for n in current_row:
-                            overflow.append(_OverflowEntry(
-                                canonical_zone, block.phase, n,
-                            ))
+                            overflow.append(
+                                _OverflowEntry(
+                                    canonical_zone,
+                                    block.phase,
+                                    n,
+                                )
+                            )
                         current_row = []
                     else:
                         lines.append({"type": "row", "items": current_row})
@@ -1344,20 +1389,29 @@ def _attempt_flow_at(phase_blocks: list[RosterZone], font_regular,
         if current_row:
             if not _budget_ok():
                 for n in current_row:
-                    overflow.append(_OverflowEntry(
-                        canonical_zone, block.phase, n,
-                    ))
+                    overflow.append(
+                        _OverflowEntry(
+                            canonical_zone,
+                            block.phase,
+                            n,
+                        )
+                    )
             else:
                 lines.append({"type": "row", "items": current_row})
                 content_rows += 1
     return lines, overflow
 
 
-def _build_flow_lines(phase_blocks: list[RosterZone], font_regular,
-                      pill_content_width_px: int, max_cols: int,
-                      max_rows: int, canonical_zone: str,
-                      overflow: list[_OverflowEntry],
-                      wrap_max_px: int | None = None) -> list[dict]:
+def _build_flow_lines(
+    phase_blocks: list[RosterZone],
+    font_regular,
+    pill_content_width_px: int,
+    max_cols: int,
+    max_rows: int,
+    canonical_zone: str,
+    overflow: list[_OverflowEntry],
+    wrap_max_px: int | None = None,
+) -> list[dict]:
     """Try the slot layout at 1 col first. If it overflows `max_rows`,
     re-try at 2 cols, then `max_cols` cols. Take the first column
     count where no overflow occurs; if even `max_cols` cols can't fit
@@ -1372,9 +1426,11 @@ def _build_flow_lines(phase_blocks: list[RosterZone], font_regular,
     best_overflow: list[_OverflowEntry] = []
     for cols in range(1, max_cols + 1):
         lines, attempt_overflow = _attempt_flow_at(
-            phase_blocks, font_regular,
+            phase_blocks,
+            font_regular,
             pill_content_width_px=pill_content_width_px,
-            cols=cols, max_rows=max_rows,
+            cols=cols,
+            max_rows=max_rows,
             canonical_zone=canonical_zone,
             wrap_max_px=wrap_max_px,
         )
@@ -1456,8 +1512,9 @@ def _pill_height_px(lines: list[dict], font_regular, font_bold) -> int:
     return h
 
 
-def _draw_flow_lines(draw, anchor: Box, lines: list[dict],
-                     font_regular, font_bold, slot_width_px: int) -> None:
+def _draw_flow_lines(
+    draw, anchor: Box, lines: list[dict], font_regular, font_bold, slot_width_px: int
+) -> None:
     """Render the slot-flow `lines` into the pill anchored at
     `anchor`. Assumes the pill background was already drawn at the
     height returned by `_pill_height_px`. `slot_width_px` is the per-
@@ -1485,8 +1542,7 @@ def _draw_flow_lines(draw, anchor: Box, lines: list[dict],
 
         # Draw this line's content at `cy` (top of the row).
         if line["type"] == "header":
-            draw.text((x0 + pad_x, cy), line["text"],
-                      fill=_TEXT_DARK, font=font_bold)
+            draw.text((x0 + pad_x, cy), line["text"], fill=_TEXT_DARK, font=font_bold)
         elif line["type"] == "row":
             items = line["items"]
             for idx, name in enumerate(items):
@@ -1501,11 +1557,9 @@ def _draw_flow_lines(draw, anchor: Box, lines: list[dict],
                 draw.text((x, cy), name, fill=_TEXT_MUTED, font=name_font)
         elif line["type"] == "long":
             name_font = _font_for_text(line["name"], font_regular.size)
-            draw.text((x0 + pad_x + indent, cy), line["name"],
-                      fill=_TEXT_MUTED, font=name_font)
+            draw.text((x0 + pad_x + indent, cy), line["name"], fill=_TEXT_MUTED, font=name_font)
         elif line["type"] == "empty":
-            draw.text((x0 + pad_x + indent, cy), "(empty)",
-                      fill=_TEXT_MUTED, font=font_regular)
+            draw.text((x0 + pad_x + indent, cy), "(empty)", fill=_TEXT_MUTED, font=font_regular)
 
         # Advance by the actual row height (accounts for fallback-font
         # ascent + descent) so the next line lands below the descenders
@@ -1514,12 +1568,17 @@ def _draw_flow_lines(draw, anchor: Box, lines: list[dict],
         prev_type = line["type"]
 
 
-def _draw_zone(canvas, zlayout: ZoneLayout, canonical: str,
-               phase_blocks: list[RosterZone],
-               icon_files: dict, icons_dir: str,
-               roster: RosterData,
-               overflow: list[_OverflowEntry],
-               layout: "EventLayout" = None) -> None:
+def _draw_zone(
+    canvas,
+    zlayout: ZoneLayout,
+    canonical: str,
+    phase_blocks: list[RosterZone],
+    icon_files: dict,
+    icons_dir: str,
+    roster: RosterData,
+    overflow: list[_OverflowEntry],
+    layout: "EventLayout" = None,
+) -> None:
     """Render the three pills + icon for one canonical zone slot.
 
     `phase_blocks` is the list of `RosterZone` entries for this zone
@@ -1530,6 +1589,7 @@ def _draw_zone(canvas, zlayout: ZoneLayout, canonical: str,
     warn the officer.
     """
     from PIL import Image, ImageDraw
+
     font_regular = _try_font(_pt_to_px(_LABEL_PT), bold=False)
     font_bold = _try_font(_pt_to_px(_LABEL_PT), bold=True)
 
@@ -1547,9 +1607,7 @@ def _draw_zone(canvas, zlayout: ZoneLayout, canonical: str,
     # vertical headroom between adjacent zones in the layout grid).
     # Central zones cap at `max_rows` per the spec (7). Headers don't
     # count toward the cap; only content rows do.
-    nominal_max_rows = (
-        zlayout.max_rows if zlayout.max_rows is not None else _OUTER_MAX_ROWS
-    )
+    nominal_max_rows = zlayout.max_rows if zlayout.max_rows is not None else _OUTER_MAX_ROWS
 
     # #236 follow-up: the `nominal_max_rows` ceiling was sized assuming
     # Inter-sized rows (~18 px at 8 pt). CJK / Arabic fallback fonts
@@ -1561,20 +1619,22 @@ def _draw_zone(canvas, zlayout: ZoneLayout, canonical: str,
     inter_row_h = _font_row_height(font_regular)
     actual_max_row_h = inter_row_h
     for block in phase_blocks:
-        for name in (block.members or []):
+        for name in block.members or []:
             actual_max_row_h = max(
                 actual_max_row_h,
                 _font_row_height(_font_for_text(name, font_regular.size)),
             )
     if actual_max_row_h > inter_row_h and nominal_max_rows > 0:
         max_rows = max(
-            1, int(nominal_max_rows * inter_row_h / actual_max_row_h),
+            1,
+            int(nominal_max_rows * inter_row_h / actual_max_row_h),
         )
     else:
         max_rows = nominal_max_rows
 
     lines = _build_flow_lines(
-        phase_blocks, font_regular,
+        phase_blocks,
+        font_regular,
         pill_content_width_px=pill_content_width_px,
         max_cols=zlayout.max_cols,
         max_rows=max_rows,
@@ -1599,7 +1659,11 @@ def _draw_zone(canvas, zlayout: ZoneLayout, canonical: str,
     # clipping. Centrals scale symmetrically; outer zones scale away
     # from their icon (so the icon stays visible).
     required_pill_w_px = _max_line_width_px(
-        lines, font_regular, font_bold, slot_width_px, col_gap_px,
+        lines,
+        font_regular,
+        font_bold,
+        slot_width_px,
+        col_gap_px,
     )
     default_pill_w_px = _s(zlayout.text.w)
 
@@ -1614,7 +1678,8 @@ def _draw_zone(canvas, zlayout: ZoneLayout, canonical: str,
     # the pill instead of spilling out.
     if layout is not None:
         left_budget_px, right_budget_px = _safe_pill_extension_px(
-            zlayout, layout,
+            zlayout,
+            layout,
         )
     else:
         # Defensive fallback — no layout context means we trust the
@@ -1650,9 +1715,7 @@ def _draw_zone(canvas, zlayout: ZoneLayout, canonical: str,
             # CS Power Tower: 118 SVG left, 29 SVG right) actually
             # uses what's available on each side instead of halving
             # the extension and crashing the lighter-budget side.
-            if max_extension_px > 0 and (
-                left_budget_px > 0 or right_budget_px > 0
-            ):
+            if max_extension_px > 0 and (left_budget_px > 0 or right_budget_px > 0):
                 left_share_px = min(
                     left_budget_px,
                     int(extend_used_px * left_budget_px / max_extension_px),
@@ -1664,13 +1727,15 @@ def _draw_zone(canvas, zlayout: ZoneLayout, canonical: str,
         # the row layout gets the right horizontal room.
         pill_content_width_px = pill_w_px - 2 * pad_x - indent
         slot_width_px = max(
-            1, (pill_content_width_px - total_gap_px) // cols_used,
+            1,
+            (pill_content_width_px - total_gap_px) // cols_used,
         )
         if needs_reflow:
             # Re-build lines with the slot constraint so long names
             # hyphen-wrap inside the cell rather than overflowing.
             lines = _build_flow_lines(
-                phase_blocks, font_regular,
+                phase_blocks,
+                font_regular,
                 pill_content_width_px=pill_content_width_px,
                 max_cols=zlayout.max_cols,
                 max_rows=max_rows,
@@ -1686,7 +1751,8 @@ def _draw_zone(canvas, zlayout: ZoneLayout, canonical: str,
                     cols_used = len(line["items"])
             total_gap_px = col_gap_px * (cols_used - 1)
             slot_width_px = max(
-                1, (pill_content_width_px - total_gap_px) // cols_used,
+                1,
+                (pill_content_width_px - total_gap_px) // cols_used,
             )
     else:
         pill_x_px = _s(zlayout.text.x)
@@ -1696,8 +1762,10 @@ def _draw_zone(canvas, zlayout: ZoneLayout, canonical: str,
     # `text.x` and `text.w` reflect the resized pill so the drawing
     # code below paints at the right coordinates.
     text_box_dynamic = Box(
-        x=pill_x_px / SCALE, y=zlayout.text.y,
-        w=pill_w_px / SCALE, h=zlayout.text.h,
+        x=pill_x_px / SCALE,
+        y=zlayout.text.y,
+        w=pill_w_px / SCALE,
+        h=zlayout.text.h,
     )
     pill_h_px = _pill_height_px(lines, font_regular, font_bold)
     # Minimum pill height: just enough room for one line of text +
@@ -1721,11 +1789,14 @@ def _draw_zone(canvas, zlayout: ZoneLayout, canonical: str,
     r = _s(min(text_box_dynamic.w, zlayout.text.h) / 9)
     d.rounded_rectangle(
         (text_x0, text_y0, text_x1, text_y1),
-        radius=r, fill=_PILL_FILL,
+        radius=r,
+        fill=_PILL_FILL,
     )
     d.rounded_rectangle(
         (text_x0, text_y0, text_x1, text_y1),
-        radius=r, outline=_PILL_OUTLINE, width=max(1, SCALE // 2),
+        radius=r,
+        outline=_PILL_OUTLINE,
+        width=max(1, SCALE // 2),
     )
     canvas.alpha_composite(layer)
 
@@ -1742,17 +1813,21 @@ def _draw_zone(canvas, zlayout: ZoneLayout, canonical: str,
     layer = Image.new("RGBA", canvas.size, (0, 0, 0, 0))
     d = ImageDraw.Draw(layer)
     _draw_flow_lines(
-        d, text_box_dynamic, lines, font_regular, font_bold,
+        d,
+        text_box_dynamic,
+        lines,
+        font_regular,
+        font_bold,
         slot_width_px=slot_width_px,
     )
     canvas.alpha_composite(layer)
 
 
-def _draw_subs_section(canvas, layout: EventLayout,
-                       roster: RosterData) -> None:
+def _draw_subs_section(canvas, layout: EventLayout, roster: RosterData) -> None:
     """Subs column on the right. Chooses the pairs variant when
     `paired_subs` carries entries; flat list otherwise."""
     from PIL import Image, ImageDraw
+
     use_pairs = bool(roster.paired_subs)
 
     layer = Image.new("RGBA", canvas.size, (0, 0, 0, 0))
@@ -1762,8 +1837,9 @@ def _draw_subs_section(canvas, layout: EventLayout,
 
     layer = Image.new("RGBA", canvas.size, (0, 0, 0, 0))
     d = ImageDraw.Draw(layer)
-    _draw_centered_text(d, layout.subs_title, "Subs",
-                        _try_font(_pt_to_px(_LABEL_PT), bold=True), _TEXT_DARK)
+    _draw_centered_text(
+        d, layout.subs_title, "Subs", _try_font(_pt_to_px(_LABEL_PT), bold=True), _TEXT_DARK
+    )
     canvas.alpha_composite(layer)
 
     content_box = layout.subs_text_pairs if use_pairs else layout.subs_text_flat
@@ -1852,10 +1928,14 @@ def _draw_subs_section(canvas, layout: EventLayout,
                 # split across multiple lines instead of running into
                 # the next column or past the divider.
                 primary_lines = _wrap_name_to_lines(
-                    primary, primary_font, primary_col_w_px,
+                    primary,
+                    primary_font,
+                    primary_col_w_px,
                 )
                 sub_lines = _wrap_name_to_lines(
-                    sub, sub_font, sub_col_w_px,
+                    sub,
+                    sub_font,
+                    sub_col_w_px,
                 )
                 # Per-line height = the per-font row height (covers
                 # CJK descenders); row height = N lines × per-line
@@ -1880,10 +1960,7 @@ def _draw_subs_section(canvas, layout: EventLayout,
             last_row_top = pairs_row_tops[-1]
             # Pill bottom = last row top + last row's actual height +
             # 12 px bottom padding (the canonical 12 px rule).
-            content_h_px = (
-                (last_row_top - _s(box_top_svg))
-                + last_row_h + _PAD_PX
-            )
+            content_h_px = (last_row_top - _s(box_top_svg)) + last_row_h + _PAD_PX
     else:
         flat_count = len([s for s in roster.subs])
         if flat_count == 0:
@@ -1894,17 +1971,9 @@ def _draw_subs_section(canvas, layout: EventLayout,
             # clipping into the bottom (#236 follow-up).
             max_row_h = max(
                 _font_row_height(fm),
-                *(
-                    _font_row_height(_font_for_text(name, fm.size))
-                    for name in roster.subs
-                ),
+                *(_font_row_height(_font_for_text(name, fm.size)) for name in roster.subs),
             )
-            content_h_px = (
-                pad_y_top
-                + flat_count * (max_row_h + line_gap)
-                - line_gap
-                + pad_y_bottom
-            )
+            content_h_px = pad_y_top + flat_count * (max_row_h + line_gap) - line_gap + pad_y_bottom
     # Never grow beyond the layout's default; only shrink.
     content_h_px = min(content_h_px, _y1_full - y0)
     y1 = y0 + content_h_px
@@ -1915,11 +1984,15 @@ def _draw_subs_section(canvas, layout: EventLayout,
     layer = Image.new("RGBA", canvas.size, (0, 0, 0, 0))
     d = ImageDraw.Draw(layer)
     d.rounded_rectangle(
-        (x0, y0, x1, y1), radius=radius_px, fill=_PILL_FILL,
+        (x0, y0, x1, y1),
+        radius=radius_px,
+        fill=_PILL_FILL,
     )
     d.rounded_rectangle(
-        (x0, y0, x1, y1), radius=radius_px,
-        outline=_PILL_OUTLINE, width=max(1, SCALE // 2),
+        (x0, y0, x1, y1),
+        radius=radius_px,
+        outline=_PILL_OUTLINE,
+        width=max(1, SCALE // 2),
     )
     canvas.alpha_composite(layer)
 
@@ -1945,13 +2018,10 @@ def _draw_subs_section(canvas, layout: EventLayout,
         header_y = _s(box_top + layout.pairs_header_offset_y)
         underline_y = _s(box_top + layout.pairs_underline_offset_y)
 
-        d.text((primary_x, header_y), "Primary",
-               fill=_TEXT_DARK, font=fm_bold)
-        d.text((sub_x, header_y), "Sub",
-               fill=_TEXT_DARK, font=fm_bold)
+        d.text((primary_x, header_y), "Primary", fill=_TEXT_DARK, font=fm_bold)
+        d.text((sub_x, header_y), "Sub", fill=_TEXT_DARK, font=fm_bold)
         d.line(
-            (_s(layout.pairs_divider_x0), underline_y,
-             _s(layout.pairs_divider_x1), underline_y),
+            (_s(layout.pairs_divider_x0), underline_y, _s(layout.pairs_divider_x1), underline_y),
             fill=_PAIRS_UNDERLINE_COLOR,
             width=max(1, _s(_PAIRS_UNDERLINE_WIDTH_SVG)),
         )
@@ -1979,12 +2049,16 @@ def _draw_subs_section(canvas, layout: EventLayout,
             for li, line in enumerate(primary_lines):
                 d.text(
                     (primary_x, row_y + li * primary_line_h),
-                    line, fill=_TEXT_DARK, font=primary_font,
+                    line,
+                    fill=_TEXT_DARK,
+                    font=primary_font,
                 )
             for li, line in enumerate(sub_lines):
                 d.text(
                     (sub_x, row_y + li * sub_line_h),
-                    line, fill=_TEXT_DARK, font=sub_font,
+                    line,
+                    fill=_TEXT_DARK,
+                    font=sub_font,
                 )
             if i < len(pairs_list) - 1:
                 # Place the divider midway between this row's bottom
@@ -1994,8 +2068,7 @@ def _draw_subs_section(canvas, layout: EventLayout,
                 div_y = (row_y + row_h + next_top) // 2
                 if div_y < y1 - 4:
                     d.line(
-                        (_s(layout.pairs_divider_x0), div_y,
-                         _s(layout.pairs_divider_x1), div_y),
+                        (_s(layout.pairs_divider_x0), div_y, _s(layout.pairs_divider_x1), div_y),
                         fill=_PAIRS_DIVIDER_COLOR,
                         width=max(1, _s(_PAIRS_DIVIDER_WIDTH_SVG)),
                     )
@@ -2022,14 +2095,15 @@ def _draw_subs_section(canvas, layout: EventLayout,
 # organic, non-repeating terrain feel. Two octaves stacked produce
 # broader light/dark patches alongside the finer grain so the canvas
 # reads as ground rather than uniform noise.
-_NOISE_COARSE_BLOCK_PX = 32      # ~32 px per coarse block at SCALE 2
-_NOISE_FINE_BLOCK_PX = 8         # ~8 px per fine grain block
-_NOISE_COARSE_WEIGHT = 0.65      # tone-shift contribution
-_NOISE_FINE_WEIGHT = 0.35        # grain contribution
+_NOISE_COARSE_BLOCK_PX = 32  # ~32 px per coarse block at SCALE 2
+_NOISE_FINE_BLOCK_PX = 8  # ~8 px per fine grain block
+_NOISE_COARSE_WEIGHT = 0.65  # tone-shift contribution
+_NOISE_FINE_WEIGHT = 0.35  # grain contribution
 
 
-def _apply_background_noise(canvas, layout: EventLayout,
-                            base_rgba: tuple[int, int, int, int]) -> None:
+def _apply_background_noise(
+    canvas, layout: EventLayout, base_rgba: tuple[int, int, int, int]
+) -> None:
     """Layer a deterministic two-octave noise pattern over the main +
     subs background fills so the canvas reads as terrain rather than
     a flat colour wash. Noise is generated *once at canvas size* (no
@@ -2042,7 +2116,7 @@ def _apply_background_noise(canvas, layout: EventLayout,
     from PIL import Image, ImageDraw as _ImageDraw
 
     canvas_w, canvas_h = canvas.size
-    rng = random.Random(0x57_4f_52_4d)  # "STOR" — stable per render
+    rng = random.Random(0x57_4F_52_4D)  # "STOR" — stable per render
     amp = _NOISE_AMPLITUDE
     br, bg, bb, _ba = base_rgba
 
@@ -2080,16 +2154,12 @@ def _apply_background_noise(canvas, layout: EventLayout,
     canvas.paste(noise, (0, 0), mask)
 
 
-_LOGO_PATH = os.path.join(_HERE, "assets", "branding",
-                          "lw-alliance-helper-logo.png")
-_DS_BACKGROUND_PATH = os.path.join(_HERE, "assets", "backgrounds",
-                                   "ds_background.png")
-_CS_BACKGROUND_PATH = os.path.join(_HERE, "assets", "backgrounds",
-                                   "cs_background.png")
+_LOGO_PATH = os.path.join(_HERE, "assets", "branding", "lw-alliance-helper-logo.png")
+_DS_BACKGROUND_PATH = os.path.join(_HERE, "assets", "backgrounds", "ds_background.png")
+_CS_BACKGROUND_PATH = os.path.join(_HERE, "assets", "backgrounds", "cs_background.png")
 
 
-def _apply_background_image(canvas, layout: EventLayout,
-                            is_cs: bool) -> bool:
+def _apply_background_image(canvas, layout: EventLayout, is_cs: bool) -> bool:
     """Composite the painted DS / CS background image over the main +
     subs background rectangles. Returns True on success; False if the
     asset is missing (caller falls back to procedural noise).
@@ -2100,6 +2170,7 @@ def _apply_background_image(canvas, layout: EventLayout,
     so the painted scene doesn't bleed onto the header bar or spawn
     bands."""
     from PIL import Image, ImageDraw as _ImageDraw
+
     path = _CS_BACKGROUND_PATH if is_cs else _DS_BACKGROUND_PATH
     if not os.path.isfile(path):
         logger.debug("render: background asset missing at %s", path)
@@ -2130,6 +2201,7 @@ def _draw_attribution_logo(canvas, layout: EventLayout) -> None:
     is missing (partial deployments, asset not copied) the slot is
     left empty rather than crashing the render."""
     from PIL import Image
+
     if not os.path.isfile(_LOGO_PATH):
         logger.debug("render: logo asset missing at %s; skipping", _LOGO_PATH)
         return
@@ -2143,7 +2215,7 @@ def _draw_attribution_logo(canvas, layout: EventLayout) -> None:
     # full width of the sidebar.
     pairs_bottom = layout.subs_text_pairs.y + layout.subs_text_pairs.h
     bg_bottom = layout.bg_subs.y + layout.bg_subs.h
-    slot_top_y = pairs_bottom + 8.0    # small gap below the pair table
+    slot_top_y = pairs_bottom + 8.0  # small gap below the pair table
     slot_left_x = layout.bg_subs.x
     slot_right_x = layout.bg_subs.x + layout.bg_subs.w
     slot_w_svg = slot_right_x - slot_left_x
@@ -2195,6 +2267,7 @@ def roster_from_session(session) -> RosterData:
     date_suffix = ""
     if session.event_date:
         from storm_date_helpers import format_event_date
+
         event_date_label = format_event_date(session.event_date)
         date_suffix = f" — {event_date_label}"
 
@@ -2232,28 +2305,34 @@ def roster_from_session(session) -> RosterData:
                 # communicate "this zone is intentionally unassigned";
                 # the visual handed to members needs to show every
                 # zone slot, even the closed ones.
-                zones.append(RosterZone(
-                    name=f"Stage {phase} — {z.zone}",
-                    max_players=cap,
-                    members=names,
-                    phase=phase,
-                    canonical_zone=z.zone,
-                ))
+                zones.append(
+                    RosterZone(
+                        name=f"Stage {phase} — {z.zone}",
+                        max_players=cap,
+                        members=names,
+                        phase=phase,
+                        canonical_zone=z.zone,
+                    )
+                )
         else:
             names = _build_member_block(z.zone, 1)
-            zones.append(RosterZone(
-                name=z.zone, max_players=int(z.max_players),
-                members=names, phase=0, canonical_zone=z.zone,
-            ))
+            zones.append(
+                RosterZone(
+                    name=z.zone,
+                    max_players=int(z.max_players),
+                    members=names,
+                    phase=0,
+                    canonical_zone=z.zone,
+                )
+            )
 
-    subs = [
-        session.members[k]["name"] for k in session.subs
-        if k in session.members
-    ]
+    subs = [session.members[k]["name"] for k in session.subs if k in session.members]
 
     return RosterData(
         title=f"{event_full} — {session.preset.name}{team_suffix}{date_suffix}",
-        zones=zones, subs=subs, paired_subs=paired_subs,
+        zones=zones,
+        subs=subs,
+        paired_subs=paired_subs,
         event_type=session.event_type,
         preset_name=session.preset.name,
         team_label=team_label,

@@ -41,21 +41,21 @@ import wizard_registry
 
 # ── Config ─────────────────────────────────────────────────────────────────────
 
-SURVEY_TIMEOUT      = 600  # 10 minutes per step
+SURVEY_TIMEOUT = 600  # 10 minutes per step
 
 # ── Magnitude-aware numeric parsing ───────────────────────────────────────────
 
 # Suffixes a player might type instead of typing the full nine-digit number —
 # `300m` / `300mil` / `1.2b` / `5k`. Case-insensitive at the call site.
 _SUFFIX_MULTIPLIERS = {
-    "k":        1_000,
-    "m":        1_000_000,
-    "mil":      1_000_000,
-    "mill":     1_000_000,
-    "million":  1_000_000,
-    "b":        1_000_000_000,
-    "bil":      1_000_000_000,
-    "billion":  1_000_000_000,
+    "k": 1_000,
+    "m": 1_000_000,
+    "mil": 1_000_000,
+    "mill": 1_000_000,
+    "million": 1_000_000,
+    "b": 1_000_000_000,
+    "bil": 1_000_000_000,
+    "billion": 1_000_000_000,
 }
 
 # Field-magnitude → multiplier applied to bare numbers. `raw` (or any unknown
@@ -146,32 +146,36 @@ def _fmt_response_value(value, qtype: str | None) -> str:
 
 # ── Sheets helpers ─────────────────────────────────────────────────────────────
 
+
 def _get_spreadsheet(guild_id: int = None):
     from config import get_spreadsheet
+
     return get_spreadsheet(guild_id)
 
 
-def update_squad_powers(discord_id: str, username: str, data: dict,
-                        guild_id: int = None, survey: dict | None = None):
+def update_squad_powers(
+    discord_id: str, username: str, data: dict, guild_id: int = None, survey: dict | None = None
+):
     """
     Update or insert a member's row in the Squad Powers sheet.
     Columns are derived from the survey's question config. If `survey` is
     provided (multi-survey path), its questions/tab override the default.
     """
     from config import get_survey_config
+
     if survey is None:
         survey_cfg = get_survey_config(guild_id) if guild_id else {}
     else:
         survey_cfg = survey
-    questions  = survey_cfg.get("questions") or []
-    sh         = _get_spreadsheet(guild_id)
-    tab_name   = survey_cfg.get("tab_squad_powers") or "Squad Powers"
-    ws         = sh.worksheet(tab_name)
-    rows       = ws.get_all_values()
+    questions = survey_cfg.get("questions") or []
+    sh = _get_spreadsheet(guild_id)
+    tab_name = survey_cfg.get("tab_squad_powers") or "Squad Powers"
+    ws = sh.worksheet(tab_name)
+    rows = ws.get_all_values()
 
-    _now     = datetime.now(timezone.utc)
-    now_str  = f"{_now.month}/{_now.day}/{_now.year}"
-    q_keys   = [q.get("key", f"field_{i}") for i, q in enumerate(questions)]
+    _now = datetime.now(timezone.utc)
+    now_str = f"{_now.month}/{_now.day}/{_now.year}"
+    q_keys = [q.get("key", f"field_{i}") for i, q in enumerate(questions)]
     q_labels = [q.get("label", k) for k, q in zip(q_keys, questions)]
 
     # Ensure header row exists
@@ -184,32 +188,33 @@ def update_squad_powers(discord_id: str, username: str, data: dict,
 
     for i, row in enumerate(rows):
         if len(row) >= 2 and row[1].strip() == discord_id:
-            ws.update(f"A{i+1}", [new_row], value_input_option="USER_ENTERED")
-            print(f"[SURVEY] Updated Squad Powers row {i+1} for {username}")
+            ws.update(f"A{i + 1}", [new_row], value_input_option="USER_ENTERED")
+            print(f"[SURVEY] Updated Squad Powers row {i + 1} for {username}")
             return
 
     ws.append_row(new_row, value_input_option="USER_ENTERED")
     print(f"[SURVEY] Appended new Squad Powers row for {username}")
 
 
-def append_survey_history(discord_id: str, username: str, data: dict,
-                          guild_id: int = None, survey: dict | None = None):
+def append_survey_history(
+    discord_id: str, username: str, data: dict, guild_id: int = None, survey: dict | None = None
+):
     """Append a timestamped row to the Survey History sheet."""
     from config import get_config, get_survey_config
+
     if survey is None:
         survey_cfg = get_survey_config(guild_id) if guild_id else {}
     else:
         survey_cfg = survey
-    questions  = survey_cfg.get("questions") or []
-    cfg        = get_config(guild_id)
-    sh         = _get_spreadsheet(guild_id)
-    tab_name   = (
-        survey_cfg.get("tab_history")
-        or (cfg.tab_survey_history if cfg else "Survey History")
+    questions = survey_cfg.get("questions") or []
+    cfg = get_config(guild_id)
+    sh = _get_spreadsheet(guild_id)
+    tab_name = survey_cfg.get("tab_history") or (
+        cfg.tab_survey_history if cfg else "Survey History"
     )
-    ws         = sh.worksheet(tab_name)
+    ws = sh.worksheet(tab_name)
 
-    q_keys   = [q.get("key", f"field_{i}") for i, q in enumerate(questions)]
+    q_keys = [q.get("key", f"field_{i}") for i, q in enumerate(questions)]
     q_labels = [q.get("label", k) for k, q in zip(q_keys, questions)]
 
     existing = ws.row_values(1)
@@ -221,43 +226,47 @@ def append_survey_history(discord_id: str, username: str, data: dict,
         except Exception:
             pass
 
-    _now    = datetime.now(timezone.utc)
+    _now = datetime.now(timezone.utc)
     now_str = f"{_now.month}/{_now.day}/{_now.year} {_now:%H:%M} UTC"
-    row     = [now_str, discord_id, username] + [data.get(k, "") for k in q_keys]
+    row = [now_str, discord_id, username] + [data.get(k, "") for k in q_keys]
     ws.append_row(row, value_input_option="USER_ENTERED")
     print(f"[SURVEY] Appended Survey History row for {username}")
 
 
 # ── Dropdown views ─────────────────────────────────────────────────────────────
 
+
 class DropdownView(discord.ui.View):
     """Generic single-select dropdown that persists the selected value after selection."""
+
     def __init__(self, placeholder: str, options: list, label: str = ""):
         super().__init__(timeout=SURVEY_TIMEOUT)
-        self.selected  = None
+        self.selected = None
         self.confirmed = False
-        self.label     = label
+        self.label = label
 
         select = discord.ui.Select(
             placeholder=placeholder,
             options=[discord.SelectOption(label=o, value=o) for o in options],
             row=0,
         )
+
         async def _cb(interaction: discord.Interaction):
-            self.selected  = select.values[0]
+            self.selected = select.values[0]
             self.confirmed = True
             select.disabled = True
             content = f"**{self.label}** {self.selected}"
             await wizard_registry.safe_edit_response(interaction, content=content, view=self)
             self.stop()
+
         select.callback = _cb
         self.add_item(select)
 
 
 # ── Survey flow ────────────────────────────────────────────────────────────────
 
-async def run_survey(bot, thread: discord.Thread, user: discord.Member,
-                     survey: dict | None = None):
+
+async def run_survey(bot, thread: discord.Thread, user: discord.Member, survey: dict | None = None):
     """
     Walk the user through all survey questions.
 
@@ -267,14 +276,17 @@ async def run_survey(bot, thread: discord.Thread, user: discord.Member,
     gid = user.guild.id if hasattr(user, "guild") and user.guild else None
 
     from config import get_survey_config
+
     if survey is None:
         survey_cfg = get_survey_config(gid) if gid else {}
     else:
         survey_cfg = survey
-    questions  = survey_cfg.get("questions") or []
+    questions = survey_cfg.get("questions") or []
 
     if not questions:
-        await thread.send("⚠️ No survey questions configured. Ask leadership to run `/setup → 📋 Survey`.")
+        await thread.send(
+            "⚠️ No survey questions configured. Ask leadership to run `/setup → 📋 Survey`."
+        )
         return
 
     def check(m):
@@ -288,7 +300,7 @@ async def run_survey(bot, thread: discord.Thread, user: discord.Member,
         of `154` for a THP-in-millions field.
         """
         attempts_left = 5
-        first_pass    = True
+        first_pass = True
         while attempts_left > 0:
             if first_pass:
                 await thread.send(prompt)
@@ -296,7 +308,9 @@ async def run_survey(bot, thread: discord.Thread, user: discord.Member,
             try:
                 reply = await bot.wait_for("message", check=check, timeout=SURVEY_TIMEOUT)
             except asyncio.TimeoutError:
-                await thread.send("⏰ Survey timed out. You can start again by clicking the Answer button.")
+                await thread.send(
+                    "⏰ Survey timed out. You can start again by clicking the Answer button."
+                )
                 return None
             val = reply.content.strip()
             if len(val) > max_chars:
@@ -314,19 +328,26 @@ async def run_survey(bot, thread: discord.Thread, user: discord.Member,
         )
         return None
 
-    async def ask_dropdown(prompt: str, options: list, placeholder: str, label: str = "") -> str | None:
+    async def ask_dropdown(
+        prompt: str, options: list, placeholder: str, label: str = ""
+    ) -> str | None:
         view = DropdownView(placeholder, options, label=label)
         await thread.send(prompt, view=view)
         await view.wait()
         if not view.confirmed:
-            await thread.send("⏰ Survey timed out. You can start again by clicking the Answer button.")
+            await thread.send(
+                "⏰ Survey timed out. You can start again by clicking the Answer button."
+            )
             return None
         return view.selected
 
-    async def ask_numeric(prompt: str, min_val: float | None = None,
-                           max_val: float | None = None,
-                           magnitude: str | None = None,
-                           max_chars: int = 0) -> str | None:
+    async def ask_numeric(
+        prompt: str,
+        min_val: float | None = None,
+        max_val: float | None = None,
+        magnitude: str | None = None,
+        max_chars: int = 0,
+    ) -> str | None:
         """
         Numeric input with optional magnitude scaling and min/max bounds.
 
@@ -342,14 +363,16 @@ async def run_survey(bot, thread: discord.Thread, user: discord.Member,
         full = prompt
         if min_val is not None or max_val is not None:
             bits = []
-            if min_val is not None: bits.append(f"min: {min_val}")
-            if max_val is not None: bits.append(f"max: {max_val}")
+            if min_val is not None:
+                bits.append(f"min: {min_val}")
+            if max_val is not None:
+                bits.append(f"max: {max_val}")
             full += f"\n*({', '.join(bits)})*"
 
         scaled = magnitude in _MAGNITUDE_MULTIPLIERS
 
         attempts_left = 5
-        first_pass    = True
+        first_pass = True
         while attempts_left > 0:
             if first_pass:
                 await thread.send(full)
@@ -357,7 +380,9 @@ async def run_survey(bot, thread: discord.Thread, user: discord.Member,
             try:
                 reply = await bot.wait_for("message", check=check, timeout=SURVEY_TIMEOUT)
             except asyncio.TimeoutError:
-                await thread.send("⏰ Survey timed out. You can start again by clicking the Answer button.")
+                await thread.send(
+                    "⏰ Survey timed out. You can start again by clicking the Answer button."
+                )
                 return None
             raw = reply.content.strip()
             if max_chars and len(raw) > max_chars:
@@ -404,12 +429,13 @@ async def run_survey(bot, thread: discord.Thread, user: discord.Member,
         )
         return None
 
-    async def ask_multi_select(prompt: str, options: list,
-                                placeholder: str, label: str = "") -> str | None:
+    async def ask_multi_select(
+        prompt: str, options: list, placeholder: str, label: str = ""
+    ) -> str | None:
         """Premium type: Discord multi-select (up to len(options) picks).
         Returns a comma-joined string."""
         if not options:
-            await thread.send(f"⚠️ Question has no options configured. Please contact leadership.")
+            await thread.send("⚠️ Question has no options configured. Please contact leadership.")
             return None
 
         view = discord.ui.View(timeout=SURVEY_TIMEOUT)
@@ -424,17 +450,20 @@ async def run_survey(bot, thread: discord.Thread, user: discord.Member,
 
         async def _cb(inter: discord.Interaction):
             result["values"] = list(select.values)
-            select.disabled  = True
+            select.disabled = True
             content = f"**{label}** {', '.join(result['values'])}"
             await wizard_registry.safe_edit_response(inter, content=content, view=view)
             view.stop()
+
         select.callback = _cb
         view.add_item(select)
 
         await thread.send(prompt, view=view)
         await view.wait()
         if result["values"] is None:
-            await thread.send("⏰ Survey timed out. You can start again by clicking the Answer button.")
+            await thread.send(
+                "⏰ Survey timed out. You can start again by clicking the Answer button."
+            )
             return None
         return ", ".join(result["values"])
 
@@ -446,10 +475,11 @@ async def run_survey(bot, thread: discord.Thread, user: discord.Member,
         (up to 5 attempts) instead of having the whole survey cancel out.
         """
         from datetime import datetime as _dt
+
         full = prompt + f"\n*(format: `{date_format}`)*"
 
         attempts_left = 5
-        first_pass    = True
+        first_pass = True
         while attempts_left > 0:
             if first_pass:
                 await thread.send(full)
@@ -457,7 +487,9 @@ async def run_survey(bot, thread: discord.Thread, user: discord.Member,
             try:
                 reply = await bot.wait_for("message", check=check, timeout=SURVEY_TIMEOUT)
             except asyncio.TimeoutError:
-                await thread.send("⏰ Survey timed out. You can start again by clicking the Answer button.")
+                await thread.send(
+                    "⏰ Survey timed out. You can start again by clicking the Answer button."
+                )
                 return None
             raw = reply.content.strip()
             try:
@@ -480,12 +512,12 @@ async def run_survey(bot, thread: discord.Thread, user: discord.Member,
     data = {}
 
     for i, q in enumerate(questions):
-        key         = q.get("key", f"field_{i}")
-        label       = q.get("label", f"Question {i+1}")
-        qtype       = q.get("type", "text")
-        options     = q.get("options", [])
+        key = q.get("key", f"field_{i}")
+        label = q.get("label", f"Question {i + 1}")
+        qtype = q.get("type", "text")
+        options = q.get("options", [])
         placeholder = q.get("placeholder", "")
-        max_chars   = q.get("max_chars", 10) or 10
+        max_chars = q.get("max_chars", 10) or 10
 
         if qtype == "text":
             hint = f"\n*{placeholder}*" if placeholder else ""
@@ -530,32 +562,46 @@ async def run_survey(bot, thread: discord.Thread, user: discord.Member,
     await thread.send("⏳ Saving your responses...")
     try:
         discord_id = str(user.id)
-        username   = user.display_name
-        loop       = asyncio.get_event_loop()
+        username = user.display_name
+        loop = asyncio.get_event_loop()
         await loop.run_in_executor(
-            None, update_squad_powers,   discord_id, username, data, gid, survey_cfg,
+            None,
+            update_squad_powers,
+            discord_id,
+            username,
+            data,
+            gid,
+            survey_cfg,
         )
         await loop.run_in_executor(
-            None, append_survey_history, discord_id, username, data, gid, survey_cfg,
+            None,
+            append_survey_history,
+            discord_id,
+            username,
+            data,
+            gid,
+            survey_cfg,
         )
     except Exception as e:
-        await thread.send(f"⚠️ There was an error saving your responses: {e}\nPlease let leadership know.")
+        await thread.send(
+            f"⚠️ There was an error saving your responses: {e}\nPlease let leadership know."
+        )
         print(f"[SURVEY] Error saving for {user.display_name}: {e}")
         return
 
     # ── Notify leadership ─────────────────────────────────────────────────────
     try:
         from config import get_config as _sgc
-        _scfg = _sgc(user.guild.id) if hasattr(user, 'guild') else None
+
+        _scfg = _sgc(user.guild.id) if hasattr(user, "guild") else None
         # Extras may override the notify channel; fall back to guild-level.
-        _notify_id = (
-            int(survey_cfg.get("notify_channel_id") or 0)
-            or (_scfg.survey_notify_channel_id if _scfg else 0)
+        _notify_id = int(survey_cfg.get("notify_channel_id") or 0) or (
+            _scfg.survey_notify_channel_id if _scfg else 0
         )
         notify_channel = bot.get_channel(_notify_id)
         if notify_channel:
-            _now     = datetime.now(timezone.utc)
-            _hour12  = _now.hour % 12 or 12
+            _now = datetime.now(timezone.utc)
+            _hour12 = _now.hour % 12 or 12
             date_str = f"{_now:%B} {_now.day}, {_now.year} at {_hour12}:{_now:%M %p} UTC"
             embed = discord.Embed(
                 title="📋 New Survey Response",
@@ -568,7 +614,7 @@ async def run_survey(bot, thread: discord.Thread, user: discord.Member,
             # custom surveys see their own labels (not a hardcoded LW set).
             response_lines = []
             for q in questions:
-                key   = q.get("key", "")
+                key = q.get("key", "")
                 label = q.get("label", key) or key
                 if not key:
                     continue
@@ -632,8 +678,8 @@ async def _finalize_survey_thread(thread):
 
 # ── Persistent survey button ───────────────────────────────────────────────────
 
-async def _start_survey_answer_flow(interaction: discord.Interaction,
-                                    survey_id: str = "default"):
+
+async def _start_survey_answer_flow(interaction: discord.Interaction, survey_id: str = "default"):
     """Shared handler for both legacy and dynamic survey-answer buttons."""
     cfg = get_config(interaction.guild_id)
     if not cfg or not cfg.setup_complete:
@@ -647,6 +693,7 @@ async def _start_survey_answer_flow(interaction: discord.Interaction,
         return
 
     from config import get_survey
+
     survey_cfg = get_survey(interaction.guild_id, survey_id)
     if survey_cfg is None:
         await interaction.response.send_message(
@@ -661,13 +708,9 @@ async def _start_survey_answer_flow(interaction: discord.Interaction,
     )
 
     # Create a private thread named after the chosen survey (slugified).
-    title_source = (
-        survey_cfg.get("survey_name")
-        or survey_cfg.get("tab_squad_powers")
-        or "survey"
-    )
+    title_source = survey_cfg.get("survey_name") or survey_cfg.get("tab_squad_powers") or "survey"
     slug = re.sub(r"[^a-z0-9]+", "-", title_source.lower()).strip("-") or "survey"
-    channel     = interaction.channel
+    channel = interaction.channel
     thread_name = f"survey-{slug}-{interaction.user.name}"[:100]
     try:
         thread = await channel.create_thread(
@@ -697,6 +740,7 @@ class SurveyButtonView(discord.ui.View):
     on_ready via `bot.add_view(SurveyButtonView())`. Extra surveys use the
     `DynamicSurveyButton` below so each one keeps its own custom_id.
     """
+
     def __init__(self):
         super().__init__(timeout=None)  # persistent
 
@@ -748,22 +792,23 @@ def build_survey_button_view(survey_id: str = "default") -> discord.ui.View:
 
 # ── Guard (leadership only) ────────────────────────────────────────────────────
 
+
 async def _guard(interaction: discord.Interaction) -> bool:
     cfg = get_config(interaction.guild_id)
     if not cfg or not cfg.setup_complete:
-        await interaction.response.send_message(
-            NOT_SET_UP, ephemeral=True
-        )
+        await interaction.response.send_message(NOT_SET_UP, ephemeral=True)
         return False
     if cfg.leadership_role_name not in [r.name for r in interaction.user.roles]:
         await interaction.response.send_message(
-            f"⛔ You need the **{cfg.leadership_role_name}** role to use this command.", ephemeral=True
+            f"⛔ You need the **{cfg.leadership_role_name}** role to use this command.",
+            ephemeral=True,
         )
         return False
     return True
 
 
 # ── Survey selector helper (Premium multi-survey) ─────────────────────────────
+
 
 class _SurveyPickView(discord.ui.View):
     """Internal: dropdown for picking which survey to act on."""
@@ -775,24 +820,28 @@ class _SurveyPickView(discord.ui.View):
         options = []
         for s in surveys[:25]:
             label = s.get("survey_name") or s.get("survey_id") or "?"
-            sid   = s.get("survey_id") or "default"
-            desc  = ", ".join(
-                q.get("label", "") for q in (s.get("questions") or [])[:3]
+            sid = s.get("survey_id") or "default"
+            desc = ", ".join(q.get("label", "") for q in (s.get("questions") or [])[:3])
+            options.append(
+                discord.SelectOption(
+                    label=label[:100],
+                    value=sid[:100],
+                    description=(desc[:100] if desc else None),
+                )
             )
-            options.append(discord.SelectOption(
-                label=label[:100],
-                value=sid[:100],
-                description=(desc[:100] if desc else None),
-            ))
 
         sel = discord.ui.Select(placeholder="Pick a survey…", options=options)
 
         async def _cb(inter: discord.Interaction):
             self.selected_id = sel.values[0]
             sel.disabled = True
-            picked = next((s for s in surveys if (s.get("survey_id") or "default") == self.selected_id), None)
-            label  = picked.get("survey_name", self.selected_id) if picked else self.selected_id
-            await wizard_registry.safe_edit_response(inter, content=f"✅ Survey: **{label}**", view=self)
+            picked = next(
+                (s for s in surveys if (s.get("survey_id") or "default") == self.selected_id), None
+            )
+            label = picked.get("survey_name", self.selected_id) if picked else self.selected_id
+            await wizard_registry.safe_edit_response(
+                inter, content=f"✅ Survey: **{label}**", view=self
+            )
             self.stop()
 
         sel.callback = _cb
@@ -810,7 +859,10 @@ async def _pick_survey(interaction: discord.Interaction, *, prompt: str) -> dict
 
     surveys = list_surveys(interaction.guild_id)
 
-    if not await _prem.is_premium(interaction.guild_id, bot=interaction.client) or len(surveys) <= 1:
+    if (
+        not await _prem.is_premium(interaction.guild_id, bot=interaction.client)
+        or len(surveys) <= 1
+    ):
         return surveys[0]  # default-only path
 
     view = _SurveyPickView(surveys)
@@ -825,6 +877,7 @@ async def _pick_survey(interaction: discord.Interaction, *, prompt: str) -> dict
 
 
 # ── Multi-survey manage view (Premium /survey UX) ─────────────────────────────
+
 
 class _SurveyManageView(discord.ui.View):
     """
@@ -845,7 +898,9 @@ class _SurveyManageView(discord.ui.View):
     @discord.ui.button(label="➕ Add Survey", style=discord.ButtonStyle.success)
     async def add_btn(self, inter: discord.Interaction, button: discord.ui.Button):
         from setup_cog import run_create_new_extra_survey
-        for item in self.children: item.disabled = True
+
+        for item in self.children:
+            item.disabled = True
         await wizard_registry.safe_edit_response(inter, view=self)
         await run_create_new_extra_survey(inter, inter.client)
         self.stop()
@@ -853,7 +908,9 @@ class _SurveyManageView(discord.ui.View):
     @discord.ui.button(label="✏️ Edit Survey", style=discord.ButtonStyle.primary)
     async def edit_btn(self, inter: discord.Interaction, button: discord.ui.Button):
         from setup_cog import run_pick_survey_to_edit
-        for item in self.children: item.disabled = True
+
+        for item in self.children:
+            item.disabled = True
         await wizard_registry.safe_edit_response(inter, view=self)
         await run_pick_survey_to_edit(inter, inter.client)
         self.stop()
@@ -861,7 +918,9 @@ class _SurveyManageView(discord.ui.View):
     @discord.ui.button(label="🗑️ Remove Survey", style=discord.ButtonStyle.danger)
     async def remove_btn(self, inter: discord.Interaction, button: discord.ui.Button):
         from setup_cog import run_remove_extra_survey
-        for item in self.children: item.disabled = True
+
+        for item in self.children:
+            item.disabled = True
         await wizard_registry.safe_edit_response(inter, view=self)
         await run_remove_extra_survey(inter, inter.client)
         self.stop()
@@ -875,7 +934,7 @@ async def _send_survey_manage_view(interaction: discord.Interaction, bot):
     """
     from config import list_surveys
 
-    surveys    = list_surveys(interaction.guild_id)
+    surveys = list_surveys(interaction.guild_id)
     has_extras = any((s.get("survey_id") or "default") != "default" for s in surveys)
 
     embed = discord.Embed(
@@ -887,24 +946,27 @@ async def _send_survey_manage_view(interaction: discord.Interaction, bot):
         ),
     )
     for s in surveys[:25]:
-        sid    = s.get("survey_id") or "default"
-        name   = s.get("survey_name") or sid
-        n_q    = len(s.get("questions") or [])
-        tab    = s.get("tab_squad_powers") or "*not set*"
-        ch_id  = int(s.get("survey_channel_id") or 0)
+        sid = s.get("survey_id") or "default"
+        name = s.get("survey_name") or sid
+        n_q = len(s.get("questions") or [])
+        tab = s.get("tab_squad_powers") or "*not set*"
+        ch_id = int(s.get("survey_channel_id") or 0)
         ch_str = f"<#{ch_id}>" if ch_id else "_(uses default channel)_"
         embed.add_field(
             name=f"{name}" + (" *(default)*" if sid == "default" else ""),
             value=f"**{n_q}** question(s) · Stats tab: `{tab}` · Channel: {ch_str}",
             inline=False,
         )
-    embed.set_footer(text="Use /survey post to publish the answer button. /survey remind to send or schedule reminders.")
+    embed.set_footer(
+        text="Use /survey post to publish the answer button. /survey remind to send or schedule reminders."
+    )
 
     view = _SurveyManageView(has_extras=has_extras)
     await interaction.followup.send(embed=embed, view=view, ephemeral=True)
 
 
 # ── Cog ────────────────────────────────────────────────────────────────────────
+
 
 class SurveyCog(commands.Cog):
     # /survey is a top-level slash-command group containing overview /
@@ -929,8 +991,10 @@ class SurveyCog(commands.Cog):
             # default survey button will still work; extras will not survive
             # restarts on this version. Surfacing this in logs lets us notice
             # when a deploy needs an upgrade.
-            print("[SURVEY] discord.py too old for DynamicItem — extra-survey "
-                  "buttons will not be persistent on this version.")
+            print(
+                "[SURVEY] discord.py too old for DynamicItem — extra-survey "
+                "buttons will not be persistent on this version."
+            )
         # Start the per-minute scheduler tick that fires scheduled reminders
         # (#27). Stamps `reminder_last_fired` on each survey row so we don't
         # double-fire on a restart in the same minute.
@@ -965,9 +1029,9 @@ class SurveyCog(commands.Cog):
 
         for entry in scheduled:
             try:
-                guild_id   = int(entry["guild_id"])
-                survey_id  = entry.get("survey_id") or "default"
-                frequency  = (entry.get("reminder_frequency") or "off").lower()
+                guild_id = int(entry["guild_id"])
+                survey_id = entry.get("survey_id") or "default"
+                frequency = (entry.get("reminder_frequency") or "off").lower()
                 if frequency == "off":
                     continue
 
@@ -975,8 +1039,8 @@ class SurveyCog(commands.Cog):
                 if not cfg or not cfg.setup_complete:
                     continue
 
-                tz_str    = cfg.timezone or "America/New_York"
-                guild_tz  = ZoneInfo(tz_str)
+                tz_str = cfg.timezone or "America/New_York"
+                guild_tz = ZoneInfo(tz_str)
                 guild_now = datetime.now(tz=guild_tz)
 
                 # Time-of-day match (HH:MM, minute granularity)
@@ -995,42 +1059,53 @@ class SurveyCog(commands.Cog):
                         continue
 
                 # Idempotency — don't fire twice for the same date
-                today_iso  = guild_now.date().isoformat()
+                today_iso = guild_now.date().isoformat()
                 last_fired = entry.get("reminder_last_fired") or ""
                 if last_fired == today_iso:
                     continue
 
                 # Resolve the survey config (so we can format the reminder body)
                 from config import get_survey
+
                 survey = get_survey(guild_id, survey_id) or {
-                    "survey_name":      entry.get("survey_name") or "Default",
+                    "survey_name": entry.get("survey_name") or "Default",
                     "reminder_message": entry.get("reminder_message") or "",
                 }
                 # Refresh body with the latest custom message + sensible default
-                body = (survey.get("reminder_message")
-                        or entry.get("reminder_message")
-                        or _default_reminder_body(survey))
+                body = (
+                    survey.get("reminder_message")
+                    or entry.get("reminder_message")
+                    or _default_reminder_body(survey)
+                )
 
-                use_dm     = bool(entry.get("reminder_use_dm"))
+                use_dm = bool(entry.get("reminder_use_dm"))
                 channel_id = int(entry.get("reminder_channel_id") or 0)
 
                 if use_dm:
                     # DM path is Premium-only because it depends on Member
                     # Roster Sync. Silently skip when the guild lapses.
                     if not await _prem.is_premium(guild_id, bot=self.bot):
-                        print(f"[SURVEY] Skipping DM reminder for guild {guild_id}: Premium lapsed.")
+                        print(
+                            f"[SURVEY] Skipping DM reminder for guild {guild_id}: Premium lapsed."
+                        )
                         continue
                     sent, skipped = await _send_reminder_via_dm(self.bot, guild_id, body)
-                    print(f"[SURVEY] Scheduled DM reminder fired for guild={guild_id} "
-                          f"survey={survey_id} sent={sent} skipped={skipped}")
+                    print(
+                        f"[SURVEY] Scheduled DM reminder fired for guild={guild_id} "
+                        f"survey={survey_id} sent={sent} skipped={skipped}"
+                    )
                 elif channel_id:
                     ok = await _send_reminder_to_channel(self.bot, guild_id, channel_id, body)
                     if not ok:
-                        print(f"[SURVEY] Channel reminder failed for guild={guild_id} "
-                              f"survey={survey_id} channel={channel_id}")
+                        print(
+                            f"[SURVEY] Channel reminder failed for guild={guild_id} "
+                            f"survey={survey_id} channel={channel_id}"
+                        )
                         continue
-                    print(f"[SURVEY] Scheduled channel reminder fired for guild={guild_id} "
-                          f"survey={survey_id} channel={channel_id}")
+                    print(
+                        f"[SURVEY] Scheduled channel reminder fired for guild={guild_id} "
+                        f"survey={survey_id} channel={channel_id}"
+                    )
                 else:
                     # No destination configured — schedule is incomplete; skip.
                     continue
@@ -1059,9 +1134,12 @@ class SurveyCog(commands.Cog):
         await interaction.response.defer(ephemeral=True)
 
         from config import get_config
+
         cfg = get_config(interaction.guild_id)
         if not cfg:
-            await interaction.followup.send("⚙️ Bot not configured. Run `/setup` first.", ephemeral=True)
+            await interaction.followup.send(
+                "⚙️ Bot not configured. Run `/setup` first.", ephemeral=True
+            )
             return
 
         # Premium guilds with multiple surveys pick which one to post.
@@ -1070,13 +1148,13 @@ class SurveyCog(commands.Cog):
             prompt="📋 You have multiple surveys configured — which one do you want to post?",
         )
         if survey is None:
-            await interaction.followup.send("⏰ Picker timed out. Run `/survey post` again.", ephemeral=True)
+            await interaction.followup.send(
+                "⏰ Picker timed out. Run `/survey post` again.", ephemeral=True
+            )
             return
 
         survey_id = survey.get("survey_id") or "default"
-        channel_id = (
-            int(survey.get("survey_channel_id") or 0) or cfg.survey_channel_id
-        )
+        channel_id = int(survey.get("survey_channel_id") or 0) or cfg.survey_channel_id
         channel = self.bot.get_channel(channel_id)
         if channel is None:
             await interaction.followup.send(
@@ -1111,7 +1189,9 @@ class SurveyCog(commands.Cog):
         import premium as _prem
 
         is_premium_flag = await _prem.is_premium(
-            interaction.guild_id, interaction=interaction, bot=self.bot,
+            interaction.guild_id,
+            interaction=interaction,
+            bot=self.bot,
         )
 
         # Premium tier: always show the list view + Add / Edit / Remove
@@ -1123,7 +1203,7 @@ class SurveyCog(commands.Cog):
             return
 
         # Free tier: single-survey detail view (matches prior behavior).
-        scfg      = get_survey_config(interaction.guild_id)
+        scfg = get_survey_config(interaction.guild_id)
         questions = scfg.get("questions") or []
 
         embed = discord.Embed(
@@ -1132,7 +1212,9 @@ class SurveyCog(commands.Cog):
         )
 
         if not questions:
-            embed.description = "*No survey questions configured. Run `/setup → 📋 Survey` to add some.*"
+            embed.description = (
+                "*No survey questions configured. Run `/setup → 📋 Survey` to add some.*"
+            )
         else:
             lines = []
             for i, q in enumerate(questions, start=1):
@@ -1146,8 +1228,12 @@ class SurveyCog(commands.Cog):
                     lines.append(f"   _{q['help']}_")
             embed.description = "\n".join(lines)[:4000]
 
-        embed.add_field(name="Stats Tab",       value=scfg.get("tab_squad_powers", "*not set*"), inline=False)
-        embed.add_field(name="History Tab",     value=scfg.get("tab_history", "*not set*"),      inline=False)
+        embed.add_field(
+            name="Stats Tab", value=scfg.get("tab_squad_powers", "*not set*"), inline=False
+        )
+        embed.add_field(
+            name="History Tab", value=scfg.get("tab_history", "*not set*"), inline=False
+        )
         embed.add_field(
             name="Intro Message",
             value="✅ Configured" if scfg.get("intro_message") else "❌ Not configured",
@@ -1155,7 +1241,7 @@ class SurveyCog(commands.Cog):
         )
         embed.set_footer(
             text=SETUP_POINTER_FOOTER.format(wizard=HUB_BTN_SURVEY)
-                 + " Run /survey post to post the button.",
+            + " Run /survey post to post the button.",
         )
 
         await interaction.response.send_message(embed=embed, ephemeral=True)
@@ -1172,6 +1258,7 @@ class SurveyCog(commands.Cog):
 
 # ── Reminder helpers ──────────────────────────────────────────────────────────
 
+
 def _default_reminder_body(survey: dict) -> str:
     """Fallback reminder message when the survey doesn't have one saved."""
     name = survey.get("survey_name") or "the survey"
@@ -1186,8 +1273,10 @@ async def _send_reminder_to_channel(bot, guild_id: int, channel_id: int, body: s
     """Post a reminder body to a guild channel. Returns True on success."""
     channel = bot.get_channel(channel_id)
     if channel is None:
-        print(f"[REMINDER] Channel {channel_id} not resolvable (guild={guild_id}) "
-              f"— scheduled reminder skipped")
+        print(
+            f"[REMINDER] Channel {channel_id} not resolvable (guild={guild_id}) "
+            f"— scheduled reminder skipped"
+        )
         return False
     try:
         await channel.send(body)
@@ -1203,6 +1292,7 @@ async def _send_reminder_to_channel(bot, guild_id: int, channel_id: int, body: s
         print(f"[REMINDER] Channel post failed (guild={guild_id}, channel={channel_id}): {e}")
         try:
             import sentry_sdk
+
             sentry_sdk.capture_exception(e)
         except Exception:
             pass
@@ -1223,14 +1313,14 @@ async def _send_reminder_via_dm(bot, guild_id: int, body: str) -> tuple[int, int
         return (0, 0)
 
     try:
-        ws   = get_member_roster_sheet(guild_id, roster_cfg["tab_name"])
+        ws = get_member_roster_sheet(guild_id, roster_cfg["tab_name"])
         rows = await asyncio.get_event_loop().run_in_executor(None, ws.get_all_values)
     except Exception as e:
         print(f"[REMINDER] Could not read roster for guild {guild_id}: {e}")
         return (0, 0)
 
     did_col = roster_cfg["discord_id_col"]
-    sent    = 0
+    sent = 0
     skipped = 0
     for row in rows[1:]:  # skip header
         if did_col >= len(row):
@@ -1248,6 +1338,7 @@ async def _send_reminder_via_dm(bot, guild_id: int, body: str) -> tuple[int, int
 
 
 # ── Wizard hub ────────────────────────────────────────────────────────────────
+
 
 class _ReminderHubView(discord.ui.View):
     """Top-level picker shown by /survey remind."""
@@ -1285,7 +1376,9 @@ async def _run_remind_hub(interaction: discord.Interaction, bot):
     import premium as _prem
 
     is_premium_flag = await _prem.is_premium(
-        interaction.guild_id, interaction=interaction, bot=bot,
+        interaction.guild_id,
+        interaction=interaction,
+        bot=bot,
     )
 
     view = _ReminderHubView()
@@ -1305,6 +1398,7 @@ async def _run_remind_hub(interaction: discord.Interaction, bot):
 
 # ── Send-now path ─────────────────────────────────────────────────────────────
 
+
 class _DestinationPickView(discord.ui.View):
     """Channel vs DM picker. DM option only enabled for Premium guilds."""
 
@@ -1316,12 +1410,14 @@ class _DestinationPickView(discord.ui.View):
             label="📢 Post to a channel",
             style=discord.ButtonStyle.primary,
         )
+
         async def _ch(inter: discord.Interaction):
             self.choice = "channel"
             for item in self.children:
                 item.disabled = True
             await wizard_registry.safe_edit_response(inter, view=self)
             self.stop()
+
         ch_btn.callback = _ch
         self.add_item(ch_btn)
 
@@ -1330,12 +1426,14 @@ class _DestinationPickView(discord.ui.View):
             style=discord.ButtonStyle.secondary,
             disabled=not allow_dm,
         )
+
         async def _dm(inter: discord.Interaction):
             self.choice = "dm"
             for item in self.children:
                 item.disabled = True
             await wizard_registry.safe_edit_response(inter, view=self)
             self.stop()
+
         dm_btn.callback = _dm
         self.add_item(dm_btn)
 
@@ -1351,6 +1449,7 @@ class _ChannelPickView(discord.ui.View):
             channel_types=[discord.ChannelType.text, discord.ChannelType.news],
             placeholder="Pick a channel…",
         )
+
         async def _cb(inter: discord.Interaction):
             self.channel = sel.values[0].resolve() or sel.values[0]
             sel.disabled = True
@@ -1360,6 +1459,7 @@ class _ChannelPickView(discord.ui.View):
                 view=self,
             )
             self.stop()
+
         sel.callback = _cb
         self.add_item(sel)
 
@@ -1373,7 +1473,8 @@ async def _run_send_now(interaction: discord.Interaction, bot, is_premium_flag: 
     )
     if survey is None:
         await interaction.followup.send(
-            "⏰ Picker timed out. Run `/survey remind` again.", ephemeral=True,
+            "⏰ Picker timed out. Run `/survey remind` again.",
+            ephemeral=True,
         )
         return
 
@@ -1388,15 +1489,21 @@ async def _run_send_now(interaction: discord.Interaction, bot, is_premium_flag: 
     )
     await dest_view.wait()
     if dest_view.choice is None:
-        await interaction.followup.send(GENERIC_CMD_TIMEOUT.format(cmd="survey remind"), ephemeral=True)
+        await interaction.followup.send(
+            GENERIC_CMD_TIMEOUT.format(cmd="survey remind"), ephemeral=True
+        )
         return
 
     if dest_view.choice == "channel":
         ch_view = _ChannelPickView()
-        await interaction.followup.send("📢 Pick the channel to post to:", view=ch_view, ephemeral=True)
+        await interaction.followup.send(
+            "📢 Pick the channel to post to:", view=ch_view, ephemeral=True
+        )
         await ch_view.wait()
         if ch_view.channel is None:
-            await interaction.followup.send(GENERIC_CMD_TIMEOUT.format(cmd="survey remind"), ephemeral=True)
+            await interaction.followup.send(
+                GENERIC_CMD_TIMEOUT.format(cmd="survey remind"), ephemeral=True
+            )
             return
         ok = await _send_reminder_to_channel(bot, interaction.guild_id, ch_view.channel.id, body)
         if ok:
@@ -1414,6 +1521,7 @@ async def _run_send_now(interaction: discord.Interaction, bot, is_premium_flag: 
 
     # dest_view.choice == "dm" (Premium only)
     from config import get_member_roster_config
+
     roster_cfg = get_member_roster_config(interaction.guild_id)
     if not roster_cfg.get("enabled"):
         await interaction.followup.send(
@@ -1443,21 +1551,24 @@ class _FrequencyPickView(discord.ui.View):
     @discord.ui.button(label="Off (disable)", style=discord.ButtonStyle.danger)
     async def off(self, inter: discord.Interaction, button: discord.ui.Button):
         self.choice = "off"
-        for item in self.children: item.disabled = True
+        for item in self.children:
+            item.disabled = True
         await wizard_registry.safe_edit_response(inter, view=self)
         self.stop()
 
     @discord.ui.button(label="Daily", style=discord.ButtonStyle.primary)
     async def daily(self, inter: discord.Interaction, button: discord.ui.Button):
         self.choice = "daily"
-        for item in self.children: item.disabled = True
+        for item in self.children:
+            item.disabled = True
         await wizard_registry.safe_edit_response(inter, view=self)
         self.stop()
 
     @discord.ui.button(label="Weekly", style=discord.ButtonStyle.success)
     async def weekly(self, inter: discord.Interaction, button: discord.ui.Button):
         self.choice = "weekly"
-        for item in self.children: item.disabled = True
+        for item in self.children:
+            item.disabled = True
         await wizard_registry.safe_edit_response(inter, view=self)
         self.stop()
 
@@ -1468,13 +1579,20 @@ class _DayPickView(discord.ui.View):
         self.day: int | None = None
         sel = discord.ui.Select(
             placeholder="Day of the week…",
-            options=[discord.SelectOption(label=name, value=str(i)) for i, name in enumerate(DAYS_OF_WEEK)],
+            options=[
+                discord.SelectOption(label=name, value=str(i))
+                for i, name in enumerate(DAYS_OF_WEEK)
+            ],
         )
+
         async def _cb(inter: discord.Interaction):
             self.day = int(sel.values[0])
             sel.disabled = True
-            await wizard_registry.safe_edit_response(inter, content=f"✅ Day: **{DAYS_OF_WEEK[self.day]}**", view=self)
+            await wizard_registry.safe_edit_response(
+                inter, content=f"✅ Day: **{DAYS_OF_WEEK[self.day]}**", view=self
+            )
             self.stop()
+
         sel.callback = _cb
         self.add_item(sel)
 
@@ -1483,6 +1601,7 @@ async def _run_schedule_wizard(interaction: discord.Interaction, bot, is_premium
     """Walk leadership through configuring a survey's scheduled reminder."""
     from config import save_survey_reminder, get_config
     from setup_cog import _format_time_with_tz
+
     # Pick which survey
     survey = await _pick_survey(
         interaction,
@@ -1490,32 +1609,34 @@ async def _run_schedule_wizard(interaction: discord.Interaction, bot, is_premium
     )
     if survey is None:
         await interaction.followup.send(
-            "⏰ Picker timed out. Run `/survey remind` again.", ephemeral=True,
+            "⏰ Picker timed out. Run `/survey remind` again.",
+            ephemeral=True,
         )
         return
 
-    survey_id   = survey.get("survey_id") or "default"
+    survey_id = survey.get("survey_id") or "default"
     survey_name = survey.get("survey_name") or "Default"
 
-    guild_cfg   = get_config(interaction.guild_id)
-    guild_tz    = guild_cfg.timezone if guild_cfg else "America/New_York"
+    guild_cfg = get_config(interaction.guild_id)
+    guild_tz = guild_cfg.timezone if guild_cfg else "America/New_York"
 
     # Show current settings as context
-    cur_freq    = survey.get("reminder_frequency") or "off"
-    cur_day     = int(survey.get("reminder_day_of_week") or 1)
-    cur_time    = survey.get("reminder_time") or "12:00"
-    cur_ch      = int(survey.get("reminder_channel_id") or 0)
-    cur_use_dm  = bool(survey.get("reminder_use_dm"))
-    cur_msg     = survey.get("reminder_message") or ""
+    cur_freq = survey.get("reminder_frequency") or "off"
+    cur_day = int(survey.get("reminder_day_of_week") or 1)
+    cur_time = survey.get("reminder_time") or "12:00"
+    cur_ch = int(survey.get("reminder_channel_id") or 0)
+    cur_use_dm = bool(survey.get("reminder_use_dm"))
+    cur_msg = survey.get("reminder_message") or ""
 
     cur_dest = (
-        "DM via Member Roster" if cur_use_dm
-        else (f"<#{cur_ch}>" if cur_ch else "*(not set)*")
+        "DM via Member Roster" if cur_use_dm else (f"<#{cur_ch}>" if cur_ch else "*(not set)*")
     )
     cur_time_label = _format_time_with_tz(cur_time, guild_tz) or cur_time
     cur_when = (
-        "Off" if cur_freq == "off"
-        else f"Daily at {cur_time_label}" if cur_freq == "daily"
+        "Off"
+        if cur_freq == "off"
+        else f"Daily at {cur_time_label}"
+        if cur_freq == "daily"
         else f"Weekly on {DAYS_OF_WEEK[cur_day]} at {cur_time_label}"
     )
 
@@ -1536,16 +1657,22 @@ async def _run_schedule_wizard(interaction: discord.Interaction, bot, is_premium
     )
     await freq_view.wait()
     if freq_view.choice is None:
-        await interaction.followup.send(GENERIC_CMD_TIMEOUT.format(cmd="survey remind"), ephemeral=True)
+        await interaction.followup.send(
+            GENERIC_CMD_TIMEOUT.format(cmd="survey remind"), ephemeral=True
+        )
         return
 
     new_freq = freq_view.choice
     if new_freq == "off":
         save_survey_reminder(
-            interaction.guild_id, survey_id,
-            enabled=0, frequency="off",
-            day_of_week=cur_day, time_str=cur_time,
-            channel_id=cur_ch, use_dm=int(cur_use_dm),
+            interaction.guild_id,
+            survey_id,
+            enabled=0,
+            frequency="off",
+            day_of_week=cur_day,
+            time_str=cur_time,
+            channel_id=cur_ch,
+            use_dm=int(cur_use_dm),
             message=cur_msg,
         )
         await interaction.followup.send(
@@ -1566,13 +1693,17 @@ async def _run_schedule_wizard(interaction: discord.Interaction, bot, is_premium
         )
         await day_view.wait()
         if day_view.day is None:
-            await interaction.followup.send(GENERIC_CMD_TIMEOUT.format(cmd="survey remind"), ephemeral=True)
+            await interaction.followup.send(
+                GENERIC_CMD_TIMEOUT.format(cmd="survey remind"), ephemeral=True
+            )
             return
         new_day = day_view.day
 
     # ── Step 3: Time of day ───────────────────────────────────────────────────
     new_time, ok = await _ask_time(
-        interaction, default=cur_time, step_label="Step 3 — Time of day",
+        interaction,
+        default=cur_time,
+        step_label="Step 3 — Time of day",
         tz_name=guild_tz,
     )
     if not ok:
@@ -1588,19 +1719,25 @@ async def _run_schedule_wizard(interaction: discord.Interaction, bot, is_premium
     )
     await dest_view.wait()
     if dest_view.choice is None:
-        await interaction.followup.send(GENERIC_CMD_TIMEOUT.format(cmd="survey remind"), ephemeral=True)
+        await interaction.followup.send(
+            GENERIC_CMD_TIMEOUT.format(cmd="survey remind"), ephemeral=True
+        )
         return
 
-    new_use_dm   = 0
-    new_channel  = 0
+    new_use_dm = 0
+    new_channel = 0
     if dest_view.choice == "dm":
         new_use_dm = 1
     else:
         ch_view = _ChannelPickView()
-        await interaction.followup.send("📢 Pick the channel to post the reminder to:", view=ch_view, ephemeral=True)
+        await interaction.followup.send(
+            "📢 Pick the channel to post the reminder to:", view=ch_view, ephemeral=True
+        )
         await ch_view.wait()
         if ch_view.channel is None:
-            await interaction.followup.send(GENERIC_CMD_TIMEOUT.format(cmd="survey remind"), ephemeral=True)
+            await interaction.followup.send(
+                GENERIC_CMD_TIMEOUT.format(cmd="survey remind"), ephemeral=True
+            )
             return
         new_channel = ch_view.channel.id
 
@@ -1611,7 +1748,8 @@ async def _run_schedule_wizard(interaction: discord.Interaction, bot, is_premium
 
     # ── Save ──────────────────────────────────────────────────────────────────
     save_survey_reminder(
-        interaction.guild_id, survey_id,
+        interaction.guild_id,
+        survey_id,
         enabled=1,
         frequency=new_freq,
         day_of_week=new_day,
@@ -1623,7 +1761,8 @@ async def _run_schedule_wizard(interaction: discord.Interaction, bot, is_premium
 
     new_time_label = _format_time_with_tz(new_time, guild_tz) or new_time
     when = (
-        f"Daily at {new_time_label}" if new_freq == "daily"
+        f"Daily at {new_time_label}"
+        if new_freq == "daily"
         else f"Weekly on {DAYS_OF_WEEK[new_day]} at {new_time_label}"
     )
     where = "DMs to every roster member" if new_use_dm else f"<#{new_channel}>"
@@ -1637,8 +1776,9 @@ async def _run_schedule_wizard(interaction: discord.Interaction, bot, is_premium
     )
 
 
-async def _ask_time(interaction: discord.Interaction, *, default: str,
-                    step_label: str, tz_name: str | None = None) -> tuple[str, bool]:
+async def _ask_time(
+    interaction: discord.Interaction, *, default: str, step_label: str, tz_name: str | None = None
+) -> tuple[str, bool]:
     """
     Ask leadership for a HH:MM time via a one-field modal. Re-prompts up to
     3 times on unparseable input. Returns (time_str_24h, ok). `tz_name`
@@ -1646,6 +1786,7 @@ async def _ask_time(interaction: discord.Interaction, *, default: str,
     e.g. `8:00am EDT` — saved values are still HH:MM 24h.
     """
     from setup_cog import _parse_12h_time, _format_time_with_tz
+
     current_label = _format_time_with_tz(default, tz_name) or default
 
     class _TimeModal(discord.ui.Modal, title="Reminder time"):
@@ -1655,9 +1796,11 @@ async def _ask_time(interaction: discord.Interaction, *, default: str,
             max_length=8,
             required=True,
         )
+
         def __init__(self):
             super().__init__()
             self.value: str | None = None
+
         async def on_submit(self, inter: discord.Interaction):
             self.value = str(self.time_in.value).strip()
             await inter.response.defer(ephemeral=True)
@@ -1667,7 +1810,10 @@ async def _ask_time(interaction: discord.Interaction, *, default: str,
         def __init__(self):
             super().__init__(timeout=180)
             self.modal: _TimeModal | None = None
-        @discord.ui.button(label=f"⏰ Set time (current: {current_label})", style=discord.ButtonStyle.primary)
+
+        @discord.ui.button(
+            label=f"⏰ Set time (current: {current_label})", style=discord.ButtonStyle.primary
+        )
         async def open_modal(self, inter: discord.Interaction, button: discord.ui.Button):
             self.modal = _TimeModal()
             await inter.response.send_modal(self.modal)
@@ -1684,13 +1830,15 @@ async def _ask_time(interaction: discord.Interaction, *, default: str,
         )
         await view.wait()
         if view.modal is None or view.modal.value is None:
-            await interaction.followup.send(GENERIC_CMD_TIMEOUT.format(cmd="survey remind"), ephemeral=True)
+            await interaction.followup.send(
+                GENERIC_CMD_TIMEOUT.format(cmd="survey remind"), ephemeral=True
+            )
             return ("", False)
         raw = view.modal.value
         parsed = _parse_12h_time(raw)
         if parsed:
             return (parsed, True)
-        if (len(raw) == 5 and raw[2] == ":" and raw.replace(":", "").isdigit()):
+        if len(raw) == 5 and raw[2] == ":" and raw.replace(":", "").isdigit():
             return (raw, True)
         attempts_left -= 1
         if attempts_left <= 0:
@@ -1705,8 +1853,9 @@ async def _ask_time(interaction: discord.Interaction, *, default: str,
         )
 
 
-async def _ask_reminder_message(interaction: discord.Interaction, bot,
-                                 *, default: str) -> tuple[str, bool]:
+async def _ask_reminder_message(
+    interaction: discord.Interaction, bot, *, default: str
+) -> tuple[str, bool]:
     """
     Prompt for the reminder message body. Empty input keeps the existing
     custom message, or falls back to the generic default at fire time.
@@ -1725,12 +1874,14 @@ async def _ask_reminder_message(interaction: discord.Interaction, bot,
             required=False,
             max_length=2000,
         )
+
         def __init__(self):
             super().__init__()
             self.value: str | None = None
             self.confirmed = False
+
         async def on_submit(self, inter: discord.Interaction):
-            self.value     = str(self.body_in.value)
+            self.value = str(self.body_in.value)
             self.confirmed = True
             await inter.response.defer(ephemeral=True)
             self.stop()
@@ -1739,18 +1890,22 @@ async def _ask_reminder_message(interaction: discord.Interaction, bot,
         def __init__(self):
             super().__init__(timeout=300)
             self.modal: _MsgModal | None = None
+
         @discord.ui.button(label="✏️ Edit message", style=discord.ButtonStyle.primary)
         async def open_modal(self, inter: discord.Interaction, button: discord.ui.Button):
             self.modal = _MsgModal()
             await inter.response.send_modal(self.modal)
             await self.modal.wait()
             self.stop()
+
         @discord.ui.button(label="Use default", style=discord.ButtonStyle.secondary)
         async def use_default(self, inter: discord.Interaction, button: discord.ui.Button):
             self.modal = _MsgModal()
             self.modal.value = ""
             self.modal.confirmed = True
-            await wizard_registry.safe_edit_response(inter, content="✅ Will use the default reminder message.", view=self)
+            await wizard_registry.safe_edit_response(
+                inter, content="✅ Will use the default reminder message.", view=self
+            )
             self.stop()
 
     view = _MsgView()
@@ -1762,7 +1917,9 @@ async def _ask_reminder_message(interaction: discord.Interaction, bot,
     )
     await view.wait()
     if view.modal is None or not view.modal.confirmed:
-        await interaction.followup.send(GENERIC_CMD_TIMEOUT.format(cmd="survey remind"), ephemeral=True)
+        await interaction.followup.send(
+            GENERIC_CMD_TIMEOUT.format(cmd="survey remind"), ephemeral=True
+        )
         return ("", False)
     return ((view.modal.value or "").strip(), True)
 

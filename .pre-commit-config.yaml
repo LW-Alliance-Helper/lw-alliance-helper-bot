@@ -1,0 +1,30 @@
+# Pre-commit hooks for lw-alliance-helper-bot. Runs on STAGED files at commit
+# time. Install once per clone with:  py -m pre_commit install
+#
+# Scope: ruff lint (bugs/dead code) + ruff format (style), codespell
+# spell-check, and a gitleaks staged-secret scan. The test suite is NOT run
+# here; tests run in CI and are run targeted-per-issue locally (the full
+# suite is ~5 min).
+repos:
+  - repo: https://github.com/astral-sh/ruff-pre-commit
+    rev: v0.15.15
+    hooks:
+      - id: ruff
+        args: [--fix]
+      - id: ruff-format
+
+  - repo: https://github.com/codespell-project/codespell
+    rev: v2.4.2
+    hooks:
+      - id: codespell
+
+  # gitleaks runs from the binary already installed on the machine (go is not
+  # installed, so the upstream go-language hook can't build). 8.30 dropped the
+  # `protect` command; `git --staged` is the staged-scan entry point.
+  - repo: local
+    hooks:
+      - id: gitleaks
+        name: gitleaks (staged secret scan)
+        entry: gitleaks git --staged --redact --no-banner
+        language: system
+        pass_filenames: false

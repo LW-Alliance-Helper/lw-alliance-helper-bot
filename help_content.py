@@ -26,9 +26,7 @@ from setup_hub import (
 )
 
 
-PRIVACY_URL = (
-    "https://lw-alliance-helper.github.io/privacy.html#where-your-data-lives"
-)
+PRIVACY_URL = "https://lw-alliance-helper.github.io/privacy.html#where-your-data-lives"
 
 OVERVIEW_DESCRIPTION = (
     "Commands require the leadership role and the leadership channel. "
@@ -62,18 +60,22 @@ HELP_CATEGORIES: dict[str, dict] = {
             "Open `/events` to see every action in one place."
         ),
         "commands": [
-            (f"/setup → {HUB_BTN_EVENTS}",
-             "Configure the four shared event settings: leadership draft "
-             "channel, public announcement channel, daily draft time, "
-             "and 5-min warning toggle."),
-            ("/events",
-             "**Event hub.** Opens an embed showing the alliance's current "
-             "event config plus a button grid.\n"
-             "**Read row:** 📅 Today's events (open the draft editor), "
-             "📆 Upcoming events (next firing dates), 📜 Event log "
-             "(recent approvals — free: 7 days / 💎 Premium: 30 days).\n"
-             "**Write row:** ➕ Create an event (pick a preset or define "
-             "your own), 🗑️ Delete an event."),
+            (
+                f"/setup → {HUB_BTN_EVENTS}",
+                "Configure the four shared event settings: leadership draft "
+                "channel, public announcement channel, daily draft time, "
+                "and 5-min warning toggle.",
+            ),
+            (
+                "/events",
+                "**Event hub.** Opens an embed showing the alliance's current "
+                "event config plus a button grid.\n"
+                "**Read row:** 📅 Today's events (open the draft editor), "
+                "📆 Upcoming events (next firing dates), 📜 Event log "
+                "(recent approvals — free: 7 days / 💎 Premium: 30 days).\n"
+                "**Write row:** ➕ Create an event (pick a preset or define "
+                "your own), 🗑️ Delete an event.",
+            ),
         ],
     },
     "train": {
@@ -84,15 +86,19 @@ HELP_CATEGORIES: dict[str, dict] = {
             "generate a personalised ChatGPT blurb prompt."
         ),
         "commands": [
-            (f"/setup → {HUB_BTN_TRAIN}",
-             "Configure the train tab, blurb generation, and reminders."),
-            ("/train overview",
-             "View the schedule with Add / Update / Generate Prompt / Clear "
-             "buttons."),
-            ("/train log [date]",
-             "Recent prompt log entries (free: 7 days / 💎 Premium: 30 days)."),
-            ("/train birthdays",
-             "Manually run the birthday → train auto-population now."),
+            (
+                f"/setup → {HUB_BTN_TRAIN}",
+                "Configure the train tab, blurb generation, and reminders.",
+            ),
+            (
+                "/train overview",
+                "View the schedule with Add / Update / Generate Prompt / Clear buttons.",
+            ),
+            (
+                "/train log [date]",
+                "Recent prompt log entries (free: 7 days / 💎 Premium: 30 days).",
+            ),
+            ("/train birthdays", "Manually run the birthday → train auto-population now."),
         ],
     },
     "birthdays": {
@@ -103,12 +109,14 @@ HELP_CATEGORIES: dict[str, dict] = {
             "announcements and auto-assign the train."
         ),
         "commands": [
-            (f"/setup → {HUB_BTN_BIRTHDAYS}",
-             "Configure birthday tracking, train integration, and "
-             "announcement template."),
-            ("/birthdays",
-             "Show upcoming birthdays inside your lookahead window "
-             "(default 14 days)."),
+            (
+                f"/setup → {HUB_BTN_BIRTHDAYS}",
+                "Configure birthday tracking, train integration, and announcement template.",
+            ),
+            (
+                "/birthdays",
+                "Show upcoming birthdays inside your lookahead window (default 14 days).",
+            ),
         ],
     },
     "desertstorm": {
@@ -121,22 +129,26 @@ HELP_CATEGORIES: dict[str, dict] = {
             "see every action in one place."
         ),
         "commands": [
-            (STORM_SETUP_NAV["DS"],
-             "Configure Team rosters, log channel, public post channel, "
-             "mail template, and (💎 Premium) the structured-flow sign-up "
-             "channel, schedule, and Sheet tabs."),
-            ("/desertstorm",
-             "**Event hub.** Opens an embed showing the alliance's current "
-             "config plus a button grid for every action.\n"
-             "**Event-day row:** Post sign-up poll (💎), View sign-ups + "
-             "set up teams (💎), Record attendance (💎), Fill out "
-             "participation questions.\n"
-             "**Comms + config row:** Send DM reminder to roster (💎), "
-             "Manage strategy presets, Manage member rules, Generate mail.\n"
-             "**Reference row:** View past participation logs, View past "
-             "rosters (💎), Open setup.\n"
-             "💎 buttons render disabled on the free tier so officers can "
-             "see at a glance what `/upgrade` unlocks."),
+            (
+                STORM_SETUP_NAV["DS"],
+                "Configure Team rosters, log channel, public post channel, "
+                "mail template, and (💎 Premium) the structured-flow sign-up "
+                "channel, schedule, and Sheet tabs.",
+            ),
+            (
+                "/desertstorm",
+                "**Event hub.** Opens an embed showing the alliance's current "
+                "config plus a button grid for every action.\n"
+                "**Event-day row:** Post sign-up poll (💎), View sign-ups + "
+                "set up teams (💎), Record attendance (💎), Fill out "
+                "participation questions.\n"
+                "**Comms + config row:** Send DM reminder to roster (💎), "
+                "Manage strategy presets, Manage member rules, Generate mail.\n"
+                "**Reference row:** View past participation logs, View past "
+                "rosters (💎), Open setup.\n"
+                "💎 buttons render disabled on the free tier so officers can "
+                "see at a glance what `/upgrade` unlocks.",
+            ),
         ],
     },
     "canyonstorm": {
@@ -149,21 +161,25 @@ HELP_CATEGORIES: dict[str, dict] = {
             "every action in one place."
         ),
         "commands": [
-            (STORM_SETUP_NAV["CS"],
-             "Configure Team rosters, log channel, public post channel, "
-             "mail template, and (💎 Premium) the structured-flow sign-up "
-             "channel, schedule, and Sheet tabs."),
-            ("/canyonstorm",
-             "**Event hub.** Opens an embed showing the alliance's current "
-             "config plus a button grid for every action.\n"
-             "**Event-day row:** Post sign-up poll (💎), View sign-ups + "
-             "set up teams (💎), Record attendance (💎), Fill out "
-             "participation questions.\n"
-             "**Comms + config row:** Send DM reminder to roster (💎), "
-             "Manage strategy presets, Manage member rules, Generate mail.\n"
-             "**Reference row:** View past participation logs, View past "
-             "rosters (💎), Open setup.\n"
-             "💎 buttons render disabled on the free tier."),
+            (
+                STORM_SETUP_NAV["CS"],
+                "Configure Team rosters, log channel, public post channel, "
+                "mail template, and (💎 Premium) the structured-flow sign-up "
+                "channel, schedule, and Sheet tabs.",
+            ),
+            (
+                "/canyonstorm",
+                "**Event hub.** Opens an embed showing the alliance's current "
+                "config plus a button grid for every action.\n"
+                "**Event-day row:** Post sign-up poll (💎), View sign-ups + "
+                "set up teams (💎), Record attendance (💎), Fill out "
+                "participation questions.\n"
+                "**Comms + config row:** Send DM reminder to roster (💎), "
+                "Manage strategy presets, Manage member rules, Generate mail.\n"
+                "**Reference row:** View past participation logs, View past "
+                "rosters (💎), Open setup.\n"
+                "💎 buttons render disabled on the free tier.",
+            ),
         ],
     },
     "survey": {
@@ -174,16 +190,20 @@ HELP_CATEGORIES: dict[str, dict] = {
             "land in your sheet; leadership gets a notification per submission."
         ),
         "commands": [
-            (f"/setup → {HUB_BTN_SURVEY}",
-             "Configure questions, channels, sheet tabs, and the intro."),
-            ("/survey overview",
-             "View configured surveys. 💎 Premium gets Add / Edit / Remove "
-             "for managing multiple."),
-            ("/survey post",
-             "Post or repost the answer button."),
-            ("/survey remind",
-             "Send now or schedule. Free: channel post. 💎 Premium: also DM "
-             "via roster."),
+            (
+                f"/setup → {HUB_BTN_SURVEY}",
+                "Configure questions, channels, sheet tabs, and the intro.",
+            ),
+            (
+                "/survey overview",
+                "View configured surveys. 💎 Premium gets Add / Edit / Remove "
+                "for managing multiple.",
+            ),
+            ("/survey post", "Post or repost the answer button."),
+            (
+                "/survey remind",
+                "Send now or schedule. Free: channel post. 💎 Premium: also DM via roster.",
+            ),
         ],
     },
     "growth": {
@@ -196,17 +216,20 @@ HELP_CATEGORIES: dict[str, dict] = {
             "who's stalled."
         ),
         "commands": [
-            (f"/setup → {HUB_BTN_GROWTH}",
-             "Configure source tab, metrics, and snapshot schedule."),
-            (f"/setup → {HUB_BTN_BREAKDOWN}",
-             "💎 Configure the breakdown auto-post, bucket thresholds, "
-             "and bucket labels."),
-            ("/growth overview",
-             "Show status with options to snapshot, view the breakdown, "
-             "or edit config."),
-            ("/growth breakdown",
-             "Jump straight to the most-recent bucket breakdown "
-             "(Increased / Steady / Low / None / Decline)."),
+            (f"/setup → {HUB_BTN_GROWTH}", "Configure source tab, metrics, and snapshot schedule."),
+            (
+                f"/setup → {HUB_BTN_BREAKDOWN}",
+                "💎 Configure the breakdown auto-post, bucket thresholds, and bucket labels.",
+            ),
+            (
+                "/growth overview",
+                "Show status with options to snapshot, view the breakdown, or edit config.",
+            ),
+            (
+                "/growth breakdown",
+                "Jump straight to the most-recent bucket breakdown "
+                "(Increased / Steady / Low / None / Decline).",
+            ),
         ],
     },
     "shiny_tasks": {
@@ -217,9 +240,10 @@ HELP_CATEGORIES: dict[str, dict] = {
             "that have shiny tasks today."
         ),
         "commands": [
-            (f"/setup → {HUB_BTN_SHINY}",
-             "Configure the announcement channel, server range, post "
-             "time, and message body."),
+            (
+                f"/setup → {HUB_BTN_SHINY}",
+                "Configure the announcement channel, server range, post time, and message body.",
+            ),
         ],
     },
     "data_portability": {
@@ -233,17 +257,22 @@ HELP_CATEGORIES: dict[str, dict] = {
             "alongside it."
         ),
         "commands": [
-            ("/config overview",
-             "What this guild has saved + pointers into /config export and "
-             "/config import."),
-            ("/config export",
-             "DMs you a JSON file with the categories you select "
-             "(core setup, events, DS, CS, train, birthday, growth, "
-             "surveys, shiny tasks, member roster)."),
-            ("/config import <file>",
-             "Apply a /config export JSON to this server. The bot walks "
-             "you through remapping each old channel and role to its new "
-             "equivalent, then writes the imported config to your tables."),
+            (
+                "/config overview",
+                "What this guild has saved + pointers into /config export and /config import.",
+            ),
+            (
+                "/config export",
+                "DMs you a JSON file with the categories you select "
+                "(core setup, events, DS, CS, train, birthday, growth, "
+                "surveys, shiny tasks, member roster).",
+            ),
+            (
+                "/config import <file>",
+                "Apply a /config export JSON to this server. The bot walks "
+                "you through remapping each old channel and role to its new "
+                "equivalent, then writes the imported config to your tables.",
+            ),
         ],
     },
     "premium": {
@@ -254,25 +283,31 @@ HELP_CATEGORIES: dict[str, dict] = {
             "Unlock with `/upgrade`."
         ),
         "commands": [
-            (f"/setup → {HUB_BTN_MEMBERS}",
-             "Configure Member Sync. Writes Discord IDs to your "
-             "sheet so other features find members by name."),
-            ("/members overview",
-             "Roster source, last-sync time, and current state at a glance."),
-            ("/members sync",
-             "Manually re-sync the roster now."),
-            ("Multiple named surveys",
-             "Manage from `/survey overview` directly via Add / Edit / Remove."),
-            ("DM-mode reminders",
-             "`/survey remind` plus the **🔔 Send DM reminder to roster** "
-             "button on `/desertstorm` and `/canyonstorm` all gain "
-             "DM-via-roster delivery; survey reminders can also schedule "
-             "recurring DMs."),
-            ("✨ More",
-             "Personal birthday DMs, train-assignment DMs, auto-mention "
-             "members in train reminders, threads as destinations, "
-             "multi-template train and storm support, advanced question "
-             "types (single-select, multi-select, date)."),
+            (
+                f"/setup → {HUB_BTN_MEMBERS}",
+                "Configure Member Sync. Writes Discord IDs to your "
+                "sheet so other features find members by name.",
+            ),
+            ("/members overview", "Roster source, last-sync time, and current state at a glance."),
+            ("/members sync", "Manually re-sync the roster now."),
+            (
+                "Multiple named surveys",
+                "Manage from `/survey overview` directly via Add / Edit / Remove.",
+            ),
+            (
+                "DM-mode reminders",
+                "`/survey remind` plus the **🔔 Send DM reminder to roster** "
+                "button on `/desertstorm` and `/canyonstorm` all gain "
+                "DM-via-roster delivery; survey reminders can also schedule "
+                "recurring DMs.",
+            ),
+            (
+                "✨ More",
+                "Personal birthday DMs, train-assignment DMs, auto-mention "
+                "members in train reminders, threads as destinations, "
+                "multi-template train and storm support, advanced question "
+                "types (single-select, multi-select, date).",
+            ),
         ],
     },
 }
@@ -322,17 +357,25 @@ class HelpCategorySelect(discord.ui.Select):
         self.is_premium = is_premium
         options = [
             discord.SelectOption(
-                label="Overview", value="__overview", emoji="🏠",
+                label="Overview",
+                value="__overview",
+                emoji="🏠",
                 description="Back to the main /help screen",
             ),
         ]
         for cat_id, cat in HELP_CATEGORIES.items():
-            options.append(discord.SelectOption(
-                label=cat["label"], value=cat_id, emoji=cat["emoji"],
-            ))
+            options.append(
+                discord.SelectOption(
+                    label=cat["label"],
+                    value=cat_id,
+                    emoji=cat["emoji"],
+                )
+            )
         super().__init__(
             placeholder="Choose a category…",
-            options=options, min_values=1, max_values=1,
+            options=options,
+            min_values=1,
+            max_values=1,
         )
 
     async def callback(self, interaction: discord.Interaction):
@@ -350,8 +393,7 @@ class HelpView(discord.ui.View):
     (matches the auto-post-timeout cleanup pattern used elsewhere).
     """
 
-    def __init__(self, is_premium: bool, *,
-                 origin: Optional[discord.Interaction] = None):
+    def __init__(self, is_premium: bool, *, origin: Optional[discord.Interaction] = None):
         super().__init__(timeout=180)
         self.origin = origin
         self.add_item(HelpCategorySelect(is_premium))

@@ -21,6 +21,7 @@ creation stays first-class via the "Define my own" path — alliance-
 internal events, regional themes, anything outside the canonical list
 all use the same wizard the setup flow used to.
 """
+
 from __future__ import annotations
 
 import asyncio
@@ -57,13 +58,13 @@ logger = logging.getLogger(__name__)
 # so a rename here updates every caller automatically. Matches the
 # HUB_BTN_* pattern in storm_event_hub.py.
 
-EVENTS_HUB_TITLE        = "📣 Event Announcements"
-EVENTS_HUB_CMD          = "/events"
-EVENTS_HUB_BTN_TODAY    = "📅 Today's events"
+EVENTS_HUB_TITLE = "📣 Event Announcements"
+EVENTS_HUB_CMD = "/events"
+EVENTS_HUB_BTN_TODAY = "📅 Today's events"
 EVENTS_HUB_BTN_UPCOMING = "📆 Upcoming events"
-EVENTS_HUB_BTN_LOG      = "📜 Event log"
-EVENTS_HUB_BTN_CREATE   = "➕ Create an event"
-EVENTS_HUB_BTN_DELETE   = "🗑️ Delete an event"
+EVENTS_HUB_BTN_LOG = "📜 Event log"
+EVENTS_HUB_BTN_CREATE = "➕ Create an event"
+EVENTS_HUB_BTN_DELETE = "🗑️ Delete an event"
 
 
 # ── Preset library ──────────────────────────────────────────────────────────
@@ -85,45 +86,45 @@ _DEFAULT_BLURB = "{name} at {time} ({server_time} Server Time)."
 
 AE_EVENT_PRESETS: list[dict] = [
     {
-        "key":           "ae_plague_marauder",
-        "name":          "Alliance Exercise: Plague Marauder",
-        "stage_note":    "S5 Off-season and later · every 3 days",
-        "blurb":         _DEFAULT_BLURB,
+        "key": "ae_plague_marauder",
+        "name": "Alliance Exercise: Plague Marauder",
+        "stage_note": "S5 Off-season and later · every 3 days",
+        "blurb": _DEFAULT_BLURB,
         "interval_days": 3,
     },
     {
-        "key":           "ae_marshalls_guard",
-        "name":          "Alliance Exercise: Marshall's Guard",
-        "stage_note":    "Early seasons (pre-S3) · every 3 days",
-        "blurb":         _DEFAULT_BLURB,
+        "key": "ae_marshalls_guard",
+        "name": "Alliance Exercise: Marshall's Guard",
+        "stage_note": "Early seasons (pre-S3) · every 3 days",
+        "blurb": _DEFAULT_BLURB,
         "interval_days": 3,
     },
     {
-        "key":           "ae_sandworm",
-        "name":          "Alliance Exercise: Sandworm",
-        "stage_note":    "Seasons 3 and 4 · every 3 days",
-        "blurb":         _DEFAULT_BLURB,
+        "key": "ae_sandworm",
+        "name": "Alliance Exercise: Sandworm",
+        "stage_note": "Seasons 3 and 4 · every 3 days",
+        "blurb": _DEFAULT_BLURB,
         "interval_days": 3,
     },
     {
-        "key":           "zombie_siege",
-        "name":          "Zombie Siege",
-        "stage_note":    "Alliance defense · every 3 days",
-        "blurb":         _DEFAULT_BLURB,
+        "key": "zombie_siege",
+        "name": "Zombie Siege",
+        "stage_note": "Alliance defense · every 3 days",
+        "blurb": _DEFAULT_BLURB,
         "interval_days": 3,
     },
     {
-        "key":           "glacieradon",
-        "name":          "Glacieradon",
-        "stage_note":    "Pairs with Gold Zombies · every other week if recurring",
-        "blurb":         _DEFAULT_BLURB,
+        "key": "glacieradon",
+        "name": "Glacieradon",
+        "stage_note": "Pairs with Gold Zombies · every other week if recurring",
+        "blurb": _DEFAULT_BLURB,
         "interval_days": 14,
     },
     {
-        "key":           "sky_predator",
-        "name":          "Sky Predator",
-        "stage_note":    "Pairs with General's Trials · every other week if recurring",
-        "blurb":         _DEFAULT_BLURB,
+        "key": "sky_predator",
+        "name": "Sky Predator",
+        "stage_note": "Pairs with General's Trials · every other week if recurring",
+        "blurb": _DEFAULT_BLURB,
         "interval_days": 14,
     },
 ]
@@ -172,14 +173,16 @@ def _build_events_hub_embed(guild: discord.Guild) -> discord.Embed:
         events = []
 
     # Foundation block: channels + draft cadence.
-    draft_id    = cfg.event_draft_channel_id if cfg else 0
+    draft_id = cfg.event_draft_channel_id if cfg else 0
     announce_id = cfg.event_announce_channel_id if cfg else 0
-    draft_time  = cfg.event_draft_time if cfg else None
-    warn_on     = cfg.event_five_min_warning if cfg else None
+    draft_time = cfg.event_draft_time if cfg else None
+    warn_on = cfg.event_five_min_warning if cfg else None
 
     config_lines = []
     config_lines.append(f"**Draft channel:** {f'<#{draft_id}>' if draft_id else '*not set*'}")
-    config_lines.append(f"**Announcement channel:** {f'<#{announce_id}>' if announce_id else '*not set*'}")
+    config_lines.append(
+        f"**Announcement channel:** {f'<#{announce_id}>' if announce_id else '*not set*'}"
+    )
     config_lines.append(f"**Draft time:** {draft_time or '*not set*'}")
     config_lines.append(f"**5-min warning:** {'on' if warn_on else 'off'}")
     embed.add_field(name="Configuration", value="\n".join(config_lines), inline=False)
@@ -198,18 +201,31 @@ def _build_events_hub_embed(guild: discord.Guild) -> discord.Embed:
             name = ev.get("name") or "(unnamed)"
             if ev["schedule_type"] == "repeating" and ev.get("anchor_date"):
                 try:
-                    anchor   = date_cls.fromisoformat(ev["anchor_date"])
+                    anchor = date_cls.fromisoformat(ev["anchor_date"])
                     interval = int(ev["interval_days"] or 0)
-                    upcoming = next_event_dates(
-                        from_date=today, count=1, anchor=anchor, cycle=interval,
-                    ) if interval > 0 else []
+                    upcoming = (
+                        next_event_dates(
+                            from_date=today,
+                            count=1,
+                            anchor=anchor,
+                            cycle=interval,
+                        )
+                        if interval > 0
+                        else []
+                    )
                     if upcoming:
-                        nxt  = upcoming[0]
+                        nxt = upcoming[0]
                         days = (nxt - today).days
-                        when = "today" if days == 0 else "tomorrow" if days == 1 else f"in {days} days"
-                        lines.append(f"**{name}** - Next event instance: {nxt:%a %b} {nxt.day} ({when}) - every {interval} days")
+                        when = (
+                            "today" if days == 0 else "tomorrow" if days == 1 else f"in {days} days"
+                        )
+                        lines.append(
+                            f"**{name}** - Next event instance: {nxt:%a %b} {nxt.day} ({when}) - every {interval} days"
+                        )
                     else:
-                        lines.append(f"**{name}** - Recurring every {interval} days (next instance not yet computable)")
+                        lines.append(
+                            f"**{name}** - Recurring every {interval} days (next instance not yet computable)"
+                        )
                 except (ValueError, TypeError):
                     lines.append(f"**{name}** - Schedule invalid (re-create the event)")
             else:
@@ -261,16 +277,17 @@ class _EventsHubView(discord.ui.View):
 
     async def on_timeout(self) -> None:
         from wizard_registry import expire_view_message
+
         await expire_view_message(self.message, command_hint=EVENTS_HUB_CMD)
 
     def _build_buttons(self) -> None:
         # Row 0: read surfaces
-        self._add(EVENTS_HUB_BTN_TODAY,    discord.ButtonStyle.primary,   0, self._on_today)
+        self._add(EVENTS_HUB_BTN_TODAY, discord.ButtonStyle.primary, 0, self._on_today)
         self._add(EVENTS_HUB_BTN_UPCOMING, discord.ButtonStyle.secondary, 0, self._on_upcoming)
-        self._add(EVENTS_HUB_BTN_LOG,      discord.ButtonStyle.secondary, 0, self._on_log)
+        self._add(EVENTS_HUB_BTN_LOG, discord.ButtonStyle.secondary, 0, self._on_log)
         # Row 1: write surfaces
-        self._add(EVENTS_HUB_BTN_CREATE,   discord.ButtonStyle.success,   1, self._on_create)
-        self._add(EVENTS_HUB_BTN_DELETE,   discord.ButtonStyle.danger,    1, self._on_delete)
+        self._add(EVENTS_HUB_BTN_CREATE, discord.ButtonStyle.success, 1, self._on_create)
+        self._add(EVENTS_HUB_BTN_DELETE, discord.ButtonStyle.danger, 1, self._on_delete)
 
     def _add(self, label, style, row, callback):
         btn = discord.ui.Button(label=label[:80], style=style, row=row)
@@ -306,9 +323,9 @@ async def _open_today_editor(bot, interaction: discord.Interaction) -> None:
 
     await interaction.response.defer(ephemeral=False)
     guild_id = interaction.guild_id
-    cfg      = get_config(guild_id)
-    events   = get_guild_events(guild_id, active_only=True)
-    today    = date_cls.today()
+    cfg = get_config(guild_id)
+    events = get_guild_events(guild_id, active_only=True)
+    today = date_cls.today()
 
     if not events:
         await interaction.followup.send(
@@ -353,7 +370,7 @@ async def _open_today_editor(bot, interaction: discord.Interaction) -> None:
 
     next_per_group.sort(key=lambda x: x[0])
     event_date = next_per_group[0][0]
-    days_diff  = (event_date - today).days
+    days_diff = (event_date - today).days
     if days_diff > 0:
         await interaction.followup.send(
             f"ℹ️ **{today:%B} {today.day}** is not an event day. "
@@ -362,9 +379,9 @@ async def _open_today_editor(bot, interaction: discord.Interaction) -> None:
         )
 
     event_list: list[dict] = []
-    draft_channel_id    = 0
+    draft_channel_id = 0
     announce_channel_id = 0
-    five_min_warn       = False
+    five_min_warn = False
     for (anchor_str, interval), group_events in groups.items():
         try:
             anchor = date_cls.fromisoformat(anchor_str)
@@ -375,21 +392,27 @@ async def _open_today_editor(bot, interaction: discord.Interaction) -> None:
             continue
         for ev in group_events:
             try:
-                ev_tz    = ZoneInfo(ev["timezone"])
+                ev_tz = ZoneInfo(ev["timezone"])
                 t_h, t_m = (int(p) for p in ev["default_time"].split(":")[:2])
-                ev_dt    = datetime(event_date.year, event_date.month, event_date.day, t_h, t_m, tzinfo=ev_tz)
-                event_list.append({
-                    "key":   ev["short_key"],
-                    "name":  ev["name"],
-                    "dt":    ev_dt,
-                    "blurb": ev["announcement_blurb"],
-                })
-                draft_channel_id    = ev["draft_channel_id"] or draft_channel_id
+                ev_dt = datetime(
+                    event_date.year, event_date.month, event_date.day, t_h, t_m, tzinfo=ev_tz
+                )
+                event_list.append(
+                    {
+                        "key": ev["short_key"],
+                        "name": ev["name"],
+                        "dt": ev_dt,
+                        "blurb": ev["announcement_blurb"],
+                    }
+                )
+                draft_channel_id = ev["draft_channel_id"] or draft_channel_id
                 announce_channel_id = ev["announcement_channel_id"] or announce_channel_id
                 if ev["five_min_warning"]:
                     five_min_warn = True
             except Exception as e:
-                logger.warning("[EVENTS HUB] Error processing event %s: %s", ev.get("short_key", "?"), e)
+                logger.warning(
+                    "[EVENTS HUB] Error processing event %s: %s", ev.get("short_key", "?"), e
+                )
 
     if not event_list:
         await interaction.followup.send(
@@ -402,7 +425,10 @@ async def _open_today_editor(bot, interaction: discord.Interaction) -> None:
     event_list.sort(key=lambda x: x["dt"])
     event_key = f"event-{guild_id}-{event_date.isoformat()}-hub"
     await post_editor(
-        bot, event_list, event_key, event_date,
+        bot,
+        event_list,
+        event_key,
+        event_date,
         cfg=cfg,
         draft_channel_id=draft_channel_id,
         announcement_channel_id=announce_channel_id,
@@ -421,7 +447,7 @@ async def _render_upcoming_followup(interaction: discord.Interaction) -> None:
     from scheduler import next_event_dates
 
     events = get_guild_events(interaction.guild_id, active_only=True)
-    today  = date_cls.today()
+    today = date_cls.today()
 
     embed = discord.Embed(title="📆 Upcoming events", color=discord.Color.blurple())
 
@@ -433,26 +459,32 @@ async def _render_upcoming_followup(interaction: discord.Interaction) -> None:
         return
 
     repeating_lines: list[str] = []
-    manual_lines:    list[str] = []
+    manual_lines: list[str] = []
     for ev in events:
         name = ev.get("name") or "(unnamed)"
         if ev["schedule_type"] == "repeating" and ev.get("anchor_date"):
             try:
-                anchor   = date_cls.fromisoformat(ev["anchor_date"])
+                anchor = date_cls.fromisoformat(ev["anchor_date"])
                 interval = int(ev["interval_days"] or 0)
             except (ValueError, TypeError):
                 repeating_lines.append(f"• **{name}** — schedule invalid")
                 continue
-            upcoming = next_event_dates(
-                from_date=today, count=1, anchor=anchor, cycle=interval,
-            ) if interval > 0 else []
+            upcoming = (
+                next_event_dates(
+                    from_date=today,
+                    count=1,
+                    anchor=anchor,
+                    cycle=interval,
+                )
+                if interval > 0
+                else []
+            )
             if upcoming:
-                nxt  = upcoming[0]
+                nxt = upcoming[0]
                 days = (nxt - today).days
                 when = "today" if days == 0 else "tomorrow" if days == 1 else f"in {days} days"
                 repeating_lines.append(
-                    f"• **{name}** — every {interval}d, next on "
-                    f"{nxt:%a %b} {nxt.day} ({when})"
+                    f"• **{name}** — every {interval}d, next on {nxt:%a %b} {nxt.day} ({when})"
                 )
             else:
                 repeating_lines.append(f"• **{name}** — every {interval}d")
@@ -460,9 +492,15 @@ async def _render_upcoming_followup(interaction: discord.Interaction) -> None:
             manual_lines.append(f"• **{name}** — manual entries only")
 
     if repeating_lines:
-        embed.add_field(name=f"Repeating ({len(repeating_lines)})", value="\n".join(repeating_lines)[:1024], inline=False)
+        embed.add_field(
+            name=f"Repeating ({len(repeating_lines)})",
+            value="\n".join(repeating_lines)[:1024],
+            inline=False,
+        )
     if manual_lines:
-        embed.add_field(name=f"Manual ({len(manual_lines)})", value="\n".join(manual_lines)[:1024], inline=False)
+        embed.add_field(
+            name=f"Manual ({len(manual_lines)})", value="\n".join(manual_lines)[:1024], inline=False
+        )
 
     await interaction.response.send_message(embed=embed, ephemeral=True)
 
@@ -489,12 +527,15 @@ async def _render_log_followup(bot, interaction: discord.Interaction) -> None:
     leadership = bot.get_channel(cfg.leadership_channel_id)
     if leadership is None:
         await interaction.followup.send(
-            LEADERSHIP_INACCESSIBLE, ephemeral=True,
+            LEADERSHIP_INACCESSIBLE,
+            ephemeral=True,
         )
         return
 
-    days   = await premium.get_limit("events_log_days", interaction.guild_id, interaction=interaction, bot=bot)
-    days   = days or 30
+    days = await premium.get_limit(
+        "events_log_days", interaction.guild_id, interaction=interaction, bot=bot
+    )
+    days = days or 30
     cutoff = datetime.now(tz=timezone.utc) - timedelta(days=days)
     matches = []
     try:
@@ -522,20 +563,31 @@ async def _render_log_followup(bot, interaction: discord.Interaction) -> None:
     # pre-hub log copy. Officers reading the log see the same "logged
     # at X" text they did before.
     from bot import ET
+
     if not matches:
-        embed.add_field(name="No approvals found", value=f"*No event posts have been approved in the past {days} days.*", inline=False)
+        embed.add_field(
+            name="No approvals found",
+            value=f"*No event posts have been approved in the past {days} days.*",
+            inline=False,
+        )
     else:
         lines = []
         for msg in matches[:25]:
-            header   = msg.content.split("\n", 1)[0]
-            ldt      = msg.created_at.astimezone(ET)
-            hr12     = ldt.hour % 12 or 12
-            local_dt = f"{ldt:%a %b} {ldt.day}, {hr12}:{ldt:%M%p} ET".replace("AM", "am").replace("PM", "pm")
+            header = msg.content.split("\n", 1)[0]
+            ldt = msg.created_at.astimezone(ET)
+            hr12 = ldt.hour % 12 or 12
+            local_dt = f"{ldt:%a %b} {ldt.day}, {hr12}:{ldt:%M%p} ET".replace("AM", "am").replace(
+                "PM", "pm"
+            )
             lines.append(f"• {header} *— logged {local_dt}*")
-        embed.add_field(name=f"Approvals ({len(matches)})", value="\n".join(lines)[:1024], inline=False)
+        embed.add_field(
+            name=f"Approvals ({len(matches)})", value="\n".join(lines)[:1024], inline=False
+        )
 
     if days < 30:
-        embed.set_footer(text=TIER_COMPARISON.format(free_limit="7-day window", premium_limit="30 days"))
+        embed.set_footer(
+            text=TIER_COMPARISON.format(free_limit="7-day window", premium_limit="30 days")
+        )
     await interaction.followup.send(embed=embed, ephemeral=True)
 
 
@@ -587,14 +639,19 @@ async def _open_create_picker(bot, interaction: discord.Interaction) -> None:
     from config import get_guild_events
 
     events = get_guild_events(interaction.guild_id, active_only=True)
-    cap    = await premium.get_limit(
-        "events", interaction.guild_id, interaction=interaction, bot=bot,
+    cap = await premium.get_limit(
+        "events",
+        interaction.guild_id,
+        interaction=interaction,
+        bot=bot,
     )
     if cap is not None and len(events) >= cap:
         await interaction.response.send_message(
             embed=premium.limit_reached_embed(
                 feature_label="Event Announcements",
-                current=len(events), cap=cap, plural_unit="events",
+                current=len(events),
+                cap=cap,
+                plural_unit="events",
             ),
             ephemeral=True,
         )
@@ -623,12 +680,12 @@ async def _open_preset_dropdown(bot, interaction: discord.Interaction) -> None:
         for p in AE_EVENT_PRESETS
     ]
     select = discord.ui.Select(placeholder="Pick a preset event…", options=options)
-    view   = discord.ui.View(timeout=180)
+    view = discord.ui.View(timeout=180)
     view.add_item(select)
 
     async def on_pick(inter: discord.Interaction):
         chosen_key = inter.data["values"][0]
-        preset     = _preset_by_key(chosen_key)
+        preset = _preset_by_key(chosen_key)
         select.disabled = True
         await inter.response.edit_message(view=view)
         view.stop()
@@ -666,26 +723,31 @@ async def _run_create_event_wizard(
     iterate."""
     import wizard_registry
     from config import (
-        get_config, get_or_create_config, save_guild_event, get_guild_events,
+        get_config,
+        get_or_create_config,
+        save_guild_event,
+        get_guild_events,
     )
     from setup_cog import _parse_12h_time, _parse_month_day
 
     guild_id = interaction.guild_id
-    channel  = interaction.channel
-    user     = interaction.user
+    channel = interaction.channel
+    user = interaction.user
     cancel_event = wizard_registry.register(user.id)
 
     guild_cfg = get_config(guild_id) or get_or_create_config(guild_id)
-    tz        = guild_cfg.timezone or "America/New_York"
+    tz = guild_cfg.timezone or "America/New_York"
 
     # Pull the events-wide settings already saved on guild_configs so
     # we can stamp the new event with them. Officers configure these
     # via /setup → 📣 Events (the wizard for channels + draft time
     # still lives there; only event-list management moved to the hub).
-    draft_channel_id    = guild_cfg.event_draft_channel_id or 0
+    draft_channel_id = guild_cfg.event_draft_channel_id or 0
     announce_channel_id = guild_cfg.event_announce_channel_id or 0
-    draft_time          = guild_cfg.event_draft_time or "12:00"
-    five_min_warning    = guild_cfg.event_five_min_warning if guild_cfg.event_five_min_warning is not None else 1
+    draft_time = guild_cfg.event_draft_time or "12:00"
+    five_min_warning = (
+        guild_cfg.event_five_min_warning if guild_cfg.event_five_min_warning is not None else 1
+    )
 
     if not draft_channel_id or not announce_channel_id:
         await channel.send(
@@ -749,7 +811,7 @@ async def _run_create_event_wizard(
 
     # ── Time ────────────────────────────────────────────────────────────────
     attempts_left = 3
-    default_time  = None
+    default_time = None
     while True:
         time_raw = await ask_text(
             f"**{name} — Event Time**\n"
@@ -762,15 +824,16 @@ async def _run_create_event_wizard(
         if parsed:
             default_time = parsed
             break
-        if (len(time_raw) == 5 and time_raw[2] == ":"
-                and time_raw.replace(":", "").isdigit()):
+        if len(time_raw) == 5 and time_raw[2] == ":" and time_raw.replace(":", "").isdigit():
             default_time = time_raw
             break
         attempts_left -= 1
         if attempts_left <= 0:
-            await channel.send(TIME_PARSE_GIVE_UP.format(
-                recovery=f"`{EVENTS_HUB_CMD}` → **{EVENTS_HUB_BTN_CREATE}**",
-            ))
+            await channel.send(
+                TIME_PARSE_GIVE_UP.format(
+                    recovery=f"`{EVENTS_HUB_CMD}` → **{EVENTS_HUB_BTN_CREATE}**",
+                )
+            )
             wizard_registry.unregister(user.id, cancel_event)
             return
         await channel.send(TIME_PARSE_RETRY.format(raw=time_raw))
@@ -784,14 +847,16 @@ async def _run_create_event_wizard(
         @discord.ui.button(label="🔁 Repeating", style=discord.ButtonStyle.primary)
         async def repeating(self, inter: discord.Interaction, _b: discord.ui.Button):
             self.selected = "repeating"
-            for item in self.children: item.disabled = True
+            for item in self.children:
+                item.disabled = True
             await wizard_registry.safe_edit_response(inter, view=self)
             self.stop()
 
         @discord.ui.button(label="📅 Manual", style=discord.ButtonStyle.secondary)
         async def manual(self, inter: discord.Interaction, _b: discord.ui.Button):
             self.selected = "manual"
-            for item in self.children: item.disabled = True
+            for item in self.children:
+                item.disabled = True
             await wizard_registry.safe_edit_response(inter, view=self)
             self.stop()
 
@@ -810,8 +875,8 @@ async def _run_create_event_wizard(
         return
     schedule_type = sched_view.selected
 
-    anchor_date   = ""
-    interval_days = (preset["interval_days"] if preset else 7)
+    anchor_date = ""
+    interval_days = preset["interval_days"] if preset else 7
 
     if schedule_type == "repeating":
         anchor_raw = await ask_text(
@@ -844,16 +909,14 @@ async def _run_create_event_wizard(
                 interval_days = int(interval_raw.strip())
             except ValueError:
                 await channel.send(
-                    INPUT_INVALID_NO_EXAMPLE.format(type="whole number", recovery=f"`{EVENTS_HUB_CMD}`")
+                    INPUT_INVALID_NO_EXAMPLE.format(
+                        type="whole number", recovery=f"`{EVENTS_HUB_CMD}`"
+                    )
                 )
                 wizard_registry.unregister(user.id, cancel_event)
                 return
 
     # ── Blurb ───────────────────────────────────────────────────────────────
-    preset_blurb  = preset["blurb"] if preset else _DEFAULT_BLURB
-    default_blurb = preset_blurb.format(
-        name="{name}", time="{time}", server_time="{server_time}",
-    ) if "{name}" in preset_blurb else preset_blurb
     # Concrete preview with the placeholders shown so officers see what
     # actually renders when the event fires.
     preview_blurb = f"{name} at {{time}} ({{server_time}} Server Time)."
@@ -866,16 +929,20 @@ async def _run_create_event_wizard(
         @discord.ui.button(label="✅ Use default blurb", style=discord.ButtonStyle.success)
         async def use_default(self, inter: discord.Interaction, _b: discord.ui.Button):
             self.choice = "default"
-            for item in self.children: item.disabled = True
+            for item in self.children:
+                item.disabled = True
             await wizard_registry.safe_edit_response(
-                inter, content=f"✅ Using default blurb:\n`{preview_blurb}`", view=self,
+                inter,
+                content=f"✅ Using default blurb:\n`{preview_blurb}`",
+                view=self,
             )
             self.stop()
 
         @discord.ui.button(label="✏️ Enter my own", style=discord.ButtonStyle.secondary)
         async def enter_own(self, inter: discord.Interaction, _b: discord.ui.Button):
             self.choice = "custom"
-            for item in self.children: item.disabled = True
+            for item in self.children:
+                item.disabled = True
             await wizard_registry.safe_edit_response(inter, view=self)
             self.stop()
 
@@ -899,8 +966,7 @@ async def _run_create_event_wizard(
         blurb = preview_blurb
     else:
         blurb_raw = await ask_text(
-            "Enter your announcement blurb:\n"
-            "*(Use `{time}` and `{server_time}` as placeholders)*",
+            "Enter your announcement blurb:\n*(Use `{time}` and `{server_time}` as placeholders)*",
             max_chars=1000,
         )
         if blurb_raw is None:
@@ -909,19 +975,19 @@ async def _run_create_event_wizard(
 
     # ── Save ────────────────────────────────────────────────────────────────
     event = {
-        "short_key":               short_key,
-        "name":                    name,
-        "timezone":                tz,
-        "default_time":            default_time,
-        "announcement_blurb":      blurb,
-        "schedule_type":           schedule_type,
-        "anchor_date":             anchor_date,
-        "interval_days":           interval_days,
-        "draft_channel_id":        draft_channel_id,
+        "short_key": short_key,
+        "name": name,
+        "timezone": tz,
+        "default_time": default_time,
+        "announcement_blurb": blurb,
+        "schedule_type": schedule_type,
+        "anchor_date": anchor_date,
+        "interval_days": interval_days,
+        "draft_channel_id": draft_channel_id,
         "announcement_channel_id": announce_channel_id,
-        "draft_time":              draft_time,
-        "five_min_warning":        five_min_warning,
-        "active":                  1,
+        "draft_time": draft_time,
+        "five_min_warning": five_min_warning,
+        "active": 1,
     }
     save_guild_event(guild_id, event)
     await channel.send(
@@ -951,25 +1017,25 @@ async def _open_delete_picker(interaction: discord.Interaction) -> None:
         return
 
     options = [
-        discord.SelectOption(label=e["name"][:100], value=e["short_key"])
-        for e in events[:25]
+        discord.SelectOption(label=e["name"][:100], value=e["short_key"]) for e in events[:25]
     ]
     select = discord.ui.Select(placeholder="🗑️ Pick an event to delete…", options=options)
-    view   = discord.ui.View(timeout=180)
+    view = discord.ui.View(timeout=180)
     view.add_item(select)
 
     async def on_pick(inter: discord.Interaction):
         chosen_key = inter.data["values"][0]
-        ev         = get_guild_event(interaction.guild_id, chosen_key)
-        name       = (ev or {}).get("name") or chosen_key
+        ev = get_guild_event(interaction.guild_id, chosen_key)
+        name = (ev or {}).get("name") or chosen_key
 
         confirm = discord.ui.View(timeout=60)
         yes_btn = discord.ui.Button(label="🗑️ Yes, delete", style=discord.ButtonStyle.danger)
-        no_btn  = discord.ui.Button(label="↩️ Cancel",      style=discord.ButtonStyle.secondary)
+        no_btn = discord.ui.Button(label="↩️ Cancel", style=discord.ButtonStyle.secondary)
 
         async def do_delete(c_inter: discord.Interaction):
             delete_guild_event(interaction.guild_id, chosen_key)
-            for item in confirm.children: item.disabled = True
+            for item in confirm.children:
+                item.disabled = True
             await c_inter.response.edit_message(
                 content=f"🗑️ Deleted **{name}**.",
                 view=confirm,
@@ -977,11 +1043,13 @@ async def _open_delete_picker(interaction: discord.Interaction) -> None:
             confirm.stop()
             logger.info(
                 "[EVENTS HUB] Deleted event %s for guild %s",
-                chosen_key, interaction.guild_id,
+                chosen_key,
+                interaction.guild_id,
             )
 
         async def do_cancel(c_inter: discord.Interaction):
-            for item in confirm.children: item.disabled = True
+            for item in confirm.children:
+                item.disabled = True
             await c_inter.response.edit_message(
                 content=CANCEL_BACKPEDAL.format(detail=f"**{name}** was not deleted."),
                 view=confirm,
@@ -989,7 +1057,7 @@ async def _open_delete_picker(interaction: discord.Interaction) -> None:
             confirm.stop()
 
         yes_btn.callback = do_delete
-        no_btn.callback  = do_cancel
+        no_btn.callback = do_cancel
         confirm.add_item(yes_btn)
         confirm.add_item(no_btn)
 
@@ -1030,7 +1098,7 @@ async def handle_events_hub(bot, interaction: discord.Interaction) -> None:
         return
 
     embed = await asyncio.to_thread(_build_events_hub_embed, guild)
-    view  = _EventsHubView(
+    view = _EventsHubView(
         bot=bot,
         guild_id=guild.id,
         owner_user_id=interaction.user.id,

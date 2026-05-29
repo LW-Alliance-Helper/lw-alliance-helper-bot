@@ -39,9 +39,9 @@ sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspa
 
 os.environ.setdefault("DISCORD_TOKEN", "fake-test-token")
 
-GUILD_ID            = 12345
-LEADERSHIP_CHAN_ID  = 1111
-REMINDER_CHAN_ID    = 5555
+GUILD_ID = 12345
+LEADERSHIP_CHAN_ID = 1111
+REMINDER_CHAN_ID = 5555
 ET = ZoneInfo("America/New_York")
 
 # Tests pin `datetime.now(tz=ET)` to 2026-05-15 22:00 ET inside the
@@ -52,6 +52,7 @@ PATCHED_TODAY_ISO = "2026-05-15"
 
 # ── Fixtures and helpers ─────────────────────────────────────────────────────
 
+
 def _make_cog():
     """A real TrainCog instance with a mocked bot. Subsequent tests
     overwrite `cog.bot.guilds` and patch the config loaders. The
@@ -60,41 +61,47 @@ def _make_cog():
     dedup path patch the SQLite helpers instead of poking at a cog
     attribute."""
     import train_cog
+
     bot = MagicMock()
-    bot.guilds      = []
+    bot.guilds = []
     bot.get_channel = MagicMock(return_value=None)
     cog = train_cog.TrainCog.__new__(train_cog.TrainCog)
-    cog.bot                 = bot
-    cog.last_reminder_date  = None
-    cog.reminders_fired     = set()
+    cog.bot = bot
+    cog.last_reminder_date = None
+    cog.reminders_fired = set()
     return cog
 
 
 def _make_guild(guild_id: int = GUILD_ID):
     g = MagicMock()
-    g.id   = guild_id
+    g.id = guild_id
     g.name = "Test Alliance"
     return g
 
 
 def _make_cfg(timezone: str = "America/New_York"):
     cfg = MagicMock()
-    cfg.guild_id              = GUILD_ID
-    cfg.setup_complete        = True
+    cfg.guild_id = GUILD_ID
+    cfg.setup_complete = True
     cfg.leadership_channel_id = LEADERSHIP_CHAN_ID
-    cfg.timezone              = timezone
+    cfg.timezone = timezone
     return cfg
 
 
-def _train_cfg(*, reminders_enabled: int = 1, reminder_time: str = "22:00",
-               reminder_channel_id: int = REMINDER_CHAN_ID,
-               blurbs_enabled: int = 1, dm_message: str = ""):
+def _train_cfg(
+    *,
+    reminders_enabled: int = 1,
+    reminder_time: str = "22:00",
+    reminder_channel_id: int = REMINDER_CHAN_ID,
+    blurbs_enabled: int = 1,
+    dm_message: str = "",
+):
     return {
-        "reminders_enabled":   reminders_enabled,
-        "reminder_time":       reminder_time,
+        "reminders_enabled": reminders_enabled,
+        "reminder_time": reminder_time,
         "reminder_channel_id": reminder_channel_id,
-        "blurbs_enabled":      blurbs_enabled,
-        "dm_message":          dm_message,
+        "blurbs_enabled": blurbs_enabled,
+        "dm_message": dm_message,
     }
 
 
@@ -102,34 +109,42 @@ def _bday_cfg(enabled: int = 0):
     """Birthday config kept disabled for train-focused tests so we
     don't have to mock load_birthdays."""
     return {
-        "enabled":              enabled,
-        "train_integration":    0,
-        "reminders_enabled":    0,
-        "reminder_time":        "08:00",
-        "reminder_channel_id":  0,
-        "tab_name":             "Birthdays",
+        "enabled": enabled,
+        "train_integration": 0,
+        "reminders_enabled": 0,
+        "reminder_time": "08:00",
+        "reminder_channel_id": 0,
+        "tab_name": "Birthdays",
     }
 
 
-async def _run_loop(cog, *, now_in_guild_tz: datetime, schedule: dict | None = None,
-                    train_cfg=None, bday_cfg=None,
-                    bot_guilds=None, channels: dict | None = None,
-                    mention_resolver=None):
+async def _run_loop(
+    cog,
+    *,
+    now_in_guild_tz: datetime,
+    schedule: dict | None = None,
+    train_cfg=None,
+    bday_cfg=None,
+    bot_guilds=None,
+    channels: dict | None = None,
+    mention_resolver=None,
+):
     """Drive a single `check_reminder` tick with everything mocked.
 
     `now_in_guild_tz` is what `datetime.now(tz=...)` returns inside the
     loop body — pin this to control whether the time-match branch
     fires."""
     import train_cog
-    cog.bot.guilds  = bot_guilds or [_make_guild()]
+
+    cog.bot.guilds = bot_guilds or [_make_guild()]
     if channels is None:
         channels = {}
     cog.bot.get_channel = MagicMock(side_effect=lambda cid: channels.get(cid))
 
-    schedule    = schedule or {}
-    train_cfg   = train_cfg or _train_cfg()
-    bday_cfg    = bday_cfg  or _bday_cfg()
-    mention_fn  = mention_resolver or AsyncMock(return_value="**alice**")
+    schedule = schedule or {}
+    train_cfg = train_cfg or _train_cfg()
+    bday_cfg = bday_cfg or _bday_cfg()
+    mention_fn = mention_resolver or AsyncMock(return_value="**alice**")
 
     # `datetime.now(tz=ET)` and `datetime.now(tz=guild_tz)` both run
     # inside check_reminder. Patching `train_cog.datetime` covers both.
@@ -138,13 +153,15 @@ async def _run_loop(cog, *, now_in_guild_tz: datetime, schedule: dict | None = N
 
     send_dm_spy = AsyncMock(return_value=True)
 
-    with patch("train_cog.datetime", fake_dt), \
-         patch("config.get_config", return_value=_make_cfg()), \
-         patch("config.get_train_config", return_value=train_cfg), \
-         patch("config.get_birthday_config", return_value=bday_cfg), \
-         patch("train_cog.load_schedule", return_value=schedule), \
-         patch("dm.send_dm", send_dm_spy), \
-         patch("dm.mention_or_name", mention_fn):
+    with (
+        patch("train_cog.datetime", fake_dt),
+        patch("config.get_config", return_value=_make_cfg()),
+        patch("config.get_train_config", return_value=train_cfg),
+        patch("config.get_birthday_config", return_value=bday_cfg),
+        patch("train_cog.load_schedule", return_value=schedule),
+        patch("dm.send_dm", send_dm_spy),
+        patch("dm.mention_or_name", mention_fn),
+    ):
         await type(cog).check_reminder.coro(cog)
 
     return send_dm_spy
@@ -152,12 +169,13 @@ async def _run_loop(cog, *, now_in_guild_tz: datetime, schedule: dict | None = N
 
 # ── Time-match firing ────────────────────────────────────────────────────────
 
-class TestTrainReminderFiringAtConfiguredTime:
 
+class TestTrainReminderFiringAtConfiguredTime:
     @pytest.mark.asyncio
     async def test_fires_when_local_time_matches(self):
         cog = _make_cog()
-        chan = AsyncMock(); chan.send = AsyncMock()
+        chan = AsyncMock()
+        chan.send = AsyncMock()
         today_iso = PATCHED_TODAY_ISO
 
         await _run_loop(
@@ -176,7 +194,8 @@ class TestTrainReminderFiringAtConfiguredTime:
     async def test_does_not_fire_when_minute_does_not_match(self):
         """The loop runs every minute. Most ticks land off-time."""
         cog = _make_cog()
-        chan = AsyncMock(); chan.send = AsyncMock()
+        chan = AsyncMock()
+        chan.send = AsyncMock()
 
         today_iso = PATCHED_TODAY_ISO
         await _run_loop(
@@ -190,7 +209,8 @@ class TestTrainReminderFiringAtConfiguredTime:
     @pytest.mark.asyncio
     async def test_does_not_fire_when_hour_does_not_match(self):
         cog = _make_cog()
-        chan = AsyncMock(); chan.send = AsyncMock()
+        chan = AsyncMock()
+        chan.send = AsyncMock()
         today_iso = PATCHED_TODAY_ISO
         await _run_loop(
             cog,
@@ -203,12 +223,13 @@ class TestTrainReminderFiringAtConfiguredTime:
 
 # ── Idempotency ──────────────────────────────────────────────────────────────
 
-class TestTrainReminderIdempotency:
 
+class TestTrainReminderIdempotency:
     @pytest.mark.asyncio
     async def test_same_guild_does_not_fire_twice_in_one_day(self):
         cog = _make_cog()
-        chan = AsyncMock(); chan.send = AsyncMock()
+        chan = AsyncMock()
+        chan.send = AsyncMock()
         today_iso = PATCHED_TODAY_ISO
 
         # First tick fires.
@@ -227,18 +248,20 @@ class TestTrainReminderIdempotency:
             schedule={today_iso: {"name": "alice"}},
             channels={REMINDER_CHAN_ID: chan},
         )
-        assert chan.send.await_count == 1, \
+        assert chan.send.await_count == 1, (
             "Reminder should be suppressed on second tick of same day"
+        )
 
 
 # ── Configuration gates ──────────────────────────────────────────────────────
 
-class TestTrainReminderConfigGates:
 
+class TestTrainReminderConfigGates:
     @pytest.mark.asyncio
     async def test_reminders_enabled_zero_skips_post(self):
         cog = _make_cog()
-        chan = AsyncMock(); chan.send = AsyncMock()
+        chan = AsyncMock()
+        chan.send = AsyncMock()
         today_iso = PATCHED_TODAY_ISO
 
         await _run_loop(
@@ -255,7 +278,8 @@ class TestTrainReminderConfigGates:
         """Empty schedule for today → no post but reminders_fired
         gets the guild added so we don't re-check next minute."""
         cog = _make_cog()
-        chan = AsyncMock(); chan.send = AsyncMock()
+        chan = AsyncMock()
+        chan.send = AsyncMock()
 
         await _run_loop(
             cog,
@@ -283,15 +307,16 @@ class TestTrainReminderConfigGates:
 
 # ── Premium DM-to-assignee ───────────────────────────────────────────────────
 
-class TestTrainReminderPremiumDM:
 
+class TestTrainReminderPremiumDM:
     @pytest.mark.asyncio
     async def test_dm_sent_to_assignee_alongside_channel_post(self):
         """The Premium feature: after posting to the channel, also DM
         the member assigned to today's train. Free-tier guilds: dm.send_dm
         is wired to silently no-op via mention_or_name returning name."""
         cog = _make_cog()
-        chan = AsyncMock(); chan.send = AsyncMock()
+        chan = AsyncMock()
+        chan.send = AsyncMock()
         today_iso = PATCHED_TODAY_ISO
 
         send_dm_spy = await _run_loop(
@@ -303,7 +328,7 @@ class TestTrainReminderPremiumDM:
 
         send_dm_spy.assert_awaited_once()
         # `dm.send_dm(bot, guild_id, name, content=...)` — verify name + body.
-        args   = send_dm_spy.await_args.args
+        args = send_dm_spy.await_args.args
         kwargs = send_dm_spy.await_args.kwargs
         assert args[1] == GUILD_ID
         assert args[2] == "alice"
@@ -315,7 +340,8 @@ class TestTrainReminderPremiumDM:
         Premium DM uses that text (with `{name}` substituted) instead
         of the hardcoded default."""
         cog = _make_cog()
-        chan = AsyncMock(); chan.send = AsyncMock()
+        chan = AsyncMock()
+        chan.send = AsyncMock()
         today_iso = PATCHED_TODAY_ISO
 
         custom = "Hey {name}, train day! Don't forget to fill it out."
@@ -335,17 +361,18 @@ class TestTrainReminderPremiumDM:
 
 # ── Daily reset ──────────────────────────────────────────────────────────────
 
-class TestTrainReminderDailyReset:
 
+class TestTrainReminderDailyReset:
     @pytest.mark.asyncio
     async def test_reminders_fired_clears_when_date_rolls_over(self):
         """`reminders_fired` is a per-day set; rollover at midnight ET
         clears it so the next day's reminder can fire."""
         cog = _make_cog()
-        cog.reminders_fired    = {GUILD_ID}
+        cog.reminders_fired = {GUILD_ID}
         cog.last_reminder_date = date_cls(2026, 5, 14)  # yesterday
 
-        chan = AsyncMock(); chan.send = AsyncMock()
+        chan = AsyncMock()
+        chan.send = AsyncMock()
         today_iso = PATCHED_TODAY_ISO
         await _run_loop(
             cog,
@@ -353,11 +380,14 @@ class TestTrainReminderDailyReset:
             schedule={today_iso: {"name": "alice"}},
             channels={REMINDER_CHAN_ID: chan},
         )
-        chan.send.assert_called_once(), \
-            "After date rollover, reminders_fired is cleared and reminder fires again"
+        (
+            chan.send.assert_called_once(),
+            "After date rollover, reminders_fired is cleared and reminder fires again",
+        )
 
 
 # ── Birthday auto-population gate ────────────────────────────────────────────
+
 
 class TestBirthdayAutoPopulationGate:
     """The birthday → train auto-population must fire exactly once per
@@ -374,10 +404,12 @@ class TestBirthdayAutoPopulationGate:
     @pytest.mark.asyncio
     async def test_fires_at_22_00_ET(self):
         cog = _make_cog()
-        with patch("train_cog.check_and_add_birthdays", return_value=({}, [])) as mock_pop, \
-             patch("train_cog.save_schedule"), \
-             patch("config.get_birthday_population_last_fired", return_value=""), \
-             patch("config.mark_birthday_population_fired") as mock_mark:
+        with (
+            patch("train_cog.check_and_add_birthdays", return_value=({}, [])) as mock_pop,
+            patch("train_cog.save_schedule"),
+            patch("config.get_birthday_population_last_fired", return_value=""),
+            patch("config.mark_birthday_population_fired") as mock_mark,
+        ):
             await _run_loop(
                 cog,
                 now_in_guild_tz=datetime(2026, 5, 15, 22, 0, tzinfo=ET),
@@ -393,9 +425,11 @@ class TestBirthdayAutoPopulationGate:
         every redeploy that lands at some other minute. Regression for
         the 'fires on every push' bug."""
         cog = _make_cog()
-        with patch("train_cog.check_and_add_birthdays", return_value=({}, [])) as mock_pop, \
-             patch("train_cog.save_schedule"), \
-             patch("config.mark_birthday_population_fired") as mock_mark:
+        with (
+            patch("train_cog.check_and_add_birthdays", return_value=({}, [])) as mock_pop,
+            patch("train_cog.save_schedule"),
+            patch("config.mark_birthday_population_fired") as mock_mark,
+        ):
             await _run_loop(
                 cog,
                 now_in_guild_tz=datetime(2026, 5, 15, 10, 23, tzinfo=ET),
@@ -408,8 +442,10 @@ class TestBirthdayAutoPopulationGate:
     async def test_does_not_fire_one_minute_off(self):
         """Same exact-minute discipline as the train reminder."""
         cog = _make_cog()
-        with patch("train_cog.check_and_add_birthdays", return_value=({}, [])) as mock_pop, \
-             patch("train_cog.save_schedule"):
+        with (
+            patch("train_cog.check_and_add_birthdays", return_value=({}, [])) as mock_pop,
+            patch("train_cog.save_schedule"),
+        ):
             await _run_loop(
                 cog,
                 now_in_guild_tz=datetime(2026, 5, 15, 22, 1, tzinfo=ET),
@@ -424,10 +460,12 @@ class TestBirthdayAutoPopulationGate:
         Same-minute retick (or any retick before midnight ET) with the
         SQLite stamp present must not re-run. Regression for #89."""
         cog = _make_cog()
-        with patch("train_cog.check_and_add_birthdays", return_value=({}, [])) as mock_pop, \
-             patch("train_cog.save_schedule"), \
-             patch("config.get_birthday_population_last_fired", return_value="2026-05-15"), \
-             patch("config.mark_birthday_population_fired") as mock_mark:
+        with (
+            patch("train_cog.check_and_add_birthdays", return_value=({}, [])) as mock_pop,
+            patch("train_cog.save_schedule"),
+            patch("config.get_birthday_population_last_fired", return_value="2026-05-15"),
+            patch("config.mark_birthday_population_fired") as mock_mark,
+        ):
             await _run_loop(
                 cog,
                 now_in_guild_tz=datetime(2026, 5, 15, 22, 0, tzinfo=ET),
@@ -442,8 +480,10 @@ class TestBirthdayAutoPopulationGate:
         cog = _make_cog()
         bcfg = self._bday_on()
         bcfg["train_integration"] = 0
-        with patch("train_cog.check_and_add_birthdays", return_value=({}, [])) as mock_pop, \
-             patch("train_cog.save_schedule"):
+        with (
+            patch("train_cog.check_and_add_birthdays", return_value=({}, [])) as mock_pop,
+            patch("train_cog.save_schedule"),
+        ):
             await _run_loop(
                 cog,
                 now_in_guild_tz=datetime(2026, 5, 15, 22, 0, tzinfo=ET),
@@ -453,6 +493,7 @@ class TestBirthdayAutoPopulationGate:
 
 
 # ── Birthday channel Forbidden isolation ─────────────────────────────────────
+
 
 class TestBirthdayChannelForbiddenIsolation:
     """Regression for 1.1.4: a `discord.Forbidden` raised by
@@ -468,8 +509,8 @@ class TestBirthdayChannelForbiddenIsolation:
         """Birthday config that announces (not auto-pop) at the same
         time the test pins the loop to."""
         cfg = _bday_cfg(enabled=1)
-        cfg["reminders_enabled"]   = 1
-        cfg["reminder_time"]       = "08:00"
+        cfg["reminders_enabled"] = 1
+        cfg["reminder_time"] = "08:00"
         cfg["reminder_channel_id"] = REMINDER_CHAN_ID
         return cfg
 
@@ -485,18 +526,20 @@ class TestBirthdayChannelForbiddenIsolation:
         # Member dict month/day must match real today, since the loop
         # filters via `_d2.today()` (not the patched ET datetime).
         from datetime import date as _date
-        real_today = _date.today()
-        members = [{
-            "name":       "alice",
-            "month":      real_today.month,
-            "day":        real_today.day,
-            "discord_id": None,
-        }]
 
-        chan      = AsyncMock()
+        real_today = _date.today()
+        members = [
+            {
+                "name": "alice",
+                "month": real_today.month,
+                "day": real_today.day,
+                "discord_id": None,
+            }
+        ]
+
+        chan = AsyncMock()
         chan.name = "birthdays"
-        forbidden = discord.Forbidden(MagicMock(status=403, reason="Forbidden"),
-                                      "Missing Access")
+        forbidden = discord.Forbidden(MagicMock(status=403, reason="Forbidden"), "Missing Access")
         chan.send = AsyncMock(side_effect=forbidden)
 
         with patch("train_cog.load_birthdays", return_value=members):
@@ -510,10 +553,10 @@ class TestBirthdayChannelForbiddenIsolation:
 
         chan.send.assert_called_once()
         out = capsys.readouterr().out
-        assert "Missing perms" in out, \
-            "Forbidden must produce the per-guild diagnostic log line"
-        assert str(REMINDER_CHAN_ID) in out, \
+        assert "Missing perms" in out, "Forbidden must produce the per-guild diagnostic log line"
+        assert str(REMINDER_CHAN_ID) in out, (
             "Log must name the channel id so leadership knows what to fix"
+        )
         assert "birthdays" in out, "Log must include the channel name"
         assert str(GUILD_ID) in out, "Log must name the guild"
 
@@ -525,16 +568,16 @@ class TestBirthdayChannelForbiddenIsolation:
         cog = _make_cog()
 
         from datetime import date as _date
+
         real_today = _date.today()
         members = [
             {"name": "alice", "month": real_today.month, "day": real_today.day, "discord_id": None},
-            {"name": "bob",   "month": real_today.month, "day": real_today.day, "discord_id": None},
+            {"name": "bob", "month": real_today.month, "day": real_today.day, "discord_id": None},
         ]
 
-        chan      = AsyncMock()
+        chan = AsyncMock()
         chan.name = "birthdays"
-        forbidden = discord.Forbidden(MagicMock(status=403, reason="Forbidden"),
-                                      "Missing Access")
+        forbidden = discord.Forbidden(MagicMock(status=403, reason="Forbidden"), "Missing Access")
         chan.send = AsyncMock(side_effect=forbidden)
 
         with patch("train_cog.load_birthdays", return_value=members):
@@ -545,11 +588,13 @@ class TestBirthdayChannelForbiddenIsolation:
                 channels={REMINDER_CHAN_ID: chan},
             )
 
-        assert chan.send.await_count == 1, \
+        assert chan.send.await_count == 1, (
             "After the first Forbidden, remaining members for that guild are skipped"
+        )
 
 
 # ── ReminderView lifecycle ───────────────────────────────────────────────────
+
 
 class TestReminderViewMessageWiring:
     """The reminder loop must capture the sent message into
@@ -560,9 +605,10 @@ class TestReminderViewMessageWiring:
 
     @pytest.mark.asyncio
     async def test_loop_assigns_view_message(self):
-        cog  = _make_cog()
+        cog = _make_cog()
         sent = MagicMock(name="reminder_msg")
-        chan = AsyncMock(); chan.send = AsyncMock(return_value=sent)
+        chan = AsyncMock()
+        chan.send = AsyncMock(return_value=sent)
         today_iso = PATCHED_TODAY_ISO
 
         await _run_loop(
@@ -574,9 +620,10 @@ class TestReminderViewMessageWiring:
 
         # `channel.send(msg, view=view)` — view is the second arg as kwarg.
         kwargs = chan.send.await_args.kwargs
-        view   = kwargs["view"]
-        assert view.message is sent, \
+        view = kwargs["view"]
+        assert view.message is sent, (
             "ReminderView.message must be set so on_timeout can clean up the buttons"
+        )
 
 
 class TestReminderViewOnTimeout:
@@ -592,7 +639,7 @@ class TestReminderViewOnTimeout:
         view = ReminderView(cog=MagicMock(), date_str="2026-05-15", name="alice")
         view.message = MagicMock()
         view.message.content = "🚂 Reset! Today's train is for alice."
-        view.message.edit    = AsyncMock()
+        view.message.edit = AsyncMock()
 
         await view.on_timeout()
 

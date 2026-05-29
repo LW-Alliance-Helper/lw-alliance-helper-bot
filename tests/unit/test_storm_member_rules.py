@@ -40,7 +40,7 @@ class _FakeWorksheet:
         if end_index is None:
             end_index = index
         # Convert 1-indexed inclusive range to 0-indexed slice.
-        del self._rows[index - 1:end_index]
+        del self._rows[index - 1 : end_index]
 
 
 class _FakeSpreadsheet:
@@ -62,16 +62,22 @@ class _FakeSpreadsheet:
 def fake_sheet(seeded_db):
     import config
     from tests.unit.test_config import TEST_GUILD_ID
+
     fake = _FakeSpreadsheet()
     # Ensure storm rows exist and structured flow is on (so member_rules_tab resolves).
     for et in ("DS", "CS"):
         config.save_storm_config(
-            TEST_GUILD_ID, et,
-            tab_name=f"{et} Tab", mail_template="x",
-            timezone="America/New_York", log_channel_id=0,
+            TEST_GUILD_ID,
+            et,
+            tab_name=f"{et} Tab",
+            mail_template="x",
+            timezone="America/New_York",
+            log_channel_id=0,
         )
         config.save_structured_storm_config(
-            TEST_GUILD_ID, et, structured_flow_enabled=True,
+            TEST_GUILD_ID,
+            et,
+            structured_flow_enabled=True,
         )
     with patch.object(config, "get_spreadsheet", return_value=fake):
         yield fake, TEST_GUILD_ID
@@ -80,85 +86,152 @@ def fake_sheet(seeded_db):
 class TestSaveAndList:
     def test_save_power_band_round_trip(self, fake_sheet):
         fake, gid = fake_sheet
-        ok, _ = smr.save_rule(gid, "DS", smr.Rule(
-            rule_type="power_band",
-            subject="250000000", value="Power Tower",
-        ))
+        ok, _ = smr.save_rule(
+            gid,
+            "DS",
+            smr.Rule(
+                rule_type="power_band",
+                subject="250000000",
+                value="Power Tower",
+            ),
+        )
         assert ok is True
         rules = smr.list_rules(gid, "DS")
         assert len(rules) == 1
         assert rules[0].rule_type == "power_band"
-        assert rules[0].value     == "Power Tower"
-        assert rules[0].subject   == "250000000"
+        assert rules[0].value == "Power Tower"
+        assert rules[0].subject == "250000000"
 
     def test_save_per_member_team(self, fake_sheet):
         fake, gid = fake_sheet
-        ok, _ = smr.save_rule(gid, "DS", smr.Rule(
-            rule_type="per_member", subject="Alice",
-            sub_type="team", value="A",
-        ))
+        ok, _ = smr.save_rule(
+            gid,
+            "DS",
+            smr.Rule(
+                rule_type="per_member",
+                subject="Alice",
+                sub_type="team",
+                value="A",
+            ),
+        )
         assert ok is True
         rules = smr.list_rules(gid, "DS")
-        assert rules[0].subject  == "Alice"
+        assert rules[0].subject == "Alice"
         assert rules[0].sub_type == "team"
-        assert rules[0].value    == "A"
+        assert rules[0].value == "A"
 
     def test_save_per_member_zone(self, fake_sheet):
         fake, gid = fake_sheet
-        ok, _ = smr.save_rule(gid, "DS", smr.Rule(
-            rule_type="per_member", subject="Charlie",
-            sub_type="zone", value="Power Tower",
-        ))
+        ok, _ = smr.save_rule(
+            gid,
+            "DS",
+            smr.Rule(
+                rule_type="per_member",
+                subject="Charlie",
+                sub_type="zone",
+                value="Power Tower",
+            ),
+        )
         assert ok is True
         rules = smr.list_rules(gid, "DS")
         assert rules[0].sub_type == "zone"
-        assert rules[0].value    == "Power Tower"
+        assert rules[0].value == "Power Tower"
+
 
 class TestDuplicateDetection:
     def test_power_band_duplicate_rejected(self, fake_sheet):
         fake, gid = fake_sheet
-        smr.save_rule(gid, "DS", smr.Rule(
-            rule_type="power_band", subject="250000000", value="Power Tower",
-        ))
-        ok, msg = smr.save_rule(gid, "DS", smr.Rule(
-            rule_type="power_band", subject="250000000", value="Power Tower",
-        ))
+        smr.save_rule(
+            gid,
+            "DS",
+            smr.Rule(
+                rule_type="power_band",
+                subject="250000000",
+                value="Power Tower",
+            ),
+        )
+        ok, msg = smr.save_rule(
+            gid,
+            "DS",
+            smr.Rule(
+                rule_type="power_band",
+                subject="250000000",
+                value="Power Tower",
+            ),
+        )
         assert ok is False
         assert "already exists" in msg.lower()
 
     def test_power_band_different_zone_accepted(self, fake_sheet):
         fake, gid = fake_sheet
-        smr.save_rule(gid, "DS", smr.Rule(
-            rule_type="power_band", subject="250000000", value="Power Tower",
-        ))
-        ok, _ = smr.save_rule(gid, "DS", smr.Rule(
-            rule_type="power_band", subject="250000000", value="Nuclear Silo",
-        ))
+        smr.save_rule(
+            gid,
+            "DS",
+            smr.Rule(
+                rule_type="power_band",
+                subject="250000000",
+                value="Power Tower",
+            ),
+        )
+        ok, _ = smr.save_rule(
+            gid,
+            "DS",
+            smr.Rule(
+                rule_type="power_band",
+                subject="250000000",
+                value="Nuclear Silo",
+            ),
+        )
         assert ok is True
         assert len(smr.list_rules(gid, "DS")) == 2
 
     def test_per_member_duplicate_same_sub_type_rejected(self, fake_sheet):
         fake, gid = fake_sheet
-        smr.save_rule(gid, "DS", smr.Rule(
-            rule_type="per_member", subject="Alice",
-            sub_type="team", value="A",
-        ))
-        ok, _ = smr.save_rule(gid, "DS", smr.Rule(
-            rule_type="per_member", subject="Alice",
-            sub_type="team", value="B",  # different value, same key
-        ))
+        smr.save_rule(
+            gid,
+            "DS",
+            smr.Rule(
+                rule_type="per_member",
+                subject="Alice",
+                sub_type="team",
+                value="A",
+            ),
+        )
+        ok, _ = smr.save_rule(
+            gid,
+            "DS",
+            smr.Rule(
+                rule_type="per_member",
+                subject="Alice",
+                sub_type="team",
+                value="B",  # different value, same key
+            ),
+        )
         assert ok is False
 
     def test_per_member_different_sub_type_accepted(self, fake_sheet):
         fake, gid = fake_sheet
-        smr.save_rule(gid, "DS", smr.Rule(
-            rule_type="per_member", subject="Alice", sub_type="team", value="A",
-        ))
+        smr.save_rule(
+            gid,
+            "DS",
+            smr.Rule(
+                rule_type="per_member",
+                subject="Alice",
+                sub_type="team",
+                value="A",
+            ),
+        )
         # Same member, different sub_type — accepted.
-        ok, _ = smr.save_rule(gid, "DS", smr.Rule(
-            rule_type="per_member", subject="Alice", sub_type="zone",
-            value="Power Tower",
-        ))
+        ok, _ = smr.save_rule(
+            gid,
+            "DS",
+            smr.Rule(
+                rule_type="per_member",
+                subject="Alice",
+                sub_type="zone",
+                value="Power Tower",
+            ),
+        )
         assert ok is True
 
 
@@ -166,10 +239,15 @@ class TestDeleteAtIndex:
     def test_delete_removes_row(self, fake_sheet):
         fake, gid = fake_sheet
         for i in range(3):
-            smr.save_rule(gid, "DS", smr.Rule(
-                rule_type="power_band", subject=f"{100 * (i + 1)}000000",
-                value=f"Zone {i}",
-            ))
+            smr.save_rule(
+                gid,
+                "DS",
+                smr.Rule(
+                    rule_type="power_band",
+                    subject=f"{100 * (i + 1)}000000",
+                    value=f"Zone {i}",
+                ),
+            )
         assert smr.delete_rule_at(gid, "DS", 1) is True
         rules = smr.list_rules(gid, "DS")
         assert len(rules) == 2
@@ -179,10 +257,16 @@ class TestDeleteAtIndex:
 
     def test_delete_out_of_range_returns_false(self, fake_sheet):
         fake, gid = fake_sheet
-        smr.save_rule(gid, "DS", smr.Rule(
-            rule_type="power_band", subject="100000000", value="Zone 0",
-        ))
-        assert smr.delete_rule_at(gid, "DS", 5)  is False
+        smr.save_rule(
+            gid,
+            "DS",
+            smr.Rule(
+                rule_type="power_band",
+                subject="100000000",
+                value="Zone 0",
+            ),
+        )
+        assert smr.delete_rule_at(gid, "DS", 5) is False
         assert smr.delete_rule_at(gid, "DS", -1) is False
         # Original row still present.
         assert len(smr.list_rules(gid, "DS")) == 1
@@ -195,6 +279,7 @@ class TestSubjectResolution:
 
     def test_member_user_returns_discord_id_string(self):
         from unittest.mock import MagicMock
+
         m = MagicMock()
         m.id = 12345
         m.display_name = "Alice"
@@ -225,6 +310,7 @@ class TestSubjectResolution:
 
     def test_both_provided_rejected(self):
         from unittest.mock import MagicMock
+
         m = MagicMock()
         m.id = 12345
         m.display_name = "Alice"
@@ -238,6 +324,7 @@ class TestSubjectResolution:
         saved against a bot ID would silently never resolve at apply
         time. Reject the bot at the input layer."""
         from unittest.mock import MagicMock
+
         m = MagicMock()
         m.id = 12345
         m.display_name = "GoodBot"
@@ -253,6 +340,7 @@ class TestSubjectResolution:
         by both forms — one rule via picker, one via name typo — and
         both fire at apply time."""
         from unittest.mock import MagicMock
+
         m = MagicMock()
         m.id = 12345
         m.display_name = "Alice"
@@ -275,6 +363,7 @@ class TestSubjectResolution:
         """A name that doesn't match any Discord member stays as a
         free-text non-Discord subject."""
         from unittest.mock import MagicMock
+
         m = MagicMock()
         m.id = 12345
         m.display_name = "Bob"
@@ -289,6 +378,7 @@ class TestSubjectResolution:
         """A name match against a bot is ignored — bots aren't real
         alliance members."""
         from unittest.mock import MagicMock
+
         bot = MagicMock()
         bot.id = 99
         bot.display_name = "Alice"
@@ -304,6 +394,7 @@ class TestSubjectResolution:
         """Two Discord members with the same display name → ambiguous;
         leave as free-text so the officer can re-enter via the picker."""
         from unittest.mock import MagicMock
+
         m1, m2 = MagicMock(), MagicMock()
         m1.id, m2.id = 1, 2
         m1.display_name = m2.display_name = "Alice"
@@ -322,24 +413,30 @@ class TestDisplayNameResolution:
 
     def test_resolves_discord_id_to_current_name(self):
         from unittest.mock import MagicMock
+
         m = MagicMock()
         m.display_name = "Alice (renamed)"
         guild = MagicMock()
         guild.get_member.return_value = m
         rule = smr.Rule(
-            rule_type="per_member", subject="12345",
-            sub_type="team", value="A",
+            rule_type="per_member",
+            subject="12345",
+            sub_type="team",
+            value="A",
         )
         label = rule.render_label(guild=guild)
         assert "Alice (renamed)" in label
 
     def test_falls_back_when_member_not_in_guild(self):
         from unittest.mock import MagicMock
+
         guild = MagicMock()
         guild.get_member.return_value = None
         rule = smr.Rule(
-            rule_type="per_member", subject="12345",
-            sub_type="team", value="A",
+            rule_type="per_member",
+            subject="12345",
+            sub_type="team",
+            value="A",
         )
         label = rule.render_label(guild=guild)
         # The raw ID surfaces — better than a missing-name crash.
@@ -347,10 +444,13 @@ class TestDisplayNameResolution:
 
     def test_non_numeric_subject_left_alone(self):
         from unittest.mock import MagicMock
+
         guild = MagicMock()
         rule = smr.Rule(
-            rule_type="per_member", subject="Carol",
-            sub_type="zone", value="Power Tower",
+            rule_type="per_member",
+            subject="Carol",
+            sub_type="zone",
+            value="Power Tower",
         )
         label = rule.render_label(guild=guild)
         assert "Carol" in label
@@ -360,8 +460,10 @@ class TestDisplayNameResolution:
 
     def test_no_guild_falls_back_to_raw_subject(self):
         rule = smr.Rule(
-            rule_type="per_member", subject="12345",
-            sub_type="team", value="A",
+            rule_type="per_member",
+            subject="12345",
+            sub_type="team",
+            value="A",
         )
         label = rule.render_label()
         assert "12345" in label
@@ -369,8 +471,10 @@ class TestDisplayNameResolution:
     def test_render_label_back_compat_no_kwarg(self):
         """Existing callsites that pass no guild kwarg keep working."""
         rule = smr.Rule(
-            rule_type="per_member", subject="Carol",
-            sub_type="team", value="A",
+            rule_type="per_member",
+            subject="Carol",
+            sub_type="team",
+            value="A",
         )
         label = rule.render_label()
         assert "Carol" in label
@@ -384,6 +488,7 @@ class TestModuleLevelResolveSubjectDisplay:
 
     def test_module_helper_matches_back_compat_method(self):
         from unittest.mock import MagicMock
+
         member = MagicMock()
         member.display_name = "AliceCurrent"
         guild = MagicMock()
@@ -391,8 +496,10 @@ class TestModuleLevelResolveSubjectDisplay:
 
         # Both should yield identical results.
         via_method = smr.Rule(
-            rule_type="per_member", subject="12345",
-            sub_type="team", value="A",
+            rule_type="per_member",
+            subject="12345",
+            sub_type="team",
+            value="A",
         )._resolve_display_name(guild)
         via_helper = smr.resolve_subject_display("12345", guild)
         assert via_method == via_helper == "AliceCurrent"
@@ -403,6 +510,7 @@ class TestModuleLevelResolveSubjectDisplay:
 
     def test_module_helper_non_digit_subject(self):
         from unittest.mock import MagicMock
+
         guild = MagicMock()
         assert smr.resolve_subject_display("Dave", guild) == "Dave"
         guild.get_member.assert_not_called()
@@ -415,18 +523,26 @@ class TestRenameThenFilterEndToEnd:
     this end-to-end path."""
 
     def test_filter_finds_renamed_member_by_current_display_name(
-        self, fake_sheet,
+        self,
+        fake_sheet,
     ):
         # The fake_sheet fixture is in this test module — uses gspread
         # mocks to land rules on the Sheet.
         from unittest.mock import MagicMock
+
         _fake, gid = fake_sheet
 
         # Save a rule keyed by Discord ID (post-#136 storage convention).
-        ok, _ = smr.save_rule(gid, "DS", smr.Rule(
-            rule_type="per_member", subject="12345",
-            sub_type="team", value="A",
-        ))
+        ok, _ = smr.save_rule(
+            gid,
+            "DS",
+            smr.Rule(
+                rule_type="per_member",
+                subject="12345",
+                sub_type="team",
+                value="A",
+            ),
+        )
         assert ok
 
         # Simulate a rename: the guild's get_member returns a Member
@@ -441,7 +557,8 @@ class TestRenameThenFilterEndToEnd:
         rules = smr.list_rules(gid, "DS")
         target = "alicerenamed"
         matched = [
-            r for r in rules
+            r
+            for r in rules
             if r.rule_type == smr._RULE_TYPE_PER_MEMBER
             and (
                 r.subject.strip().lower() == target
@@ -465,29 +582,39 @@ class TestThreeWayResolutionInLoader:
         import storm_strategy as ss
 
         members = {
-            "1001": {"key": "1001", "name": "Alice", "discord_id": "1001",
-                     "power": 412_000_000, "not_on_discord": False},
+            "1001": {
+                "key": "1001",
+                "name": "Alice",
+                "discord_id": "1001",
+                "power": 412_000_000,
+                "not_on_discord": False,
+            },
         }
         preset = ss.PresetBuffer(
-            name="Standard", event_type="DS",
+            name="Standard",
+            event_type="DS",
             zones=[ss.ZoneRow(zone="Power Tower", max_players=4)],
         )
         rule = smr.Rule(
-            rule_type="per_member", subject="1001",  # Discord ID, not name
-            sub_type="zone", value="Power Tower",
+            rule_type="per_member",
+            subject="1001",  # Discord ID, not name
+            sub_type="zone",
+            value="Power Tower",
         )
         session = srb.RosterBuilderSession(
-            guild_id=1, user_id=42, event_type="DS",
-            team="A", preset=preset, members=members,
-            per_member_rules=[rule], power_band_rules=[],
+            guild_id=1,
+            user_id=42,
+            event_type="DS",
+            team="A",
+            preset=preset,
+            members=members,
+            per_member_rules=[rule],
+            power_band_rules=[],
         )
         srb._apply_rules_to_session(session)
         # The rule pre-assigned Alice — and no false-positive stale warning.
         assert "1001" in session.assignments["Power Tower"]
-        assert not any(
-            "rename or remove" in e or "1001" in e
-            for e in session.roster_errors
-        )
+        assert not any("rename or remove" in e or "1001" in e for e in session.roster_errors)
 
     def test_discord_id_field_path_resolves(self):
         """Member key is the roster name (non-Discord-style row), but
@@ -497,21 +624,34 @@ class TestThreeWayResolutionInLoader:
         import storm_strategy as ss
 
         members = {
-            "Alice": {"key": "Alice", "name": "Alice", "discord_id": "9999",
-                      "power": 412_000_000, "not_on_discord": False},
+            "Alice": {
+                "key": "Alice",
+                "name": "Alice",
+                "discord_id": "9999",
+                "power": 412_000_000,
+                "not_on_discord": False,
+            },
         }
         preset = ss.PresetBuffer(
-            name="Standard", event_type="DS",
+            name="Standard",
+            event_type="DS",
             zones=[ss.ZoneRow(zone="Power Tower", max_players=4)],
         )
         rule = smr.Rule(
-            rule_type="per_member", subject="9999",
-            sub_type="zone", value="Power Tower",
+            rule_type="per_member",
+            subject="9999",
+            sub_type="zone",
+            value="Power Tower",
         )
         session = srb.RosterBuilderSession(
-            guild_id=1, user_id=42, event_type="DS",
-            team="A", preset=preset, members=members,
-            per_member_rules=[rule], power_band_rules=[],
+            guild_id=1,
+            user_id=42,
+            event_type="DS",
+            team="A",
+            preset=preset,
+            members=members,
+            per_member_rules=[rule],
+            power_band_rules=[],
         )
         srb._apply_rules_to_session(session)
         assert "Alice" in session.assignments["Power Tower"]
@@ -525,14 +665,14 @@ class TestRenderLabel:
         assert "Power Tower" in label
 
     def test_per_member_team_label(self):
-        r = smr.Rule(rule_type="per_member", subject="Alice",
-                     sub_type="team", value="A")
+        r = smr.Rule(rule_type="per_member", subject="Alice", sub_type="team", value="A")
         assert "Alice" in r.render_label()
         assert "Team A" in r.render_label()
 
     def test_per_member_zone_label(self):
-        r = smr.Rule(rule_type="per_member", subject="Charlie",
-                     sub_type="zone", value="Power Tower")
+        r = smr.Rule(
+            rule_type="per_member", subject="Charlie", sub_type="zone", value="Power Tower"
+        )
         assert "Charlie" in r.render_label()
         assert "Power Tower" in r.render_label()
 
@@ -544,7 +684,10 @@ class TestRulesListAddRuleButton:
 
     def test_add_rule_button_present_on_empty_list(self):
         view = smr._RulesListView(
-            guild_id=123, user_id=456, event_type="DS", rules=[],
+            guild_id=123,
+            user_id=456,
+            event_type="DS",
+            rules=[],
         )
         labels = [getattr(c, "label", "") for c in view.children]
         assert any("Add rule" in lab for lab in labels)
@@ -555,7 +698,10 @@ class TestRulesListAddRuleButton:
             smr.Rule(rule_type="per_member", subject="Alice", sub_type="zone", value="Power Tower"),
         ]
         view = smr._RulesListView(
-            guild_id=123, user_id=456, event_type="DS", rules=rules,
+            guild_id=123,
+            user_id=456,
+            event_type="DS",
+            rules=rules,
         )
         labels = [getattr(c, "label", "") for c in view.children]
         # Both Clear buttons + the Add Rule button.
@@ -596,10 +742,16 @@ class TestListRulesCsLegacyValueMigration:
         fake, gid = fake_sheet
         # Simulate pre-#178 alliance data by writing the rule row
         # directly via the storage path with the internal-key value.
-        ok, _ = smr.save_rule(gid, "CS", smr.Rule(
-            rule_type="per_member", subject="Alice",
-            sub_type="zone", value="s1_power_tower",
-        ))
+        ok, _ = smr.save_rule(
+            gid,
+            "CS",
+            smr.Rule(
+                rule_type="per_member",
+                subject="Alice",
+                sub_type="zone",
+                value="s1_power_tower",
+            ),
+        )
         assert ok is True
         rules = smr.list_rules(gid, "CS")
         # On read, the value translates to the display name.
@@ -609,10 +761,15 @@ class TestListRulesCsLegacyValueMigration:
 
     def test_cs_power_band_rule_value_translated(self, fake_sheet):
         fake, gid = fake_sheet
-        ok, _ = smr.save_rule(gid, "CS", smr.Rule(
-            rule_type="power_band", subject="250000000",
-            value="s3_virus_lab",
-        ))
+        ok, _ = smr.save_rule(
+            gid,
+            "CS",
+            smr.Rule(
+                rule_type="power_band",
+                subject="250000000",
+                value="s3_virus_lab",
+            ),
+        )
         assert ok is True
         rules = smr.list_rules(gid, "CS")
         band_rules = [r for r in rules if r.rule_type == "power_band"]
@@ -623,10 +780,16 @@ class TestListRulesCsLegacyValueMigration:
         fake, gid = fake_sheet
         # New rules saved with display names already — no translation
         # surprise (translator is idempotent on display names).
-        ok, _ = smr.save_rule(gid, "CS", smr.Rule(
-            rule_type="per_member", subject="Bob",
-            sub_type="zone", value="Power Tower",
-        ))
+        ok, _ = smr.save_rule(
+            gid,
+            "CS",
+            smr.Rule(
+                rule_type="per_member",
+                subject="Bob",
+                sub_type="zone",
+                value="Power Tower",
+            ),
+        )
         assert ok is True
         rules = smr.list_rules(gid, "CS")
         assert rules[0].value == "Power Tower"
@@ -638,10 +801,16 @@ class TestListRulesCsLegacyValueMigration:
         # DS doesn't have "s1_power_tower" as a known internal key,
         # but even if a DS rule happened to carry that string verbatim
         # the DS reader leaves it alone.
-        ok, _ = smr.save_rule(gid, "DS", smr.Rule(
-            rule_type="per_member", subject="Carol",
-            sub_type="zone", value="Power Tower",
-        ))
+        ok, _ = smr.save_rule(
+            gid,
+            "DS",
+            smr.Rule(
+                rule_type="per_member",
+                subject="Carol",
+                sub_type="zone",
+                value="Power Tower",
+            ),
+        )
         assert ok is True
         rules = smr.list_rules(gid, "DS")
         assert rules[0].value == "Power Tower"
@@ -651,12 +820,17 @@ class TestListRulesCsLegacyValueMigration:
         names. The translator skips them so a "B" team value stays
         "B" (not accidentally matched against the internal-key map)."""
         fake, gid = fake_sheet
-        ok, _ = smr.save_rule(gid, "CS", smr.Rule(
-            rule_type="per_member", subject="Dan",
-            sub_type="team", value="B",
-        ))
+        ok, _ = smr.save_rule(
+            gid,
+            "CS",
+            smr.Rule(
+                rule_type="per_member",
+                subject="Dan",
+                sub_type="team",
+                value="B",
+            ),
+        )
         assert ok is True
         rules = smr.list_rules(gid, "CS")
         team_rules = [r for r in rules if r.sub_type == "team"]
         assert team_rules[0].value == "B"
-

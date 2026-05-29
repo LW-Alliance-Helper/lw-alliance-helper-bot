@@ -24,7 +24,7 @@ os.environ.setdefault("DISCORD_TOKEN", "fake-test-token")
 
 def _make_role(name: str, role_id: int) -> MagicMock:
     role = MagicMock(spec=discord.Role)
-    role.id   = role_id
+    role.id = role_id
     role.name = name
     return role
 
@@ -44,12 +44,14 @@ def _labels(view) -> list[str]:
 
 # ── Default (no current_id) path ──────────────────────────────────────────────
 
+
 class TestDefaultRendering:
     """No `current_id` → the view renders just the select + create button,
     same as the pre-#94 behavior."""
 
     def test_no_current_id_renders_select_and_create_only(self):
         from setup_cog import RoleSelectStep
+
         view = RoleSelectStep("Pick a role...")
         labels = _labels(view)
         assert "➕ Create a new role" in labels
@@ -60,18 +62,20 @@ class TestDefaultRendering:
 
     def test_is_current_stale_false_when_no_current_id(self):
         from setup_cog import RoleSelectStep
+
         view = RoleSelectStep("Pick a role...")
         assert view.is_current_stale is False
 
 
 # ── Keep-current button (#94) ────────────────────────────────────────────────
 
-class TestKeepCurrentRole:
 
+class TestKeepCurrentRole:
     def test_current_id_resolves_renders_keep_button(self):
         from setup_cog import RoleSelectStep
+
         member = _make_role("Member", 42)
-        guild  = _make_guild([member])
+        guild = _make_guild([member])
         view = RoleSelectStep("Pick a role...", current_id=42, guild=guild)
         labels = _labels(view)
         assert any("Keep current" in lbl and "Member" in lbl for lbl in labels)
@@ -79,6 +83,7 @@ class TestKeepCurrentRole:
 
     def test_current_id_zero_treated_as_unset(self):
         from setup_cog import RoleSelectStep
+
         guild = _make_guild([_make_role("Member", 42)])
         view = RoleSelectStep("Pick a role...", current_id=0, guild=guild)
         labels = _labels(view)
@@ -87,6 +92,7 @@ class TestKeepCurrentRole:
 
     def test_stale_current_id_flags_is_current_stale(self):
         from setup_cog import RoleSelectStep
+
         guild = _make_guild([])  # role was deleted
         view = RoleSelectStep(
             "Pick a role...",
@@ -103,12 +109,15 @@ class TestKeepCurrentRole:
     @pytest.mark.asyncio
     async def test_clicking_keep_sets_selected_role_and_stops(self):
         from setup_cog import RoleSelectStep
+
         member = _make_role("Member", 42)
-        guild  = _make_guild([member])
+        guild = _make_guild([member])
         view = RoleSelectStep("Pick a role...", current_id=42, guild=guild)
-        keep_btn = next(c for c in view.children
-                        if isinstance(c, discord.ui.Button)
-                        and "Keep current" in (c.label or ""))
+        keep_btn = next(
+            c
+            for c in view.children
+            if isinstance(c, discord.ui.Button) and "Keep current" in (c.label or "")
+        )
         inter = MagicMock()
         inter.response.edit_message = AsyncMock()
         await keep_btn.callback(inter)
@@ -121,23 +130,28 @@ class TestKeepCurrentRole:
         """`guild` is needed to resolve current_id. Without it the keep
         button simply doesn't render — graceful degradation."""
         from setup_cog import RoleSelectStep
+
         view = RoleSelectStep("Pick a role...", current_id=42)
         labels = _labels(view)
         assert not any("Keep current" in lbl for lbl in labels)
 
     def test_long_role_name_clipped_to_80_chars(self):
         from setup_cog import RoleSelectStep
+
         long_name = "x" * 200
         long_role = _make_role(long_name, 42)
         guild = _make_guild([long_role])
         view = RoleSelectStep("Pick a role...", current_id=42, guild=guild)
-        keep_btn = next(c for c in view.children
-                        if isinstance(c, discord.ui.Button)
-                        and "Keep current" in (c.label or ""))
+        keep_btn = next(
+            c
+            for c in view.children
+            if isinstance(c, discord.ui.Button) and "Keep current" in (c.label or "")
+        )
         assert len(keep_btn.label) <= 80
 
 
 # ── Name-based fallback (#106) ───────────────────────────────────────────────
+
 
 class TestNameFallback:
     """Old guilds stored the leadership role by name only — the
@@ -148,12 +162,13 @@ class TestNameFallback:
 
     def test_zero_id_with_name_resolves_via_guild_roles(self):
         from setup_cog import RoleSelectStep
+
         leader = _make_role("Leadership", 77)
-        guild  = _make_guild([leader, _make_role("Member", 88)])
+        guild = _make_guild([leader, _make_role("Member", 88)])
         view = RoleSelectStep(
             "Pick a role...",
-            current_id=0,                # migration default
-            current_name="Leadership",   # the only thing we knew
+            current_id=0,  # migration default
+            current_name="Leadership",  # the only thing we knew
             guild=guild,
         )
         labels = _labels(view)
@@ -164,11 +179,12 @@ class TestNameFallback:
         """Stale id (role recreated, new id) but name still matches —
         prefer the name match over showing a 'deleted' warning."""
         from setup_cog import RoleSelectStep
+
         leader = _make_role("Leadership", 99)
-        guild  = _make_guild([leader])
+        guild = _make_guild([leader])
         view = RoleSelectStep(
             "Pick a role...",
-            current_id=11,               # stale id
+            current_id=11,  # stale id
             current_name="Leadership",
             guild=guild,
         )
@@ -178,6 +194,7 @@ class TestNameFallback:
 
     def test_id_zero_and_name_misses_flags_stale(self):
         from setup_cog import RoleSelectStep
+
         guild = _make_guild([_make_role("OtherRole", 1)])
         view = RoleSelectStep(
             "Pick a role...",
@@ -192,6 +209,7 @@ class TestNameFallback:
     def test_id_zero_and_no_name_is_not_stale(self):
         """Truly new guild — no saved value of any kind. Don't warn."""
         from setup_cog import RoleSelectStep
+
         guild = _make_guild([])
         view = RoleSelectStep(
             "Pick a role...",
@@ -206,17 +224,20 @@ class TestNameFallback:
         """Clicking the keep button from the name-fallback path still
         gives the caller a real Role object, not a stub."""
         from setup_cog import RoleSelectStep
+
         leader = _make_role("Leadership", 77)
-        guild  = _make_guild([leader])
+        guild = _make_guild([leader])
         view = RoleSelectStep(
             "Pick a role...",
             current_id=0,
             current_name="Leadership",
             guild=guild,
         )
-        keep_btn = next(c for c in view.children
-                        if isinstance(c, discord.ui.Button)
-                        and "Keep current" in (c.label or ""))
+        keep_btn = next(
+            c
+            for c in view.children
+            if isinstance(c, discord.ui.Button) and "Keep current" in (c.label or "")
+        )
         inter = MagicMock()
         inter.response.edit_message = AsyncMock()
         await keep_btn.callback(inter)

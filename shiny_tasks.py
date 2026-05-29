@@ -45,9 +45,7 @@ HEDGE_FETCH_TIMEOUT_S = 30
 # Regex to pull `/_next/static/chunks/app/servers/page-<hash>.js` out
 # of the HTML. The hash rotates on every Hedge deploy so it must be
 # extracted at fetch time, not hardcoded.
-_PAGE_CHUNK_RE = re.compile(
-    r'/_next/static/chunks/app/servers/page-[0-9a-f]+\.js'
-)
+_PAGE_CHUNK_RE = re.compile(r"/_next/static/chunks/app/servers/page-[0-9a-f]+\.js")
 
 # Each server record looks like:
 #   {"id":"10","server":"State#10","timestamp":"1694157329000",
@@ -61,7 +59,7 @@ _SERVER_RECORD_RE = re.compile(
     r'"id":"(?P<id>\d+)"'
     r',"server":"State#\d+"'
     r',"timestamp":"(?P<ts>\d+)"'
-    r'.*?'
+    r".*?"
     r'"region":\[(?P<region>[^\]]*)\]',
     re.DOTALL,
 )
@@ -85,7 +83,8 @@ def is_shiny_today(creation_date: date, today: date) -> bool:
 
 
 def servers_shiny_today(
-    server_rows: list[dict], today: date,
+    server_rows: list[dict],
+    today: date,
 ) -> list[int]:
     """Return server numbers that are shiny today, sorted ascending.
 
@@ -114,10 +113,10 @@ def servers_shiny_today(
 def format_server_list(servers: list[int]) -> str:
     """Render a server-number list as friendly English.
 
-      []                → ""
-      [681]             → "681"
-      [681, 682]        → "681 and 682"
-      [681, 682, 689]   → "681, 682 and 689"
+    []                → ""
+    [681]             → "681"
+    [681, 682]        → "681 and 682"
+    [681, 682, 689]   → "681, 682 and 689"
     """
     nums = [str(n) for n in servers]
     if not nums:
@@ -134,6 +133,7 @@ class _SafeDict(dict):
     announcement template (e.g. `{servrs}`) must render literally
     instead of crashing the daily scheduler loop.
     """
+
     def __missing__(self, key):
         return "{" + key + "}"
 
@@ -146,7 +146,10 @@ def _format_date_for_template(d: date) -> str:
 
 
 def render_announcement(
-    template: str, *, servers: list[int], today: date,
+    template: str,
+    *,
+    servers: list[int],
+    today: date,
 ) -> str:
     """Substitute `{servers}` and `{date}` into the configured template.
 
@@ -154,10 +157,12 @@ def render_announcement(
     `DEFAULT_SHINY_TASKS_MESSAGE` from defaults.py — resolve the
     fallback via `resolve_announcement_template` before calling.
     """
-    return template.format_map(_SafeDict(
-        servers=format_server_list(servers),
-        date=_format_date_for_template(today),
-    ))
+    return template.format_map(
+        _SafeDict(
+            servers=format_server_list(servers),
+            date=_format_date_for_template(today),
+        )
+    )
 
 
 # ── Fetch + parse cpt-hedge bundle ─────────────────────────────────────────
@@ -176,9 +181,7 @@ async def _fetch_text(session: aiohttp.ClientSession, url: str) -> str:
         timeout=aiohttp.ClientTimeout(total=HEDGE_FETCH_TIMEOUT_S),
     ) as resp:
         if resp.status != 200:
-            raise HedgeFetchError(
-                f"GET {url} → HTTP {resp.status}"
-            )
+            raise HedgeFetchError(f"GET {url} → HTTP {resp.status}")
         return await resp.text()
 
 
@@ -256,6 +259,7 @@ async def refresh_servers() -> int:
     no-op refresh is harder to diagnose than a logged failure.
     """
     from config import upsert_shiny_task_servers
+
     rows = await fetch_server_table()
     seen_at = datetime.now(tz=timezone.utc).isoformat()
     return upsert_shiny_task_servers(rows, seen_at=seen_at)
@@ -269,6 +273,7 @@ def resolve_announcement_template(saved_template: str) -> str:
     and any future preview command all resolve the same way.
     """
     from defaults import DEFAULT_SHINY_TASKS_MESSAGE
+
     if saved_template and saved_template.strip():
         return saved_template
     return DEFAULT_SHINY_TASKS_MESSAGE
@@ -292,10 +297,7 @@ def build_announcement_for_guild(
     this helper additionally re-applies it so tests can pass an
     unfiltered roster fixture without a SQLite round-trip.
     """
-    in_range = [
-        r for r in server_rows
-        if server_min <= int(r["server_number"]) <= server_max
-    ]
+    in_range = [r for r in server_rows if server_min <= int(r["server_number"]) <= server_max]
     todays = servers_shiny_today(in_range, today)
     if not todays:
         return None

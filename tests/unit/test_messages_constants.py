@@ -9,6 +9,7 @@ Companion to tests/unit/test_setup_hub_constants.py (which pins the
 HUB_BTN_* labels from #208) and tests/unit/test_no_verb_colon_acks.py
 (which guards the sentence-form success-ack style rule from D15).
 """
+
 from messages import (
     CANCEL_BACKPEDAL,
     CANCEL_BACKPEDAL_DEFAULT,
@@ -38,6 +39,7 @@ from messages import (
 
 # ── Wizard scaffolding ───────────────────────────────────────────────
 
+
 def test_wizard_timeout():
     assert WIZARD_TIMEOUT == "⏰ Timed out. Run `/setup` → {wizard} to start again."
 
@@ -51,41 +53,65 @@ def test_hub_timeout():
 
 
 def test_cancel_constants():
-    assert CANCEL_PLAIN              == "❌ Cancelled."
-    assert CANCEL_BACKPEDAL_DEFAULT  == "↩️ Cancelled. No changes made."
-    assert CANCEL_BACKPEDAL          == "↩️ Cancelled. {detail}"
+    assert CANCEL_PLAIN == "❌ Cancelled."
+    assert CANCEL_BACKPEDAL_DEFAULT == "↩️ Cancelled. No changes made."
+    assert CANCEL_BACKPEDAL == "↩️ Cancelled. {detail}"
 
 
 def test_setup_not_complete_constants():
-    assert NOT_SET_UP             == "⚙️ This bot hasn't been set up yet. Run `/setup` to get started."
-    assert NOT_SET_UP_HUB         == "⚙️ This server hasn't been set up yet. Click **{hub_btn}** above to start."
-    assert FEATURE_NOT_CONFIGURED == "⚙️ {feature} isn't configured yet. Run `/setup` → {wizard_btn} first."
+    assert NOT_SET_UP == "⚙️ This bot hasn't been set up yet. Run `/setup` to get started."
+    assert (
+        NOT_SET_UP_HUB
+        == "⚙️ This server hasn't been set up yet. Click **{hub_btn}** above to start."
+    )
+    assert (
+        FEATURE_NOT_CONFIGURED
+        == "⚙️ {feature} isn't configured yet. Run `/setup` → {wizard_btn} first."
+    )
 
 
 # ── Premium / permissions ────────────────────────────────────────────
 
+
 def test_premium_locked_inline():
-    assert PREMIUM_LOCKED_INLINE == "🔒 The **{feature}** is a 💎 Premium feature. Run `/upgrade` to unlock it."
+    assert (
+        PREMIUM_LOCKED_INLINE
+        == "🔒 The **{feature}** is a 💎 Premium feature. Run `/upgrade` to unlock it."
+    )
 
 
 def test_deny_constants():
-    assert DENY_NOT_OWNER     == "⛔ Only the user who opened this view can use it."
-    assert DENY_ADMIN_OR_ROLE == "⛔ You need server administrator permission or the **{role}** role to {action}."
+    assert DENY_NOT_OWNER == "⛔ Only the user who opened this view can use it."
+    assert (
+        DENY_ADMIN_OR_ROLE
+        == "⛔ You need server administrator permission or the **{role}** role to {action}."
+    )
 
 
 # ── Leadership / channel errors ──────────────────────────────────────
 
+
 def test_leadership_constants():
-    assert LEADERSHIP_NOT_CONFIGURED == "⚠️ Leadership channel isn't configured. Run `/setup` to configure it."
-    assert LEADERSHIP_INACCESSIBLE   == "⚠️ Could not access the leadership channel."
-    assert LEADERSHIP_NO_READ_PERM   == "⚠️ Bot does not have permission to read message history in the leadership channel."
+    assert (
+        LEADERSHIP_NOT_CONFIGURED
+        == "⚠️ Leadership channel isn't configured. Run `/setup` to configure it."
+    )
+    assert LEADERSHIP_INACCESSIBLE == "⚠️ Could not access the leadership channel."
+    assert (
+        LEADERSHIP_NO_READ_PERM
+        == "⚠️ Bot does not have permission to read message history in the leadership channel."
+    )
 
 
 def test_prev_channel_gone():
-    assert PREV_CHANNEL_GONE == "⚠️ Your previously configured {channel_label} channel no longer exists. Pick a new one below."
+    assert (
+        PREV_CHANNEL_GONE
+        == "⚠️ Your previously configured {channel_label} channel no longer exists. Pick a new one below."
+    )
 
 
 # ── Validation ───────────────────────────────────────────────────────
+
 
 def test_time_parse_constants():
     assert TIME_PARSE_RETRY == (
@@ -93,13 +119,12 @@ def test_time_parse_constants():
         "Try `9:00am`, `10:15pm`, or `22:00`. Let's try once more."
     )
     assert TIME_PARSE_GIVE_UP == (
-        "⚠️ Could not read that time after a few tries. "
-        "Run {recovery} to start again."
+        "⚠️ Could not read that time after a few tries. Run {recovery} to start again."
     )
 
 
 def test_input_invalid_constants():
-    assert INPUT_INVALID            == "⚠️ Please enter a {type} like `{example}`. Run {recovery} to try again."
+    assert INPUT_INVALID == "⚠️ Please enter a {type} like `{example}`. Run {recovery} to try again."
     assert INPUT_INVALID_NO_EXAMPLE == "⚠️ Please enter a {type}. Run {recovery} to try again."
 
 
@@ -109,12 +134,14 @@ def test_date_parse_reject():
 
 # ── Footers ──────────────────────────────────────────────────────────
 
+
 def test_footer_constants():
-    assert TIER_COMPARISON      == "Free tier: {free_limit}. Upgrade to Premium for {premium_limit}."
+    assert TIER_COMPARISON == "Free tier: {free_limit}. Upgrade to Premium for {premium_limit}."
     assert SETUP_POINTER_FOOTER == "Run `/setup` → {wizard} to update settings."
 
 
 # ── Templates render without KeyError when called with their documented params ──
+
 
 def test_templates_format_with_documented_params():
     """Smoke-check that every template's documented parameters actually

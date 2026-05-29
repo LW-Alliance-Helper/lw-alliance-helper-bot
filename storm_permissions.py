@@ -40,6 +40,7 @@ def is_leader_or_admin(interaction: discord.Interaction) -> bool:
     don't have to special-case the off-guild path.
     """
     from config import get_config
+
     member = interaction.user
     if not isinstance(member, discord.Member):
         return False
@@ -84,6 +85,7 @@ async def ensure_premium_structured(
     from config import get_structured_storm_config
 
     from setup_hub import STORM_SETUP_NAV
+
     label = "Desert Storm" if event_type == "DS" else "Canyon Storm"
     setup_cmd = STORM_SETUP_NAV[event_type]
 
@@ -97,9 +99,7 @@ async def ensure_premium_structured(
         await _say("⚠️ This command must be used inside a server.")
         return False, None
 
-    if not await premium.is_premium(
-        interaction.guild_id, interaction=interaction, bot=bot
-    ):
+    if not await premium.is_premium(interaction.guild_id, interaction=interaction, bot=bot):
         await _say(
             f"🔒 {feature_label or 'The structured storm flow'} is a "
             f"💎 Premium feature. Run `/upgrade` to unlock it."

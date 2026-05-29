@@ -71,10 +71,10 @@ _STALE_ID_LOG_MEMO: set[tuple[int, frozenset]] = set()
 
 _BUCKET_ORDER = ("a", "b", "either", "cannot", "not_voted")
 _BUCKET_LABELS = {
-    "a":         "🅰️ Voted Team A",
-    "b":         "🅱️ Voted Team B",
-    "either":    "🔄 Voted Either",
-    "cannot":    "❌ Voted Cannot",
+    "a": "🅰️ Voted Team A",
+    "b": "🅱️ Voted Team B",
+    "either": "🔄 Voted Either",
+    "cannot": "❌ Voted Cannot",
     "not_voted": "❓ Not voted yet",
 }
 
@@ -131,7 +131,9 @@ def _resolve_member_name(
 
 
 def _read_roster_rows(
-    guild_id: int, *, guild: discord.Guild | None = None,
+    guild_id: int,
+    *,
+    guild: discord.Guild | None = None,
 ) -> tuple[list[dict], list[str]]:
     """Read the alliance's member-roster Sheet and return:
       (rows, errors)
@@ -159,6 +161,7 @@ def _read_roster_rows(
     too for consistency.
     """
     import config
+
     errors: list[str] = []
     stale_ids: list[str] = []
     try:
@@ -192,16 +195,16 @@ def _read_roster_rows(
                 return idx
         return -1
 
-    id_col          = int(cfg.get("discord_id_col", 0))
+    id_col = int(cfg.get("discord_id_col", 0))
     display_col_idx = int(cfg.get("display_col", cfg.get("name_col", 1)))
     # Underlying Name column (typically B = Discord username). Read
     # separately so hand-typed rows that only filled in the Name column
     # still resolve to a usable name when Display Name is blank (#268).
-    name_col_idx    = int(cfg.get("name_col", 1))
+    name_col_idx = int(cfg.get("name_col", 1))
     # Prefer the bot-maintained presence column when present. Falls
     # back to the legacy `not_on_discord` column for back-compat.
     presence_col = _find_col("is this user in discord?")
-    not_col  = _find_col("not_on_discord")
+    not_col = _find_col("not_on_discord")
     if not_col < 0:
         not_col = _find_col("not on discord")
 
@@ -212,9 +215,9 @@ def _read_roster_rows(
     has_presence_col = presence_col >= 0
 
     for row in values[1:]:
-        discord_id    = row[id_col].strip() if id_col < len(row) else ""
+        discord_id = row[id_col].strip() if id_col < len(row) else ""
         display_value = row[display_col_idx].strip() if display_col_idx < len(row) else ""
-        name_value    = row[name_col_idx].strip() if name_col_idx < len(row) else ""
+        name_value = row[name_col_idx].strip() if name_col_idx < len(row) else ""
         # Resolve the human-readable name: Display Name → Name →
         # live Discord member's display_name → discord_id (last resort).
         # Pre-#268 only checked Display Name and fell straight through
@@ -222,30 +225,34 @@ def _read_roster_rows(
         # with a blank Display Name surfaced as numeric IDs or as the
         # alliance's workaround text typed into the ID column.
         resolved_name = _resolve_member_name(
-            discord_id, display_value, name_value, guild,
+            discord_id,
+            display_value,
+            name_value,
+            guild,
         )
         if not (discord_id or display_value or name_value):
             continue
 
         # New presence column wins — bot writes this on every sync.
         if has_presence_col:
-            presence_cell = (
-                row[presence_col].strip().lower()
-                if presence_col < len(row) else ""
-            )
+            presence_cell = row[presence_col].strip().lower() if presence_col < len(row) else ""
             if presence_cell == "yes":
-                rows.append({
-                    "discord_id":     discord_id,
-                    "name":           resolved_name,
-                    "not_on_discord": False,
-                })
+                rows.append(
+                    {
+                        "discord_id": discord_id,
+                        "name": resolved_name,
+                        "not_on_discord": False,
+                    }
+                )
                 continue
             if presence_cell == "no":
-                rows.append({
-                    "discord_id":     discord_id,
-                    "name":           resolved_name,
-                    "not_on_discord": True,
-                })
+                rows.append(
+                    {
+                        "discord_id": discord_id,
+                        "name": resolved_name,
+                        "not_on_discord": True,
+                    }
+                )
                 continue
             # Blank → fall through to legacy + inference.
 
@@ -283,11 +290,13 @@ def _read_roster_rows(
                     inferred = True
                     stale_ids.append(f"{resolved_name or '?'} (id {discord_id})")
 
-        rows.append({
-            "discord_id":     discord_id,
-            "name":           resolved_name,
-            "not_on_discord": explicit_set or inferred,
-        })
+        rows.append(
+            {
+                "discord_id": discord_id,
+                "name": resolved_name,
+                "not_on_discord": explicit_set or inferred,
+            }
+        )
 
     if stale_ids:
         # Soft warning so leadership can clean up the roster Sheet.
@@ -296,8 +305,7 @@ def _read_roster_rows(
         preview = ", ".join(stale_ids[:5])
         extra = f" (+{len(stale_ids) - 5} more)" if len(stale_ids) > 5 else ""
         errors.append(
-            "stale Discord IDs on roster (member likely left the server): "
-            f"{preview}{extra}"
+            f"stale Discord IDs on roster (member likely left the server): {preview}{extra}"
         )
         # Dedup the log — refresh button + on-behalf picker re-call this
         # function on every click. Without the memo, a 5-stale-ID
@@ -309,7 +317,8 @@ def _read_roster_rows(
             _STALE_ID_LOG_MEMO.add(memo_key)
             logger.warning(
                 "[STORM OFFICER VIEW] stale roster Discord IDs for guild=%s: %s",
-                guild_id, "; ".join(stale_ids),
+                guild_id,
+                "; ".join(stale_ids),
             )
 
     return rows, errors
@@ -324,6 +333,7 @@ def _discord_member_pool(guild: discord.Guild) -> list[discord.Member]:
     role_filter_id = 0
     try:
         from config import get_member_roster_config
+
         roster_cfg = get_member_roster_config(guild.id)
         role_filter_id = int(roster_cfg.get("role_filter_id", 0) or 0)
     except Exception:
@@ -350,6 +360,7 @@ def _build_bucket_map(
               roster_errors)
     """
     import config
+
     rows = config.get_storm_signups(guild.id, event_type, event_date) if guild else []
     by_target: dict[str, dict] = {r["target_member_id"]: r for r in rows}
     # Lenient lookup: on-behalf votes stored before the picker's
@@ -387,19 +398,19 @@ def _build_bucket_map(
         bucket = row["vote"] if row else "not_voted"
         if bucket not in buckets:
             bucket = "not_voted"
-        buckets[bucket].append({
-            "label":          m.display_name,
-            "target_id":      target_id,
-            "is_on_behalf":   bool(row["is_on_behalf"]) if row else False,
-            "not_on_discord": False,
-        })
+        buckets[bucket].append(
+            {
+                "label": m.display_name,
+                "target_id": target_id,
+                "is_on_behalf": bool(row["is_on_behalf"]) if row else False,
+                "not_on_discord": False,
+            }
+        )
 
     # Non-Discord roster rows — read the alliance's roster Sheet and
     # surface every row flagged `not_on_discord` so leadership can see
     # who still needs an on-behalf vote BEFORE casting it.
-    roster_rows, roster_errors = (
-        _read_roster_rows(guild.id, guild=guild) if guild else ([], [])
-    )
+    roster_rows, roster_errors = _read_roster_rows(guild.id, guild=guild) if guild else ([], [])
     for r in roster_rows:
         if not r.get("not_on_discord"):
             continue
@@ -414,12 +425,14 @@ def _build_bucket_map(
         bucket = row["vote"] if row else "not_voted"
         if bucket not in buckets:
             bucket = "not_voted"
-        buckets[bucket].append({
-            "label":          r["name"],
-            "target_id":      target_id,
-            "is_on_behalf":   bool(row["is_on_behalf"]) if row else False,
-            "not_on_discord": True,
-        })
+        buckets[bucket].append(
+            {
+                "label": r["name"],
+                "target_id": target_id,
+                "is_on_behalf": bool(row["is_on_behalf"]) if row else False,
+                "not_on_discord": True,
+            }
+        )
 
     # On-behalf votes whose target wasn't matched above — phantom rows
     # from a pre-fix typo or a member removed from the roster. Surface
@@ -428,12 +441,14 @@ def _build_bucket_map(
         if target_id in seen_targets:
             continue
         bucket = row["vote"] if row["vote"] in buckets else "cannot"
-        buckets[bucket].append({
-            "label":          target_id,
-            "target_id":      target_id,
-            "is_on_behalf":   bool(row["is_on_behalf"]),
-            "not_on_discord": True,
-        })
+        buckets[bucket].append(
+            {
+                "label": target_id,
+                "target_id": target_id,
+                "is_on_behalf": bool(row["is_on_behalf"]),
+                "not_on_discord": True,
+            }
+        )
 
     # Sort each bucket alphabetically.
     for k in buckets:
@@ -442,10 +457,10 @@ def _build_bucket_map(
 
 
 _BUCKET_EMOJIS = {
-    "a":         "🅰️",
-    "b":         "🅱️",
-    "either":    "🔄",
-    "cannot":    "❌",
+    "a": "🅰️",
+    "b": "🅱️",
+    "either": "🔄",
+    "cannot": "❌",
     "not_voted": "❓",
 }
 
@@ -506,9 +521,7 @@ def _render_embed(
 
     # If any bucket holds a not-on-Discord entry, render a footnote so the
     # ¹ marker we add to each such entry isn't unexplained.
-    has_off_discord = any(
-        e.get("not_on_discord") for entries in buckets.values() for e in entries
-    )
+    has_off_discord = any(e.get("not_on_discord") for entries in buckets.values() for e in entries)
 
     desc_lines: list[str] = []
     truncated_buckets = False
@@ -569,8 +582,11 @@ def _render_embed(
     if team_plans is None:
         try:
             from config import get_storm_team_plans_for_event
+
             team_plans = get_storm_team_plans_for_event(
-                guild.id, event_type, event_date,
+                guild.id,
+                event_type,
+                event_date,
             )
         except Exception:
             team_plans = {}
@@ -587,9 +603,7 @@ def _render_embed(
                 inline=True,
             )
 
-    counts_line = " · ".join(
-        f"{_BUCKET_EMOJIS[k]} {len(buckets[k])}" for k in _BUCKET_ORDER
-    )
+    counts_line = " · ".join(f"{_BUCKET_EMOJIS[k]} {len(buckets[k])}" for k in _BUCKET_ORDER)
     embed.set_footer(text=counts_line)
     return embed
 
@@ -598,9 +612,9 @@ def _render_embed(
 
 
 _VOTE_CHOICES = [
-    ("Team A",        "a"),
-    ("Team B",        "b"),
-    ("Either time",   "either"),
+    ("Team A", "a"),
+    ("Team B", "b"),
+    ("Either time", "either"),
     ("Cannot participate", "cannot"),
 ]
 
@@ -609,7 +623,9 @@ _ON_BEHALF_PAGE_SIZE = 25
 
 
 def _vote_select_options(
-    event_type: str, guild_id: int, teams_setting: str,
+    event_type: str,
+    guild_id: int,
+    teams_setting: str,
     event_date: str | None = None,
 ) -> list[discord.SelectOption]:
     """Build the on-behalf Vote-select options to match the sign-up buttons.
@@ -623,9 +639,12 @@ def _vote_select_options(
     both-teams alliances see all four choices.
     """
     from config import get_storm_team_slot_labels
+
     try:
         team_a_label, team_b_label = get_storm_team_slot_labels(
-            guild_id, event_type, event_date,
+            guild_id,
+            event_type,
+            event_date,
         )
     except Exception:
         team_a_label, team_b_label = "", ""
@@ -656,25 +675,24 @@ def _vote_ack_label(vote: str) -> str:
     parent view embed already shows the slot timing, and the ack is
     explicitly an officer-side confirmation."""
     return {
-        "a":      "Team A",
-        "b":      "Team B",
+        "a": "Team A",
+        "b": "Team B",
         "either": "Either",
         "cannot": "Cannot",
     }.get(vote, vote)
 
 
 def _format_on_behalf_ack(
-    recorded: list[str], failed: list[str], vote: str,
+    recorded: list[str],
+    failed: list[str],
+    vote: str,
 ) -> str:
     """Build the on-behalf submit ack. Single-pick keeps the original
     phrasing; multi-pick gets a count + first-N-names preview + overflow
     hint. Partial-failure path tells the officer how many fell out."""
     label = _vote_ack_label(vote)
     if not recorded and failed:
-        return (
-            f"⚠️ Couldn't record any of the {len(failed)} on-behalf votes. "
-            "Check the bot logs."
-        )
+        return f"⚠️ Couldn't record any of the {len(failed)} on-behalf votes. Check the bot logs."
     if len(recorded) == 1 and not failed:
         return f"✅ Recorded on-behalf vote for **{recorded[0]}**."
 
@@ -682,14 +700,9 @@ def _format_on_behalf_ack(
     overflow = ""
     if len(recorded) > _ACK_NAME_PREVIEW:
         overflow = f", … +{len(recorded) - _ACK_NAME_PREVIEW} more"
-    msg = (
-        f"✅ Recorded **{len(recorded)} on-behalf vote(s)** ({label}): "
-        f"{preview}{overflow}."
-    )
+    msg = f"✅ Recorded **{len(recorded)} on-behalf vote(s)** ({label}): {preview}{overflow}."
     if failed:
-        msg += (
-            f"\n⚠️ {len(failed)} failed to record — check the bot logs."
-        )
+        msg += f"\n⚠️ {len(failed)} failed to record — check the bot logs."
     return msg
 
 
@@ -763,9 +776,7 @@ class _OnBehalfVoteView(discord.ui.View):
         if guild is not None:
             for gm in _discord_member_pool(guild):
                 key = gm.display_name.lower()
-                discord_members_by_name.setdefault(key, []).append(
-                    (str(gm.id), gm.name)
-                )
+                discord_members_by_name.setdefault(key, []).append((str(gm.id), gm.name))
         seen: set[str] = set()
         cleaned: list[dict] = []
         for m in members:
@@ -811,10 +822,12 @@ class _OnBehalfVoteView(discord.ui.View):
             # Discord match. Sort by username for a stable order across
             # picker rebuilds.
             for member_id, username in sorted(live_matches, key=lambda p: p[1].lower()):
-                cleaned.append({
-                    "name": f"{name} (@{username})",
-                    "target_id": member_id,
-                })
+                cleaned.append(
+                    {
+                        "name": f"{name} (@{username})",
+                        "target_id": member_id,
+                    }
+                )
         cleaned.sort(key=lambda r: r["name"].lower())
         # `_all_members` is the full roster post-dedup-sort. `members`
         # is a property that returns the filter-applied subset (hides
@@ -824,9 +837,7 @@ class _OnBehalfVoteView(discord.ui.View):
         # Cache a name→target_id map so the submit handler can resolve
         # without re-walking the list. Keys are lowercased to match the
         # case-insensitive picker dedup.
-        self._target_by_name = {
-            r["name"].lower(): r["target_id"] for r in cleaned
-        }
+        self._target_by_name = {r["name"].lower(): r["target_id"] for r in cleaned}
         self.page = 0
         # Multi-select state: picks accumulate across pages until Submit
         # fires. Insertion order is preserved for stable ack rendering.
@@ -848,10 +859,7 @@ class _OnBehalfVoteView(discord.ui.View):
         Read by `_members_for_page` and `page_count`."""
         if self.show_voted or not self.voted_target_ids:
             return self._all_members
-        return [
-            m for m in self._all_members
-            if m["target_id"] not in self.voted_target_ids
-        ]
+        return [m for m in self._all_members if m["target_id"] not in self.voted_target_ids]
 
     @property
     def not_voted_count(self) -> int:
@@ -860,10 +868,7 @@ class _OnBehalfVoteView(discord.ui.View):
         of `show_voted` — the shortcut always means "not-voted only"."""
         if not self.voted_target_ids:
             return len(self._all_members)
-        return sum(
-            1 for m in self._all_members
-            if m["target_id"] not in self.voted_target_ids
-        )
+        return sum(1 for m in self._all_members if m["target_id"] not in self.voted_target_ids)
 
     @property
     def page_count(self) -> int:
@@ -873,7 +878,7 @@ class _OnBehalfVoteView(discord.ui.View):
 
     def _members_for_page(self) -> list[dict]:
         start = self.page * _ON_BEHALF_PAGE_SIZE
-        return self.members[start:start + _ON_BEHALF_PAGE_SIZE]
+        return self.members[start : start + _ON_BEHALF_PAGE_SIZE]
 
     def _build_components(self):
         self.clear_items()
@@ -894,9 +899,7 @@ class _OnBehalfVoteView(discord.ui.View):
             # update vs. which were unticked on this page.
             selected_set = set(self.selected_members)
             page_names = {m["name"] for m in page_members}
-            picks_on_this_page = [
-                m["name"] for m in page_members if m["name"] in selected_set
-            ]
+            picks_on_this_page = [m["name"] for m in page_members if m["name"] in selected_set]
             member_options = [
                 discord.SelectOption(
                     label=m["name"][:100],
@@ -908,8 +911,7 @@ class _OnBehalfVoteView(discord.ui.View):
             placeholder = "Pick one or more members…"
             if self.selected_members:
                 placeholder = (
-                    f"Picked: {len(self.selected_members)} "
-                    f"(this page: {len(picks_on_this_page)})"
+                    f"Picked: {len(self.selected_members)} (this page: {len(picks_on_this_page)})"
                 )
             # `max_values` is capped at the page size — Discord rejects
             # `max_values > len(options)`. The 25-cap is enforced by
@@ -929,10 +931,7 @@ class _OnBehalfVoteView(discord.ui.View):
                 # picked on other pages survives. Without this, paging
                 # to page 2 + ticking new names would silently erase
                 # everything chosen on page 1.
-                kept = [
-                    name for name in self.selected_members
-                    if name not in page_names
-                ]
+                kept = [name for name in self.selected_members if name not in page_names]
                 self.selected_members = kept + list(member_select.values)
                 self._build_components()
                 try:
@@ -950,13 +949,15 @@ class _OnBehalfVoteView(discord.ui.View):
             event_date=getattr(self.parent_view, "event_date", None),
         )
         for opt in vote_options:
-            opt.default = (opt.value == self.selected_vote)
+            opt.default = opt.value == self.selected_vote
         vote_select = discord.ui.Select(
             placeholder=(
                 f"Picked: {dict((o.value, o.label) for o in vote_options).get(self.selected_vote, '')}"
-                if self.selected_vote else "Pick a vote…"
+                if self.selected_vote
+                else "Pick a vote…"
             ),
-            min_values=1, max_values=1,
+            min_values=1,
+            max_values=1,
             options=vote_options,
             row=1,
         )
@@ -978,8 +979,10 @@ class _OnBehalfVoteView(discord.ui.View):
         # 25-option Select cap.
         if self.page_count > 1:
             prev_btn = discord.ui.Button(
-                label="◀ Prev", style=discord.ButtonStyle.secondary,
-                disabled=(self.page == 0), row=2,
+                label="◀ Prev",
+                style=discord.ButtonStyle.secondary,
+                disabled=(self.page == 0),
+                row=2,
             )
 
             async def _on_prev(inter: discord.Interaction):
@@ -1001,13 +1004,16 @@ class _OnBehalfVoteView(discord.ui.View):
             page_label = discord.ui.Button(
                 label=f"Page {self.page + 1} / {self.page_count}",
                 style=discord.ButtonStyle.secondary,
-                disabled=True, row=2,
+                disabled=True,
+                row=2,
             )
             self.add_item(page_label)
 
             next_btn = discord.ui.Button(
-                label="Next ▶", style=discord.ButtonStyle.secondary,
-                disabled=(self.page >= self.page_count - 1), row=2,
+                label="Next ▶",
+                style=discord.ButtonStyle.secondary,
+                disabled=(self.page >= self.page_count - 1),
+                row=2,
             )
 
             async def _on_next(inter: discord.Interaction):
@@ -1030,7 +1036,8 @@ class _OnBehalfVoteView(discord.ui.View):
         if self.selected_members and self.selected_vote:
             submit_label = f"✅ Submit ({len(self.selected_members)})"
         submit_btn = discord.ui.Button(
-            label=submit_label, style=discord.ButtonStyle.primary,
+            label=submit_label,
+            style=discord.ButtonStyle.primary,
             disabled=not (self.selected_members and self.selected_vote),
             row=3,
         )
@@ -1038,7 +1045,9 @@ class _OnBehalfVoteView(discord.ui.View):
         self.add_item(submit_btn)
 
         cancel_btn = discord.ui.Button(
-            label="↩️ Cancel", style=discord.ButtonStyle.secondary, row=3,
+            label="↩️ Cancel",
+            style=discord.ButtonStyle.secondary,
+            row=3,
         )
         cancel_btn.callback = self._on_cancel
         self.add_item(cancel_btn)
@@ -1058,8 +1067,7 @@ class _OnBehalfVoteView(discord.ui.View):
             if not await self._guard_owner(inter):
                 return
             not_voted_names = [
-                m["name"] for m in self._all_members
-                if m["target_id"] not in self.voted_target_ids
+                m["name"] for m in self._all_members if m["target_id"] not in self.voted_target_ids
             ]
             # Replace, don't append — repeat clicks should stay
             # idempotent rather than dupe the list.
@@ -1136,12 +1144,11 @@ class _OnBehalfVoteView(discord.ui.View):
         # a phantom name-keyed bucket and the original Discord-ID-keyed
         # "Not voted yet" entry never moved.
         import config
+
         recorded: list[str] = []
         failed: list[str] = []
         for name in self.selected_members:
-            target_member_id = (
-                self._target_by_name.get(name.lower()) or name
-            )
+            target_member_id = self._target_by_name.get(name.lower()) or name
             ok = config.record_storm_vote(
                 self.parent_view.guild_id,
                 self.parent_view.event_type,
@@ -1166,9 +1173,11 @@ class _OnBehalfVoteView(discord.ui.View):
                 if self.parent_view.message is not None:
                     await self.parent_view.message.edit(
                         embed=_render_embed(
-                            self.parent_view.guild, self.parent_view.event_type,
+                            self.parent_view.guild,
+                            self.parent_view.event_type,
                             self.parent_view.event_date,
-                            self.parent_view.buckets, self.parent_view.bucket_filter,
+                            self.parent_view.buckets,
+                            self.parent_view.bucket_filter,
                         ),
                         view=self.parent_view,
                     )
@@ -1201,7 +1210,8 @@ class _OnBehalfVoteView(discord.ui.View):
         self.stop()
         try:
             await inter.response.edit_message(
-                content=CANCEL_BACKPEDAL_DEFAULT, view=self,
+                content=CANCEL_BACKPEDAL_DEFAULT,
+                view=self,
             )
         except discord.HTTPException:
             pass
@@ -1257,23 +1267,18 @@ class _TeamPlanRosterPickerView(discord.ui.View):
         self.message: discord.Message | None = None
         # Build a quick name lookup so step 2 can render display names
         # for the picked target_ids without re-querying the bucket map.
-        self.name_by_target_id: dict[str, str] = {
-            c["target_id"]: c["name"] for c in candidates
-        }
+        self.name_by_target_id: dict[str, str] = {c["target_id"]: c["name"] for c in candidates}
         self._build_components()
 
     @property
     def page_count(self) -> int:
         if not self.candidates:
             return 1
-        return (
-            (len(self.candidates) + _ON_BEHALF_PAGE_SIZE - 1)
-            // _ON_BEHALF_PAGE_SIZE
-        )
+        return (len(self.candidates) + _ON_BEHALF_PAGE_SIZE - 1) // _ON_BEHALF_PAGE_SIZE
 
     def _candidates_for_page(self) -> list[dict]:
         start = self.page * _ON_BEHALF_PAGE_SIZE
-        return self.candidates[start:start + _ON_BEHALF_PAGE_SIZE]
+        return self.candidates[start : start + _ON_BEHALF_PAGE_SIZE]
 
     def _build_components(self):
         self.clear_items()
@@ -1286,9 +1291,7 @@ class _TeamPlanRosterPickerView(discord.ui.View):
         if page_candidates:
             selected_set = set(self.selected_target_ids)
             page_ids = {c["target_id"] for c in page_candidates}
-            picks_on_this_page = [
-                c for c in page_candidates if c["target_id"] in selected_set
-            ]
+            picks_on_this_page = [c for c in page_candidates if c["target_id"] in selected_set]
             # Defensive: fall back to the target_id when name is
             # missing or empty. Discord rejects SelectOption with an
             # empty label, and bucket entries sometimes carry an
@@ -1321,10 +1324,7 @@ class _TeamPlanRosterPickerView(discord.ui.View):
             async def _on_pick(inter: discord.Interaction):
                 if not await self._guard_owner(inter):
                     return
-                kept = [
-                    tid for tid in self.selected_target_ids
-                    if tid not in page_ids
-                ]
+                kept = [tid for tid in self.selected_target_ids if tid not in page_ids]
                 self.selected_target_ids = kept + list(select.values)
                 self._build_components()
                 try:
@@ -1337,8 +1337,10 @@ class _TeamPlanRosterPickerView(discord.ui.View):
 
         if self.page_count > 1:
             prev_btn = discord.ui.Button(
-                label="◀ Prev", style=discord.ButtonStyle.secondary,
-                disabled=(self.page == 0), row=1,
+                label="◀ Prev",
+                style=discord.ButtonStyle.secondary,
+                disabled=(self.page == 0),
+                row=1,
             )
 
             async def _on_prev(inter: discord.Interaction):
@@ -1360,13 +1362,16 @@ class _TeamPlanRosterPickerView(discord.ui.View):
             page_label = discord.ui.Button(
                 label=f"Page {self.page + 1} / {self.page_count}",
                 style=discord.ButtonStyle.secondary,
-                disabled=True, row=1,
+                disabled=True,
+                row=1,
             )
             self.add_item(page_label)
 
             next_pg_btn = discord.ui.Button(
-                label="Page ▶", style=discord.ButtonStyle.secondary,
-                disabled=(self.page >= self.page_count - 1), row=1,
+                label="Page ▶",
+                style=discord.ButtonStyle.secondary,
+                disabled=(self.page >= self.page_count - 1),
+                row=1,
             )
 
             async def _on_next_page(inter: discord.Interaction):
@@ -1403,7 +1408,8 @@ class _TeamPlanRosterPickerView(discord.ui.View):
             self.stop()
             try:
                 await inter.response.edit_message(
-                    content="↪️ Pick the subs (up to 10)…", view=self,
+                    content="↪️ Pick the subs (up to 10)…",
+                    view=self,
                 )
             except discord.HTTPException:
                 pass
@@ -1412,7 +1418,9 @@ class _TeamPlanRosterPickerView(discord.ui.View):
         self.add_item(next_btn)
 
         cancel_btn = discord.ui.Button(
-            label="↩️ Cancel", style=discord.ButtonStyle.secondary, row=2,
+            label="↩️ Cancel",
+            style=discord.ButtonStyle.secondary,
+            row=2,
         )
 
         async def _on_cancel(inter: discord.Interaction):
@@ -1423,7 +1431,8 @@ class _TeamPlanRosterPickerView(discord.ui.View):
             self.stop()
             try:
                 await inter.response.edit_message(
-                    content=CANCEL_BACKPEDAL_DEFAULT, view=self,
+                    content=CANCEL_BACKPEDAL_DEFAULT,
+                    view=self,
                 )
             except discord.HTTPException:
                 pass
@@ -1433,7 +1442,8 @@ class _TeamPlanRosterPickerView(discord.ui.View):
 
         if self.has_prior_plan:
             clear_btn = discord.ui.Button(
-                label="🗑️ Clear plan", style=discord.ButtonStyle.danger,
+                label="🗑️ Clear plan",
+                style=discord.ButtonStyle.danger,
                 row=2,
             )
 
@@ -1441,6 +1451,7 @@ class _TeamPlanRosterPickerView(discord.ui.View):
                 if not await self._guard_owner(inter):
                     return
                 import config
+
                 config.clear_storm_team_plan(
                     self.parent_view.guild_id,
                     self.parent_view.event_type,
@@ -1453,7 +1464,8 @@ class _TeamPlanRosterPickerView(discord.ui.View):
                 self.stop()
                 try:
                     await inter.response.edit_message(
-                        content="🗑️ Plan cleared.", view=self,
+                        content="🗑️ Plan cleared.",
+                        view=self,
                     )
                 except discord.HTTPException:
                     pass
@@ -1503,9 +1515,7 @@ class _TeamPlanSubPickerView(discord.ui.View):
         # Drop any prior-sub IDs that aren't in the step-1 picks anymore
         # (officer might have deselected them).
         chosen_ids = {c["target_id"] for c in chosen}
-        self.selected_sub_ids: list[str] = [
-            tid for tid in prior_subs if tid in chosen_ids
-        ]
+        self.selected_sub_ids: list[str] = [tid for tid in prior_subs if tid in chosen_ids]
         self.saved: bool = False
         self.go_back: bool = False
         self.page = 0
@@ -1517,14 +1527,11 @@ class _TeamPlanSubPickerView(discord.ui.View):
     def page_count(self) -> int:
         if not self.chosen:
             return 1
-        return (
-            (len(self.chosen) + _ON_BEHALF_PAGE_SIZE - 1)
-            // _ON_BEHALF_PAGE_SIZE
-        )
+        return (len(self.chosen) + _ON_BEHALF_PAGE_SIZE - 1) // _ON_BEHALF_PAGE_SIZE
 
     def _chosen_for_page(self) -> list[dict]:
         start = self.page * _ON_BEHALF_PAGE_SIZE
-        return self.chosen[start:start + _ON_BEHALF_PAGE_SIZE]
+        return self.chosen[start : start + _ON_BEHALF_PAGE_SIZE]
 
     def _build_components(self):
         self.clear_items()
@@ -1537,9 +1544,7 @@ class _TeamPlanSubPickerView(discord.ui.View):
         if page_chosen:
             selected_set = set(self.selected_sub_ids)
             page_ids = {c["target_id"] for c in page_chosen}
-            picks_on_this_page = [
-                c for c in page_chosen if c["target_id"] in selected_set
-            ]
+            picks_on_this_page = [c for c in page_chosen if c["target_id"] in selected_set]
             # Same defensive fallback as the step-1 picker — an empty
             # name would 400 the whole message and silently break the
             # Mark-subs step.
@@ -1568,10 +1573,7 @@ class _TeamPlanSubPickerView(discord.ui.View):
             async def _on_pick(inter: discord.Interaction):
                 if not await self._guard_owner(inter):
                     return
-                kept = [
-                    tid for tid in self.selected_sub_ids
-                    if tid not in page_ids
-                ]
+                kept = [tid for tid in self.selected_sub_ids if tid not in page_ids]
                 self.selected_sub_ids = kept + list(select.values)
                 self._build_components()
                 try:
@@ -1584,8 +1586,10 @@ class _TeamPlanSubPickerView(discord.ui.View):
 
         if self.page_count > 1:
             prev_btn = discord.ui.Button(
-                label="◀ Prev", style=discord.ButtonStyle.secondary,
-                disabled=(self.page == 0), row=1,
+                label="◀ Prev",
+                style=discord.ButtonStyle.secondary,
+                disabled=(self.page == 0),
+                row=1,
             )
 
             async def _on_prev(inter: discord.Interaction):
@@ -1607,13 +1611,16 @@ class _TeamPlanSubPickerView(discord.ui.View):
             page_label = discord.ui.Button(
                 label=f"Page {self.page + 1} / {self.page_count}",
                 style=discord.ButtonStyle.secondary,
-                disabled=True, row=1,
+                disabled=True,
+                row=1,
             )
             self.add_item(page_label)
 
             next_pg_btn = discord.ui.Button(
-                label="Page ▶", style=discord.ButtonStyle.secondary,
-                disabled=(self.page >= self.page_count - 1), row=1,
+                label="Page ▶",
+                style=discord.ButtonStyle.secondary,
+                disabled=(self.page >= self.page_count - 1),
+                row=1,
             )
 
             async def _on_next_page(inter: discord.Interaction):
@@ -1634,10 +1641,7 @@ class _TeamPlanSubPickerView(discord.ui.View):
 
         sub_count = len(self.selected_sub_ids)
         primary_count = len(self.chosen) - sub_count
-        save_disabled = (
-            sub_count > STORM_PLAN_MAX_SUBS
-            or primary_count > STORM_PLAN_MAX_PRIMARIES
-        )
+        save_disabled = sub_count > STORM_PLAN_MAX_SUBS or primary_count > STORM_PLAN_MAX_PRIMARIES
         save_btn = discord.ui.Button(
             label=f"💾 Save plan ({primary_count} primary / {sub_count} sub)",
             style=discord.ButtonStyle.success,
@@ -1648,7 +1652,9 @@ class _TeamPlanSubPickerView(discord.ui.View):
         self.add_item(save_btn)
 
         back_btn = discord.ui.Button(
-            label="◀ Back", style=discord.ButtonStyle.secondary, row=2,
+            label="◀ Back",
+            style=discord.ButtonStyle.secondary,
+            row=2,
         )
 
         async def _on_back(inter: discord.Interaction):
@@ -1660,7 +1666,8 @@ class _TeamPlanSubPickerView(discord.ui.View):
             self.stop()
             try:
                 await inter.response.edit_message(
-                    content="◀ Back to player picker…", view=self,
+                    content="◀ Back to player picker…",
+                    view=self,
                 )
             except discord.HTTPException:
                 pass
@@ -1669,7 +1676,9 @@ class _TeamPlanSubPickerView(discord.ui.View):
         self.add_item(back_btn)
 
         cancel_btn = discord.ui.Button(
-            label="↩️ Cancel", style=discord.ButtonStyle.secondary, row=2,
+            label="↩️ Cancel",
+            style=discord.ButtonStyle.secondary,
+            row=2,
         )
 
         async def _on_cancel(inter: discord.Interaction):
@@ -1680,7 +1689,8 @@ class _TeamPlanSubPickerView(discord.ui.View):
             self.stop()
             try:
                 await inter.response.edit_message(
-                    content=CANCEL_BACKPEDAL_DEFAULT, view=self,
+                    content=CANCEL_BACKPEDAL_DEFAULT,
+                    view=self,
                 )
             except discord.HTTPException:
                 pass
@@ -1701,15 +1711,10 @@ class _TeamPlanSubPickerView(discord.ui.View):
         if not await self._guard_owner(inter):
             return
         sub_set = set(self.selected_sub_ids)
-        primaries = [
-            c["target_id"] for c in self.chosen
-            if c["target_id"] not in sub_set
-        ]
-        subs = [
-            c["target_id"] for c in self.chosen
-            if c["target_id"] in sub_set
-        ]
+        primaries = [c["target_id"] for c in self.chosen if c["target_id"] not in sub_set]
+        subs = [c["target_id"] for c in self.chosen if c["target_id"] in sub_set]
         import config
+
         ok, errors = config.save_storm_team_plan(
             self.parent_view.guild_id,
             self.parent_view.event_type,
@@ -1778,15 +1783,20 @@ def _build_team_plan_raw_pool(
             if not tid or tid in seen_target_ids:
                 continue
             seen_target_ids.add(tid)
-            raw_pool.append({
-                "name":      e.get("label") or e.get("name", ""),
-                "target_id": tid,
-            })
+            raw_pool.append(
+                {
+                    "name": e.get("label") or e.get("name", ""),
+                    "target_id": tid,
+                }
+            )
     return raw_pool
 
 
 async def _open_team_plan(
-    inter: discord.Interaction, officer_view: "OfficerView", *, team: str,
+    inter: discord.Interaction,
+    officer_view: "OfficerView",
+    *,
+    team: str,
 ) -> None:
     """Drive the two-step team-plan picker for one team (#239). Called
     from the 📋 Team A/B plan buttons on the officer view.
@@ -1806,10 +1816,12 @@ async def _open_team_plan(
     # Log entry so the click is at least visible in Railway logs even
     # if downstream silently fails. logger.info routes to stdout.
     logger.info(
-        "[STORM TEAM PLAN] open click for guild=%s event=%s/%s team=%s "
-        "by user=%s",
-        officer_view.guild_id, officer_view.event_type,
-        officer_view.event_date, team, inter.user.id,
+        "[STORM TEAM PLAN] open click for guild=%s event=%s/%s team=%s by user=%s",
+        officer_view.guild_id,
+        officer_view.event_type,
+        officer_view.event_date,
+        team,
+        inter.user.id,
     )
 
     # Defer immediately so any downstream blip (SQLite contention, slow
@@ -1828,7 +1840,10 @@ async def _open_team_plan(
         # have a record.
         logger.exception(
             "[STORM TEAM PLAN] defer failed for guild=%s event=%s team=%s: %s",
-            officer_view.guild_id, officer_view.event_type, team, e,
+            officer_view.guild_id,
+            officer_view.event_type,
+            team,
+            e,
         )
         raise
 
@@ -1844,12 +1859,14 @@ async def _open_team_plan(
         eligible_buckets = ("b", "either")
     else:
         await inter.followup.send(
-            f"⚠️ Unknown team `{team}`.", ephemeral=True,
+            f"⚠️ Unknown team `{team}`.",
+            ephemeral=True,
         )
         return
 
     raw_pool = _build_team_plan_raw_pool(
-        officer_view.buckets, eligible_buckets,
+        officer_view.buckets,
+        eligible_buckets,
     )
 
     # Cross-team filter: anyone already on the OTHER team's plan for
@@ -1857,25 +1874,25 @@ async def _open_team_plan(
     # is the backstop if two officers race; this is the friendly path.
     other_team = "B" if team == "A" else "A"
     other_plan = config.get_storm_team_plan(
-        officer_view.guild_id, officer_view.event_type,
-        officer_view.event_date, other_team,
+        officer_view.guild_id,
+        officer_view.event_type,
+        officer_view.event_date,
+        other_team,
     ) or {"primaries": [], "subs": []}
     other_claimed = set(other_plan["primaries"]) | set(other_plan["subs"])
     if other_claimed:
-        hidden_names = sorted({
-            c["name"] for c in raw_pool if c["target_id"] in other_claimed
-        })
-        candidates = [
-            c for c in raw_pool if c["target_id"] not in other_claimed
-        ]
+        hidden_names = sorted({c["name"] for c in raw_pool if c["target_id"] in other_claimed})
+        candidates = [c for c in raw_pool if c["target_id"] not in other_claimed]
     else:
         hidden_names = []
         candidates = list(raw_pool)
     candidates.sort(key=lambda c: c["name"].lower())
 
     prior_plan = config.get_storm_team_plan(
-        officer_view.guild_id, officer_view.event_type,
-        officer_view.event_date, team,
+        officer_view.guild_id,
+        officer_view.event_type,
+        officer_view.event_date,
+        team,
     )
     prior_picks: list[str] = []
     prior_subs: list[str] = []
@@ -1928,8 +1945,7 @@ async def _open_team_plan(
         sample = ", ".join(hidden_names[:3])
         more = f" +{n - 3} more" if n > 3 else ""
         intro_lines.append(
-            f"_{n} member(s) hidden — already on Team {other_team}: "
-            f"{sample}{more}._"
+            f"_{n} member(s) hidden — already on Team {other_team}: {sample}{more}._"
         )
 
     # Track the currently-visible picker so we can tear it down before
@@ -1953,15 +1969,22 @@ async def _open_team_plan(
         await _drop_prev_picker()
 
         step1 = _TeamPlanRosterPickerView(
-            officer_view, team, candidates, sorted(other_claimed),
-            prior_picks, prior_subs, prior_saved_at,
+            officer_view,
+            team,
+            candidates,
+            sorted(other_claimed),
+            prior_picks,
+            prior_subs,
+            prior_saved_at,
         )
         # Always use followup.send — we deferred up front so the initial
         # response slot is already consumed. Followup messages return a
         # Message object directly, no separate `original_response()` fetch.
         try:
             step1.message = await inter.followup.send(
-                "\n".join(intro_lines), view=step1, ephemeral=True,
+                "\n".join(intro_lines),
+                view=step1,
+                ephemeral=True,
             )
             prev_picker_msg = step1.message
         except discord.HTTPException as e:
@@ -1970,9 +1993,11 @@ async def _open_team_plan(
             # ever appeared. Re-raise so the outer `_plan_a` / `_plan_b`
             # wrapper logs + acks.
             logger.exception(
-                "[STORM TEAM PLAN] followup.send failed for guild=%s "
-                "event=%s team=%s: %s",
-                officer_view.guild_id, officer_view.event_type, team, e,
+                "[STORM TEAM PLAN] followup.send failed for guild=%s event=%s team=%s: %s",
+                officer_view.guild_id,
+                officer_view.event_type,
+                team,
+                e,
             )
             raise
 
@@ -1995,21 +2020,22 @@ async def _open_team_plan(
         # Preserve display name from step 1's candidate list so step 2
         # shows the same names; sort case-insensitively for stability.
         name_lookup = {c["target_id"]: c["name"] for c in candidates}
-        chosen = [
-            {"name": name_lookup.get(tid, tid), "target_id": tid}
-            for tid in chosen_ids
-        ]
+        chosen = [{"name": name_lookup.get(tid, tid), "target_id": tid} for tid in chosen_ids]
         chosen.sort(key=lambda c: c["name"].lower())
 
         step2 = _TeamPlanSubPickerView(
-            officer_view, team, chosen, prior_subs=prior_subs,
+            officer_view,
+            team,
+            chosen,
+            prior_subs=prior_subs,
         )
         try:
             step2.message = await inter.followup.send(
                 f"📋 **Team {team} plan** — Step 2 of 2. Mark up to "
                 f"**10** subs from the {len(chosen)} picked. The "
                 f"remaining will be primaries.",
-                view=step2, ephemeral=True,
+                view=step2,
+                ephemeral=True,
             )
             prev_picker_msg = step2.message
         except discord.HTTPException:
@@ -2048,6 +2074,7 @@ async def _refresh_officer_view_message(officer_view: "OfficerView") -> None:
     officer_view._build_components()  # rebuild button labels
     try:
         import config
+
         team_plans = config.get_storm_team_plans_for_event(
             officer_view.guild_id,
             officer_view.event_type,
@@ -2071,8 +2098,7 @@ async def _refresh_officer_view_message(officer_view: "OfficerView") -> None:
 class OfficerView(discord.ui.View):
     """Officer view for one event. Owns the bucket map + filter state."""
 
-    def __init__(self, guild: discord.Guild, owner_user_id: int,
-                 event_type: str, event_date: str):
+    def __init__(self, guild: discord.Guild, owner_user_id: int, event_type: str, event_date: str):
         super().__init__(timeout=900)
         self.guild = guild
         self.guild_id = guild.id
@@ -2104,6 +2130,7 @@ class OfficerView(discord.ui.View):
         officers know the buttons are dead. Matches the auto-post-view
         cleanup contract in CLAUDE.md."""
         from wizard_registry import expire_view_message
+
         hint = f"{HUB_COMMAND[self.event_type]} → **{HUB_BTN_VIEW_SIGNUPS}**"
         await expire_view_message(self.message, command_hint=hint)
 
@@ -2112,7 +2139,10 @@ class OfficerView(discord.ui.View):
         and rebuild the bucket map. Off the event loop so a slow
         gspread call doesn't stall the bot. Callers MUST await."""
         self.buckets, self.roster_errors = await asyncio.to_thread(
-            _build_bucket_map, self.guild, self.event_type, self.event_date,
+            _build_bucket_map,
+            self.guild,
+            self.event_type,
+            self.event_date,
         )
 
     def _build_components(self):
@@ -2120,15 +2150,15 @@ class OfficerView(discord.ui.View):
 
         # Filter dropdown
         filter_select = discord.ui.Select(
-            placeholder=("Filter bucket — currently: "
-                         f"{self.bucket_filter or 'All'}"),
-            min_values=1, max_values=1,
+            placeholder=(f"Filter bucket — currently: {self.bucket_filter or 'All'}"),
+            min_values=1,
+            max_values=1,
             options=[
-                discord.SelectOption(label="All buckets",  value="_all"),
-                discord.SelectOption(label=_BUCKET_LABELS["a"],         value="a"),
-                discord.SelectOption(label=_BUCKET_LABELS["b"],         value="b"),
-                discord.SelectOption(label=_BUCKET_LABELS["either"],    value="either"),
-                discord.SelectOption(label=_BUCKET_LABELS["cannot"],    value="cannot"),
+                discord.SelectOption(label="All buckets", value="_all"),
+                discord.SelectOption(label=_BUCKET_LABELS["a"], value="a"),
+                discord.SelectOption(label=_BUCKET_LABELS["b"], value="b"),
+                discord.SelectOption(label=_BUCKET_LABELS["either"], value="either"),
+                discord.SelectOption(label=_BUCKET_LABELS["cannot"], value="cannot"),
                 discord.SelectOption(label=_BUCKET_LABELS["not_voted"], value="not_voted"),
             ],
         )
@@ -2144,8 +2174,9 @@ class OfficerView(discord.ui.View):
             self.bucket_filter = None if choice == "_all" else choice
             self._build_components()
             await inter.response.edit_message(
-                embed=_render_embed(self.guild, self.event_type, self.event_date,
-                                    self.buckets, self.bucket_filter),
+                embed=_render_embed(
+                    self.guild, self.event_type, self.event_date, self.buckets, self.bucket_filter
+                ),
                 view=self,
             )
 
@@ -2173,7 +2204,9 @@ class OfficerView(discord.ui.View):
             except discord.HTTPException:
                 pass
             roster_rows, _errs = await asyncio.to_thread(
-                _read_roster_rows, self.guild_id, guild=self.guild,
+                _read_roster_rows,
+                self.guild_id,
+                guild=self.guild,
             )
             if not roster_rows:
                 # Permissive fallback path. Without a roster read, we can't
@@ -2189,6 +2222,7 @@ class OfficerView(discord.ui.View):
                     pass
                 return
             import config
+
             cfg = config.get_storm_config(self.guild_id, self.event_type) or {}
             teams_setting = (cfg.get("teams") or "both").strip()
             # Collect target_ids already in a vote bucket so the picker
@@ -2199,7 +2233,9 @@ class OfficerView(discord.ui.View):
                 for e in self.buckets.get(k, []):
                     voted_target_ids.add(e["target_id"])
             picker = _OnBehalfVoteView(
-                self, roster_rows, teams_setting,
+                self,
+                roster_rows,
+                teams_setting,
                 voted_target_ids=voted_target_ids,
             )
             try:
@@ -2212,11 +2248,13 @@ class OfficerView(discord.ui.View):
                         "the remaining roster in one click. `/members "
                         "sync` refreshes the list."
                     ),
-                    view=picker, ephemeral=True,
+                    view=picker,
+                    ephemeral=True,
                 )
                 picker.message = msg
             except discord.HTTPException:
                 pass
+
         on_behalf_btn.callback = _on_behalf
         self.add_item(on_behalf_btn)
 
@@ -2240,12 +2278,18 @@ class OfficerView(discord.ui.View):
             await self.refresh_buckets()
             try:
                 await inter.edit_original_response(
-                    embed=_render_embed(self.guild, self.event_type, self.event_date,
-                                        self.buckets, self.bucket_filter),
+                    embed=_render_embed(
+                        self.guild,
+                        self.event_type,
+                        self.event_date,
+                        self.buckets,
+                        self.bucket_filter,
+                    ),
                     view=self,
                 )
             except discord.HTTPException:
                 pass
+
         refresh_btn.callback = _refresh
         self.add_item(refresh_btn)
 
@@ -2261,6 +2305,7 @@ class OfficerView(discord.ui.View):
         # secondary. When no draft exists, the row shows a single
         # `[🅰️ Set up Team A]` success button (pre-#240 behaviour).
         from config import get_storm_config, get_roster_draft
+
         cfg = get_storm_config(self.guild_id, self.event_type) or {}
         teams_setting = (cfg.get("teams") or "both").strip()
         if teams_setting not in ("both", "A", "B"):
@@ -2276,6 +2321,7 @@ class OfficerView(discord.ui.View):
             render time. Format mirrors what the design source used:
             `May 21 8:42pm`."""
             from datetime import datetime, timezone
+
             try:
                 dt = datetime.fromisoformat(updated_at_iso)
                 if dt.tzinfo is None:
@@ -2283,18 +2329,17 @@ class OfficerView(discord.ui.View):
                 # Localize to the guild's timezone for human-readable
                 # labels (officers think in their alliance's local
                 # time, not UTC).
-                tz_name = (cfg.get("timezone") or "America/New_York")
+                tz_name = cfg.get("timezone") or "America/New_York"
                 try:
                     from zoneinfo import ZoneInfo
+
                     dt = dt.astimezone(ZoneInfo(tz_name))
                 except Exception:
                     pass
                 hour = dt.hour % 12 or 12
                 ampm = "am" if dt.hour < 12 else "pm"
                 month_label = dt.strftime("%b")  # Jan / Feb / Mar / ...
-                return (
-                    f"{month_label} {dt.day} {hour}:{dt.minute:02d}{ampm}"
-                )
+                return f"{month_label} {dt.day} {hour}:{dt.minute:02d}{ampm}"
             except (TypeError, ValueError):
                 return "earlier"
 
@@ -2303,19 +2348,25 @@ class OfficerView(discord.ui.View):
             when a draft exists, single `[Set up Team X]` otherwise.
             Row index passed in so caller controls layout placement."""
             draft = get_roster_draft(
-                self.guild_id, self.event_type, team_letter,
+                self.guild_id,
+                self.event_type,
+                team_letter,
             )
             has_draft = draft is not None
             if has_draft:
                 ts_label = _format_draft_timestamp(draft["updated_at"])
                 resume_btn = discord.ui.Button(
                     label=f"♻️ Resume Team {team_letter} ({ts_label})",
-                    style=discord.ButtonStyle.success, row=row,
+                    style=discord.ButtonStyle.success,
+                    row=row,
                 )
 
                 async def _resume(inter: discord.Interaction):
                     await _open_team_setup(
-                        inter, self, team=team_letter, resume=True,
+                        inter,
+                        self,
+                        team=team_letter,
+                        resume=True,
                     )
 
                 resume_btn.callback = _resume
@@ -2323,12 +2374,15 @@ class OfficerView(discord.ui.View):
 
                 fresh_btn = discord.ui.Button(
                     label=f"🆕 Set up new Team {team_letter} roster",
-                    style=discord.ButtonStyle.secondary, row=row,
+                    style=discord.ButtonStyle.secondary,
+                    row=row,
                 )
 
                 async def _fresh(inter: discord.Interaction):
                     await _confirm_discard_and_setup(
-                        inter, self, team=team_letter,
+                        inter,
+                        self,
+                        team=team_letter,
                     )
 
                 fresh_btn.callback = _fresh
@@ -2338,7 +2392,8 @@ class OfficerView(discord.ui.View):
                     label=f"🅰️ Set up Team {team_letter}"
                     if team_letter == "A"
                     else f"🅱️ Set up Team {team_letter}",
-                    style=discord.ButtonStyle.success, row=row,
+                    style=discord.ButtonStyle.success,
+                    row=row,
                 )
 
                 async def _setup(inter: discord.Interaction):
@@ -2365,13 +2420,21 @@ class OfficerView(discord.ui.View):
         # buttons above so single-team alliances don't see the other
         # team's button.
         from config import get_storm_team_plan as _get_team_plan
+
         if show_a:
-            plan_a_saved = _get_team_plan(
-                self.guild_id, self.event_type, self.event_date, "A",
-            ) is not None
+            plan_a_saved = (
+                _get_team_plan(
+                    self.guild_id,
+                    self.event_type,
+                    self.event_date,
+                    "A",
+                )
+                is not None
+            )
             a_plan_btn = discord.ui.Button(
                 label="📋 Team A plan" + (" ✅" if plan_a_saved else ""),
-                style=discord.ButtonStyle.secondary, row=3,
+                style=discord.ButtonStyle.secondary,
+                row=3,
             )
 
             async def _plan_a(inter: discord.Interaction):
@@ -2379,9 +2442,10 @@ class OfficerView(discord.ui.View):
                     await _open_team_plan(inter, self, team="A")
                 except Exception as e:
                     logger.exception(
-                        "[STORM TEAM PLAN] open failed for guild=%s "
-                        "event=%s team=A: %s",
-                        self.guild_id, self.event_type, e,
+                        "[STORM TEAM PLAN] open failed for guild=%s event=%s team=A: %s",
+                        self.guild_id,
+                        self.event_type,
+                        e,
                     )
                     try:
                         await inter.followup.send(
@@ -2397,12 +2461,19 @@ class OfficerView(discord.ui.View):
             self.add_item(a_plan_btn)
 
         if show_b:
-            plan_b_saved = _get_team_plan(
-                self.guild_id, self.event_type, self.event_date, "B",
-            ) is not None
+            plan_b_saved = (
+                _get_team_plan(
+                    self.guild_id,
+                    self.event_type,
+                    self.event_date,
+                    "B",
+                )
+                is not None
+            )
             b_plan_btn = discord.ui.Button(
                 label="📋 Team B plan" + (" ✅" if plan_b_saved else ""),
-                style=discord.ButtonStyle.secondary, row=3,
+                style=discord.ButtonStyle.secondary,
+                row=3,
             )
 
             async def _plan_b(inter: discord.Interaction):
@@ -2410,9 +2481,10 @@ class OfficerView(discord.ui.View):
                     await _open_team_plan(inter, self, team="B")
                 except Exception as e:
                     logger.exception(
-                        "[STORM TEAM PLAN] open failed for guild=%s "
-                        "event=%s team=B: %s",
-                        self.guild_id, self.event_type, e,
+                        "[STORM TEAM PLAN] open failed for guild=%s event=%s team=B: %s",
+                        self.guild_id,
+                        self.event_type,
+                        e,
                     )
                     try:
                         await inter.followup.send(
@@ -2429,7 +2501,10 @@ class OfficerView(discord.ui.View):
 
 
 async def _open_team_setup(
-    inter: discord.Interaction, officer_view: "OfficerView", *, team: str,
+    inter: discord.Interaction,
+    officer_view: "OfficerView",
+    *,
+    team: str,
     resume: bool = False,
 ) -> None:
     """Pick a preset, then hand off to the structured roster builder.
@@ -2454,12 +2529,16 @@ async def _open_team_setup(
     # fall through to the fresh-setup picker.
     if resume:
         import config
+
         draft = config.get_roster_draft(
-            officer_view.guild_id, officer_view.event_type, team,
+            officer_view.guild_id,
+            officer_view.event_type,
+            team,
         )
         if draft is not None:
             try:
                 import json
+
                 payload = json.loads(draft["session_json"])
                 preset_name = payload.get("selected_preset_name", "")
             except (ValueError, KeyError):
@@ -2473,15 +2552,18 @@ async def _open_team_setup(
                 # clearer error + a discard button so the officer
                 # can clean up the stale row.
                 import storm_strategy as ss
+
                 preset = await asyncio.to_thread(
                     ss.load_preset,
-                    officer_view.guild_id, officer_view.event_type,
+                    officer_view.guild_id,
+                    officer_view.event_type,
                     preset_name,
                 )
                 if preset is None:
                     orphan_view = _OrphanDraftDiscardView(
                         owner_id=inter.user.id,
-                        officer_view=officer_view, team=team,
+                        officer_view=officer_view,
+                        team=team,
                     )
                     await inter.response.send_message(
                         f"📋 The saved draft for **Team {team}** "
@@ -2490,7 +2572,8 @@ async def _open_team_setup(
                         f"(it may have been renamed or deleted). "
                         f"Discard the orphan draft and start fresh "
                         f"with a current preset?",
-                        view=orphan_view, ephemeral=True,
+                        view=orphan_view,
+                        ephemeral=True,
                     )
                     try:
                         orphan_view.message = await inter.original_response()
@@ -2499,8 +2582,11 @@ async def _open_team_setup(
                     return
                 await inter.response.defer(ephemeral=False, thinking=True)
                 from storm_roster_builder import open_roster_builder
+
                 await open_roster_builder(
-                    inter, officer_view.event_type, preset_name,
+                    inter,
+                    officer_view.event_type,
+                    preset_name,
                     event_date=officer_view.event_date,
                     team_override=team or None,
                     resume_from_draft=True,
@@ -2508,6 +2594,7 @@ async def _open_team_setup(
                 return
 
     import storm_strategy as ss
+
     preset_names = ss.list_presets(officer_view.guild_id, officer_view.event_type)
     if not preset_names:
         hub_cmd = HUB_COMMAND[officer_view.event_type]
@@ -2520,11 +2607,10 @@ async def _open_team_setup(
         return
 
     picker = _PresetPickerView(
-        owner_id=inter.user.id, preset_names=preset_names,
+        owner_id=inter.user.id,
+        preset_names=preset_names,
     )
-    team_label = (
-        "Team A" if team == "A" else "Team B" if team == "B" else "this roster"
-    )
+    team_label = "Team A" if team == "A" else "Team B" if team == "B" else "this roster"
     # #240 chain-from-confirm path: the discard-confirm view already
     # responded to `inter` via `edit_message`, so a follow-up has to
     # ride `interaction.followup.send`. Fresh path: `response` is
@@ -2532,11 +2618,15 @@ async def _open_team_setup(
     prompt = f"Pick a strategy preset to apply for **{team_label}**:"
     if inter.response.is_done():
         picker.message = await inter.followup.send(
-            prompt, view=picker, ephemeral=True,
+            prompt,
+            view=picker,
+            ephemeral=True,
         )
     else:
         await inter.response.send_message(
-            prompt, view=picker, ephemeral=True,
+            prompt,
+            view=picker,
+            ephemeral=True,
         )
         try:
             picker.message = await inter.original_response()
@@ -2551,15 +2641,21 @@ async def _open_team_setup(
     # interaction.followup. (The roster builder calls
     # `interaction.followup.send` on a deferred interaction by default.)
     from storm_roster_builder import open_roster_builder
+
     await open_roster_builder(
-        inter, officer_view.event_type, picker.selected_preset,
+        inter,
+        officer_view.event_type,
+        picker.selected_preset,
         event_date=officer_view.event_date,
         team_override=team or None,
     )
 
 
 async def _confirm_discard_and_setup(
-    inter: discord.Interaction, officer_view: "OfficerView", *, team: str,
+    inter: discord.Interaction,
+    officer_view: "OfficerView",
+    *,
+    team: str,
 ) -> None:
     """#240: when the officer clicks `🆕 Set up new Team X` and a saved
     draft exists, confirm before discarding the draft. Yes → delete
@@ -2573,8 +2669,11 @@ async def _confirm_discard_and_setup(
         return
 
     import config
+
     draft = config.get_roster_draft(
-        officer_view.guild_id, officer_view.event_type, team,
+        officer_view.guild_id,
+        officer_view.event_type,
+        team,
     )
     if draft is None:
         # Edge case — draft vanished between render and click. Go
@@ -2583,14 +2682,17 @@ async def _confirm_discard_and_setup(
         return
 
     confirm = _DiscardDraftConfirmView(
-        owner_id=inter.user.id, officer_view=officer_view, team=team,
+        owner_id=inter.user.id,
+        officer_view=officer_view,
+        team=team,
         draft_event_date=draft.get("event_date", ""),
     )
     await inter.response.send_message(
         f"⚠️ You have a saved roster draft for **Team {team}** from "
         f"**{draft.get('event_date', 'an earlier event')}**. Starting "
         f"fresh will discard it.",
-        view=confirm, ephemeral=True,
+        view=confirm,
+        ephemeral=True,
     )
     try:
         confirm.message = await inter.original_response()
@@ -2604,7 +2706,11 @@ class _DiscardDraftConfirmView(discord.ui.View):
     Cancel → close ephemeral, draft untouched."""
 
     def __init__(
-        self, *, owner_id: int, officer_view: "OfficerView", team: str,
+        self,
+        *,
+        owner_id: int,
+        officer_view: "OfficerView",
+        team: str,
         draft_event_date: str,
     ):
         super().__init__(timeout=120)
@@ -2623,13 +2729,12 @@ class _DiscardDraftConfirmView(discord.ui.View):
             return False
         return True
 
-    @discord.ui.button(label="Yes, start over",
-                       style=discord.ButtonStyle.danger)
-    async def confirm(self, inter: discord.Interaction,
-                      _btn: discord.ui.Button):
+    @discord.ui.button(label="Yes, start over", style=discord.ButtonStyle.danger)
+    async def confirm(self, inter: discord.Interaction, _btn: discord.ui.Button):
         if self.is_finished():
             return
         import config
+
         try:
             config.delete_roster_draft(
                 self.officer_view.guild_id,
@@ -2658,10 +2763,8 @@ class _DiscardDraftConfirmView(discord.ui.View):
         # instead by passing a fresh-state path.
         await _open_team_setup(inter, self.officer_view, team=self.team)
 
-    @discord.ui.button(label="↩️ Cancel",
-                       style=discord.ButtonStyle.secondary)
-    async def cancel(self, inter: discord.Interaction,
-                     _btn: discord.ui.Button):
+    @discord.ui.button(label="↩️ Cancel", style=discord.ButtonStyle.secondary)
+    async def cancel(self, inter: discord.Interaction, _btn: discord.ui.Button):
         if self.is_finished():
             return
         for item in self.children:
@@ -2684,7 +2787,11 @@ class _OrphanDraftDiscardView(discord.ui.View):
     forever, blocking future Resume clicks too."""
 
     def __init__(
-        self, *, owner_id: int, officer_view: "OfficerView", team: str,
+        self,
+        *,
+        owner_id: int,
+        officer_view: "OfficerView",
+        team: str,
     ):
         super().__init__(timeout=120)
         self.owner_id = owner_id
@@ -2701,13 +2808,12 @@ class _OrphanDraftDiscardView(discord.ui.View):
             return False
         return True
 
-    @discord.ui.button(label="🗑️ Discard orphan draft",
-                       style=discord.ButtonStyle.danger)
-    async def discard(self, inter: discord.Interaction,
-                      _btn: discord.ui.Button):
+    @discord.ui.button(label="🗑️ Discard orphan draft", style=discord.ButtonStyle.danger)
+    async def discard(self, inter: discord.Interaction, _btn: discord.ui.Button):
         if self.is_finished():
             return
         import config
+
         try:
             config.delete_roster_draft(
                 self.officer_view.guild_id,
@@ -2730,10 +2836,8 @@ class _OrphanDraftDiscardView(discord.ui.View):
             pass
         self.stop()
 
-    @discord.ui.button(label="↩️ Keep draft (do nothing)",
-                       style=discord.ButtonStyle.secondary)
-    async def keep(self, inter: discord.Interaction,
-                   _btn: discord.ui.Button):
+    @discord.ui.button(label="↩️ Keep draft (do nothing)", style=discord.ButtonStyle.secondary)
+    async def keep(self, inter: discord.Interaction, _btn: discord.ui.Button):
         if self.is_finished():
             return
         for item in self.children:
@@ -2759,13 +2863,11 @@ class _PresetPickerView(discord.ui.View):
         self.owner_id = owner_id
         self.selected_preset: Optional[str] = None
         self.message: Optional[discord.Message] = None
-        options = [
-            discord.SelectOption(label=n[:100], value=n[:100])
-            for n in preset_names[:25]
-        ]
+        options = [discord.SelectOption(label=n[:100], value=n[:100]) for n in preset_names[:25]]
         select = discord.ui.Select(
             placeholder="Pick a preset…",
-            min_values=1, max_values=1,
+            min_values=1,
+            max_values=1,
             options=options,
         )
 
@@ -2777,10 +2879,11 @@ class _PresetPickerView(discord.ui.View):
                 )
                 return
             self.selected_preset = select.values[0]
-            for item in self.children: item.disabled = True
+            for item in self.children:
+                item.disabled = True
             await inter.response.edit_message(
                 content=f"✅ Preset **{self.selected_preset}** selected. "
-                        f"opening the roster builder…",
+                f"opening the roster builder…",
                 view=self,
             )
             self.stop()
@@ -2842,11 +2945,10 @@ async def handle_storm_signups(
             return
         date_clean = parsed.isoformat()
 
-    feature_label = (
-        f"`/{'desertstorm' if et == 'DS' else 'canyonstorm'} signups`"
-    )
+    feature_label = f"`/{'desertstorm' if et == 'DS' else 'canyonstorm'} signups`"
     ok, _structured = await ensure_premium_structured(
-        interaction, et,
+        interaction,
+        et,
         bot=bot,
         feature_label=feature_label,
     )
@@ -2867,12 +2969,13 @@ async def handle_storm_signups(
     # path in `_read_roster_rows` still surfaces).
     try:
         import member_roster
+
         await member_roster._ensure_member_cache(interaction.guild)
     except Exception as e:
         logger.warning(
-            "[STORM OFFICER VIEW] guild.chunk() pre-pass failed for "
-            "guild=%s: %s",
-            interaction.guild_id, e,
+            "[STORM OFFICER VIEW] guild.chunk() pre-pass failed for guild=%s: %s",
+            interaction.guild_id,
+            e,
         )
 
     view = OfficerView(interaction.guild, interaction.user.id, et, date_clean)
@@ -2897,7 +3000,8 @@ async def handle_storm_signups(
         )
         logger.warning(
             "[STORM OFFICER VIEW] roster errors for guild=%s: %s",
-            interaction.guild_id, "; ".join(view.roster_errors),
+            interaction.guild_id,
+            "; ".join(view.roster_errors),
         )
     view.message = await interaction.followup.send(**followup_args)
 

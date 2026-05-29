@@ -44,16 +44,16 @@ logger = logging.getLogger(__name__)
 # produces them again. The constant + label are kept for that
 # back-compat read path only.
 
-STATUS_ATTENDED      = "attended"
-STATUS_NO_SHOW       = "no_show"
+STATUS_ATTENDED = "attended"
+STATUS_NO_SHOW = "no_show"
 STATUS_SUB_ACTIVATED = "sub_activated"  # legacy — read-only, never written
-STATUS_UNRECORDED    = ""
+STATUS_UNRECORDED = ""
 
 _STATUS_LABELS = {
-    STATUS_ATTENDED:      "✅ Attended",
-    STATUS_NO_SHOW:       "❌ Did not attend",
+    STATUS_ATTENDED: "✅ Attended",
+    STATUS_NO_SHOW: "❌ Did not attend",
     STATUS_SUB_ACTIVATED: "—",  # legacy renders as unrecorded
-    STATUS_UNRECORDED:    "—",
+    STATUS_UNRECORDED: "—",
 }
 # Statuses the officer can pick. `sub_activated` is read-only.
 _VALID_STATUSES = (STATUS_ATTENDED, STATUS_NO_SHOW)
@@ -67,13 +67,19 @@ _VALID_STATUSES = (STATUS_ATTENDED, STATUS_NO_SHOW)
 # the alliance's pre-cutover history; the bot no longer writes to it.
 
 _LEGACY_ATTENDANCE_HEADER = [
-    "Event Date", "Team", "Zone", "Member", "Status",
-    "Recorded By", "Recorded At (UTC)",
+    "Event Date",
+    "Team",
+    "Zone",
+    "Member",
+    "Status",
+    "Recorded By",
+    "Recorded At (UTC)",
 ]
 
 
 def _attendance_tab_name(guild_id: int, event_type: str) -> str:
     import config
+
     structured = config.get_structured_storm_config(guild_id, event_type)
     return structured.get("attendance_tab") or config.default_structured_tab(
         event_type, "attendance_tab"
@@ -82,10 +88,9 @@ def _attendance_tab_name(guild_id: int, event_type: str) -> str:
 
 def _rosters_tab_name(guild_id: int, event_type: str) -> str:
     import config
+
     structured = config.get_structured_storm_config(guild_id, event_type)
-    return structured.get("rosters_tab") or config.default_structured_tab(
-        event_type, "rosters_tab"
-    )
+    return structured.get("rosters_tab") or config.default_structured_tab(event_type, "rosters_tab")
 
 
 # Tab open/create uses `config.get_or_create_worksheet` so every
@@ -96,13 +101,16 @@ def _rosters_tab_name(guild_id: int, event_type: str) -> str:
 
 
 def load_rostered_slots(
-    guild_id: int, event_type: str, event_date: str,
+    guild_id: int,
+    event_type: str,
+    event_date: str,
 ) -> tuple[list[dict], list[str]]:
     """Read assigned slots for an event from rosters_tab. Returns
     `(slots, errors)`. Each slot is `{team, zone, member, discord_id,
     role}` — primary + sub rows both included so attendance can flag
     no-show subs the same way."""
     import config
+
     errors: list[str] = []
     try:
         sh = config.get_spreadsheet(guild_id)
@@ -172,8 +180,10 @@ def load_rostered_slots(
     # of scope).
     seen: set[tuple[str, str, str]] = set()
     for row in values[1:]:
+
         def _cell(idx: int) -> str:
             return row[idx].strip() if 0 <= idx < len(row) else ""
+
         if _cell(date_col) != event_date:
             continue
         member = _cell(member_col)
@@ -183,19 +193,23 @@ def load_rostered_slots(
         if key in seen:
             continue
         seen.add(key)
-        slots.append({
-            "team":       _cell(team_col),
-            "zone":       _cell(zone_col),
-            "member":     member,
-            "discord_id": _cell(id_col),
-            "role":       _cell(role_col) or "primary",
-            "override_below_floor": _cell(override_col).lower() in truthy,
-        })
+        slots.append(
+            {
+                "team": _cell(team_col),
+                "zone": _cell(zone_col),
+                "member": member,
+                "discord_id": _cell(id_col),
+                "role": _cell(role_col) or "primary",
+                "override_below_floor": _cell(override_col).lower() in truthy,
+            }
+        )
     return slots, errors
 
 
 def load_attendance(
-    guild_id: int, event_type: str, event_date: str,
+    guild_id: int,
+    event_type: str,
+    event_date: str,
     *,
     slots: Optional[list[dict]] = None,
 ) -> tuple[dict[tuple[str, str, str], dict], list[str]]:
@@ -227,7 +241,9 @@ def load_attendance(
 
     try:
         member_flags = _read_member_log_for_date(
-            guild_id, event_type, event_date,
+            guild_id,
+            event_type,
+            event_date,
         )
     except Exception as e:
         return {}, [f"member-log read failed: {e}"]
@@ -247,16 +263,18 @@ def load_attendance(
             continue
         key = (slot.get("team", ""), slot.get("zone", ""), member)
         out[key] = {
-            "status":       status,
-            "recorded_by":  "",   # Audit fields no longer captured.
-            "recorded_at":  "",
+            "status": status,
+            "recorded_by": "",  # Audit fields no longer captured.
+            "recorded_at": "",
         }
     _ = storm_log  # storm_log import kept for future audit-log hooks
     return out, errors
 
 
 def _read_member_log_for_date(
-    guild_id: int, event_type: str, event_date: str,
+    guild_id: int,
+    event_type: str,
+    event_date: str,
 ) -> dict[str, str]:
     """Read the `showed_up` column for the given event from the
     Per-Member Log tab. Returns `{member: flag}` where flag is
@@ -349,7 +367,9 @@ def _collapse_slot_statuses_to_member_flag(
 
 
 def save_attendance(
-    guild_id: int, event_type: str, event_date: str,
+    guild_id: int,
+    event_type: str,
+    event_date: str,
     *,
     statuses: dict[tuple[str, str, str], str],
     officer_id: int,
@@ -382,13 +402,14 @@ def save_attendance(
         return errors
 
     per_member_data = {
-        member: {storm_log.ATTENDANCE_QUESTION_KEY: value}
-        for member, value in flags.items()
+        member: {storm_log.ATTENDANCE_QUESTION_KEY: value} for member, value in flags.items()
     }
 
     try:
         storm_log.upsert_member_log_rows(
-            guild_id, event_type, event_date,
+            guild_id,
+            event_type,
+            event_date,
             per_member_data,
             [storm_log.ATTENDANCE_QUESTION_KEY],
         )
@@ -398,9 +419,11 @@ def save_attendance(
 
     recorded_count = sum(1 for v in flags.values() if v)
     logger.info(
-        "[STORM ATTENDANCE] %d member(s) recorded to Member Log "
-        "(guild=%s event=%s/%s)",
-        recorded_count, guild_id, event_type, event_date,
+        "[STORM ATTENDANCE] %d member(s) recorded to Member Log (guild=%s event=%s/%s)",
+        recorded_count,
+        guild_id,
+        event_type,
+        event_date,
     )
     # `officer_id` and `prior_existing` no longer drive the Sheet
     # write (the legacy `recorded_by` audit column rides on the now-
@@ -425,11 +448,11 @@ class _AttendanceSession:
         slots: list[dict],
         existing: dict[tuple[str, str, str], dict],
     ):
-        self.guild_id   = guild_id
-        self.user_id    = user_id
+        self.guild_id = guild_id
+        self.user_id = user_id
         self.event_type = event_type
         self.event_date = event_date
-        self.slots      = slots
+        self.slots = slots
         # statuses keyed by (team, zone, member) → status code.
         self.statuses: dict[tuple[str, str, str], str] = {}
         for slot in slots:
@@ -441,9 +464,9 @@ class _AttendanceSession:
         # for rows the officer didn't actually edit and (b) carry forward
         # any prior rows whose slot is no longer in `slots` (roster edit
         # between attendance sessions).
-        self.existing  = dict(existing)
-        self.page      = 0
-        self.per_page  = 25  # Discord Select option limit.
+        self.existing = dict(existing)
+        self.page = 0
+        self.per_page = 25  # Discord Select option limit.
 
     def slot_key(self, slot: dict) -> tuple[str, str, str]:
         return (slot["team"], slot["zone"], slot["member"])
@@ -455,7 +478,7 @@ class _AttendanceSession:
 
     def page_slots(self) -> list[dict]:
         start = self.page * self.per_page
-        return self.slots[start:start + self.per_page]
+        return self.slots[start : start + self.per_page]
 
     def counts(self) -> dict[str, int]:
         out = {s: 0 for s in _VALID_STATUSES}
@@ -471,8 +494,7 @@ def _render_embed(session: _AttendanceSession) -> discord.Embed:
     label = "Desert Storm" if session.event_type == "DS" else "Canyon Storm"
     embed = discord.Embed(
         title=f"📋 {label} Attendance: {format_event_date(session.event_date)}",
-        color=discord.Color.gold() if session.event_type == "DS"
-              else discord.Color.orange(),
+        color=discord.Color.gold() if session.event_type == "DS" else discord.Color.orange(),
     )
 
     if not session.slots:
@@ -493,6 +515,7 @@ def _render_embed(session: _AttendanceSession) -> discord.Embed:
         teams.setdefault(slot["team"] or "(no team)", []).append(slot)
 
     from storm_icons import zone_emoji_prefix
+
     lines: list[str] = []
     for team in sorted(teams.keys()):
         team_slots = teams[team]
@@ -511,18 +534,13 @@ def _render_embed(session: _AttendanceSession) -> discord.Embed:
             # line are dropped from the attendance UI. The Sheet still
             # records the flag for post-event audit, but officers
             # recording attendance don't need it surfaced.
-            lines.append(
-                f"{label_status} {slot['member']}{zone_part}{role_marker}"
-            )
+            lines.append(f"{label_status} {slot['member']}{zone_part}{role_marker}")
 
     # Rule K (#171): footer counts collapse from ✅ N · ❌ N · 🔄 N · — N
     # to ✅ N · ❌ N · — N. Any legacy `sub_activated` rows roll into
     # the unrecorded bucket since the UI renders them as `—`.
     counts = session.counts()
-    unrecorded = (
-        counts.get(STATUS_UNRECORDED, 0)
-        + counts.get(STATUS_SUB_ACTIVATED, 0)
-    )
+    unrecorded = counts.get(STATUS_UNRECORDED, 0) + counts.get(STATUS_SUB_ACTIVATED, 0)
     summary = (
         f"✅ {counts.get(STATUS_ATTENDED, 0)}  ·  "
         f"❌ {counts.get(STATUS_NO_SHOW, 0)}  ·  "
@@ -587,21 +605,24 @@ class _AttendanceView(discord.ui.View):
             desc = f"current: {_STATUS_LABELS.get(cur, '—')}"
             # Stable value: encoded as team|zone|member; max 100 chars.
             value = f"{slot['team']}|{slot['zone']}|{slot['member']}"[:100]
-            options.append(discord.SelectOption(
-                label=label[:100],
-                value=value,
-                description=desc[:100],
-                default=(key == self.selected_key),
-            ))
+            options.append(
+                discord.SelectOption(
+                    label=label[:100],
+                    value=value,
+                    description=desc[:100],
+                    default=(key == self.selected_key),
+                )
+            )
         picker = discord.ui.Select(
             placeholder=(
                 f"Picked: {self._selected_slot_label()}"
-                if self.selected_key else
-                "Pick a slot to record attendance "
-                "(or use the bulk-mark buttons below)…"
+                if self.selected_key
+                else "Pick a slot to record attendance (or use the bulk-mark buttons below)…"
             ),
-            min_values=1, max_values=1,
-            options=options, row=0,
+            min_values=1,
+            max_values=1,
+            options=options,
+            row=0,
         )
 
         async def _on_pick(inter: discord.Interaction):
@@ -632,14 +653,16 @@ class _AttendanceView(discord.ui.View):
 
         attended_btn = discord.ui.Button(
             label=mark_attended_label,
-            style=discord.ButtonStyle.success, row=1,
+            style=discord.ButtonStyle.success,
+            row=1,
         )
         attended_btn.callback = self._make_mark_callback(STATUS_ATTENDED)
         self.add_item(attended_btn)
 
         no_show_btn = discord.ui.Button(
             label=mark_no_show_label,
-            style=discord.ButtonStyle.danger, row=1,
+            style=discord.ButtonStyle.danger,
+            row=1,
         )
         no_show_btn.callback = self._make_mark_callback(STATUS_NO_SHOW)
         self.add_item(no_show_btn)
@@ -648,7 +671,8 @@ class _AttendanceView(discord.ui.View):
         # walk back a mistake on the currently-picked slot.
         clear_btn = discord.ui.Button(
             label="↩️ Clear selection",
-            style=discord.ButtonStyle.secondary, row=2,
+            style=discord.ButtonStyle.secondary,
+            row=2,
             disabled=self.selected_key is None,
         )
 
@@ -666,11 +690,15 @@ class _AttendanceView(discord.ui.View):
         # Row 3 — pagination (only rendered when total slots > one page).
         if s.total_pages() > 1:
             prev_btn = discord.ui.Button(
-                label="◀ Prev", style=discord.ButtonStyle.secondary, row=3,
+                label="◀ Prev",
+                style=discord.ButtonStyle.secondary,
+                row=3,
                 disabled=s.page == 0,
             )
             next_btn = discord.ui.Button(
-                label="Next ▶", style=discord.ButtonStyle.secondary, row=3,
+                label="Next ▶",
+                style=discord.ButtonStyle.secondary,
+                row=3,
                 disabled=s.page >= s.total_pages() - 1,
             )
 
@@ -696,7 +724,8 @@ class _AttendanceView(discord.ui.View):
         # Row 4 — Save.
         save_btn = discord.ui.Button(
             label="💾 Save attendance",
-            style=discord.ButtonStyle.primary, row=4,
+            style=discord.ButtonStyle.primary,
+            row=4,
         )
         save_btn.callback = self._on_save
         self.add_item(save_btn)
@@ -719,6 +748,7 @@ class _AttendanceView(discord.ui.View):
                     if not current:
                         s.statuses[key] = status
             await self._redraw(inter)
+
         return _cb
 
     async def _on_save(self, inter: discord.Interaction):
@@ -728,7 +758,9 @@ class _AttendanceView(discord.ui.View):
         await inter.response.defer(ephemeral=True, thinking=True)
         errors = await asyncio.to_thread(
             save_attendance,
-            s.guild_id, s.event_type, s.event_date,
+            s.guild_id,
+            s.event_type,
+            s.event_date,
             statuses=s.statuses,
             officer_id=inter.user.id,
             prior_existing=s.existing,
@@ -740,11 +772,9 @@ class _AttendanceView(discord.ui.View):
                 ephemeral=True,
             )
             return
-        recorded = (
-            counts.get(STATUS_ATTENDED, 0)
-            + counts.get(STATUS_NO_SHOW, 0)
-        )
+        recorded = counts.get(STATUS_ATTENDED, 0) + counts.get(STATUS_NO_SHOW, 0)
         from storm_date_helpers import format_event_date
+
         await inter.followup.send(
             f"✅ Saved attendance for **{format_event_date(s.event_date)}**: "
             f"{recorded} slot(s) recorded "
@@ -770,7 +800,8 @@ class _AttendanceView(discord.ui.View):
     async def _redraw(self, inter: discord.Interaction):
         self._build()
         await inter.response.edit_message(
-            embed=_render_embed(self.session), view=self,
+            embed=_render_embed(self.session),
+            view=self,
         )
 
     async def on_timeout(self):
@@ -800,11 +831,16 @@ async def handle_storm_attendance(
     event_date: Optional[str] = None,
 ) -> None:
     from storm_permissions import (
-        is_leader_or_admin, deny_non_leader, ensure_premium_structured,
+        is_leader_or_admin,
+        deny_non_leader,
+        ensure_premium_structured,
     )
     from storm_date_helpers import (
-        parse_event_date, most_recent_event_date, format_event_date,
+        parse_event_date,
+        most_recent_event_date,
+        format_event_date,
     )
+
     if not is_leader_or_admin(interaction):
         await deny_non_leader(interaction)
         return
@@ -837,7 +873,8 @@ async def handle_storm_attendance(
         date_clean = parsed.isoformat()
 
     ok, _structured = await ensure_premium_structured(
-        interaction, et,
+        interaction,
+        et,
         bot=bot,
         feature_label=f"the **{HUB_BTN_ATTENDANCE}** button on `{hub_cmd}`",
     )
@@ -852,11 +889,16 @@ async def handle_storm_attendance(
     # member-log read (one extra round-trip per officer command — the
     # ~30-member alliance overhead is negligible).
     slots, slot_errors = await asyncio.to_thread(
-        load_rostered_slots, interaction.guild_id, et, date_clean,
+        load_rostered_slots,
+        interaction.guild_id,
+        et,
+        date_clean,
     )
     existing, attendance_errors = await asyncio.to_thread(
         load_attendance,
-        interaction.guild_id, et, date_clean,
+        interaction.guild_id,
+        et,
+        date_clean,
         slots=slots,
     )
 
@@ -890,7 +932,8 @@ async def handle_storm_attendance(
     if attendance_errors:
         logger.warning(
             "[STORM ATTENDANCE] attendance read errors for guild=%s: %s",
-            interaction.guild_id, "; ".join(attendance_errors),
+            interaction.guild_id,
+            "; ".join(attendance_errors),
         )
         content = (
             "⚠️ Read existing attendance had issues. See bot logs. "

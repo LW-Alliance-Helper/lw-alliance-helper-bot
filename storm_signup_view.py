@@ -37,8 +37,8 @@ _VOTE_CODES = ("a", "b", "either", "cannot")
 
 # Human-readable confirmation messages for each vote code.
 _VOTE_CONFIRMATIONS = {
-    "a":      "Team A",
-    "b":      "Team B",
+    "a": "Team A",
+    "b": "Team B",
     "either": "Either time works",
     "cannot": "Cannot participate",
 }
@@ -68,10 +68,10 @@ def parse_custom_id(custom_id: str) -> dict | None:
     if vote not in _VOTE_CODES:
         return None
     return {
-        "guild_id":   guild_id,
+        "guild_id": guild_id,
         "event_type": event_type,
         "event_date": event_date,
-        "vote":       vote,
+        "vote": vote,
     }
 
 
@@ -82,7 +82,9 @@ _VIEW_SIGNUPS_PREFIX = "signup_view"
 
 
 def make_view_signups_custom_id(
-    guild_id: int, event_type: str, event_date: str,
+    guild_id: int,
+    event_type: str,
+    event_date: str,
 ) -> str:
     return f"{_VIEW_SIGNUPS_PREFIX}:{int(guild_id)}:{event_type.lower()}:{event_date}"
 
@@ -100,7 +102,7 @@ def parse_view_signups_custom_id(custom_id: str) -> dict | None:
     if event_type not in ("ds", "cs"):
         return None
     return {
-        "guild_id":   guild_id,
+        "guild_id": guild_id,
         "event_type": event_type,
         "event_date": event_date,
     }
@@ -109,8 +111,8 @@ def parse_view_signups_custom_id(custom_id: str) -> dict | None:
 # Poll-style ack embed labels (#258). Short labels chosen so the bars
 # render the same width regardless of which bucket is the longest text.
 _POLL_BUCKET_LABELS = {
-    "a":      "Team A",
-    "b":      "Team B",
+    "a": "Team A",
+    "b": "Team B",
     "either": "Either",
     "cannot": "Can't",
 }
@@ -167,18 +169,11 @@ def _render_vote_poll_embed(
             blocks = 0
         bar = "█" * blocks
         marker = "  ✓" if voter_vote == k else ""
-        bar_lines.append(
-            f"{_POLL_BUCKET_LABELS[k]:<7}{bar:<{_POLL_BAR_WIDTH}}  {c}{marker}"
-        )
+        bar_lines.append(f"{_POLL_BUCKET_LABELS[k]:<7}{bar:<{_POLL_BAR_WIDTH}}  {c}{marker}")
 
     total = sum(counts[k] for k in ordered)
 
-    description = (
-        "```\n"
-        + "\n".join(bar_lines)
-        + "\n```"
-        + f"\n**Total votes:** {total}"
-    )
+    description = "```\n" + "\n".join(bar_lines) + "\n```" + f"\n**Total votes:** {total}"
 
     color = discord.Color.gold() if event_type == "DS" else discord.Color.orange()
     return discord.Embed(
@@ -205,7 +200,7 @@ class SignupView(discord.ui.View):
         _force_all_buttons: bool = False,
     ):
         super().__init__(timeout=None)
-        self.guild_id   = int(guild_id)
+        self.guild_id = int(guild_id)
         self.event_type = event_type.lower()
         self.event_date = event_date
         # Button labels prefix the TEAM so members aren't guessing
@@ -230,15 +225,9 @@ class SignupView(discord.ui.View):
         # click handler (`_handle_signup_click`) rejects stale wrong-team
         # votes with a polite toast.
         teams_norm = teams if teams in ("both", "A", "B") else "both"
-        show_a = (
-            _force_all_buttons or teams_norm in ("both", "A")
-        )
-        show_b = (
-            _force_all_buttons or teams_norm in ("both", "B")
-        )
-        show_either = (
-            _force_all_buttons or teams_norm == "both"
-        )
+        show_a = _force_all_buttons or teams_norm in ("both", "A")
+        show_b = _force_all_buttons or teams_norm in ("both", "B")
+        show_either = _force_all_buttons or teams_norm == "both"
         if show_a:
             a_label = f"🅰️ Team A: {time_a_label}" if time_a_label else "🅰️ Team A"
             self._add_vote_button("a", a_label[:80], discord.ButtonStyle.success)
@@ -247,7 +236,9 @@ class SignupView(discord.ui.View):
             self._add_vote_button("b", b_label[:80], discord.ButtonStyle.success)
         if show_either:
             self._add_vote_button(
-                "either", "🔄 Either time works", discord.ButtonStyle.success,
+                "either",
+                "🔄 Either time works",
+                discord.ButtonStyle.success,
             )
         self._add_vote_button("cannot", "❌ Cannot participate", discord.ButtonStyle.danger)
         # Leadership-only sign-up breakdown button (#258). Always shown
@@ -271,7 +262,9 @@ class SignupView(discord.ui.View):
             label="👁️ View sign-ups",
             style=discord.ButtonStyle.secondary,
             custom_id=make_view_signups_custom_id(
-                self.guild_id, self.event_type, self.event_date,
+                self.guild_id,
+                self.event_type,
+                self.event_date,
             ),
             row=1,
         )
@@ -281,11 +274,15 @@ class SignupView(discord.ui.View):
     def _make_callback(self, vote_code: str):
         async def _cb(interaction: discord.Interaction):
             await _handle_signup_click(interaction, vote_code)
+
         return _cb
 
     async def _view_signups_callback(self, interaction: discord.Interaction):
         await _handle_view_signups_click(
-            interaction, self.guild_id, self.event_type, self.event_date,
+            interaction,
+            self.guild_id,
+            self.event_type,
+            self.event_date,
         )
 
 
@@ -320,10 +317,10 @@ async def _handle_signup_click(interaction: discord.Interaction, vote_code: str)
             pass
         return
 
-    guild_id   = parsed["guild_id"]
+    guild_id = parsed["guild_id"]
     event_type = parsed["event_type"].upper()
     event_date = parsed["event_date"]
-    vote       = parsed["vote"]
+    vote = parsed["vote"]
 
     # Sanity check: the click came from this guild. Discord routes by
     # message-id so the parsed guild_id should always match — but a
@@ -331,7 +328,8 @@ async def _handle_signup_click(interaction: discord.Interaction, vote_code: str)
     if interaction.guild_id != guild_id:
         logger.error(
             "[STORM SIGNUP] guild_id mismatch: parsed=%s interaction=%s",
-            guild_id, interaction.guild_id,
+            guild_id,
+            interaction.guild_id,
         )
         try:
             await interaction.response.send_message(
@@ -385,7 +383,9 @@ async def _handle_signup_click(interaction: discord.Interaction, vote_code: str)
     except discord.HTTPException as e:
         logger.warning(
             "[STORM SIGNUP] defer failed (guild=%s vote=%s): %s",
-            guild_id, vote, e,
+            guild_id,
+            vote,
+            e,
         )
         # If defer fails the interaction is probably already dead;
         # press on anyway so the vote at least lands in SQLite.
@@ -405,13 +405,15 @@ async def _handle_signup_click(interaction: discord.Interaction, vote_code: str)
             pass
         return
 
-    voter_id      = interaction.user.id
-    target_id     = str(voter_id)  # self-vote
-    channel_id    = interaction.channel_id or 0
-    message_id    = interaction.message.id if interaction.message else 0
+    voter_id = interaction.user.id
+    target_id = str(voter_id)  # self-vote
+    channel_id = interaction.channel_id or 0
+    message_id = interaction.message.id if interaction.message else 0
 
     config.record_storm_vote(
-        guild_id, event_type, event_date,
+        guild_id,
+        event_type,
+        event_date,
         voter_user_id=voter_id,
         target_member_id=target_id,
         vote=vote,
@@ -437,8 +439,11 @@ async def _handle_signup_click(interaction: discord.Interaction, vote_code: str)
         # specific week.
         try:
             from config import get_storm_team_slot_labels
+
             team_a_label, team_b_label = get_storm_team_slot_labels(
-                guild_id, event_type, event_date,
+                guild_id,
+                event_type,
+                event_date,
             )
         except Exception:
             team_a_label, team_b_label = "", ""
@@ -447,7 +452,9 @@ async def _handle_signup_click(interaction: discord.Interaction, vote_code: str)
             label = f"{label}: {slot_label}"
     try:
         embed = _render_vote_poll_embed(
-            guild_id, event_type, event_date,
+            guild_id,
+            event_type,
+            event_date,
             voter_vote=vote,
             voter_vote_label=label,
             teams_setting=teams_setting,
@@ -456,7 +463,9 @@ async def _handle_signup_click(interaction: discord.Interaction, vote_code: str)
     except discord.HTTPException as e:
         logger.warning(
             "[STORM SIGNUP] Failed to send vote ack to user %s in guild %s: %s",
-            voter_id, guild_id, e,
+            voter_id,
+            guild_id,
+            e,
         )
 
     # Sheet mirroring — best-effort, never rolls back SQLite.
@@ -477,7 +486,10 @@ async def _handle_signup_click(interaction: discord.Interaction, vote_code: str)
     except Exception as e:
         logger.warning(
             "[STORM SIGNUP] Sheet mirror failed for guild=%s event=%s/%s voter=%s: %s",
-            guild_id, event_type, event_date, voter_id,
+            guild_id,
+            event_type,
+            event_date,
+            voter_id,
             config.describe_sheet_error(e),
         )
 
@@ -486,13 +498,20 @@ async def _handle_signup_click(interaction: discord.Interaction, vote_code: str)
     # or bot restart can't trigger a second nudge for the same event.
     try:
         await _maybe_send_power_refresh_dm(
-            interaction, guild_id, event_type, event_date, voter_id,
+            interaction,
+            guild_id,
+            event_type,
+            event_date,
+            voter_id,
         )
     except Exception as e:
         logger.warning(
-            "[STORM SIGNUP] power-refresh DM check failed for "
-            "guild=%s event=%s/%s voter=%s: %s",
-            guild_id, event_type, event_date, voter_id, e,
+            "[STORM SIGNUP] power-refresh DM check failed for guild=%s event=%s/%s voter=%s: %s",
+            guild_id,
+            event_type,
+            event_date,
+            voter_id,
+            e,
         )
 
 
@@ -519,6 +538,7 @@ async def _maybe_send_power_refresh_dm(
     both pass the SELECT and both fire `user.send`.
     """
     import config
+
     structured = config.get_structured_storm_config(guild_id, event_type)
     if not structured.get("power_refresh_dm_enabled"):
         return
@@ -526,7 +546,10 @@ async def _maybe_send_power_refresh_dm(
     # Cheap cooldown check before any Sheet read — saves the Sheet
     # roundtrip on every subsequent re-vote by the same member.
     if config.has_power_refresh_dm_been_sent(
-        guild_id, event_type, event_date, voter_id,
+        guild_id,
+        event_type,
+        event_date,
+        voter_id,
     ):
         return
 
@@ -545,18 +568,22 @@ async def _maybe_send_power_refresh_dm(
     if guild is not None:
         try:
             import member_roster
+
             await member_roster._ensure_member_cache(guild)
         except Exception as e:
             logger.warning(
-                "[STORM SIGNUP] guild.chunk() pre-pass failed for "
-                "guild=%s: %s",
-                guild_id, e,
+                "[STORM SIGNUP] guild.chunk() pre-pass failed for guild=%s: %s",
+                guild_id,
+                e,
             )
     # `_read_roster_powers` does a gspread `get_all_values` — off the
     # event loop to keep the click handler from stalling every other
     # guild under Sheets rate-limit pressure.
     members, _errors = await asyncio.to_thread(
-        _read_roster_powers, guild_id, event_type, guild=guild,
+        _read_roster_powers,
+        guild_id,
+        event_type,
+        guild=guild,
     )
     voter_key = str(voter_id)
     voter_row = members.get(voter_key)
@@ -582,6 +609,7 @@ async def _maybe_send_power_refresh_dm(
         if stale_days > 0 and last_updated is not None:
             try:
                 import datetime as _dt
+
                 today = _dt.date.today()
                 age_days = (today - last_updated).days
                 if age_days >= stale_days:
@@ -600,7 +628,10 @@ async def _maybe_send_power_refresh_dm(
     # Claim the cooldown FIRST. If another concurrent click already
     # claimed it (insert returned False), bail before the DM send.
     inserted = config.record_power_refresh_dm_sent(
-        guild_id, event_type, event_date, voter_id,
+        guild_id,
+        event_type,
+        event_date,
+        voter_id,
     )
     if not inserted:
         return
@@ -615,14 +646,18 @@ async def _maybe_send_power_refresh_dm(
     # column out of range, etc.).
     try:
         from storm_roster_builder import _read_power_column_header
+
         header = await asyncio.to_thread(
-            _read_power_column_header, guild_id, event_type,
+            _read_power_column_header,
+            guild_id,
+            event_type,
         )
     except Exception as e:
         logger.warning(
-            "[STORM SIGNUP] power-refresh DM header lookup failed for "
-            "guild=%s event=%s: %s",
-            guild_id, event_type, e,
+            "[STORM SIGNUP] power-refresh DM header lookup failed for guild=%s event=%s: %s",
+            guild_id,
+            event_type,
+            e,
         )
         header = ""
     # Lead with the vote-recorded confirmation (#259) so members never
@@ -674,7 +709,8 @@ async def _maybe_send_power_refresh_dm(
         logger.info(
             "[STORM SIGNUP] power-refresh DM blocked by user %s in guild=%s "
             "(DMs disabled). Skipping nudge.",
-            voter_id, guild_id,
+            voter_id,
+            guild_id,
         )
     except discord.HTTPException as e:
         # Transient API error (503/502/rate limit) — the DM didn't
@@ -684,17 +720,23 @@ async def _maybe_send_power_refresh_dm(
         logger.warning(
             "[STORM SIGNUP] power-refresh DM HTTP error for user=%s guild=%s: %s "
             "(backing out cooldown so next click retries)",
-            voter_id, guild_id, e,
+            voter_id,
+            guild_id,
+            e,
         )
         try:
             config.clear_power_refresh_dm_sent(
-                guild_id, event_type, event_date, voter_id,
+                guild_id,
+                event_type,
+                event_date,
+                voter_id,
             )
         except Exception as clear_err:
             logger.warning(
-                "[STORM SIGNUP] cooldown back-out failed for user=%s "
-                "guild=%s: %s",
-                voter_id, guild_id, clear_err,
+                "[STORM SIGNUP] cooldown back-out failed for user=%s guild=%s: %s",
+                voter_id,
+                guild_id,
+                clear_err,
             )
 
 
@@ -719,8 +761,7 @@ async def _handle_view_signups_click(
     if not is_leader_or_admin(interaction):
         try:
             await interaction.response.send_message(
-                "🔒 Leadership only. This shows the full sign-up "
-                "breakdown.",
+                "🔒 Leadership only. This shows the full sign-up breakdown.",
                 ephemeral=True,
             )
         except discord.HTTPException:
@@ -732,7 +773,8 @@ async def _handle_view_signups_click(
     except discord.HTTPException as e:
         logger.warning(
             "[STORM SIGNUP] view-signups defer failed (guild=%s): %s",
-            guild_id, e,
+            guild_id,
+            e,
         )
 
     # Ensure the guild member cache is loaded — the bucket builder
@@ -742,12 +784,13 @@ async def _handle_view_signups_click(
     if interaction.guild is not None:
         try:
             import member_roster
+
             await member_roster._ensure_member_cache(interaction.guild)
         except Exception as e:
             logger.warning(
-                "[STORM SIGNUP] view-signups member-cache pre-pass "
-                "failed for guild=%s: %s",
-                guild_id, e,
+                "[STORM SIGNUP] view-signups member-cache pre-pass failed for guild=%s: %s",
+                guild_id,
+                e,
             )
 
     try:
@@ -755,7 +798,8 @@ async def _handle_view_signups_click(
     except ImportError as e:
         logger.warning(
             "[STORM SIGNUP] view-signups import failed (guild=%s): %s",
-            guild_id, e,
+            guild_id,
+            e,
         )
         try:
             await interaction.followup.send(
@@ -771,16 +815,23 @@ async def _handle_view_signups_click(
     try:
         buckets, _errs = await asyncio.to_thread(
             _build_bucket_map,
-            interaction.guild, event_type.upper(), event_date,
+            interaction.guild,
+            event_type.upper(),
+            event_date,
         )
         embed = _render_embed(
-            interaction.guild, event_type.upper(), event_date, buckets,
+            interaction.guild,
+            event_type.upper(),
+            event_date,
+            buckets,
         )
     except Exception as e:
         logger.warning(
-            "[STORM SIGNUP] view-signups build failed "
-            "(guild=%s event=%s/%s): %s",
-            guild_id, event_type, event_date, e,
+            "[STORM SIGNUP] view-signups build failed (guild=%s event=%s/%s): %s",
+            guild_id,
+            event_type,
+            event_date,
+            e,
         )
         try:
             await interaction.followup.send(
@@ -795,9 +846,9 @@ async def _handle_view_signups_click(
         await interaction.followup.send(embed=embed, ephemeral=True)
     except discord.HTTPException as e:
         logger.warning(
-            "[STORM SIGNUP] view-signups followup send failed "
-            "(guild=%s): %s",
-            guild_id, e,
+            "[STORM SIGNUP] view-signups followup send failed (guild=%s): %s",
+            guild_id,
+            e,
         )
 
 
@@ -832,10 +883,18 @@ def _mirror_vote_to_sheet(
     # Tab auto-creates via the shared helper. Alliance can rename
     # the tab later via setup; the bot will follow the renamed config.
     ws = config.get_or_create_worksheet(
-        sh, tab_name,
-        header_row=["Event Date", "Member", "Vote", "Voter Discord ID",
-                    "On Behalf?", "Voted At (UTC)"],
-        rows=1000, cols=6,
+        sh,
+        tab_name,
+        header_row=[
+            "Event Date",
+            "Member",
+            "Vote",
+            "Voter Discord ID",
+            "On Behalf?",
+            "Voted At (UTC)",
+        ],
+        rows=1000,
+        cols=6,
     )
 
     voted_at = _dt.datetime.now(_dt.timezone.utc).isoformat(timespec="seconds")
@@ -867,6 +926,7 @@ def register_persistent_signup_views(bot) -> int:
     so freshly-posted CS messages keep the 2-button visual shape.
     """
     import config
+
     posts = config.get_recent_storm_registration_posts()
     registered = 0
     for post in posts:
@@ -889,8 +949,11 @@ def register_persistent_signup_views(bot) -> int:
             logger.warning(
                 "[STORM SIGNUP] Failed to register SignupView for "
                 "guild=%s event=%s/%s message=%s: %s",
-                post["guild_id"], post["event_type"], post["event_date"],
-                post["message_id"], e,
+                post["guild_id"],
+                post["event_type"],
+                post["event_date"],
+                post["message_id"],
+                e,
             )
     if registered:
         logger.info("[STORM SIGNUP] Re-registered %d sign-up view(s) on startup", registered)

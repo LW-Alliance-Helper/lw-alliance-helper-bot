@@ -49,16 +49,16 @@ PROJECT_NUMBER = 2
 # These are stable across project sessions; confirm with
 # `gh project field-list 2 --owner LW-Alliance-Helper` if the project's
 # Status options are ever rebuilt.
-PROJECT_ID      = "PVT_kwDOEKcAYM4BWkGY"
+PROJECT_ID = "PVT_kwDOEKcAYM4BWkGY"
 STATUS_FIELD_ID = "PVTSSF_lADOEKcAYM4BWkGYzhR3O10"
 STATUS_OPTIONS = {
-    "Backlog":            "ba2535b0",
-    "Up Next":            "4e8153fa",
-    "In progress":        "84ab9a6f",
-    "In review":          "fcf39296",
-    "Ready for Release":  "c7676c23",
-    "Shipped":            "1c9d5aae",
-    "Canceled":           "6e1f842d",
+    "Backlog": "ba2535b0",
+    "Up Next": "4e8153fa",
+    "In progress": "84ab9a6f",
+    "In review": "fcf39296",
+    "Ready for Release": "c7676c23",
+    "Shipped": "1c9d5aae",
+    "Canceled": "6e1f842d",
 }
 
 # GitHub's close keywords (close/closes/closed, fix/fixes/fixed,
@@ -66,10 +66,10 @@ STATUS_OPTIONS = {
 # prefix for cross-repo refs, an optional `[` for markdown-linked refs
 # (`Closes [#123](url)`), then `#<number>`. Case-insensitive.
 CLOSE_KEYWORDS_RE = re.compile(
-    r'\b(?:close[sd]?|fix(?:e[sd])?|resolve[sd]?)\b[:\s]+'
-    r'\[?'
-    r'(?:([\w.-]+)/([\w.-]+))?'
-    r'#(\d+)',
+    r"\b(?:close[sd]?|fix(?:e[sd])?|resolve[sd]?)\b[:\s]+"
+    r"\[?"
+    r"(?:([\w.-]+)/([\w.-]+))?"
+    r"#(\d+)",
     re.IGNORECASE,
 )
 
@@ -233,14 +233,18 @@ def main():
     p.add_argument("--pr", type=int, help="PR number")
     p.add_argument("--commit", type=str, help="Commit SHA (looks up the merging PR)")
     p.add_argument("--status", required=True, help="Target status name")
-    p.add_argument("--issue", type=int, action="append", default=[],
-                   help="Issue number to set explicitly (repeatable). "
-                        "Bypasses PR lookup — useful for one-shot bootstraps.")
+    p.add_argument(
+        "--issue",
+        type=int,
+        action="append",
+        default=[],
+        help="Issue number to set explicitly (repeatable). "
+        "Bypasses PR lookup — useful for one-shot bootstraps.",
+    )
     args = p.parse_args()
 
     if args.status not in STATUS_OPTIONS:
-        sys.exit(f"Unknown status: {args.status!r} "
-                 f"(valid: {', '.join(STATUS_OPTIONS)})")
+        sys.exit(f"Unknown status: {args.status!r} (valid: {', '.join(STATUS_OPTIONS)})")
     option_id = STATUS_OPTIONS[args.status]
 
     issues = []

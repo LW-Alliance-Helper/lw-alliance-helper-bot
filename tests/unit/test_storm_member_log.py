@@ -71,24 +71,26 @@ def _make_sh(ws=None, raise_on_missing=False):
 
 
 class TestMemberLogTabName:
-
     def test_ds_lowercase_input(self):
         from storm_log import _member_log_tab_name
+
         assert _member_log_tab_name("ds") == "DS Member Log"
 
     def test_cs_uppercase_input(self):
         from storm_log import _member_log_tab_name
+
         assert _member_log_tab_name("CS") == "CS Member Log"
 
 
 class TestFormatMemberLogDate:
-
     def test_date_object_iso_formats(self):
         from storm_log import _format_member_log_date
+
         assert _format_member_log_date(date(2026, 5, 22)) == "2026-05-22"
 
     def test_string_passthrough(self):
         from storm_log import _format_member_log_date
+
         assert _format_member_log_date("2026-01-15") == "2026-01-15"
 
 
@@ -107,7 +109,9 @@ class TestUpsertMemberLogRows:
 
         with patch("storm_log._get_spreadsheet") as mock_sh:
             upsert_member_log_rows(
-                TEST_GUILD_ID, "DS", date(2026, 5, 22),
+                TEST_GUILD_ID,
+                "DS",
+                date(2026, 5, 22),
                 per_member_data={},
                 question_keys=["sat_out"],
             )
@@ -125,10 +129,12 @@ class TestUpsertMemberLogRows:
 
         with patch("storm_log._get_spreadsheet", return_value=sh):
             upsert_member_log_rows(
-                TEST_GUILD_ID, "DS", date(2026, 5, 22),
+                TEST_GUILD_ID,
+                "DS",
+                date(2026, 5, 22),
                 per_member_data={
                     "alice": {"sat_out": "yes"},
-                    "bob":   {"sat_out": "no"},
+                    "bob": {"sat_out": "no"},
                 },
                 question_keys=["sat_out"],
             )
@@ -141,7 +147,7 @@ class TestUpsertMemberLogRows:
         assert update_call.args[1] == [
             ["Event Date", "Member", "sat_out"],
             ["2026-05-22", "alice", "yes"],
-            ["2026-05-22", "bob",   "no"],
+            ["2026-05-22", "bob", "no"],
         ]
 
     def test_existing_tab_merges_new_question_column(self):
@@ -155,7 +161,9 @@ class TestUpsertMemberLogRows:
 
         with patch("storm_log._get_spreadsheet", return_value=sh):
             upsert_member_log_rows(
-                TEST_GUILD_ID, "DS", date(2026, 5, 22),
+                TEST_GUILD_ID,
+                "DS",
+                date(2026, 5, 22),
                 per_member_data={"alice": {"new_q": "yes"}},
                 question_keys=["new_q"],
             )
@@ -176,7 +184,9 @@ class TestUpsertMemberLogRows:
 
         with patch("storm_log._get_spreadsheet", return_value=sh):
             upsert_member_log_rows(
-                TEST_GUILD_ID, "DS", date(2026, 5, 22),
+                TEST_GUILD_ID,
+                "DS",
+                date(2026, 5, 22),
                 per_member_data={"alice": {"old_q": "yes"}},
                 question_keys=["old_q"],
             )
@@ -193,19 +203,23 @@ class TestUpsertMemberLogRows:
         Viewer can't double-count."""
         from storm_log import upsert_member_log_rows
 
-        ws = _make_ws([
-            ["Event Date", "Member", "sat_out"],
-            ["2026-05-22", "alice", "no"],   # ← will be replaced
-            ["2026-05-22", "bob",   "no"],   # ← will be replaced
-            ["2026-05-15", "alice", "yes"],  # ← preserved (different date)
-        ])
+        ws = _make_ws(
+            [
+                ["Event Date", "Member", "sat_out"],
+                ["2026-05-22", "alice", "no"],  # ← will be replaced
+                ["2026-05-22", "bob", "no"],  # ← will be replaced
+                ["2026-05-15", "alice", "yes"],  # ← preserved (different date)
+            ]
+        )
         sh = _make_sh(ws=ws)
         with patch("storm_log._get_spreadsheet", return_value=sh):
             upsert_member_log_rows(
-                TEST_GUILD_ID, "DS", date(2026, 5, 22),
+                TEST_GUILD_ID,
+                "DS",
+                date(2026, 5, 22),
                 per_member_data={
                     "alice": {"sat_out": "yes"},  # ← corrected
-                    "bob":   {"sat_out": "no"},
+                    "bob": {"sat_out": "no"},
                 },
                 question_keys=["sat_out"],
             )
@@ -217,7 +231,7 @@ class TestUpsertMemberLogRows:
             ["Event Date", "Member", "sat_out"],
             ["2026-05-15", "alice", "yes"],
             ["2026-05-22", "alice", "yes"],
-            ["2026-05-22", "bob",   "no"],
+            ["2026-05-22", "bob", "no"],
         ]
 
     def test_rerun_preserves_other_questions_for_same_member(self):
@@ -228,18 +242,22 @@ class TestUpsertMemberLogRows:
         from storm_log import upsert_member_log_rows
 
         # First write captures sit-out values.
-        ws = _make_ws([
-            ["Event Date", "Member", "sat_out"],
-            ["2026-05-22", "alice", "yes"],
-            ["2026-05-22", "bob",   "no"],
-        ])
+        ws = _make_ws(
+            [
+                ["Event Date", "Member", "sat_out"],
+                ["2026-05-22", "alice", "yes"],
+                ["2026-05-22", "bob", "no"],
+            ]
+        )
         sh = _make_sh(ws=ws)
         with patch("storm_log._get_spreadsheet", return_value=sh):
             upsert_member_log_rows(
-                TEST_GUILD_ID, "DS", date(2026, 5, 22),
+                TEST_GUILD_ID,
+                "DS",
+                date(2026, 5, 22),
                 per_member_data={
                     "alice": {"showed_up": "no"},
-                    "bob":   {"showed_up": "yes"},
+                    "bob": {"showed_up": "yes"},
                 },
                 question_keys=["showed_up"],
             )
@@ -260,13 +278,15 @@ class TestUpsertMemberLogRows:
 
 
 class TestReadMemberLogWindow:
-
     def test_missing_tab_returns_empty(self):
         from storm_log import read_member_log_window
+
         sh = _make_sh(raise_on_missing=True)
         with patch("storm_log._get_spreadsheet", return_value=sh):
             dates, rows = read_member_log_window(
-                TEST_GUILD_ID, "DS", lookback_events=4,
+                TEST_GUILD_ID,
+                "DS",
+                lookback_events=4,
                 question_key="sat_out",
             )
         assert dates == []
@@ -277,19 +297,23 @@ class TestReadMemberLogWindow:
         most recent 2, newest first."""
         from storm_log import read_member_log_window
 
-        ws = _make_ws([
-            ["Event Date", "Member", "sat_out"],
-            ["2026-05-01", "alice", "yes"],
-            ["2026-05-01", "bob",   "no"],
-            ["2026-05-08", "alice", "no"],
-            ["2026-05-08", "bob",   "yes"],
-            ["2026-05-15", "alice", "yes"],
-            ["2026-05-15", "bob",   "no"],
-        ])
+        ws = _make_ws(
+            [
+                ["Event Date", "Member", "sat_out"],
+                ["2026-05-01", "alice", "yes"],
+                ["2026-05-01", "bob", "no"],
+                ["2026-05-08", "alice", "no"],
+                ["2026-05-08", "bob", "yes"],
+                ["2026-05-15", "alice", "yes"],
+                ["2026-05-15", "bob", "no"],
+            ]
+        )
         sh = _make_sh(ws=ws)
         with patch("storm_log._get_spreadsheet", return_value=sh):
             dates, by_member = read_member_log_window(
-                TEST_GUILD_ID, "DS", lookback_events=2,
+                TEST_GUILD_ID,
+                "DS",
+                lookback_events=2,
                 question_key="sat_out",
             )
         assert dates == ["2026-05-15", "2026-05-08"]
@@ -307,14 +331,18 @@ class TestReadMemberLogWindow:
         empty results rather than crashing."""
         from storm_log import read_member_log_window
 
-        ws = _make_ws([
-            ["Event Date", "Member", "sat_out"],
-            ["2026-05-01", "alice", "yes"],
-        ])
+        ws = _make_ws(
+            [
+                ["Event Date", "Member", "sat_out"],
+                ["2026-05-01", "alice", "yes"],
+            ]
+        )
         sh = _make_sh(ws=ws)
         with patch("storm_log._get_spreadsheet", return_value=sh):
             dates, by_member = read_member_log_window(
-                TEST_GUILD_ID, "DS", lookback_events=4,
+                TEST_GUILD_ID,
+                "DS",
+                lookback_events=4,
                 question_key="never_configured",
             )
         assert dates == []
@@ -322,23 +350,26 @@ class TestReadMemberLogWindow:
 
 
 class TestCountMemberFlagsInWindow:
-
     def test_counts_truthy_yes_values(self):
         from storm_log import count_member_flags_in_window
 
-        ws = _make_ws([
-            ["Event Date", "Member", "sat_out"],
-            ["2026-05-01", "alice", "yes"],
-            ["2026-05-01", "bob",   "no"],
-            ["2026-05-08", "alice", "yes"],
-            ["2026-05-08", "bob",   "no"],
-            ["2026-05-15", "alice", "yes"],
-            ["2026-05-15", "bob",   "yes"],
-        ])
+        ws = _make_ws(
+            [
+                ["Event Date", "Member", "sat_out"],
+                ["2026-05-01", "alice", "yes"],
+                ["2026-05-01", "bob", "no"],
+                ["2026-05-08", "alice", "yes"],
+                ["2026-05-08", "bob", "no"],
+                ["2026-05-15", "alice", "yes"],
+                ["2026-05-15", "bob", "yes"],
+            ]
+        )
         sh = _make_sh(ws=ws)
         with patch("storm_log._get_spreadsheet", return_value=sh):
             counts = count_member_flags_in_window(
-                TEST_GUILD_ID, "DS", lookback_events=4,
+                TEST_GUILD_ID,
+                "DS",
+                lookback_events=4,
                 question_key="sat_out",
             )
         assert counts["alice"] == 3
@@ -347,16 +378,20 @@ class TestCountMemberFlagsInWindow:
     def test_false_and_zero_count_as_not_flagged(self):
         from storm_log import count_member_flags_in_window
 
-        ws = _make_ws([
-            ["Event Date", "Member", "sat_out"],
-            ["2026-05-01", "alice", "false"],
-            ["2026-05-01", "bob",   "0"],
-            ["2026-05-08", "alice", "yes"],
-        ])
+        ws = _make_ws(
+            [
+                ["Event Date", "Member", "sat_out"],
+                ["2026-05-01", "alice", "false"],
+                ["2026-05-01", "bob", "0"],
+                ["2026-05-08", "alice", "yes"],
+            ]
+        )
         sh = _make_sh(ws=ws)
         with patch("storm_log._get_spreadsheet", return_value=sh):
             counts = count_member_flags_in_window(
-                TEST_GUILD_ID, "DS", lookback_events=4,
+                TEST_GUILD_ID,
+                "DS",
+                lookback_events=4,
                 question_key="sat_out",
             )
         assert counts["alice"] == 1
@@ -367,13 +402,16 @@ class TestCountMemberFlagsInWindow:
 
 
 class TestPrefillFromDiscordPoll:
-
     def test_empty_signups_returns_empty(self):
         from storm_log import _prefill_from_discord_poll
+
         with patch("config.get_storm_signups", return_value=[]):
             out = _prefill_from_discord_poll(
-                TEST_GUILD_ID, "DS", "2026-05-22",
-                ["alice", "bob"], {},
+                TEST_GUILD_ID,
+                "DS",
+                "2026-05-22",
+                ["alice", "bob"],
+                {},
             )
         assert out == set()
 
@@ -381,16 +419,20 @@ class TestPrefillFromDiscordPoll:
         """`cannot` and missing-vote are excluded; `a`, `b`, `either`
         all count as attending."""
         from storm_log import _prefill_from_discord_poll
+
         rows = [
-            {"target_member_id": "alice",  "vote": "a"},
-            {"target_member_id": "bob",    "vote": "either"},
-            {"target_member_id": "carol",  "vote": "cannot"},
-            {"target_member_id": "dave",   "vote": "b"},
+            {"target_member_id": "alice", "vote": "a"},
+            {"target_member_id": "bob", "vote": "either"},
+            {"target_member_id": "carol", "vote": "cannot"},
+            {"target_member_id": "dave", "vote": "b"},
         ]
         with patch("config.get_storm_signups", return_value=rows):
             out = _prefill_from_discord_poll(
-                TEST_GUILD_ID, "DS", "2026-05-22",
-                ["alice", "bob", "carol", "dave"], {},
+                TEST_GUILD_ID,
+                "DS",
+                "2026-05-22",
+                ["alice", "bob", "carol", "dave"],
+                {},
             )
         assert out == {"alice", "bob", "dave"}
 
@@ -399,13 +441,17 @@ class TestPrefillFromDiscordPoll:
         on-behalf vote against an alias back to the canonical roster
         name."""
         from storm_log import _prefill_from_discord_poll
+
         rows = [
             {"target_member_id": "AliceTheTank", "vote": "a"},
         ]
         with patch("config.get_storm_signups", return_value=rows):
             out = _prefill_from_discord_poll(
-                TEST_GUILD_ID, "DS", "2026-05-22",
-                ["alice"], {"alicethetank": "alice"},
+                TEST_GUILD_ID,
+                "DS",
+                "2026-05-22",
+                ["alice"],
+                {"alicethetank": "alice"},
             )
         assert out == {"alice"}
 
@@ -414,24 +460,37 @@ class TestPrefillFromDiscordPoll:
         helper falls through to the Member Roster sheet for the
         Discord-ID → name lookup."""
         from storm_log import _prefill_from_discord_poll
+
         rows = [
             {"target_member_id": "111", "vote": "a"},
             {"target_member_id": "222", "vote": "either"},
         ]
-        roster_sheet = _make_ws([
-            ["Discord ID", "Name"],
-            ["111", "alice"],
-            ["222", "bob"],
-        ])
-        with patch("config.get_storm_signups", return_value=rows), \
-             patch("config.get_member_roster_config", return_value={
-                 "enabled": 1, "tab_name": "Members",
-                 "discord_id_col": 0, "name_col": 1,
-             }), \
-             patch("config.get_member_roster_sheet", return_value=roster_sheet):
+        roster_sheet = _make_ws(
+            [
+                ["Discord ID", "Name"],
+                ["111", "alice"],
+                ["222", "bob"],
+            ]
+        )
+        with (
+            patch("config.get_storm_signups", return_value=rows),
+            patch(
+                "config.get_member_roster_config",
+                return_value={
+                    "enabled": 1,
+                    "tab_name": "Members",
+                    "discord_id_col": 0,
+                    "name_col": 1,
+                },
+            ),
+            patch("config.get_member_roster_sheet", return_value=roster_sheet),
+        ):
             out = _prefill_from_discord_poll(
-                TEST_GUILD_ID, "DS", "2026-05-22",
-                ["alice", "bob"], {},
+                TEST_GUILD_ID,
+                "DS",
+                "2026-05-22",
+                ["alice", "bob"],
+                {},
             )
         assert out == {"alice", "bob"}
 
@@ -440,16 +499,21 @@ class TestPrefillFromDiscordPoll:
         can't be resolved. They drop silently — prefill is best-effort,
         not a source of truth."""
         from storm_log import _prefill_from_discord_poll
+
         rows = [
             {"target_member_id": "alice", "vote": "a"},  # resolves directly
-            {"target_member_id": "999",   "vote": "a"},  # unresolvable
+            {"target_member_id": "999", "vote": "a"},  # unresolvable
         ]
-        with patch("config.get_storm_signups", return_value=rows), \
-             patch("config.get_member_roster_config",
-                   return_value={"enabled": 0}):
+        with (
+            patch("config.get_storm_signups", return_value=rows),
+            patch("config.get_member_roster_config", return_value={"enabled": 0}),
+        ):
             out = _prefill_from_discord_poll(
-                TEST_GUILD_ID, "DS", "2026-05-22",
-                ["alice", "bob"], {},
+                TEST_GUILD_ID,
+                "DS",
+                "2026-05-22",
+                ["alice", "bob"],
+                {},
             )
         assert out == {"alice"}
 
@@ -458,15 +522,16 @@ class TestPrefillFromDiscordPoll:
 
 
 class TestPaginatedRosterMultiSelectView:
-
     def test_single_page_has_no_pagination_row(self):
         """When the roster fits in one page (≤25 names), no Prev/Next
         controls render. Just the Select + Save + Clear."""
         from storm_log import _PaginatedRosterMultiSelectView
+
         names = [f"member{i:02d}" for i in range(10)]
         v = _PaginatedRosterMultiSelectView(names, "Pick attendees")
         labels = {
-            getattr(c, "label", None) for c in v.children
+            getattr(c, "label", None)
+            for c in v.children
             if isinstance(c, __import__("discord").ui.Button)
         }
         assert "✅ Save" in labels
@@ -478,21 +543,22 @@ class TestPaginatedRosterMultiSelectView:
         """30 names → 2 pages → Prev / Page indicator / Next visible
         on page 0; Prev is disabled."""
         from storm_log import _PaginatedRosterMultiSelectView
+
         names = [f"member{i:02d}" for i in range(30)]
         v = _PaginatedRosterMultiSelectView(names, "Pick")
         import discord as _discord
-        buttons = {
-            c.label: c for c in v.children
-            if isinstance(c, _discord.ui.Button)
-        }
+
+        buttons = {c.label: c for c in v.children if isinstance(c, _discord.ui.Button)}
         assert "◀ Prev" in buttons
         assert "Next ▶" in buttons
         assert buttons["◀ Prev"].disabled is True
         assert buttons["Next ▶"].disabled is False
         # Page indicator label includes 1 / 2.
-        page_lbls = [c.label for c in v.children
-                     if isinstance(c, _discord.ui.Button)
-                     and c.label and c.label.startswith("Page ")]
+        page_lbls = [
+            c.label
+            for c in v.children
+            if isinstance(c, _discord.ui.Button) and c.label and c.label.startswith("Page ")
+        ]
         assert page_lbls == ["Page 1 / 2"]
 
     def test_preselected_marks_select_options_default(self):
@@ -500,13 +566,14 @@ class TestPaginatedRosterMultiSelectView:
         page render."""
         from storm_log import _PaginatedRosterMultiSelectView
         import discord as _discord
+
         names = ["alice", "bob", "carol"]
         v = _PaginatedRosterMultiSelectView(
-            names, "Pick", preselected={"alice", "carol"},
+            names,
+            "Pick",
+            preselected={"alice", "carol"},
         )
-        select = next(
-            c for c in v.children if isinstance(c, _discord.ui.Select)
-        )
+        select = next(c for c in v.children if isinstance(c, _discord.ui.Select))
         defaults = {o.value: o.default for o in select.options}
         assert defaults == {"alice": True, "bob": False, "carol": True}
 
@@ -515,6 +582,7 @@ class TestPaginatedRosterMultiSelectView:
         """Picking on page 0 then flipping to page 1 keeps page-0
         picks in `selected_set`; picking on page 1 merges."""
         from storm_log import _PaginatedRosterMultiSelectView
+
         names = [f"m{i:02d}" for i in range(30)]
         v = _PaginatedRosterMultiSelectView(names, "Pick")
 
@@ -542,8 +610,11 @@ class TestPaginatedRosterMultiSelectView:
     @pytest.mark.asyncio
     async def test_clear_all_resets_selection(self):
         from storm_log import _PaginatedRosterMultiSelectView
+
         v = _PaginatedRosterMultiSelectView(
-            ["alice", "bob"], "Pick", preselected={"alice"},
+            ["alice", "bob"],
+            "Pick",
+            preselected={"alice"},
         )
         inter = MagicMock()
         with patch("wizard_registry.safe_edit_response", AsyncMock()):
@@ -553,6 +624,7 @@ class TestPaginatedRosterMultiSelectView:
     @pytest.mark.asyncio
     async def test_save_sets_confirmed_and_stops_view(self):
         from storm_log import _PaginatedRosterMultiSelectView
+
         v = _PaginatedRosterMultiSelectView(["alice", "bob"], "Pick")
         v.selected_set = {"alice"}
         inter = MagicMock()
@@ -576,10 +648,9 @@ class TestLogDatePickerView:
     def test_today_and_yesterday_quick_picks_always_present(self):
         from storm_log import _LogDatePickerView
         import discord as _discord
+
         v = _LogDatePickerView(recent_dates=[])
-        select = next(
-            c for c in v.children if isinstance(c, _discord.ui.Select)
-        )
+        select = next(c for c in v.children if isinstance(c, _discord.ui.Select))
         values = [o.value for o in select.options]
         assert "__today__" in values
         assert "__yesterday__" in values
@@ -588,14 +659,12 @@ class TestLogDatePickerView:
     def test_recent_dates_listed_newest_first(self):
         from storm_log import _LogDatePickerView
         import discord as _discord
+
         v = _LogDatePickerView(
             recent_dates=["2026-05-15", "2026-05-08", "2026-05-01"],
         )
-        select = next(
-            c for c in v.children if isinstance(c, _discord.ui.Select)
-        )
-        dated_values = [o.value for o in select.options
-                        if not o.value.startswith("__")]
+        select = next(c for c in v.children if isinstance(c, _discord.ui.Select))
+        dated_values = [o.value for o in select.options if not o.value.startswith("__")]
         # Caller passes dates already sorted newest-first.
         assert dated_values == ["2026-05-15", "2026-05-08", "2026-05-01"]
 
@@ -605,15 +674,13 @@ class TestLogDatePickerView:
         from storm_log import _LogDatePickerView
         from datetime import date as _date, timedelta as _td
         import discord as _discord
+
         today_iso = _date.today().isoformat()
         v = _LogDatePickerView(
             recent_dates=[today_iso, "2026-04-01"],
         )
-        select = next(
-            c for c in v.children if isinstance(c, _discord.ui.Select)
-        )
-        dated_values = [o.value for o in select.options
-                        if not o.value.startswith("__")]
+        select = next(c for c in v.children if isinstance(c, _discord.ui.Select))
+        dated_values = [o.value for o in select.options if not o.value.startswith("__")]
         assert today_iso not in dated_values
         assert "2026-04-01" in dated_values
 
@@ -621,10 +688,9 @@ class TestLogDatePickerView:
     async def test_select_today_resolves_to_date(self):
         from storm_log import _LogDatePickerView
         from datetime import date as _date
+
         v = _LogDatePickerView(recent_dates=[])
-        select = next(
-            c for c in v.children if hasattr(c, "options")
-        )
+        select = next(c for c in v.children if hasattr(c, "options"))
         inter = MagicMock()
         inter.data = {"values": ["__today__"]}
         inter.response.edit_message = AsyncMock()
@@ -636,6 +702,7 @@ class TestLogDatePickerView:
     @pytest.mark.asyncio
     async def test_select_manual_flags_wants_manual(self):
         from storm_log import _LogDatePickerView
+
         v = _LogDatePickerView(recent_dates=["2026-05-15"])
         select = next(c for c in v.children if hasattr(c, "options"))
         inter = MagicMock()
@@ -649,6 +716,7 @@ class TestLogDatePickerView:
     async def test_select_saved_date_parses_iso(self):
         from storm_log import _LogDatePickerView
         from datetime import date as _date
+
         v = _LogDatePickerView(recent_dates=["2026-05-15"])
         select = next(c for c in v.children if hasattr(c, "options"))
         inter = MagicMock()
@@ -664,6 +732,7 @@ class TestCollectRecentEventDates:
 
     def test_returns_signup_dates_newest_first(self):
         from storm_log import _collect_recent_event_dates
+
         fake_rows = [
             {"event_date": "2026-04-24"},
             {"event_date": "2026-05-08"},
@@ -676,13 +745,16 @@ class TestCollectRecentEventDates:
         fake_conn.execute.return_value.fetchall = MagicMock(
             return_value=fake_rows,
         )
-        with patch("config._get_conn", return_value=fake_conn), \
-             patch("storm_history.list_event_dates", return_value=([], [])):
+        with (
+            patch("config._get_conn", return_value=fake_conn),
+            patch("storm_history.list_event_dates", return_value=([], [])),
+        ):
             dates = _collect_recent_event_dates(TEST_GUILD_ID, "DS")
         assert dates == ["2026-05-15", "2026-05-08", "2026-04-24"]
 
     def test_merges_signup_and_roster_sources(self):
         from storm_log import _collect_recent_event_dates
+
         fake_signup_rows = [{"event_date": "2026-05-15"}]
         fake_conn = MagicMock()
         fake_conn.__enter__ = MagicMock(return_value=fake_conn)
@@ -691,15 +763,19 @@ class TestCollectRecentEventDates:
         fake_conn.execute.return_value.fetchall = MagicMock(
             return_value=fake_signup_rows,
         )
-        with patch("config._get_conn", return_value=fake_conn), \
-             patch("storm_history.list_event_dates",
-                   return_value=(["2026-05-08", "2026-04-01"], [])):
+        with (
+            patch("config._get_conn", return_value=fake_conn),
+            patch(
+                "storm_history.list_event_dates", return_value=(["2026-05-08", "2026-04-01"], [])
+            ),
+        ):
             dates = _collect_recent_event_dates(TEST_GUILD_ID, "DS")
         # Three distinct dates, newest first.
         assert dates == ["2026-05-15", "2026-05-08", "2026-04-01"]
 
     def test_dedupe_across_sources(self):
         from storm_log import _collect_recent_event_dates
+
         fake_signup_rows = [{"event_date": "2026-05-15"}]
         fake_conn = MagicMock()
         fake_conn.__enter__ = MagicMock(return_value=fake_conn)
@@ -708,14 +784,16 @@ class TestCollectRecentEventDates:
         fake_conn.execute.return_value.fetchall = MagicMock(
             return_value=fake_signup_rows,
         )
-        with patch("config._get_conn", return_value=fake_conn), \
-             patch("storm_history.list_event_dates",
-                   return_value=(["2026-05-15"], [])):
+        with (
+            patch("config._get_conn", return_value=fake_conn),
+            patch("storm_history.list_event_dates", return_value=(["2026-05-15"], [])),
+        ):
             dates = _collect_recent_event_dates(TEST_GUILD_ID, "DS")
         assert dates == ["2026-05-15"]
 
     def test_malformed_dates_filtered(self):
         from storm_log import _collect_recent_event_dates
+
         fake_signup_rows = [
             {"event_date": "garbage"},
             {"event_date": "2026-13-50"},
@@ -728,17 +806,17 @@ class TestCollectRecentEventDates:
         fake_conn.execute.return_value.fetchall = MagicMock(
             return_value=fake_signup_rows,
         )
-        with patch("config._get_conn", return_value=fake_conn), \
-             patch("storm_history.list_event_dates",
-                   return_value=([], [])):
+        with (
+            patch("config._get_conn", return_value=fake_conn),
+            patch("storm_history.list_event_dates", return_value=([], [])),
+        ):
             dates = _collect_recent_event_dates(TEST_GUILD_ID, "DS")
         assert dates == ["2026-05-15"]
 
     def test_limit_respected(self):
         from storm_log import _collect_recent_event_dates
-        fake_signup_rows = [
-            {"event_date": f"2026-{m:02d}-15"} for m in range(1, 13)
-        ]
+
+        fake_signup_rows = [{"event_date": f"2026-{m:02d}-15"} for m in range(1, 13)]
         fake_conn = MagicMock()
         fake_conn.__enter__ = MagicMock(return_value=fake_conn)
         fake_conn.__exit__ = MagicMock(return_value=False)
@@ -746,12 +824,16 @@ class TestCollectRecentEventDates:
         fake_conn.execute.return_value.fetchall = MagicMock(
             return_value=fake_signup_rows,
         )
-        with patch("config._get_conn", return_value=fake_conn), \
-             patch("storm_history.list_event_dates",
-                   return_value=([], [])):
+        with (
+            patch("config._get_conn", return_value=fake_conn),
+            patch("storm_history.list_event_dates", return_value=([], [])),
+        ):
             dates = _collect_recent_event_dates(TEST_GUILD_ID, "DS", limit=4)
         assert len(dates) == 4
         # Newest 4 (sorted desc).
         assert dates == [
-            "2026-12-15", "2026-11-15", "2026-10-15", "2026-09-15",
+            "2026-12-15",
+            "2026-11-15",
+            "2026-10-15",
+            "2026-09-15",
         ]

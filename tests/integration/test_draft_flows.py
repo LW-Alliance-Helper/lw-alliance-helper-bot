@@ -15,6 +15,7 @@ configurable participation log (#20):
 These exercise the integration paths that the unit tests in test_storm.py
 and the gate smoke tests in test_command_coverage.py don't reach.
 """
+
 from __future__ import annotations
 
 import asyncio
@@ -31,27 +32,28 @@ from tests.conftest import TEST_GUILD_ID, PREMIUM_TEST_GUILD_ID, make_mock_inter
 
 # ── Helpers ───────────────────────────────────────────────────────────────────
 
+
 def _make_message():
     """Mock for the return of channel.send — has async edit/delete."""
-    msg        = MagicMock(id=999)
-    msg.edit   = AsyncMock(return_value=msg)
+    msg = MagicMock(id=999)
+    msg.edit = AsyncMock(return_value=msg)
     msg.delete = AsyncMock()
     return msg
 
 
 def _make_channel():
     """A channel mock that captures every send() call."""
-    ch          = AsyncMock()
-    ch.id       = 111111111111111111
-    ch.name     = "leadership"
-    ch.guild    = MagicMock(id=TEST_GUILD_ID)
+    ch = AsyncMock()
+    ch.id = 111111111111111111
+    ch.name = "leadership"
+    ch.guild = MagicMock(id=TEST_GUILD_ID)
     ch.guild.id = TEST_GUILD_ID
     ch.guild.get_channel = MagicMock(return_value=None)
-    ch._state   = MagicMock()
+    ch._state = MagicMock()
     ch._state.get_channel = MagicMock(return_value=None)
     # Each send returns a fresh message-like mock (so .edit/.delete are
     # AsyncMocks the wizard can await).
-    ch.send     = AsyncMock(side_effect=lambda *a, **kw: _make_message())
+    ch.send = AsyncMock(side_effect=lambda *a, **kw: _make_message())
     return ch
 
 
@@ -77,6 +79,7 @@ def _all_send_contents(channel):
 
 # ── Storm draft flow — timeout branches ───────────────────────────────────────
 
+
 class TestDsDraftFlowTimeouts:
     """run_ds_draft_flow exits gracefully on every timeout/cancel branch
     without dead-ending the user."""
@@ -85,16 +88,18 @@ class TestDsDraftFlowTimeouts:
     async def test_time_picker_timeout_exits_cleanly(self, seeded_db):
         from storm import run_ds_draft_flow
 
-        bot     = AsyncMock()
+        bot = AsyncMock()
         channel = _make_channel()
-        user    = MagicMock(id=42); user.mention = "@user"
+        user = MagicMock(id=42)
+        user.mention = "@user"
 
         # TimeSelectView's `selected` stays None after wait() → timeout
         with patch("storm.TimeSelectView") as MockTimeView:
             instance = MagicMock(selected=None, wait=AsyncMock())
             MockTimeView.return_value = instance
-            await run_ds_draft_flow(bot, channel, user, "A",
-                                     current_zones={"Z1": "names"}, current_subs=[])
+            await run_ds_draft_flow(
+                bot, channel, user, "A", current_zones={"Z1": "names"}, current_subs=[]
+            )
 
         # Should have surfaced the timeout message pointing at the hub
         # button (`📄 Generate mail` on `/desertstorm` since #187).
@@ -107,26 +112,31 @@ class TestDsDraftFlowTimeouts:
     async def test_template_choice_timeout_exits_cleanly(self, seeded_db):
         from storm import run_ds_draft_flow
 
-        bot     = AsyncMock()
+        bot = AsyncMock()
         channel = _make_channel()
-        user    = MagicMock(id=42); user.mention = "@user"
+        user = MagicMock(id=42)
+        user.mention = "@user"
 
         # Time-pick succeeds (returns "1"); template-choice times out (None).
-        with patch("storm.TimeSelectView") as MockTimeView, \
-             patch("storm.TemplateUseEditView") as MockTemplateView:
-            time_view     = MagicMock(selected="1", wait=AsyncMock())
-            template_view = MagicMock(choice=None,  wait=AsyncMock())
-            MockTimeView.return_value     = time_view
+        with (
+            patch("storm.TimeSelectView") as MockTimeView,
+            patch("storm.TemplateUseEditView") as MockTemplateView,
+        ):
+            time_view = MagicMock(selected="1", wait=AsyncMock())
+            template_view = MagicMock(choice=None, wait=AsyncMock())
+            MockTimeView.return_value = time_view
             MockTemplateView.return_value = template_view
 
-            await run_ds_draft_flow(bot, channel, user, "A",
-                                     current_zones={"Z1": "names"}, current_subs=[])
+            await run_ds_draft_flow(
+                bot, channel, user, "A", current_zones={"Z1": "names"}, current_subs=[]
+            )
 
         contents = _all_send_contents(channel)
         assert any("Timed out" in c for c in contents)
 
 
 # ── Storm draft flow — use-as-is happy path ───────────────────────────────────
+
 
 class TestDsDraftFlowUseAsIs:
     """When leadership clicks 'Use as-is', the flow skips editing and
@@ -139,25 +149,35 @@ class TestDsDraftFlowUseAsIs:
 
         # Configure storm so the draft flow has a tab + post-channel.
         config.save_storm_config(
-            TEST_GUILD_ID, "DS", "DS Tab", "Mail body for {time}",
-            "America/New_York", 0,
+            TEST_GUILD_ID,
+            "DS",
+            "DS Tab",
+            "Mail body for {time}",
+            "America/New_York",
+            0,
             post_channel_id=12345,
         )
 
-        bot     = AsyncMock()
+        bot = AsyncMock()
         channel = _make_channel()
-        user    = MagicMock(id=42); user.mention = "@user"
+        user = MagicMock(id=42)
+        user.mention = "@user"
 
-        with patch("storm.TimeSelectView") as MockTime, \
-             patch("storm.TemplateUseEditView") as MockTemplate, \
-             patch("storm._pick_storm_template", new=AsyncMock(return_value=None)):
-            time_view     = MagicMock(selected="1", wait=AsyncMock())
+        with (
+            patch("storm.TimeSelectView") as MockTime,
+            patch("storm.TemplateUseEditView") as MockTemplate,
+            patch("storm._pick_storm_template", new=AsyncMock(return_value=None)),
+        ):
+            time_view = MagicMock(selected="1", wait=AsyncMock())
             template_view = MagicMock(choice="use", wait=AsyncMock())
-            MockTime.return_value     = time_view
+            MockTime.return_value = time_view
             MockTemplate.return_value = template_view
 
             await run_ds_draft_flow(
-                bot, channel, user, "A",
+                bot,
+                channel,
+                user,
+                "A",
                 current_zones={"Nuclear Silo": "Alice"},
                 current_subs=[("Bob", "Carol")],
             )
@@ -166,13 +186,13 @@ class TestDsDraftFlowUseAsIs:
         # preview message starts with "Step 4 of 4 — Preview" or a
         # "📬" mail preview header.
         contents = _all_send_contents(channel)
-        assert any(
-            "Step 4 of 4" in c or "preview" in c.lower()
-            for c in contents
-        ), f"Preview step never reached. Sent: {contents}"
+        assert any("Step 4 of 4" in c or "preview" in c.lower() for c in contents), (
+            f"Preview step never reached. Sent: {contents}"
+        )
 
 
 # ── Storm draft flow — edit branch with cancel ────────────────────────────────
+
 
 class TestDsDraftFlowEditCancel:
     """User clicks Edit, then types `cancel` — flow exits with a clear
@@ -184,32 +204,42 @@ class TestDsDraftFlowEditCancel:
         from storm import run_ds_draft_flow
 
         config.save_storm_config(
-            TEST_GUILD_ID, "DS", "DS Tab", "Body",
-            "America/New_York", 0,
+            TEST_GUILD_ID,
+            "DS",
+            "DS Tab",
+            "Body",
+            "America/New_York",
+            0,
         )
 
-        bot     = AsyncMock()
+        bot = AsyncMock()
         # bot.wait_for returns the user's "cancel" reply
-        bot.wait_for = AsyncMock(
-            return_value=MagicMock(content="cancel", delete=AsyncMock())
-        )
+        bot.wait_for = AsyncMock(return_value=MagicMock(content="cancel", delete=AsyncMock()))
         channel = _make_channel()
-        user    = MagicMock(id=42); user.mention = "@user"
+        user = MagicMock(id=42)
+        user.mention = "@user"
 
         save_called = False
+
         def fake_save(*args, **kwargs):
             nonlocal save_called
             save_called = True
 
-        with patch("storm.TimeSelectView") as MockTime, \
-             patch("storm.TemplateUseEditView") as MockTemplate, \
-             patch("storm.save_ds_assignments", side_effect=fake_save):
-            MockTime.return_value     = MagicMock(selected="1", wait=AsyncMock())
+        with (
+            patch("storm.TimeSelectView") as MockTime,
+            patch("storm.TemplateUseEditView") as MockTemplate,
+            patch("storm.save_ds_assignments", side_effect=fake_save),
+        ):
+            MockTime.return_value = MagicMock(selected="1", wait=AsyncMock())
             MockTemplate.return_value = MagicMock(choice="edit", wait=AsyncMock())
 
             await run_ds_draft_flow(
-                bot, channel, user, "A",
-                current_zones={"Z1": "names"}, current_subs=[],
+                bot,
+                channel,
+                user,
+                "A",
+                current_zones={"Z1": "names"},
+                current_subs=[],
             )
 
         contents = _all_send_contents(channel)
@@ -218,6 +248,7 @@ class TestDsDraftFlowEditCancel:
 
 
 # ── _post_and_copy ────────────────────────────────────────────────────────────
+
 
 class TestPostAndCopyHelper:
     """The shared helper that posts the final mail to the configured
@@ -231,12 +262,14 @@ class TestPostAndCopyHelper:
         leadership.guild = MagicMock()
         post_channel = AsyncMock()
         post_channel.mention = "<#88888>"
-        post_channel.send    = AsyncMock()
+        post_channel.send = AsyncMock()
         leadership.guild.get_channel = MagicMock(return_value=post_channel)
 
         await _post_and_copy(
-            leadership, post_channel_id=88888,
-            event_label="Desert Storm", team="A",
+            leadership,
+            post_channel_id=88888,
+            event_label="Desert Storm",
+            team="A",
             mail="HELLO MAIL BODY",
         )
 
@@ -258,8 +291,10 @@ class TestPostAndCopyHelper:
         leadership = _make_channel()
 
         await _post_and_copy(
-            leadership, post_channel_id=0,
-            event_label="Canyon Storm", team="B",
+            leadership,
+            post_channel_id=0,
+            event_label="Canyon Storm",
+            team="B",
             mail="CS body",
         )
 
@@ -272,6 +307,7 @@ class TestPostAndCopyHelper:
 
 # ── Participation flow — gate when not enabled ────────────────────────────────
 
+
 class TestParticipationFlowGate:
     """run_log_flow refuses to run when participation is disabled or
     has no questions configured — and tells the user how to fix it."""
@@ -280,9 +316,10 @@ class TestParticipationFlowGate:
     async def test_disabled_participation_tells_user_to_set_up(self, seeded_db):
         from storm_log import run_log_flow
 
-        bot     = AsyncMock()
+        bot = AsyncMock()
         channel = _make_channel()
-        user    = MagicMock(id=42); user.mention = "@user"
+        user = MagicMock(id=42)
+        user.mention = "@user"
 
         await run_log_flow(bot, channel, user, "DS")
 
@@ -298,20 +335,29 @@ class TestParticipationFlowGate:
 
         # Enable participation but configure zero questions.
         config.save_storm_config(
-            TEST_GUILD_ID, "CS", "CS Tab", "Body",
-            "America/New_York", 0,
+            TEST_GUILD_ID,
+            "CS",
+            "CS Tab",
+            "Body",
+            "America/New_York",
+            0,
         )
         config.save_participation_config(
-            TEST_GUILD_ID, "CS",
-            enabled=1, tab_name="CS Participation Log",
+            TEST_GUILD_ID,
+            "CS",
+            enabled=1,
+            tab_name="CS Participation Log",
             questions=[],
-            roster_tab="Squad Powers", roster_name_col=0,
-            roster_alias_col=-1, roster_start_row=2,
+            roster_tab="Squad Powers",
+            roster_name_col=0,
+            roster_alias_col=-1,
+            roster_start_row=2,
         )
 
-        bot     = AsyncMock()
+        bot = AsyncMock()
         channel = _make_channel()
-        user    = MagicMock(id=42); user.mention = "@user"
+        user = MagicMock(id=42)
+        user.mention = "@user"
 
         await run_log_flow(bot, channel, user, "CS")
 
@@ -322,6 +368,7 @@ class TestParticipationFlowGate:
 
 
 # ── Participation flow — happy path ───────────────────────────────────────────
+
 
 class TestParticipationFlowHappyPath:
     """A guild with participation enabled walks through the configured
@@ -336,30 +383,41 @@ class TestParticipationFlowHappyPath:
         from storm_log import run_log_flow
 
         config.save_storm_config(
-            TEST_GUILD_ID, "DS", "DS Tab", "Body",
-            "America/New_York", 0,
+            TEST_GUILD_ID,
+            "DS",
+            "DS Tab",
+            "Body",
+            "America/New_York",
+            0,
         )
         config.save_participation_config(
-            TEST_GUILD_ID, "DS",
-            enabled=1, tab_name="DS Participation Log",
+            TEST_GUILD_ID,
+            "DS",
+            enabled=1,
+            tab_name="DS Participation Log",
             questions=[
                 {"key": "outcome", "label": "Outcome", "type": "text"},
                 {"key": "rescheduled", "label": "Rescheduled?", "type": "yes_no"},
             ],
-            roster_tab="Roster", roster_name_col=0,
-            roster_alias_col=-1, roster_start_row=2,
+            roster_tab="Roster",
+            roster_name_col=0,
+            roster_alias_col=-1,
+            roster_start_row=2,
         )
 
         bot = AsyncMock()
         # bot.wait_for returns Step-1 (date) then Step-2 (text answer)
-        wait_for_seq = iter([
-            MagicMock(content="today", delete=AsyncMock()),     # date
-            MagicMock(content="Win", delete=AsyncMock()),       # text
-        ])
+        wait_for_seq = iter(
+            [
+                MagicMock(content="today", delete=AsyncMock()),  # date
+                MagicMock(content="Win", delete=AsyncMock()),  # text
+            ]
+        )
         bot.wait_for = AsyncMock(side_effect=lambda *a, **kw: next(wait_for_seq))
 
         channel = _make_channel()
-        user    = MagicMock(id=42); user.mention = "@user"
+        user = MagicMock(id=42)
+        user.mention = "@user"
 
         # Two view types appear during run_log_flow:
         #   _LogDatePickerView (Step 1 — ac5d3dc) — has `wants_manual`;
@@ -371,27 +429,33 @@ class TestParticipationFlowHappyPath:
         def _resolve_view(view):
             if hasattr(view, "wants_manual"):
                 view.wants_manual = True
-                view.confirmed    = True
-            elif hasattr(view, "value"):
-                view.value     = True
                 view.confirmed = True
-            try: view.stop()
-            except Exception: pass
+            elif hasattr(view, "value"):
+                view.value = True
+                view.confirmed = True
+            try:
+                view.stop()
+            except Exception:
+                pass
 
         async def _send(content=None, view=None, **kw):
             if view is not None:
                 _resolve_view(view)
             return _make_message()
+
         channel.send = AsyncMock(side_effect=_send)
 
         captured = {}
+
         def fake_append(guild_id, event_type, log_date, answers):
-            captured.update({
-                "guild_id": guild_id,
-                "event_type": event_type,
-                "log_date": log_date,
-                "answers": answers,
-            })
+            captured.update(
+                {
+                    "guild_id": guild_id,
+                    "event_type": event_type,
+                    "log_date": log_date,
+                    "answers": answers,
+                }
+            )
 
         with patch("storm_log.append_participation_row", side_effect=fake_append):
             await run_log_flow(bot, channel, user, "DS")
@@ -405,6 +469,7 @@ class TestParticipationFlowHappyPath:
 
 # ── Participation flow — numeric retry on bad input ───────────────────────────
 
+
 class TestParticipationFlowNumericRetry:
     """Bad numeric input re-prompts up to 5 times instead of cancelling
     the whole log — matches the survey ask_numeric pattern."""
@@ -415,30 +480,41 @@ class TestParticipationFlowNumericRetry:
         from storm_log import run_log_flow
 
         config.save_storm_config(
-            TEST_GUILD_ID, "DS", "DS Tab", "Body",
-            "America/New_York", 0,
+            TEST_GUILD_ID,
+            "DS",
+            "DS Tab",
+            "Body",
+            "America/New_York",
+            0,
         )
         config.save_participation_config(
-            TEST_GUILD_ID, "DS",
-            enabled=1, tab_name="DS Participation Log",
+            TEST_GUILD_ID,
+            "DS",
+            enabled=1,
+            tab_name="DS Participation Log",
             questions=[
                 {"key": "vote_count", "label": "Vote Count", "type": "numeric"},
             ],
-            roster_tab="Roster", roster_name_col=0,
-            roster_alias_col=-1, roster_start_row=2,
+            roster_tab="Roster",
+            roster_name_col=0,
+            roster_alias_col=-1,
+            roster_start_row=2,
         )
 
         bot = AsyncMock()
         # Sequence: today, then bad input, then good number
-        replies = iter([
-            MagicMock(content="today",   delete=AsyncMock()),
-            MagicMock(content="not a #", delete=AsyncMock()),
-            MagicMock(content="42",      delete=AsyncMock()),
-        ])
+        replies = iter(
+            [
+                MagicMock(content="today", delete=AsyncMock()),
+                MagicMock(content="not a #", delete=AsyncMock()),
+                MagicMock(content="42", delete=AsyncMock()),
+            ]
+        )
         bot.wait_for = AsyncMock(side_effect=lambda *a, **kw: next(replies))
 
         channel = _make_channel()
-        user    = MagicMock(id=42); user.mention = "@user"
+        user = MagicMock(id=42)
+        user.mention = "@user"
 
         # The Step 1 date picker (ac5d3dc) is a discord.ui.View — it
         # hangs at view.wait() unless a callback resolves it. Route it
@@ -447,13 +523,17 @@ class TestParticipationFlowNumericRetry:
         async def _send(content=None, view=None, **kw):
             if view is not None and hasattr(view, "wants_manual"):
                 view.wants_manual = True
-                view.confirmed    = True
-                try: view.stop()
-                except Exception: pass
+                view.confirmed = True
+                try:
+                    view.stop()
+                except Exception:
+                    pass
             return _make_message()
+
         channel.send = AsyncMock(side_effect=_send)
 
         captured = {}
+
         def fake_append(guild_id, event_type, log_date, answers):
             captured.update(answers)
 

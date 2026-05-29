@@ -22,14 +22,15 @@ def _get_member_sheet_inner(tab_name: str, guild_id: int = None):
     scopes = ["https://www.googleapis.com/auth/spreadsheets"]
     credentials_json = os.getenv("GOOGLE_CREDENTIALS_JSON")
     if credentials_json:
-        info  = json.loads(credentials_json)
+        info = json.loads(credentials_json)
         creds = Credentials.from_service_account_info(info, scopes=scopes)
     else:
         key_file = os.getenv("GOOGLE_SERVICE_ACCOUNT_FILE", "service_account.json")
-        creds    = Credentials.from_service_account_file(key_file, scopes=scopes)
+        creds = Credentials.from_service_account_file(key_file, scopes=scopes)
 
     gc = gspread.authorize(creds)
     from config import get_spreadsheet_id
+
     sh = gc.open_by_key(get_spreadsheet_id(guild_id))
     return sh.worksheet(tab_name)
 
@@ -37,19 +38,47 @@ def _get_member_sheet_inner(tab_name: str, guild_id: int = None):
 # Month-name lookup used by parse_birthday. Includes full names plus 3-letter
 # and 4-letter abbreviations leadership commonly types ("Sept", "Sep").
 _BIRTHDAY_MONTH_MAP = {
-    "january": 1, "february": 2, "march": 3, "april": 4,
-    "may": 5, "june": 6, "july": 7, "august": 8,
-    "september": 9, "october": 10, "november": 11, "december": 12,
-    "jan": 1, "feb": 2, "mar": 3, "apr": 4, "jun": 6,
-    "jul": 7, "aug": 8, "sep": 9, "sept": 9,
-    "oct": 10, "nov": 11, "dec": 12,
+    "january": 1,
+    "february": 2,
+    "march": 3,
+    "april": 4,
+    "may": 5,
+    "june": 6,
+    "july": 7,
+    "august": 8,
+    "september": 9,
+    "october": 10,
+    "november": 11,
+    "december": 12,
+    "jan": 1,
+    "feb": 2,
+    "mar": 3,
+    "apr": 4,
+    "jun": 6,
+    "jul": 7,
+    "aug": 8,
+    "sep": 9,
+    "sept": 9,
+    "oct": 10,
+    "nov": 11,
+    "dec": 12,
 }
 
 # Days per month, with February allowing 29 to keep leap-year birthdays
 # (we don't know the year, so we accept Feb 29 even in non-leap years).
 _DAYS_IN_MONTH = {
-    1: 31, 2: 29, 3: 31, 4: 30, 5: 31, 6: 30,
-    7: 31, 8: 31, 9: 30, 10: 31, 11: 30, 12: 31,
+    1: 31,
+    2: 29,
+    3: 31,
+    4: 30,
+    5: 31,
+    6: 30,
+    7: 31,
+    8: 31,
+    9: 30,
+    10: 31,
+    11: 30,
+    12: 31,
 }
 
 
@@ -57,7 +86,6 @@ def _validate_month_day(month: int, day: int) -> bool:
     if not (1 <= month <= 12):
         return False
     return 1 <= day <= _DAYS_IN_MONTH[month]
-
 
 
 # ── Birthday sheet config ──────────────────────────────────────────────────────
@@ -72,19 +100,20 @@ def load_birthdays(tab_name: str, guild_id: int = None) -> list[dict]:
     Returns a list of { "name": str, "month": int, "day": int }
     """
     from config import get_birthday_config
-    bcfg         = get_birthday_config(guild_id) if guild_id else {}
-    name_col     = bcfg.get("name_col", 4)
-    bday_col     = bcfg.get("birthday_col", 8)
-    start_row    = bcfg.get("data_start_row", 10)
-    min_cols     = max(name_col, bday_col) + 1
+
+    bcfg = get_birthday_config(guild_id) if guild_id else {}
+    name_col = bcfg.get("name_col", 4)
+    bday_col = bcfg.get("birthday_col", 8)
+    start_row = bcfg.get("data_start_row", 10)
+    min_cols = max(name_col, bday_col) + 1
     try:
-        ws   = _get_member_sheet_inner(tab_name, guild_id)
+        ws = _get_member_sheet_inner(tab_name, guild_id)
         rows = ws.get_all_values()
         members = []
-        for row in rows[start_row - 1:]:
+        for row in rows[start_row - 1 :]:
             if len(row) < min_cols:
                 continue
-            name     = row[name_col].strip()
+            name = row[name_col].strip()
             bday_raw = row[bday_col].strip()
             if not name or not bday_raw:
                 continue
@@ -103,13 +132,16 @@ def load_birthdays(tab_name: str, guild_id: int = None) -> list[dict]:
         print(f"[BIRTHDAY] Error loading birthdays from '{tab_name}': {e}")
         return []
 
+
 def get_member_tab_name(guild_id: int = None) -> str:
     """Get the active member tab name from the config database."""
     from config import get_member_tab
+
     if guild_id is None:
         guild_id = None
     tab = get_member_tab(guild_id)
     return tab if tab else "Season 5 - Off-Season"
+
 
 def parse_birthday(raw: str) -> tuple[int, int] | None:
     """Parse a birthday string into (month, day), ignoring the year.
@@ -160,7 +192,8 @@ def parse_birthday(raw: str) -> tuple[int, int] | None:
     #    optionally followed by a year ("December 7, 1990").
     named_first = re.match(
         r"^([A-Za-z]+)[\s\-](\d{1,2})(?:st|nd|rd|th)?(?:[\s,\-]+\d+)?$",
-        raw, re.IGNORECASE,
+        raw,
+        re.IGNORECASE,
     )
     if named_first:
         month = _BIRTHDAY_MONTH_MAP.get(named_first.group(1).lower())
@@ -172,7 +205,8 @@ def parse_birthday(raw: str) -> tuple[int, int] | None:
     #    optionally followed by a year ("7 December 1990").
     named_last = re.match(
         r"^(\d{1,2})(?:st|nd|rd|th)?[\s\-]([A-Za-z]+)(?:[\s,\-]+\d+)?$",
-        raw, re.IGNORECASE,
+        raw,
+        re.IGNORECASE,
     )
     if named_last:
         month = _BIRTHDAY_MONTH_MAP.get(named_last.group(2).lower())
@@ -182,26 +216,28 @@ def parse_birthday(raw: str) -> tuple[int, int] | None:
 
     return None
 
+
 def check_and_add_birthdays(schedule: dict, guild_id: int = None) -> tuple[dict, list[str]]:
     """
     Look ahead lookahead_days from today (from guild birthday config).
     Uses configured tab, name column, and birthday column.
     """
     from config import get_birthday_config
-    bcfg       = get_birthday_config(guild_id) if guild_id else {}
+
+    bcfg = get_birthday_config(guild_id) if guild_id else {}
     if not bcfg.get("enabled", 0) and guild_id:
         return schedule, []
     if not bcfg.get("train_integration", 1) and guild_id:
         return schedule, []
 
-    tab_name  = bcfg.get("tab_name") or get_member_tab_name(guild_id)
+    tab_name = bcfg.get("tab_name") or get_member_tab_name(guild_id)
     lookahead = bcfg.get("lookahead_days", BIRTHDAY_LOOKAHEAD)
-    members   = load_birthdays(tab_name, guild_id)
+    members = load_birthdays(tab_name, guild_id)
     if not members:
         return schedule, []
 
-    today       = date.today()
-    check_year  = today.year
+    today = date.today()
+    check_year = today.year
     added_count = 0
     # Per-member conflict records collected during the loop; folded into
     # a single combined Discord message at the end so leadership gets
@@ -210,8 +246,8 @@ def check_and_add_birthdays(schedule: dict, guild_id: int = None) -> tuple[dict,
 
     for member in members:
         month = member["month"]
-        day   = member["day"]
-        name  = member["name"]
+        day = member["day"]
+        name = member["name"]
 
         # Find this year's birthday date — handle Dec/Jan year boundary
         try:
@@ -262,11 +298,13 @@ def check_and_add_birthdays(schedule: dict, guild_id: int = None) -> tuple[dict,
             for candidate in (bday, bday - timedelta(days=1), bday + timedelta(days=1)):
                 occupant = schedule[candidate.isoformat()].get("name", "someone")
                 taken.append(f"{candidate:%b} {candidate.day} ({occupant})")
-            conflicts.append({
-                "name":     name,
-                "bday_fmt": f"{bday:%A, %B} {bday.day}",
-                "taken":    taken,
-            })
+            conflicts.append(
+                {
+                    "name": name,
+                    "bday_fmt": f"{bday:%A, %B} {bday.day}",
+                    "taken": taken,
+                }
+            )
             print(f"[BIRTHDAY] CONFLICT — could not place {name} around {bday.isoformat()}")
             continue
 
@@ -275,21 +313,25 @@ def check_and_add_birthdays(schedule: dict, guild_id: int = None) -> tuple[dict,
         if placed_date != bday:
             direction = "day before" if placed_date < bday else "day after"
             note = f"Auto-added from birthday sheet (placed {direction} due to conflict on actual birthday)"
-            print(f"[BIRTHDAY] {name} placed on {placed_date.isoformat()} ({direction} birthday {bday.isoformat()})")
+            print(
+                f"[BIRTHDAY] {name} placed on {placed_date.isoformat()} ({direction} birthday {bday.isoformat()})"
+            )
         else:
             print(f"[BIRTHDAY] Added {name} on {placed_date.isoformat()}")
 
         schedule[placed_date.isoformat()] = {
-            "name":             name,
-            "theme":            "Birthday",
-            "tone":             "",
-            "notes":            note,
+            "name": name,
+            "theme": "Birthday",
+            "tone": "",
+            "notes": note,
             "prompt_retrieved": False,
         }
         added_count += 1
 
     if added_count:
-        print(f"[BIRTHDAY] Added {added_count} birthday entr{'y' if added_count == 1 else 'ies'} to schedule")
+        print(
+            f"[BIRTHDAY] Added {added_count} birthday entr{'y' if added_count == 1 else 'ies'} to schedule"
+        )
 
     # Fold every conflict into a single combined alert message. The list
     # is always 0 or 1 entries — callers that iterate `alerts` end up
@@ -299,16 +341,14 @@ def check_and_add_birthdays(schedule: dict, guild_id: int = None) -> tuple[dict,
         return schedule, []
     sections = [
         f"**{c['name']}'s** birthday is **{c['bday_fmt']}** but all three "
-        f"surrounding dates are taken:\n"
-        + "\n".join(f"• {t}" for t in c["taken"])
+        f"surrounding dates are taken:\n" + "\n".join(f"• {t}" for t in c["taken"])
         for c in conflicts
     ]
     combined = (
         "🚨 **Birthday scheduling conflict — manual action needed!**\n\n"
         + "\n\n".join(sections)
         + "\n\nPlease manually add "
-        + ("this member" if len(conflicts) == 1
-           else "these members")
+        + ("this member" if len(conflicts) == 1 else "these members")
         + " to the schedule."
     )
     return schedule, [combined]

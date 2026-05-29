@@ -91,7 +91,9 @@ async def wait_or_cancel(awaitable, cancel_event: asyncio.Event):
     Returns the awaitable's result, or None if the cancel event fires first
     (or the awaitable raises asyncio.TimeoutError).
     """
-    main_task   = asyncio.create_task(awaitable) if not isinstance(awaitable, asyncio.Task) else awaitable
+    main_task = (
+        asyncio.create_task(awaitable) if not isinstance(awaitable, asyncio.Task) else awaitable
+    )
     cancel_task = asyncio.create_task(cancel_event.wait())
     try:
         done, pending = await asyncio.wait(
@@ -137,7 +139,7 @@ async def expire_view_message(message, command_hint: str = "") -> None:
     suffix = f" Use {command_hint} to re-initiate." if command_hint else ""
     notice = f"\n\n⏰ *The actions for this have timed out.{suffix}*"
     try:
-        existing = (getattr(message, "content", None) or "")
+        existing = getattr(message, "content", None) or ""
         if "actions for this have timed out" in existing:
             return
         await message.edit(content=existing + notice, view=None)
@@ -181,7 +183,7 @@ async def wait_view_or_cancel(view, cancel_event):
         return
 
     cancel_task = asyncio.create_task(cancel_event.wait())
-    view_task   = asyncio.create_task(view.wait())
+    view_task = asyncio.create_task(view.wait())
     try:
         done, pending = await asyncio.wait(
             [view_task, cancel_task],
@@ -190,7 +192,7 @@ async def wait_view_or_cancel(view, cancel_event):
         if cancel_task in done:
             view.cancelled = True
             try:
-                view.stop()                     # makes the view's own wait() return
+                view.stop()  # makes the view's own wait() return
             except Exception:
                 pass
             for t in pending:

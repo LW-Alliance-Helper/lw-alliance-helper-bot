@@ -32,7 +32,10 @@ from train import (
 
 # ── Blurb wizard wrapper (writes back to schedule entry) ──────────────────────
 
-async def run_blurb_wizard_for_entry(bot, channel, user, date_str: str, name: str, guild_id: int) -> bool:
+
+async def run_blurb_wizard_for_entry(
+    bot, channel, user, date_str: str, name: str, guild_id: int
+) -> bool:
     """
     Walk the user through Theme → Tone → Notes for the entry on `date_str`,
     save theme/tone/notes back into the schedule, build the ChatGPT prompt,
@@ -53,19 +56,26 @@ async def run_blurb_wizard_for_entry(bot, channel, user, date_str: str, name: st
     async def ask(prompt: str) -> str | None:
         msg = await channel.send(prompt) if prompt else None
         try:
-            reply_task  = asyncio.ensure_future(bot.wait_for("message", check=check_msg, timeout=WIZARD_TIMEOUT))
+            reply_task = asyncio.ensure_future(
+                bot.wait_for("message", check=check_msg, timeout=WIZARD_TIMEOUT)
+            )
             cancel_task = asyncio.ensure_future(cancel_event.wait())
-            done, pending = await asyncio.wait([reply_task, cancel_task], return_when=asyncio.FIRST_COMPLETED)
+            done, pending = await asyncio.wait(
+                [reply_task, cancel_task], return_when=asyncio.FIRST_COMPLETED
+            )
             for t in pending:
                 t.cancel()
             if cancel_event.is_set():
                 if msg:
-                    try: await msg.delete()
-                    except discord.HTTPException: pass
+                    try:
+                        await msg.delete()
+                    except discord.HTTPException:
+                        pass
                 return None
             reply = done.pop().result()
             try:
-                if msg: await msg.delete()
+                if msg:
+                    await msg.delete()
                 await reply.delete()
             except discord.HTTPException:
                 pass
@@ -77,21 +87,25 @@ async def run_blurb_wizard_for_entry(bot, channel, user, date_str: str, name: st
             return None
 
     async def wait_for_view(view, msg) -> bool:
-        view_task   = asyncio.ensure_future(view.wait())
+        view_task = asyncio.ensure_future(view.wait())
         cancel_task = asyncio.ensure_future(cancel_event.wait())
-        done, pending = await asyncio.wait([view_task, cancel_task], return_when=asyncio.FIRST_COMPLETED)
+        done, pending = await asyncio.wait(
+            [view_task, cancel_task], return_when=asyncio.FIRST_COMPLETED
+        )
         for t in pending:
             t.cancel()
         if cancel_event.is_set():
             for item in view.children:
                 item.disabled = True
-            try: await msg.edit(view=view)
-            except discord.HTTPException: pass
+            try:
+                await msg.edit(view=view)
+            except discord.HTTPException:
+                pass
             return False
         return True
 
     try:
-        _d      = date.fromisoformat(date_str)
+        _d = date.fromisoformat(date_str)
         d_label = f"{_d:%A, %B} {_d.day}"
         await channel.send(
             f"🚂 **Train Blurb Wizard for {name}** — {d_label}\n"
@@ -99,7 +113,7 @@ async def run_blurb_wizard_for_entry(bot, channel, user, date_str: str, name: st
         )
 
         # Step 1: Theme
-        theme_msg  = await channel.send("**Step 1 of 3 — Theme**\nSelect the theme for this train:")
+        theme_msg = await channel.send("**Step 1 of 3 — Theme**\nSelect the theme for this train:")
         theme_view = ThemeSelectView(guild_id=guild_id)
         await theme_msg.edit(view=theme_view)
         if not await wait_for_view(theme_view, theme_msg):
@@ -116,7 +130,7 @@ async def run_blurb_wizard_for_entry(bot, channel, user, date_str: str, name: st
                 return False
 
         # Step 2: Tone
-        tone_msg  = await channel.send("**Step 2 of 3 — Tone**\nSelect the tone:")
+        tone_msg = await channel.send("**Step 2 of 3 — Tone**\nSelect the tone:")
         tone_view = ToneSelectView(guild_id=guild_id)
         await tone_msg.edit(view=tone_view)
         if not await wait_for_view(tone_view, tone_msg):
@@ -140,10 +154,12 @@ async def run_blurb_wizard_for_entry(bot, channel, user, date_str: str, name: st
         # 💎 Premium step 4: pick which saved template to use, when more than one exists.
         import premium
         from train import get_train_template_names
+
         template_name = None
         if await premium.is_premium(guild_id, bot=bot):
             names = get_train_template_names(guild_id)
             if len(names) > 1:
+
                 class TemplatePickView(discord.ui.View):
                     def __init__(self, options: list[str]):
                         super().__init__(timeout=120)
@@ -152,41 +168,51 @@ async def run_blurb_wizard_for_entry(bot, channel, user, date_str: str, name: st
                             placeholder="Pick a saved template…",
                             options=[discord.SelectOption(label=n[:100], value=n) for n in options],
                         )
+
                         async def _cb(inter):
                             self.selected = sel.values[0]
-                            sel.disabled  = True
+                            sel.disabled = True
                             await wizard_registry.safe_edit_response(
                                 inter,
-                                content=f"✅ Template: **{self.selected}**", view=self,
+                                content=f"✅ Template: **{self.selected}**",
+                                view=self,
                             )
                             self.stop()
+
                         sel.callback = _cb
                         self.add_item(sel)
 
                 pick_view = TemplatePickView(names)
-                pick_msg  = await channel.send(
+                pick_msg = await channel.send(
                     "**Step 4 of 4 — Template** *(💎 Premium)*\n"
                     "You have multiple saved templates. Pick one for this prompt:",
                     view=pick_view,
                 )
                 if not await wait_for_view(pick_view, pick_msg):
                     return False
-                template_name = pick_view.selected   # may stay None if user picked nothing → falls back to default
+                template_name = (
+                    pick_view.selected
+                )  # may stay None if user picked nothing → falls back to default
 
         # Persist back to schedule
         schedule = load_schedule(guild_id)
         schedule[date_str] = {
-            "name":             name,
-            "theme":            theme,
-            "tone":             tone,
-            "notes":            notes,
+            "name": name,
+            "theme": theme,
+            "tone": tone,
+            "notes": notes,
             "prompt_retrieved": True,
         }
         save_schedule(schedule, guild_id)
 
         # Build and post the prompt
         prompt = build_chatgpt_prompt(
-            name, theme, tone, notes, guild_id=guild_id, template_name=template_name,
+            name,
+            theme,
+            tone,
+            notes,
+            guild_id=guild_id,
+            template_name=template_name,
         )
         await channel.send(
             f"✅ **ChatGPT prompt for {name}** — copy and paste into the thread:\n"
@@ -200,27 +226,36 @@ async def run_blurb_wizard_for_entry(bot, channel, user, date_str: str, name: st
 
 # ── /train UI: views + modals ─────────────────────────────────────────────────
 
+
 class RunWizardView(discord.ui.View):
     """Yes/Skip prompt offered after Add or Update when blurbs_enabled."""
+
     def __init__(self, bot, guild_id: int, date_iso: str, name: str):
         super().__init__(timeout=120)
-        self.bot      = bot
+        self.bot = bot
         self.guild_id = guild_id
         self.date_iso = date_iso
-        self.name     = name
+        self.name = name
 
     @discord.ui.button(label="✅ Run blurb wizard", style=discord.ButtonStyle.success)
     async def yes(self, inter: discord.Interaction, button: discord.ui.Button):
-        for c in self.children: c.disabled = True
+        for c in self.children:
+            c.disabled = True
         await wizard_registry.safe_edit_response(inter, view=self)
         await run_blurb_wizard_for_entry(
-            self.bot, inter.channel, inter.user, self.date_iso, self.name, self.guild_id,
+            self.bot,
+            inter.channel,
+            inter.user,
+            self.date_iso,
+            self.name,
+            self.guild_id,
         )
         self.stop()
 
     @discord.ui.button(label="⏭️ Skip", style=discord.ButtonStyle.secondary)
     async def skip(self, inter: discord.Interaction, button: discord.ui.Button):
-        for c in self.children: c.disabled = True
+        for c in self.children:
+            c.disabled = True
         await wizard_registry.safe_edit_response(inter, view=self)
         self.stop()
 
@@ -228,24 +263,28 @@ class RunWizardView(discord.ui.View):
 class AddEntryModal(discord.ui.Modal, title="Add Train Entry"):
     def __init__(self, bot, guild_id: int, blurbs_enabled: bool):
         super().__init__()
-        self.bot            = bot
-        self.guild_id       = guild_id
+        self.bot = bot
+        self.guild_id = guild_id
         self.blurbs_enabled = blurbs_enabled
         self.date_input = discord.ui.TextInput(
-            label="Date", placeholder="e.g. April 5 or 4/5",
-            required=True, max_length=20,
+            label="Date",
+            placeholder="e.g. April 5 or 4/5",
+            required=True,
+            max_length=20,
         )
         self.name_input = discord.ui.TextInput(
-            label="Member name", placeholder="Exactly as it should appear",
-            required=True, max_length=64,
+            label="Member name",
+            placeholder="Exactly as it should appear",
+            required=True,
+            max_length=64,
         )
         self.add_item(self.date_input)
         self.add_item(self.name_input)
 
     async def on_submit(self, interaction: discord.Interaction):
         date_text = self.date_input.value.strip()
-        name      = self.name_input.value.strip()
-        d, _, _   = parse_date_and_name(f"{date_text} - placeholder")
+        name = self.name_input.value.strip()
+        d, _, _ = parse_date_and_name(f"{date_text} - placeholder")
         if d is None:
             await interaction.response.send_message(
                 f"⚠️ Could not parse date `{date_text}`. Try formats like `April 5` or `4/5`.",
@@ -258,58 +297,64 @@ class AddEntryModal(discord.ui.Modal, title="Add Train Entry"):
         # NotFound 10062 Unknown interaction.
         await interaction.response.defer(ephemeral=True)
 
-        d_iso    = d.isoformat()
+        d_iso = d.isoformat()
         schedule = load_schedule(self.guild_id)
-        existed  = d_iso in schedule
+        existed = d_iso in schedule
         existing = schedule.get(d_iso, {})
         schedule[d_iso] = {
-            "name":             name,
-            "theme":            existing.get("theme", ""),
-            "tone":             existing.get("tone", ""),
-            "notes":            existing.get("notes", ""),
+            "name": name,
+            "theme": existing.get("theme", ""),
+            "tone": existing.get("tone", ""),
+            "notes": existing.get("notes", ""),
             "prompt_retrieved": existing.get("prompt_retrieved", False),
         }
         save_schedule(schedule, self.guild_id)
 
         verb = "Updated" if existed else "Added"
-        msg  = f"✅ {verb} **{name}** for **{d:%A, %B} {d.day}**."
+        msg = f"✅ {verb} **{name}** for **{d:%A, %B} {d.day}**."
 
         if self.blurbs_enabled:
             view = RunWizardView(self.bot, self.guild_id, d_iso, name)
             await interaction.followup.send(
                 f"{msg}\n\nRun the blurb wizard now to build the ChatGPT prompt?",
-                view=view, ephemeral=True,
+                view=view,
+                ephemeral=True,
             )
         else:
             await interaction.followup.send(msg, ephemeral=True)
 
 
 class UpdateEntryModal(discord.ui.Modal, title="Update Train Entry"):
-    def __init__(self, bot, guild_id: int, blurbs_enabled: bool,
-                 original_date_iso: str, original_entry: dict):
+    def __init__(
+        self, bot, guild_id: int, blurbs_enabled: bool, original_date_iso: str, original_entry: dict
+    ):
         super().__init__()
-        self.bot               = bot
-        self.guild_id          = guild_id
-        self.blurbs_enabled    = blurbs_enabled
+        self.bot = bot
+        self.guild_id = guild_id
+        self.blurbs_enabled = blurbs_enabled
         self.original_date_iso = original_date_iso
-        self.original_entry    = original_entry
+        self.original_entry = original_entry
 
         d_obj = date.fromisoformat(original_date_iso)
         self.date_input = discord.ui.TextInput(
-            label="Date", default=f"{d_obj.month}/{d_obj.day}",
-            required=True, max_length=20,
+            label="Date",
+            default=f"{d_obj.month}/{d_obj.day}",
+            required=True,
+            max_length=20,
         )
         self.name_input = discord.ui.TextInput(
-            label="Member name", default=original_entry.get("name", ""),
-            required=True, max_length=64,
+            label="Member name",
+            default=original_entry.get("name", ""),
+            required=True,
+            max_length=64,
         )
         self.add_item(self.date_input)
         self.add_item(self.name_input)
 
     async def on_submit(self, interaction: discord.Interaction):
         date_text = self.date_input.value.strip()
-        new_name  = self.name_input.value.strip()
-        d, _, _   = parse_date_and_name(f"{date_text} - placeholder")
+        new_name = self.name_input.value.strip()
+        d, _, _ = parse_date_and_name(f"{date_text} - placeholder")
         if d is None:
             await interaction.response.send_message(
                 f"⚠️ Could not parse date `{date_text}`.", ephemeral=True
@@ -321,15 +366,15 @@ class UpdateEntryModal(discord.ui.Modal, title="Update Train Entry"):
         # NotFound 10062 Unknown interaction.
         await interaction.response.defer(ephemeral=True)
 
-        new_iso  = d.isoformat()
+        new_iso = d.isoformat()
         schedule = load_schedule(self.guild_id)
 
         # Preserve theme/tone/notes/prompt_retrieved from the original entry
         merged = {
-            "name":             new_name,
-            "theme":            self.original_entry.get("theme", ""),
-            "tone":             self.original_entry.get("tone", ""),
-            "notes":            self.original_entry.get("notes", ""),
+            "name": new_name,
+            "theme": self.original_entry.get("theme", ""),
+            "tone": self.original_entry.get("tone", ""),
+            "notes": self.original_entry.get("notes", ""),
             "prompt_retrieved": self.original_entry.get("prompt_retrieved", False),
         }
 
@@ -346,7 +391,8 @@ class UpdateEntryModal(discord.ui.Modal, title="Update Train Entry"):
             view = RunWizardView(self.bot, self.guild_id, new_iso, new_name)
             await interaction.followup.send(
                 f"{msg}\n\nRe-run the blurb wizard to refresh the ChatGPT prompt?",
-                view=view, ephemeral=True,
+                view=view,
+                ephemeral=True,
             )
         else:
             await interaction.followup.send(msg, ephemeral=True)
@@ -354,12 +400,13 @@ class UpdateEntryModal(discord.ui.Modal, title="Update Train Entry"):
 
 class UpdateSelectView(discord.ui.View):
     """Select-menu for picking which existing entry to update."""
+
     def __init__(self, bot, guild_id: int, blurbs_enabled: bool, entries: list):
         super().__init__(timeout=120)
-        self.bot            = bot
-        self.guild_id       = guild_id
+        self.bot = bot
+        self.guild_id = guild_id
         self.blurbs_enabled = blurbs_enabled
-        self._entries       = dict(entries[:25])
+        self._entries = dict(entries[:25])
 
         options = []
         for d_iso, entry in entries[:25]:
@@ -381,9 +428,10 @@ class UpdateSelectView(discord.ui.View):
 
 class GeneratePromptSelectView(discord.ui.View):
     """Select-menu for picking which filled entry to generate a prompt for."""
+
     def __init__(self, bot, guild_id: int, entries: list):
         super().__init__(timeout=120)
-        self.bot      = bot
+        self.bot = bot
         self.guild_id = guild_id
         self._entries = dict(entries[:25])
 
@@ -435,25 +483,24 @@ class ConfirmTrainClearView(discord.ui.View):
 
 class TrainActionView(discord.ui.View):
     """Action bar shown beneath the /train schedule embed."""
+
     def __init__(self, bot, guild_id: int, blurbs_enabled: bool):
         super().__init__(timeout=300)
-        self.bot            = bot
-        self.guild_id       = guild_id
+        self.bot = bot
+        self.guild_id = guild_id
         self.blurbs_enabled = blurbs_enabled
 
     @discord.ui.button(label="➕ Add", style=discord.ButtonStyle.success)
     async def add(self, inter: discord.Interaction, button: discord.ui.Button):
-        await inter.response.send_modal(
-            AddEntryModal(self.bot, self.guild_id, self.blurbs_enabled)
-        )
+        await inter.response.send_modal(AddEntryModal(self.bot, self.guild_id, self.blurbs_enabled))
 
     @discord.ui.button(label="✏️ Update", style=discord.ButtonStyle.primary)
     async def update(self, inter: discord.Interaction, button: discord.ui.Button):
         schedule = load_schedule(self.guild_id)
-        today    = date.today()
-        cutoff   = today - timedelta(days=7)
-        upper    = today + timedelta(days=30)
-        entries  = []
+        today = date.today()
+        cutoff = today - timedelta(days=7)
+        upper = today + timedelta(days=30)
+        entries = []
         for d_iso, entry in schedule.items():
             try:
                 d_obj = date.fromisoformat(d_iso)
@@ -471,16 +518,14 @@ class TrainActionView(discord.ui.View):
             return
 
         view = UpdateSelectView(self.bot, self.guild_id, self.blurbs_enabled, entries)
-        await inter.response.send_message(
-            "Select an entry to update:", view=view, ephemeral=True
-        )
+        await inter.response.send_message("Select an entry to update:", view=view, ephemeral=True)
 
     @discord.ui.button(label="📋 Generate Prompt", style=discord.ButtonStyle.secondary)
     async def generate(self, inter: discord.Interaction, button: discord.ui.Button):
         schedule = load_schedule(self.guild_id)
-        today    = date.today()
-        upper    = today + timedelta(days=14)
-        entries  = []
+        today = date.today()
+        upper = today + timedelta(days=14)
+        entries = []
         for d_iso, entry in schedule.items():
             try:
                 d_obj = date.fromisoformat(d_iso)
@@ -508,7 +553,8 @@ class TrainActionView(discord.ui.View):
         view = ConfirmTrainClearView()
         await inter.response.send_message(
             "⚠️ Clear the entire train schedule? This cannot be undone.",
-            view=view, ephemeral=True,
+            view=view,
+            ephemeral=True,
         )
         await view.wait()
         if view.confirmed:

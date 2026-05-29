@@ -2,6 +2,7 @@
 Shared fixtures for all tests.
 Provides: temp DB, mock guild config, mock Discord objects, sheet client.
 """
+
 import os
 import sys
 import json
@@ -30,6 +31,7 @@ from tests.constants import TEST_GUILD_ID, TEST_SHEET_ID, PREMIUM_TEST_GUILD_ID
 # skipped instead of failed.
 #
 # Mark such tests with `@pytest.mark.free_tier_only`.
+
 
 def pytest_configure(config):
     config.addinivalue_line(
@@ -83,27 +85,26 @@ def seeded_db(temp_db, monkeypatch):
     import config
 
     cfg = config.get_or_create_config(TEST_GUILD_ID)
-    cfg.member_role_name         = "Member"
-    cfg.leadership_role_name     = "Leadership"
-    cfg.leadership_channel_id    = 111111111111111111
-    cfg.announcement_channel_id  = 222222222222222222
-    cfg.survey_channel_id        = 333333333333333333
+    cfg.member_role_name = "Member"
+    cfg.leadership_role_name = "Leadership"
+    cfg.leadership_channel_id = 111111111111111111
+    cfg.announcement_channel_id = 222222222222222222
+    cfg.survey_channel_id = 333333333333333333
     cfg.survey_notify_channel_id = 444444444444444444
-    cfg.timezone                 = "America/New_York"
-    cfg.spreadsheet_id           = TEST_SHEET_ID
-    cfg.setup_complete           = True
+    cfg.timezone = "America/New_York"
+    cfg.spreadsheet_id = TEST_SHEET_ID
+    cfg.setup_complete = True
     config.save_config(cfg)
 
     yield temp_db
 
 
 # ── Mock Discord objects ───────────────────────────────────────────────────────
-def make_mock_user(user_id: int = 123456789, display_name: str = "TestUser",
-                   is_admin: bool = True):
+def make_mock_user(user_id: int = 123456789, display_name: str = "TestUser", is_admin: bool = True):
     user = MagicMock()
-    user.id           = user_id
+    user.id = user_id
     user.display_name = display_name
-    user.name         = display_name
+    user.name = display_name
     user.guild_permissions = MagicMock()
     user.guild_permissions.administrator = is_admin
     return user
@@ -111,42 +112,44 @@ def make_mock_user(user_id: int = 123456789, display_name: str = "TestUser",
 
 def make_mock_role(role_id: int = 987654321, name: str = "TestRole"):
     role = MagicMock()
-    role.id   = role_id
+    role.id = role_id
     role.name = name
     return role
 
 
 def make_mock_channel(channel_id: int = 111111111111111111, name: str = "test-channel"):
-    channel          = AsyncMock()
-    channel.id       = channel_id
-    channel.name     = name
+    channel = AsyncMock()
+    channel.id = channel_id
+    channel.name = name
     channel.category_id = None
-    channel.send     = AsyncMock(return_value=MagicMock(id=999))
-    channel.history  = AsyncMock(return_value=[])
+    channel.send = AsyncMock(return_value=MagicMock(id=999))
+    channel.history = AsyncMock(return_value=[])
     return channel
 
 
 def make_mock_guild(guild_id: int = TEST_GUILD_ID, name: str = "Test Alliance"):
-    guild      = MagicMock()
-    guild.id   = guild_id
+    guild = MagicMock()
+    guild.id = guild_id
     guild.name = name
     return guild
 
 
-def make_mock_interaction(guild_id: int = TEST_GUILD_ID,
-                          user_id: int = 123456789,
-                          channel_id: int = 111111111111111111,
-                          is_admin: bool = True):
-    interaction                = AsyncMock()
-    interaction.guild_id       = guild_id
-    interaction.user           = make_mock_user(user_id, is_admin=is_admin)
-    interaction.channel        = make_mock_channel(channel_id)
-    interaction.guild          = make_mock_guild(guild_id)
-    interaction.response       = AsyncMock()
+def make_mock_interaction(
+    guild_id: int = TEST_GUILD_ID,
+    user_id: int = 123456789,
+    channel_id: int = 111111111111111111,
+    is_admin: bool = True,
+):
+    interaction = AsyncMock()
+    interaction.guild_id = guild_id
+    interaction.user = make_mock_user(user_id, is_admin=is_admin)
+    interaction.channel = make_mock_channel(channel_id)
+    interaction.guild = make_mock_guild(guild_id)
+    interaction.response = AsyncMock()
     interaction.response.send_message = AsyncMock()
-    interaction.response.defer        = AsyncMock()
-    interaction.followup              = AsyncMock()
-    interaction.followup.send         = AsyncMock()
+    interaction.response.defer = AsyncMock()
+    interaction.followup = AsyncMock()
+    interaction.followup.send = AsyncMock()
     return interaction
 
 
@@ -160,7 +163,7 @@ def mock_bot():
     bot = AsyncMock()
     bot.guilds = [make_mock_guild()]
     bot.get_channel = MagicMock(return_value=make_mock_channel())
-    bot.wait_for    = AsyncMock()
+    bot.wait_for = AsyncMock()
     return bot
 
 
@@ -191,7 +194,7 @@ def sheets_client():
     creds_json = os.environ.get("GOOGLE_CREDENTIALS_JSON")
     if creds_json:
         try:
-            info  = json.loads(creds_json)
+            info = json.loads(creds_json)
             creds = Credentials.from_service_account_info(info, scopes=scopes)
         except Exception as e:
             pytest.skip(f"GOOGLE_CREDENTIALS_JSON couldn't be parsed: {e}")
@@ -241,6 +244,7 @@ def test_worksheet(test_spreadsheet):
     the END so a human can inspect what was written.
     """
     import random
+
     tab_name = f"_test_{random.randint(10000, 99999)}"
     ws = test_spreadsheet.add_worksheet(title=tab_name, rows=100, cols=30)
     yield ws  # Best effort cleanup

@@ -21,6 +21,7 @@ Style guide: see the "Success acknowledgements" section near the
 bottom for the sentence-form rule and what's deliberately NOT
 extracted.
 """
+
 from __future__ import annotations
 
 
@@ -97,7 +98,9 @@ DENY_NOT_OWNER = "⛔ Only the user who opened this view can use it."
 # Admin-or-role permission deny. The caller passes the leadership
 # role display name as {role} and a short action verb phrase as
 # {action} (e.g. "use the setup hub", "run `/setup`").
-DENY_ADMIN_OR_ROLE = "⛔ You need server administrator permission or the **{role}** role to {action}."
+DENY_ADMIN_OR_ROLE = (
+    "⛔ You need server administrator permission or the **{role}** role to {action}."
+)
 
 
 # ── Leadership channel / configured-channel errors ───────────────────────────
@@ -106,14 +109,18 @@ DENY_ADMIN_OR_ROLE = "⛔ You need server administrator permission or the **{rol
 # log + scheduler paths when the configured channel is missing,
 # inaccessible, or lacks read-history permission.
 LEADERSHIP_NOT_CONFIGURED = "⚠️ Leadership channel isn't configured. Run `/setup` to configure it."
-LEADERSHIP_INACCESSIBLE   = "⚠️ Could not access the leadership channel."
-LEADERSHIP_NO_READ_PERM   = "⚠️ Bot does not have permission to read message history in the leadership channel."
+LEADERSHIP_INACCESSIBLE = "⚠️ Could not access the leadership channel."
+LEADERSHIP_NO_READ_PERM = (
+    "⚠️ Bot does not have permission to read message history in the leadership channel."
+)
 
 # Setup-wizard channel-pick step found the previously-configured channel
 # no longer exists (deleted, perms changed, etc.). The wizard offers
 # a new pick immediately below. Caller passes a short label (e.g.
 # "leadership", "draft", "announcement", "birthday") as {channel_label}.
-PREV_CHANNEL_GONE = "⚠️ Your previously configured {channel_label} channel no longer exists. Pick a new one below."
+PREV_CHANNEL_GONE = (
+    "⚠️ Your previously configured {channel_label} channel no longer exists. Pick a new one below."
+)
 
 
 # ── Validation retry messages ────────────────────────────────────────────────
@@ -134,10 +141,7 @@ TIME_PARSE_RETRY = (
 # Same as above but after N failed tries — wizard bails out and tells
 # the user how to re-enter. Caller passes the recovery hint (e.g.
 # "`/setup` → 📋 Survey" or "`/survey remind`") as {recovery}.
-TIME_PARSE_GIVE_UP = (
-    "⚠️ Could not read that time after a few tries. "
-    "Run {recovery} to start again."
-)
+TIME_PARSE_GIVE_UP = "⚠️ Could not read that time after a few tries. Run {recovery} to start again."
 
 # Generic validation failure with an example. Caller passes the input
 # type (e.g. "row number", "single column letter", "number") as {type},

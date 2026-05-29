@@ -37,6 +37,7 @@ from tests.constants import TEST_GUILD_ID, PREMIUM_TEST_GUILD_ID
 
 # ── Premium-env isolation (mirrors test_member_roster.py's pattern) ─────────
 
+
 @pytest.fixture(autouse=True)
 def _isolate_premium_env(monkeypatch):
     """Pin PREMIUM_TEST_GUILD_ID into PREMIUM_BYPASS_GUILD_IDS so the
@@ -44,10 +45,12 @@ def _isolate_premium_env(monkeypatch):
     entitlements. TEST_GUILD_ID stays out of the bypass set so free-
     tier paths still take effect for those tests."""
     import importlib
+
     for var in ("PREMIUM_SKU_ID", "FORCE_PREMIUM"):
         monkeypatch.delenv(var, raising=False)
     monkeypatch.setenv("PREMIUM_BYPASS_GUILD_IDS", str(PREMIUM_TEST_GUILD_ID))
     import premium as _premium
+
     importlib.reload(_premium)
     _premium.clear_cache()
     yield
@@ -59,18 +62,19 @@ def _isolate_premium_env(monkeypatch):
 
 # ── Helpers ─────────────────────────────────────────────────────────────────
 
+
 def _make_interaction(guild_id: int = PREMIUM_TEST_GUILD_ID):
-    interaction                       = MagicMock()
-    interaction.guild_id              = guild_id
-    interaction.entitlements          = []
-    interaction.user                  = MagicMock()
-    interaction.user.id               = 9001
+    interaction = MagicMock()
+    interaction.guild_id = guild_id
+    interaction.entitlements = []
+    interaction.user = MagicMock()
+    interaction.user.id = 9001
     interaction.user.guild_permissions = MagicMock(administrator=True)
-    interaction.response              = MagicMock()
+    interaction.response = MagicMock()
     interaction.response.send_message = AsyncMock()
-    interaction.response.defer        = AsyncMock()
-    interaction.followup              = MagicMock()
-    interaction.followup.send         = AsyncMock()
+    interaction.response.defer = AsyncMock()
+    interaction.followup = MagicMock()
+    interaction.followup.send = AsyncMock()
     return interaction
 
 
@@ -82,15 +86,15 @@ def _make_sheet(rows: list[list[str]]):
 
 def _enabled_roster_cfg(discord_id_col: int = 0, tab_name: str = "Member Roster"):
     return {
-        "enabled":        1,
-        "tab_name":       tab_name,
+        "enabled": 1,
+        "tab_name": tab_name,
         "discord_id_col": discord_id_col,
-        "name_col":       1,
-        "display_col":    2,
-        "joined_col":     3,
-        "roles_col":      4,
+        "name_col": 1,
+        "display_col": 2,
+        "joined_col": 3,
+        "roles_col": 4,
         "role_filter_id": 0,
-        "auto_sync":      0,
+        "auto_sync": 0,
         "last_synced_at": "",
     }
 
@@ -102,19 +106,22 @@ def _enabled_roster_cfg(discord_id_col: int = 0, tab_name: str = "Member Roster"
 # inner patch wins under unittest.mock's stacking rules.
 @pytest.fixture
 def _bypass_guard():
-    with patch("storm_log._guard", AsyncMock(return_value=True)), \
-         patch("config.get_storm_config", return_value={"dm_reminder_message": ""}):
+    with (
+        patch("storm_log._guard", AsyncMock(return_value=True)),
+        patch("config.get_storm_config", return_value={"dm_reminder_message": ""}),
+    ):
         yield
 
 
 # ── Premium gate ─────────────────────────────────────────────────────────────
 
-class TestStormReminderPremiumGate:
 
+class TestStormReminderPremiumGate:
     @pytest.mark.asyncio
     @pytest.mark.free_tier_only
     async def test_free_tier_guild_sees_upsell(self, _bypass_guard):
         from storm_log import _send_storm_reminder
+
         interaction = _make_interaction(guild_id=TEST_GUILD_ID)
 
         bot = MagicMock()
@@ -123,18 +130,19 @@ class TestStormReminderPremiumGate:
         # Premium-locked embed surfaces; nothing else gets touched.
         interaction.response.send_message.assert_called_once()
         kwargs = interaction.response.send_message.call_args.kwargs
-        embed  = kwargs.get("embed")
+        embed = kwargs.get("embed")
         assert embed is not None
         assert "Premium" in embed.title
 
 
 # ── Roster-disabled branch ───────────────────────────────────────────────────
 
-class TestStormReminderRosterDisabled:
 
+class TestStormReminderRosterDisabled:
     @pytest.mark.asyncio
     async def test_premium_with_roster_disabled_shows_setup_hint(self, _bypass_guard):
         from storm_log import _send_storm_reminder
+
         interaction = _make_interaction()
 
         with patch(
@@ -153,28 +161,31 @@ class TestStormReminderRosterDisabled:
 
 # ── Happy path ───────────────────────────────────────────────────────────────
 
-class TestStormReminderHappyPath:
 
+class TestStormReminderHappyPath:
     @pytest.mark.asyncio
     async def test_dms_each_member_with_nonempty_discord_id(self, _bypass_guard):
         """Roster has 3 valid IDs and 1 empty cell → 3 DMs attempted,
         1 skipped. send_dm_to_id is mocked to always succeed."""
         from storm_log import _send_storm_reminder
+
         interaction = _make_interaction()
 
         sheet_rows = [
             ["Discord ID", "Name", "Display Name", "Joined", "Roles"],
             ["111", "alice", "Alice", "", ""],
-            ["222", "bob",   "Bob",   "", ""],
-            ["",    "ghost", "Ghost", "", ""],   # empty ID — skip
+            ["222", "bob", "Bob", "", ""],
+            ["", "ghost", "Ghost", "", ""],  # empty ID — skip
             ["333", "carol", "Carol", "", ""],
         ]
 
         send_spy = AsyncMock(return_value=True)
 
-        with patch("config.get_member_roster_config", return_value=_enabled_roster_cfg()), \
-             patch("config.get_member_roster_sheet", return_value=_make_sheet(sheet_rows)), \
-             patch("dm.send_dm_to_id", send_spy):
+        with (
+            patch("config.get_member_roster_config", return_value=_enabled_roster_cfg()),
+            patch("config.get_member_roster_sheet", return_value=_make_sheet(sheet_rows)),
+            patch("dm.send_dm_to_id", send_spy),
+        ):
             await _send_storm_reminder(MagicMock(), interaction, "DS")
 
         # Three DMs (one per non-empty ID).
@@ -192,20 +203,23 @@ class TestStormReminderHappyPath:
         """When `send_dm_to_id` returns False (DMs disabled, etc.),
         the row counts as skipped, not sent."""
         from storm_log import _send_storm_reminder
+
         interaction = _make_interaction()
 
         sheet_rows = [
             ["Discord ID", "Name", "Display Name", "Joined", "Roles"],
             ["111", "alice", "Alice", "", ""],
-            ["222", "bob",   "Bob",   "", ""],
+            ["222", "bob", "Bob", "", ""],
         ]
 
         # Bob's DM fails.
         send_spy = AsyncMock(side_effect=lambda bot, gid, did, **kw: did != "222")
 
-        with patch("config.get_member_roster_config", return_value=_enabled_roster_cfg()), \
-             patch("config.get_member_roster_sheet", return_value=_make_sheet(sheet_rows)), \
-             patch("dm.send_dm_to_id", send_spy):
+        with (
+            patch("config.get_member_roster_config", return_value=_enabled_roster_cfg()),
+            patch("config.get_member_roster_sheet", return_value=_make_sheet(sheet_rows)),
+            patch("dm.send_dm_to_id", send_spy),
+        ):
             await _send_storm_reminder(MagicMock(), interaction, "DS")
 
         followup_msg = interaction.followup.send.call_args.args[0]
@@ -217,6 +231,7 @@ class TestStormReminderHappyPath:
         """`Sent 1 reminder DM.` (no `s`). Tiny detail but tested
         because the format string conditionalizes the plural."""
         from storm_log import _send_storm_reminder
+
         interaction = _make_interaction()
 
         sheet_rows = [
@@ -224,9 +239,11 @@ class TestStormReminderHappyPath:
             ["111", "alice", "Alice", "", ""],
         ]
 
-        with patch("config.get_member_roster_config", return_value=_enabled_roster_cfg()), \
-             patch("config.get_member_roster_sheet", return_value=_make_sheet(sheet_rows)), \
-             patch("dm.send_dm_to_id", AsyncMock(return_value=True)):
+        with (
+            patch("config.get_member_roster_config", return_value=_enabled_roster_cfg()),
+            patch("config.get_member_roster_sheet", return_value=_make_sheet(sheet_rows)),
+            patch("dm.send_dm_to_id", AsyncMock(return_value=True)),
+        ):
             await _send_storm_reminder(MagicMock(), interaction, "DS")
 
         followup_msg = interaction.followup.send.call_args.args[0]
@@ -236,11 +253,12 @@ class TestStormReminderHappyPath:
 
 # ── Event type label ─────────────────────────────────────────────────────────
 
-class TestStormReminderEventTypeLabel:
 
+class TestStormReminderEventTypeLabel:
     @pytest.mark.asyncio
     async def test_ds_label_in_dm_body(self, _bypass_guard):
         from storm_log import _send_storm_reminder
+
         interaction = _make_interaction()
 
         sheet_rows = [
@@ -248,9 +266,11 @@ class TestStormReminderEventTypeLabel:
             ["111", "alice", "Alice", "", ""],
         ]
         send_spy = AsyncMock(return_value=True)
-        with patch("config.get_member_roster_config", return_value=_enabled_roster_cfg()), \
-             patch("config.get_member_roster_sheet", return_value=_make_sheet(sheet_rows)), \
-             patch("dm.send_dm_to_id", send_spy):
+        with (
+            patch("config.get_member_roster_config", return_value=_enabled_roster_cfg()),
+            patch("config.get_member_roster_sheet", return_value=_make_sheet(sheet_rows)),
+            patch("dm.send_dm_to_id", send_spy),
+        ):
             await _send_storm_reminder(MagicMock(), interaction, "DS")
 
         body = send_spy.await_args.kwargs["content"]
@@ -260,6 +280,7 @@ class TestStormReminderEventTypeLabel:
     @pytest.mark.asyncio
     async def test_cs_label_in_dm_body(self, _bypass_guard):
         from storm_log import _send_storm_reminder
+
         interaction = _make_interaction()
 
         sheet_rows = [
@@ -267,9 +288,11 @@ class TestStormReminderEventTypeLabel:
             ["111", "alice", "Alice", "", ""],
         ]
         send_spy = AsyncMock(return_value=True)
-        with patch("config.get_member_roster_config", return_value=_enabled_roster_cfg()), \
-             patch("config.get_member_roster_sheet", return_value=_make_sheet(sheet_rows)), \
-             patch("dm.send_dm_to_id", send_spy):
+        with (
+            patch("config.get_member_roster_config", return_value=_enabled_roster_cfg()),
+            patch("config.get_member_roster_sheet", return_value=_make_sheet(sheet_rows)),
+            patch("dm.send_dm_to_id", send_spy),
+        ):
             await _send_storm_reminder(MagicMock(), interaction, "CS")
 
         body = send_spy.await_args.kwargs["content"]
@@ -278,6 +301,7 @@ class TestStormReminderEventTypeLabel:
 
 
 # ── Custom DM-reminder template ──────────────────────────────────────────────
+
 
 class TestStormReminderCustomTemplate:
     """When an alliance configures `dm_reminder_message` via
@@ -288,6 +312,7 @@ class TestStormReminderCustomTemplate:
     @pytest.mark.asyncio
     async def test_custom_template_replaces_default(self, _bypass_guard):
         from storm_log import _send_storm_reminder
+
         interaction = _make_interaction()
 
         sheet_rows = [
@@ -296,10 +321,12 @@ class TestStormReminderCustomTemplate:
         ]
         custom = "Hey {name}, suit up — DS in 30 minutes!"
         send_spy = AsyncMock(return_value=True)
-        with patch("config.get_member_roster_config", return_value=_enabled_roster_cfg()), \
-             patch("config.get_member_roster_sheet", return_value=_make_sheet(sheet_rows)), \
-             patch("config.get_storm_config", return_value={"dm_reminder_message": custom}), \
-             patch("dm.send_dm_to_id", send_spy):
+        with (
+            patch("config.get_member_roster_config", return_value=_enabled_roster_cfg()),
+            patch("config.get_member_roster_sheet", return_value=_make_sheet(sheet_rows)),
+            patch("config.get_storm_config", return_value={"dm_reminder_message": custom}),
+            patch("dm.send_dm_to_id", send_spy),
+        ):
             await _send_storm_reminder(MagicMock(), interaction, "DS")
 
         body = send_spy.await_args.kwargs["content"]
@@ -311,20 +338,23 @@ class TestStormReminderCustomTemplate:
     async def test_each_member_gets_their_own_name_substituted(self, _bypass_guard):
         """Multi-row roster — every DM should reflect the row's own name."""
         from storm_log import _send_storm_reminder
+
         interaction = _make_interaction()
 
         sheet_rows = [
             ["Discord ID", "Name", "Display Name", "Joined", "Roles"],
             ["111", "alice", "Alice", "", ""],
-            ["222", "bob",   "Bob",   "", ""],
+            ["222", "bob", "Bob", "", ""],
             ["333", "carol", "Carol", "", ""],
         ]
         send_spy = AsyncMock(return_value=True)
         custom = "Reminder for {name}"
-        with patch("config.get_member_roster_config", return_value=_enabled_roster_cfg()), \
-             patch("config.get_member_roster_sheet", return_value=_make_sheet(sheet_rows)), \
-             patch("config.get_storm_config", return_value={"dm_reminder_message": custom}), \
-             patch("dm.send_dm_to_id", send_spy):
+        with (
+            patch("config.get_member_roster_config", return_value=_enabled_roster_cfg()),
+            patch("config.get_member_roster_sheet", return_value=_make_sheet(sheet_rows)),
+            patch("config.get_storm_config", return_value={"dm_reminder_message": custom}),
+            patch("dm.send_dm_to_id", send_spy),
+        ):
             await _send_storm_reminder(MagicMock(), interaction, "DS")
 
         bodies = [c.kwargs["content"] for c in send_spy.await_args_list]
@@ -339,6 +369,7 @@ class TestStormReminderCustomTemplate:
         """User puts `{nme}` in their template by accident. The DM
         sends with literal `{nme}` text instead of crashing the loop."""
         from storm_log import _send_storm_reminder
+
         interaction = _make_interaction()
 
         sheet_rows = [
@@ -347,10 +378,12 @@ class TestStormReminderCustomTemplate:
         ]
         broken = "Hey {nme}, ready?"
         send_spy = AsyncMock(return_value=True)
-        with patch("config.get_member_roster_config", return_value=_enabled_roster_cfg()), \
-             patch("config.get_member_roster_sheet", return_value=_make_sheet(sheet_rows)), \
-             patch("config.get_storm_config", return_value={"dm_reminder_message": broken}), \
-             patch("dm.send_dm_to_id", send_spy):
+        with (
+            patch("config.get_member_roster_config", return_value=_enabled_roster_cfg()),
+            patch("config.get_member_roster_sheet", return_value=_make_sheet(sheet_rows)),
+            patch("config.get_storm_config", return_value={"dm_reminder_message": broken}),
+            patch("dm.send_dm_to_id", send_spy),
+        ):
             await _send_storm_reminder(MagicMock(), interaction, "DS")
 
         body = send_spy.await_args.kwargs["content"]
@@ -361,20 +394,22 @@ class TestStormReminderCustomTemplate:
 
 # ── Sheet read failure ───────────────────────────────────────────────────────
 
-class TestStormReminderSheetError:
 
+class TestStormReminderSheetError:
     @pytest.mark.asyncio
     async def test_followup_explains_when_sheet_read_fails(self, _bypass_guard):
         """get_member_roster_sheet raises (e.g. tab missing). Loop
         bails with a friendly followup, no DMs attempted."""
         from storm_log import _send_storm_reminder
+
         interaction = _make_interaction()
 
         send_spy = AsyncMock(return_value=True)
-        with patch("config.get_member_roster_config", return_value=_enabled_roster_cfg()), \
-             patch("config.get_member_roster_sheet",
-                   side_effect=RuntimeError("tab not found")), \
-             patch("dm.send_dm_to_id", send_spy):
+        with (
+            patch("config.get_member_roster_config", return_value=_enabled_roster_cfg()),
+            patch("config.get_member_roster_sheet", side_effect=RuntimeError("tab not found")),
+            patch("dm.send_dm_to_id", send_spy),
+        ):
             await _send_storm_reminder(MagicMock(), interaction, "DS")
 
         send_spy.assert_not_called()
@@ -384,28 +419,32 @@ class TestStormReminderSheetError:
 
 # ── Defensive: short rows ────────────────────────────────────────────────────
 
-class TestStormReminderShortRows:
 
+class TestStormReminderShortRows:
     @pytest.mark.asyncio
     async def test_row_shorter_than_did_col_is_skipped(self, _bypass_guard):
         """If the configured discord_id_col is past the end of a row
         (sheet got trimmed somehow), skip the row instead of indexing
         out-of-range."""
         from storm_log import _send_storm_reminder
+
         interaction = _make_interaction()
 
         sheet_rows = [
             ["Discord ID", "Name", "Display Name", "Joined", "Roles"],
             ["111", "alice", "Alice", "", ""],
-            ["onlyonecol"],   # too short — discord_id_col=2 doesn't fit
+            ["onlyonecol"],  # too short — discord_id_col=2 doesn't fit
         ]
 
         send_spy = AsyncMock(return_value=True)
-        with patch("config.get_member_roster_config",
-                   return_value=_enabled_roster_cfg(discord_id_col=2)), \
-             patch("config.get_member_roster_sheet",
-                   return_value=_make_sheet(sheet_rows)), \
-             patch("dm.send_dm_to_id", send_spy):
+        with (
+            patch(
+                "config.get_member_roster_config",
+                return_value=_enabled_roster_cfg(discord_id_col=2),
+            ),
+            patch("config.get_member_roster_sheet", return_value=_make_sheet(sheet_rows)),
+            patch("dm.send_dm_to_id", send_spy),
+        ):
             await _send_storm_reminder(MagicMock(), interaction, "DS")
 
         # Only the well-formed row gets processed (col 2 = "Alice" — but

@@ -269,6 +269,11 @@ the long form on each.
 
 | Version | What |
 |---|---|
+| `1.4.5` | Hotfix: choosing **Edit** to paste a custom roster DM template during Premium storm setup no longer crashes the wizard — the structured-flow Edit branch called `bot.wait_for(check=check)` without defining `check`. Surfaced by the ruff `F821` lint sweep landing on `dev`. Direct-to-main per the hotfix exception. |
+| `1.4.4` | Hotfix: Team A / Team B plan picker lists candidate members by name instead of their raw Discord ID ([#270](https://github.com/LW-Alliance-Helper/lw-alliance-helper-bot/issues/270)). Direct-to-main per the hotfix exception. |
+| `1.4.3` | Hotfix: storm roster readers fall back to the Name column (then the live Discord member) when Display Name is blank, so the sign-up poll and Team Plan render names instead of IDs ([#268](https://github.com/LW-Alliance-Helper/lw-alliance-helper-bot/issues/268)). Direct-to-main per the hotfix exception. |
+| `1.4.2` | Sign-up vote click shows a poll-style ephemeral with per-option totals and a ✓ on your vote, plus a leadership 👁️ View sign-ups breakdown ([#258](https://github.com/LW-Alliance-Helper/lw-alliance-helper-bot/issues/258)); Premium stale-power DM nudges members whose roster power hasn't refreshed in N days ([#255](https://github.com/LW-Alliance-Helper/lw-alliance-helper-bot/issues/255)); sign-up messages can be re-posted with votes aggregating across every post ([#265](https://github.com/LW-Alliance-Helper/lw-alliance-helper-bot/issues/265)). Name-match column renamed Member-match for clarity ([#260](https://github.com/LW-Alliance-Helper/lw-alliance-helper-bot/issues/260)); member sync preserves hand-typed non-Discord roster rows ([#262](https://github.com/LW-Alliance-Helper/lw-alliance-helper-bot/issues/262)); power-refresh DM leads with the ✅ vote-recorded confirmation so it isn't mistaken for a failure ([#259](https://github.com/LW-Alliance-Helper/lw-alliance-helper-bot/issues/259)). |
+| `1.4.1` | Hotfix: power-refresh DM names the column on the configured Power Data Source tab instead of always reading the Member Roster ([#256](https://github.com/LW-Alliance-Helper/lw-alliance-helper-bot/issues/256)). Direct-to-main per the hotfix exception. |
 | `1.4.0` | Premium Storm Overhaul ([#233](https://github.com/LW-Alliance-Helper/lw-alliance-helper-bot/issues/233)): structured sign-up → roster builder → PNG mail flow with auto-fill, per-event team plan picker, per-team time-slot mapping with weekly override, per-member assignment DMs with role-keyed templates, unified DS + CS mail body, and `/desertstorm` / `/canyonstorm` event hubs that consolidate every storm action under one command per event type. Participation Tracking 2.0 (Premium, [#243](https://github.com/LW-Alliance-Helper/lw-alliance-helper-bot/issues/243)): per-member question types written to a Per-Member Log tab, parameterized Trends Viewer for cross-event queries, and preset question templates during setup. Member Sync renamed with Power Data Source flexibility, collision protection, and a presence column surfaced in the sync preview; storm + participation now share one Alias Column instead of duplicating it. 📢 Release announcements toggle lands on the `/setup` hub — the first leadership-channel embed posts to every alliance as part of this release ([#253](https://github.com/LW-Alliance-Helper/lw-alliance-helper-bot/issues/253) infra shipped in 1.3.4). Setup wizard re-entry covers mail template choices ([#231](https://github.com/LW-Alliance-Helper/lw-alliance-helper-bot/issues/231)) and the shared/separate picker without clobbering saved bodies; officers with the Leadership role can run `/setup` ([#229](https://github.com/LW-Alliance-Helper/lw-alliance-helper-bot/issues/229)) without server-admin permission. Stale post-consolidation slash refs in Steps 5 and 9 of the storm wizard fixed ([#242](https://github.com/LW-Alliance-Helper/lw-alliance-helper-bot/issues/242)). |
 | `1.3.4` | Release-announcement infrastructure ([#253](https://github.com/LW-Alliance-Helper/lw-alliance-helper-bot/issues/253)): `last_seen_version` column on `guild_install_metadata`, `release_announcements_enabled` on `guild_configs`, and an `on_ready` handler that posts a short embed to each alliance's leadership channel when the running version's major.minor changes. The `RELEASE_ANNOUNCEMENTS` dict is empty in 1.3.4 itself so the deploy is silent; existing rows backfill to `'1.3.3'` so 1.4.0 fires the first real announcement. Opt-out toggle ships with 1.4.0's `/setup` hub. Changelog-slim hook resolves absolute hook paths to repo-relative so historical bullets stop flagging as new violations ([#250](https://github.com/LW-Alliance-Helper/lw-alliance-helper-bot/issues/250)). |
 | `1.3.0` | Setup wizard re-entry UX overhaul ([#80](https://github.com/LW-Alliance-Helper/lw-alliance-helper-bot/issues/80)): every `/setup_*` command (plus `/setup_members`) opens with a saved-config summary on re-entry; Keep current buttons across every channel, role, timezone, sheet ID, time, default tone, intro message, and `ask_keep_or_change` step; enable-toggle wizards (`/setup_birthdays`, `/setup_growth`, `/setup_shiny_tasks`) preserve config on disable with an optional 🗑️ Clear my saved configuration button. Shiny-tasks weekly refresh no longer thrashes cpt-hedge on every Railway redeploy — gated on the last-seen timestamp in `shiny_task_servers` ([#109](https://github.com/LW-Alliance-Helper/lw-alliance-helper-bot/issues/109)). |
@@ -355,17 +360,22 @@ These have been thought through. Reopening them needs a real reason:
 
 ## Status snapshot
 
-- 1.0.0 launched 2026-04-28. Currently on `1.4.0` — Premium Storm
-  Overhaul ([#233](https://github.com/LW-Alliance-Helper/lw-alliance-helper-bot/issues/233)):
+- 1.0.0 launched 2026-04-28. Production (`main`) is on `1.4.5`;
+  `dev` / staging runs `1.4.6`. The headline release was 1.4.0 — the
+  Premium Storm Overhaul ([#233](https://github.com/LW-Alliance-Helper/lw-alliance-helper-bot/issues/233)):
   structured sign-up → roster builder → PNG mail with auto-fill,
-  per-event team plan picker, per-team time slots, per-member
-  assignment DMs, and `/desertstorm` / `/canyonstorm` event hubs.
-  Participation Tracking 2.0 ([#243](https://github.com/LW-Alliance-Helper/lw-alliance-helper-bot/issues/243))
-  adds per-member question types, a Per-Member Log tab, parameterized
-  Trends Viewer, and preset templates. Member Sync renamed with
-  Power Data Source flexibility and a shared Alias Column.
-  See `CHANGELOG.md` for per-version detail.
-- 1958 tests collected; 18 skipped on the free-tier lane.
+  per-event team plan, per-team time slots, per-member assignment DMs,
+  and `/desertstorm` / `/canyonstorm` event hubs, plus Participation
+  Tracking 2.0 ([#243](https://github.com/LW-Alliance-Helper/lw-alliance-helper-bot/issues/243)).
+  1.4.1–1.4.5 were follow-up hotfixes (power-refresh DM column source,
+  roster name fallbacks, plan-picker names, the storm DM-template Edit
+  crash). See `CHANGELOG.md` and the Recent shipped highlights table
+  for per-version detail.
+- ~2085 tests pass on the default (non-sheets) lane.
+- Dev-branch tooling (not yet on a release): pre-commit runs ruff
+  lint + format (line-length 100), codespell, and a gitleaks
+  staged-secret scan; the whole tree was formatted once at line-length
+  100. See the Working agreement for the deliberate F401/F811 caveat.
 - Pre-launch audit fully shipped (Rounds 1–4 → 1.0.1–1.0.4; schema
   drops → 1.0.5 + 1.0.8). No outstanding cleanup from that audit.
 - Transfer management feature designed, not built (see

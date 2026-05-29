@@ -9,6 +9,13 @@ Each entry is a slim summary — heavier context (root cause, what we
 tried, design rationale) lives in the corresponding commit message
 and PR description.
 
+## [1.4.5] — 2026-05-29
+
+### Fixed
+- Choosing **Edit** to paste your own roster DM template during Premium storm setup no longer crashes the wizard.
+
+Hotfix released direct to main per CLAUDE.md's hotfix exception.
+
 ## [1.4.4] — 2026-05-27
 
 ### Fixed

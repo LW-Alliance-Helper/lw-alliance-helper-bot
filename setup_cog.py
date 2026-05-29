@@ -7791,6 +7791,9 @@ async def _run_structured_flow_setup_step(
                 f"*This form will time out in 5 minutes. "
                 f"You can run `/{cmd_name}` again if it times out.*"
             )
+            def check(m):
+                return m.author == user and m.channel == channel
+
             try:
                 reply = await bot.wait_for(
                     "message", check=check, timeout=300,

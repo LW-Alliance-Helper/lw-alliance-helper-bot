@@ -38,8 +38,13 @@ repo `../lw-alliance-helper.github.io` (the website) has its own
     is *not* ahead with feature work in progress, fast-forward `dev`
     to `main`. If `dev` has uncommitted-to-main feature work, leave
     it alone — it'll resync after that feature ships.
-  - **Versioning still happens on the release branch.** Don't bump
-    `__version__` or write CHANGELOG entries on `dev`.
+  - **`dev` carries the next patch `__version__` over `main`** (e.g.
+    `main` at `1.4.5` → `dev` at `1.4.6`) so the staging Railway
+    service's Sentry release tag is distinct from production's and
+    staging errors don't get bucketed under the shipped version. Bump
+    it whenever `main` moves forward. The CHANGELOG entry and the
+    final release version are still settled on the release branch —
+    don't write CHANGELOG entries on `dev`.
 - **Backlog lives in [GitHub Project #2](https://github.com/orgs/LW-Alliance-Helper/projects/2).**
   Auto-add fires for both repos. Apply a label at issue-creation time:
   - `feature` — large work warranting a minor/major version bump. Multiple

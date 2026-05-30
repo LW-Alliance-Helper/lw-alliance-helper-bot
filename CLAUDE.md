@@ -95,11 +95,16 @@ repo `../lw-alliance-helper.github.io` (the website) has its own
   Release notes, and the PR body is what reviewers (and your future
   self when bisecting) see first.
 - **Pre-commit hooks run on staged files** (`pre-commit` framework, config
-  in `.pre-commit-config.yaml`): ruff lint + ruff format (line-length 100),
-  codespell, and a gitleaks staged-secret scan. Install once per clone with
-  `py -m pre_commit install`. If a hook fails: investigate and fix, don't
-  bypass with `--no-verify`. ruff config is in `ruff.toml`, codespell's
-  ignore list in `.codespellrc`.
+  in `.pre-commit-config.yaml`): stock `pre-commit-hooks` file checks
+  (check-merge-conflict, check-yaml, check-toml, check-added-large-files),
+  ruff lint + ruff format (line-length 100), codespell, a gitleaks
+  staged-secret scan, and `actionlint` on `.github/workflows/*.yml`. Install
+  once per clone with `py -m pre_commit install`. If a hook fails:
+  investigate and fix, don't bypass with `--no-verify`. ruff config is in
+  `ruff.toml`, codespell's ignore list in `.codespellrc`. actionlint runs via
+  the `actionlint-py` pip wrapper (Go isn't installed, so the upstream
+  go-language hook can't build — same reason gitleaks runs as a system
+  binary).
   - **ruff lint scope is bugs + dead code only** (`E9` + pyflakes `F`).
     **F401 (unused import) and F811 (redefinition) are deliberately OFF** —
     they break this repo's module re-exports (e.g. `train.py`) and inline
@@ -372,10 +377,15 @@ These have been thought through. Reopening them needs a real reason:
   crash). See `CHANGELOG.md` and the Recent shipped highlights table
   for per-version detail.
 - ~2085 tests pass on the default (non-sheets) lane.
-- Dev-branch tooling (not yet on a release): pre-commit runs ruff
-  lint + format (line-length 100), codespell, and a gitleaks
-  staged-secret scan; the whole tree was formatted once at line-length
-  100. See the Working agreement for the deliberate F401/F811 caveat.
+- Dev-branch tooling (not yet on a release): pre-commit runs stock
+  `pre-commit-hooks` file checks (merge-conflict / yaml / toml /
+  large-files), ruff lint + format (line-length 100), codespell, a
+  gitleaks staged-secret scan, and `actionlint` on the workflow files;
+  the whole tree was formatted once at line-length 100. See the Working
+  agreement for the deliberate F401/F811 caveat. A `.github/dependabot.yml`
+  (weekly pip + github-actions update PRs) also rides dev — Dependabot
+  reads its config from the default branch, so it stays dormant until dev
+  next merges to main.
 - Pre-launch audit fully shipped (Rounds 1–4 → 1.0.1–1.0.4; schema
   drops → 1.0.5 + 1.0.8). No outstanding cleanup from that audit.
 - Transfer management feature designed, not built (see

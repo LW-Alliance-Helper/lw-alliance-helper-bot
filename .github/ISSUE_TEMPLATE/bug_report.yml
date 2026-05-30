@@ -42,7 +42,7 @@ body:
     id: reference
     attributes:
       label: Reference code (if shown)
-      description: If the bot returned an error message with a `Reference: ...` code, paste it here. It lets us correlate to the exact failure on our side.
+      description: "If the bot returned an error message with a `Reference: ...` code, paste it here. It lets us correlate to the exact failure on our side."
       placeholder: e.g. Reference 7f3a-2c91
     validations:
       required: false

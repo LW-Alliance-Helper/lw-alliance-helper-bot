@@ -1,11 +1,20 @@
 # Pre-commit hooks for lw-alliance-helper-bot. Runs on STAGED files at commit
 # time. Install once per clone with:  py -m pre_commit install
 #
-# Scope: ruff lint (bugs/dead code) + ruff format (style), codespell
-# spell-check, and a gitleaks staged-secret scan. The test suite is NOT run
-# here; tests run in CI and are run targeted-per-issue locally (the full
+# Scope: basic file-sanity checks (pre-commit-hooks), ruff lint (bugs/dead
+# code) + ruff format (style), codespell spell-check, a gitleaks staged-secret
+# scan, and actionlint on the GitHub Actions workflows. The test suite is NOT
+# run here; tests run in CI and are run targeted-per-issue locally (the full
 # suite is ~5 min).
 repos:
+  - repo: https://github.com/pre-commit/pre-commit-hooks
+    rev: v6.0.0
+    hooks:
+      - id: check-merge-conflict # stray <<<<<< markers (we merge a lot)
+      - id: check-yaml # validate workflow / config YAML before it breaks CI
+      - id: check-toml # validate ruff.toml, pytest config, etc.
+      - id: check-added-large-files # block accidental binaries (storm PNGs)
+
   - repo: https://github.com/astral-sh/ruff-pre-commit
     rev: v0.15.15
     hooks:
@@ -28,3 +37,11 @@ repos:
         entry: gitleaks git --staged --redact --no-banner
         language: system
         pass_filenames: false
+
+  # actionlint via the pip-wrapped binary (actionlint-py): Go isn't installed,
+  # so the upstream go-language hook can't build. This wrapper ships a prebuilt
+  # binary. Runs only on .github/workflows/*.yml.
+  - repo: https://github.com/Mateusz-Grzelinski/actionlint-py
+    rev: v1.7.12.24
+    hooks:
+      - id: actionlint
